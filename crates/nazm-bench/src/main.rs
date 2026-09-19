@@ -42,6 +42,8 @@ enum Command {
         #[arg(long)]
         ledger: std::path::PathBuf,
         #[arg(long)]
+        scratch: std::path::PathBuf,
+        #[arg(long)]
         run: String,
         #[arg(long)]
         attempt: String,
@@ -85,10 +87,11 @@ fn main() -> anyhow::Result<()> {
         Command::Selftest => selftest(),
         Command::SandboxLeak {
             ledger,
+            scratch,
             run,
             attempt,
             owner,
-        } => sandbox_leak(&ledger, &run, &attempt, &owner),
+        } => sandbox_leak(&ledger, &scratch, &run, &attempt, &owner),
         Command::Run { arm } => run(arm.map(Arm::from)),
     }
 }
@@ -160,6 +163,7 @@ fn run(arm: Option<Arm>) -> anyhow::Result<()> {
 /// Create an attempt's resources and exit, deliberately leaking them.
 fn sandbox_leak(
     ledger_path: &std::path::Path,
+    scratch: &std::path::Path,
     run: &str,
     attempt: &str,
     owner: &str,
@@ -182,6 +186,7 @@ fn sandbox_leak(
             slots: (40..=60).collect(),
         },
         limits: Limits::default(),
+        scratch: scratch.to_path_buf(),
     };
 
     let sb = Sandbox::start(&cli, &led, cfg)

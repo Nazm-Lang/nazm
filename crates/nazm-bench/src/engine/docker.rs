@@ -284,8 +284,12 @@ pub fn container_create_argv(spec: &ContainerSpec) -> Vec<String> {
     ]);
     a.extend(["--pids-limit".to_owned(), spec.pids_limit.to_string()]);
 
+    // Always drop everything first, then add back only what a spec justifies.
     a.push("--cap-drop".to_owned());
     a.push("ALL".to_owned());
+    for cap in &spec.cap_add {
+        a.extend(["--cap-add".to_owned(), cap.clone()]);
+    }
     a.extend(["--security-opt".to_owned(), "no-new-privileges".to_owned()]);
 
     for m in &spec.mounts {

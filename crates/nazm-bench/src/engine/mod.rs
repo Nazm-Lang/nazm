@@ -170,6 +170,15 @@ pub struct ContainerSpec {
     /// Reap orphaned children. Without it a long-lived PID 1 accumulates zombies until the
     /// pids limit is hit, and the failure looks like the candidate's fault.
     pub init: bool,
+    /// Capabilities added back after `--cap-drop ALL`.
+    ///
+    /// Empty for the candidate, which needs none. **Not** empty for PostgreSQL: its
+    /// entrypoint runs as root, chowns the data directory, and drops to the `postgres`
+    /// user, all of which need capabilities. Dropping every capability uniformly looked
+    /// like thorough hardening and simply broke the database — `failed switching to
+    /// 'postgres': operation not permitted` — so this is per-spec rather than global, and
+    /// each entry has to be justified where it is added.
+    pub cap_add: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -17,6 +17,15 @@ use nazm_bench::sandbox::ledger::{Ledger, State};
 use nazm_bench::sandbox::network::{self, AllocationError, SubnetBlock};
 use nazm_bench::sandbox::recovery;
 
+/// Harness-side scratch for the attempt (database init script). Leaked deliberately: it
+/// must outlive the sandbox that mounts it, and the process is short.
+fn scratch_dir() -> std::path::PathBuf {
+    let dir = tempfile::tempdir().expect("scratch");
+    let path = dir.path().to_path_buf();
+    std::mem::forget(dir);
+    path
+}
+
 fn config() -> AttemptConfig {
     AttemptConfig {
         run: "r1".to_owned(),
@@ -26,6 +35,7 @@ fn config() -> AttemptConfig {
         postgres_image: "postgres:16-alpine@sha256:test".to_owned(),
         block: SubnetBlock::default(),
         limits: Limits::default(),
+        scratch: scratch_dir(),
     }
 }
 

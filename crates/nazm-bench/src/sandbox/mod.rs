@@ -3,4 +3,5 @@
 pub mod attempt;
 pub mod ledger;
 pub mod network;
+pub mod postgres;
 pub mod recovery;
