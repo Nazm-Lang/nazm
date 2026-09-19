@@ -1,0 +1,12 @@
+# Pinned exactly, not to a floating channel: the bootstrap story ("to build Nazm you
+# need a Rust toolchain and nothing else") is only meaningful if the toolchain is
+# named. A floating `stable` also silently changed under us once already — the local
+# `stable` was still 1.93.1 in September 2026, seven months behind.
+#
+# 1.98.1 rather than the 1.93.1 the earlier plan draft assumed: cranelift 0.135
+# declares MSRV 1.95.0, so the older pin could not have built the Stage 7 backend.
+# Cranelift is not a dependency yet, but a pin that is known-dead is worse than none.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy", "rust-analyzer"]
+profile = "minimal"

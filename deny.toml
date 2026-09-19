@@ -1,0 +1,33 @@
+# cargo-deny configuration.
+#
+# Nazm will eventually ship a compiler people run on their own source. The
+# supply chain of that binary is a security property, not hygiene.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# Apache-2.0 is the project's own licence (see LICENSE and the note in README
+# about the runtime-library exception question, which is a Phase 1 decision).
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
