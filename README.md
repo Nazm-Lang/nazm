@@ -115,8 +115,13 @@ have built the eventual backend.
 Almost everything. Specifically:
 
 - **No language.** No lexer, parser, type checker, IR, interpreter, or backend.
-- **The harness is a skeleton.** Task definitions, agent drivers, and cost accounting are
-  stubs. It does not produce a usable number yet.
+- **The harness is partial.** The accounting and comparison path is real, tested, and
+  mutation-checked (`nazm-bench selftest`). Task definitions, agent drivers, workspace
+  isolation between attempts, and independent acceptance tests are **not written**, so the
+  harness still cannot produce a benchmark number.
+- **Holdout isolation is a workflow control, not a boundary.** The API refuses holdout
+  fixtures without a verified freeze; it does nothing about filesystem access. Real
+  isolation for the gate run is operational — see `docs/evaluation.md` §3.
 - **No task corpus.** The six task families in `docs/evaluation.md` are described, not
   written.
 - **The decision rule is not pre-registered.** It is a draft until committed with its hash

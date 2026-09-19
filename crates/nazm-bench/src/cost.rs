@@ -35,11 +35,15 @@ impl Money {
         self.0
     }
 
-    /// Saturating rather than wrapping: a cost that silently wraps negative would be worse
-    /// than one that is implausibly large, because the second is visible in review.
+    /// Checked, not saturating and not wrapping.
+    ///
+    /// An earlier version saturated. That is the wrong failure mode for an accounting
+    /// figure: it silently caps and the total keeps looking like a total. Overflow here
+    /// would take ~9.2 trillion dollars and so means a unit or parsing bug, which is
+    /// exactly the thing that must surface rather than be absorbed.
     #[must_use]
-    pub const fn saturating_add(self, other: Self) -> Self {
-        Self(self.0.saturating_add(other.0))
+    pub fn checked_add(self, other: Self) -> Option<Self> {
+        self.0.checked_add(other.0).map(Self)
     }
 }
 
@@ -54,9 +58,11 @@ impl fmt::Display for Money {
     }
 }
 
-impl Sum for Money {
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(Self::ZERO, Self::saturating_add)
+/// Summing can overflow, so the sum is fallible. `Sum` is implemented over `Option` rather
+/// than `Money` to make that unavoidable at the call site.
+impl Sum<Money> for Option<Money> {
+    fn sum<I: Iterator<Item = Money>>(mut iter: I) -> Self {
+        iter.try_fold(Money::ZERO, Money::checked_add)
     }
 }
 
@@ -67,7 +73,13 @@ impl Sum for Money {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CostComponent {
-    Recorded(Money),
+    // A struct variant, not `Recorded(Money)`. serde's internally-tagged representation
+    // cannot serialize a newtype variant wrapping an integer, and the newtype form failed
+    // at runtime with "cannot serialize tagged newtype variant" — meaning no run record
+    // could ever have been written to disk. `cost_round_trips_through_json` pins it.
+    Recorded {
+        amount: Money,
+    },
     /// The provider returned no usage, the run was interrupted, the meter was unavailable.
     /// The reason is retained because it is the difference between a harness bug and a
     /// provider outage, and those have different consequences for the result.
@@ -79,7 +91,9 @@ pub enum CostComponent {
 impl CostComponent {
     #[must_use]
     pub fn recorded(micros: i64) -> Self {
-        Self::Recorded(Money::from_micros(micros))
+        Self::Recorded {
+            amount: Money::from_micros(micros),
+        }
     }
 
     #[must_use]
@@ -99,7 +113,7 @@ impl CostComponent {
     #[must_use]
     pub fn value(&self) -> Option<Money> {
         match self {
-            Self::Recorded(m) => Some(*m),
+            Self::Recorded { amount } => Some(*amount),
             Self::Missing { .. } => None,
         }
     }
@@ -167,6 +181,9 @@ pub struct Total {
     attempts: usize,
     /// One entry per missing component, as `(line, reason)`.
     gaps: Vec<(String, String)>,
+    /// Set when summation overflowed. Invalidates the total exactly as a gap does: a
+    /// figure that overflowed is not a smaller figure, it is not a figure.
+    overflowed: bool,
 }
 
 impl Total {
@@ -182,7 +199,12 @@ impl Total {
 
     #[must_use]
     pub fn is_complete(&self) -> bool {
-        self.gaps.is_empty()
+        self.gaps.is_empty() && !self.overflowed
+    }
+
+    #[must_use]
+    pub fn overflowed(&self) -> bool {
+        self.overflowed
     }
 
     /// The figure, but only when nothing was missing.
@@ -209,11 +231,21 @@ impl Total {
     /// requires this figure to be read alongside the acceptance rate for exactly that
     /// reason. An arm accepting 40/100 at $40 beats one accepting 90/100 at $100 on this
     /// number alone, which is why this number alone decides nothing.
-    // Truncating division, deliberately. The residue is under one micro-dollar per
-    // computation — far below the noise in any agent run — and truncation is
-    // order-independent, where rounding would make the published figure depend on how the
-    // records happened to be grouped. The bias is downward and uniform across arms, so it
-    // cannot favour one.
+    // Truncating division, deliberately — but the justification matters more than the
+    // choice, and an earlier comment here got it wrong.
+    //
+    // It claimed the bias "is uniform across arms, so it cannot favour one". That is false
+    // in general: with per-record truncation, an arm with many small records loses more
+    // than an arm with few large ones, because floor(a) + floor(b) != floor(a + b). Two
+    // records of 0.6 truncate to 0 while one record of 1.0 truncates to 1, and the cheaper
+    // arm reads as more expensive.
+    //
+    // What makes it safe here is structural, not statistical: amounts are exact i64
+    // micro-dollars end to end, `total` sums them with no rounding at all, and this is the
+    // *only* division in the aggregation path — one, at the presentation boundary. Total
+    // residue is therefore under one micro-dollar for an entire arm, not per record.
+    // `regrouping_records_cannot_change_the_total` pins that property so a future change
+    // that introduces per-record rounding fails the build rather than the review.
     #[allow(clippy::integer_division)]
     #[must_use]
     pub fn per_accepted(&self, accepted: usize) -> Option<Money> {
@@ -231,7 +263,7 @@ impl Total {
 /// Takes all attempts, not just successful ones: `docs/evaluation.md` §5 requires failed
 /// attempts in the denominator, because an arm that fails cheaply and often is not cheap.
 pub fn total<'a>(costs: impl IntoIterator<Item = &'a Cost>) -> Total {
-    let mut sum = Money::ZERO;
+    let mut sum = Some(Money::ZERO);
     let mut attempts = 0usize;
     let mut gaps = Vec::new();
 
@@ -239,7 +271,11 @@ pub fn total<'a>(costs: impl IntoIterator<Item = &'a Cost>) -> Total {
         attempts += 1;
         for (line, component) in cost.components() {
             match component {
-                CostComponent::Recorded(m) => sum = sum.saturating_add(*m),
+                // No rounding here, ever. Exact micro-dollars accumulate, and the single
+                // division in the whole path happens in `per_accepted`.
+                CostComponent::Recorded { amount } => {
+                    sum = sum.and_then(|s| s.checked_add(*amount));
+                }
                 CostComponent::Missing { reason } => {
                     gaps.push((line.to_owned(), reason.clone()));
                 }
@@ -248,9 +284,10 @@ pub fn total<'a>(costs: impl IntoIterator<Item = &'a Cost>) -> Total {
     }
 
     Total {
-        total: sum,
+        total: sum.unwrap_or(Money::ZERO),
         attempts,
         gaps,
+        overflowed: sum.is_none(),
     }
 }
 
@@ -352,13 +389,100 @@ mod tests {
     }
 
     #[test]
+    fn regrouping_records_cannot_change_the_total() {
+        // The property the single-division design exists to hold. If anyone introduces
+        // per-record rounding, this fails: floor(a) + floor(b) != floor(a + b).
+        //
+        // Same money, three groupings.
+        let one_record = [complete(1_500_001)];
+        let two_records = [complete(500_000), complete(1_000_001)];
+        let many_records = [complete(1), complete(500_000), complete(1_000_000)];
+
+        let a = total(&one_record).believable();
+        let b = total(&two_records).believable();
+        let c = total(&many_records).believable();
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+        assert_eq!(a, Some(Money::from_micros(1_500_001)));
+    }
+
+    #[test]
+    fn the_reviewers_truncation_counterexample_does_not_bite() {
+        // Stated against an earlier, wrong justification ("the bias is uniform across arms
+        // so it cannot favour one"). With per-record truncation to whole units, an arm of
+        // two 0.6 records would read as 0 while an arm of one 1.0 record reads as 1 — the
+        // cheaper arm appearing more expensive.
+        //
+        // Scaled into micro-dollars: A2 spends 1.2 over two records, A3 spends 1.0 over
+        // one. A2 must remain the more expensive arm.
+        let arm_a2 = [complete(600_000), complete(600_000)];
+        let arm_a3 = [complete(1_000_000)];
+
+        let a2 = total(&arm_a2).believable().unwrap();
+        let a3 = total(&arm_a3).believable().unwrap();
+        assert_eq!(a2, Money::from_micros(1_200_000));
+        assert_eq!(a3, Money::from_micros(1_000_000));
+        assert!(
+            a2 > a3,
+            "record count must not invert the ordering of two arms"
+        );
+    }
+
+    #[test]
+    fn overflow_invalidates_the_total_instead_of_capping() {
+        // Saturating arithmetic would report i64::MAX as though it were a total. An
+        // overflowed figure is not a large figure; it is not a figure.
+        let huge = [complete(i64::MAX), complete(1)];
+        let t = total(&huge);
+        assert!(t.overflowed());
+        assert!(!t.is_complete());
+        assert!(t.believable().is_none());
+        assert!(t.per_accepted(1).is_none());
+    }
+
+    #[test]
+    fn cost_round_trips_through_json() {
+        // This test did not exist, and its absence hid a defect that would have broken
+        // every run record: the original `Recorded(Money)` newtype variant could not be
+        // serialized under `#[serde(tag = "kind")]` at all.
+        let c = Cost::new(
+            CostComponent::recorded(1_500_000),
+            CostComponent::recorded(0),
+            CostComponent::missing("no operator time logged"),
+        );
+        let json = serde_json::to_string(&c).expect("a cost record must be writable");
+        assert!(json.contains(r#""kind":"recorded""#));
+        assert!(json.contains(r#""amount":1500000"#));
+        assert_eq!(serde_json::from_str::<Cost>(&json).unwrap(), c);
+    }
+
+    #[test]
+    fn every_cost_line_is_structurally_required() {
+        // Propagating an explicit `Missing` does not help against a component that was
+        // never inserted. `Cost` has three non-optional fields and no `serde(default)`, so
+        // a record omitting one fails to deserialise rather than defaulting to zero.
+        let missing_a_line = r#"{"model":{"kind":"recorded","amount":1},
+                                 "infrastructure":{"kind":"recorded","amount":1}}"#;
+        assert!(
+            serde_json::from_str::<Cost>(missing_a_line).is_err(),
+            "a record without every cost line must be rejected, not defaulted"
+        );
+
+        let complete_record = r#"{"model":{"kind":"recorded","amount":1},
+                                  "infrastructure":{"kind":"recorded","amount":1},
+                                  "human":{"kind":"missing","reason":"none logged"}}"#;
+        let parsed: Cost = serde_json::from_str(complete_record).unwrap();
+        assert!(!parsed.is_complete());
+    }
+
+    #[test]
     fn money_sums_exactly_regardless_of_order() {
         // Integer arithmetic, so no associativity surprise. Guards the choice against a
         // well-meaning future change to f64.
-        let a: Money = [1_i64, 2, 3].into_iter().map(Money::from_micros).sum();
-        let b: Money = [3_i64, 2, 1].into_iter().map(Money::from_micros).sum();
+        let a: Option<Money> = [1_i64, 2, 3].into_iter().map(Money::from_micros).sum();
+        let b: Option<Money> = [3_i64, 2, 1].into_iter().map(Money::from_micros).sum();
         assert_eq!(a, b);
-        assert_eq!(a.as_micros(), 6);
+        assert_eq!(a.map(Money::as_micros), Some(6));
     }
 
     #[test]

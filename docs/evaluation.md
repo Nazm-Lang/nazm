@@ -63,6 +63,14 @@ benchmark rewards specialisation to that set rather than language quality.
 | **Calibration** | Variance estimation, power analysis, protocol rehearsal |
 | **Holdout** | Gate evaluation only, **after implementation freeze**. Never opened before |
 
+**Holdout isolation is operational, not type-level.** The harness refuses to hand back a
+holdout fixture without a `Freeze`, and a fabricated `Freeze` fails when verified against
+the repository — but that guards *the harness API*, not the filesystem. Anything with read
+access to the corpus directory can bypass it, and repository history, logs, and CI
+artifacts can all leak fixture content. For the gate run the holdout corpus must live
+outside the agent's accessible environment entirely: a separate host or credential-gated
+store, fetched after the freeze and never mounted where the agent can reach it.
+
 The freeze is a git tag. Everything under evaluation — compiler, tooling, prompts,
 wrappers — is fixed at that tag, and the holdout run uses only that tag.
 
@@ -185,6 +193,19 @@ A large tooling win does not make an additional language win worthless. Capture 
 published as a descriptive figure. The investment decision rests on A3's incremental
 benefit over A2, its reliability, and the cost of building and maintaining the language —
 the last being a judgement, made explicitly and recorded, not a threshold.
+
+### Chronology, not just consistency
+
+A registration that merely *agrees* with the documentation proves nothing: both files can
+be written in one commit after the results have been examined. The registration is
+therefore bound by git ancestry — every attempt record names the registration commit, and
+that commit must be a strict **ancestor** of the run commit. A registration written after
+a run cannot be an ancestor of it, so the ordering is checkable rather than trusted.
+
+A registration binds the protocol and analysis rules (its own content), the evaluated
+implementation (the freeze tag), the task sets (a corpus digest), and its version. A later
+protocol change creates a **new** registration; earlier runs keep pointing at the one they
+ran under and stay interpretable under the rules that applied to them.
 
 ## 7. What the gate establishes
 

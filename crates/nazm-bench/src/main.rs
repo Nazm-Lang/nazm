@@ -92,15 +92,34 @@ fn protocol() -> anyhow::Result<()> {
 }
 
 fn selftest() -> anyhow::Result<()> {
-    anyhow::bail!(
-        "not implemented.\n\n\
-         The self-test must cover the failure cases in docs/evaluation.md §8: each outcome \
-         class, an agent that edits tests or invokes the wrong binary, missing usage \
-         records, interrupted runs, state leaking between attempts, and a solution that \
-         passes the visible suite but fails independent acceptance.\n\n\
-         Until it does, no run from this harness is believable. `cargo test -p nazm-bench` \
-         covers the data model only."
-    )
+    let results = nazm_bench::selftest::run();
+    let failed = results.iter().filter(|c| !c.passed).count();
+
+    for case in &results {
+        let mark = if case.passed { "ok  " } else { "FAIL" };
+        println!("{mark}  {}", case.name);
+        if !case.passed {
+            println!("        {}", case.detail);
+        }
+    }
+
+    println!(
+        "\n{}/{} cases passed",
+        results.len() - failed,
+        results.len()
+    );
+
+    if failed > 0 {
+        anyhow::bail!("{failed} self-test case(s) failed — no run from this harness is believable");
+    }
+
+    println!(
+        "\nThe accounting and comparison path reports known fixtures correctly.\n\
+         Still unvalidated, because the code does not exist yet: agent drivers, workspace \
+         isolation between attempts, and independent acceptance tests executing outside \
+         the agent's writable environment."
+    );
+    Ok(())
 }
 
 fn run(arm: Option<Arm>) -> anyhow::Result<()> {
