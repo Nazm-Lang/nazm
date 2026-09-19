@@ -169,5 +169,17 @@ keys outstanding claims by the whole ResourceId, so an Intended entry and its ow
 entry become different rows and every completed attempt looks like it leaked everything
 """
 file = "crates/nazm-bench/src/sandbox/ledger.rs"
-find = "            let same = |a: &ResourceId, b: &ResourceId| a.kind == b.kind && a.name == b.name;"
-replace = "            let same = |a: &ResourceId, b: &ResourceId| a == b;"
+find = "                    && a.resource.name == b.resource.name"
+replace = "                    && a.resource.name == b.resource.name\n                    && a.resource.engine_id == b.resource.engine_id"
+
+[[mutation]]
+name = "ledger-claims-not-scoped-to-attempt"
+why = """
+keys outstanding claims by name alone, so a name reused by a later attempt merges into the
+earlier resolved claim and the new resource becomes invisible to recovery
+"""
+file = "crates/nazm-bench/src/sandbox/ledger.rs"
+find = """                a.run == b.run
+                    && a.attempt == b.attempt
+                    && a.resource.kind == b.resource.kind"""
+replace = """                a.resource.kind == b.resource.kind"""

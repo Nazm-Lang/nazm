@@ -10,6 +10,7 @@
 //! The kill guarantee, read-only mounts, and role restrictions are claims about Docker and
 //! PostgreSQL, and only the Docker-gated integration tests touch them.
 
+pub mod docker;
 pub mod fake;
 
 use std::fmt;
