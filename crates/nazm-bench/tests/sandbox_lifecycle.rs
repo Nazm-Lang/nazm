@@ -11,15 +11,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use nazm_bench::engine::fake::{FakeEngine, Op};
-use nazm_bench::engine::{ContainerEngine, EngineError, ResourceId, ResourceKind};
+use nazm_bench::engine::{self, ContainerEngine, EngineError, Ownership, ResourceId, ResourceKind};
 use nazm_bench::sandbox::attempt::{AttemptConfig, Disposition, Limits, Names, Sandbox};
 use nazm_bench::sandbox::ledger::{Ledger, State};
 use nazm_bench::sandbox::network::{self, AllocationError, SubnetBlock};
+use nazm_bench::sandbox::recovery;
 
 fn config() -> AttemptConfig {
     AttemptConfig {
         run: "r1".to_owned(),
         attempt: "a1".to_owned(),
+        owner: "owner-token-run-1".to_owned(),
         candidate_image: "node:22-alpine@sha256:test".to_owned(),
         postgres_image: "postgres:16-alpine@sha256:test".to_owned(),
         block: SubnetBlock::default(),
@@ -283,4 +285,207 @@ fn teardown_removes_containers_before_networks_and_volumes() {
 
     assert!(first_container_removal < first_network_removal);
     assert!(first_container_removal < first_volume_removal);
+}
+
+#[test]
+fn a_name_collision_with_a_foreign_resource_never_removes_it() {
+    // The hole this closes: the ledger records an intention to create a *name*. It cannot
+    // establish that whatever now bears that name is ours. A create failing with
+    // NameConflict is exactly the case where it is not — and a cleanup pass acting on its
+    // own recorded intention would delete a stranger's container.
+    let dir = tempfile::tempdir().unwrap();
+    let led = ledger(&dir);
+    let engine = FakeEngine::new();
+
+    // Something else already holds the name this attempt will ask for.
+    let names = Names::for_attempt("r1", "a1");
+    engine.plant_foreign_container(&names.db);
+
+    let (err, disposition) = Sandbox::start(&engine, &led, config()).err().unwrap();
+    assert!(
+        format!("{err}").contains("already exists"),
+        "error was: {err}"
+    );
+
+    // Teardown must not have removed it.
+    let survivors: Vec<_> = engine.surviving().into_iter().map(|r| r.name).collect();
+    assert!(
+        survivors.contains(&names.db),
+        "the foreign container was removed: {survivors:?}"
+    );
+
+    // And the run is clean from the harness's point of view, because everything it
+    // actually created was cleaned up.
+    assert_eq!(
+        disposition,
+        Disposition::Clean,
+        "own resources should still be cleaned"
+    );
+
+    // The ledger records the name as not ours, rather than leaving an open claim.
+    let outstanding = led.outstanding().unwrap();
+    assert!(
+        !outstanding.iter().any(|e| e.resource.name == names.db),
+        "a disowned name must not stay outstanding: {outstanding:?}"
+    );
+}
+
+#[test]
+fn ownership_is_checked_before_removal_not_inferred_from_the_ledger() {
+    let engine = FakeEngine::new();
+    engine.plant_foreign_container("someone-elses-api");
+    let id = ResourceId::new(ResourceKind::Container, "someone-elses-api");
+
+    assert_eq!(
+        engine::ownership(&engine, &id, "owner-token-run-1"),
+        Ownership::Foreign {
+            found: Some("not-our-token".to_owned())
+        }
+    );
+    assert!(!engine::ownership(&engine, &id, "owner-token-run-1").may_remove());
+
+    // An absent resource is a different answer from a foreign one, and only one of them
+    // means "nothing to do".
+    let gone = ResourceId::new(ResourceKind::Container, "never-existed");
+    assert_eq!(
+        engine::ownership(&engine, &gone, "owner-token-run-1"),
+        Ownership::Absent
+    );
+}
+
+#[test]
+fn a_new_harness_process_recovers_leftovers_without_touching_foreign_resources() {
+    // The interruption window the ledger exists for: resources were created, the process
+    // died before recording anything further, and a *different* process must clean up.
+    // Testing ordering within one process does not exercise this.
+    let dir = tempfile::tempdir().unwrap();
+    let ledger_path = dir.path().join("resources.jsonl");
+    let engine = FakeEngine::new();
+
+    // A stranger's resource sits alongside, with a name the harness never asked for.
+    engine.plant_foreign_network("another-teams-net", "192.168.77.0/24");
+
+    // --- "process one": bring an attempt up, then vanish without tearing down. ---
+    {
+        let led = Ledger::open(&ledger_path, "r1").unwrap();
+        let sb = Sandbox::start(&engine, &led, config())
+            .map_err(|(e, _)| e)
+            .unwrap();
+        std::mem::forget(sb); // no Drop, no teardown — as if the process were killed
+    }
+
+    let leaked = engine.surviving().len();
+    assert!(
+        leaked >= 5,
+        "expected the attempt's resources to survive, saw {leaked}"
+    );
+
+    // --- "process two": a fresh Ledger over the same file, and recovery. ---
+    let led2 = Ledger::open(&ledger_path, "r1").unwrap();
+    let outstanding = led2.outstanding().unwrap();
+    assert!(!outstanding.is_empty(), "recovery must find the leftovers");
+
+    // Recovery has to apply the same ordering discipline as teardown. Writing this test
+    // naively — iterating the ledger in creation order — made the fake refuse with
+    // StillReferenced, which is how the ordering rule ended up in the library rather than
+    // in this test.
+    let result = recovery::reconcile(&engine, &led2, "owner-token-run-1").unwrap();
+
+    assert!(
+        result.is_clear(),
+        "unresolved leftovers: {:?}",
+        result.unresolved
+    );
+    assert!(!result.removed.is_empty(), "recovery removed nothing");
+    assert!(
+        result.foreign.is_empty(),
+        "nothing ledger-claimed should be foreign"
+    );
+
+    // The stranger's network is still there. It was never in our ledger, so recovery
+    // never considered it — which is the property that matters on a machine running
+    // fourteen unrelated Docker networks.
+    let survivors: Vec<_> = engine.surviving().into_iter().map(|r| r.name).collect();
+    assert_eq!(
+        survivors,
+        vec!["another-teams-net".to_owned()],
+        "recovery should have left exactly the foreign network: {survivors:?}"
+    );
+}
+
+#[test]
+fn teardown_refuses_a_resource_that_changed_hands() {
+    // Contrived sequence, real guard. Teardown removes from its own creation list, so
+    // nothing in an ordinary run reaches the ownership check with a foreign resource —
+    // which is exactly why the check went untested until `cargo xtask mutate` reported
+    // `removal-skips-the-ownership-check` as SURVIVED.
+    let dir = tempfile::tempdir().unwrap();
+    let led = ledger(&dir);
+    let engine = FakeEngine::new();
+    let mut sb = Sandbox::start(&engine, &led, config())
+        .map_err(|(e, _)| e)
+        .unwrap();
+
+    let work = ResourceId::new(ResourceKind::Volume, &sb.names().work_volume);
+    engine.retag_owner(&work, "some-other-run");
+
+    match sb.teardown() {
+        Disposition::Quarantine { reason, .. } => {
+            assert!(
+                reason.contains("not ours") || reason.contains("refusing"),
+                "teardown must say why it declined: {reason}"
+            );
+        }
+        Disposition::Clean => panic!("a resource we no longer own must not be removed silently"),
+    }
+
+    // And it is still there.
+    let survivors: Vec<_> = engine.surviving().into_iter().map(|r| r.name).collect();
+    assert!(
+        survivors.contains(&sb.names().work_volume),
+        "it was removed: {survivors:?}"
+    );
+}
+
+#[test]
+fn recovery_refuses_a_claimed_name_now_held_by_a_stranger() {
+    // The realistic version of the same hazard: process one records an intent to create
+    // `…-db`, dies before the create lands, and something unrelated takes that name.
+    // Process two must not remove it on the strength of the recorded intention.
+    let dir = tempfile::tempdir().unwrap();
+    let ledger_path = dir.path().join("resources.jsonl");
+    let engine = FakeEngine::new();
+
+    let names = Names::for_attempt("r1", "a1");
+    let db = ResourceId::new(ResourceKind::Container, &names.db);
+
+    // Process one: intent written, create never completed.
+    {
+        let led = Ledger::open(&ledger_path, "r1").unwrap();
+        led.intend("a1", &db).unwrap();
+    }
+    // Meanwhile, a stranger takes the name.
+    engine.plant_foreign_container(&names.db);
+
+    let led2 = Ledger::open(&ledger_path, "r1").unwrap();
+    let result = recovery::reconcile(&engine, &led2, "owner-token-run-1").unwrap();
+
+    assert_eq!(
+        result.removed,
+        Vec::<ResourceId>::new(),
+        "nothing of ours existed to remove"
+    );
+    assert_eq!(
+        result.foreign.len(),
+        1,
+        "the claimed name must be reported as foreign"
+    );
+    let (reported, _) = result.foreign.first().expect("foreign entry");
+    assert_eq!(*reported, db);
+
+    let survivors: Vec<_> = engine.surviving().into_iter().map(|r| r.name).collect();
+    assert!(
+        survivors.contains(&names.db),
+        "the stranger's container was removed"
+    );
 }

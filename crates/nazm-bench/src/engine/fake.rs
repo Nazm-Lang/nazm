@@ -106,6 +106,54 @@ impl FakeEngine {
         out
     }
 
+    /// Reassign a resource's owner token, simulating one that changed hands between
+    /// creation and teardown. Contrived on purpose: it exists to exercise the ownership
+    /// guard on the removal path, which no ordinary sequence reaches.
+    pub fn retag_owner(&self, id: &ResourceId, owner: &str) {
+        if let Ok(mut w) = self.world.lock() {
+            match id.kind {
+                ResourceKind::Container => {
+                    if let Some(c) = w.containers.get_mut(&id.name) {
+                        c.labels.owner = owner.to_owned();
+                    }
+                }
+                ResourceKind::Network => {
+                    if let Some((_, l)) = w.networks.get_mut(&id.name) {
+                        l.owner = owner.to_owned();
+                    }
+                }
+                ResourceKind::Volume => {
+                    if let Some(l) = w.volumes.get_mut(&id.name) {
+                        l.owner = owner.to_owned();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Plant a foreign container, to test the case where a create fails with a name
+    /// conflict against something the harness does not own.
+    pub fn plant_foreign_container(&self, name: &str) {
+        if let Ok(mut w) = self.world.lock() {
+            w.containers.insert(
+                name.to_owned(),
+                FakeContainer {
+                    running: true,
+                    exit_code: None,
+                    oom_killed: false,
+                    network: None,
+                    volumes: Vec::new(),
+                    labels: Labels {
+                        run: "someone-else".to_owned(),
+                        attempt: "someone-else".to_owned(),
+                        role: "unrelated".to_owned(),
+                        owner: "not-our-token".to_owned(),
+                    },
+                },
+            );
+        }
+    }
+
     /// Plant a resource the harness did not create, to test that recovery leaves foreign
     /// resources alone.
     pub fn plant_foreign_network(&self, name: &str, subnet: &str) {
@@ -114,6 +162,7 @@ impl FakeEngine {
                 run: "someone-else".to_owned(),
                 attempt: "someone-else".to_owned(),
                 role: "unrelated".to_owned(),
+                owner: "not-our-token".to_owned(),
             };
             w.networks
                 .insert(name.to_owned(), (subnet.to_owned(), labels));
@@ -339,6 +388,23 @@ impl ContainerEngine for FakeEngine {
             }
         }
         Ok(out)
+    }
+
+    fn owner_of(&self, id: &ResourceId) -> Result<Option<String>, EngineError> {
+        let w = self
+            .world
+            .lock()
+            .map_err(|_| EngineError::DaemonUnreachable("poisoned".into()))?;
+        let labels = match id.kind {
+            ResourceKind::Container => w.containers.get(&id.name).map(|c| &c.labels),
+            ResourceKind::Network => w.networks.get(&id.name).map(|(_, l)| l),
+            ResourceKind::Volume => w.volumes.get(&id.name),
+        };
+        match labels {
+            Some(l) if l.owner.is_empty() => Ok(None),
+            Some(l) => Ok(Some(l.owner.clone())),
+            None => Err(EngineError::NotFound { id: id.clone() }),
+        }
     }
 
     fn subnets_in_use(&self) -> Result<Vec<String>, EngineError> {

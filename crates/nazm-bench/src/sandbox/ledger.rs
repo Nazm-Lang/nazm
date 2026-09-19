@@ -36,6 +36,11 @@ pub enum State {
     Created,
     /// Removal was verified, not merely requested.
     Removed,
+    /// The create failed because the name was already taken by something else. Recorded
+    /// so the intent is not left as an unresolved claim -- ownership is re-checked before
+    /// any removal in any case, but an entry that says "not ours" is clearer to a human
+    /// reading the ledger after an incident than one that just stops.
+    Disowned,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +119,15 @@ impl Ledger {
         self.append(attempt, resource, State::Removed)
     }
 
+    /// Record that the name belongs to something we did not create.
+    ///
+    /// Ownership is re-checked before any removal regardless, so this is not the control
+    /// that keeps a stranger's resource safe. It stops the intent from lingering as an
+    /// unresolved claim, which matters to whoever reads the ledger after an incident.
+    pub fn disowned(&self, attempt: &str, resource: &ResourceId) -> Result<(), LedgerError> {
+        self.append(attempt, resource, State::Disowned)
+    }
+
     fn append(
         &self,
         attempt: &str,
@@ -184,7 +198,7 @@ impl Ledger {
             }
         }
 
-        latest.retain(|e| e.state != State::Removed);
+        latest.retain(|e| !matches!(e.state, State::Removed | State::Disowned));
         Ok(latest)
     }
 

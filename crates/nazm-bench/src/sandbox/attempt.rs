@@ -12,8 +12,8 @@
 //! after-the-fact recording protects nothing.
 
 use crate::engine::{
-    ContainerEngine, ContainerSpec, EngineError, Labels, Mount, MountSource, NetworkSpec,
-    ResourceId, ResourceKind, VolumeSpec,
+    self, ContainerEngine, ContainerSpec, EngineError, Labels, Mount, MountSource, NetworkSpec,
+    Ownership, ResourceId, ResourceKind, VolumeSpec,
 };
 use crate::sandbox::ledger::{Ledger, LedgerError};
 use crate::sandbox::network::{self, AllocationError, Subnet, SubnetBlock};
@@ -96,6 +96,8 @@ impl Default for Limits {
 pub struct AttemptConfig {
     pub run: String,
     pub attempt: String,
+    /// Random per-run ownership token. The only thing that authorises a removal.
+    pub owner: String,
     pub candidate_image: String,
     pub postgres_image: String,
     pub block: SubnetBlock,
@@ -162,6 +164,7 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
             run: self.cfg.run.clone(),
             attempt: self.cfg.attempt.clone(),
             role: role.to_owned(),
+            owner: self.cfg.owner.clone(),
         }
     }
 
@@ -172,10 +175,46 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
         create: impl FnOnce(&E) -> Result<T, EngineError>,
     ) -> Result<(), SandboxError> {
         self.ledger.intend(&self.cfg.attempt, &id)?;
-        create(self.engine)?;
-        self.ledger.created(&self.cfg.attempt, &id)?;
-        self.created.push(id);
-        Ok(())
+        match create(self.engine) {
+            Ok(_) => {
+                self.ledger.created(&self.cfg.attempt, &id)?;
+                self.created.push(id);
+                Ok(())
+            }
+            // The name is taken by something we did not create. Record that we do *not*
+            // own it, so no later reconciliation reads the intent as a claim. Ownership is
+            // re-checked before any removal regardless; this just stops the entry from
+            // lingering as an unresolved question.
+            Err(e @ EngineError::NameConflict { .. }) => {
+                self.ledger.disowned(&self.cfg.attempt, &id)?;
+                Err(SandboxError::Engine(e))
+            }
+            // Any other failure leaves the result genuinely unknown -- the create may have
+            // taken effect before the error. The entry stays `Intended` and reconciliation
+            // resolves it by asking the engine who owns the name.
+            Err(e) => Err(SandboxError::Engine(e)),
+        }
+    }
+
+    /// Remove a resource only after confirming we own it.
+    ///
+    /// Returns whether the resource is gone. A foreign or unknown owner is never removed
+    /// and never counted as cleaned: the cost of leaving it is a quarantined run, and the
+    /// cost of guessing wrong is destroying someone else's work.
+    fn remove_if_ours(&self, id: &ResourceId, force: bool) -> Result<bool, String> {
+        match engine::ownership(self.engine, id, &self.cfg.owner) {
+            Ownership::Absent => Ok(true),
+            Ownership::Ours => match self.engine.remove(id, force) {
+                Ok(()) | Err(EngineError::NotFound { .. }) => Ok(true),
+                Err(e) => Err(format!("{id}: {e}")),
+            },
+            Ownership::Foreign { found } => Err(format!(
+                "{id} carries owner {found:?}, not ours -- refusing to remove it"
+            )),
+            Ownership::Unknown { reason } => Err(format!(
+                "{id}: ownership could not be established ({reason})"
+            )),
+        }
     }
 
     fn bring_up(&mut self) -> Result<(), SandboxError> {
@@ -300,18 +339,16 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
         for id in &containers {
             // Candidate before database: the untrusted party must not observe its
             // database dying and react.
-            let _ = self.engine.kill(id);
-            if let Err(e) = self.engine.remove(id, true) {
-                if !matches!(e, EngineError::NotFound { .. }) {
-                    problems.push(format!("{id}: {e}"));
-                }
+            if engine::ownership(self.engine, id, &self.cfg.owner).may_remove() {
+                let _ = self.engine.kill(id);
+            }
+            if let Err(problem) = self.remove_if_ours(id, true) {
+                problems.push(problem);
             }
         }
         for id in &rest {
-            if let Err(e) = self.engine.remove(id, false) {
-                if !matches!(e, EngineError::NotFound { .. }) {
-                    problems.push(format!("{id}: {e}"));
-                }
+            if let Err(problem) = self.remove_if_ours(id, false) {
+                problems.push(problem);
             }
         }
 

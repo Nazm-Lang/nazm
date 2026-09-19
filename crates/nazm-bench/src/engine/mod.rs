@@ -69,15 +69,24 @@ pub struct Labels {
     pub run: String,
     pub attempt: String,
     pub role: String,
+    /// A random per-run token, and the **only** thing that establishes ownership.
+    ///
+    /// The ledger records an intention to create a name; it cannot establish that the
+    /// thing now bearing that name is the thing the harness created. A create can fail
+    /// with `NameConflict` precisely because something else already holds the name, and a
+    /// cleanup pass that removed whatever it found there would delete a stranger's
+    /// resource on the strength of its own intention.
+    pub owner: String,
 }
 
 impl Labels {
     #[must_use]
-    pub fn as_pairs(&self) -> [(String, String); 3] {
+    pub fn as_pairs(&self) -> [(String, String); 4] {
         [
             ("nazm.run".to_owned(), self.run.clone()),
             ("nazm.attempt".to_owned(), self.attempt.clone()),
             ("nazm.role".to_owned(), self.role.clone()),
+            ("nazm.owner".to_owned(), self.owner.clone()),
         ]
     }
 }
@@ -202,4 +211,57 @@ pub trait ContainerEngine: fmt::Debug {
     fn list_by_label(&self, key: &str, value: &str) -> Result<Vec<ResourceId>, EngineError>;
     /// Subnets currently in use, for the allocation-time collision check.
     fn subnets_in_use(&self) -> Result<Vec<String>, EngineError>;
+
+    /// The `nazm.owner` label on a resource, if it has one.
+    ///
+    /// `Ok(None)` means the resource exists and is not ours. That is a different answer
+    /// from `Err(NotFound)`, and conflating them is how a cleanup pass ends up deleting a
+    /// stranger's container.
+    fn owner_of(&self, id: &ResourceId) -> Result<Option<String>, EngineError>;
+}
+
+/// Whether a resource may be removed by the harness.
+///
+/// Every removal goes through this. A negative or unknown answer is never upgraded to a
+/// removal: the cost of leaving a leaked resource is a quarantined run, and the cost of
+/// guessing wrong the other way is destroying someone else's work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ownership {
+    /// Carries our token. Safe to remove.
+    Ours,
+    /// Exists, but carries a different token or none. **Never remove.**
+    Foreign { found: Option<String> },
+    /// Does not exist. Nothing to remove, which is the desired end state anyway.
+    Absent,
+    /// The engine could not say. Treated as foreign for removal purposes.
+    Unknown { reason: String },
+}
+
+impl Ownership {
+    #[must_use]
+    pub fn may_remove(&self) -> bool {
+        matches!(self, Self::Ours)
+    }
+
+    /// Whether the resource is already gone, so a failure to remove it is not a leak.
+    #[must_use]
+    pub fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+}
+
+/// Establish ownership before acting on a resource.
+pub fn ownership<E: ContainerEngine + ?Sized>(
+    engine: &E,
+    id: &ResourceId,
+    our_token: &str,
+) -> Ownership {
+    match engine.owner_of(id) {
+        Ok(Some(token)) if token == our_token => Ownership::Ours,
+        Ok(found) => Ownership::Foreign { found },
+        Err(EngineError::NotFound { .. }) => Ownership::Absent,
+        Err(e) => Ownership::Unknown {
+            reason: e.to_string(),
+        },
+    }
 }
