@@ -41,6 +41,17 @@ impl fmt::Display for ResourceKind {
 pub struct ResourceId {
     pub kind: ResourceKind,
     pub name: String,
+    /// The engine-assigned identifier, once a create has returned one.
+    ///
+    /// Names are a namespace someone else can take. Removing by name inspects one
+    /// resource and then deletes whatever currently holds that name — a window a
+    /// container exiting and being recreated is enough to open. Where the engine supports
+    /// it, operations after creation address the resource by this instead.
+    ///
+    /// `None` before creation, and after an interrupted create where the client never
+    /// received it — which is exactly the case that must resolve through ownership
+    /// discovery rather than by assuming nothing was created.
+    pub engine_id: Option<String>,
 }
 
 impl ResourceId {
@@ -49,7 +60,20 @@ impl ResourceId {
         Self {
             kind,
             name: name.into(),
+            engine_id: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_engine_id(mut self, id: impl Into<String>) -> Self {
+        self.engine_id = Some(id.into());
+        self
+    }
+
+    /// What to address the resource by: the engine id when we have one, else the name.
+    #[must_use]
+    pub fn handle(&self) -> &str {
+        self.engine_id.as_deref().unwrap_or(&self.name)
     }
 }
 
