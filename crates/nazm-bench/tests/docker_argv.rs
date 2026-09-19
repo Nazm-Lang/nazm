@@ -48,6 +48,7 @@ fn candidate() -> ContainerSpec {
         milli_cpus: 2000,
         pids_limit: 512,
         init: true,
+        cap_add: Vec::new(),
     }
 }
 
