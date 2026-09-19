@@ -17,10 +17,12 @@
 
 pub mod acceptance;
 pub mod cost;
+pub mod engine;
 pub mod outcome;
 pub mod prereg;
 pub mod record;
 pub mod report;
+pub mod sandbox;
 pub mod selftest;
 pub mod task;
 pub mod workspace;
