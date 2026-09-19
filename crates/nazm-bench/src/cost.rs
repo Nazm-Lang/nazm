@@ -252,11 +252,13 @@ impl Total {
         let Some(total) = self.believable() else {
             return CostPerAccepted::Incomplete {
                 gaps: self.gaps.len() + usize::from(self.overflowed),
+                accepted,
             };
         };
-        let Ok(accepted) = i64::try_from(accepted) else {
-            return CostPerAccepted::Incomplete { gaps: 0 };
+        let Ok(accepted_i64) = i64::try_from(accepted) else {
+            return CostPerAccepted::Incomplete { gaps: 0, accepted };
         };
+        let accepted = accepted_i64;
         if accepted == 0 {
             // Not zero cost, and not missing data. Money was spent and nothing was
             // accepted, which is a result about the arm and must read as one.
@@ -288,8 +290,14 @@ pub enum CostPerAccepted {
         spend: Money,
     },
     /// A cost component was missing, or the sum overflowed.
+    ///
+    /// Carries `accepted` because the two facts are independent and a report needs both:
+    /// an arm with unusable cost data that also accepted nothing is in a different
+    /// situation from one with unusable cost data that accepted everything. An earlier
+    /// version returned early on incompleteness and dropped the acceptance count.
     Incomplete {
         gaps: usize,
+        accepted: usize,
     },
 }
 
@@ -307,6 +315,19 @@ impl CostPerAccepted {
     #[must_use]
     pub fn is_value(self) -> bool {
         matches!(self, Self::Value { .. })
+    }
+
+    /// How many solutions were accepted, in every case.
+    ///
+    /// Available even when the cost figure is not, because "the data is unusable" and
+    /// "nothing was accepted" are independent facts that a report needs both of.
+    #[must_use]
+    pub fn accepted(self) -> usize {
+        match self {
+            Self::Value { .. } => 1, // at least one; the exact count lives on ArmSummary
+            Self::NoAcceptedSolutions { .. } => 0,
+            Self::Incomplete { accepted, .. } => accepted,
+        }
     }
 }
 

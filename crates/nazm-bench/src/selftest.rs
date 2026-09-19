@@ -85,6 +85,8 @@ pub fn run() -> Vec<CaseResult> {
         void_spend_is_in_the_primary_metric(),
         the_gate_ratio_is_not_inverted_by_void_spend(),
         no_acceptances_is_distinguishable_from_missing_data(),
+        incomplete_costs_still_report_the_acceptance_count(),
+        a_free_comparator_is_not_a_missing_figure(),
         holdout_is_refused_before_the_freeze(),
         a_forged_freeze_fails_against_the_repository(),
     ]
@@ -385,7 +387,10 @@ fn the_comparison_is_against_the_tooled_arm() -> CaseResult {
     };
     // $1.00 against A2's $2.00 is a ratio of 0.5. Against A1's $10.00 it would be 0.1 —
     // the difference between a real result and a flattering one.
-    let ratio_ok = cmp.cost_ratio.is_some_and(|r| (r - 0.5).abs() < 1e-9);
+    let ratio_ok = cmp
+        .cost_ratio
+        .value()
+        .is_some_and(|r| (r - 0.5).abs() < 1e-9);
     check(
         "the comparison is against the tooled arm",
         cmp.comparator == Arm::TypescriptTooled && ratio_ok,
@@ -759,7 +764,7 @@ fn the_gate_ratio_is_not_inverted_by_void_spend() -> CaseResult {
         "the gate ratio is not inverted by void spend",
         primary == Some(2_000_000)
             && secondary == Some(800_000)
-            && ratio.is_some_and(|r| (r - 2.0).abs() < 1e-9),
+            && ratio.value().is_some_and(|r| (r - 2.0).abs() < 1e-9),
         format!(
             "expected primary $2.00, secondary $0.80, R_C 2.0 (not 0.8); got {primary:?}, {secondary:?}, {ratio:?}"
         ),
@@ -822,6 +827,102 @@ fn no_acceptances_is_distinguishable_from_missing_data() -> CaseResult {
     )
 }
 
+/// Unusable cost data and zero acceptances are independent facts, and a report needs both.
+///
+/// An earlier version returned `Incomplete` early and dropped the acceptance count, so an
+/// arm that accepted nothing *and* lost its cost records was indistinguishable from one
+/// that accepted everything and lost its cost records.
+fn incomplete_costs_still_report_the_acceptance_count() -> CaseResult {
+    use crate::cost::CostPerAccepted;
+
+    let missing = |outcome: Outcome| {
+        attempt(
+            Arm::Nazm,
+            Family::ValidatedCrudApi,
+            outcome,
+            Cost::new(
+                CostComponent::missing("no usage block"),
+                CostComponent::recorded(0),
+                CostComponent::recorded(0),
+            ),
+        )
+    };
+
+    let none_accepted = vec![missing(Outcome::WrongAnswer), missing(Outcome::WrongAnswer)];
+    let all_accepted = vec![missing(Outcome::Accepted), missing(Outcome::Accepted)];
+
+    let a = report::summarise(Arm::Nazm, &none_accepted).total_cost_per_accepted;
+    let b = report::summarise(Arm::Nazm, &all_accepted).total_cost_per_accepted;
+
+    let a_ok = matches!(a, CostPerAccepted::Incomplete { accepted: 0, .. });
+    let b_ok = matches!(b, CostPerAccepted::Incomplete { accepted: 2, .. });
+
+    check(
+        "incomplete costs still report the acceptance count",
+        a_ok && b_ok && a != b,
+        format!(
+            "expected Incomplete{{accepted:0}} and Incomplete{{accepted:2}}, got {a:?} and {b:?}"
+        ),
+    )
+}
+
+/// A comparator that genuinely cost nothing is a finding, not a gap in the data.
+///
+/// Division by zero was already guarded, but the guard fell into a catch-all that also
+/// covered "no figure available". Those call for different responses: one needs
+/// investigating, the other needs the data fixed.
+fn a_free_comparator_is_not_a_missing_figure() -> CaseResult {
+    use crate::report::CostRatio;
+
+    // A2 accepted at zero cost — a cache hit, or a task skipped by design.
+    let attempts = vec![
+        attempt(
+            Arm::TypescriptTooled,
+            Family::ValidatedCrudApi,
+            Outcome::Accepted,
+            Cost::known_free(),
+        ),
+        attempt(
+            Arm::Nazm,
+            Family::ValidatedCrudApi,
+            Outcome::Accepted,
+            paid(1_000_000),
+        ),
+    ];
+    let summaries: Vec<_> = Arm::all()
+        .iter()
+        .map(|a| report::summarise(*a, &attempts))
+        .collect();
+    let Some(nazm) = summaries.iter().find(|s| s.arm == Arm::Nazm).cloned() else {
+        return check(
+            "a free comparator is not a missing figure",
+            false,
+            "no Nazm summary",
+        );
+    };
+    let Some(cmp) = report::compare(&nazm, &summaries) else {
+        return check(
+            "a free comparator is not a missing figure",
+            false,
+            "no comparison",
+        );
+    };
+
+    let explicit = matches!(
+        cmp.cost_ratio,
+        CostRatio::ComparatorCostZero { subject_cost } if subject_cost.as_micros() == 1_000_000
+    );
+
+    check(
+        "a free comparator is not a missing figure",
+        explicit && cmp.cost_ratio.value().is_none(),
+        format!(
+            "expected ComparatorCostZero with the subject's $1.00, got {:?}",
+            cmp.cost_ratio
+        ),
+    )
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -839,6 +940,6 @@ mod tests {
     #[test]
     fn the_selftest_covers_every_outcome_class() {
         // A self-test that silently stopped exercising a case would be worse than none.
-        assert!(super::run().len() >= 17);
+        assert!(super::run().len() >= 19);
     }
 }

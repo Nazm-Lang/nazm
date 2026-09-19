@@ -131,14 +131,42 @@ pub fn summarise(arm: Arm, attempts: &[Attempt]) -> ArmSummary {
 /// Named `Comparison`, not `GateResult`, on purpose: it carries no verdict. `delta_p` and
 /// `cost_ratio` are the estimands from `docs/evaluation.md` §6, but the thresholds there
 /// are stated on confidence bounds, and this struct has none.
+/// The cost ratio, or an explicit reason it could not be formed.
+///
+/// An `Option<f64>` here would fold four different situations into one `None`, and one of
+/// them — a comparator that genuinely cost nothing — is a real finding rather than a gap
+/// in the data. Division by zero was already guarded; what was missing was saying so.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CostRatio {
+    Value(f64),
+    /// The comparator's cost per accepted solution was exactly zero. Not an error, not
+    /// infinity — a fact that has to be looked at.
+    ComparatorCostZero {
+        subject_cost: crate::cost::Money,
+    },
+    SubjectFigureUnavailable,
+    ComparatorFigureUnavailable,
+}
+
+impl CostRatio {
+    #[must_use]
+    pub fn value(self) -> Option<f64> {
+        match self {
+            Self::Value(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Comparison {
     pub subject: Arm,
     pub comparator: Arm,
     /// Δp = p₃ − p₂.
     pub delta_p: Option<f64>,
-    /// R_C = C₃ / C₂.
-    pub cost_ratio: Option<f64>,
+    /// R_C = C₃ / C₂, or why it could not be formed.
+    pub cost_ratio: CostRatio,
     /// Families where the subject fell below 70% of the comparator's acceptance.
     pub collapsed_families: Vec<Family>,
     /// Always true: the gate decision needs confidence bounds this does not compute.
@@ -163,13 +191,17 @@ pub fn compare(subject: &ArmSummary, all: &[ArmSummary]) -> Option<Comparison> {
         subject.total_cost_per_accepted.value(),
         comparator.total_cost_per_accepted.value(),
     ) {
-        (Some(c3), Some(c2)) if c2.as_micros() != 0 => {
+        (Some(c3), Some(c2)) if c2.as_micros() != 0 =>
+        {
             #[allow(clippy::cast_precision_loss)]
-            {
-                Some(c3.as_micros() as f64 / c2.as_micros() as f64)
-            }
+            CostRatio::Value(c3.as_micros() as f64 / c2.as_micros() as f64)
         }
-        _ => None,
+        // Complete data, and the comparator genuinely cost nothing. The ratio is not
+        // large, it is undefined — and it is a distinct situation from having no figure,
+        // so it gets its own variant rather than falling into a catch-all `None`.
+        (Some(c3), Some(_)) => CostRatio::ComparatorCostZero { subject_cost: c3 },
+        (None, _) => CostRatio::SubjectFigureUnavailable,
+        (_, None) => CostRatio::ComparatorFigureUnavailable,
     };
 
     let mut collapsed_families = Vec::new();
