@@ -30,6 +30,24 @@ enum Command {
     /// Run the harness self-tests: the known-answer and failure-case checks from
     /// docs/evaluation.md §8 that must pass before any result is believable.
     Selftest,
+    /// Bring an attempt up and exit **without tearing it down**, leaving real resources
+    /// behind.
+    ///
+    /// Only reachable from the Docker integration suite. It exists because the genuine
+    /// interruption case cannot be simulated in one process: recovery has to happen in a
+    /// process that did not create the resources, and two processes need shared state to
+    /// recover through. The daemon is that state.
+    #[command(hide = true)]
+    SandboxLeak {
+        #[arg(long)]
+        ledger: std::path::PathBuf,
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        attempt: String,
+        #[arg(long)]
+        owner: String,
+    },
     /// Execute a benchmark run. Not implemented.
     Run {
         #[arg(long, value_enum)]
@@ -65,6 +83,12 @@ fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Protocol => protocol(),
         Command::Selftest => selftest(),
+        Command::SandboxLeak {
+            ledger,
+            run,
+            attempt,
+            owner,
+        } => sandbox_leak(&ledger, &run, &attempt, &owner),
         Command::Run { arm } => run(arm.map(Arm::from)),
     }
 }
@@ -131,4 +155,40 @@ fn run(arm: Option<Arm>) -> anyhow::Result<()> {
          Phase 2 builds arm A1 only.",
         arm.map_or_else(String::new, |a| format!(" (requested {a})"))
     )
+}
+
+/// Create an attempt's resources and exit, deliberately leaking them.
+fn sandbox_leak(
+    ledger_path: &std::path::Path,
+    run: &str,
+    attempt: &str,
+    owner: &str,
+) -> anyhow::Result<()> {
+    use nazm_bench::engine::docker::DockerCli;
+    use nazm_bench::sandbox::attempt::{AttemptConfig, Limits, Sandbox};
+    use nazm_bench::sandbox::ledger::Ledger;
+    use nazm_bench::sandbox::network::SubnetBlock;
+
+    let cli = DockerCli::new();
+    let led = Ledger::open(ledger_path, run)?;
+    let cfg = AttemptConfig {
+        run: run.to_owned(),
+        attempt: attempt.to_owned(),
+        owner: owner.to_owned(),
+        candidate_image: "alpine:3.20".to_owned(),
+        postgres_image: "postgres:16-alpine".to_owned(),
+        block: SubnetBlock {
+            prefix: [10, 201],
+            slots: (40..=60).collect(),
+        },
+        limits: Limits::default(),
+    };
+
+    let sb = Sandbox::start(&cli, &led, cfg)
+        .map_err(|(e, _)| anyhow::anyhow!("bring-up failed: {e}"))?;
+
+    // Exit without teardown. `forget` rather than `drop` so nothing can tidy up on the
+    // way out — the point is to leave real resources for another process to find.
+    std::mem::forget(sb);
+    Ok(())
 }

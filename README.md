@@ -121,13 +121,16 @@ Almost everything. Specifically:
   independent acceptance runner. **Not written:** agent drivers, a provider adapter, and
   all but one task fixture — so the harness cannot produce a benchmark number, and `run`
   stays disabled.
-- **The sandbox is designed and its logic is tested; it does not run yet.** The attempt
-  lifecycle — collision-checked subnet allocation, write-ahead ownership, ordered teardown,
-  verified cleanup, quarantine — is implemented and exercised against a fake engine that
-  models the rules a daemon enforces. **No Docker adapter exists**, so nothing is actually
-  confined today: a candidate process can still open another attempt's tree or the
-  acceptance corpus by absolute path. The fake proves the harness's ordering logic and
-  proves nothing about Docker.
+- **Confinement works and is tested against a real daemon.** Each attempt gets a private
+  internal network, its own PostgreSQL container, and a candidate container with all
+  capabilities dropped, no published ports, and no host namespaces. Four tests under
+  `NAZM_REQUIRE_DOCKER=1` establish what the fake engine cannot: a candidate cannot read a
+  host sentinel or route off its network, killing it reaps a detached grandchild, teardown
+  is verified clean, and a separate process recovers what a killed harness left behind.
+  Run them with `NAZM_REQUIRE_DOCKER=1 cargo test --test docker_boundary -- --test-threads=1`.
+- **What confinement does not yet cover:** the immutable submission snapshot and the
+  independent acceptance runner are not wired to it, so there is no complete execution
+  path and `run` stays disabled.
 - **Holdout isolation is a workflow control, not a boundary.** The API refuses holdout
   fixtures without a verified freeze; it does nothing about filesystem access. Real
   isolation for the gate run is operational — see `docs/evaluation.md` §3.

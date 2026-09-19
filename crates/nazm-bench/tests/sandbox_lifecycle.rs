@@ -611,3 +611,44 @@ fn removal_addresses_the_resource_by_its_engine_id() {
         "a created resource must carry its engine id"
     );
 }
+
+#[test]
+fn a_reused_name_in_a_later_attempt_is_a_separate_claim() {
+    // The invariant that keeps correctness off the naming convention.
+    //
+    // Constructed so an unscoped key gives a different answer: attempt one's claim is
+    // still OUTSTANDING when attempt two claims the same name. Keyed by name alone, the
+    // second entry overwrites the first and one of two live claims disappears — recovery
+    // would then never look for it. Keyed by (run, attempt, kind, name), both survive.
+    //
+    // An earlier version of this test had attempt one already resolved, which both the
+    // scoped and unscoped keys report identically — it could not fail, and
+    // `cargo xtask mutate` said so.
+    let dir = tempfile::tempdir().unwrap();
+    let led = Ledger::open(dir.path().join("reuse.jsonl"), "r1").unwrap();
+    let id = ResourceId::new(ResourceKind::Volume, "shared-name");
+
+    // Attempt one creates it and is interrupted: the claim stays live.
+    led.intend("a1", &id).unwrap();
+    led.created("a1", &id).unwrap();
+
+    // Attempt two takes the same name and is also interrupted.
+    led.intend("a2", &id).unwrap();
+
+    let outstanding = led.outstanding().unwrap();
+    assert_eq!(
+        outstanding.len(),
+        2,
+        "both attempts' claims must survive; keying by name alone loses one: {outstanding:?}"
+    );
+
+    let attempts: Vec<&str> = outstanding.iter().map(|e| e.attempt.as_str()).collect();
+    assert!(
+        attempts.contains(&"a1"),
+        "attempt one's claim vanished: {attempts:?}"
+    );
+    assert!(
+        attempts.contains(&"a2"),
+        "attempt two's claim vanished: {attempts:?}"
+    );
+}

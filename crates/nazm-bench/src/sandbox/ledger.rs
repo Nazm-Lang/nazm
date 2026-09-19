@@ -200,11 +200,21 @@ impl Ledger {
             // never superseded and every completed attempt looked like it had leaked
             // everything — caught by `normal_execution_removes_every_attempt_resource`
             // the moment engine ids were introduced.
-            let same = |a: &ResourceId, b: &ResourceId| a.kind == b.kind && a.name == b.name;
-            if let Some(existing) = latest
-                .iter_mut()
-                .find(|e| same(&e.resource, &entry.resource))
-            {
+            // Scoped by (run, attempt, kind, name), not by name alone.
+            //
+            // Today's names embed the run and attempt, so a bare (kind, name) key would
+            // behave identically — but that makes correctness depend on a naming
+            // convention rather than on the key. If a name is ever reused by a later
+            // attempt or a new resource generation, an unscoped key would merge the new
+            // claim into the old resolved one and the new resource would be invisible to
+            // recovery.
+            let same = |a: &Entry, b: &Entry| {
+                a.run == b.run
+                    && a.attempt == b.attempt
+                    && a.resource.kind == b.resource.kind
+                    && a.resource.name == b.resource.name
+            };
+            if let Some(existing) = latest.iter_mut().find(|e| same(e, &entry)) {
                 *existing = entry;
             } else {
                 latest.push(entry);
