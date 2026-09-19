@@ -15,6 +15,7 @@
 //!
 //! [`docs/evaluation.md`]: https://github.com/mdferdousalam/nazm/blob/main/docs/evaluation.md
 
+pub mod acceptance;
 pub mod cost;
 pub mod outcome;
 pub mod prereg;
@@ -22,10 +23,13 @@ pub mod record;
 pub mod report;
 pub mod selftest;
 pub mod task;
+pub mod workspace;
 
+pub use acceptance::{AcceptanceSuite, Verdict};
 pub use cost::{Cost, CostComponent, Money, Total};
 pub use outcome::{Outcome, PostSuccessCategory};
 pub use prereg::PreRegistration;
 pub use record::Attempt;
 pub use report::{ArmSummary, Comparison};
 pub use task::{Arm, TaskSet, TaskSpec};
+pub use workspace::{Submission, Workspace};
