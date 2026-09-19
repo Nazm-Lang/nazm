@@ -115,10 +115,11 @@ have built the eventual backend.
 Almost everything. Specifically:
 
 - **No language.** No lexer, parser, type checker, IR, interpreter, or backend.
-- **The harness is partial.** The accounting and comparison path is real, tested, and
-  mutation-checked (`nazm-bench selftest`). Task definitions, agent drivers, workspace
-  isolation between attempts, and independent acceptance tests are **not written**, so the
-  harness still cannot produce a benchmark number.
+- **The harness is partial.** Real, tested, and mutation-checked: the accounting and
+  comparison path (`nazm-bench selftest`, 14 cases), per-attempt workspace isolation, the
+  submission freeze, and the independent acceptance runner (8 execution-boundary tests).
+  **Not written:** agent drivers, a provider adapter, and all but one task fixture — so
+  the harness still cannot produce a benchmark number, and `run` stays disabled.
 - **Holdout isolation is a workflow control, not a boundary.** The API refuses holdout
   fixtures without a verified freeze; it does nothing about filesystem access. Real
   isolation for the gate run is operational — see `docs/evaluation.md` §3.
