@@ -652,3 +652,222 @@ fn development_state_cannot_carry_into_acceptance_within_one_attempt() {
 
     assert_eq!(sb.teardown(), Disposition::Clean);
 }
+
+/// One complete attempt, from candidate work to a finalised record.
+///
+/// The submission is a single `answer.txt`, and the acceptance check reads it from the
+/// frozen snapshot. Small on purpose: this establishes that the *path* joins up, not that
+/// any particular task is well designed.
+fn run_one_attempt(
+    cli: &DockerCli,
+    dir: &std::path::Path,
+    attempt: &str,
+    candidate_script: &str,
+    wall_clock: Duration,
+) -> nazm_bench::sandbox::execution::AttemptRecord {
+    use nazm_bench::acceptance::{AcceptanceSuite, CheckResult};
+    use nazm_bench::cost::{Cost, CostComponent};
+    use nazm_bench::engine::{ResourceId, ResourceKind};
+    use nazm_bench::sandbox::execution as ex;
+
+    let led = Ledger::open(dir.join(format!("{attempt}.jsonl")), "dockertest").unwrap();
+    let mut sb = Sandbox::start(cli, &led, config(attempt, &format!("owner-{attempt}")))
+        .map_err(|(e, _)| e)
+        .expect("bring-up");
+    let (net, creds) = (sb.names().network.clone(), sb.credentials().clone());
+    let cand = sb.names().candidate.clone();
+    assert!(wait_ready(&net, &creds), "database never became ready");
+
+    // 1. The fake agent does its work inside the candidate container.
+    let started = Instant::now();
+    exec(&cand, &["sh", "-c", candidate_script]);
+    let timed_out = started.elapsed() >= wall_clock;
+
+    // 2. Stop the candidate BEFORE anything is frozen. Nothing may still be writing.
+    let stop = ex::stop_candidate(&sb, Duration::from_secs(20)).expect("stop");
+
+    // 3. Freeze: copy the work volume out to an evaluator-owned directory the candidate
+    //    never mounted, and take its digest.
+    let frozen = dir.join(format!("{attempt}-frozen"));
+    std::fs::create_dir_all(&frozen).unwrap();
+    let copied = std::process::Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{}:/w:ro", sb.names().work_volume),
+            "-v",
+        ])
+        .arg(format!("{}:/out", frozen.display()))
+        .args([BUSY, "sh", "-c", "cp -a /w/. /out/ 2>/dev/null || true"])
+        .status()
+        .expect("freeze");
+    assert!(copied.success(), "could not freeze the submission");
+
+    let ws = nazm_bench::workspace::Workspace::create(attempt).unwrap();
+    for entry in std::fs::read_dir(&frozen).unwrap().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Ok(text) = std::fs::read_to_string(entry.path()) {
+            ws.write(&name, &text).unwrap();
+        }
+    }
+    let sealed = dir.join(format!("{attempt}-sealed"));
+    let submission = ws.freeze(&sealed).unwrap();
+
+    // 4. Fresh acceptance state: the candidate's own writes must not be what it is graded
+    //    against.
+    for stmt in nazm_bench::sandbox::postgres::reset_statements(&creds) {
+        let (out, code) = psql_admin(&net, &creds, &stmt);
+        assert_eq!(code, 0, "acceptance reset failed ({stmt}): {out}");
+    }
+
+    // 5. Grade the frozen snapshot, using tests the candidate never saw.
+    fn answer_is_42(s: &nazm_bench::Submission) -> CheckResult {
+        match std::fs::read_to_string(s.path.join("answer.txt")) {
+            Ok(t) if t.trim() == "42" => CheckResult::Pass,
+            Ok(_) => CheckResult::Fail,
+            Err(e) => CheckResult::CandidateFault(format!("no answer.txt: {e}")),
+        }
+    }
+    let verdict = AcceptanceSuite::new("e2e")
+        .with_check("answer_is_42", answer_is_42)
+        .grade(&submission);
+
+    // A timeout is about the candidate, not the submission, and outranks the grade.
+    let outcome =
+        ex::classify_candidate(&stop, timed_out).unwrap_or_else(|| verdict.into_outcome(false));
+
+    // 6. Accounting, then cleanup, then finalise — in that order.
+    //
+    // The database has to be stopped before its runtime can be read: a running container
+    // has no finish time, and `inspect` correctly reports that as unavailable rather than
+    // inventing a zero. Timings must therefore be captured after the kill and before
+    // removal, which is why teardown happens further down rather than here.
+    let db_id = nazm_bench::engine::ResourceId::new(
+        nazm_bench::engine::ResourceKind::Container,
+        sb.names().db.clone(),
+    );
+    cli.kill(&db_id)
+        .expect("stop the database before reading its runtime");
+    cli.wait_until_exit(&db_id, Duration::from_secs(20))
+        .expect("wait for the database")
+        .expect("the database did not stop");
+
+    let durations = vec![
+        ("cand".to_owned(), duration_ms(cli, &cand)),
+        ("db".to_owned(), duration_ms(cli, &sb.names().db)),
+    ];
+    let cost = Cost::new(
+        CostComponent::recorded(0), // no model calls: the agent is a shell script
+        ex::infrastructure_cost(&durations, 1),
+        CostComponent::recorded(0),
+    );
+
+    let disposition = sb.teardown();
+    let _ = ResourceId::new(ResourceKind::Container, &cand);
+    ex::finalise(
+        attempt,
+        outcome,
+        cost,
+        Some(submission.digest.clone()),
+        durations,
+        &disposition,
+    )
+}
+
+/// Container runtime in milliseconds, or `None` when it cannot be read.
+///
+/// `inspect` already rejects Docker's zero time (`0001-01-01…`), so a missing timestamp
+/// here means the container never ran or has not stopped yet. Returning `None` rather
+/// than zero is the whole point: an unreadable clock is not a zero runtime, and the cost
+/// line has to be able to say which it is.
+///
+/// The elapsed value itself is a placeholder — parsing RFC3339Nano and differencing is
+/// deferred until there is a rate to multiply it by. What is real here is the
+/// present-versus-absent distinction, which is what the accounting depends on.
+fn duration_ms(cli: &DockerCli, name: &str) -> Option<u64> {
+    use nazm_bench::engine::{ResourceId, ResourceKind};
+    let id = ResourceId::new(ResourceKind::Container, name);
+    let s = cli.inspect(&id).ok()?;
+    s.started_at.as_ref()?;
+    s.finished_at.as_ref()?;
+    Some(1)
+}
+
+#[test]
+fn the_complete_path_grades_accepted_wrong_answer_and_timeout() {
+    let Some(cli) = docker_or_skip() else { return };
+    let _guard = serial()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = tempfile::tempdir().unwrap();
+    use nazm_bench::outcome::{Limit, Outcome};
+
+    // Accepted.
+    let ok = run_one_attempt(
+        &cli,
+        dir.path(),
+        "e2eok",
+        "echo 42 > /work/answer.txt",
+        Duration::from_secs(60),
+    );
+    assert_eq!(ok.outcome, Outcome::Accepted, "{ok:?}");
+    assert!(
+        ok.is_final(),
+        "cleanup must verify before a grade is reportable: {:?}",
+        ok.cleanup
+    );
+    assert!(
+        ok.submission_digest.is_some(),
+        "the graded bytes must be identified"
+    );
+
+    // Wrong answer.
+    let wrong = run_one_attempt(
+        &cli,
+        dir.path(),
+        "e2ewrong",
+        "echo 41 > /work/answer.txt",
+        Duration::from_secs(60),
+    );
+    assert_eq!(wrong.outcome, Outcome::WrongAnswer, "{wrong:?}");
+    assert!(wrong.is_final());
+    assert_ne!(
+        wrong.submission_digest, ok.submission_digest,
+        "different submissions must be identified differently"
+    );
+
+    // Timeout: the work never finishes within the budget, and that outranks the grade —
+    // the candidate did write a correct answer first.
+    let slow = run_one_attempt(
+        &cli,
+        dir.path(),
+        "e2eslow",
+        "echo 42 > /work/answer.txt; sleep 3",
+        Duration::from_millis(1),
+    );
+    assert_eq!(
+        slow.outcome,
+        Outcome::Timeout {
+            limit: Limit::WallClock
+        },
+        "a timeout outranks a correct answer: {slow:?}"
+    );
+    assert!(slow.is_final());
+
+    // Every attempt kept its accounting, and nothing leaked.
+    for r in [&ok, &wrong, &slow] {
+        assert!(
+            r.cost.is_complete(),
+            "cost incomplete for {}: {:?}",
+            r.attempt_id,
+            r.cost
+        );
+    }
+    assert!(
+        cli.list_by_label("nazm.run", "dockertest")
+            .unwrap()
+            .is_empty(),
+        "resources survived the end-to-end run"
+    );
+}

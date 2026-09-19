@@ -105,16 +105,14 @@ replace = "                return Disposition::Clean;"
 [[mutation]]
 name = "ownership-recorded-after-creation"
 why = """
-writes the ledger entry after the create returns, reopening the window where an
-interruption leaves a resource nothing knows the name of
+records the intent only after the create returns, reopening the window where an
+interruption leaves a resource that nothing knows the name of
 """
 file = "crates/nazm-bench/src/sandbox/attempt.rs"
 find = """        self.ledger.intend(&self.cfg.attempt, &id)?;
-        match create(self.engine) {"""
-replace = """        let _deferred = &id;
-        match create(self.engine).inspect(|_| {
-            let _ = self.ledger.intend(&self.cfg.attempt, &id);
-        }) {"""
+        let created = create(self.engine);"""
+replace = """        let created = create(self.engine);
+        self.ledger.intend(&self.cfg.attempt, &id)?;"""
 
 [[mutation]]
 name = "allocator-ignores-occupied-subnets"

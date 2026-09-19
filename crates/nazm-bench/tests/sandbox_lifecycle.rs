@@ -183,17 +183,63 @@ fn surviving_resources_quarantine_the_next_attempt() {
     }
 }
 
+/// The intent must be on disk *before* the create is attempted, not merely afterwards.
+///
+/// Checking the ledger once the call has returned cannot distinguish the two orderings:
+/// both leave the same entry. So this looks at the world **during** the create, which is
+/// the only moment they differ — and it is how the mutation for this ordering was caught
+/// after it survived a test that only inspected the end state.
 #[test]
-fn ownership_is_recorded_before_creation_so_an_interruption_is_recoverable() {
+fn ownership_is_recorded_before_creation_is_attempted() {
+    use std::sync::{Arc, Mutex};
+
+    let dir = tempfile::tempdir().unwrap();
+    let ledger_path = dir.path().join("resources.jsonl");
+    let led = Ledger::open(&ledger_path, "r1").unwrap();
+    let engine = FakeEngine::new();
+
+    // Records, for each create, whether the ledger already claimed that name.
+    let seen: Arc<Mutex<Vec<(String, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_for_hook = Arc::clone(&seen);
+    let path_for_hook = ledger_path.clone();
+    engine.on_create(Box::new(move |id| {
+        let claimed = std::fs::read_to_string(&path_for_hook)
+            .map(|t| t.contains(&id.name))
+            .unwrap_or(false);
+        if let Ok(mut v) = seen_for_hook.lock() {
+            v.push((id.name.clone(), claimed));
+        }
+    }));
+
+    let mut sb = Sandbox::start(&engine, &led, config())
+        .map_err(|(e, _)| e)
+        .unwrap();
+
+    let observed = seen.lock().unwrap().clone();
+    assert!(!observed.is_empty(), "no creates were observed");
+    for (name, claimed_first) in &observed {
+        assert!(
+            *claimed_first,
+            "{name} was created before the ledger claimed it — an interruption there \
+             leaves a resource nothing knows the name of"
+        );
+    }
+
+    assert_eq!(sb.teardown(), Disposition::Clean);
+}
+
+#[test]
+fn a_failed_create_still_leaves_the_claim_on_disk() {
+    // The consequence of writing first: even a create that never lands is recorded, so
+    // recovery has something to check ownership against.
     let dir = tempfile::tempdir().unwrap();
     let led = ledger(&dir);
     let engine = FakeEngine::new();
-
-    // Interrupt at the moment of the very first create: the intent is already on disk.
     engine.fail_next(
         Op::CreateNetwork,
         EngineError::DaemonUnreachable("killed".to_owned()),
     );
+
     let _ = Sandbox::start(&engine, &led, config());
 
     let outstanding = led.outstanding().unwrap();
@@ -202,7 +248,7 @@ fn ownership_is_recorded_before_creation_so_an_interruption_is_recoverable() {
         outstanding
             .iter()
             .any(|e| e.resource.name == names.network && e.state == State::Intended),
-        "the network must be claimed as Intended even though its create failed: {outstanding:?}"
+        "the network must be claimed despite its create failing: {outstanding:?}"
     );
 }
 
