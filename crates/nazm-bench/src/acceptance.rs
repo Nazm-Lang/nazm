@@ -9,9 +9,12 @@
 //! * **The graded bytes are the recorded bytes.** The submission digest is re-verified
 //!   before grading, so a lingering process editing the tree produces a void result rather
 //!   than a quietly different one.
-//! * **Infrastructure failure is not candidate failure.** A database that would not start
-//!   is a void attempt. Scoring it as "the arm failed" would silently penalise whichever
-//!   arm happened to run when the machine was unwell.
+//! * **Evaluator failure is not candidate failure — and candidate failure is not void.**
+//!   A database that would not start is the evaluator's fault and voids the attempt;
+//!   scoring it as "the arm failed" would penalise whichever arm ran while the machine was
+//!   unwell. But a candidate that crashes, emits nothing, or blows a resource limit is a
+//!   *failure*, and it stays in the denominator. Voiding it would delete an arm's worst
+//!   attempts and make an unreliable arm look good.
 
 use serde::{Deserialize, Serialize};
 
@@ -25,9 +28,12 @@ pub enum Verdict {
     Accepted,
     /// The submission ran and failed its independent tests.
     Rejected { failing: Vec<String> },
-    /// The runner itself could not produce a judgement. **Not** a candidate failure.
-    Infrastructure { reason: String },
-    /// The frozen submission is not the one recorded.
+    /// The candidate crashed, produced nothing usable, or blew a resource limit. This is a
+    /// **failure and stays in the denominator** — it is a fact about the arm.
+    CandidateFault { reason: String },
+    /// The evaluator could not produce a judgement. Void, and not attributable to the arm.
+    EvaluatorFault { reason: String },
+    /// The frozen submission is not the one recorded. Void.
     Void { reason: String },
 }
 
@@ -45,9 +51,18 @@ impl Verdict {
                 Outcome::VisiblePassedAcceptanceFailed { failing }
             }
             Self::Rejected { .. } => Outcome::WrongAnswer,
-            Self::Infrastructure { reason } => Outcome::HarnessError { reason },
-            Self::Void { reason } => Outcome::HarnessError { reason },
+            // Counted. A crash is a result about the arm.
+            Self::CandidateFault { .. } => Outcome::Crash { signal: None },
+            Self::EvaluatorFault { reason } | Self::Void { reason } => {
+                Outcome::HarnessError { reason }
+            }
         }
+    }
+
+    /// Whether this verdict leaves the analysis entirely.
+    #[must_use]
+    pub fn is_void(&self) -> bool {
+        matches!(self, Self::EvaluatorFault { .. } | Self::Void { .. })
     }
 }
 
@@ -64,12 +79,24 @@ pub struct AcceptanceSuite {
     checks: Vec<(String, Check)>,
 }
 
+/// Why a check did not pass — and, critically, **whose fault it was**.
+///
+/// An earlier version had a single `CouldNotRun` that mapped to evaluator infrastructure
+/// failure, which made a candidate producing no output a *void* attempt. That deletes an
+/// arm's worst attempts from the denominator: an arm that crashes or emits garbage on hard
+/// tasks would look better than one that merely gets them wrong. The distinction below is
+/// the whole point.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckResult {
     Pass,
+    /// Ran, produced a wrong answer.
     Fail,
-    /// The check could not run. Propagates as `Infrastructure`, never as a failure.
-    CouldNotRun(String),
+    /// The candidate is at fault: it crashed, produced no output, emitted something
+    /// unparseable, or exceeded a resource limit. **A failure, not a void attempt.**
+    CandidateFault(String),
+    /// The evaluator is at fault: the database would not start, the test runner itself
+    /// crashed, the fixture is missing. **Void** — not attributable to the arm.
+    EvaluatorFault(String),
 }
 
 impl AcceptanceSuite {
@@ -109,7 +136,7 @@ impl AcceptanceSuite {
                 SubmissionDrift::Changed { .. } => Verdict::Void {
                     reason: drift.to_string(),
                 },
-                SubmissionDrift::Unreadable(_) => Verdict::Infrastructure {
+                SubmissionDrift::Unreadable(_) => Verdict::EvaluatorFault {
                     reason: drift.to_string(),
                 },
             };
@@ -120,10 +147,17 @@ impl AcceptanceSuite {
             match check(submission) {
                 CheckResult::Pass => {}
                 CheckResult::Fail => failing.push(name.clone()),
-                // One unrunnable check voids the whole grade. Reporting "3 of 4 passed"
-                // when the fourth never ran would be a judgement the runner did not make.
-                CheckResult::CouldNotRun(reason) => {
-                    return Verdict::Infrastructure {
+                // The candidate broke. That is a failure and it stays counted — deleting
+                // it would remove an arm's worst attempts from the denominator.
+                CheckResult::CandidateFault(reason) => {
+                    return Verdict::CandidateFault {
+                        reason: format!("check `{name}`: {reason}"),
+                    };
+                }
+                // The evaluator broke. Reporting "3 of 4 passed" when the fourth never ran
+                // would be a judgement the runner did not make, so the whole grade voids.
+                CheckResult::EvaluatorFault(reason) => {
+                    return Verdict::EvaluatorFault {
                         reason: format!("check `{name}` could not run: {reason}"),
                     };
                 }

@@ -115,11 +115,17 @@ have built the eventual backend.
 Almost everything. Specifically:
 
 - **No language.** No lexer, parser, type checker, IR, interpreter, or backend.
-- **The harness is partial.** Real, tested, and mutation-checked: the accounting and
-  comparison path (`nazm-bench selftest`, 14 cases), per-attempt workspace isolation, the
-  submission freeze, and the independent acceptance runner (8 execution-boundary tests).
-  **Not written:** agent drivers, a provider adapter, and all but one task fixture — so
-  the harness still cannot produce a benchmark number, and `run` stays disabled.
+- **The harness is partial.** Real, tested, and mutation-checked (`cargo xtask mutate`,
+  7 catalogued defects, all caught): the accounting and comparison path (`nazm-bench
+  selftest`, 15 cases), per-attempt workspace management, the submission freeze, and the
+  independent acceptance runner. **Not written:** agent drivers, a provider adapter, and
+  all but one task fixture — so the harness cannot produce a benchmark number, and `run`
+  stays disabled.
+- **There is no sandbox.** Each attempt gets its own directory, but nothing stops a
+  candidate process opening another attempt's tree, the acceptance corpus, or the harness
+  binary by absolute path. Real isolation needs an OS sandbox or a container per attempt,
+  with the corpus outside the mount namespace, and none of it exists yet. Backend tasks
+  additionally need per-attempt database state and scoped credentials.
 - **Holdout isolation is a workflow control, not a boundary.** The API refuses holdout
   fixtures without a verified freeze; it does nothing about filesystem access. Real
   isolation for the gate run is operational — see `docs/evaluation.md` §3.
