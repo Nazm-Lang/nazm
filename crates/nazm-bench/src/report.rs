@@ -12,7 +12,7 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use crate::cost::{self, Money, Total};
+use crate::cost::{self, CostPerAccepted, Total};
 use crate::record::Attempt;
 use crate::task::{Arm, Family};
 
@@ -30,19 +30,29 @@ pub struct ArmSummary {
     /// more often than another, the comparison is not between two arms, it is between one
     /// arm and a partly-broken measurement of another.
     pub void_rate: Option<f64>,
-    /// What the void attempts cost.
-    ///
-    /// Kept out of `cost_per_accepted` — void work is not attributable to the arm — but
-    /// reported, because it was really spent. An earlier version dropped it silently,
-    /// which hid real money and made a run that voided constantly look cheap.
+    /// What the void attempts cost, on its own line.
     pub void_cost: Total,
     pub accepted: usize,
+    /// Every attempt's cost, void included. The numerator of the primary metric.
     pub cost: Total,
     /// Acceptance rate over counted attempts. `None` when nothing counted.
     pub acceptance_rate: Option<f64>,
-    /// Cost per accepted solution. `None` when any cost was missing, the sum overflowed,
-    /// or nothing was accepted — never a stand-in figure.
-    pub cost_per_accepted: Option<Money>,
+    /// **The primary metric.** All attributable spend — failures, retries, and void
+    /// attempts — divided by acceptances. `docs/evaluation.md` §5 defines it as "total cost
+    /// of all attempts", and this is that.
+    ///
+    /// An earlier version excluded void spend here and reported it separately. That was a
+    /// silent change to the agreed metric, and it could invert the gate: two arms each
+    /// accepting 10, A2 spending $10 with no voids and A3 spending $8 plus $12 of void,
+    /// reported as $1.00 vs $0.80 — passing the `R_C ≤ 0.80` condition on what was really
+    /// a 2× cost regression. Reporting void spend on its own line makes that visible to a
+    /// careful reader and does nothing to stop the gate deciding on the wrong number.
+    pub total_cost_per_accepted: CostPerAccepted,
+    /// **Secondary, diagnostic only.** The same figure with evaluator-fault spend removed.
+    ///
+    /// Useful for separating "this arm is expensive" from "the infrastructure was flaky
+    /// while this arm happened to run". Never used by the gate.
+    pub cost_per_accepted_excluding_evaluator_faults: CostPerAccepted,
     /// Acceptance by family, for the "no category collapse" condition.
     pub by_family: IndexMap<Family, FamilyCount>,
 }
@@ -60,6 +70,12 @@ pub struct FamilyCount {
 #[must_use]
 pub fn summarise(arm: Arm, attempts: &[Attempt]) -> ArmSummary {
     let mine: Vec<&Attempt> = attempts.iter().filter(|a| a.arm == arm).collect();
+
+    // Every attempt's cost, taken before the partition: the primary metric's numerator is
+    // all spend, and computing it from `counted` is the defect this ordering prevents.
+    let all_costs: Vec<&crate::cost::Cost> = mine.iter().map(|a| &a.cost).collect();
+    let all_total = cost::total(all_costs);
+
     let (void, counted): (Vec<&Attempt>, Vec<&Attempt>) =
         mine.into_iter().partition(|a| a.is_void());
 
@@ -102,8 +118,9 @@ pub fn summarise(arm: Arm, attempts: &[Attempt]) -> ArmSummary {
         void_rate,
         void_cost: void_total,
         accepted,
-        cost_per_accepted: total.per_accepted(accepted),
-        cost: total,
+        total_cost_per_accepted: all_total.per_accepted(accepted),
+        cost_per_accepted_excluding_evaluator_faults: total.per_accepted(accepted),
+        cost: all_total,
         acceptance_rate,
         by_family,
     }
@@ -140,7 +157,12 @@ pub fn compare(subject: &ArmSummary, all: &[ArmSummary]) -> Option<Comparison> {
         _ => None,
     };
 
-    let cost_ratio = match (subject.cost_per_accepted, comparator.cost_per_accepted) {
+    // Built from the PRIMARY metric. Using the evaluator-fault-excluding figure here would
+    // let an arm that voids expensively look cheap to the gate.
+    let cost_ratio = match (
+        subject.total_cost_per_accepted.value(),
+        comparator.total_cost_per_accepted.value(),
+    ) {
         (Some(c3), Some(c2)) if c2.as_micros() != 0 => {
             #[allow(clippy::cast_precision_loss)]
             {

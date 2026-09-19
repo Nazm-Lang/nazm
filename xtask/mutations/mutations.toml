@@ -59,3 +59,14 @@ why = "hides money really spent on voided attempts"
 file = "crates/nazm-bench/src/report.rs"
 find = "    let void_costs: Vec<&crate::cost::Cost> = void.iter().map(|a| &a.cost).collect();"
 replace = "    let void_costs: Vec<&crate::cost::Cost> = Vec::new();"
+
+[[mutation]]
+name = "primary-metric-drops-void-spend"
+why = """
+computes the primary cost metric from counted attempts only, which is the defect that
+would let an arm spending $8 plus $12 of void work report $0.80 against a comparator's
+$1.00 and pass the gate on what is really a 2x cost regression
+"""
+file = "crates/nazm-bench/src/report.rs"
+find = "        total_cost_per_accepted: all_total.per_accepted(accepted),"
+replace = "        total_cost_per_accepted: total.per_accepted(accepted),"

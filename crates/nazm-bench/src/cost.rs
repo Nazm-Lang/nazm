@@ -248,13 +248,65 @@ impl Total {
     // that introduces per-record rounding fails the build rather than the review.
     #[allow(clippy::integer_division)]
     #[must_use]
-    pub fn per_accepted(&self, accepted: usize) -> Option<Money> {
-        let total = self.believable()?;
-        let accepted = i64::try_from(accepted).ok()?;
+    pub fn per_accepted(&self, accepted: usize) -> CostPerAccepted {
+        let Some(total) = self.believable() else {
+            return CostPerAccepted::Incomplete {
+                gaps: self.gaps.len() + usize::from(self.overflowed),
+            };
+        };
+        let Ok(accepted) = i64::try_from(accepted) else {
+            return CostPerAccepted::Incomplete { gaps: 0 };
+        };
         if accepted == 0 {
-            return None;
+            // Not zero cost, and not missing data. Money was spent and nothing was
+            // accepted, which is a result about the arm and must read as one.
+            return CostPerAccepted::NoAcceptedSolutions { spend: total };
         }
-        Some(Money::from_micros(total.as_micros() / accepted))
+        CostPerAccepted::Value {
+            amount: Money::from_micros(total.as_micros() / accepted),
+        }
+    }
+}
+
+/// The outcome of dividing spend by acceptances.
+///
+/// An enum rather than `Option<Money>` because the previous `Option` conflated two
+/// different facts — "cost data is missing" and "nothing was accepted" — and a caller that
+/// cannot tell them apart will eventually treat one as the other. An arm that accepted
+/// nothing did not have an unmeasurable cost; it failed everything, at a price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CostPerAccepted {
+    // A struct variant, not `Value(Money)`: serde's internally-tagged representation
+    // cannot serialize a newtype variant wrapping an integer. That defect already shipped
+    // once in this file (see `CostComponent::Recorded`) and is not repeating.
+    Value {
+        amount: Money,
+    },
+    /// Spend occurred and nothing was accepted. Never rendered as zero.
+    NoAcceptedSolutions {
+        spend: Money,
+    },
+    /// A cost component was missing, or the sum overflowed.
+    Incomplete {
+        gaps: usize,
+    },
+}
+
+impl CostPerAccepted {
+    /// The figure, when there is one. `None` for both other cases — but callers must
+    /// handle those cases explicitly rather than reaching for this first.
+    #[must_use]
+    pub fn value(self) -> Option<Money> {
+        match self {
+            Self::Value { amount } => Some(amount),
+            Self::NoAcceptedSolutions { .. } | Self::Incomplete { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn is_value(self) -> bool {
+        matches!(self, Self::Value { .. })
     }
 }
 
@@ -331,7 +383,7 @@ mod tests {
             "an incomplete total must not yield a figure"
         );
         assert!(
-            t.per_accepted(2).is_none(),
+            !t.per_accepted(2).is_value(),
             "and must not yield a derived figure either"
         );
     }
@@ -366,7 +418,10 @@ mod tests {
         let attempts = [complete(10_000_000), complete(10_000_000)];
         let t = total(&attempts);
         // $20 spent, 2 accepted -> $10 each.
-        assert_eq!(t.per_accepted(2), Some(Money::from_micros(10_000_000)));
+        assert_eq!(
+            t.per_accepted(2).value(),
+            Some(Money::from_micros(10_000_000))
+        );
     }
 
     #[test]
@@ -379,13 +434,19 @@ mod tests {
             complete(1_000_000),
         ];
         let t = total(&attempts);
-        assert_eq!(t.per_accepted(1), Some(Money::from_micros(4_000_000)));
+        assert_eq!(
+            t.per_accepted(1).value(),
+            Some(Money::from_micros(4_000_000))
+        );
     }
 
     #[test]
     fn zero_acceptances_is_not_an_infinitely_good_score() {
         let t = total(&[complete(50_000_000)]);
-        assert!(t.per_accepted(0).is_none());
+        assert!(matches!(
+            t.per_accepted(0),
+            CostPerAccepted::NoAcceptedSolutions { .. }
+        ));
     }
 
     #[test]
@@ -437,7 +498,7 @@ mod tests {
         assert!(t.overflowed());
         assert!(!t.is_complete());
         assert!(t.believable().is_none());
-        assert!(t.per_accepted(1).is_none());
+        assert!(!t.per_accepted(1).is_value());
     }
 
     #[test]
