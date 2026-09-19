@@ -1,0 +1,51 @@
+# Arm-neutral statement. Requirements and observable behaviour only: no hint of structure,
+# no library names, nothing that would read as a solution sketch in one language and not
+# another.
+
+[task]
+id = "reservation-01"
+family = "transactional_reservation"
+set = "development"
+
+[requirements]
+summary = """
+A service holds inventory for items. Expose an endpoint that reserves a quantity of an
+item for a customer. A reservation succeeds only if the requested quantity is available.
+Reserved stock is not available to anyone else.
+"""
+
+[[requirements.behaviour]]
+given = "an item with 10 available"
+when = "a request reserves 3"
+then = "the reservation succeeds and 7 remain available"
+
+[[requirements.behaviour]]
+given = "an item with 2 available"
+when = "a request reserves 5"
+then = "the reservation is refused and 2 remain available"
+
+[[requirements.behaviour]]
+# The property the whole task exists for. Stated as observable behaviour so it does not
+# prescribe locking, serialisable isolation, or a compare-and-set.
+given = "an item with 1 available"
+when = "many requests reserve 1 at the same time"
+then = "exactly one succeeds and available never goes below zero"
+
+[[requirements.behaviour]]
+given = "a reservation that fails partway"
+when = "the failure occurs after stock was decremented"
+then = "no stock is consumed"
+
+[caps]
+# Which caps bind is fixed by the pre-registration; recorded here so the record is
+# self-contained.
+wall_clock_seconds = 900
+turns = 40
+
+[acceptance]
+# The agent is told these exist and what they check, but never sees them. Concealing their
+# existence would change behaviour for reasons unrelated to language.
+description = """
+Independent tests exercise the behaviours above, including concurrent reservation against
+a single unit of stock, and assert that total reserved never exceeds initial stock.
+"""
