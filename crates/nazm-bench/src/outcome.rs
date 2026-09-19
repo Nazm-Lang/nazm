@@ -32,6 +32,17 @@ pub enum Outcome {
     Crash { signal: Option<String> },
     /// Hit the wall-clock or turn cap fixed in the pre-registration.
     Timeout { limit: Limit },
+    /// The candidate exceeded a registered resource limit.
+    ///
+    /// **A failure, and it stays in the denominator.** Deliberately not folded into
+    /// `Crash`: the memory cap is an instrument parameter, so a per-arm OOM rate is the
+    /// single most likely systematic confound between arms, and burying it inside "crash"
+    /// makes it invisible to exactly the analysis that needs to see it.
+    ///
+    /// Only ever set from engine state — `OOMKilled` from the container runtime — never
+    /// from an exit code alone (137 is any SIGKILL, including the harness's own stop) and
+    /// never from candidate-controlled output.
+    ResourceExhausted { limit: Limit },
     /// The attempt is void and must not enter the analysis as a failure: the harness
     /// itself broke. Kept distinct so that instrument defects cannot be mistaken for
     /// arm performance.
@@ -70,6 +81,7 @@ impl Outcome {
             Self::CompileFailure { .. } => "compile_failure",
             Self::Crash { .. } => "crash",
             Self::Timeout { .. } => "timeout",
+            Self::ResourceExhausted { .. } => "resource_exhausted",
             Self::HarnessError { .. } => "harness_error",
             Self::ProtocolViolation { .. } => "protocol_violation",
         }
@@ -85,6 +97,11 @@ pub enum Limit {
     Turns,
     Tokens,
     Dollars,
+    /// The container memory cap. Registered and identical across arms, or it is not a
+    /// fair constraint and an exhaustion outcome is not attributable to the arm.
+    Memory,
+    /// The submission size cap.
+    Disk,
 }
 
 /// What an agent did after its solution already passed.

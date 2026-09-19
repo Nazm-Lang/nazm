@@ -405,6 +405,13 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
         }
     }
 
+    /// The engine this attempt is running on, so the execution path can wait on and
+    /// inspect containers without a second handle that could point somewhere else.
+    #[must_use]
+    pub fn engine(&self) -> &'a E {
+        self.engine
+    }
+
     #[must_use]
     pub fn names(&self) -> &Names {
         &self.names
