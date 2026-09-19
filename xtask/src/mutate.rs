@@ -13,6 +13,13 @@
 //! must differ afterwards, and the mutated tree must still compile. A mutation that does
 //! not build is reported as unusable rather than counted as caught — an uncompilable
 //! program fails the suite for the wrong reason.
+//!
+//! **"Compiles" has to include the tests.** An earlier version built only
+//! `cargo build --workspace`, which leaves test targets unbuilt. A broken test file then
+//! made `cargo test` produce no results at all, `failing_tests` counted zero, and every
+//! single mutation reported SURVIVED — nineteen of them, all false. The same class of
+//! mistake as the silently-skipped injection, and just as convincing. The baseline is now
+//! checked before any mutation runs, and the mutated tree is built with `--tests`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,6 +67,31 @@ pub(crate) fn run_all(root: &Path, catalogue: &Path) -> Result<(), Vec<String>> 
         Ok(m) => m,
         Err(e) => return Err(vec![e]),
     };
+
+    // Establish a baseline before touching anything. If the suite is already failing, or
+    // does not run, every result below is meaningless.
+    if !builds(root) {
+        return Err(vec![
+            "the unmutated workspace does not build (including tests). Fix that first: \
+             every mutation would otherwise be reported as SURVIVED."
+                .to_owned(),
+        ]);
+    }
+    let baseline_failing = failing_tests(root);
+    if baseline_failing > 0 {
+        return Err(vec![format!(
+            "{baseline_failing} test(s) already fail before any mutation. A mutation \
+             cannot be shown to be caught by a suite that is not green."
+        )]);
+    }
+    let baseline_results = result_lines(root);
+    if baseline_results == 0 {
+        return Err(vec![
+            "the test suite produced no results at all, so nothing here would mean \
+             anything."
+                .to_owned(),
+        ]);
+    }
 
     let mut problems = Vec::new();
     for m in &mutations {
@@ -125,13 +157,13 @@ fn apply_and_test(root: &Path, m: &Mutation) -> Verdict {
         return Verdict::NotInjected(format!("cannot write {}", m.file));
     }
 
-    let verdict = if !builds(root) {
-        Verdict::DidNotBuild
-    } else {
+    let verdict = if builds(root) {
         match failing_tests(root) {
             0 => Verdict::Survived,
             failing => Verdict::Caught { failing },
         }
+    } else {
+        Verdict::DidNotBuild
     };
 
     let _ = fs::write(&path, &original);
@@ -139,13 +171,35 @@ fn apply_and_test(root: &Path, m: &Mutation) -> Verdict {
 }
 
 fn builds(root: &Path) -> bool {
+    // `--tests` matters: without it a broken test file compiles nothing, `cargo test`
+    // reports nothing, and every mutation looks like it survived.
     Command::new(cargo())
         .arg("build")
         .arg("--workspace")
+        .arg("--tests")
         .arg("--quiet")
         .current_dir(root)
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// How many test binaries reported results at all.
+///
+/// A mutation run is only meaningful if the suite actually ran. Zero result lines means
+/// the harness learned nothing, which is different from learning that nothing failed.
+fn result_lines(root: &Path) -> usize {
+    let Ok(out) = Command::new(cargo())
+        .arg("test")
+        .arg("--workspace")
+        .current_dir(root)
+        .output()
+    else {
+        return 0;
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.starts_with("test result:"))
+        .count()
 }
 
 fn failing_tests(root: &Path) -> usize {
