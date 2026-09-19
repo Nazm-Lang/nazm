@@ -17,8 +17,15 @@
 
 pub mod cost;
 pub mod outcome;
+pub mod prereg;
+pub mod record;
+pub mod report;
+pub mod selftest;
 pub mod task;
 
 pub use cost::{Cost, CostComponent, Money, Total};
 pub use outcome::{Outcome, PostSuccessCategory};
+pub use prereg::PreRegistration;
+pub use record::Attempt;
+pub use report::{ArmSummary, Comparison};
 pub use task::{Arm, TaskSet, TaskSpec};

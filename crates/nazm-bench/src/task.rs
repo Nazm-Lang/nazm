@@ -6,7 +6,25 @@
 //! benchmark rewards specialisation to that set. `docs/evaluation.md` §3 therefore splits
 //! tasks three ways and gates the holdout behind an implementation freeze.
 //!
-//! A comment saying "don't open the holdout early" is not a control. [`Freeze`] is.
+//! # What [`Freeze`] does and does not do
+//!
+//! It prevents **accidental early access through this API**. That is worth having and it
+//! is all it is. It is a workflow control, not an isolation boundary:
+//!
+//! * anyone who can call [`Freeze::new`] can construct one, so it stops mistakes, not
+//!   intent — though [`Freeze::verify_against_repo`] at least makes a forged one fail
+//!   against the actual repository;
+//! * it does nothing about the filesystem. An agent, a developer, or any other tool with
+//!   read access to the corpus directory can read holdout fixtures without going through
+//!   [`TaskSpec::open`] at all;
+//! * it says nothing about repository history, logs, or CI artifacts, all of which can
+//!   leak fixture content.
+//!
+//! **Real isolation for the gate run requires the holdout corpus to live outside the
+//! agent's accessible environment entirely** — a separate host or credential-gated store,
+//! fetched by the harness after the freeze and never mounted where the agent can reach it.
+//! That is an operational requirement recorded in `docs/evaluation.md` §3, not something
+//! this module can enforce.
 
 use std::fmt;
 
@@ -95,10 +113,10 @@ impl TaskSet {
 
 /// Evidence that the implementation freeze has happened.
 ///
-/// Carries the git tag everything under evaluation was fixed at. There is no way to
-/// construct one without naming that tag, and [`TaskSpec::open`] will not hand back a
-/// holdout task without it — so reading the holdout early requires deliberately forging a
-/// freeze, which is a thing a reviewer can see in a diff.
+/// Carries the git tag and commit everything under evaluation was fixed at.
+/// [`TaskSpec::open`] will not hand back a holdout fixture path without one, so opening
+/// the holdout early through this API requires deliberately forging a freeze — visible in
+/// a diff. See the module docs for what this does **not** protect against.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Freeze {
     tag: String,
@@ -129,6 +147,42 @@ impl Freeze {
     pub fn commit(&self) -> &str {
         &self.commit
     }
+
+    /// Check the freeze against the actual repository: the tag must exist and must resolve
+    /// to the recorded commit.
+    ///
+    /// A `Freeze` built by hand claims a freeze happened. This is what turns the claim
+    /// into something checkable, so that a run record naming a tag nobody ever created —
+    /// or a tag that has since been moved — fails rather than being believed.
+    ///
+    /// It still does not make the holdout unreadable by other means; see the module docs.
+    pub fn verify_against_repo(&self, repo: &std::path::Path) -> Result<(), FreezeError> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["rev-list", "-n", "1"])
+            .arg(&self.tag)
+            .output()
+            .map_err(|e| FreezeError::RepoUnreadable(e.to_string()))?;
+
+        if !out.status.success() {
+            return Err(FreezeError::UnknownTag {
+                tag: self.tag.clone(),
+            });
+        }
+
+        let resolved = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        // Accept an abbreviated commit, as long as it is a genuine prefix of the full one.
+        if resolved.starts_with(&self.commit) {
+            Ok(())
+        } else {
+            Err(FreezeError::TagMovedOrMismatched {
+                tag: self.tag.clone(),
+                recorded: self.commit.clone(),
+                actual: resolved,
+            })
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -137,6 +191,19 @@ pub enum FreezeError {
     MissingTag,
     #[error("a freeze must name the commit it froze")]
     MissingCommit,
+    #[error("could not read the repository to verify the freeze: {0}")]
+    RepoUnreadable(String),
+    #[error("freeze names tag {tag}, which does not exist in the repository")]
+    UnknownTag { tag: String },
+    #[error(
+        "freeze names tag {tag} at commit {recorded}, but the tag resolves to {actual}. \
+         Either the tag moved or the record is wrong; neither may be evaluated."
+    )]
+    TagMovedOrMismatched {
+        tag: String,
+        recorded: String,
+        actual: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -196,6 +263,8 @@ impl TaskSpec {
     ///
     /// `freeze` is `Option` rather than two separate methods so that the check happens on
     /// every access rather than at one call site a future refactor might route around.
+    /// Note this returns a *path*, and holds no authority over that path: anything with
+    /// filesystem access can read it directly. See the module docs.
     pub fn open(&self, freeze: Option<&Freeze>) -> Result<&str, AccessError> {
         if self.set.is_freely_readable() || freeze.is_some() {
             Ok(&self.fixture)
@@ -286,6 +355,33 @@ mod tests {
             let task = TaskSpec::new("crud-01", Family::ValidatedCrudApi, set, "dev/crud-01");
             assert!(task.open(None).is_ok());
         }
+    }
+
+    #[test]
+    fn a_forged_freeze_fails_against_the_real_repository() {
+        // `Freeze::new` accepts anything, which is why it is a workflow control and not a
+        // boundary. Verification is what makes a fabricated one detectable.
+        let forged = Freeze::new("gate-v1-that-never-existed", "deadbeef").unwrap();
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        match forged.verify_against_repo(repo) {
+            Err(FreezeError::UnknownTag { tag }) => {
+                assert_eq!(tag, "gate-v1-that-never-existed");
+            }
+            // A machine without git, or a non-repo checkout, is not a test failure.
+            Err(FreezeError::RepoUnreadable(_)) => {}
+            other => panic!("a forged freeze must not verify: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn opening_a_holdout_returns_only_a_path_not_protection() {
+        // Documents the limit in an executable form: `open` hands back a path, and the
+        // path is readable by anything with filesystem access. Real isolation for the gate
+        // run is operational, not type-level.
+        let freeze = Freeze::new("gate-v1", "abc1234").unwrap();
+        let task = holdout_task();
+        let path = task.open(Some(&freeze)).unwrap();
+        assert_eq!(path, "holdout/tenant-iso-07");
     }
 
     #[test]
