@@ -103,6 +103,17 @@ pub struct AttemptConfig {
     pub postgres_image: String,
     pub block: SubnetBlock,
     pub limits: Limits,
+    /// Test hook: abort the process immediately after this role's resource is created and
+    /// **before** its creation is recorded.
+    ///
+    /// That window is the one the ledger exists for and the one nothing else can reach.
+    /// A child that exits after a full bring-up leaves complete records; only a process
+    /// that dies between the create returning and the write landing produces a resource
+    /// whose engine id was never learned. Simulating it needs a real abort at a
+    /// deterministic point, so the hook lives here rather than in a test.
+    ///
+    /// `None` in every real run. The CLI flag that sets it is hidden.
+    pub die_after_create: Option<String>,
     /// Harness-side scratch, mounted read-only into the database container for its init
     /// script. Never writable from any container.
     pub scratch: std::path::PathBuf,
@@ -193,7 +204,20 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
         create: impl FnOnce(&E) -> Result<ResourceId, EngineError>,
     ) -> Result<(), SandboxError> {
         self.ledger.intend(&self.cfg.attempt, &id)?;
-        match create(self.engine) {
+        let created = create(self.engine);
+
+        // The interruption window, reachable only here: the resource exists, and nothing
+        // has recorded that it does.
+        if let (Ok(_), Some(role)) = (&created, &self.cfg.die_after_create) {
+            if id.name.ends_with(role.as_str()) {
+                // `abort`, not `exit`: no unwinding, no destructors, no chance for
+                // anything to tidy up on the way out. A clean exit would not reproduce
+                // what a killed process leaves behind.
+                std::process::abort();
+            }
+        }
+
+        match created {
             // Keep what the engine returned, not what we asked for. Later operations
             // address the resource by its engine-assigned id where there is one, so a
             // name that changes hands cannot redirect a removal.
@@ -292,6 +316,14 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
     #[must_use]
     pub fn credentials(&self) -> &Credentials {
         &self.credentials
+    }
+
+    /// The two container specifications, exposed so the separation between what the
+    /// database is given and what the candidate is given can be asserted rather than
+    /// described.
+    #[must_use]
+    pub fn specs(&self) -> (ContainerSpec, ContainerSpec) {
+        (self.db_spec(), self.candidate_spec())
     }
 
     fn db_spec(&self) -> ContainerSpec {

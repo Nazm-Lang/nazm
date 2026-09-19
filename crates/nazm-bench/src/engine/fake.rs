@@ -323,6 +323,29 @@ impl ContainerEngine for FakeEngine {
         })
     }
 
+    fn wait_until_exit(
+        &self,
+        id: &ResourceId,
+        _deadline: std::time::Duration,
+    ) -> Result<Option<ContainerState>, EngineError> {
+        // The fake has no clock: a container it was told to stop is stopped, and one it
+        // was not is still running and would never exit. Modelling a timeout would mean
+        // modelling time, and the timeout path is a claim about Docker anyway.
+        let state = self.inspect(id)?;
+        Ok((!state.running).then_some(state))
+    }
+
+    fn logs(&self, id: &ResourceId) -> Result<String, EngineError> {
+        let w = self
+            .world
+            .lock()
+            .map_err(|_| EngineError::DaemonUnreachable("poisoned".into()))?;
+        w.containers
+            .get(&id.name)
+            .map(|_| String::new())
+            .ok_or_else(|| EngineError::NotFound { id: id.clone() })
+    }
+
     fn remove(&self, id: &ResourceId, force: bool) -> Result<(), EngineError> {
         let mut w = self
             .world

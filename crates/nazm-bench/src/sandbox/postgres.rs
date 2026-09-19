@@ -98,11 +98,47 @@ GRANT USAGE, CREATE ON SCHEMA public TO {role};
     Ok(init_dir)
 }
 
-/// The SQL that proves the role is what it claims to be.
+/// Drop and recreate the application database, as the superuser.
+///
+/// Run between the development phase and grading. Fresh state *between attempts* is not
+/// the same property: within one attempt the candidate has spent its whole run writing to
+/// this database, and grading it against that state would let a submission pass by having
+/// left the right rows behind rather than by doing the work. The acceptance phase has to
+/// start from the same empty database the task statement describes.
+///
+/// `WITH (FORCE)` because the candidate's connections are still open — it is not asked to
+/// Returned as separate statements, not one string: `psql -c` wraps a multi-statement
+/// argument in a single transaction, and `DROP DATABASE` cannot run inside one. Each has
+/// to be sent on its own — found the direct way, by the reset failing with
+/// "DROP DATABASE cannot run inside a transaction block".
+#[must_use]
+pub fn reset_statements(creds: &Credentials) -> Vec<String> {
+    vec![
+        format!("DROP DATABASE IF EXISTS {} WITH (FORCE)", creds.database),
+        format!(
+            "CREATE DATABASE {db} OWNER {role} ENCODING 'UTF8' TEMPLATE template0",
+            db = creds.database,
+            role = creds.app_role
+        ),
+        // The grants the init script set up do not survive a recreate.
+        format!("REVOKE ALL ON DATABASE {} FROM PUBLIC", creds.database),
+        format!(
+            "GRANT CONNECT, TEMPORARY ON DATABASE {db} TO {role}",
+            db = creds.database,
+            role = creds.app_role
+        ),
+    ]
+}
+
+/// The SQL that checks the role against the escalation routes this project tests for.
 ///
 /// Run once per attempt after readiness. Every value must be `f`. This turns the central
 /// security decision from a comment into a recorded per-attempt fact, and costs about
 /// fifty milliseconds.
+///
+/// It covers the **tested** routes — the five role attributes and the three server-file /
+/// program-execution predefined roles — not every conceivable one. A future PostgreSQL
+/// release could add another, and this list would not know.
 #[must_use]
 pub fn privilege_assertion_sql(role: &str) -> String {
     format!(
@@ -163,7 +199,31 @@ mod tests {
     }
 
     #[test]
-    fn the_privilege_assertion_covers_every_escalation_route() {
+    fn the_reset_forces_the_candidates_connections_closed() {
+        // The candidate is not asked to disconnect, and would not be trusted to if it
+        let c = Credentials::generate().unwrap();
+        let stmts = reset_statements(&c);
+        let joined = stmts.join(" | ");
+        assert!(joined.contains("WITH (FORCE)"), "{joined}");
+        assert!(
+            joined.contains("TEMPLATE template0"),
+            "must not inherit template1: {joined}"
+        );
+        assert!(joined.contains(&format!("OWNER {}", c.app_role)));
+        // Separate statements, not one string: `psql -c` wraps a multi-statement argument
+        // in a transaction, and DROP DATABASE cannot run inside one.
+        assert!(
+            stmts.iter().all(|s| !s.contains(';')),
+            "statements must not be joined: {stmts:?}"
+        );
+        assert!(
+            stmts.len() >= 4,
+            "the reset must restore the grants too: {stmts:?}"
+        );
+    }
+
+    #[test]
+    fn the_privilege_assertion_covers_the_tested_escalation_routes() {
         let sql = privilege_assertion_sql("app");
         for route in [
             "rolsuper",

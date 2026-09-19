@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use nazm_bench::engine::docker::DockerCli;
 use nazm_bench::engine::{ContainerEngine, ResourceId, ResourceKind};
 use nazm_bench::sandbox::attempt::{AttemptConfig, Disposition, Limits, Sandbox};
-use nazm_bench::sandbox::ledger::Ledger;
+use nazm_bench::sandbox::ledger::{Ledger, State};
 use nazm_bench::sandbox::network::SubnetBlock;
 
 fn serial() -> &'static Mutex<()> {
@@ -80,6 +80,7 @@ fn config(attempt: &str, owner: &str) -> AttemptConfig {
         },
         limits: Limits::default(),
         scratch: scratch_dir(),
+        die_after_create: None,
     }
 }
 
@@ -396,4 +397,258 @@ fn each_attempt_gets_fresh_database_state() {
         assert_ne!(code, 0, "attempt two saw attempt one's table: {out}");
         assert_eq!(sb.teardown(), Disposition::Clean);
     }
+}
+
+#[test]
+fn the_candidate_cannot_read_another_attempts_workspace_or_the_acceptance_corpus() {
+    let Some(cli) = docker_or_skip() else { return };
+    let _guard = serial()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = tempfile::tempdir().unwrap();
+    let led = Ledger::open(dir.path().join("r.jsonl"), "dockertest").unwrap();
+
+    // The acceptance corpus lives on the host and is mounted into no candidate, ever.
+    let corpus = dir.path().join("acceptance");
+    std::fs::create_dir_all(&corpus).unwrap();
+    std::fs::write(corpus.join("expected.txt"), "THE-ACCEPTANCE-ANSWER").unwrap();
+
+    // Attempt A: write a sentinel into its work volume, then tear it down leaving the
+    // volume behind, so there is something real for attempt B to fail to reach.
+    let mut a = Sandbox::start(&cli, &led, config("probea", "owner-probea"))
+        .map_err(|(e, _)| e)
+        .expect("bring-up A");
+    let a_work = a.names().work_volume.clone();
+    exec(
+        &a.names().candidate,
+        &["sh", "-c", "echo ATTEMPT-A-SECRET > /work/secret.txt"],
+    );
+
+    // POSITIVE CONTROL 1: the sentinel really is there and really is readable from a
+    // container that mounts that volume. Without this, a later "cannot read" proves
+    // only that the path was wrong.
+    let seen = std::process::Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{a_work}:/w:ro"),
+            BUSY,
+            "cat",
+            "/w/secret.txt",
+        ])
+        .output()
+        .expect("read A's volume");
+    assert!(
+        String::from_utf8_lossy(&seen.stdout).contains("ATTEMPT-A-SECRET"),
+        "the sentinel was never written, so the denial below would prove nothing"
+    );
+
+    // POSITIVE CONTROL 2: the corpus file is readable when it is mounted.
+    let seen = std::process::Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{}:/c:ro", corpus.display()),
+            BUSY,
+        ])
+        .args(["cat", "/c/expected.txt"])
+        .output()
+        .expect("read the corpus");
+    assert!(
+        String::from_utf8_lossy(&seen.stdout).contains("THE-ACCEPTANCE-ANSWER"),
+        "the corpus fixture is missing, so the denial below would prove nothing"
+    );
+
+    // Attempt B runs while A's volume still exists.
+    let mut b = Sandbox::start(&cli, &led, config("probeb", "owner-probeb"))
+        .map_err(|(e, _)| e)
+        .expect("bring-up B");
+    let bname = b.names().candidate.clone();
+
+    // It cannot see A's work through its own mount.
+    let (out, code) = exec(&bname, &["cat", "/work/secret.txt"]);
+    assert_ne!(code, 0, "attempt B read attempt A's file: {out}");
+    assert!(
+        !out.contains("ATTEMPT-A-SECRET"),
+        "attempt A's secret leaked: {out}"
+    );
+
+    // Nor by naming the volume's path on the host, which is inside the Docker VM and
+    // outside B's mount namespace entirely.
+    let (out, code) = exec(
+        &bname,
+        &[
+            "sh",
+            "-c",
+            &format!("cat /var/lib/docker/volumes/{a_work}/_data/secret.txt"),
+        ],
+    );
+    assert_ne!(code, 0, "attempt B reached A's volume by host path: {out}");
+    assert!(
+        !out.contains("ATTEMPT-A-SECRET"),
+        "secret leaked by host path: {out}"
+    );
+
+    // Nor the acceptance corpus, by the path it actually occupies on the host.
+    let (out, code) = exec(
+        &bname,
+        &["cat", corpus.join("expected.txt").to_str().unwrap()],
+    );
+    assert_ne!(code, 0, "the candidate read the acceptance corpus: {out}");
+    assert!(
+        !out.contains("THE-ACCEPTANCE-ANSWER"),
+        "the answer key leaked: {out}"
+    );
+
+    assert_eq!(b.teardown(), Disposition::Clean);
+    assert_eq!(a.teardown(), Disposition::Clean);
+}
+
+#[test]
+fn a_harness_killed_between_creating_and_recording_is_still_recoverable() {
+    // The window the ledger exists for, and the only one nothing else reaches: the
+    // resource exists and its creation was never recorded, so only the `Intended` entry
+    // and the ownership label connect it to this run.
+    let Some(cli) = docker_or_skip() else { return };
+    let _guard = serial()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = tempfile::tempdir().unwrap();
+    let ledger_path = dir.path().join("r.jsonl");
+    let owner = "owner-window";
+
+    // The child aborts immediately after creating the network, before recording it.
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_nazm-bench"))
+        .args(["sandbox-leak", "--ledger"])
+        .arg(&ledger_path)
+        .arg("--scratch")
+        .arg(dir.path())
+        .args(["--run", "dockertest", "--attempt", "win1", "--owner", owner])
+        .args(["--die-after-create", "net"])
+        .status()
+        .expect("spawn child harness");
+    assert!(
+        !status.success(),
+        "the child was supposed to abort, not exit cleanly"
+    );
+
+    // The network exists.
+    let leaked = cli.list_by_label("nazm.attempt", "win1").unwrap();
+    assert!(
+        !leaked.is_empty(),
+        "nothing was created, so there is nothing to recover"
+    );
+
+    // And the ledger knows only that it was *intended* — the engine id was never learned.
+    let led = Ledger::open(&ledger_path, "dockertest").unwrap();
+    let outstanding = led.outstanding().unwrap();
+    let entry = outstanding.first().expect("an outstanding claim");
+    assert_eq!(
+        entry.state,
+        State::Intended,
+        "the create was recorded despite the abort"
+    );
+    assert!(
+        entry.resource.engine_id.is_none(),
+        "the engine id was recorded, so this is not the window under test"
+    );
+
+    // A separate process recovers it anyway, by asking who owns the name.
+    let result = nazm_bench::sandbox::recovery::reconcile(&cli, &led, owner).unwrap();
+    assert!(result.is_clear(), "unresolved: {:?}", result.unresolved);
+    assert_eq!(
+        result.removed.len(),
+        1,
+        "expected the network removed: {result:?}"
+    );
+    assert!(
+        cli.list_by_label("nazm.attempt", "win1")
+            .unwrap()
+            .is_empty(),
+        "the resource survived recovery"
+    );
+}
+
+/// psql as the superuser, for the acceptance reset. Never reachable from the candidate.
+fn psql_admin(
+    network: &str,
+    creds: &nazm_bench::sandbox::postgres::Credentials,
+    sql: &str,
+) -> (String, i32) {
+    let out = std::process::Command::new("docker")
+        .args(["run", "--rm", "--network", network, "-e"])
+        .arg(format!("PGPASSWORD={}", creds.superuser_password))
+        .args([
+            PG,
+            "psql",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-h",
+            "db",
+            "-U",
+            "postgres",
+        ])
+        .args(["-d", "postgres", "-tAc", sql])
+        .output()
+        .expect("psql admin");
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (text, out.status.code().unwrap_or(-1))
+}
+
+#[test]
+fn development_state_cannot_carry_into_acceptance_within_one_attempt() {
+    // Distinct from freshness *between* attempts. Inside one attempt the candidate spends
+    // its whole run writing to this database; grading against that state would let a
+    // submission pass by leaving the right rows behind rather than by doing the work.
+    let Some(cli) = docker_or_skip() else { return };
+    let _guard = serial()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = tempfile::tempdir().unwrap();
+    let led = Ledger::open(dir.path().join("r.jsonl"), "dockertest").unwrap();
+
+    let mut sb = Sandbox::start(&cli, &led, config("reset1", "owner-reset1"))
+        .map_err(|(e, _)| e)
+        .expect("bring-up failed");
+    let (net, creds) = (sb.names().network.clone(), sb.credentials().clone());
+    assert!(wait_ready(&net, &creds), "never became ready");
+
+    // Development phase: the candidate leaves state behind, including an open connection.
+    let (out, code) = psql(
+        &net,
+        &creds,
+        "CREATE TABLE answers(v text); INSERT INTO answers VALUES ('left-behind');",
+    );
+    assert_eq!(code, 0, "{out}");
+
+    // POSITIVE CONTROL: it really is there before the reset, so the absence afterwards
+    // reflects the reset rather than a write that never happened.
+    let (out, code) = psql(&net, &creds, "SELECT v FROM answers");
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("left-behind"),
+        "the fixture was never written: {out}"
+    );
+
+    // Reset for grading, as the superuser — a capability the candidate does not have.
+    for stmt in nazm_bench::sandbox::postgres::reset_statements(&creds) {
+        let (out, code) = psql_admin(&net, &creds, &stmt);
+        assert_eq!(code, 0, "reset statement failed ({stmt}): {out}");
+    }
+
+    // Acceptance phase: the table is gone, and the role can still work.
+    let (out, code) = psql(&net, &creds, "SELECT v FROM answers");
+    assert_ne!(code, 0, "development state survived into acceptance: {out}");
+    assert!(
+        !out.contains("left-behind"),
+        "the row survived the reset: {out}"
+    );
+
+    let (out, code) = psql(&net, &creds, "CREATE TABLE fresh(x int); SELECT 1;");
+    assert_eq!(code, 0, "the role lost its grants across the reset: {out}");
+
+    assert_eq!(sb.teardown(), Disposition::Clean);
 }

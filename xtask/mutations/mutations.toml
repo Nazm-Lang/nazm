@@ -184,3 +184,16 @@ find = """                a.run == b.run
                     && a.resource.kind == b.resource.kind"""
 replace = """                a.resource.kind == b.resource.kind"""
 
+
+[[mutation]]
+name = "candidate-receives-admin-credentials"
+why = "hands the superuser password to the candidate alongside its own restricted URL"
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = """            env: vec![("DATABASE_URL".to_owned(), self.credentials.candidate_url())],"""
+replace = """            env: vec![
+                ("DATABASE_URL".to_owned(), self.credentials.candidate_url()),
+                (
+                    "POSTGRES_PASSWORD".to_owned(),
+                    self.credentials.superuser_password.clone(),
+                ),
+            ],"""

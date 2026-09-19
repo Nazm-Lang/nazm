@@ -246,6 +246,24 @@ pub trait ContainerEngine: fmt::Debug {
     /// Subnets currently in use, for the allocation-time collision check.
     fn subnets_in_use(&self) -> Result<Vec<String>, EngineError>;
 
+    /// Block until the container exits, or the deadline passes.
+    ///
+    /// Returns the deadline case as `Ok(None)` rather than an error: a candidate that
+    /// runs out of time is a result about the candidate, and turning it into an engine
+    /// error would route it to the wrong disposition.
+    fn wait_until_exit(
+        &self,
+        id: &ResourceId,
+        deadline: std::time::Duration,
+    ) -> Result<Option<ContainerState>, EngineError>;
+
+    /// A container's combined output. Diagnostic context only.
+    ///
+    /// Candidate-controlled: a process can print "Killed" or "out of memory" whenever it
+    /// likes. It never establishes *why* something ended — that comes from the engine's
+    /// own state — and nothing should classify an outcome from this alone.
+    fn logs(&self, id: &ResourceId) -> Result<String, EngineError>;
+
     /// The `nazm.owner` label on a resource, if it has one.
     ///
     /// `Ok(None)` means the resource exists and is not ours. That is a different answer
