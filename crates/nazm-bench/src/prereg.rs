@@ -5,11 +5,22 @@
 //! results: examine the numbers, then write both files in one commit, and the gate passes.
 //! Consistency is not chronology.
 //!
-//! What makes a registration credible is that the registration event provably preceded the
-//! evaluation. Git gives that for free, if it is actually checked: the registration is a
-//! commit, every run record names it, and the run's own commit must be a **descendant** of
-//! it. A registration written afterwards cannot be an ancestor of a run that already
-//! happened, so the ordering is not a matter of trust.
+//! Git ancestry is the first half of the answer, and an earlier version of this module
+//! overstated it. Requiring the registration commit to be a strict ancestor of the run
+//! commit establishes **ordering within repository history** — it does not establish that
+//! the registration preceded the *experiment*. Someone can run the experiment, then create
+//! the registration commit and the run commit in the required order. History is authored,
+//! not observed.
+//!
+//! The second half is [`Preflight`]: before an agent is launched, the runner verifies the
+//! registration and the freeze, captures what is being evaluated, refuses to proceed from
+//! a dirty tree, and writes a start record. That record is what ties the registration to a
+//! specific execution rather than to a commit graph.
+//!
+//! Neither half is an independent timestamp. Publication-grade chronology needs an
+//! externally recorded registration event — a push whose time the forge records, or a
+//! timestamping service — and this module does not provide one. It must not be described
+//! as if it did.
 //!
 //! What this binds, per `docs/evaluation.md` §6:
 //!
@@ -145,6 +156,63 @@ mod tests {
         }
     }
 
+    fn preflight(prereg_for: &PreRegistration) -> Preflight {
+        Preflight {
+            preregistration: prereg_for.clone(),
+            run_commit: "ffffff".to_owned(),
+            freeze_tag: prereg_for.freeze_tag.clone(),
+            corpus_digest: prereg_for.corpus_digest.clone(),
+            configuration: "model=x;effort=high;turns=40".to_owned(),
+            dependency_digest: "sha256:lock".to_owned(),
+            uncommitted: None,
+            started_at: "2026-09-19T00:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_dirty_tree_blocks_a_run_by_default() {
+        let p = prereg("aaa");
+        let mut pf = preflight(&p);
+        pf.uncommitted = Some("M src/lib.rs".to_owned());
+        assert!(matches!(
+            pf.validate(false),
+            Err(PreflightError::DirtyTree { .. })
+        ));
+        // Allowed explicitly, it proceeds but can never be reported.
+        assert!(pf.validate(true).is_ok());
+        assert!(!pf.is_publishable());
+    }
+
+    #[test]
+    fn a_corpus_the_rules_were_not_registered_against_is_refused() {
+        let p = prereg("aaa");
+        let mut pf = preflight(&p);
+        pf.corpus_digest = "sha256:some-other-tasks".to_owned();
+        assert!(matches!(
+            pf.validate(false),
+            Err(PreflightError::CorpusMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn a_run_at_the_wrong_freeze_is_refused() {
+        let p = prereg("aaa");
+        let mut pf = preflight(&p);
+        pf.freeze_tag = "gate-v2".to_owned();
+        assert!(matches!(
+            pf.validate(false),
+            Err(PreflightError::FreezeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn a_clean_matching_preflight_is_publishable() {
+        let p = prereg("aaa");
+        let pf = preflight(&p);
+        assert!(pf.validate(false).is_ok());
+        assert!(pf.is_publishable());
+    }
+
     #[test]
     fn a_registration_survives_being_superseded() {
         // Two registrations differ by version, so a run reported under v1 is not silently
@@ -154,5 +222,87 @@ mod tests {
         v2.version = 2;
         assert_ne!(v1, v2);
         assert_ne!(v1.version, v2.version);
+    }
+}
+
+/// What the runner captures before launching an agent.
+///
+/// Ancestry proves ordering in the commit graph; this proves what was actually executed.
+/// Together they are much harder to fabricate after the fact than either alone — but see
+/// the module docs: neither is an independent timestamp.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Preflight {
+    pub preregistration: PreRegistration,
+    /// Commit of the implementation under evaluation, resolved at launch.
+    pub run_commit: String,
+    /// The freeze tag, verified to resolve to `run_commit`.
+    pub freeze_tag: String,
+    /// Digest of the task bundle actually loaded, not the one the registration names —
+    /// so a mismatch is visible rather than assumed away.
+    pub corpus_digest: String,
+    /// Model versions, reasoning settings, caps. The pre-registration fixes these; the
+    /// record captures what was really used.
+    pub configuration: String,
+    /// Lockfile digest. "Same configuration" is not the same run if a dependency moved.
+    pub dependency_digest: String,
+    /// Uncommitted changes at launch. Never silently ignored: either the run is refused,
+    /// or the diff is captured here and the run is marked unpublishable.
+    pub uncommitted: Option<String>,
+    /// When the runner started, by the runner's clock. Self-reported, and therefore
+    /// evidence of sequence within a run, not proof of chronology against the world.
+    pub started_at: String,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum PreflightError {
+    #[error(
+        "the working tree has uncommitted changes, so what would be evaluated is not any \
+         commit. Commit them, stash them, or pass the explicit allow-dirty flag, which \
+         marks the run unpublishable."
+    )]
+    DirtyTree { diff: String },
+    #[error(
+        "the task bundle loaded ({loaded}) is not the one the pre-registration names \
+         ({registered}). The rules were registered against different tasks."
+    )]
+    CorpusMismatch { registered: String, loaded: String },
+    #[error("the pre-registration expects freeze tag {expected}, but the run is at {actual}")]
+    FreezeMismatch { expected: String, actual: String },
+}
+
+impl Preflight {
+    /// Check the run against what was registered, before any agent is launched.
+    ///
+    /// `allow_dirty` exists because refusing outright would push people to commit noise
+    /// mid-experiment; it records the diff and the caller is required to mark the run
+    /// unpublishable.
+    pub fn validate(&self, allow_dirty: bool) -> Result<(), PreflightError> {
+        if let Some(diff) = &self.uncommitted {
+            if !allow_dirty {
+                return Err(PreflightError::DirtyTree { diff: diff.clone() });
+            }
+        }
+        if self.corpus_digest != self.preregistration.corpus_digest {
+            return Err(PreflightError::CorpusMismatch {
+                registered: self.preregistration.corpus_digest.clone(),
+                loaded: self.corpus_digest.clone(),
+            });
+        }
+        if self.freeze_tag != self.preregistration.freeze_tag {
+            return Err(PreflightError::FreezeMismatch {
+                expected: self.preregistration.freeze_tag.clone(),
+                actual: self.freeze_tag.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether results from this run may be published.
+    ///
+    /// A dirty tree does not invalidate a debugging run; it does mean the run is not
+    /// attributable to a commit, so it cannot be reported.
+    #[must_use]
+    pub fn is_publishable(&self) -> bool {
+        self.uncommitted.is_none()
     }
 }

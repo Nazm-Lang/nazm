@@ -69,7 +69,9 @@ fn check(name: &'static str, passed: bool, detail: impl Into<String>) -> CaseRes
 #[must_use]
 pub fn run() -> Vec<CaseResult> {
     vec![
-        failed_attempts_stay_in_the_denominator(),
+        failure_costs_stay_in_the_cost_numerator(),
+        acceptance_rate_divides_by_every_counted_attempt(),
+        the_two_metrics_use_different_denominators(),
         void_attempts_leave_both_numerator_and_denominator(),
         a_timeout_is_a_failure_not_a_void(),
         overfitting_is_not_acceptance(),
@@ -86,7 +88,20 @@ pub fn run() -> Vec<CaseResult> {
 
 /// Three failures and one acceptance: cost per accepted is the whole spend, not a quarter
 /// of it. An arm that fails cheaply and often is not cheap.
-fn failed_attempts_stay_in_the_denominator() -> CaseResult {
+///
+/// Named for the *numerator*, deliberately. An earlier version called this "failed
+/// attempts stay in the denominator", which conflated two metrics with two different
+/// denominators:
+///
+/// ```text
+/// cost per accepted = cost of EVERY attempt / count of ACCEPTED attempts
+/// acceptance rate   = count of ACCEPTED    / count of EVERY counted attempt
+/// ```
+///
+/// Failures belong in the cost **numerator** and in the acceptance-rate **denominator** —
+/// never in the cost-per-accepted denominator. The two are exercised separately below,
+/// because a mutation in one does not necessarily show up in the other.
+fn failure_costs_stay_in_the_cost_numerator() -> CaseResult {
     let attempts = vec![
         attempt(
             Arm::Nazm,
@@ -116,7 +131,7 @@ fn failed_attempts_stay_in_the_denominator() -> CaseResult {
     let s = report::summarise(Arm::Nazm, &attempts);
     let got = s.cost_per_accepted.map(|m| m.as_micros());
     check(
-        "failed attempts stay in the denominator",
+        "failure costs stay in the cost numerator",
         got == Some(4_000_000) && s.accepted == 1 && s.attempts == 4,
         format!(
             "expected $4.00 per accepted over 4 attempts, got {got:?} over {}",
@@ -511,6 +526,99 @@ fn a_forged_freeze_fails_against_the_repository() -> CaseResult {
     )
 }
 
+/// The acceptance-rate denominator is every counted attempt, not just the acceptances.
+///
+/// This case exists because it was missing, and the gap was demonstrated rather than
+/// assumed: a mutation dividing acceptances by acceptances — pinning the rate at 1.0 for
+/// every arm — passed the entire self-test suite. Δp is a primary gate estimand and the
+/// absolute 60% usability floor reads this number directly, so an arm could have looked
+/// perfect on both while failing three attempts in four.
+fn acceptance_rate_divides_by_every_counted_attempt() -> CaseResult {
+    let attempts = vec![
+        attempt(
+            Arm::Nazm,
+            Family::ValidatedCrudApi,
+            Outcome::Accepted,
+            paid(1_000_000),
+        ),
+        attempt(
+            Arm::Nazm,
+            Family::ValidatedCrudApi,
+            Outcome::WrongAnswer,
+            paid(1_000_000),
+        ),
+        attempt(
+            Arm::Nazm,
+            Family::ValidatedCrudApi,
+            Outcome::WrongAnswer,
+            paid(1_000_000),
+        ),
+        attempt(
+            Arm::Nazm,
+            Family::ValidatedCrudApi,
+            Outcome::Timeout {
+                limit: Limit::Turns,
+            },
+            paid(1_000_000),
+        ),
+    ];
+    let s = report::summarise(Arm::Nazm, &attempts);
+    let rate = s.acceptance_rate;
+    check(
+        "acceptance rate divides by every counted attempt",
+        rate.is_some_and(|r| (r - 0.25).abs() < 1e-9),
+        format!("expected 1 of 4 counted attempts = 0.25, got {rate:?}"),
+    )
+}
+
+/// The two metrics must not share a denominator.
+///
+/// ```text
+/// cost per accepted = cost of EVERY attempt / count of ACCEPTED attempts
+/// acceptance rate   = count of ACCEPTED     / count of EVERY counted attempt
+/// ```
+///
+/// Constructed so a single shared denominator cannot satisfy both: the cost figure is
+/// $4.00 only when divided by 1 acceptance, and the rate is 0.25 only when divided by 4
+/// counted attempts. Any implementation using one denominator for both fails here,
+/// whichever one it picked.
+fn the_two_metrics_use_different_denominators() -> CaseResult {
+    let attempts = vec![
+        attempt(
+            Arm::Nazm,
+            Family::CancellableJob,
+            Outcome::Accepted,
+            paid(1_000_000),
+        ),
+        attempt(
+            Arm::Nazm,
+            Family::CancellableJob,
+            Outcome::WrongAnswer,
+            paid(1_000_000),
+        ),
+        attempt(
+            Arm::Nazm,
+            Family::CancellableJob,
+            Outcome::WrongAnswer,
+            paid(1_000_000),
+        ),
+        attempt(
+            Arm::Nazm,
+            Family::CancellableJob,
+            Outcome::WrongAnswer,
+            paid(1_000_000),
+        ),
+    ];
+    let s = report::summarise(Arm::Nazm, &attempts);
+    let cost = s.cost_per_accepted.map(|m| m.as_micros());
+    let rate = s.acceptance_rate;
+    check(
+        "the two metrics use different denominators",
+        cost == Some(4_000_000) && rate.is_some_and(|r| (r - 0.25).abs() < 1e-9),
+        format!("expected cost $4.00 (/1) and rate 0.25 (/4), got {cost:?} and {rate:?}"),
+    )
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -528,6 +636,6 @@ mod tests {
     #[test]
     fn the_selftest_covers_every_outcome_class() {
         // A self-test that silently stopped exercising a case would be worse than none.
-        assert!(super::run().len() >= 12);
+        assert!(super::run().len() >= 14);
     }
 }
