@@ -230,7 +230,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes {
         hash ^= u64::from(*b);
-        hash = hash.wrapping_mul(0x1000_0000_01b3);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
 }
