@@ -39,7 +39,9 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 /// An immutable reference to a pre-registration, recorded on every run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// No `Eq`: `max_void_rate` is an f64. `PartialEq` is what comparisons here need, and
+// deriving `Eq` on a float would be a lie about the type rather than a convenience.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PreRegistration {
     /// Commit containing the registered protocol and analysis rules.
     pub commit: String,
@@ -49,6 +51,14 @@ pub struct PreRegistration {
     pub corpus_digest: String,
     /// The implementation freeze tag this registration expects to be evaluated at.
     pub freeze_tag: String,
+    /// The void rate above which an arm's results are not usable.
+    ///
+    /// Evaluator faults stay outside the *acceptance-rate* denominator under the
+    /// registered policy, but that licence has a limit: past some rate the comparison is
+    /// no longer between two arms, it is between one arm and a partly-broken measurement
+    /// of another. Registered in advance so the threshold is not chosen after seeing which
+    /// arm breached it.
+    pub max_void_rate: f64,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -70,6 +80,15 @@ pub enum ChronologyError {
 }
 
 impl PreRegistration {
+    /// Whether an arm's void rate is within the registered tolerance.
+    ///
+    /// `None` when there were no attempts to rate. Registered in advance so the threshold
+    /// is not chosen after seeing which arm breached it.
+    #[must_use]
+    pub fn void_rate_acceptable(&self, observed: Option<f64>) -> Option<bool> {
+        observed.map(|r| r <= self.max_void_rate)
+    }
+
     /// Verify that this registration genuinely precedes `run_commit`.
     ///
     /// Uses `git merge-base --is-ancestor`, which answers exactly the question that
@@ -129,6 +148,7 @@ mod tests {
             version: 1,
             corpus_digest: "sha256:deadbeef".to_owned(),
             freeze_tag: "gate-v1".to_owned(),
+            max_void_rate: 0.05,
         }
     }
 
@@ -214,6 +234,16 @@ mod tests {
     }
 
     #[test]
+    fn the_void_rate_tolerance_is_registered_in_advance() {
+        // Choosing the threshold after seeing which arm breached it is the thing this
+        // field exists to prevent.
+        let p = prereg("aaa");
+        assert_eq!(p.void_rate_acceptable(Some(0.04)), Some(true));
+        assert_eq!(p.void_rate_acceptable(Some(0.20)), Some(false));
+        assert_eq!(p.void_rate_acceptable(None), None);
+    }
+
+    #[test]
     fn a_registration_survives_being_superseded() {
         // Two registrations differ by version, so a run reported under v1 is not silently
         // reinterpreted when v2 changes the rules.
@@ -230,7 +260,7 @@ mod tests {
 /// Ancestry proves ordering in the commit graph; this proves what was actually executed.
 /// Together they are much harder to fabricate after the fact than either alone — but see
 /// the module docs: neither is an independent timestamp.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Preflight {
     pub preregistration: PreRegistration,
     /// Commit of the implementation under evaluation, resolved at launch.

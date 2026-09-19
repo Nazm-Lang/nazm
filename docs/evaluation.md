@@ -116,6 +116,11 @@ most of the work. Always reported with it:
 - regressions introduced (maintenance tasks)
 - human interventions required
 - unsuccessful repair cycles
+- **void count and void rate, per arm** — evaluator faults stay outside the acceptance-rate
+  denominator under the registered policy, but that licence has a registered limit
+  (`max_void_rate`). Past it the comparison is no longer between two arms, it is between
+  one arm and a partly-broken measurement of another, and the run is repeated or
+  invalidated rather than averaged
 
 **Cost** is three separate lines, never silently summed into one:
 model charges · execution infrastructure · logged human intervention.
