@@ -110,9 +110,11 @@ interruption leaves a resource nothing knows the name of
 """
 file = "crates/nazm-bench/src/sandbox/attempt.rs"
 find = """        self.ledger.intend(&self.cfg.attempt, &id)?;
-        create(self.engine)?;"""
-replace = """        create(self.engine)?;
-        self.ledger.intend(&self.cfg.attempt, &id)?;"""
+        match create(self.engine) {"""
+replace = """        let _deferred = &id;
+        match create(self.engine).inspect(|_| {
+            let _ = self.ledger.intend(&self.cfg.attempt, &id);
+        }) {"""
 
 [[mutation]]
 name = "allocator-ignores-occupied-subnets"
@@ -120,3 +122,30 @@ why = "hands out a subnet already in use, including by networks the harness does
 file = "crates/nazm-bench/src/sandbox/network.rs"
 find = "        if !in_use.iter().any(|s| overlaps(s, &candidate.cidr())) {"
 replace = "        if true {"
+
+[[mutation]]
+name = "removal-skips-the-ownership-check"
+why = """
+removes a resource on the strength of the ledger's recorded intention alone, which deletes
+a stranger's container whenever a create failed because the name was already taken
+"""
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = "            Ownership::Absent => Ok(true),"
+replace = "            Ownership::Absent | Ownership::Foreign { .. } => Ok(true),"
+
+[[mutation]]
+name = "recovery-ignores-ownership"
+why = "cross-process recovery removes every ledger-claimed name without checking the token"
+file = "crates/nazm-bench/src/sandbox/recovery.rs"
+find = "            Ownership::Foreign { found } => out.foreign.push((id.clone(), found)),"
+replace = "            Ownership::Foreign { .. } => { let _ = engine.remove(id, true); }"
+
+[[mutation]]
+name = "recovery-ignores-dependency-order"
+why = """
+reconciles in ledger order, so a network is removed while its containers are still
+attached -- the engine refuses and the leftovers stay
+"""
+file = "crates/nazm-bench/src/sandbox/recovery.rs"
+find = "        .filter(|e| e.resource.kind == ResourceKind::Container)\n        .chain("
+replace = "        .filter(|e| e.resource.kind != ResourceKind::Container)\n        .chain("
