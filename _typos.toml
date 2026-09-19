@@ -1,0 +1,3 @@
+[default.extend-words]
+# "Nazm" and its transliterations are not typos.
+nazm = "nazm"

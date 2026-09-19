@@ -1,0 +1,108 @@
+# Nazm — an AI-native programming language.
+#
+# Design record: docs/architecture.md · Spec: docs/spec.md
+# Evaluation protocol and pre-registered decision rule: docs/evaluation.md
+# Plan: ~/.claude/plans/in-my-download-folder-sparkling-minsky.md
+#
+# Phase 2 is the whole workspace right now: a benchmark harness and the
+# architectural gates. There is deliberately no compiler here yet — the harness
+# has to work, and be shown to work, before the language is worth building.
+
+[workspace]
+resolver = "2"
+members = ["crates/nazm-bench", "xtask"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+# Pinned toolchain is 1.98.1 (see rust-toolchain.toml). This floor is lower on
+# purpose: it is the oldest compiler the Phase 2 crates actually need, and CI
+# verifies the claim rather than trusting it. The floor will rise to 1.95+ when
+# cranelift arrives in Stage 7 — at which point this line is the thing that has
+# to change deliberately.
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/mdferdousalam/nazm"
+homepage = "https://github.com/mdferdousalam/nazm"
+authors = ["Md Ferdous Alam <mdferdousalam1989@yahoo.com>", "Nazm contributors"]
+publish = false
+
+# ---------------------------------------------------------------------------
+# Shared dependency versions.
+#
+# Phase 2 only. The compiler stack (salsa, cstree, cranelift, redb, blake3,
+# postcard) is listed in docs/architecture.md with its MSRVs checked, but is
+# NOT depended on here: adding a dependency before the crate that needs it
+# exists is how a workspace acquires a build it cannot explain.
+# ---------------------------------------------------------------------------
+[workspace.dependencies]
+# --- internal ---
+# Path-only, no version: nothing here is published (`publish = false` above), and
+# a version string on an unpublishable crate is decoration that cargo-deny would
+# rightly flag as a wildcard once publishing starts.
+nazm-bench = { path = "crates/nazm-bench" }
+
+# --- cli / config ---
+clap = { version = "4", features = ["derive", "env"] }
+toml = "0.9"
+
+# --- serialization ---
+# Every run record is JSON: the analysis (mixed-effects models, per §5 of the plan)
+# happens in R or Python, not here. Rust's job is to produce records that are
+# complete, ordered, and impossible to silently lose.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Preserves insertion order. Run records are diffed and reviewed by hand; map
+# iteration order leaking into output would make every diff noise.
+indexmap = { version = "2", features = ["serde"] }
+
+# --- process / fs ---
+# Each attempt runs in its own tree. Reuse is how state leaks between attempts,
+# which is a failure mode the harness is explicitly tested against.
+tempfile = "3"
+
+# --- errors / logging ---
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# --- time ---
+# Run records are timestamped in UTC. Local time in an experimental record is a
+# defect: runs get compared across machines.
+jiff = { version = "0.2", features = ["serde"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
+# A measurement instrument that silently drops a field is worse than one that
+# fails. Unused results here are usually a dropped record.
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+# The harness computes the numbers the whole project is judged on. A panic in
+# analysis code is a lost run; a silent truncation is a wrong answer that looks
+# like a right one.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+indexing_slicing = "warn"
+integer_division = "warn"
+cast_possible_truncation = "warn"
+cast_precision_loss = "warn"
+float_cmp = "warn"
+dbg_macro = "deny"
+todo = "warn"
+unimplemented = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+overflow-checks = true
+
+[profile.dev]
+overflow-checks = true
