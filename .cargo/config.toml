@@ -1,0 +1,5 @@
+[alias]
+xtask = "run --package xtask --"
+# Mirrors the CI gate exactly. If this passes locally and CI fails, one of the two
+# is lying; keeping them textually identical is what makes that detectable.
+lint = "clippy --workspace --all-targets --locked -- -D warnings"
