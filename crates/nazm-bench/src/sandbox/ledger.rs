@@ -191,7 +191,20 @@ impl Ledger {
             let Ok(entry) = serde_json::from_str::<Entry>(&line) else {
                 continue;
             };
-            if let Some(existing) = latest.iter_mut().find(|e| e.resource == entry.resource) {
+            // Keyed by (kind, name), NOT by the whole `ResourceId`.
+            //
+            // A claim is about a *name*: that is what is written before the create, and it
+            // is all that is known at that point. The engine-assigned id is learned later
+            // and appears only from `Created` onwards. Keying on the full id made an
+            // `Intended` entry and its own `Created` entry different rows, so intents were
+            // never superseded and every completed attempt looked like it had leaked
+            // everything — caught by `normal_execution_removes_every_attempt_resource`
+            // the moment engine ids were introduced.
+            let same = |a: &ResourceId, b: &ResourceId| a.kind == b.kind && a.name == b.name;
+            if let Some(existing) = latest
+                .iter_mut()
+                .find(|e| same(&e.resource, &entry.resource))
+            {
                 *existing = entry;
             } else {
                 latest.push(entry);

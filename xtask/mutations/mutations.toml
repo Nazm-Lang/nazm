@@ -137,8 +137,10 @@ replace = "            Ownership::Absent | Ownership::Foreign { .. } => Ok(true)
 name = "recovery-ignores-ownership"
 why = "cross-process recovery removes every ledger-claimed name without checking the token"
 file = "crates/nazm-bench/src/sandbox/recovery.rs"
-find = "            Ownership::Foreign { found } => out.foreign.push((id.clone(), found)),"
-replace = "            Ownership::Foreign { .. } => { let _ = engine.remove(id, true); }"
+find = """                let _ = ledger.disowned(&entry.attempt, id);
+                out.foreign.push((id.clone(), found));"""
+replace = """                let _ = found;
+                let _ = engine.remove(id, true);"""
 
 [[mutation]]
 name = "recovery-ignores-dependency-order"
@@ -149,3 +151,23 @@ attached -- the engine refuses and the leftovers stay
 file = "crates/nazm-bench/src/sandbox/recovery.rs"
 find = "        .filter(|e| e.resource.kind == ResourceKind::Container)\n        .chain("
 replace = "        .filter(|e| e.resource.kind != ResourceKind::Container)\n        .chain("
+
+[[mutation]]
+name = "unknown-ownership-resolves-the-claim"
+why = """
+clears a ledger claim the engine could not resolve, which is unverified cleanup: the
+resource may exist even though the client never learned its id
+"""
+file = "crates/nazm-bench/src/sandbox/recovery.rs"
+find = "                if !resolved {"
+replace = "                if false {"
+
+[[mutation]]
+name = "ledger-keys-claims-by-engine-id"
+why = """
+keys outstanding claims by the whole ResourceId, so an Intended entry and its own Created
+entry become different rows and every completed attempt looks like it leaked everything
+"""
+file = "crates/nazm-bench/src/sandbox/ledger.rs"
+find = "            let same = |a: &ResourceId, b: &ResourceId| a.kind == b.kind && a.name == b.name;"
+replace = "            let same = |a: &ResourceId, b: &ResourceId| a == b;"

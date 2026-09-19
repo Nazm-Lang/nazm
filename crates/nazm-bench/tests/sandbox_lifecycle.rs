@@ -353,11 +353,16 @@ fn ownership_is_checked_before_removal_not_inferred_from_the_ledger() {
     );
 }
 
+/// Reconstruction from persisted state — **not** a cross-process test.
+///
+/// It drops the sandbox without tearing down and rebuilds a `Ledger` from the same file,
+/// which demonstrates that recovery works from what is on disk. It does not demonstrate
+/// process interruption: everything here runs in one process, and `mem::forget` is not a
+/// kill. The genuine version needs a child process terminated mid-create and a separate
+/// recovery process, which requires a real daemon to share state through — it lands with
+/// the Docker adapter, not here.
 #[test]
-fn a_new_harness_process_recovers_leftovers_without_touching_foreign_resources() {
-    // The interruption window the ledger exists for: resources were created, the process
-    // died before recording anything further, and a *different* process must clean up.
-    // Testing ordering within one process does not exercise this.
+fn recovery_works_from_persisted_state_alone() {
     let dir = tempfile::tempdir().unwrap();
     let ledger_path = dir.path().join("resources.jsonl");
     let engine = FakeEngine::new();
@@ -371,7 +376,7 @@ fn a_new_harness_process_recovers_leftovers_without_touching_foreign_resources()
         let sb = Sandbox::start(&engine, &led, config())
             .map_err(|(e, _)| e)
             .unwrap();
-        std::mem::forget(sb); // no Drop, no teardown — as if the process were killed
+        std::mem::forget(sb); // skip teardown; note this is NOT process death
     }
 
     let leaked = engine.surviving().len();
@@ -487,5 +492,122 @@ fn recovery_refuses_a_claimed_name_now_held_by_a_stranger() {
     assert!(
         survivors.contains(&names.db),
         "the stranger's container was removed"
+    );
+}
+
+#[test]
+fn unknown_ownership_blocks_the_next_attempt_but_foreign_does_not() {
+    // The two share "do not delete" and nothing else. Foreign resolves the claim — the
+    // name is not ours and never will be. Unknown leaves it outstanding and stops the
+    // run, because the resource may exist even though we never learned its id, and that
+    // is precisely the state that reaches the next attempt.
+    let dir = tempfile::tempdir().unwrap();
+    let names = Names::for_attempt("r1", "a1");
+
+    // Foreign: a stranger holds a name we claimed.
+    let foreign_path = dir.path().join("foreign.jsonl");
+    let engine = FakeEngine::new();
+    let db = ResourceId::new(ResourceKind::Container, &names.db);
+    {
+        let led = Ledger::open(&foreign_path, "r1").unwrap();
+        led.intend("a1", &db).unwrap();
+    }
+    engine.plant_foreign_container(&names.db);
+    let led = Ledger::open(&foreign_path, "r1").unwrap();
+    let foreign = recovery::reconcile(&engine, &led, "owner-token-run-1").unwrap();
+
+    assert!(
+        foreign.is_clear(),
+        "a foreign resource must not block the next attempt"
+    );
+    assert_eq!(foreign.foreign.len(), 1);
+    assert!(
+        led.outstanding().unwrap().is_empty(),
+        "a foreign claim must be resolved, not re-reported forever"
+    );
+
+    // Unknown: the engine cannot say who owns it.
+    let unknown_path = dir.path().join("unknown.jsonl");
+    let engine2 = FakeEngine::new();
+    let net = ResourceId::new(ResourceKind::Network, &names.network);
+    {
+        let led2 = Ledger::open(&unknown_path, "r1").unwrap();
+        led2.intend("a1", &net).unwrap();
+    }
+    engine2.plant_foreign_network(&names.network, "10.201.9.0/24");
+    // Every ownership query fails, including the retries.
+    for _ in 0..8 {
+        engine2.fail_next(
+            Op::Inspect,
+            EngineError::DaemonUnreachable("socket".to_owned()),
+        );
+    }
+    let led2 = Ledger::open(&unknown_path, "r1").unwrap();
+    let unknown = recovery::reconcile(&engine2, &led2, "owner-token-run-1").unwrap();
+
+    assert!(
+        !unknown.is_clear(),
+        "an unresolved claim must block the next attempt"
+    );
+    assert_eq!(unknown.unresolved.len(), 1);
+    assert!(
+        !led2.outstanding().unwrap().is_empty(),
+        "an unresolved claim must stay outstanding — clearing it loses the only record \
+         that something may be out there"
+    );
+}
+
+#[test]
+fn a_transient_unknown_resolves_on_retry() {
+    // A daemon mid-restart answers the second time. Declaring it unresolved immediately
+    // would quarantine a run for a hiccup.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("retry.jsonl");
+    let engine = FakeEngine::new();
+    let names = Names::for_attempt("r1", "a1");
+    let db = ResourceId::new(ResourceKind::Container, &names.db);
+
+    {
+        let led = Ledger::open(&path, "r1").unwrap();
+        led.intend("a1", &db).unwrap();
+    }
+    // One failure, then the truth: the resource was never created.
+    engine.fail_next(
+        Op::Inspect,
+        EngineError::DaemonUnreachable("restarting".to_owned()),
+    );
+
+    let led = Ledger::open(&path, "r1").unwrap();
+    let result = recovery::reconcile(&engine, &led, "owner-token-run-1").unwrap();
+
+    assert!(
+        result.is_clear(),
+        "a transient failure must not quarantine: {result:?}"
+    );
+    assert_eq!(result.already_absent.len(), 1);
+}
+
+#[test]
+fn removal_addresses_the_resource_by_its_engine_id() {
+    // Names are a namespace someone else can take. Once a create returns an id, that is
+    // what later operations use, so a name changing hands cannot redirect a removal.
+    let dir = tempfile::tempdir().unwrap();
+    let led = ledger(&dir);
+    let engine = FakeEngine::new();
+    let mut sb = Sandbox::start(&engine, &led, config())
+        .map_err(|(e, _)| e)
+        .unwrap();
+    assert_eq!(sb.teardown(), Disposition::Clean);
+
+    // Everything the ledger recorded as created carried an engine id.
+    let text = std::fs::read_to_string(led.path()).unwrap();
+    let created_without_id = text
+        .lines()
+        .filter(|l| l.contains("\"created\""))
+        .filter(|l| l.contains("\"engine_id\":null"))
+        .count();
+    assert_eq!(
+        created_without_id, 0,
+        "a created resource must carry its engine id"
     );
 }

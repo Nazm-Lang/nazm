@@ -169,16 +169,19 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
     }
 
     /// Record the intent, create, record the creation. In that order, always.
-    fn track<T>(
+    fn track(
         &mut self,
         id: ResourceId,
-        create: impl FnOnce(&E) -> Result<T, EngineError>,
+        create: impl FnOnce(&E) -> Result<ResourceId, EngineError>,
     ) -> Result<(), SandboxError> {
         self.ledger.intend(&self.cfg.attempt, &id)?;
         match create(self.engine) {
-            Ok(_) => {
-                self.ledger.created(&self.cfg.attempt, &id)?;
-                self.created.push(id);
+            // Keep what the engine returned, not what we asked for. Later operations
+            // address the resource by its engine-assigned id where there is one, so a
+            // name that changes hands cannot redirect a removal.
+            Ok(created) => {
+                self.ledger.created(&self.cfg.attempt, &created)?;
+                self.created.push(created);
                 Ok(())
             }
             // The name is taken by something we did not create. Record that we do *not*
