@@ -57,6 +57,15 @@ fn docker_or_skip() -> Option<DockerCli> {
 const PG: &str = "postgres:16-alpine";
 const BUSY: &str = "alpine:3.20";
 
+/// Harness-side scratch for the attempt (database init script). Leaked deliberately: it
+/// must outlive the sandbox that mounts it, and the process is short.
+fn scratch_dir() -> std::path::PathBuf {
+    let dir = tempfile::tempdir().expect("scratch");
+    let path = dir.path().to_path_buf();
+    std::mem::forget(dir);
+    path
+}
+
 fn config(attempt: &str, owner: &str) -> AttemptConfig {
     AttemptConfig {
         run: "dockertest".to_owned(),
@@ -70,6 +79,7 @@ fn config(attempt: &str, owner: &str) -> AttemptConfig {
             slots: (40..=60).collect(),
         },
         limits: Limits::default(),
+        scratch: scratch_dir(),
     }
 }
 
@@ -219,6 +229,8 @@ fn a_new_process_recovers_resources_a_killed_harness_left_behind() {
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_nazm-bench"))
         .args(["sandbox-leak", "--ledger"])
         .arg(&ledger_path)
+        .arg("--scratch")
+        .arg(dir.path())
         .args(["--run", "dockertest", "--attempt", "rec1", "--owner", owner])
         .status()
         .expect("spawn child harness");
@@ -250,4 +262,138 @@ fn a_new_process_recovers_resources_a_killed_harness_left_behind() {
             .is_empty(),
         "resources survived recovery"
     );
+}
+
+/// Run psql on the attempt network as the restricted role.
+fn psql(
+    network: &str,
+    creds: &nazm_bench::sandbox::postgres::Credentials,
+    sql: &str,
+) -> (String, i32) {
+    let out = std::process::Command::new("docker")
+        .args(["run", "--rm", "--network", network, "-e"])
+        .arg(format!("PGPASSWORD={}", creds.app_password))
+        .args([PG, "psql", "-v", "ON_ERROR_STOP=1", "-h", "db", "-U"])
+        .arg(&creds.app_role)
+        .args(["-d", &creds.database, "-tAc", sql])
+        .output()
+        .expect("psql");
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (text, out.status.code().unwrap_or(-1))
+}
+
+/// Poll until the application role can genuinely connect to its own database.
+///
+/// Not `pg_isready`, and not the Docker healthcheck. `pg_isready` over the Unix socket
+/// succeeds during the bootstrap phase — while the temporary server is up but the app role
+/// and database do not exist yet — which is a false positive that shows up later as
+/// intermittent, unexplained failures. The readiness gate is the exact thing the work
+/// needs to be true.
+fn wait_ready(network: &str, creds: &nazm_bench::sandbox::postgres::Credentials) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline {
+        if psql(network, creds, "SELECT 1").1 == 0 {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    false
+}
+
+#[test]
+fn the_restricted_role_can_work_and_cannot_escalate() {
+    let Some(cli) = docker_or_skip() else { return };
+    let _guard = serial()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = tempfile::tempdir().unwrap();
+    let led = Ledger::open(dir.path().join("r.jsonl"), "dockertest").unwrap();
+
+    let mut sb = Sandbox::start(&cli, &led, config("db1", "owner-db1"))
+        .map_err(|(e, _)| e)
+        .expect("bring-up failed");
+    let network = sb.names().network.clone();
+    let creds = sb.credentials().clone();
+
+    assert!(
+        wait_ready(&network, &creds),
+        "the app role never became able to connect"
+    );
+
+    // It can do the work a task needs.
+    let (out, code) = psql(
+        &network,
+        &creds,
+        "CREATE TABLE items(id serial primary key, qty int not null);          INSERT INTO items(qty) VALUES (10); SELECT qty FROM items;",
+    );
+    assert_eq!(code, 0, "the app role could not do ordinary work: {out}");
+    assert!(out.contains("10"), "expected the inserted row back: {out}");
+
+    // And it has none of the escalation routes. Every value must be false.
+    let (out, code) = psql(
+        &network,
+        &creds,
+        &nazm_bench::sandbox::postgres::privilege_assertion_sql(&creds.app_role),
+    );
+    assert_eq!(code, 0, "privilege assertion failed to run: {out}");
+    for (i, line) in out.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+        assert_eq!(line.trim(), "f", "privilege check {i} was not false: {out}");
+    }
+
+    // The decisive one, tested directly rather than inferred: server-side program
+    // execution. A superuser could start a process in the database container, which
+    // killing the candidate container would not touch.
+    let (out, code) = psql(
+        &network,
+        &creds,
+        "COPY (SELECT 1) TO PROGRAM 'touch /tmp/pwned'",
+    );
+    assert_ne!(code, 0, "COPY TO PROGRAM succeeded: {out}");
+    assert!(
+        out.to_lowercase().contains("permission denied")
+            || out.to_lowercase().contains("must be superuser"),
+        "expected a privilege error, got: {out}"
+    );
+
+    assert_eq!(sb.teardown(), Disposition::Clean);
+}
+
+#[test]
+fn each_attempt_gets_fresh_database_state() {
+    let Some(cli) = docker_or_skip() else { return };
+    let _guard = serial()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = tempfile::tempdir().unwrap();
+    let led = Ledger::open(dir.path().join("r.jsonl"), "dockertest").unwrap();
+
+    // Attempt one writes a row.
+    {
+        let mut sb = Sandbox::start(&cli, &led, config("fresh1", "owner-f1"))
+            .map_err(|(e, _)| e)
+            .expect("bring-up 1");
+        let (net, creds) = (sb.names().network.clone(), sb.credentials().clone());
+        assert!(wait_ready(&net, &creds));
+        let (out, code) = psql(
+            &net,
+            &creds,
+            "CREATE TABLE leftover(x int); INSERT INTO leftover VALUES (1);",
+        );
+        assert_eq!(code, 0, "{out}");
+        assert_eq!(sb.teardown(), Disposition::Clean);
+    }
+
+    // Attempt two must not see it. Independence between attempts is the property the
+    // whole per-attempt volume exists for.
+    {
+        let mut sb = Sandbox::start(&cli, &led, config("fresh2", "owner-f2"))
+            .map_err(|(e, _)| e)
+            .expect("bring-up 2");
+        let (net, creds) = (sb.names().network.clone(), sb.credentials().clone());
+        assert!(wait_ready(&net, &creds));
+        let (out, code) = psql(&net, &creds, "SELECT count(*) FROM leftover");
+        assert_ne!(code, 0, "attempt two saw attempt one's table: {out}");
+        assert_eq!(sb.teardown(), Disposition::Clean);
+    }
 }

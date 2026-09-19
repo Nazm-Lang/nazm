@@ -17,6 +17,7 @@ use crate::engine::{
 };
 use crate::sandbox::ledger::{Ledger, LedgerError};
 use crate::sandbox::network::{self, AllocationError, Subnet, SubnetBlock};
+use crate::sandbox::postgres::Credentials;
 
 /// How the harness should proceed after an attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +103,9 @@ pub struct AttemptConfig {
     pub postgres_image: String,
     pub block: SubnetBlock,
     pub limits: Limits,
+    /// Harness-side scratch, mounted read-only into the database container for its init
+    /// script. Never writable from any container.
+    pub scratch: std::path::PathBuf,
 }
 
 /// One attempt's live resources, created in dependency order.
@@ -112,6 +116,7 @@ pub struct Sandbox<'a, E: ContainerEngine> {
     cfg: AttemptConfig,
     names: Names,
     subnet: Subnet,
+    credentials: Credentials,
     /// Reverse creation order. Teardown walks this, so it cannot drift from what was made.
     created: Vec<ResourceId>,
 }
@@ -140,12 +145,25 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
             Err(e) => return Err((SandboxError::Allocation(e), Disposition::Clean)),
         };
 
+        let credentials = match Credentials::generate() {
+            Ok(c) => c,
+            Err(e) => {
+                return Err((
+                    SandboxError::Engine(EngineError::DaemonUnreachable(format!(
+                        "could not generate database credentials: {e}"
+                    ))),
+                    Disposition::Clean,
+                ))
+            }
+        };
+
         let mut sb = Self {
             engine,
             ledger,
             cfg,
             names,
             subnet,
+            credentials,
             created: Vec::new(),
         };
 
@@ -220,7 +238,22 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
         }
     }
 
+    fn init_dir(&self) -> std::path::PathBuf {
+        self.cfg.scratch.join(&self.cfg.attempt).join("pginit")
+    }
+
     fn bring_up(&mut self) -> Result<(), SandboxError> {
+        // Written before the database container is created: the image runs it during
+        // bootstrap, on a Unix socket, before TCP is ever reachable.
+        let attempt_scratch = self.cfg.scratch.join(&self.cfg.attempt);
+        crate::sandbox::postgres::write_init_script(&attempt_scratch, &self.credentials).map_err(
+            |e| {
+                SandboxError::Engine(EngineError::DaemonUnreachable(format!(
+                    "could not write the database init script: {e}"
+                )))
+            },
+        )?;
+
         let net = ResourceId::new(ResourceKind::Network, &self.names.network);
         let spec = NetworkSpec {
             name: self.names.network.clone(),
@@ -255,6 +288,12 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
         Ok(())
     }
 
+    /// Credentials for this attempt. The candidate receives only the restricted role.
+    #[must_use]
+    pub fn credentials(&self) -> &Credentials {
+        &self.credentials
+    }
+
     fn db_spec(&self) -> ContainerSpec {
         ContainerSpec {
             name: self.names.db.clone(),
@@ -262,20 +301,52 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
             labels: self.labels("db"),
             network: Some(self.names.network.clone()),
             network_alias: Some("db".to_owned()),
-            mounts: vec![Mount {
-                source: MountSource::Volume(self.names.db_volume.clone()),
-                target: "/var/lib/postgresql/data".to_owned(),
-                read_only: false,
-            }],
+            mounts: vec![
+                Mount {
+                    source: MountSource::Volume(self.names.db_volume.clone()),
+                    target: "/var/lib/postgresql/data".to_owned(),
+                    read_only: false,
+                },
+                // Read-only, and harness-authored. The only host bind in the design, and
+                // nothing about its bytes is graded.
+                Mount {
+                    source: MountSource::HostPath(self.init_dir().to_string_lossy().into_owned()),
+                    target: "/docker-entrypoint-initdb.d".to_owned(),
+                    read_only: true,
+                },
+            ],
             // Never POSTGRES_USER: the official image creates that role WITH SUPERUSER,
             // which would silently undo the restricted-role decision. The application
-            // role is created by an init script instead.
-            env: vec![("POSTGRES_PASSWORD".to_owned(), "<generated>".to_owned())],
+            // role is created by the init script above instead.
+            env: vec![
+                (
+                    "POSTGRES_PASSWORD".to_owned(),
+                    self.credentials.superuser_password.clone(),
+                ),
+                // Read by the init script through a psql variable, so it never appears as
+                // literal text in any SQL.
+                (
+                    "APP_PASSWORD".to_owned(),
+                    self.credentials.app_password.clone(),
+                ),
+                (
+                    "POSTGRES_INITDB_ARGS".to_owned(),
+                    "--auth-host=scram-sha-256".to_owned(),
+                ),
+            ],
             command: Vec::new(),
             memory_mb: self.cfg.limits.db_memory_mb,
             milli_cpus: self.cfg.limits.db_milli_cpus,
             pids_limit: self.cfg.limits.pids_limit,
             init: true,
+            // The minimum the official entrypoint needs to chown its data directory and
+            // drop from root to the `postgres` user. Verified by removing them: the
+            // container dies with "failed switching to 'postgres'". Notably absent:
+            // SYS_ADMIN, SYS_PTRACE, NET_ADMIN, and everything else.
+            cap_add: ["CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE"]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
         }
     }
 
@@ -291,12 +362,14 @@ impl<'a, E: ContainerEngine> Sandbox<'a, E> {
                 target: "/work".to_owned(),
                 read_only: false,
             }],
-            env: Vec::new(),
+            env: vec![("DATABASE_URL".to_owned(), self.credentials.candidate_url())],
             command: vec!["sleep".to_owned(), "infinity".to_owned()],
             memory_mb: self.cfg.limits.candidate_memory_mb,
             milli_cpus: self.cfg.limits.candidate_milli_cpus,
             pids_limit: self.cfg.limits.pids_limit,
             init: true,
+            // None. The candidate is the untrusted party and needs no capability at all.
+            cap_add: Vec::new(),
         }
     }
 
