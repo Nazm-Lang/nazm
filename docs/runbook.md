@@ -19,14 +19,27 @@ $ docker info --format '{{json .DefaultAddressPools}}'  → null (built-in defau
 (`erp_default`, `news_default`, `rx_default`, several `fintant-*`, and others). One /16
 remains.
 
-When it is gone, Docker falls back to `192.168.0.0/16` in /20 chunks. The first of those
-is `192.168.0.0/20`. This machine's LAN address is **192.168.0.101, gateway 192.168.0.1** —
-inside that range. So the fallback does not merely risk a collision in the abstract; the
-very first fallback allocation would contain this machine's own network and break its
-connectivity mid-run.
+### Measured, versus predicted — kept apart on purpose
+
+**Measured:** fourteen of fifteen default /16s are consumed; this machine's LAN address is
+`192.168.0.101` with gateway `192.168.0.1`, i.e. `192.168.0.0/24`.
+
+**Documented behaviour:** when the `172.17.0.0/12` pool is exhausted Docker's next default
+pool is `192.168.0.0/16`, allocated in /20 chunks — the first of which, `192.168.0.0/20`,
+overlaps this machine's LAN.
+
+**Not established:** that Docker *would* actually hand out the overlapping subnet. Its IPAM
+performs some host-route conflict avoidance, and whether that is sufficient here has not
+been tested — deliberately, because testing it means provoking the failure on a machine
+someone is using. So this is a **potential conflict**, not a predicted outage.
+
+The distinction matters for how much weight the mitigation carries: the harness allocates
+from an explicitly configured block precisely so that none of this has to be predicted
+correctly. The overlap is a reason not to rely on the default allocator, not a forecast.
 
 **Consequence for the harness:** a single leaked network per attempt exhausts the
-remaining space in well under twenty attempts, and the failure mode is not a clean error.
+remaining /16 quickly, after which behaviour depends on a fallback path nobody here has
+tested.
 Networks are therefore allocated from an explicitly reserved block with a collision check
 at allocation time, ownership tracked, and cleanup verified.
 

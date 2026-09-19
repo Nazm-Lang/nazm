@@ -121,11 +121,13 @@ Almost everything. Specifically:
   independent acceptance runner. **Not written:** agent drivers, a provider adapter, and
   all but one task fixture — so the harness cannot produce a benchmark number, and `run`
   stays disabled.
-- **There is no sandbox.** Each attempt gets its own directory, but nothing stops a
-  candidate process opening another attempt's tree, the acceptance corpus, or the harness
-  binary by absolute path. Real isolation needs an OS sandbox or a container per attempt,
-  with the corpus outside the mount namespace, and none of it exists yet. Backend tasks
-  additionally need per-attempt database state and scoped credentials.
+- **The sandbox is designed and its logic is tested; it does not run yet.** The attempt
+  lifecycle — collision-checked subnet allocation, write-ahead ownership, ordered teardown,
+  verified cleanup, quarantine — is implemented and exercised against a fake engine that
+  models the rules a daemon enforces. **No Docker adapter exists**, so nothing is actually
+  confined today: a candidate process can still open another attempt's tree or the
+  acceptance corpus by absolute path. The fake proves the harness's ordering logic and
+  proves nothing about Docker.
 - **Holdout isolation is a workflow control, not a boundary.** The API refuses holdout
   fixtures without a verified freeze; it does nothing about filesystem access. Real
   isolation for the gate run is operational — see `docs/evaluation.md` §3.
