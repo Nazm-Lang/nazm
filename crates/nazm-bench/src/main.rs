@@ -49,6 +49,9 @@ enum Command {
         attempt: String,
         #[arg(long)]
         owner: String,
+        /// Abort after creating this role's resource, before recording it.
+        #[arg(long)]
+        die_after_create: Option<String>,
     },
     /// Execute a benchmark run. Not implemented.
     Run {
@@ -91,7 +94,8 @@ fn main() -> anyhow::Result<()> {
             run,
             attempt,
             owner,
-        } => sandbox_leak(&ledger, &scratch, &run, &attempt, &owner),
+            die_after_create,
+        } => sandbox_leak(&ledger, &scratch, &run, &attempt, &owner, die_after_create),
         Command::Run { arm } => run(arm.map(Arm::from)),
     }
 }
@@ -167,6 +171,7 @@ fn sandbox_leak(
     run: &str,
     attempt: &str,
     owner: &str,
+    die_after_create: Option<String>,
 ) -> anyhow::Result<()> {
     use nazm_bench::engine::docker::DockerCli;
     use nazm_bench::sandbox::attempt::{AttemptConfig, Limits, Sandbox};
@@ -187,6 +192,7 @@ fn sandbox_leak(
         },
         limits: Limits::default(),
         scratch: scratch.to_path_buf(),
+        die_after_create,
     };
 
     let sb = Sandbox::start(&cli, &led, cfg)

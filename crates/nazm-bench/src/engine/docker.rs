@@ -390,6 +390,31 @@ impl ContainerEngine for DockerCli {
         })
     }
 
+    fn wait_until_exit(
+        &self,
+        id: &ResourceId,
+        deadline: std::time::Duration,
+    ) -> Result<Option<ContainerState>, EngineError> {
+        let started = Instant::now();
+        loop {
+            let state = self.inspect(id)?;
+            if !state.running {
+                return Ok(Some(state));
+            }
+            if started.elapsed() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    fn logs(&self, id: &ResourceId) -> Result<String, EngineError> {
+        self.run(
+            &["logs".to_owned(), id.handle().to_owned()],
+            self.deadlines.inspect,
+        )
+    }
+
     fn remove(&self, id: &ResourceId, force: bool) -> Result<(), EngineError> {
         let mut args = match id.kind {
             ResourceKind::Container => vec!["rm".to_owned()],

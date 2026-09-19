@@ -36,6 +36,7 @@ fn config() -> AttemptConfig {
         block: SubnetBlock::default(),
         limits: Limits::default(),
         scratch: scratch_dir(),
+        die_after_create: None,
     }
 }
 
@@ -661,4 +662,74 @@ fn a_reused_name_in_a_later_attempt_is_a_separate_claim() {
         attempts.contains(&"a2"),
         "attempt two's claim vanished: {attempts:?}"
     );
+}
+
+#[test]
+fn the_candidate_never_receives_admin_credentials_or_the_init_script() {
+    // Two separate secrets and one privileged file. The candidate is entitled to exactly
+    // one of the three: the restricted role's URL. Everything else would hand it either
+    // the superuser password or the means to read what created the role.
+    let dir = tempfile::tempdir().unwrap();
+    let led = ledger(&dir);
+    let engine = FakeEngine::new();
+    let mut sb = Sandbox::start(&engine, &led, config())
+        .map_err(|(e, _)| e)
+        .unwrap();
+
+    let creds = sb.credentials().clone();
+    let (db, cand) = sb.specs();
+
+    // The candidate gets the app URL and nothing else.
+    let cand_env: Vec<&str> = cand.env.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(
+        cand_env,
+        vec!["DATABASE_URL"],
+        "candidate env: {cand_env:?}"
+    );
+
+    let cand_env_values = cand
+        .env
+        .iter()
+        .map(|(_, v)| v.clone())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        !cand_env_values.contains(&creds.superuser_password),
+        "the superuser password reached the candidate"
+    );
+    assert!(
+        cand_env_values.contains(&creds.app_password),
+        "the candidate needs the app password to connect at all"
+    );
+
+    // The init script is mounted into the database and nowhere else. It is the file that
+    // creates the role; a candidate that can read it learns how its own limits were set,
+    // and in an earlier draft it carried the password in plain text.
+    let cand_mounts = format!("{:?}", cand.mounts);
+    assert!(
+        !cand_mounts.contains("pginit"),
+        "candidate mounts the init script: {cand_mounts}"
+    );
+    assert!(
+        !cand_mounts.contains("docker-entrypoint-initdb.d"),
+        "candidate mounts the init directory: {cand_mounts}"
+    );
+
+    let db_mounts = format!("{:?}", db.mounts);
+    assert!(
+        db_mounts.contains("docker-entrypoint-initdb.d"),
+        "the database needs it"
+    );
+    assert!(
+        db_mounts.contains("read_only: true"),
+        "the init mount must be read-only: {db_mounts}"
+    );
+
+    // And the admin secrets exist only on the database side.
+    let db_env: Vec<&str> = db.env.iter().map(|(k, _)| k.as_str()).collect();
+    assert!(db_env.contains(&"POSTGRES_PASSWORD"));
+    assert!(!cand_env.contains(&"POSTGRES_PASSWORD"));
+    assert!(!cand_env.contains(&"APP_PASSWORD"));
+
+    assert_eq!(sb.teardown(), Disposition::Clean);
 }
