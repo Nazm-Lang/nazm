@@ -13,6 +13,22 @@
 use crate::engine::{self, ContainerEngine, EngineError, Ownership, ResourceId, ResourceKind};
 use crate::sandbox::ledger::{Ledger, LedgerError};
 
+/// How each outstanding claim was resolved.
+///
+/// The four dispositions are deliberately not collapsible. All of `Foreign`, `Absent`, and
+/// `Unknown` share "do not delete", but only the first two resolve the claim:
+///
+/// | Result  | Deleted | Claim resolved | Blocks the next attempt |
+/// |---------|---------|----------------|-------------------------|
+/// | Ours    | yes     | yes            | no                      |
+/// | Foreign | no      | yes, as disowned | no                    |
+/// | Absent  | no      | yes, as removed  | no                    |
+/// | Unknown | no      | **no**         | **yes**                 |
+///
+/// `Unknown` is the one that matters when a create times out: the resource may exist even
+/// though the client never saw its ID. Clearing that claim would be exactly the unverified
+/// cleanup this module exists to prevent, so it is retried and then quarantined.
+///
 /// What reconciliation did, in enough detail to decide whether to proceed.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Reconciliation {
@@ -52,6 +68,18 @@ pub fn reconcile<E: ContainerEngine + ?Sized>(
     ledger: &Ledger,
     owner: &str,
 ) -> Result<Reconciliation, RecoveryError> {
+    reconcile_with_retries(engine, ledger, owner, 3)
+}
+
+/// How many times an `Unknown` ownership answer is re-asked before it is declared
+/// unresolved. A daemon mid-restart, or a removal still in progress, resolves on a retry;
+/// a genuinely unreachable one does not, and then the run stops.
+pub fn reconcile_with_retries<E: ContainerEngine + ?Sized>(
+    engine: &E,
+    ledger: &Ledger,
+    owner: &str,
+    attempts: u32,
+) -> Result<Reconciliation, RecoveryError> {
     let outstanding = ledger.outstanding()?;
     let mut out = Reconciliation::default();
 
@@ -85,8 +113,42 @@ pub fn reconcile<E: ContainerEngine + ?Sized>(
                     Err(e) => out.unresolved.push((id.clone(), e.to_string())),
                 }
             }
-            Ownership::Foreign { found } => out.foreign.push((id.clone(), found)),
-            Ownership::Unknown { reason } => out.unresolved.push((id.clone(), reason)),
+            Ownership::Foreign { found } => {
+                // Resolve the claim: the name is not ours and never will be, so leaving
+                // the entry outstanding would re-report it on every future reconcile
+                // without ever becoming actionable.
+                let _ = ledger.disowned(&entry.attempt, id);
+                out.foreign.push((id.clone(), found));
+            }
+            Ownership::Unknown { reason } => {
+                // Re-ask before giving up. A daemon mid-restart or a removal in progress
+                // answers on a retry.
+                let mut last = reason;
+                let mut resolved = false;
+                for _ in 1..attempts {
+                    match engine::ownership(engine, id, owner) {
+                        Ownership::Unknown { reason } => last = reason,
+                        other => {
+                            resolved = matches!(other, Ownership::Absent);
+                            if resolved {
+                                let _ = ledger.removed(&entry.attempt, id);
+                                out.already_absent.push(id.clone());
+                            } else if let Ownership::Foreign { found } = other {
+                                let _ = ledger.disowned(&entry.attempt, id);
+                                out.foreign.push((id.clone(), found));
+                                resolved = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+                if !resolved {
+                    // The claim stays outstanding on purpose. The resource may exist even
+                    // though we never learned its ID, and clearing the entry would lose
+                    // the only record that something might be out there.
+                    out.unresolved.push((id.clone(), last));
+                }
+            }
         }
     }
 

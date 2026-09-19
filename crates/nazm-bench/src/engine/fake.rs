@@ -62,6 +62,16 @@ pub enum Op {
     List,
 }
 
+/// Stable per-name pseudo-id, so the fake exercises id-addressed removal.
+fn fnv(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    h
+}
+
 #[derive(Debug, Default)]
 pub struct FakeEngine {
     world: Mutex<World>,
@@ -185,7 +195,8 @@ impl ContainerEngine for FakeEngine {
         if let Some(e) = Self::take_fault(&mut w, Op::CreateNetwork) {
             return Err(e);
         }
-        let id = ResourceId::new(ResourceKind::Network, &spec.name);
+        let id = ResourceId::new(ResourceKind::Network, &spec.name)
+            .with_engine_id(format!("net-{:012x}", fnv(&spec.name)));
         if w.networks.contains_key(&spec.name) {
             return Err(EngineError::NameConflict { id });
         }
@@ -210,7 +221,8 @@ impl ContainerEngine for FakeEngine {
         if let Some(e) = Self::take_fault(&mut w, Op::CreateVolume) {
             return Err(e);
         }
-        let id = ResourceId::new(ResourceKind::Volume, &spec.name);
+        let id = ResourceId::new(ResourceKind::Volume, &spec.name)
+            .with_engine_id(format!("vol-{:012x}", fnv(&spec.name)));
         if w.volumes.contains_key(&spec.name) {
             return Err(EngineError::NameConflict { id });
         }
@@ -227,7 +239,8 @@ impl ContainerEngine for FakeEngine {
         if let Some(e) = Self::take_fault(&mut w, Op::CreateContainer) {
             return Err(e);
         }
-        let id = ResourceId::new(ResourceKind::Container, &spec.name);
+        let id = ResourceId::new(ResourceKind::Container, &spec.name)
+            .with_engine_id(format!("ctr-{:012x}", fnv(&spec.name)));
         if w.containers.contains_key(&spec.name) {
             return Err(EngineError::NameConflict { id });
         }
@@ -391,10 +404,17 @@ impl ContainerEngine for FakeEngine {
     }
 
     fn owner_of(&self, id: &ResourceId) -> Result<Option<String>, EngineError> {
-        let w = self
+        let mut w = self
             .world
             .lock()
             .map_err(|_| EngineError::DaemonUnreachable("poisoned".into()))?;
+        w.log.push(format!("owner_of {}", id.name));
+        // An ownership query is an inspection, and it has to be able to fail: an engine
+        // that can never fail to answer would make `Ownership::Unknown` untestable, and
+        // that variant is the whole reason the four dispositions are distinct.
+        if let Some(e) = Self::take_fault(&mut w, Op::Inspect) {
+            return Err(e);
+        }
         let labels = match id.kind {
             ResourceKind::Container => w.containers.get(&id.name).map(|c| &c.labels),
             ResourceKind::Network => w.networks.get(&id.name).map(|(_, l)| l),
