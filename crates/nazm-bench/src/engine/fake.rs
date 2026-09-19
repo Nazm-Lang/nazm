@@ -72,9 +72,25 @@ fn fnv(s: &str) -> u64 {
     h
 }
 
-#[derive(Debug, Default)]
+type CreateObserver = Box<dyn Fn(&ResourceId) + Send>;
+
+#[derive(Default)]
 pub struct FakeEngine {
     world: Mutex<World>,
+    /// Called at the *start* of every create, before the resource exists.
+    ///
+    /// Exists to make "recorded before creation" observable. Both orderings of the ledger
+    /// write and the create leave the same entry behind afterwards, so a test that only
+    /// inspects the ledger at the end cannot tell them apart — which is exactly how the
+    /// mutation for that ordering survived. Something has to look at the world *during*
+    /// the create, and this is it.
+    on_create: Mutex<Option<CreateObserver>>,
+}
+
+impl std::fmt::Debug for FakeEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FakeEngine").finish_non_exhaustive()
+    }
 }
 
 impl FakeEngine {
@@ -114,6 +130,21 @@ impl FakeEngine {
             out.push(ResourceId::new(ResourceKind::Volume, name));
         }
         out
+    }
+
+    /// Observe the world at the moment a create begins.
+    pub fn on_create(&self, f: CreateObserver) {
+        if let Ok(mut slot) = self.on_create.lock() {
+            *slot = Some(f);
+        }
+    }
+
+    fn notify_create(&self, id: &ResourceId) {
+        if let Ok(slot) = self.on_create.lock() {
+            if let Some(f) = slot.as_ref() {
+                f(id);
+            }
+        }
     }
 
     /// Reassign a resource's owner token, simulating one that changed hands between
@@ -187,6 +218,7 @@ impl FakeEngine {
 
 impl ContainerEngine for FakeEngine {
     fn create_network(&self, spec: &NetworkSpec) -> Result<ResourceId, EngineError> {
+        self.notify_create(&ResourceId::new(ResourceKind::Network, &spec.name));
         let mut w = self
             .world
             .lock()
@@ -213,6 +245,7 @@ impl ContainerEngine for FakeEngine {
     }
 
     fn create_volume(&self, spec: &VolumeSpec) -> Result<ResourceId, EngineError> {
+        self.notify_create(&ResourceId::new(ResourceKind::Volume, &spec.name));
         let mut w = self
             .world
             .lock()
@@ -231,6 +264,7 @@ impl ContainerEngine for FakeEngine {
     }
 
     fn create_container(&self, spec: &ContainerSpec) -> Result<ResourceId, EngineError> {
+        self.notify_create(&ResourceId::new(ResourceKind::Container, &spec.name));
         let mut w = self
             .world
             .lock()

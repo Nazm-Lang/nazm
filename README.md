@@ -128,9 +128,15 @@ Almost everything. Specifically:
   host sentinel or route off its network, killing it reaps a detached grandchild, teardown
   is verified clean, and a separate process recovers what a killed harness left behind.
   Run them with `NAZM_REQUIRE_DOCKER=1 cargo test --test docker_boundary -- --test-threads=1`.
-- **What confinement does not yet cover:** the immutable submission snapshot and the
-  independent acceptance runner are not wired to it, so there is no complete execution
-  path and `run` stays disabled.
+- **One complete attempt runs end to end.** Candidate work → stop → freeze the submission
+  and record its digest → reset the database so the candidate's own writes are not what it
+  is graded against → grade the frozen snapshot against tests it never saw → record the
+  outcome and costs → verified cleanup. Demonstrated with three submissions: accepted,
+  wrong answer, and a timeout that outranks a correct answer written before the deadline.
+  A grade is **provisional until cleanup verifies**, because a leak means the next attempt
+  starts from this one's leftovers and that cannot be detected afterwards.
+- **`run` is still disabled.** There is no task corpus, no agent driver, and no provider
+  adapter — the path is validated for the development fixtures, not for a benchmark.
 - **Holdout isolation is a workflow control, not a boundary.** The API refuses holdout
   fixtures without a verified freeze; it does nothing about filesystem access. Real
   isolation for the gate run is operational — see `docs/evaluation.md` §3.
