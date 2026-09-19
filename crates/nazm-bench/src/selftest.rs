@@ -32,6 +32,7 @@ fn prereg() -> PreRegistration {
         version: 1,
         corpus_digest: "sha256:fixture".to_owned(),
         freeze_tag: "fixture".to_owned(),
+        max_void_rate: 0.05,
     }
 }
 
@@ -72,7 +73,7 @@ pub fn run() -> Vec<CaseResult> {
         failure_costs_stay_in_the_cost_numerator(),
         acceptance_rate_divides_by_every_counted_attempt(),
         the_two_metrics_use_different_denominators(),
-        void_attempts_leave_both_numerator_and_denominator(),
+        void_attempts_leave_the_counts_but_not_the_spend(),
         a_timeout_is_a_failure_not_a_void(),
         overfitting_is_not_acceptance(),
         one_missing_cost_invalidates_the_arm(),
@@ -81,7 +82,9 @@ pub fn run() -> Vec<CaseResult> {
         the_comparison_is_against_the_tooled_arm(),
         category_collapse_is_detected(),
         no_verdict_is_produced_here(),
-        void_spend_is_reported_not_discarded(),
+        void_spend_is_in_the_primary_metric(),
+        the_gate_ratio_is_not_inverted_by_void_spend(),
+        no_acceptances_is_distinguishable_from_missing_data(),
         holdout_is_refused_before_the_freeze(),
         a_forged_freeze_fails_against_the_repository(),
     ]
@@ -130,12 +133,24 @@ fn failure_costs_stay_in_the_cost_numerator() -> CaseResult {
         ),
     ];
     let s = report::summarise(Arm::Nazm, &attempts);
-    let got = s.cost_per_accepted.map(|m| m.as_micros());
+    let got = s.total_cost_per_accepted.value().map(|m| m.as_micros());
+    // Both metrics, deliberately. They differ only in whether evaluator-fault spend is
+    // included; neither may drop *failure* spend, and with no void attempts here the two
+    // must agree. Asserting only the primary left the secondary's numerator untested,
+    // which `cargo xtask mutate` caught as a surviving mutation.
+    let secondary = s
+        .cost_per_accepted_excluding_evaluator_faults
+        .value()
+        .map(|m| m.as_micros());
+
     check(
         "failure costs stay in the cost numerator",
-        got == Some(4_000_000) && s.accepted == 1 && s.attempts == 4,
+        got == Some(4_000_000)
+            && secondary == Some(4_000_000)
+            && s.accepted == 1
+            && s.attempts == 4,
         format!(
-            "expected $4.00 per accepted over 4 attempts, got {got:?} over {}",
+            "expected $4.00 on both metrics over 4 attempts, got {got:?} and {secondary:?} over {}",
             s.attempts
         ),
     )
@@ -143,7 +158,7 @@ fn failure_costs_stay_in_the_cost_numerator() -> CaseResult {
 
 /// A harness crash is not the arm's failure. Void attempts are excluded from both sides
 /// and counted separately, so an instrument defect cannot look like poor performance.
-fn void_attempts_leave_both_numerator_and_denominator() -> CaseResult {
+fn void_attempts_leave_the_counts_but_not_the_spend() -> CaseResult {
     let attempts = vec![
         attempt(
             Arm::Nazm,
@@ -169,16 +184,24 @@ fn void_attempts_leave_both_numerator_and_denominator() -> CaseResult {
         ),
     ];
     let s = report::summarise(Arm::Nazm, &attempts);
+    // Void attempts leave the acceptance COUNTS. Their spend does not leave the primary
+    // cost metric: $1.00 counted plus two $0.50 void attempts is $2.00 of real money
+    // against one acceptance.
     check(
-        "void attempts leave both numerator and denominator",
+        "void attempts leave the counts but not the spend",
         s.attempts == 1
             && s.void == 2
-            && s.cost_per_accepted.map(|m| m.as_micros()) == Some(1_000_000),
+            && s.total_cost_per_accepted.value().map(|m| m.as_micros()) == Some(2_000_000)
+            && s.cost_per_accepted_excluding_evaluator_faults
+                .value()
+                .map(|m| m.as_micros())
+                == Some(1_000_000),
         format!(
-            "expected 1 counted / 2 void / $1.00, got {} / {} / {:?}",
+            "expected 1 counted / 2 void / primary $2.00 / secondary $1.00, got {} / {} / {:?} / {:?}",
             s.attempts,
             s.void,
-            s.cost_per_accepted.map(|m| m.as_micros())
+            s.total_cost_per_accepted.value().map(|m| m.as_micros()),
+            s.cost_per_accepted_excluding_evaluator_faults.value().map(|m| m.as_micros())
         ),
     )
 }
@@ -251,10 +274,10 @@ fn one_missing_cost_invalidates_the_arm() -> CaseResult {
     let s = report::summarise(Arm::Nazm, &attempts);
     check(
         "one missing cost invalidates the arm's figure",
-        s.cost_per_accepted.is_none() && !s.cost.is_complete() && s.accepted == 2,
+        !s.total_cost_per_accepted.is_value() && !s.cost.is_complete() && s.accepted == 2,
         format!(
             "expected no cost figure despite 2 acceptances, got {:?}",
-            s.cost_per_accepted.map(|m| m.as_micros())
+            s.total_cost_per_accepted.value().map(|m| m.as_micros())
         ),
     )
 }
@@ -272,10 +295,11 @@ fn retries_are_counted_and_their_cost_kept() -> CaseResult {
     let s = report::summarise(Arm::Nazm, &[a.clone()]);
     check(
         "retries are counted and their cost kept",
-        a.retries == 5 && s.cost_per_accepted.map(|m| m.as_micros()) == Some(6_000_000),
+        a.retries == 5
+            && s.total_cost_per_accepted.value().map(|m| m.as_micros()) == Some(6_000_000),
         format!(
             "expected the full $6.00 retained, got {:?}",
-            s.cost_per_accepted.map(|m| m.as_micros())
+            s.total_cost_per_accepted.value().map(|m| m.as_micros())
         ),
     )
 }
@@ -611,7 +635,7 @@ fn the_two_metrics_use_different_denominators() -> CaseResult {
         ),
     ];
     let s = report::summarise(Arm::Nazm, &attempts);
-    let cost = s.cost_per_accepted.map(|m| m.as_micros());
+    let cost = s.total_cost_per_accepted.value().map(|m| m.as_micros());
     let rate = s.acceptance_rate;
     check(
         "the two metrics use different denominators",
@@ -626,7 +650,7 @@ fn the_two_metrics_use_different_denominators() -> CaseResult {
 /// — but it is reported, and the void rate with it. An arm voiding far more often than its
 /// comparator means the comparison is partly a measurement artifact, which is a finding in
 /// its own right rather than something to average away.
-fn void_spend_is_reported_not_discarded() -> CaseResult {
+fn void_spend_is_in_the_primary_metric() -> CaseResult {
     let attempts = vec![
         attempt(
             Arm::Nazm,
@@ -645,16 +669,155 @@ fn void_spend_is_reported_not_discarded() -> CaseResult {
     ];
     let s = report::summarise(Arm::Nazm, &attempts);
 
-    let counted_cost = s.cost_per_accepted.map(|m| m.as_micros());
+    let counted_cost = s.total_cost_per_accepted.value().map(|m| m.as_micros());
     let void_cost = s.void_cost.believable().map(|m| m.as_micros());
     let rate = s.void_rate;
 
+    let secondary = s
+        .cost_per_accepted_excluding_evaluator_faults
+        .value()
+        .map(|m| m.as_micros());
+
     check(
-        "void spend is reported, not discarded",
-        counted_cost == Some(1_000_000) && void_cost == Some(3_000_000)
+        "void spend is in the primary metric and on its own line",
+        counted_cost == Some(4_000_000)
+            && secondary == Some(1_000_000)
+            && void_cost == Some(3_000_000)
             && rate.is_some_and(|r| (r - 0.5).abs() < 1e-9),
         format!(
-            "expected $1.00 counted, $3.00 void, rate 0.5; got {counted_cost:?}, {void_cost:?}, {rate:?}"
+            "expected primary $4.00 (all spend), secondary $1.00, void line $3.00, rate 0.5; \
+             got {counted_cost:?}, {secondary:?}, {void_cost:?}, {rate:?}"
+        ),
+    )
+}
+
+/// The review's counterexample, end to end, against the gate ratio itself.
+///
+/// Both arms accept 10. A2 spends $10 with no voids. A3 spends $8 plus $12 of void work.
+/// Excluding void spend reports A3 at $0.80 against A2's $1.00 — R_C = 0.80, which
+/// **passes** the gate's cost condition. Including it, A3 is $2.00 against $1.00 —
+/// R_C = 2.00, a 2× regression. The gate must see the second number.
+fn the_gate_ratio_is_not_inverted_by_void_spend() -> CaseResult {
+    let mut attempts = Vec::new();
+
+    // A2: ten acceptances, $1.00 each, nothing void.
+    for _ in 0..10 {
+        attempts.push(attempt(
+            Arm::TypescriptTooled,
+            Family::ValidatedCrudApi,
+            Outcome::Accepted,
+            paid(1_000_000),
+        ));
+    }
+    // A3: ten acceptances at $0.80, plus $12 burned on four void attempts.
+    for _ in 0..10 {
+        attempts.push(attempt(
+            Arm::Nazm,
+            Family::ValidatedCrudApi,
+            Outcome::Accepted,
+            paid(800_000),
+        ));
+    }
+    for _ in 0..4 {
+        attempts.push(attempt(
+            Arm::Nazm,
+            Family::ValidatedCrudApi,
+            Outcome::HarnessError {
+                reason: "evaluator database unreachable".to_owned(),
+            },
+            paid(3_000_000),
+        ));
+    }
+
+    let summaries: Vec<_> = Arm::all()
+        .iter()
+        .map(|a| report::summarise(*a, &attempts))
+        .collect();
+    let Some(nazm) = summaries.iter().find(|s| s.arm == Arm::Nazm).cloned() else {
+        return check(
+            "the gate ratio is not inverted by void spend",
+            false,
+            "no Nazm summary",
+        );
+    };
+    let Some(cmp) = report::compare(&nazm, &summaries) else {
+        return check(
+            "the gate ratio is not inverted by void spend",
+            false,
+            "no comparison",
+        );
+    };
+
+    let primary = nazm.total_cost_per_accepted.value().map(|m| m.as_micros());
+    let secondary = nazm
+        .cost_per_accepted_excluding_evaluator_faults
+        .value()
+        .map(|m| m.as_micros());
+    let ratio = cmp.cost_ratio;
+
+    check(
+        "the gate ratio is not inverted by void spend",
+        primary == Some(2_000_000)
+            && secondary == Some(800_000)
+            && ratio.is_some_and(|r| (r - 2.0).abs() < 1e-9),
+        format!(
+            "expected primary $2.00, secondary $0.80, R_C 2.0 (not 0.8); got {primary:?}, {secondary:?}, {ratio:?}"
+        ),
+    )
+}
+
+/// Spending money and accepting nothing is a result, not missing data.
+///
+/// The previous `Option<Money>` returned `None` for both, so a caller could not tell an
+/// arm that failed everything from an arm whose cost records were lost. They call for
+/// opposite responses: the first is a finding about the arm, the second invalidates the
+/// figure.
+fn no_acceptances_is_distinguishable_from_missing_data() -> CaseResult {
+    use crate::cost::CostPerAccepted;
+
+    let all_failed = vec![
+        attempt(
+            Arm::Nazm,
+            Family::CancellableJob,
+            Outcome::WrongAnswer,
+            paid(5_000_000),
+        ),
+        attempt(
+            Arm::Nazm,
+            Family::CancellableJob,
+            Outcome::WrongAnswer,
+            paid(5_000_000),
+        ),
+    ];
+    let s1 = report::summarise(Arm::Nazm, &all_failed);
+
+    let lost_records = vec![attempt(
+        Arm::Nazm,
+        Family::CancellableJob,
+        Outcome::Accepted,
+        Cost::new(
+            CostComponent::missing("provider returned no usage block"),
+            CostComponent::recorded(0),
+            CostComponent::recorded(0),
+        ),
+    )];
+    let s2 = report::summarise(Arm::Nazm, &lost_records);
+
+    let spent_nothing_accepted = matches!(
+        s1.total_cost_per_accepted,
+        CostPerAccepted::NoAcceptedSolutions { spend } if spend.as_micros() == 10_000_000
+    );
+    let incomplete = matches!(
+        s2.total_cost_per_accepted,
+        CostPerAccepted::Incomplete { .. }
+    );
+
+    check(
+        "no acceptances is distinguishable from missing data",
+        spent_nothing_accepted && incomplete,
+        format!(
+            "expected NoAcceptedSolutions{{$10.00}} and Incomplete; got {:?} and {:?}",
+            s1.total_cost_per_accepted, s2.total_cost_per_accepted
         ),
     )
 }
@@ -676,6 +839,6 @@ mod tests {
     #[test]
     fn the_selftest_covers_every_outcome_class() {
         // A self-test that silently stopped exercising a case would be worse than none.
-        assert!(super::run().len() >= 15);
+        assert!(super::run().len() >= 17);
     }
 }

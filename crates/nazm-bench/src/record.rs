@@ -12,7 +12,7 @@ use crate::prereg::PreRegistration;
 use crate::task::Arm;
 
 /// One attempt, as written to the run log.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Attempt {
     pub arm: Arm,
     pub task_id: String,
