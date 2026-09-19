@@ -70,3 +70,53 @@ $1.00 and pass the gate on what is really a 2x cost regression
 file = "crates/nazm-bench/src/report.rs"
 find = "        total_cost_per_accepted: all_total.per_accepted(accepted),"
 replace = "        total_cost_per_accepted: total.per_accepted(accepted),"
+
+[[mutation]]
+name = "teardown-order-reversed"
+why = """
+removes networks and volumes before containers, which a real daemon refuses because a
+network with attached endpoints and a volume with a referencing container cannot be
+removed -- the ordering bug that leaks an attempt's resources
+"""
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = "            .partition(|r| r.kind == ResourceKind::Container);"
+replace = "            .partition(|r| r.kind != ResourceKind::Container);"
+
+[[mutation]]
+name = "cleanup-verification-skipped"
+why = "reports Clean without checking whether anything survived teardown"
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = "        if surviving.is_empty() && problems.is_empty() {"
+replace = "        if true {"
+
+[[mutation]]
+name = "unverifiable-cleanup-passes"
+why = """
+treats a cleanup that could not be verified as clean, which is the assumption that turns a
+detectable instrument fault into a silent independence violation
+"""
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = """                return Disposition::Quarantine {
+                    surviving: Vec::new(),
+                    reason: format!("cleanup could not be verified: {e}"),
+                };"""
+replace = "                return Disposition::Clean;"
+
+[[mutation]]
+name = "ownership-recorded-after-creation"
+why = """
+writes the ledger entry after the create returns, reopening the window where an
+interruption leaves a resource nothing knows the name of
+"""
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = """        self.ledger.intend(&self.cfg.attempt, &id)?;
+        create(self.engine)?;"""
+replace = """        create(self.engine)?;
+        self.ledger.intend(&self.cfg.attempt, &id)?;"""
+
+[[mutation]]
+name = "allocator-ignores-occupied-subnets"
+why = "hands out a subnet already in use, including by networks the harness does not own"
+file = "crates/nazm-bench/src/sandbox/network.rs"
+find = "        if !in_use.iter().any(|s| overlaps(s, &candidate.cidr())) {"
+replace = "        if true {"
