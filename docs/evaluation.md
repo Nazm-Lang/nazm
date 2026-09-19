@@ -197,10 +197,24 @@ the last being a judgement, made explicitly and recorded, not a threshold.
 ### Chronology, not just consistency
 
 A registration that merely *agrees* with the documentation proves nothing: both files can
-be written in one commit after the results have been examined. The registration is
-therefore bound by git ancestry — every attempt record names the registration commit, and
-that commit must be a strict **ancestor** of the run commit. A registration written after
-a run cannot be an ancestor of it, so the ordering is checkable rather than trusted.
+be written in one commit after the results have been examined. So the registration is bound
+two ways, and neither alone is sufficient.
+
+**Git ancestry** — every attempt record names the registration commit, which must be a
+strict ancestor of the run commit. This establishes ordering **within repository history**.
+It does *not* establish that the registration preceded the experiment: history is authored,
+and someone can run first, then create both commits in the required order.
+
+**A preflight record** — before any agent is launched, the runner verifies the registration
+and freeze, captures the run commit, task-bundle digest, configuration, and dependency
+digest, refuses to proceed from a dirty tree (or captures the diff and marks the run
+unpublishable), and writes a start record. This ties the registration to a specific
+execution rather than to a commit graph.
+
+**Neither is an independent timestamp**, and this protocol does not claim one. If
+publication requires chronology verifiable by a third party, the registration must also be
+recorded externally — a push whose time the forge records, or a timestamping service — and
+that is an additional step, not something the repository provides.
 
 A registration binds the protocol and analysis rules (its own content), the evaluated
 implementation (the freeze tag), the task sets (a corpus digest), and its version. A later

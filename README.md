@@ -125,7 +125,9 @@ Almost everything. Specifically:
 - **No task corpus.** The six task families in `docs/evaluation.md` are described, not
   written.
 - **The decision rule is not pre-registered.** It is a draft until committed with its hash
-  recorded, and it is not binding before then.
+  recorded, and it is not binding before then. Registration is bound by git ancestry plus a
+  runner preflight record; neither is an independent timestamp, so third-party-verifiable
+  chronology would need an external registration event.
 - **The spec is a list of open questions**, not a specification — see
   [`docs/spec.md`](docs/spec.md). Notably unsettled: whether divergence is an effect, which
   determines whether an unused pure call may be dropped at all.
