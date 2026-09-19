@@ -1,0 +1,61 @@
+# Mutation catalogue.
+#
+# Each entry names a defect the test suite claims to catch. `cargo xtask mutate` applies
+# one, rebuilds, runs the suite, and requires it to FAIL — then restores and requires it to
+# pass again.
+#
+# The verification that matters most is that the injection actually landed. Twice during
+# development a replacement silently matched nothing (cargo fmt had rewrapped the target),
+# the suite passed, and the result was indistinguishable from a surviving mutation. So a
+# no-op replacement is now a hard error, not a pass.
+
+[[mutation]]
+name = "acceptance-rate-denominator"
+why = "divides acceptances by acceptances, pinning every arm's rate at 1.0"
+file = "crates/nazm-bench/src/report.rs"
+find = "accepted as f64 / counted.len() as f64"
+replace = "accepted as f64 / counted.iter().filter(|a| a.is_accepted()).count() as f64"
+
+[[mutation]]
+name = "cost-numerator-drops-failures"
+why = "sums only successful attempts, so an arm that fails cheaply looks cheap"
+file = "crates/nazm-bench/src/report.rs"
+find = "let costs: Vec<&crate::cost::Cost> = counted.iter().map(|a| &a.cost).collect();"
+replace = "let costs: Vec<&crate::cost::Cost> = counted.iter().filter(|a| a.is_accepted()).map(|a| &a.cost).collect();"
+
+[[mutation]]
+name = "missing-cost-becomes-zero"
+why = "a dropped usage record silently reads as free"
+file = "crates/nazm-bench/src/cost.rs"
+find = """                CostComponent::Missing { reason } => {
+                    gaps.push((line.to_owned(), reason.clone()));
+                }"""
+replace = "                CostComponent::Missing { reason: _ } => {}"
+
+[[mutation]]
+name = "candidate-fault-becomes-void"
+why = "a crashing candidate leaves the denominator, so an unreliable arm looks better"
+file = "crates/nazm-bench/src/acceptance.rs"
+find = "            Self::CandidateFault { .. } => Outcome::Crash { signal: None },"
+replace = "            Self::CandidateFault { reason } => Outcome::HarnessError { reason },"
+
+[[mutation]]
+name = "skip-submission-drift-check"
+why = "grades a snapshot that changed after it was recorded"
+file = "crates/nazm-bench/src/acceptance.rs"
+find = "        if let Err(drift) = submission.verify_unchanged() {"
+replace = "        if let Err(drift) = Ok::<(), SubmissionDrift>(()) {"
+
+[[mutation]]
+name = "compare-against-the-baseline"
+why = "credits the language with the entire tooling contribution"
+file = "crates/nazm-bench/src/task.rs"
+find = "            Self::Nazm => Some(Self::TypescriptTooled),"
+replace = "            Self::Nazm => Some(Self::TypescriptBaseline),"
+
+[[mutation]]
+name = "void-spend-discarded"
+why = "hides money really spent on voided attempts"
+file = "crates/nazm-bench/src/report.rs"
+find = "    let void_costs: Vec<&crate::cost::Cost> = void.iter().map(|a| &a.cost).collect();"
+replace = "    let void_costs: Vec<&crate::cost::Cost> = Vec::new();"

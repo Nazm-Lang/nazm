@@ -1,9 +1,17 @@
-//! The failure demonstrations that must pass before any live run is believable.
+//! Workspace-management and grading-integrity tests.
 //!
 //! These use real directories, real files, and real processes — not fixtures. The unit
 //! tests prove the accounting is right about numbers it is handed; these prove the harness
 //! is handed the right numbers in the first place, which is the part that cannot be
 //! checked synthetically.
+//!
+//! **Scope, stated precisely.** These test the harness's own behaviour. They are *not*
+//! evidence that a candidate process is sandboxed: every check here runs in the test
+//! process, not inside a spawned agent. A real agent can open any absolute path it likes —
+//! another attempt's tree, the acceptance corpus, the harness binary. Enforcement the
+//! candidate cannot decline (OS sandbox or per-attempt container, corpus outside the mount
+//! namespace) is **not implemented**, and until it is, no claim of isolation should rest on
+//! this file.
 //!
 //! Each test is named for the way the benchmark would otherwise lie.
 
@@ -20,8 +28,16 @@ fn answer_is_correct(s: &nazm_bench::Submission) -> CheckResult {
     match std::fs::read_to_string(s.path.join("answer.txt")) {
         Ok(text) if text.trim() == "42" => CheckResult::Pass,
         Ok(_) => CheckResult::Fail,
-        Err(e) => CheckResult::CouldNotRun(e.to_string()),
+        // The candidate produced no output. That is the candidate's fault, not the
+        // evaluator's, and it must be counted rather than voided.
+        Err(e) => CheckResult::CandidateFault(format!("no answer.txt: {e}")),
     }
+}
+
+/// A check whose own dependency is unavailable — the evaluator's fault, not the
+/// candidate's. Stands in for "the database would not start".
+fn evaluator_is_broken(_s: &nazm_bench::Submission) -> CheckResult {
+    CheckResult::EvaluatorFault("test database refused connections".to_owned())
 }
 
 fn suite() -> AcceptanceSuite {
@@ -128,25 +144,50 @@ fn the_evaluator_grades_exactly_the_submission_named_in_the_record() {
 }
 
 #[test]
-fn acceptance_infrastructure_failure_is_not_a_candidate_failure() {
-    let frozen = tempfile::tempdir().unwrap();
-    let ws = Workspace::create("attempt-4").unwrap();
-    // No answer.txt at all, so the check cannot run rather than failing.
-    ws.write("readme.txt", "nothing here").unwrap();
-    let submission = ws.freeze(frozen.path()).unwrap();
+fn evaluator_failure_is_void_but_candidate_failure_is_counted() {
+    // The distinction this test originally got backwards. An earlier version used a
+    // candidate that produced no output as the "infrastructure failure" case, which
+    // voided it — deleting an arm's worst attempts from the denominator and making an
+    // unreliable arm look better than one that merely gets answers wrong.
 
-    let verdict = suite().grade(&submission);
+    // 1. Candidate produced nothing. Its fault. COUNTED.
+    let frozen_a = tempfile::tempdir().unwrap();
+    let ws_a = Workspace::create("attempt-4a").unwrap();
+    ws_a.write("readme.txt", "no answer here").unwrap();
+    let sub_a = ws_a.freeze(frozen_a.path()).unwrap();
+
+    let verdict_a = suite().grade(&sub_a);
     assert!(
-        matches!(verdict, Verdict::Infrastructure { .. }),
-        "a check that could not run must not be scored as a failure: {verdict:?}"
+        matches!(verdict_a, Verdict::CandidateFault { .. }),
+        "a candidate that emits nothing has failed, not voided the run: {verdict_a:?}"
+    );
+    assert!(!verdict_a.is_void());
+    assert!(
+        !verdict_a.clone().into_outcome(false).is_void(),
+        "a candidate fault must stay in the denominator"
     );
 
-    // And it lands as a void attempt, so it leaves the denominator entirely.
-    assert!(verdict.into_outcome(false).is_void());
+    // 2. The evaluator's own dependency is down. Not the arm's fault. VOID.
+    let frozen_b = tempfile::tempdir().unwrap();
+    let ws_b = Workspace::create("attempt-4b").unwrap();
+    ws_b.write("answer.txt", "42").unwrap();
+    let sub_b = ws_b.freeze(frozen_b.path()).unwrap();
+
+    let broken = AcceptanceSuite::new("demo-01").with_check("db_reachable", evaluator_is_broken);
+    let verdict_b = broken.grade(&sub_b);
+    assert!(
+        matches!(verdict_b, Verdict::EvaluatorFault { .. }),
+        "an evaluator dependency failure must void: {verdict_b:?}"
+    );
+    assert!(verdict_b.clone().into_outcome(false).is_void());
 }
 
+/// The harness will not itself route one attempt's file operations into another's tree.
+///
+/// Note what this does not show: nothing here stops a *spawned candidate process* from
+/// opening the other workspace by absolute path. See the module docs.
 #[test]
-fn one_attempt_cannot_read_or_modify_another() {
+fn the_harness_does_not_route_one_attempt_into_another() {
     let a = Workspace::create("attempt-a").unwrap();
     let b = Workspace::create("attempt-b").unwrap();
 

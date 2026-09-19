@@ -5,6 +5,7 @@
 //! the project makes about its own structure that no linter can see.
 
 mod metadata;
+mod mutate;
 mod rules;
 
 use std::process::ExitCode;
@@ -17,6 +18,7 @@ fn main() -> ExitCode {
         Some("check-codegen") => report(&[("codegen reach", check_codegen_reach())]),
         Some("check-unsafe") => report(&[("unsafe policy", check_unsafe_policy())]),
         Some("check-docs") => report(&[("doc claims", check_doc_claims())]),
+        Some("mutate") => report(&[("mutation coverage", run_mutations())]),
         Some("help" | "--help" | "-h") | None => {
             help();
             ExitCode::SUCCESS
@@ -38,6 +40,7 @@ fn help() {
            check-codegen   no front-end crate reaches a code generator\n  \
            check-unsafe    the unsafe allowlist and the workspace lint agree\n  \
            check-docs      documented claims that must stay true\n  \
+           mutate          inject catalogued defects; each must be caught\n  \
            help            this message\n"
     );
 }
@@ -253,4 +256,16 @@ fn check_unsafe_policy() -> Result<(), Vec<String>> {
     } else {
         Err(problems)
     }
+}
+
+/// Inject every catalogued defect and require the suite to catch it.
+///
+/// Not part of `check`: it rebuilds and re-tests the workspace once per mutation, so it is
+/// a scheduled job rather than a pre-commit gate.
+fn run_mutations() -> Result<(), Vec<String>> {
+    let Some(root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() else {
+        return Err(vec!["could not locate workspace root".to_owned()]);
+    };
+    let catalogue = root.join("xtask/mutations/mutations.toml");
+    mutate::run_all(root, &catalogue)
 }

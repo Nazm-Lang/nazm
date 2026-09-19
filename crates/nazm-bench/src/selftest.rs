@@ -81,6 +81,7 @@ pub fn run() -> Vec<CaseResult> {
         the_comparison_is_against_the_tooled_arm(),
         category_collapse_is_detected(),
         no_verdict_is_produced_here(),
+        void_spend_is_reported_not_discarded(),
         holdout_is_refused_before_the_freeze(),
         a_forged_freeze_fails_against_the_repository(),
     ]
@@ -619,6 +620,45 @@ fn the_two_metrics_use_different_denominators() -> CaseResult {
     )
 }
 
+/// Void attempts cost real money, and a run that voids constantly must not look cheap.
+///
+/// Their spend stays out of `cost_per_accepted` — void work is not attributable to the arm
+/// — but it is reported, and the void rate with it. An arm voiding far more often than its
+/// comparator means the comparison is partly a measurement artifact, which is a finding in
+/// its own right rather than something to average away.
+fn void_spend_is_reported_not_discarded() -> CaseResult {
+    let attempts = vec![
+        attempt(
+            Arm::Nazm,
+            Family::ValidatedCrudApi,
+            Outcome::Accepted,
+            paid(1_000_000),
+        ),
+        attempt(
+            Arm::Nazm,
+            Family::ValidatedCrudApi,
+            Outcome::HarnessError {
+                reason: "test database refused connections".to_owned(),
+            },
+            paid(3_000_000),
+        ),
+    ];
+    let s = report::summarise(Arm::Nazm, &attempts);
+
+    let counted_cost = s.cost_per_accepted.map(|m| m.as_micros());
+    let void_cost = s.void_cost.believable().map(|m| m.as_micros());
+    let rate = s.void_rate;
+
+    check(
+        "void spend is reported, not discarded",
+        counted_cost == Some(1_000_000) && void_cost == Some(3_000_000)
+            && rate.is_some_and(|r| (r - 0.5).abs() < 1e-9),
+        format!(
+            "expected $1.00 counted, $3.00 void, rate 0.5; got {counted_cost:?}, {void_cost:?}, {rate:?}"
+        ),
+    )
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -636,6 +676,6 @@ mod tests {
     #[test]
     fn the_selftest_covers_every_outcome_class() {
         // A self-test that silently stopped exercising a case would be worse than none.
-        assert!(super::run().len() >= 14);
+        assert!(super::run().len() >= 15);
     }
 }

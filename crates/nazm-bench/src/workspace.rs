@@ -1,10 +1,29 @@
-//! Per-attempt isolated workspaces, and the submission freeze.
+//! Per-attempt workspace management, and the submission freeze.
 //!
-//! Two properties this exists to hold, both of which are ways the harness could report a
-//! number that is not about the arm at all:
+//! # What this is not
 //!
-//! 1. **One attempt cannot see or touch another.** Shared state means attempt N's result
-//!    depends on attempt N−1, and a run is no longer a set of independent observations.
+//! **This is not an access-control boundary, and the module was originally misdescribed as
+//! one.** Giving each attempt its own directory and validating paths inside the harness
+//! constrains *the harness's own* file operations. It does nothing to a process the agent
+//! spawns: `cat /tmp/nazm-attempt-xyz/secret.txt` works, and so does reading the
+//! acceptance fixtures or the harness binary itself.
+//!
+//! Real isolation needs enforcement the candidate process cannot decline — an OS sandbox
+//! (`sandbox-exec` on macOS, namespaces plus seccomp on Linux), or a container per
+//! attempt, with the acceptance corpus outside the mount namespace entirely. **None of
+//! that is implemented.** Until it is, the tests in `tests/execution_boundary.rs` are
+//! workspace-management tests, and this module's guarantee is "the harness will not
+//! itself leak state between attempts", not "attempts are isolated".
+//!
+//! For backend tasks the same gap applies beyond the filesystem: each attempt also needs
+//! its own database state and scoped credentials, or attempts share a Postgres instance
+//! and one attempt's rows are another's starting conditions.
+//!
+//! # What it does hold
+//!
+//! 1. **The harness will not itself carry state between attempts.** Each attempt gets a
+//!    fresh tree, removed when the attempt ends, and harness-side path resolution refuses
+//!    absolute paths, `..`, and symlinks resolving outside the root.
 //! 2. **Acceptance evaluates a frozen submission, not a live tree.** An agent whose
 //!    process outlived its timeout — or whose children did — must not be able to keep
 //!    editing what is being graded. The freeze takes a snapshot, records its digest, and
