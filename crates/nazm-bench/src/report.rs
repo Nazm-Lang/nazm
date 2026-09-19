@@ -22,8 +22,20 @@ pub struct ArmSummary {
     pub arm: Arm,
     /// Attempts that count: everything except void ones.
     pub attempts: usize,
-    /// Excluded as instrument defects or protocol violations.
+    /// Excluded as evaluator defects or protocol violations.
     pub void: usize,
+    /// Void attempts as a fraction of all attempts by this arm.
+    ///
+    /// Reported per arm because a high void rate is itself a finding: if one arm voids far
+    /// more often than another, the comparison is not between two arms, it is between one
+    /// arm and a partly-broken measurement of another.
+    pub void_rate: Option<f64>,
+    /// What the void attempts cost.
+    ///
+    /// Kept out of `cost_per_accepted` — void work is not attributable to the arm — but
+    /// reported, because it was really spent. An earlier version dropped it silently,
+    /// which hid real money and made a run that voided constantly look cheap.
+    pub void_cost: Total,
     pub accepted: usize,
     pub cost: Total,
     /// Acceptance rate over counted attempts. `None` when nothing counted.
@@ -74,10 +86,21 @@ pub fn summarise(arm: Arm, attempts: &[Attempt]) -> ArmSummary {
         }
     });
 
+    let void_costs: Vec<&crate::cost::Cost> = void.iter().map(|a| &a.cost).collect();
+    let void_total = cost::total(void_costs);
+
+    #[allow(clippy::cast_precision_loss)]
+    let void_rate = {
+        let all = counted.len() + void.len();
+        (all > 0).then(|| void.len() as f64 / all as f64)
+    };
+
     ArmSummary {
         arm,
         attempts: counted.len(),
         void: void.len(),
+        void_rate,
+        void_cost: void_total,
         accepted,
         cost_per_accepted: total.per_accepted(accepted),
         cost: total,
