@@ -1,0 +1,12 @@
+fn classify(n: Int) -> Int {
+    if n < 0 { return 0 - 1; }
+    let mut i = 0;
+    while i < n {
+        if i * i == n { return i; }
+        if i > 100 { break; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn main() -> Int { classify(49) * 100 + classify(0 - 2) + classify(5) }

@@ -317,6 +317,7 @@ fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints)
     add_builtin(bnames, bret, bfirst, bcount, bparams, "strs_set", t_int(), t_strs(), t_int(), t_str());
     add_builtin(bnames, bret, bfirst, bcount, bparams, "strs_push", t_int(), t_strs(), t_str(), n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "strs_pop", t_str(), t_strs(), n, n);
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "str_join", t_str(), t_strs(), t_str(), n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "args_count", t_int(), n, n, n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "arg", t_str(), t_int(), n, n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "read_file", t_str(), t_str(), n, n);

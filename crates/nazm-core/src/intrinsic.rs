@@ -85,6 +85,13 @@ pub enum Intrinsic {
     IntsPop,
     /// `strs_pop(a: Strs) -> Str` — the same, for `Strs`.
     StrsPop,
+    /// `str_join(parts: Strs, sep: Str) -> Str` — the parts in order, separated.
+    ///
+    /// Not a convenience. Building a large string with `str_concat` in a loop is
+    /// quadratic in both time and memory, and nothing is ever freed — the compiler
+    /// written in Nazm ran out of memory assembling its own output before this existed.
+    /// One pass measures, one allocation holds the result.
+    StrJoin,
 
     // --- the outside world -------------------------------------------------------
     //
@@ -118,7 +125,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -137,6 +144,7 @@ impl Intrinsic {
         Self::StrsPush,
         Self::IntsPop,
         Self::StrsPop,
+        Self::StrJoin,
         Self::ArgsCount,
         Self::Arg,
         Self::ReadFile,
@@ -168,6 +176,7 @@ impl Intrinsic {
             Self::StrsPush => "strs_push",
             Self::IntsPop => "ints_pop",
             Self::StrsPop => "strs_pop",
+            Self::StrJoin => "str_join",
             Self::ArgsCount => "args_count",
             Self::Arg => "arg",
             Self::ReadFile => "read_file",
@@ -196,6 +205,7 @@ impl Intrinsic {
             Self::StrsSet => &[Type::Strs, Type::Int, Type::Str],
             Self::IntsPush => &[Type::Ints, Type::Int],
             Self::StrsPush => &[Type::Strs, Type::Str],
+            Self::StrJoin => &[Type::Strs, Type::Str],
             Self::ArgsCount => &[],
             Self::Arg | Self::ExitWith => &[Type::Int],
             Self::ReadFile | Self::FileExists | Self::Print | Self::EPrint => &[Type::Str],
@@ -216,7 +226,7 @@ impl Intrinsic {
             | Self::IntsPop
             | Self::StrsSet
             | Self::StrsPush => Type::Int,
-            Self::StrsGet | Self::StrsPop | Self::Arg | Self::ReadFile => Type::Str,
+            Self::StrsGet | Self::StrsPop | Self::StrJoin | Self::Arg | Self::ReadFile => Type::Str,
             Self::ArgsCount | Self::WriteFile | Self::Print | Self::EPrint | Self::ExitWith => {
                 Type::Int
             }

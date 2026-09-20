@@ -647,6 +647,21 @@ impl<'a> Interpreter<'a> {
                     |v| Ok(Value::Int(v)),
                 )
             }
+            (Intrinsic::StrJoin, [Value::Strs(parts), Value::Str(sep)]) => {
+                let Some(parts) = seq(parts) else {
+                    return Err(bug("a sequence that could not be read"));
+                };
+                let total: usize = parts.iter().map(Vec::len).sum::<usize>()
+                    + sep.len() * parts.len().saturating_sub(1);
+                let mut out = Vec::with_capacity(total);
+                for (i, part) in parts.iter().enumerate() {
+                    if i > 0 {
+                        out.extend_from_slice(sep);
+                    }
+                    out.extend_from_slice(part);
+                }
+                Ok(Value::Str(out))
+            }
             (Intrinsic::StrsPop, [Value::Strs(a)]) => {
                 let Some(mut a) = seq(a) else {
                     return Err(bug("a sequence that could not be written"));

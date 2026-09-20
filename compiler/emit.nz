@@ -47,17 +47,30 @@ fn add_line(out: Strs, line: Str) -> Int {
     strs_len(out)
 }
 
+// One pass and one allocation.
+//
+// This was `str_concat` in a loop, which is quadratic in time *and* memory — and with
+// nothing ever freed, the compiler ran out of memory assembling its own output. That is
+// the measurement that made `str_join` a built-in rather than a convenience.
 fn join(out: Strs) -> Str {
-    let mut s = "";
-    let mut i = 0;
-    while i < strs_len(out) {
-        s = str_concat(s, strs_get(out, i));
-        i = i + 1;
-    }
-    s
+    str_join(out, "")
 }
 
 fn v(n: Int) -> Str { str_concat("%", int_to_str(n)) }
+
+// The LLVM type for one of the checker's type codes.
+//
+// `Str` is `{ pointer, byte length }` by value; a sequence is a pointer to its
+// `{ len, cap, data }` header, which is what gives sequences reference semantics. The
+// codes are `compiler/analyse.nz`'s, so the two cannot disagree about what a node holds.
+fn llvm_type(t: Int) -> Str {
+    if t == t_int() { return "i64"; }
+    if t == t_bool() { return "i1"; }
+    if t == t_str() { return "{ ptr, i64 }"; }
+    if t == t_ints() { return "ptr"; }
+    if t == t_strs() { return "ptr"; }
+    "void"
+}
 
 // --- source positions --------------------------------------------------------------
 //
@@ -149,7 +162,12 @@ fn failure_text(code: Str, message: Str, at: Str) -> Str {
 // Emit the branch that reports `msg` and never returns, then continue after it.
 //
 // The failure block ends in `unreachable`, so it is never a predecessor of anything.
-fn guard(out: Strs, msgs: Strs, next: Ints, cond: Int, code: Str, message: Str, at: Str) -> Int {
+// A guard opens two blocks, so it **must** tell `current` where emission ended up.
+// Without that a later `phi` names the block the guard left, not the one that branches to
+// it — which clang reports as "PHI node entries do not match predecessors", several
+// constructs away from the cause.
+fn guard(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
+         cond: Int, code: Str, message: Str, at: Str) -> Int {
     let text = failure_text(code, message, at);
     let idx = message_index(msgs, text);
     let fail = take_number(next);
@@ -157,11 +175,11 @@ fn guard(out: Strs, msgs: Strs, next: Ints, cond: Int, code: Str, message: Str, 
     add_line(out, str_concat(str_concat("  br i1 ", v(cond)),
                              str_concat(str_concat(", label %b", int_to_str(fail)),
                                         str_concat(", label %b", int_to_str(cont)))));
-    add_line(out, str_concat(str_concat("b", int_to_str(fail)), ":"));
+    open_block(out, current, live, str_concat("b", int_to_str(fail)));
     add_line(out, str_concat(str_concat("  call void @nz.fail(ptr @.m", int_to_str(idx)),
                              str_concat(", i64 ", str_concat(int_to_str(str_len(text) + 1), ")"))));
     add_line(out, "  unreachable");
-    add_line(out, str_concat(str_concat("b", int_to_str(cont)), ":"));
+    open_block(out, current, live, str_concat("b", int_to_str(cont)));
     cont
 }
 
@@ -176,8 +194,8 @@ fn take_number(next: Ints) -> Int {
 // A post-order scan with a stack of SSA value numbers. Operands are already emitted when
 // their operator is reached, which is what post-order means.
 
-fn checked(out: Strs, msgs: Strs, next: Ints, intrinsic: Str, noun: Str,
-           a: Int, b: Int, at: Str) -> Int {
+fn checked(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
+           intrinsic: Str, noun: Str, a: Int, b: Int, at: Str) -> Int {
     let r = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(r)),
                              str_concat(str_concat(" = call {i64, i1} @llvm.", intrinsic),
@@ -186,7 +204,7 @@ fn checked(out: Strs, msgs: Strs, next: Ints, intrinsic: Str, noun: Str,
     let ov = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(ov)),
                              str_concat(" = extractvalue {i64, i1} ", str_concat(v(r), ", 1"))));
-    guard(out, msgs, next, ov, "N0400", str_concat(str_concat("this ", noun), " overflows `Int`"), at);
+    guard(out, msgs, next, current, live, ov, "N0400", str_concat(str_concat("this ", noun), " overflows `Int`"), at);
     let res = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(res)),
                              str_concat(" = extractvalue {i64, i1} ", str_concat(v(r), ", 0"))));
@@ -207,13 +225,13 @@ fn min_over_minus_one(out: Strs, next: Ints, a: Int, b: Int) -> Int {
     both
 }
 
-fn divide(out: Strs, msgs: Strs, next: Ints, a: Int, b: Int, at: Str) -> Int {
+fn divide(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, a: Int, b: Int, at: Str) -> Int {
     let zero = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(zero)),
                              str_concat(" = icmp eq i64 ", str_concat(v(b), ", 0"))));
-    guard(out, msgs, next, zero, "N0401", "division by zero", at);
+    guard(out, msgs, next, current, live, zero, "N0401", "division by zero", at);
     let bad = min_over_minus_one(out, next, a, b);
-    guard(out, msgs, next, bad, "N0400", "this division overflows `Int`", at);
+    guard(out, msgs, next, current, live, bad, "N0400", "this division overflows `Int`", at);
     let res = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(res)),
                              str_concat(" = sdiv i64 ", str_concat(v(a), str_concat(", ", v(b))))));
@@ -224,11 +242,11 @@ fn divide(out: Strs, msgs: Strs, next: Ints, a: Int, b: Int, at: Str) -> Int {
 // zero and zero is representable, so `docs/spec.md` specifies it as `0` — and the `srem`
 // instruction faults on that pair anyway, because it computes the quotient. The pair is
 // answered with a constant and never reaches the instruction.
-fn remainder(out: Strs, msgs: Strs, next: Ints, a: Int, b: Int, at: Str) -> Int {
+fn remainder(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, a: Int, b: Int, at: Str) -> Int {
     let zero = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(zero)),
                              str_concat(" = icmp eq i64 ", str_concat(v(b), ", 0"))));
-    guard(out, msgs, next, zero, "N0401", "division by zero", at);
+    guard(out, msgs, next, current, live, zero, "N0401", "division by zero", at);
     let special = min_over_minus_one(out, next, a, b);
     let is_zero = take_number(next);
     let compute = take_number(next);
@@ -264,21 +282,162 @@ fn predicate(op: Str) -> Str {
     ""
 }
 
-fn emit_binary(out: Strs, msgs: Strs, next: Ints, op: Str, a: Int, b: Int, at: Str) -> Int {
+// `==` and `!=` on two `Str`s: equal lengths, then equal bytes.
+//
+// The length test **guards** the comparison rather than merely preceding it, so `memcmp`
+// is only reached when both strings really are that long and no path reads past either
+// buffer. That is why this is a branch and a `phi` rather than an `and` of two computed
+// values, which would have evaluated the `memcmp` first.
+// --- pieces the built-ins share ------------------------------------------------------
+
+fn field(out: Strs, next: Ints, s: Int, index: Str) -> Int {
+    let n = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(n)),
+                             str_concat(" = extractvalue { ptr, i64 } ",
+                                        str_concat(v(s), str_concat(", ", index)))));
+    n
+}
+
+fn make_str(out: Strs, next: Ints, ptr: Int, len: Int) -> Int {
+    // `undef` is the standard way to build an aggregate, and **both** fields are written
+    // before it is read — not the poison-producing shortcut the architecture rules mean.
+    let half = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(half)),
+                             str_concat(" = insertvalue { ptr, i64 } undef, ptr ",
+                                        str_concat(v(ptr), ", 0"))));
+    let whole = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(whole)),
+                             str_concat(str_concat(" = insertvalue { ptr, i64 } ", v(half)),
+                                        str_concat(", i64 ", str_concat(v(len), ", 1")))));
+    whole
+}
+
+fn require(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
+           bad: Int, message: Str, at: Str) -> Int {
+    guard(out, msgs, next, current, live, bad, "N0405", message, at)
+}
+
+fn allocate(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, bytes: Int, at: Str) -> Int {
+    let buf = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(buf)),
+                             str_concat(" = call ptr @malloc(i64 ", str_concat(v(bytes), ")"))));
+    let null = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(null)),
+                             str_concat(" = icmp eq ptr ", str_concat(v(buf), ", null"))));
+    guard(out, msgs, next, current, live, null, "N0406", "out of memory", at);
+    buf
+}
+
+fn constant(out: Strs, next: Ints, value: Str) -> Int {
+    let n = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(n)), str_concat(" = add i64 ", str_concat(value, ", 0"))));
+    n
+}
+
+// One instruction of the form `%n = OP TY A[, B]`.
+//
+// A single writer for the shapes the built-ins need, because assembling these by hand at
+// twenty call sites is how a stray comma reaches clang.
+fn binop(out: Strs, next: Ints, op: Str, ty: Str, a: Str, b: Str) -> Int {
+    let n = take_number(next);
+    let rest = if str_len(b) == 0 { a } else { str_concat(a, str_concat(", ", b)) };
+    add_line(out, str_concat(str_concat("  ", v(n)),
+                             str_concat(str_concat(str_concat(" = ", op), str_concat(" ", ty)),
+                                        str_concat(" ", rest))));
+    n
+}
+
+// A pointer to element `i` of a sequence, bounds-checked.
+//
+// The check is here rather than inside a shared helper because the diagnostic has to
+// name *this* call's source position, and a helper has only one.
+// `%n = OP FROM %x to TO`. A cast is not a binary operation and writing it as one loses
+// the `to`, which clang rejects with a message about the cast value rather than about
+// the missing word.
+fn cast(out: Strs, next: Ints, op: Str, from: Str, value: Int, to: Str) -> Int {
+    let n = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(n)),
+                             str_concat(str_concat(str_concat(" = ", op), str_concat(" ", from)),
+                                        str_concat(str_concat(" ", v(value)), str_concat(" to ", to)))));
+    n
+}
+
+fn seq_slot(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, handle: Int, index: Int, elem: Str, at: Str) -> Int {
+    let len = binop(out, next, "load", "i64,", str_concat("ptr ", v(handle)), "");
+    let neg = binop(out, next, "icmp slt", "i64", v(index), "0");
+    let past = binop(out, next, "icmp sge", "i64", v(index), v(len));
+    let bad = binop(out, next, "or", "i1", v(neg), v(past));
+    require(out, msgs, next, current, live, bad, "this index is outside the sequence", at);
+    let df = binop(out, next, "getelementptr", "i8,", str_concat("ptr ", v(handle)), "i64 16");
+    let data = binop(out, next, "load", "ptr,", str_concat("ptr ", v(df)), "");
+    binop(out, next, "getelementptr", str_concat(elem, ","), str_concat("ptr ", v(data)),
+          str_concat("i64 ", v(index)))
+}
+
+fn string_equality(out: Strs, current: Strs, live: Ints, next: Ints,
+                   a: Int, b: Int, negate: Bool) -> Int {
+    let pa = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(pa)),
+                             str_concat(" = extractvalue { ptr, i64 } ", str_concat(v(a), ", 0"))));
+    let la = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(la)),
+                             str_concat(" = extractvalue { ptr, i64 } ", str_concat(v(a), ", 1"))));
+    let pb = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(pb)),
+                             str_concat(" = extractvalue { ptr, i64 } ", str_concat(v(b), ", 0"))));
+    let lb = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(lb)),
+                             str_concat(" = extractvalue { ptr, i64 } ", str_concat(v(b), ", 1"))));
+    let same = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(same)),
+                             str_concat(" = icmp eq i64 ", str_concat(v(la), str_concat(", ", v(lb))))));
+
+    let cmp = take_number(next);
+    let join = take_number(next);
+    let short = strs_get(current, 0);
+    add_line(out, str_concat(str_concat("  br i1 ", v(same)),
+                             str_concat(str_concat(", label %bc", int_to_str(cmp)),
+                                        str_concat(", label %bj", int_to_str(join)))));
+    open_block(out, current, live, str_concat("bc", int_to_str(cmp)));
+    let diff = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(diff)),
+                             str_concat(str_concat(" = call i32 @memcmp(ptr ", v(pa)),
+                                        str_concat(str_concat(", ptr ", v(pb)),
+                                                   str_concat(str_concat(", i64 ", v(la)), ")")))));
+    let eq = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(eq)),
+                             str_concat(" = icmp eq i32 ", str_concat(v(diff), ", 0"))));
+    let from_cmp = strs_get(current, 0);
+    branch(out, live, str_concat("bj", int_to_str(join)));
+    open_block(out, current, live, str_concat("bj", int_to_str(join)));
+    let outv = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(outv)),
+                             str_concat(str_concat(" = phi i1 [ false, %", short),
+                                        str_concat(str_concat(" ], [ ", v(eq)),
+                                                   str_concat(str_concat(", %", from_cmp), " ]")))));
+    if negate == false { return outv; }
+    let flipped = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(flipped)),
+                             str_concat(" = xor i1 ", str_concat(v(outv), ", true"))));
+    flipped
+}
+
+fn emit_binary(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, op: Str, a: Int, b: Int, at: Str, ot: Int) -> Int {
     let pred = predicate(op);
     if pred != "" {
-        // No guard: no comparison can fail. `icmp` on two `i64`s is total.
+        // No guard: no comparison can fail. `icmp` on two `i64`s or two `i1`s is total.
         let n = take_number(next);
         add_line(out, str_concat(str_concat("  ", v(n)),
                                  str_concat(str_concat(" = icmp ", pred),
-                                            str_concat(" i64 ", str_concat(v(a), str_concat(", ", v(b)))))));
+                                            str_concat(str_concat(" ", llvm_type(ot)),
+                                                       str_concat(" ", str_concat(v(a), str_concat(", ", v(b))))))));
         return n;
     }
-    if op == "+" { return checked(out, msgs, next, "sadd", "addition", a, b, at); }
-    if op == "-" { return checked(out, msgs, next, "ssub", "subtraction", a, b, at); }
-    if op == "*" { return checked(out, msgs, next, "smul", "multiplication", a, b, at); }
-    if op == "/" { return divide(out, msgs, next, a, b, at); }
-    if op == "%" { return remainder(out, msgs, next, a, b, at); }
+    if op == "+" { return checked(out, msgs, next, current, live, "sadd", "addition", a, b, at); }
+    if op == "-" { return checked(out, msgs, next, current, live, "ssub", "subtraction", a, b, at); }
+    if op == "*" { return checked(out, msgs, next, current, live, "smul", "multiplication", a, b, at); }
+    if op == "/" { return divide(out, msgs, next, current, live, a, b, at); }
+    if op == "%" { return remainder(out, msgs, next, current, live, a, b, at); }
     0 - 1
 }
 
@@ -295,6 +454,218 @@ fn slot_count(nk: Ints, nslot: Ints) -> Int {
         k = k + 1;
     }
     most
+}
+
+// The runtime, as generated LLVM rather than a linked crate: sequences and files need a
+// handful of helpers, and none of them needs stack switching or a custom allocator —
+// which is what `docs/architecture.md` reserves `nazm-rt` for.
+//
+// **Bounds checks are not here.** They live at each call site, because the diagnostic has
+// to name that call's source position and a shared helper has only one. What is here is
+// allocation, growth and the file system, none of which has a position to report: each
+// signals failure by returning null or a negative count, and the call site turns that
+// into `N0405`, `N0406` or `N0407`.
+//
+// Emitted into every module. The Rust backend gates each helper on being reached; this
+// one does not yet, so a program that uses no sequence still carries `@nz.arr_new`. That
+// is a size cost and not a correctness one, and it is written down rather than hidden.
+fn runtime() -> Str {
+    let mut r = strs_new();
+    strs_push(r, "define internal ptr @nz.arr_new() {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %h = call ptr @malloc(i64 24)");
+    strs_push(r, "  %bad = icmp eq ptr %h, null");
+    strs_push(r, "  br i1 %bad, label %fail, label %ok");
+    strs_push(r, "fail:");
+    strs_push(r, "  ret ptr null");
+    strs_push(r, "ok:");
+    strs_push(r, "  store i64 0, ptr %h");
+    strs_push(r, "  %cp = getelementptr i8, ptr %h, i64 8");
+    strs_push(r, "  store i64 0, ptr %cp");
+    strs_push(r, "  %dp = getelementptr i8, ptr %h, i64 16");
+    strs_push(r, "  store ptr null, ptr %dp");
+    strs_push(r, "  ret ptr %h");
+    strs_push(r, "}");
+    strs_push(r, "define internal ptr @nz.arr_grow(ptr %h, i64 %elem) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %len = load i64, ptr %h");
+    strs_push(r, "  %capp = getelementptr i8, ptr %h, i64 8");
+    strs_push(r, "  %cap = load i64, ptr %capp");
+    strs_push(r, "  %datap = getelementptr i8, ptr %h, i64 16");
+    strs_push(r, "  %full = icmp sge i64 %len, %cap");
+    strs_push(r, "  br i1 %full, label %grow, label %done");
+    strs_push(r, "grow:");
+    strs_push(r, "  %twice = mul i64 %cap, 2");
+    strs_push(r, "  %tiny = icmp slt i64 %twice, 4");
+    strs_push(r, "  %want = select i1 %tiny, i64 4, i64 %twice");
+    strs_push(r, "  %bytes = mul i64 %want, %elem");
+    strs_push(r, "  %old = load ptr, ptr %datap");
+    strs_push(r, "  %new = call ptr @realloc(ptr %old, i64 %bytes)");
+    strs_push(r, "  %failed = icmp eq ptr %new, null");
+    strs_push(r, "  br i1 %failed, label %oom, label %kept");
+    strs_push(r, "kept:");
+    strs_push(r, "  store ptr %new, ptr %datap");
+    strs_push(r, "  store i64 %want, ptr %capp");
+    strs_push(r, "  br label %done");
+    strs_push(r, "oom:");
+    strs_push(r, "  ret ptr null");
+    strs_push(r, "done:");
+    strs_push(r, "  %data = load ptr, ptr %datap");
+    strs_push(r, "  ret ptr %data");
+    strs_push(r, "}");
+    strs_push(r, "define internal ptr @nz.cstr(ptr %p, i64 %n) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %room = add i64 %n, 1");
+    strs_push(r, "  %buf = call ptr @malloc(i64 %room)");
+    strs_push(r, "  %bad = icmp eq ptr %buf, null");
+    strs_push(r, "  br i1 %bad, label %fail, label %ok");
+    strs_push(r, "fail:");
+    strs_push(r, "  ret ptr null");
+    strs_push(r, "ok:");
+    strs_push(r, "  call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr %p, i64 %n, i1 false)");
+    strs_push(r, "  %end = getelementptr i8, ptr %buf, i64 %n");
+    strs_push(r, "  store i8 0, ptr %end");
+    strs_push(r, "  ret ptr %buf");
+    strs_push(r, "}");
+    strs_push(r, "define internal i1 @nz.file_exists(ptr %p, i64 %n) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %path = call ptr @nz.cstr(ptr %p, i64 %n)");
+    strs_push(r, "  %np = icmp eq ptr %path, null");
+    strs_push(r, "  br i1 %np, label %no, label %open");
+    strs_push(r, "open:");
+    strs_push(r, "  %f = call ptr @fopen(ptr %path, ptr @.rb)");
+    strs_push(r, "  %missing = icmp eq ptr %f, null");
+    strs_push(r, "  br i1 %missing, label %no, label %yes");
+    strs_push(r, "yes:");
+    strs_push(r, "  %ig = call i32 @fclose(ptr %f)");
+    strs_push(r, "  ret i1 true");
+    strs_push(r, "no:");
+    strs_push(r, "  ret i1 false");
+    strs_push(r, "}");
+    strs_push(r, "define internal { ptr, i64 } @nz.read_file(ptr %p, i64 %n) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %path = call ptr @nz.cstr(ptr %p, i64 %n)");
+    strs_push(r, "  %np = icmp eq ptr %path, null");
+    strs_push(r, "  br i1 %np, label %fail, label %open");
+    strs_push(r, "open:");
+    strs_push(r, "  %f = call ptr @fopen(ptr %path, ptr @.rb)");
+    strs_push(r, "  %missing = icmp eq ptr %f, null");
+    strs_push(r, "  br i1 %missing, label %fail, label %measure");
+    strs_push(r, "measure:");
+    strs_push(r, "  %e = call i32 @fseek(ptr %f, i64 0, i32 2)");
+    strs_push(r, "  %len = call i64 @ftell(ptr %f)");
+    strs_push(r, "  %un = icmp slt i64 %len, 0");
+    strs_push(r, "  br i1 %un, label %closefail, label %reserve");
+    strs_push(r, "reserve:");
+    strs_push(r, "  %s = call i32 @fseek(ptr %f, i64 0, i32 0)");
+    strs_push(r, "  %room = add i64 %len, 1");
+    strs_push(r, "  %buf = call ptr @malloc(i64 %room)");
+    strs_push(r, "  %nb = icmp eq ptr %buf, null");
+    strs_push(r, "  br i1 %nb, label %closefail, label %read");
+    strs_push(r, "read:");
+    strs_push(r, "  %got = call i64 @fread(ptr %buf, i64 1, i64 %len, ptr %f)");
+    strs_push(r, "  %c = call i32 @fclose(ptr %f)");
+    strs_push(r, "  %short = icmp ne i64 %got, %len");
+    strs_push(r, "  br i1 %short, label %fail, label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  %a = insertvalue { ptr, i64 } undef, ptr %buf, 0");
+    strs_push(r, "  %b = insertvalue { ptr, i64 } %a, i64 %len, 1");
+    strs_push(r, "  ret { ptr, i64 } %b");
+    strs_push(r, "closefail:");
+    strs_push(r, "  %c2 = call i32 @fclose(ptr %f)");
+    strs_push(r, "  br label %fail");
+    strs_push(r, "fail:");
+    strs_push(r, "  %z = insertvalue { ptr, i64 } undef, ptr null, 0");
+    strs_push(r, "  %z2 = insertvalue { ptr, i64 } %z, i64 0, 1");
+    strs_push(r, "  ret { ptr, i64 } %z2");
+    strs_push(r, "}");
+    strs_push(r, "define internal { ptr, i64 } @nz.str_join(ptr %h, ptr %sp, i64 %sn) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %n = load i64, ptr %h");
+    strs_push(r, "  %dp0 = getelementptr i8, ptr %h, i64 16");
+    strs_push(r, "  %data = load ptr, ptr %dp0");
+    strs_push(r, "  br label %sum");
+    strs_push(r, "sum:");
+    strs_push(r, "  %i = phi i64 [ 0, %entry ], [ %i2, %sumbody ]");
+    strs_push(r, "  %acc = phi i64 [ 0, %entry ], [ %acc2, %sumbody ]");
+    strs_push(r, "  %more = icmp slt i64 %i, %n");
+    strs_push(r, "  br i1 %more, label %sumbody, label %alloc");
+    strs_push(r, "sumbody:");
+    strs_push(r, "  %e = getelementptr { ptr, i64 }, ptr %data, i64 %i");
+    strs_push(r, "  %lp = getelementptr i8, ptr %e, i64 8");
+    strs_push(r, "  %li = load i64, ptr %lp");
+    strs_push(r, "  %acc2 = add i64 %acc, %li");
+    strs_push(r, "  %i2 = add i64 %i, 1");
+    strs_push(r, "  br label %sum");
+    strs_push(r, "alloc:");
+    strs_push(r, "  %less = sub i64 %n, 1");
+    strs_push(r, "  %neg = icmp slt i64 %less, 0");
+    strs_push(r, "  %gaps = select i1 %neg, i64 0, i64 %less");
+    strs_push(r, "  %sepbytes = mul i64 %gaps, %sn");
+    strs_push(r, "  %total = add i64 %acc, %sepbytes");
+    strs_push(r, "  %room = add i64 %total, 1");
+    strs_push(r, "  %buf = call ptr @malloc(i64 %room)");
+    strs_push(r, "  %bad = icmp eq ptr %buf, null");
+    strs_push(r, "  br i1 %bad, label %jfail, label %copy");
+    strs_push(r, "copy:");
+    strs_push(r, "  %j = phi i64 [ 0, %alloc ], [ %j2, %jtail ]");
+    strs_push(r, "  %off = phi i64 [ 0, %alloc ], [ %off3, %jtail ]");
+    strs_push(r, "  %more2 = icmp slt i64 %j, %n");
+    strs_push(r, "  br i1 %more2, label %jbody, label %jdone");
+    strs_push(r, "jbody:");
+    strs_push(r, "  %first = icmp eq i64 %j, 0");
+    strs_push(r, "  br i1 %first, label %jtail, label %gap");
+    strs_push(r, "gap:");
+    strs_push(r, "  %d1 = getelementptr i8, ptr %buf, i64 %off");
+    strs_push(r, "  call void @llvm.memcpy.p0.p0.i64(ptr %d1, ptr %sp, i64 %sn, i1 false)");
+    strs_push(r, "  %off1 = add i64 %off, %sn");
+    strs_push(r, "  br label %jtail");
+    strs_push(r, "jtail:");
+    strs_push(r, "  %off2 = phi i64 [ %off, %jbody ], [ %off1, %gap ]");
+    strs_push(r, "  %e2 = getelementptr { ptr, i64 }, ptr %data, i64 %j");
+    strs_push(r, "  %p2 = load ptr, ptr %e2");
+    strs_push(r, "  %l2p = getelementptr i8, ptr %e2, i64 8");
+    strs_push(r, "  %l2 = load i64, ptr %l2p");
+    strs_push(r, "  %d2 = getelementptr i8, ptr %buf, i64 %off2");
+    strs_push(r, "  call void @llvm.memcpy.p0.p0.i64(ptr %d2, ptr %p2, i64 %l2, i1 false)");
+    strs_push(r, "  %off3 = add i64 %off2, %l2");
+    strs_push(r, "  %j2 = add i64 %j, 1");
+    strs_push(r, "  br label %copy");
+    strs_push(r, "jdone:");
+    strs_push(r, "  %ja = insertvalue { ptr, i64 } undef, ptr %buf, 0");
+    strs_push(r, "  %jb = insertvalue { ptr, i64 } %ja, i64 %total, 1");
+    strs_push(r, "  ret { ptr, i64 } %jb");
+    strs_push(r, "jfail:");
+    strs_push(r, "  %jz = insertvalue { ptr, i64 } undef, ptr null, 0");
+    strs_push(r, "  %jz2 = insertvalue { ptr, i64 } %jz, i64 0, 1");
+    strs_push(r, "  ret { ptr, i64 } %jz2");
+    strs_push(r, "}");
+    strs_push(r, "define internal i64 @nz.write_file(ptr %pp, i64 %pn, ptr %dp, i64 %dn) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %path = call ptr @nz.cstr(ptr %pp, i64 %pn)");
+    strs_push(r, "  %np = icmp eq ptr %path, null");
+    strs_push(r, "  br i1 %np, label %fail, label %open");
+    strs_push(r, "open:");
+    strs_push(r, "  %f = call ptr @fopen(ptr %path, ptr @.wb)");
+    strs_push(r, "  %missing = icmp eq ptr %f, null");
+    strs_push(r, "  br i1 %missing, label %fail, label %write");
+    strs_push(r, "write:");
+    strs_push(r, "  %got = call i64 @fwrite(ptr %dp, i64 1, i64 %dn, ptr %f)");
+    strs_push(r, "  %c = call i32 @fclose(ptr %f)");
+    strs_push(r, "  %short = icmp ne i64 %got, %dn");
+    strs_push(r, "  br i1 %short, label %fail, label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  ret i64 %got");
+    strs_push(r, "fail:");
+    strs_push(r, "  ret i64 -1");
+    strs_push(r, "}");
+    let mut text = "";
+    let mut i = 0;
+    while i < strs_len(r) {
+        text = str_concat(text, str_concat(strs_get(r, i), nl()));
+        i = i + 1;
+    }
+    text
 }
 
 fn refuse(message: Str, at: Str) -> Int {
@@ -370,7 +741,7 @@ fn symbol(fnames: Strs, name: Str) -> Str {
 
 fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
                  nk: Ints, nar: Ints, ntx: Strs, nslot: Ints, ntype: Ints,
-                 kids: Ints, kid_first: Ints, fnames: Strs, k: Int,
+                 kids: Ints, kid_first: Ints, fnames: Strs, k: Int, begin: Int,
                  src: Str, path: Str) -> Int {
     // Numbering restarts per function: LLVM requires a function's unnamed values to be
     // consecutive from zero, and `%p<n>`/`%slot<n>` are named so they consume none of it.
@@ -383,10 +754,13 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     let mut p = 0;
     while p < params {
         if p > 0 { list = str_concat(list, ", "); }
-        list = str_concat(list, str_concat("i64 %p", int_to_str(p)));
+        let pt = type_of_name(after_colon(strs_get(ntx, ints_get(kids, first + p))));
+        list = str_concat(list, str_concat(str_concat(llvm_type(pt), " %p"), int_to_str(p)));
         p = p + 1;
     }
-    add_line(out, str_concat(str_concat("define internal i64 ", symbol(fnames, before_colon(text))),
+    add_line(out, str_concat(str_concat(str_concat("define internal ",
+                                                   llvm_type(type_of_name(after_colon(text)))),
+                                        str_concat(" ", symbol(fnames, before_colon(text)))),
                              str_concat(str_concat("(", list), str_concat(") {   ; ", before_colon(text)))));
     add_line(out, "entry:");
     strs_set(current, 0, "entry");
@@ -394,18 +768,44 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
 
     // Every local gets its storage here, one `alloca` per binding, never on a path that
     // runs more than once: a slot belongs to a binding, not to an execution of it.
+    //
+    // A slot's *type* comes from the binding that owns it, found by scanning this
+    // function's own subtree — which is contiguous in a post-order array, running from
+    // `substart[k]` to `k`. The alternative, a map threaded down from the checker, would
+    // be a second place for a slot's type to live.
     let slots = ints_get(nslot, k);
+    let styp = ints_new();
+    let mut fill = 0;
+    while fill < slots { ints_push(styp, t_int()); fill = fill + 1; }
+    let mut scan = begin;
+    while scan <= k {
+        let sk = ints_get(nk, scan);
+        if sk == n_param() {
+            ints_set(styp, ints_get(nslot, scan), type_of_name(after_colon(strs_get(ntx, scan))));
+        }
+        if sk == n_let() {
+            // A binding's type is its initialiser's, which the checker already recorded
+            // on the initialiser node.
+            ints_set(styp, ints_get(nslot, scan),
+                     ints_get(ntype, ints_get(kids, ints_get(kid_first, scan))));
+        }
+        scan = scan + 1;
+    }
     let mut sl = 0;
     while sl < slots {
-        add_line(out, str_concat(str_concat("  %slot", int_to_str(sl)), " = alloca i64"));
+        add_line(out, str_concat(str_concat("  %slot", int_to_str(sl)),
+                                 str_concat(" = alloca ", llvm_type(ints_get(styp, sl)))));
         sl = sl + 1;
     }
     // Parameters arrive as SSA values and are stored into their slots at once, so the
     // body reads them with the same `load` it uses for any local.
     p = 0;
     while p < params {
-        let slot = ints_get(nslot, ints_get(kids, first + p));
-        add_line(out, str_concat(str_concat("  store i64 %p", int_to_str(p)),
+        let child = ints_get(kids, first + p);
+        let slot = ints_get(nslot, child);
+        let pt = type_of_name(after_colon(strs_get(ntx, child)));
+        add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(pt)),
+                                            str_concat(" %p", int_to_str(p))),
                                  str_concat(", ptr %slot", int_to_str(slot))));
         p = p + 1;
     }
@@ -415,7 +815,7 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
 fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
                naux: Ints, nslot: Ints, ntype: Ints,
                parent: Ints, childno: Ints, substart: Ints, kids: Ints, kid_first: Ints,
-               fnames: Strs, out: Strs, msgs: Strs) -> Int {
+               fnames: Strs, out: Strs, msgs: Strs, blobs: Strs) -> Int {
     let next = ints_new();
     ints_push(next, 0);
     let vals = ints_new();
@@ -471,7 +871,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         // A function's definition opens before its body, for the same reason.
         if ints_get(fn_at, k) >= 0 {
             open_function(out, current, live, next, vals, nk, nar, ntx, nslot, ntype,
-                          kids, kid_first, fnames, ints_get(fn_at, k), src, path);
+                          kids, kid_first, fnames, ints_get(fn_at, k), k, src, path);
         }
 
         // A loop header opens before its condition, never after: `continue` and the back
@@ -490,17 +890,42 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             let args = ints_new();
             let mut a = 0;
             while a < argc { ints_push(args, ints_pop(vals)); a = a + 1; }
+            // A built-in is instructions, not a call: `emit_builtin` returns -1 when
+            // the name is not one, which is how a built-in is told from a user function
+            // without a second name table.
+            let ordered = ints_new();
+            let mut o = argc - 1;
+            while o >= 0 { ints_push(ordered, ints_get(args, o)); o = o - 1; }
+            let built = emit_builtin(text, ordered, out, msgs, next, current, live,
+                                     position(src, path, from));
+            if built >= 0 {
+                ints_push(vals, built);
+            } else {
             let mut list = "";
             a = argc - 1;
             while a >= 0 {
                 if a < argc - 1 { list = str_concat(list, ", "); }
-                list = str_concat(list, str_concat("i64 ", v(ints_get(args, a))));
+                let at = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + (argc - 1 - a)));
+                list = str_concat(list, str_concat(str_concat(llvm_type(at), " "),
+                                                   v(ints_get(args, a))));
                 a = a - 1;
             }
             let n = take_number(next);
             add_line(out, str_concat(str_concat("  ", v(n)),
-                                     str_concat(str_concat(" = call i64 ", symbol(fnames, text)),
+                                     str_concat(str_concat(str_concat(" = call ", llvm_type(ints_get(ntype, k))),
+                                                           str_concat(" ", symbol(fnames, text))),
                                                 str_concat(str_concat("(", list), ")"))));
+            ints_push(vals, n);
+            }
+        } else {
+        if kind == n_str() {
+            // A literal is known entirely at compile time, so it is a constant pair
+            // loaded in one instruction rather than assembled from `undef`.
+            let idx = message_index(blobs, text);
+            let n = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(n)),
+                                     str_concat(" = load { ptr, i64 }, ptr @.sv",
+                                                int_to_str(idx))));
             ints_push(vals, n);
         } else {
         if kind == n_bool() {
@@ -528,7 +953,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                 let av = ints_pop(phi_val);
                 let n = take_number(next);
                 add_line(out, str_concat(str_concat("  ", v(n)),
-                                         str_concat(str_concat(" = phi i64 [ ", v(av)),
+                                         str_concat(str_concat(str_concat(" = phi ", llvm_type(ints_get(ntype, k))),
+                                                               str_concat(" [ ", v(av))),
                                                     str_concat(str_concat(", %", a),
                                                                str_concat(str_concat(" ], [ ", v(bv)),
                                                                           str_concat(str_concat(", %", b), " ]"))))));
@@ -548,27 +974,32 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         } else {
         if kind == n_return() {
             let value = ints_pop(vals);
-            add_line(out, str_concat("  ret i64 ", v(value)));
+            let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+            add_line(out, str_concat(str_concat("  ret ", llvm_type(vt)), str_concat(" ", v(value))));
             ints_set(live, 0, 0);
         } else {
         if kind == n_var() {
             let n = take_number(next);
             add_line(out, str_concat(str_concat("  ", v(n)),
-                                     str_concat(" = load i64, ptr %slot",
-                                                int_to_str(ints_get(nslot, k)))));
+                                     str_concat(str_concat(" = load ", llvm_type(ints_get(ntype, k))),
+                                                str_concat(", ptr %slot", int_to_str(ints_get(nslot, k))))));
             ints_push(vals, n);
         } else {
         if kind == n_let() {
             // The value is already on the stack: its subtree came first.
             let value = ints_pop(vals);
-            add_line(out, str_concat(str_concat("  store i64 ", v(value)),
+            let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+            add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
+                                                str_concat(" ", v(value))),
                                      str_concat(", ptr %slot", int_to_str(ints_get(nslot, k)))));
         } else {
         if kind == n_assign() {
             // The same store. A declaration and a reassignment differ in the source and
             // not once the slot is known, so there is one code path rather than two.
             let value = ints_pop(vals);
-            add_line(out, str_concat(str_concat("  store i64 ", v(value)),
+            let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+            add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
+                                                str_concat(" ", v(value))),
                                      str_concat(", ptr %slot", int_to_str(ints_get(nslot, k)))));
         } else {
         if kind == n_exprstmt() {
@@ -591,7 +1022,14 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                 let b = ints_pop(vals);
                 let a = ints_pop(vals);
                 let at = position(src, path, ints_get(naux, k));
-                let r = emit_binary(out, msgs, next, text, a, b, at);
+                // The operand type, not the result's: `==` always produces `Bool`, and
+                // what it compares decides how.
+                let ot = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+                let r = if ot == t_str() {
+                    string_equality(out, current, live, next, a, b, text == "!=")
+                } else {
+                    emit_binary(out, msgs, next, current, live, text, a, b, at, ot)
+                };
                 if r < 0 { refuse(str_concat(str_concat("the operator `", text), "`"), at); }
                 ints_push(vals, r);
             } else {
@@ -601,7 +1039,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     add_line(out, str_concat(str_concat("  ", v(zero)), " = add i64 0, 0"));
                     let at = position(src, path, from);
                     // The only negation without a representable result is `-Int::MIN`.
-                    let r = checked(out, msgs, next, "ssub", "negation", zero, a, at);
+                    let r = checked(out, msgs, next, current, live, "ssub", "negation", zero, a, at);
                     ints_push(vals, r);
                 } else {
                     if kind == n_block() {
@@ -611,9 +1049,19 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                         }
                     } else {
                         if kind == n_fn() {
-                            if after_colon(text) != "Int" {
-                                refuse("a function that does not return `Int`",
+                            if llvm_type(type_of_name(after_colon(text))) == "void" {
+                                refuse(str_concat(str_concat("a function returning `",
+                                                             after_colon(text)), "`"),
                                        position(src, path, from));
+                            }
+                            // The platform wrapper prints an `Int`, so `main` must
+                            // produce one. What a `Str` result would mean for a process
+                            // is a decision nobody has made.
+                            if before_colon(text) == "main" {
+                                if after_colon(text) != "Int" {
+                                    refuse("a `main` that does not return `Int`",
+                                           position(src, path, from));
+                                }
                             }
                             // A body whose every path returned has nothing to fall off
                             // the end with and needs no terminator of its own — the
@@ -623,10 +1071,16 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                     refuse("a body that produces no value",
                                            position(src, path, from));
                                 }
-                                add_line(out, str_concat("  ret i64 ", v(ints_pop(vals))));
+                                add_line(out, str_concat(str_concat("  ret ",
+                                                                    llvm_type(type_of_name(after_colon(text)))),
+                                                         str_concat(" ", v(ints_pop(vals)))));
                             }
                             add_line(out, "}");
                             ints_set(live, 0, 0);
+                            // Values never cross a function boundary. A body that
+                            // returned on every path can leave some behind, and the
+                            // next function would inherit them.
+                            while ints_len(vals) > 0 { ints_pop(vals); }
                         } else {
                             if kind != n_program() {
                                 refuse(str_concat(str_concat("`", node_name(kind)), "`"),
@@ -636,6 +1090,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     }
                 }
             }
+        }
         }
         }
         }
@@ -781,12 +1236,13 @@ fn main() -> Int {
 
     let body = strs_new();
     let msgs = strs_new();
+    let blobs = strs_new();
     let parent = ints_new();
     let childno = ints_new();
     let substart = ints_new();
     build_relations(nk, nar, kids, kid_first, parent, childno, substart);
     emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype,
-                parent, childno, substart, kids, kid_first, fnames, body, msgs);
+                parent, childno, substart, kids, kid_first, fnames, body, msgs, blobs);
 
     // The header comes last because interning the messages is what discovers them.
     let head = strs_new();
@@ -798,11 +1254,49 @@ fn main() -> Int {
     add_line(head, "declare i32 @printf(ptr noundef, ...)");
     add_line(head, "declare i64 @write(i32, ptr, i64)");
     add_line(head, "declare void @exit(i32) noreturn");
+    add_line(head, "declare i32 @memcmp(ptr, ptr, i64)");
+    add_line(head, "declare i32 @snprintf(ptr noundef, i64, ptr noundef, ...)");
+    add_line(head, "declare ptr @malloc(i64)");
+    add_line(head, "declare ptr @realloc(ptr, i64)");
+    add_line(head, "declare i64 @strlen(ptr)");
+    add_line(head, "declare ptr @fopen(ptr, ptr)");
+    add_line(head, "declare i32 @fseek(ptr, i64, i32)");
+    add_line(head, "declare i64 @ftell(ptr)");
+    add_line(head, "declare i64 @fread(ptr, i64, i64, ptr)");
+    add_line(head, "declare i64 @fwrite(ptr, i64, i64, ptr)");
+    add_line(head, "declare i32 @fclose(ptr)");
+    add_line(head, "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)");
+    add_line(head, "@nz.argc = internal global i64 0");
+    add_line(head, "@nz.argv = internal global ptr null");
+    add_line(head, str_concat(str_concat("@.dec = private unnamed_addr constant [5 x i8] c", dq()),
+                              str_concat("%lld", str_concat(str_concat(bs(), "00"), dq()))));
+    add_line(head, str_concat(str_concat("@.rb = private unnamed_addr constant [3 x i8] c", dq()),
+                              str_concat("rb", str_concat(str_concat(bs(), "00"), dq()))));
+    add_line(head, str_concat(str_concat("@.wb = private unnamed_addr constant [3 x i8] c", dq()),
+                              str_concat("wb", str_concat(str_concat(bs(), "00"), dq()))));
     // `%lld` then a newline then NUL, written as LLVM's own escapes inside a quoted
     // constant — which is why both the quote and the backslash have to be built.
     add_line(head, str_concat(str_concat("@.fmt = private unnamed_addr constant [6 x i8] c", dq()),
                               str_concat(str_concat("%lld", str_concat(bs(), "0A")),
                                          str_concat(str_concat(bs(), "00"), dq()))));
+    // `Str` literals: the bytes, and a constant pair naming them. An empty literal still
+    // gets a byte of storage so its pointer stays valid to hand to `memcmp`.
+    let mut sb = 0;
+    while sb < strs_len(blobs) {
+        let text = strs_get(blobs, sb);
+        let stored = if str_len(text) == 0 { str_from_byte(0) } else { text };
+        add_line(head, str_concat(str_concat(str_concat("@.s", int_to_str(sb)),
+                                             str_concat(" = private unnamed_addr constant [",
+                                                        int_to_str(str_len(stored)))),
+                                  str_concat(str_concat(str_concat(" x i8] c", dq()), escaped(stored)),
+                                             dq())));
+        add_line(head, str_concat(str_concat(str_concat("@.sv", int_to_str(sb)),
+                                             str_concat(" = private unnamed_addr constant { ptr, i64 } { ptr @.s",
+                                                        int_to_str(sb))),
+                                  str_concat(str_concat(", i64 ", int_to_str(str_len(text))), " }")));
+        sb = sb + 1;
+    }
+
     let mut m = 0;
     while m < strs_len(msgs) {
         let text = strs_get(msgs, m);
@@ -822,17 +1316,292 @@ fn main() -> Int {
     let tail = strs_new();
     // The platform entry point is a wrapper, separate from Nazm's `main`, and **only it
     // prints** — the full 64-bit value, because an exit status is 8 bits and would lie.
-    add_line(tail, "define i32 @main() {");
+    add_line(tail, "define i32 @main(i32 %argc, ptr %argv) {");
     add_line(tail, "entry:");
+    // Stashed in globals so `args_count` and `arg` need no parameter threaded through
+    // every Nazm function. One fewer than `argc`, because `argv[0]` is the program's own
+    // name and is deliberately not visible.
+    add_line(tail, "  %a64 = sext i32 %argc to i64");
+    add_line(tail, "  %an = sub i64 %a64, 1");
+    add_line(tail, "  store i64 %an, ptr @nz.argc");
+    add_line(tail, "  store ptr %argv, ptr @nz.argv");
     add_line(tail, str_concat("  %r = call i64 ", str_concat(symbol(fnames, "main"), "()")));
     add_line(tail, "  %p = call i32 (ptr, ...) @printf(ptr @.fmt, i64 %r)");
     add_line(tail, "  ret i32 0");
     add_line(tail, "}");
 
-    print(str_concat(str_concat(join(head), join(body)), join(tail)));
+    print(str_concat(str_concat(str_concat(join(head), runtime()), join(body)), join(tail)));
     // `exit_with`, not a return: the platform wrapper prints `main`'s value, and this
     // program's standard output *is* the LLVM module. A stray integer at the end of it
     // is a module clang rejects.
     exit_with(0);
     0
+}
+
+// --- the built-ins ---------------------------------------------------------------
+//
+// Each is the instructions it means. Bounds checks live here, at the call site, because
+// the diagnostic has to name this call's source position.
+//
+// Returns the value number, or -1 when `name` is not a built-in — which is how the call
+// site tells a built-in from a user function without a second name table.
+
+fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
+                current: Strs, live: Ints, at: Str) -> Int {
+    let a0 = if ints_len(args) > 0 { ints_get(args, 0) } else { 0 };
+    let a1 = if ints_len(args) > 1 { ints_get(args, 1) } else { 0 };
+    let a2 = if ints_len(args) > 2 { ints_get(args, 2) } else { 0 };
+
+    if name == "str_len" { return field(out, next, a0, "1"); }
+
+    if name == "str_byte" {
+        let len = field(out, next, a0, "1");
+        let ptr = field(out, next, a0, "0");
+        let neg = binop(out, next, "icmp slt", "i64", v(a1), "0");
+        let past = binop(out, next, "icmp sge", "i64", v(a1), v(len));
+        let bad = binop(out, next, "or", "i1", v(neg), v(past));
+        require(out, msgs, next, current, live, bad, "this byte index is outside the `Str`", at);
+        let slot = binop(out, next, "getelementptr", "i8,", str_concat("ptr ", v(ptr)),
+                         str_concat("i64 ", v(a1)));
+        let byte = binop(out, next, "load", "i8,", str_concat("ptr ", v(slot)), "");
+        // Zero-extended: a byte is `0..=255`, never negative.
+        return cast(out, next, "zext", "i8", byte, "i64");
+    }
+
+    if name == "str_slice" {
+        let len = field(out, next, a0, "1");
+        let ptr = field(out, next, a0, "0");
+        let neg = binop(out, next, "icmp slt", "i64", v(a1), "0");
+        let inv = binop(out, next, "icmp slt", "i64", v(a2), v(a1));
+        let past = binop(out, next, "icmp sgt", "i64", v(a2), v(len));
+        let x = binop(out, next, "or", "i1", v(neg), v(inv));
+        let bad = binop(out, next, "or", "i1", v(x), v(past));
+        require(out, msgs, next, current, live, bad, "this slice is not inside the `Str`", at);
+        // No copy: a slice of an immutable, never-freed buffer is a pointer and a length.
+        let start = binop(out, next, "getelementptr", "i8,", str_concat("ptr ", v(ptr)),
+                          str_concat("i64 ", v(a1)));
+        let n = binop(out, next, "sub", "i64", v(a2), v(a1));
+        return make_str(out, next, start, n);
+    }
+
+    if name == "str_join" {
+        let sp = field(out, next, a1, "0");
+        let sn = field(out, next, a1, "1");
+        let r = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(r)),
+                                 str_concat(str_concat(" = call { ptr, i64 } @nz.str_join(ptr ", v(a0)),
+                                            str_concat(str_concat(", ptr ", v(sp)),
+                                                       str_concat(", i64 ", str_concat(v(sn), ")"))))));
+        let got = field(out, next, r, "0");
+        let bad = binop(out, next, "icmp eq", "ptr", v(got), "null");
+        guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+        return r;
+    }
+
+    if name == "str_concat" {
+        let pa = field(out, next, a0, "0");
+        let la = field(out, next, a0, "1");
+        let pb = field(out, next, a1, "0");
+        let lb = field(out, next, a1, "1");
+        let n = binop(out, next, "add", "i64", v(la), v(lb));
+        // One byte more than needed, so an empty result still owns storage and its
+        // pointer stays valid to compare.
+        let room = binop(out, next, "add", "i64", v(n), "1");
+        let buf = allocate(out, msgs, next, current, live, room, at);
+        add_line(out, str_concat(str_concat("  call void @llvm.memcpy.p0.p0.i64(ptr ", v(buf)),
+                                 str_concat(str_concat(", ptr ", v(pa)),
+                                            str_concat(str_concat(", i64 ", v(la)), ", i1 false)"))));
+        let rest = binop(out, next, "getelementptr", "i8,", str_concat("ptr ", v(buf)),
+                         str_concat("i64 ", v(la)));
+        add_line(out, str_concat(str_concat("  call void @llvm.memcpy.p0.p0.i64(ptr ", v(rest)),
+                                 str_concat(str_concat(", ptr ", v(pb)),
+                                            str_concat(str_concat(", i64 ", v(lb)), ", i1 false)"))));
+        return make_str(out, next, buf, n);
+    }
+
+    if name == "str_from_byte" {
+        let low = binop(out, next, "icmp slt", "i64", v(a0), "0");
+        let high = binop(out, next, "icmp sgt", "i64", v(a0), "255");
+        let bad = binop(out, next, "or", "i1", v(low), v(high));
+        require(out, msgs, next, current, live, bad, "this is not a byte value", at);
+        let one = constant(out, next, "1");
+        let buf = allocate(out, msgs, next, current, live, one, at);
+        let narrow = cast(out, next, "trunc", "i64", a0, "i8");
+        add_line(out, str_concat(str_concat("  store i8 ", v(narrow)), str_concat(", ptr ", v(buf))));
+        let n = constant(out, next, "1");
+        return make_str(out, next, buf, n);
+    }
+
+    if name == "int_to_str" {
+        // 20 digits is the widest `Int`, plus the NUL `snprintf` insists on writing.
+        let room = constant(out, next, "21");
+        let buf = allocate(out, msgs, next, current, live, room, at);
+        let written = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(written)),
+                                 str_concat(str_concat(" = call i32 (ptr, i64, ptr, ...) @snprintf(ptr ", v(buf)),
+                                            str_concat(", i64 21, ptr @.dec, i64 ", str_concat(v(a0), ")")))));
+        let n = cast(out, next, "sext", "i32", written, "i64");
+        return make_str(out, next, buf, n);
+    }
+
+    if name == "ints_new" { return new_sequence(out, msgs, next, current, live, at); }
+    if name == "strs_new" { return new_sequence(out, msgs, next, current, live, at); }
+    if name == "ints_len" { return binop(out, next, "load", "i64,", str_concat("ptr ", v(a0)), ""); }
+    if name == "strs_len" { return binop(out, next, "load", "i64,", str_concat("ptr ", v(a0)), ""); }
+
+    if name == "ints_get" {
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "i64", at);
+        return binop(out, next, "load", "i64,", str_concat("ptr ", v(slot)), "");
+    }
+    if name == "strs_get" {
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "{ ptr, i64 }", at);
+        return binop(out, next, "load", "{ ptr, i64 },", str_concat("ptr ", v(slot)), "");
+    }
+    if name == "ints_set" {
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "i64", at);
+        add_line(out, str_concat(str_concat("  store i64 ", v(a2)), str_concat(", ptr ", v(slot))));
+        // The index written: the language has no unit type, and the index is the one
+        // answer that is always meaningful.
+        return a1;
+    }
+    if name == "strs_set" {
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "{ ptr, i64 }", at);
+        add_line(out, str_concat(str_concat("  store { ptr, i64 } ", v(a2)),
+                                 str_concat(", ptr ", v(slot))));
+        return a1;
+    }
+    if name == "ints_push" { return push_sequence(out, msgs, next, current, live, a0, a1, "i64", "8", at); }
+    if name == "strs_push" { return push_sequence(out, msgs, next, current, live, a0, a1, "{ ptr, i64 }", "16", at); }
+    if name == "ints_pop" { return pop_sequence(out, msgs, next, current, live, a0, "i64", at); }
+    if name == "strs_pop" { return pop_sequence(out, msgs, next, current, live, a0, "{ ptr, i64 }", at); }
+
+    if name == "args_count" {
+        return binop(out, next, "load", "i64,", "ptr @nz.argc", "");
+    }
+    if name == "arg" {
+        let argc = binop(out, next, "load", "i64,", "ptr @nz.argc", "");
+        let neg = binop(out, next, "icmp slt", "i64", v(a0), "0");
+        let past = binop(out, next, "icmp sge", "i64", v(a0), v(argc));
+        let bad = binop(out, next, "or", "i1", v(neg), v(past));
+        require(out, msgs, next, current, live, bad, "this index is outside the arguments", at);
+        // `argv[0]` is the program's own name and is deliberately not visible.
+        let shifted = binop(out, next, "add", "i64", v(a0), "1");
+        let base = binop(out, next, "load", "ptr,", "ptr @nz.argv", "");
+        let slot = binop(out, next, "getelementptr", "ptr,", str_concat("ptr ", v(base)),
+                         str_concat("i64 ", v(shifted)));
+        let text = binop(out, next, "load", "ptr,", str_concat("ptr ", v(slot)), "");
+        let len = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(len)),
+                                 str_concat(" = call i64 @strlen(ptr ", str_concat(v(text), ")"))));
+        return make_str(out, next, text, len);
+    }
+
+    if name == "print" { return write_bytes(out, next, "1", a0); }
+    if name == "eprint" { return write_bytes(out, next, "2", a0); }
+
+    if name == "exit_with" {
+        let narrow = cast(out, next, "trunc", "i64", a0, "i32");
+        add_line(out, str_concat(str_concat("  call void @exit(i32 ", v(narrow)), ")"));
+        add_line(out, "  unreachable");
+        // The checker does not know `exit_with` never returns, so a program may write
+        // code after it — and that code has to land somewhere legal. A fresh block with
+        // no predecessors is exactly that: unreachable, valid, and dropped by any
+        // optimiser. The alternative, appending after `unreachable`, is invalid IR.
+        let after = take_number(next);
+        open_block(out, current, live, str_concat("bu", int_to_str(after)));
+        // A value is still owed to whatever contained the call; it is never read.
+        return constant(out, next, "0");
+    }
+
+    if name == "read_file" {
+        let ptr = field(out, next, a0, "0");
+        let len = field(out, next, a0, "1");
+        let r = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(r)),
+                                 str_concat(str_concat(" = call { ptr, i64 } @nz.read_file(ptr ", v(ptr)),
+                                            str_concat(", i64 ", str_concat(v(len), ")")))));
+        let got = field(out, next, r, "0");
+        let bad = binop(out, next, "icmp eq", "ptr", v(got), "null");
+        guard(out, msgs, next, current, live, bad, "N0407", "this file could not be read", at);
+        return r;
+    }
+    if name == "write_file" {
+        let pp = field(out, next, a0, "0");
+        let pn = field(out, next, a0, "1");
+        let dp = field(out, next, a1, "0");
+        let dn = field(out, next, a1, "1");
+        let n = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(n)),
+                                 str_concat(str_concat(" = call i64 @nz.write_file(ptr ", v(pp)),
+                                            str_concat(str_concat(", i64 ", v(pn)),
+                                                       str_concat(str_concat(", ptr ", v(dp)),
+                                                                  str_concat(", i64 ", str_concat(v(dn), ")")))))));
+        let bad = binop(out, next, "icmp slt", "i64", v(n), "0");
+        guard(out, msgs, next, current, live, bad, "N0407", "this file could not be written", at);
+        return n;
+    }
+    if name == "file_exists" {
+        let pp = field(out, next, a0, "0");
+        let pn = field(out, next, a0, "1");
+        let n = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(n)),
+                                 str_concat(str_concat(" = call i1 @nz.file_exists(ptr ", v(pp)),
+                                            str_concat(", i64 ", str_concat(v(pn), ")")))));
+        return n;
+    }
+
+    0 - 1
+}
+
+fn write_bytes(out: Strs, next: Ints, fd: Str, s: Int) -> Int {
+    let ptr = field(out, next, s, "0");
+    let len = field(out, next, s, "1");
+    let n = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(n)),
+                             str_concat(str_concat(" = call i64 @write(i32 ", fd),
+                                        str_concat(str_concat(", ptr ", v(ptr)),
+                                                   str_concat(", i64 ", str_concat(v(len), ")"))))));
+    n
+}
+
+fn new_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, at: Str) -> Int {
+    let h = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(h)), " = call ptr @nz.arr_new()"));
+    let bad = binop(out, next, "icmp eq", "ptr", v(h), "null");
+    guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+    h
+}
+
+fn push_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, handle: Int, value: Int,
+                 elem: Str, size: Str, at: Str) -> Int {
+    let data = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(data)),
+                             str_concat(str_concat(" = call ptr @nz.arr_grow(ptr ", v(handle)),
+                                        str_concat(", i64 ", str_concat(size, ")")))));
+    let bad = binop(out, next, "icmp eq", "ptr", v(data), "null");
+    guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+    let len = binop(out, next, "load", "i64,", str_concat("ptr ", v(handle)), "");
+    let slot = binop(out, next, "getelementptr", str_concat(elem, ","), str_concat("ptr ", v(data)),
+                     str_concat("i64 ", v(len)));
+    add_line(out, str_concat(str_concat(str_concat("  store ", elem), str_concat(" ", v(value))),
+                             str_concat(", ptr ", v(slot))));
+    let grown = binop(out, next, "add", "i64", v(len), "1");
+    add_line(out, str_concat(str_concat("  store i64 ", v(grown)), str_concat(", ptr ", v(handle))));
+    grown
+}
+
+fn pop_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, handle: Int, elem: Str, at: Str) -> Int {
+    let len = binop(out, next, "load", "i64,", str_concat("ptr ", v(handle)), "");
+    let empty = binop(out, next, "icmp sle", "i64", v(len), "0");
+    require(out, msgs, next, current, live, empty, "this sequence is empty", at);
+    let last = binop(out, next, "sub", "i64", v(len), "1");
+    let df = binop(out, next, "getelementptr", "i8,", str_concat("ptr ", v(handle)), "i64 16");
+    let data = binop(out, next, "load", "ptr,", str_concat("ptr ", v(df)), "");
+    let slot = binop(out, next, "getelementptr", str_concat(elem, ","), str_concat("ptr ", v(data)),
+                     str_concat("i64 ", v(last)));
+    let value = binop(out, next, "load", str_concat(elem, ","), str_concat("ptr ", v(slot)), "");
+    // The length is written back *after* the value is read, so the item is still inside
+    // the sequence while it is being fetched. Capacity is left alone.
+    add_line(out, str_concat(str_concat("  store i64 ", v(last)), str_concat(", ptr ", v(handle))));
+    value
 }

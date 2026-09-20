@@ -373,6 +373,7 @@ pub enum Builtin {
     StrsPush,
     IntsPop,
     StrsPop,
+    StrJoin,
     ArgsCount,
     Arg,
     ReadFile,
@@ -405,6 +406,7 @@ impl Builtin {
             "strs_push" => Some(Self::StrsPush),
             "ints_pop" => Some(Self::IntsPop),
             "strs_pop" => Some(Self::StrsPop),
+            "str_join" => Some(Self::StrJoin),
             "args_count" => Some(Self::ArgsCount),
             "arg" => Some(Self::Arg),
             "read_file" => Some(Self::ReadFile),
@@ -438,6 +440,7 @@ impl Builtin {
             Self::StrsPush => "strs_push",
             Self::IntsPop => "ints_pop",
             Self::StrsPop => "strs_pop",
+            Self::StrJoin => "str_join",
             Self::ArgsCount => "args_count",
             Self::Arg => "arg",
             Self::ReadFile => "read_file",
@@ -490,6 +493,7 @@ impl Builtin {
             Self::StrsSet => &[Ty::Strs, Ty::Int, Ty::Str],
             Self::IntsPush => &[Ty::Ints, Ty::Int],
             Self::StrsPush => &[Ty::Strs, Ty::Str],
+            Self::StrJoin => &[Ty::Strs, Ty::Str],
             Self::ArgsCount => &[],
             Self::Arg | Self::ExitWith => &[Ty::Int],
             Self::ReadFile | Self::FileExists | Self::Print | Self::EPrint => &[Ty::Str],
@@ -510,7 +514,7 @@ impl Builtin {
             | Self::IntsPop
             | Self::StrsSet
             | Self::StrsPush => Ty::Int,
-            Self::StrsGet | Self::StrsPop | Self::Arg | Self::ReadFile => Ty::Str,
+            Self::StrsGet | Self::StrsPop | Self::StrJoin | Self::Arg | Self::ReadFile => Ty::Str,
             Self::ArgsCount | Self::WriteFile | Self::Print | Self::EPrint | Self::ExitWith => {
                 Ty::Int
             }

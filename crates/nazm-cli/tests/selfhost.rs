@@ -1261,8 +1261,12 @@ fn the_nazm_compiler_refuses_what_it_cannot_emit_and_writes_nothing() {
 
     for (src, expected) in [
         // Outside this increment's coverage: a backend limitation, reported as `N0101`.
+        // `main` must produce an `Int`: the platform wrapper prints one, and what a
+        // `Str` result would mean for a process is a decision nobody has made.
         ("fn main() -> Bool { true }\n", "N0101"),
-        ("fn main() -> Int { let s = \"x\"; 1 }\n", "N0101"),
+        // A bare block used as an expression is refused in the parser, so the refusal
+        // arrives before emission is reached at all.
+        ("fn main() -> Int { { 1 } }\n", "not implemented yet"),
         // A program that does not check is a *check* failure, reported with the
         // checker's own code — never as a backend limit.
         ("fn main() -> Int { 1 + true }\n", "N0304"),
@@ -1280,6 +1284,64 @@ fn the_nazm_compiler_refuses_what_it_cannot_emit_and_writes_nothing() {
         assert!(
             out.stdout.is_empty(),
             "{src:?}: emitted IR for a refused program"
+        );
+    }
+}
+
+#[test]
+fn the_bootstrap_chain_reaches_a_fixpoint() {
+    // C1 → C2 → C3 from one source, then C2 and C3 compared and both run over the
+    // conformance corpus. `compiler/bootstrap.sh` is the script; this test is what stops
+    // it from rotting, and it asserts the *record* rather than only the exit status —
+    // a script that exits 0 having skipped a stage would otherwise pass.
+    let root = repo_root();
+    let script = root.join("compiler/bootstrap.sh");
+    assert!(script.exists(), "{} is missing", script.display());
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("bootstrap");
+    let result = Command::new("sh")
+        .arg(&script)
+        .arg(&out)
+        .current_dir(&root)
+        .output()
+        .expect("run bootstrap.sh");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        result.status.success(),
+        "the bootstrap failed:\n{stdout}\n{stderr}"
+    );
+
+    let record = std::fs::read_to_string(out.join("record.txt")).expect("the record");
+    for expected in [
+        "ir: identical",
+        "executables: byte-identical",
+        "conformance-cases: 5",
+    ] {
+        assert!(
+            record.contains(expected),
+            "the record does not say {expected:?}:\n{record}"
+        );
+    }
+    // The two compilers really are the same bytes, read out of the record rather than
+    // inferred from the script not having failed.
+    let digest = |key: &str| -> String {
+        record
+            .lines()
+            .find(|l| l.starts_with(key))
+            .and_then(|l| l.split(' ').nth(1))
+            .unwrap_or("<missing>")
+            .to_owned()
+    };
+    assert_eq!(digest("c2-digest:"), digest("c3-digest:"), "{record}");
+    assert_ne!(digest("c2-digest:"), "<missing>", "{record}");
+
+    // And all three stages exist, so none was skipped.
+    for stage in ["stage1", "stage2", "stage3"] {
+        assert!(
+            out.join(stage).join("nazmc").exists(),
+            "{stage} produced no compiler"
         );
     }
 }
