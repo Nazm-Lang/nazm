@@ -93,6 +93,20 @@ pub enum Intrinsic {
     /// One pass measures, one allocation holds the result.
     StrJoin,
 
+    // --- channels -----------------------------------------------------------------
+    /// `chan_new(capacity: Int) -> Chan` — a channel holding at most `capacity` values.
+    /// Fails with `N0405` for a capacity below 1.
+    ChanNew,
+    /// `chan_send(c: Chan, v: Int) -> Bool` — blocks while full; `false` when closed, in
+    /// which case **the value was not sent**.
+    ChanSend,
+    /// `chan_recv(c: Chan, out: Ints) -> Bool` — blocks while empty; pushes one value
+    /// onto `out` and returns `true`, or `false` when closed **and** drained.
+    ChanRecv,
+    /// `chan_close(c: Chan) -> Int` — idempotent; wakes every blocked sender and
+    /// receiver. Closing is the cancellation mechanism.
+    ChanClose,
+
     // --- the outside world -------------------------------------------------------
     //
     // **Ambient authority, and labelled as such.** These are callable from anywhere,
@@ -125,7 +139,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 31] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -145,6 +159,10 @@ impl Intrinsic {
         Self::IntsPop,
         Self::StrsPop,
         Self::StrJoin,
+        Self::ChanNew,
+        Self::ChanSend,
+        Self::ChanRecv,
+        Self::ChanClose,
         Self::ArgsCount,
         Self::Arg,
         Self::ReadFile,
@@ -177,6 +195,10 @@ impl Intrinsic {
             Self::IntsPop => "ints_pop",
             Self::StrsPop => "strs_pop",
             Self::StrJoin => "str_join",
+            Self::ChanNew => "chan_new",
+            Self::ChanSend => "chan_send",
+            Self::ChanRecv => "chan_recv",
+            Self::ChanClose => "chan_close",
             Self::ArgsCount => "args_count",
             Self::Arg => "arg",
             Self::ReadFile => "read_file",
@@ -206,6 +228,10 @@ impl Intrinsic {
             Self::IntsPush => &[Type::Ints, Type::Int],
             Self::StrsPush => &[Type::Strs, Type::Str],
             Self::StrJoin => &[Type::Strs, Type::Str],
+            Self::ChanNew => &[Type::Int],
+            Self::ChanSend => &[Type::Chan, Type::Int],
+            Self::ChanRecv => &[Type::Chan, Type::Ints],
+            Self::ChanClose => &[Type::Chan],
             Self::ArgsCount => &[],
             Self::Arg | Self::ExitWith => &[Type::Int],
             Self::ReadFile | Self::FileExists | Self::Print | Self::EPrint => &[Type::Str],
@@ -230,7 +256,9 @@ impl Intrinsic {
             Self::ArgsCount | Self::WriteFile | Self::Print | Self::EPrint | Self::ExitWith => {
                 Type::Int
             }
-            Self::FileExists => Type::Bool,
+            Self::FileExists | Self::ChanSend | Self::ChanRecv => Type::Bool,
+            Self::ChanNew => Type::Chan,
+            Self::ChanClose => Type::Int,
             Self::IntsNew => Type::Ints,
             Self::StrsNew => Type::Strs,
         }

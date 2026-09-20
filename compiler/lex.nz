@@ -38,6 +38,11 @@ fn k_break() -> Int { 18 }
 fn k_continue() -> Int { 19 }
 fn k_return() -> Int { 20 }
 fn k_use() -> Int { 21 }
+// `scope` and `spawn` are reserved here although this compiler cannot emit them, so
+// that the two lexers agree on every input. A word that is a keyword to one and an
+// identifier to the other is a divergence the differential test would have to excuse.
+fn k_scope() -> Int { 22 }
+fn k_spawn() -> Int { 23 }
 fn k_lparen() -> Int { 30 }
 fn k_rparen() -> Int { 31 }
 fn k_lbrace() -> Int { 32 }
@@ -103,6 +108,8 @@ fn keyword_kind(word: Str) -> Int {
     if word == "continue" { return k_continue(); }
     if word == "return" { return k_return(); }
     if word == "use" { return k_use(); }
+    if word == "scope" { return k_scope(); }
+    if word == "spawn" { return k_spawn(); }
     k_ident()
 }
 

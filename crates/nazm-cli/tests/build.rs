@@ -3376,6 +3376,7 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
                 nazm_core::Type::Str => "\"ab\"",
                 nazm_core::Type::Ints => "ints_new()",
                 nazm_core::Type::Strs => "strs_new()",
+                nazm_core::Type::Chan => "chan_new(1)",
             })
             .collect();
         // Every built-in currently returns `Int` or `Str`; wrap the `Str` ones so `main`
@@ -3390,6 +3391,10 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
             nazm_core::Type::Bool => format!("if {call} {{ 1 }} else {{ 0 }}"),
             nazm_core::Type::Ints => format!("ints_len({call})"),
             nazm_core::Type::Strs => format!("strs_len({call})"),
+            // No `chan_len`, and none is wanted: a channel's length is not a thing a
+            // program may observe without racing. Sending into it is the shortest way
+            // to reach an `Int` from one.
+            nazm_core::Type::Chan => format!("if chan_send({call}, 0) {{ 1 }} else {{ 0 }}"),
         };
         let src = format!("fn main() -> Int {{ {body} }}\n");
 

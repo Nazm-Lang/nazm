@@ -114,6 +114,12 @@ pub mod codes {
     /// A file could not be read or written. The path is in the help, not the message,
     /// so the two implementations report the same sentence.
     pub const IO_FAILED: Code = Code::new("N0407");
+
+    /// `spawn` outside a `scope`.
+    pub const SPAWN_OUTSIDE_SCOPE: Code = Code::new("N0320");
+    /// A value that may not cross into a task: an `Ints` or a `Strs`, which are handles
+    /// to unsynchronised shared mutable storage.
+    pub const ILLEGAL_TASK_CAPTURE: Code = Code::new("N0321");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

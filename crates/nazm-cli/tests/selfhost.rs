@@ -118,6 +118,8 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::Continue => 19,
                 T::Return => 20,
                 T::Use => 21,
+                T::Scope => 22,
+                T::Spawn => 23,
                 T::LParen => 30,
                 T::RParen => 31,
                 T::LBrace => 32,
@@ -377,6 +379,26 @@ fn dump_stmt(s: &nazm_core::__syntax::Stmt, out: &mut String) {
         S::Expr(e) => {
             dump_expr(e, out);
             push_node(out, "exprstmt", 1, e.span().start, e.span().end, "");
+        }
+        // The encoding the Nazm parser will have to produce if it ever gains these. It
+        // cannot parse them today, so no differential input reaches here — writing the
+        // shape down now is what stops the two parsers being specified separately later.
+        S::Scope(sc) => {
+            dump_block(&sc.body, out);
+            push_node(out, "scope", 1, sc.span.start, sc.span.end, "");
+        }
+        S::Spawn(sp) => {
+            for a in &sp.args {
+                dump_expr(a, out);
+            }
+            push_node(
+                out,
+                "spawn",
+                sp.args.len(),
+                sp.span.start,
+                sp.span.end,
+                &sp.callee,
+            );
         }
     }
 }
@@ -884,9 +906,37 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
             i.name()
         );
     }
+    // Every built-in must be named in that file, and the ones the bootstrap compiler
+    // deliberately does not lower must be named in its exclusion list rather than simply
+    // missing. The distinction is the whole point of the guard: a gap and a decision look
+    // identical from the outside, and only one of them is acceptable.
+    let excluded: Vec<&str> = source
+        .split("fn outside_bootstrap_subset")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split("name == \"").nth(1))
+        .filter_map(|l| l.split('"').next())
+        .collect();
+    assert_eq!(
+        excluded,
+        ["chan_new", "chan_send", "chan_recv", "chan_close"],
+        "the bootstrap subset's exclusions changed; `docs/bootstrap-design.md` says \
+         which built-ins are left out and why"
+    );
+    for name in &excluded {
+        assert!(
+            nazm_core::Intrinsic::by_name(name).is_some(),
+            "`{name}` is excluded from the bootstrap subset but is not a built-in at all"
+        );
+    }
     // And the arity the Nazm table records must match, since a wrong one turns a valid
     // call into `N0303`. Checked by counting the non-`n` arguments on each line.
     for i in nazm_core::Intrinsic::ALL {
+        if excluded.contains(&i.name()) {
+            continue;
+        }
         let line = source
             .lines()
             .find(|l| l.contains(&format!("\"{}\"", i.name())) && l.contains("add_builtin"))
