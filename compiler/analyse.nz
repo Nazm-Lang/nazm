@@ -31,6 +31,45 @@ use "parse.nz";
 // `kid_first[k]` is where node `k`'s children begin in `kids`, and `nar[k]` says how
 // many there are, in source order.
 
+// `parent[k]`, `childno[k]` and `substart[k]`: who a node belongs to, which child it is,
+// and where its subtree begins in the post-order array.
+//
+// Emission needs all three. A post-order scan reaches a node *after* its children, which
+// is right for an expression and wrong for control flow — an `if`'s branch has to be
+// inside a basic block that opens after the condition, and a loop's condition has to be
+// inside a block that opens before it. Knowing each node's parent and position lets the
+// scan emit the branch and the label at the boundary between two children, and knowing
+// where a subtree begins lets it open a loop's header before the condition is reached.
+fn build_relations(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints,
+                   parent: Ints, childno: Ints, substart: Ints) -> Int {
+    let mut k = 0;
+    while k < ints_len(nk) {
+        ints_push(parent, 0 - 1);
+        ints_push(childno, 0 - 1);
+        ints_push(substart, k);
+        k = k + 1;
+    }
+    k = 0;
+    while k < ints_len(nk) {
+        let arity = ints_get(nar, k);
+        let first = ints_get(kid_first, k);
+        let mut j = 0;
+        while j < arity {
+            let child = ints_get(kids, first + j);
+            ints_set(parent, child, k);
+            ints_set(childno, child, j);
+            j = j + 1;
+        }
+        if arity > 0 {
+            // A subtree is contiguous and ends at its root, so it begins where its
+            // leftmost child's subtree begins.
+            ints_set(substart, k, ints_get(substart, ints_get(kids, first)));
+        }
+        k = k + 1;
+    }
+    ints_len(parent)
+}
+
 fn build_children(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints) -> Int {
     let stack = ints_new();
     let mut k = 0;
@@ -321,6 +360,7 @@ fn collect_signatures(nk: Ints, nar: Ints, ntx: Strs, kids: Ints, kid_first: Int
 // --- checking -------------------------------------------------------------------------
 
 fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, nslot: Ints,
+             ntype: Ints,
              kids: Ints, kid_first: Ints, root: Int,
              fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
              bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
@@ -334,6 +374,11 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
     let ts = ints_new();          // the type stack: one entry per finished child
     // One entry per node, so the emitter can index it directly. `-1` is "no slot".
     while ints_len(nslot) < ints_len(nk) { ints_push(nslot, 0 - 1); }
+    // The type each node produces, recorded for the emitter: `t_unknown` means the node
+    // produces no value, which is what tells emission whether a node leaves anything on
+    // its value stack. Computing it twice, in two languages, is how the two would come
+    // to disagree.
+    while ints_len(ntype) < ints_len(nk) { ints_push(ntype, t_unknown()); }
     // Slots are numbered per function, and the count is recorded on the `fn` node so
     // the emitter knows how many `alloca`s its entry block needs.
     let counter = ints_new();
@@ -351,6 +396,9 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
             }
             // --- finish: the children's types are the top of `ts` ---------------------
             let k = (v - 2) / 3;
+            // Whatever this node ends up pushing is its type; recorded once, at the end,
+            // by reading the stack back.
+            let _unused = ints_len(ts);
             let kind = ints_get(nk, k);
             let arity = ints_get(nar, k);
             let first = ints_get(kid_first, k);
@@ -367,6 +415,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                 let op_at = ints_get(naux, k);
                 ints_push(ts, check_binary(text, l, r, op_at, op_at + str_len(text),
                                            dcode, dstart, dend, dmsg));
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_neg() {
@@ -379,6 +428,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                                                  type_name(t)), "`"));
                 }
                 ints_push(ts, t_int());
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_call() {
@@ -387,6 +437,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                                          fnames, fret, ffirst, fcount, fparams,
                                          bnames, bret, bfirst, bcount, bparams,
                                          dcode, dstart, dend, dmsg));
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_if() {
@@ -409,6 +460,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                 } else {
                     ints_push(ts, t_unknown());
                 }
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             // **Every node leaves exactly one entry on `ts`.** A statement's is
@@ -428,6 +480,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                     d = d + 1;
                 }
                 ints_push(ts, t);
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_let() {
@@ -438,6 +491,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                 bind(names, ntypes, nmut, nslotof, before_colon(text),
                      t, str_to_int_flag(after_colon(text)), slot);
                 ints_push(ts, t_unknown());
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_assign() {
@@ -457,6 +511,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                            str_concat(str_concat("`", text), "` has a different type"));
                 }
                 ints_push(ts, t_unknown());
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_while() {
@@ -470,16 +525,19 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                                                  type_name(cond_t)), "`"));
                 }
                 ints_push(ts, t_unknown());
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_return() {
                 ints_pop(ts);
                 ints_push(ts, t_unknown());
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_exprstmt() {
                 ints_pop(ts);
                 ints_push(ts, t_unknown());
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_fn() {
@@ -488,12 +546,14 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                 // How many slots this function's entry block must allocate.
                 ints_set(nslot, k, ints_get(counter, 0));
                 ints_push(ts, t_unknown());
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_program() {
                 let mut d = 0;
                 while d < arity { ints_pop(ts); d = d + 1; }
                 ints_push(ts, t_unknown());
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             // `param` and every leaf pushed its own type when it was visited.
@@ -506,9 +566,26 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
         let first = ints_get(kid_first, entry);
         let text = strs_get(ntx, entry);
 
-        if kind == n_int() { ints_push(ts, t_int()); continue; }
-        if kind == n_bool() { ints_push(ts, t_bool()); continue; }
-        if kind == n_str() { ints_push(ts, t_str()); continue; }
+        // Leaves are typed here rather than at a finish, because they have no children
+        // to wait for — so `ntype` is recorded here too. Missing these was a real
+        // defect: the emitter reads `ntype` to decide whether a node left a value on
+        // its stack, and a `var` recorded as `unknown` made a discarded expression
+        // statement pop nothing.
+        if kind == n_int() {
+            ints_set(ntype, entry, t_int());
+            ints_push(ts, t_int());
+            continue;
+        }
+        if kind == n_bool() {
+            ints_set(ntype, entry, t_bool());
+            ints_push(ts, t_bool());
+            continue;
+        }
+        if kind == n_str() {
+            ints_set(ntype, entry, t_str());
+            ints_push(ts, t_str());
+            continue;
+        }
         if kind == n_break() { ints_push(ts, t_unknown()); continue; }
         if kind == n_continue() { ints_push(ts, t_unknown()); continue; }
 
@@ -520,7 +597,9 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                 ints_push(ts, t_unknown());
             } else {
                 ints_set(nslot, entry, lookup_slot(names, nslotof, text));
-                ints_push(ts, lookup_type(names, ntypes, text));
+                let t = lookup_type(names, ntypes, text);
+                ints_set(ntype, entry, t);
+                ints_push(ts, t);
             }
             continue;
         }

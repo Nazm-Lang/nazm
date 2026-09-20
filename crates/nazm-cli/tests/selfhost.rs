@@ -999,6 +999,32 @@ fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_in
         ("let x = 1; let y = x + 10; y", "11"),
         // An expression statement is evaluated and dropped.
         ("1 + 1; let a = 4; a; a * 2", "8"),
+        // Comparisons, and `if` as a value.
+        ("if 1 < 2 { 10 } else { 20 }", "10"),
+        ("if 2 < 1 { 10 } else { 20 }", "20"),
+        ("if 1 == 1 { if 2 != 3 { 7 } else { 8 } } else { 9 }", "7"),
+        // Loops: the back edge targets the condition, so it is re-evaluated.
+        ("let mut i = 0; let mut s = 0; while i < 5 { s = s + i; i = i + 1; } s", "10"),
+        ("let mut i = 1; let mut f = 1; while i <= 10 { f = f * i; i = i + 1; } f", "3628800"),
+        // Nested loops: the inner loop's blocks must not be the outer's.
+        (
+            "let mut a = 0; let mut n = 0; while a < 4 { let mut b = 0; while b < 3 { n = n + 1; b = b + 1; } a = a + 1; } n",
+            "12",
+        ),
+        // `break` leaves the innermost loop; `continue` re-evaluates its condition.
+        ("let mut i = 0; while i < 10 { if i == 3 { break; } i = i + 1; } i", "3"),
+        (
+            "let mut i = 0; let mut s = 0; while i < 6 { i = i + 1; if i == 3 { continue; } s = s + i; } s",
+            "18",
+        ),
+        // `return` leaves the function, and a statement `if` still falls through.
+        ("let x = 5; if x > 3 { return 99; } 0", "99"),
+        ("let x = 1; if x > 3 { return 99; } 7", "7"),
+        // A value `if` inside a loop: its `phi` must name the blocks emission ended in.
+        (
+            "let mut i = 0; let mut s = 0; while i < 5 { s = s + if i % 2 == 0 { i } else { 0 }; i = i + 1; } s",
+            "6",
+        ),
         ("(1 + 2) * (3 - 4)", "-3"),
         ("100 / 7", "14"),
         ("100 % 7", "2"),
@@ -1158,6 +1184,7 @@ fn the_nazm_compiler_refuses_what_it_cannot_emit_and_writes_nothing() {
     for (src, expected) in [
         // Outside this increment's coverage: a backend limitation, reported as `N0101`.
         ("fn main() -> Bool { true }\n", "N0101"),
+        ("fn main() -> Int { let s = \"x\"; 1 }\n", "N0101"),
         ("fn f() -> Int { 1 }\nfn main() -> Int { f() }\n", "N0101"),
         // A program that does not check is a *check* failure, reported with the
         // checker's own code — never as a backend limit.
