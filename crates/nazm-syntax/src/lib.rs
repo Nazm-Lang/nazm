@@ -5,7 +5,8 @@ pub mod lexer;
 pub mod parser;
 
 pub use ast::{
-    Assign, BinOp, Block, Expr, Function, Let, Param, Program, Stmt, StmtBlock, TypeName, While,
+    Assign, BinOp, Block, Expr, Function, Let, Param, Program, Stmt, StmtBlock, StmtIf, TypeName,
+    While,
 };
 pub use lexer::{lex, Token, TokenKind};
 pub use parser::parse;

@@ -75,6 +75,13 @@ pub mod codes {
     pub const ASSIGN_TO_IMMUTABLE: Code = Code::new("N0310");
     pub const MUTABLE_PARAMETER: Code = Code::new("N0311");
 
+    /// `break` or `continue` outside a loop.
+    pub const NOT_IN_A_LOOP: Code = Code::new("N0312");
+    /// A statement that provably cannot run.
+    pub const UNREACHABLE_STATEMENT: Code = Code::new("N0313");
+    /// `break` or `continue` where a value is expected.
+    pub const CONTROL_FLOW_AS_VALUE: Code = Code::new("N0314");
+
     // Execution
     pub const INTEGER_OVERFLOW: Code = Code::new("N0400");
     pub const DIVISION_BY_ZERO: Code = Code::new("N0401");
@@ -290,6 +297,9 @@ mod tests {
             codes::UNKNOWN_TYPE,
             codes::ASSIGN_TO_IMMUTABLE,
             codes::MUTABLE_PARAMETER,
+            codes::NOT_IN_A_LOOP,
+            codes::UNREACHABLE_STATEMENT,
+            codes::CONTROL_FLOW_AS_VALUE,
             codes::INTEGER_OVERFLOW,
             codes::DIVISION_BY_ZERO,
             codes::ITERATION_LIMIT,

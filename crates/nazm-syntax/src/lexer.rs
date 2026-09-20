@@ -27,6 +27,8 @@ pub enum TokenKind {
     False,
     Mut,
     While,
+    Break,
+    Continue,
 
     // Punctuation
     LParen,
@@ -71,6 +73,8 @@ impl TokenKind {
             Self::False => "`false`".to_owned(),
             Self::Mut => "`mut`".to_owned(),
             Self::While => "`while`".to_owned(),
+            Self::Break => "`break`".to_owned(),
+            Self::Continue => "`continue`".to_owned(),
             Self::LParen => "`(`".to_owned(),
             Self::RParen => "`)`".to_owned(),
             Self::LBrace => "`{`".to_owned(),
@@ -180,6 +184,8 @@ pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
                 "false" => TokenKind::False,
                 "mut" => TokenKind::Mut,
                 "while" => TokenKind::While,
+                "break" => TokenKind::Break,
+                "continue" => TokenKind::Continue,
                 _ => TokenKind::Ident(word.to_owned()),
             };
             tokens.push(Token {
