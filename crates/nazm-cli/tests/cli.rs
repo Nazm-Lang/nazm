@@ -97,6 +97,8 @@ fn every_bad_example_is_refused_with_its_own_code() {
         ("bad/invalid_operands.nz", "N0304"),
         ("bad/unsupported_construct.nz", "N0101"),
         ("bad/division_by_zero.nz", "N0401"),
+        ("bad/assign_to_immutable.nz", "N0310"),
+        ("bad/mutable_parameter.nz", "N0311"),
     ];
     for (file, code) in cases {
         let (_, stderr, status) = nazm(&["run", &example(file)]);
@@ -106,4 +108,29 @@ fn every_bad_example_is_refused_with_its_own_code() {
             "{file} should report {code}, got:\n{stderr}"
         );
     }
+}
+
+#[test]
+fn loops_and_mutation_run() {
+    let (stdout, _, code) = nazm(&["run", &example("sum.nz")]);
+    assert_eq!(stdout.trim(), "6074");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn a_runaway_loop_reports_instead_of_hanging() {
+    // Without this guard the process would consume a core until someone noticed. A tool
+    // that hangs is worse than one that says what happened.
+    let (_, stderr, code) = nazm(&[
+        "run",
+        &example("bad/runaway_loop.nz"),
+        "--max-iterations",
+        "1000",
+    ]);
+    assert_eq!(code, 2, "a runaway loop is a runtime failure");
+    assert!(stderr.contains("N0402"), "{stderr}");
+    assert!(
+        stderr.contains("--max-iterations"),
+        "the diagnostic should say how to raise it: {stderr}"
+    );
 }

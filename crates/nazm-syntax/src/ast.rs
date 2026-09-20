@@ -36,22 +36,80 @@ pub struct TypeName {
     pub span: Span,
 }
 
-/// A sequence of `let` bindings followed by the expression the block evaluates to.
+/// Statements, then the expression the block evaluates to.
 ///
-/// The tail is required: a block is an expression, and one with no value would have to
-/// have a unit type, which v0.1 does not have.
+/// The tail is required. A block is an expression, and one with no value would need a
+/// unit type — a decision with consequences for function returns and every other block,
+/// too large to make in passing so that `while` can be an expression. So `while` and
+/// assignment are statements, which have no value, and the tail carries it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
-    pub lets: Vec<Let>,
+    pub statements: Vec<Stmt>,
     pub tail: Box<Expr>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stmt {
+    Let(Let),
+    /// `name = value;`
+    ///
+    /// A statement, not an expression: `if (x = 1) { … }` does not parse, which is one of
+    /// the oldest C bugs and nothing is gained by reproducing it.
+    Assign(Assign),
+    While(While),
+}
+
+impl Stmt {
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Let(l) => l.span,
+            Self::Assign(a) => a.span,
+            Self::While(w) => w.span,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Let {
     pub name: String,
     pub name_span: Span,
+    /// Whether the binding was written `let mut`.
+    ///
+    /// Immutable by default: mutable-by-default with an opt-out would put the annotation
+    /// on the rarer case and make the common one silent.
+    pub mutable: bool,
     pub value: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assign {
+    pub name: String,
+    pub name_span: Span,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// Statements with no tail expression.
+///
+/// A loop body is this rather than a `Block`, and the distinction is not cosmetic: a
+/// `Block` must end in an expression because it *is* one, and a loop body has no value to
+/// give. Requiring a tail there would force every loop to end with a pointless expression.
+///
+/// The spec said `while` is a statement and stopped there; it took writing a loop to
+/// notice the body needed saying too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StmtBlock {
+    pub statements: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct While {
+    pub cond: Expr,
+    pub body: StmtBlock,
     pub span: Span,
 }
 

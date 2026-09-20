@@ -22,13 +22,32 @@ $ cargo run -p nazm-cli --bin nazm -- run examples/max.nz
 25
 ```
 
-An executable subset — functions, `let`, `if`/`else`, arithmetic and comparison over
-`Int`, `Bool` and `Str` — lexed, parsed, type-checked and evaluated. No mutation, loops,
-effects or I/O yet, and a program using them is **refused by name** rather than misparsed
-into something else. The semantics it commits to are in [`docs/spec.md`](docs/spec.md):
-overflow traps identically in every build, division by zero is an error, shadowing is
-allowed in a nested scope and refused in the same one, arguments evaluate left to right,
-and a function's value is its final expression.
+```nazm
+fn sum_to(n: Int) -> Int {
+    let mut total = 0;
+    let mut i = 1;
+    while i <= n {
+        total = total + i;
+        i = i + 1;
+    }
+    total
+}
+```
+
+An executable subset — functions, `let` and `let mut`, assignment, `while`, `if`/`else`,
+arithmetic and comparison over `Int`, `Bool` and `Str` — lexed, parsed, type-checked and
+evaluated. No `break`, `return`, effects or I/O yet, and a program using them is **refused
+by name** rather than misparsed into something else.
+
+The semantics it commits to are in [`docs/spec.md`](docs/spec.md): overflow traps
+identically in every build, division by zero is an error, bindings are immutable unless
+written `let mut`, parameters are never mutable, assignment is a statement so `if (x = 1)`
+does not parse, shadowing is allowed in a nested scope and refused in the same one,
+arguments evaluate left to right, and a function's value is its final expression.
+
+`nazm run` stops a non-terminating program after a configurable number of iterations. That
+is the interpreter's guard, not a language rule — with no `break` and no I/O such a program
+produces nothing at all, and a tool that hangs is worse than one that reports.
 
 Alongside it, a benchmark harness. `crates/nazm-bench` measures what it costs an agent to
 build and maintain small backend services, with a validated execution path for its

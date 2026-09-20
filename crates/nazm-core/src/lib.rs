@@ -37,15 +37,36 @@ pub enum Outcome {
 /// ill-typed produces a second, less useful error about the same mistake.
 #[must_use]
 pub fn run(source: &str) -> Outcome {
+    run_with_limit(source, eval::DEFAULT_MAX_ITERATIONS)
+}
+
+/// As [`run`], with an explicit iteration budget.
+///
+/// The budget is the interpreter's, not the language's — see `docs/spec.md`. It exists so
+/// a non-terminating program reports instead of consuming the machine.
+#[must_use]
+pub fn run_with_limit(source: &str, max_iterations: u64) -> Outcome {
     let (program, mut diagnostics) = nazm_syntax::parse_source(source);
+    let parse_failed = !diagnostics.is_empty();
     let (_signatures, check_errors) = check(&program);
-    diagnostics.extend(check_errors);
+
+    // A function that failed to parse was never registered, so "this program has no
+    // `main`" would be reported for a file whose first line is `fn main`. True of the
+    // tree that was built, misleading about the file, and it buries the real error.
+    diagnostics.extend(
+        check_errors
+            .into_iter()
+            .filter(|d| !(parse_failed && d.code == nazm_diag::codes::MISSING_MAIN)),
+    );
 
     if !diagnostics.is_empty() {
         return Outcome::CheckFailed(diagnostics);
     }
 
-    match Interpreter::new(&program).run_main() {
+    match Interpreter::new(&program)
+        .with_max_iterations(max_iterations)
+        .run_main()
+    {
         Ok(v) => Outcome::Value(v),
         Err(e) => Outcome::RuntimeFailed(e.diagnostic),
     }

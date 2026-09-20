@@ -8,24 +8,33 @@
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 
-use crate::ast::{BinOp, Block, Expr, Function, Let, Param, Program, TypeName};
+use crate::ast::{
+    Assign, BinOp, Block, Expr, Function, Let, Param, Program, Stmt, StmtBlock, TypeName, While,
+};
 use crate::lexer::{Token, TokenKind};
 
 /// Constructs that are deliberately absent from v0.1, so they can be refused by name.
 const RESERVED: &[(&str, &str)] = &[
-    ("while", "loops"),
-    ("for", "loops"),
-    ("loop", "loops"),
-    ("return", "early return"),
-    ("mut", "mutation"),
-    ("struct", "user-defined types"),
-    ("enum", "user-defined types"),
-    ("match", "pattern matching"),
-    ("use", "modules"),
-    ("mod", "modules"),
-    ("impl", "methods"),
-    ("print", "input and output"),
+    ("for", "there is no `for`; iterate with `while`"),
+    ("loop", "there is no `loop`; write `while true`"),
+    ("break", "a loop runs until its condition is false"),
+    ("continue", "a loop runs until its condition is false"),
+    ("return", "a function's value is its final expression"),
+    ("struct", "there are no user-defined types yet"),
+    ("enum", "there are no user-defined types yet"),
+    ("match", "there is no pattern matching yet"),
+    ("use", "there are no modules yet"),
+    ("mod", "there are no modules yet"),
+    ("impl", "there are no methods yet"),
+    ("print", "there is no input or output yet"),
 ];
+
+/// What the language does have, for the help text on a refused construct.
+const SUPPORTED: &str = concat!(
+    "the supported subset is functions, `let` and `let mut`, assignment, `while`, ",
+    "`if`/`else`, arithmetic and comparison over `Int`, `Bool` and `Str` — see ",
+    "docs/spec.md"
+);
 
 #[derive(Debug)]
 pub struct Parser<'a> {
@@ -119,17 +128,15 @@ impl<'a> Parser<'a> {
 
     /// Reject a deliberately-absent construct by name.
     fn reserved(&mut self, name: &str, span: Span) -> bool {
-        if let Some((_, feature)) = RESERVED.iter().find(|(k, _)| *k == name) {
+        if let Some((_, why)) = RESERVED.iter().find(|(k, _)| *k == name) {
             self.errors.push(
                 Diagnostic::error(
                     codes::UNSUPPORTED_CONSTRUCT,
                     span,
-                    format!("`{name}` is not supported in Nazm v0.1"),
+                    format!("`{name}` is not supported yet"),
                 )
-                .help(format!(
-                    "{feature} are not implemented yet. The supported subset is functions, \
-                     `let`, `if`/`else`, arithmetic and comparison."
-                )),
+                .primary_label(format!("`{name}` is reserved"))
+                .help(format!("{why}. In general, {SUPPORTED}")),
             );
             return true;
         }
@@ -165,6 +172,24 @@ impl<'a> Parser<'a> {
         let mut params = Vec::new();
         while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
             let p_span = self.peek_span();
+            // `fn f(mut x: Int)` is a real thing to try, and "expected a parameter name,
+            // found `mut`" describes the symptom rather than the rule.
+            if self.at(&TokenKind::Mut) {
+                self.advance();
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::MUTABLE_PARAMETER,
+                        p_span,
+                        "parameters cannot be `mut`",
+                    )
+                    .help(
+                        "a mutable parameter is a local copy, which reads as an \
+                         out-parameter. Bind one in the body instead: `let mut n = n;`",
+                    )
+                    .fix(p_span, "", "remove `mut`"),
+                );
+                return None;
+            }
             let p_name = match self.advance() {
                 TokenKind::Ident(n) => n,
                 other => {
@@ -223,48 +248,143 @@ impl<'a> Parser<'a> {
 
     fn block(&mut self) -> Option<Block> {
         let open = self.expect(&TokenKind::LBrace, "to start a block")?;
-        let mut lets = Vec::new();
+        let mut statements = Vec::new();
 
-        while self.at(&TokenKind::Let) {
-            let let_span = self.peek_span();
-            self.advance();
-            let name_span = self.peek_span();
-            let name = match self.advance() {
-                TokenKind::Ident(n) => {
-                    // `let mut x = 1` reads as a binding named `mut`, and reporting
-                    // "expected `=`, found `x`" describes a mistake nobody made.
-                    if self.reserved(&n, name_span) {
-                        return None;
-                    }
-                    n
-                }
-                other => {
-                    self.errors.push(Diagnostic::error(
-                        codes::UNEXPECTED_TOKEN,
-                        name_span,
-                        format!("expected a variable name, found {}", other.describe()),
-                    ));
-                    return None;
-                }
-            };
-            self.expect(&TokenKind::Eq, "in a `let` binding")?;
-            let value = self.expr()?;
-            let semi = self.expect(&TokenKind::Semi, "after a `let` binding")?;
-            lets.push(Let {
-                name,
-                name_span,
-                value,
-                span: let_span.join(semi),
-            });
+        loop {
+            if self.at(&TokenKind::Let) {
+                statements.push(Stmt::Let(self.let_stmt()?));
+            } else if self.at(&TokenKind::While) {
+                statements.push(Stmt::While(self.while_stmt()?));
+            } else if let Some(a) = self.try_assign()? {
+                statements.push(Stmt::Assign(a));
+            } else {
+                break;
+            }
         }
 
         let tail = self.expr()?;
         let close = self.expect(&TokenKind::RBrace, "to close the block")?;
         Some(Block {
-            lets,
+            statements,
             tail: Box::new(tail),
             span: open.join(close),
         })
+    }
+
+    fn let_stmt(&mut self) -> Option<Let> {
+        let let_span = self.peek_span();
+        self.advance();
+        let mutable = self.eat(&TokenKind::Mut);
+
+        let name_span = self.peek_span();
+        let name = match self.advance() {
+            TokenKind::Ident(n) => {
+                if self.reserved(&n, name_span) {
+                    return None;
+                }
+                n
+            }
+            other => {
+                self.errors.push(Diagnostic::error(
+                    codes::UNEXPECTED_TOKEN,
+                    name_span,
+                    format!("expected a variable name, found {}", other.describe()),
+                ));
+                return None;
+            }
+        };
+        self.expect(&TokenKind::Eq, "in a `let` binding")?;
+        let value = self.expr()?;
+        let semi = self.expect(&TokenKind::Semi, "after a `let` binding")?;
+        Some(Let {
+            name,
+            name_span,
+            mutable,
+            value,
+            span: let_span.join(semi),
+        })
+    }
+
+    fn while_stmt(&mut self) -> Option<While> {
+        let start = self.peek_span();
+        self.advance();
+        let cond = self.expr()?;
+        let body = self.stmt_block()?;
+        Some(While {
+            cond,
+            span: start.join(body.span),
+            body,
+        })
+    }
+
+    /// A loop body: statements, no tail expression.
+    fn stmt_block(&mut self) -> Option<StmtBlock> {
+        let open = self.expect(&TokenKind::LBrace, "to start a loop body")?;
+        let mut statements = Vec::new();
+        loop {
+            if self.at(&TokenKind::Let) {
+                statements.push(Stmt::Let(self.let_stmt()?));
+            } else if self.at(&TokenKind::While) {
+                statements.push(Stmt::While(self.while_stmt()?));
+            } else if let Some(a) = self.try_assign()? {
+                statements.push(Stmt::Assign(a));
+            } else {
+                break;
+            }
+        }
+        // A loop body parses no expression, so nothing else would reach the reserved-word
+        // check — `break` would be reported as "expected `}`", which describes the
+        // symptom and not the rule.
+        if let TokenKind::Ident(name) = self.peek().clone() {
+            let span = self.peek_span();
+            if self.reserved(&name, span) {
+                self.advance();
+                return None;
+            }
+        }
+
+        let close = self.expect(
+            &TokenKind::RBrace,
+            "to close the loop body — a loop body holds statements and has no value",
+        )?;
+        Some(StmtBlock {
+            statements,
+            span: open.join(close),
+        })
+    }
+
+    /// An assignment, if the next two tokens are `ident =`.
+    ///
+    /// Two tokens of lookahead rather than parsing an expression and checking what it
+    /// turned out to be: `x` alone is a perfectly good tail expression, and committing to
+    /// a statement before seeing the `=` would make `{ x }` a parse error.
+    ///
+    /// `Ok(None)` means "not an assignment", which is different from "an assignment that
+    /// failed to parse" — the second has already reported and must not be retried as an
+    /// expression.
+    fn try_assign(&mut self) -> Option<Option<Assign>> {
+        let is_assign = matches!(self.peek(), TokenKind::Ident(_))
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Eq)
+            );
+        if !is_assign {
+            return Some(None);
+        }
+
+        let name_span = self.peek_span();
+        let TokenKind::Ident(name) = self.advance() else {
+            return Some(None);
+        };
+        self.advance(); // `=`
+        let value = self.expr()?;
+        let semi = self.expect(&TokenKind::Semi, "after an assignment")?;
+        Some(Some(Assign {
+            name,
+            name_span,
+            value,
+            span: name_span.join(semi),
+        }))
     }
 
     fn expr(&mut self) -> Option<Expr> {

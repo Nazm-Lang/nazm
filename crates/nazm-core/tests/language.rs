@@ -251,9 +251,10 @@ fn a_duplicate_function_points_at_the_first_definition() {
 #[test]
 fn absent_features_are_refused_by_name() {
     for (src, word) in [
-        ("fn main() -> Int { while true { 1 } }", "while"),
         ("fn main() -> Int { return 1 }", "return"),
-        ("fn main() -> Int { let mut x = 1; x }", "mut"),
+        ("fn main() -> Int { break }", "break"),
+        ("fn main() -> Int { continue }", "continue"),
+        ("fn main() -> Int { for x in y { 1 } }", "for"),
         ("fn main() -> Int { match 1 { } }", "match"),
         ("fn main() -> Int { print(1) }", "print"),
     ] {
@@ -331,4 +332,189 @@ fn one_bad_operand_produces_one_error_not_a_cascade() {
         sole_error(r#"fn main() -> Str { "a" + "b" }"#),
         codes::INVALID_OPERANDS
     );
+}
+
+// --- v0.2: mutation --------------------------------------------------------------
+
+#[test]
+fn a_mutable_binding_can_be_reassigned() {
+    assert_eq!(
+        value("fn main() -> Int { let mut n = 1; n = n + 41; n }"),
+        Value::Int(42)
+    );
+}
+
+#[test]
+fn an_immutable_binding_cannot_be() {
+    // Immutable by default: mutable-by-default with an opt-out would put the annotation
+    // on the rarer case and leave the common one silent.
+    assert_eq!(
+        sole_error("fn main() -> Int { let x = 1; x = 2; x }"),
+        codes::ASSIGN_TO_IMMUTABLE
+    );
+}
+
+#[test]
+fn the_immutability_error_suggests_the_fix() {
+    match run("fn main() -> Int { let x = 1; x = 2; x }") {
+        Outcome::CheckFailed(ds) => {
+            let d = &ds[0];
+            assert!(!d.fixes.is_empty(), "should suggest `mut`");
+            assert!(d.fixes[0].replacement.contains("mut"), "{:?}", d.fixes);
+        }
+        other => panic!("expected a check failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn parameters_are_never_mutable() {
+    // A mutable parameter is a local copy, which reads as an out-parameter to anyone who
+    // has not checked the calling convention.
+    let src = "fn f(mut n: Int) -> Int { n } fn main() -> Int { f(1) }";
+    assert!(
+        errors(src).contains(&codes::MUTABLE_PARAMETER),
+        "{:?}",
+        errors(src)
+    );
+}
+
+#[test]
+fn assignment_cannot_change_a_bindings_type() {
+    // A variable whose type depends on how far through the function you are is exactly
+    // what a reader cannot predict.
+    let src = "fn main() -> Int { let mut n = 1; n = true; n }";
+    assert!(
+        errors(src).contains(&codes::TYPE_MISMATCH),
+        "{:?}",
+        errors(src)
+    );
+}
+
+#[test]
+fn assigning_to_an_undefined_name_is_not_a_declaration() {
+    // `n = 1;` does not introduce `n`; only `let` does.
+    assert_eq!(
+        sole_error("fn main() -> Int { n = 1; 0 }"),
+        codes::UNDEFINED_VARIABLE
+    );
+}
+
+#[test]
+fn every_use_of_an_undefined_name_is_reported() {
+    // Two sites, two errors. Not a cascade: each is a real place needing an edit, unlike
+    // an invented follow-on error of a different kind.
+    let found = errors("fn main() -> Int { n = 1; n }");
+    assert_eq!(
+        found
+            .iter()
+            .filter(|c| **c == codes::UNDEFINED_VARIABLE)
+            .count(),
+        2,
+        "{found:?}"
+    );
+}
+
+#[test]
+fn assignment_is_a_statement_so_it_cannot_be_a_condition() {
+    // `if (x = 1)` is one of the oldest C bugs; nothing is gained by reproducing it.
+    let src = "fn main() -> Int { let mut x = 1; if (x = 1) { 1 } else { 2 } }";
+    assert!(
+        !errors(src).is_empty(),
+        "an assignment in a condition must not parse"
+    );
+}
+
+// --- v0.2: loops -----------------------------------------------------------------
+
+#[test]
+fn a_while_loop_accumulates() {
+    let src = r"
+        fn main() -> Int {
+            let mut total = 0;
+            let mut i = 1;
+            while i <= 100 { total = total + i; i = i + 1; }
+            total
+        }
+    ";
+    assert_eq!(value(src), Value::Int(5050));
+}
+
+#[test]
+fn a_loop_body_assigns_to_the_outer_binding_not_a_shadow() {
+    // If the body created a fresh binding each iteration, every accumulator in the
+    // language would silently do nothing and still compile.
+    let src = r"
+        fn main() -> Int {
+            let mut n = 0;
+            while n < 3 { n = n + 1; }
+            n
+        }
+    ";
+    assert_eq!(value(src), Value::Int(3));
+}
+
+#[test]
+fn a_loop_body_needs_no_tail_expression() {
+    // A `Block` must end in an expression because it is one; a loop body has no value to
+    // give, so requiring a tail would force every loop to end with something pointless.
+    assert_eq!(
+        value("fn main() -> Int { let mut i = 0; while i < 2 { i = i + 1; } i }"),
+        Value::Int(2)
+    );
+}
+
+#[test]
+fn a_while_condition_must_be_bool() {
+    let src = "fn main() -> Int { let mut i = 0; while i { i = i + 1; } i }";
+    assert_eq!(sole_error(src), codes::CONDITION_NOT_BOOL);
+}
+
+#[test]
+fn a_loop_that_never_ends_reports_rather_than_hanging() {
+    // The guard is the interpreter's, not the language's. Without it a non-terminating
+    // program produces nothing at all, and a tool that hangs is worse than one that says
+    // what happened.
+    let src = "fn main() -> Int { let mut i = 0; while i >= 0 { i = i + 1; } i }";
+    match nazm_core::run_with_limit(src, 1000) {
+        Outcome::RuntimeFailed(d) => assert_eq!(d.code, codes::ITERATION_LIMIT),
+        other => panic!("expected the iteration limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_terminating_loop_is_unaffected_by_the_guard() {
+    let src = "fn main() -> Int { let mut i = 0; while i < 10 { i = i + 1; } i }";
+    match nazm_core::run_with_limit(src, 1000) {
+        Outcome::Value(v) => assert_eq!(v, Value::Int(10)),
+        other => panic!("expected 10, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_let_inside_a_loop_body_does_not_leak_between_iterations() {
+    let src = r"
+        fn main() -> Int {
+            let mut n = 0;
+            while n < 3 { let step = 1; n = n + step; }
+            n
+        }
+    ";
+    assert_eq!(value(src), Value::Int(3));
+}
+
+#[test]
+fn loops_nest() {
+    let src = r"
+        fn main() -> Int {
+            let mut count = 0;
+            let mut i = 0;
+            while i < 3 {
+                let mut j = 0;
+                while j < 4 { count = count + 1; j = j + 1; }
+                i = i + 1;
+            }
+            count
+        }
+    ";
+    assert_eq!(value(src), Value::Int(12));
 }
