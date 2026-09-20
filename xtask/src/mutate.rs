@@ -131,6 +131,17 @@ pub(crate) enum Verdict {
     NotInjected(String),
     /// The mutated tree does not compile, so the suite would fail for the wrong reason.
     DidNotBuild,
+    /// A test binary died — stack overflow, abort, segfault — while the mutation was
+    /// injected.
+    ///
+    /// Distinct from both `Caught` and `RunnerFailed`, and the distinction is the point.
+    /// The mutant did have an observable effect, so this is not `Survived`; but nothing
+    /// *asserted* anything, so it is not `Caught` either, and the binary that died took
+    /// its other results with it. It is also not a `RunnerFailed`: the orchestration
+    /// worked perfectly and reported exactly what happened. The fix is always the same —
+    /// move the case to a suite that runs the program as a child process, where a crash
+    /// is an exit code the parent can assert on.
+    MutantCrashed { signature: String, missing: usize },
     /// The suite did not run to completion: the runner errored, produced no results, or
     /// produced fewer result lines than the baseline.
     ///
@@ -183,11 +194,18 @@ pub(crate) fn run_all(root: &Path, catalogue: &Path) -> Result<(), Vec<String>> 
                 .to_owned(),
         ]);
     }
-    let baseline_results = match run_tests(root) {
+    let baseline_results = match run_tests(root, 0) {
         TestRun::Failed(why) => {
             return Err(vec![format!(
                 "the baseline suite did not run to completion ({why}). Every verdict \
                  below would be meaningless."
+            )])
+        }
+        // Nothing is injected yet, so this is the tree's own doing, not a mutant's.
+        TestRun::Crashed { signature, .. } => {
+            return Err(vec![format!(
+                "the unmutated suite killed a test binary ({signature}). Fix that first: \
+                 a baseline that cannot survive itself measures nothing."
             )])
         }
         TestRun::Completed { failing, .. } if failing > 0 => {
@@ -225,6 +243,16 @@ pub(crate) fn run_all(root: &Path, catalogue: &Path) -> Result<(), Vec<String>> 
                 problems.push(format!(
                     "{}: the mutated tree does not compile, so a failing suite would not \
                      mean the defect was detected.",
+                    m.name
+                ));
+            }
+            Verdict::MutantCrashed { signature, missing } => {
+                println!("  MUTANT CRASH {}", m.name);
+                problems.push(format!(
+                    "{}: the mutant killed a test binary ({signature}), taking {missing} \
+                     binary's results with it. The defect had an effect, but no test \
+                     asserted it and the rest of that binary went unmeasured — move the \
+                     case out of process, where a crash is an exit code to assert on.",
                     m.name
                 ));
             }
@@ -290,8 +318,15 @@ fn apply_and_test(root: &Path, m: &Mutation, baseline_results: usize) -> Verdict
     }
 
     let verdict = if builds(root) {
-        match run_tests(root) {
+        match run_tests(root, baseline_results) {
             TestRun::Failed(why) => Verdict::RunnerFailed(why),
+            TestRun::Crashed {
+                signature,
+                result_lines,
+            } => Verdict::MutantCrashed {
+                signature,
+                missing: baseline_results.saturating_sub(result_lines),
+            },
             // Fewer binaries reported than at baseline: something did not run, and a
             // mutation the missing binary would have caught reads as survived.
             TestRun::Completed { result_lines, .. } if result_lines < baseline_results => {
@@ -377,11 +412,45 @@ fn builds(root: &Path) -> bool {
 enum TestRun {
     /// Ran to completion. `failing` may be zero.
     Completed { failing: usize, result_lines: usize },
+    /// A test binary died rather than reporting. Carries what it died of, and how many
+    /// binaries did report, so the caller can say how much of the suite went unmeasured.
+    Crashed {
+        signature: String,
+        result_lines: usize,
+    },
     /// Did not run to completion, for a reason that is about the runner, not the code.
     Failed(String),
 }
 
-fn run_tests(root: &Path) -> TestRun {
+/// What a test binary died of, if one did.
+///
+/// Only meaningful once a binary is known to be missing: a crash and a broken
+/// orchestration both show up as missing results, and the message is what separates them.
+/// One is a fact about the code under test, the other about the runner, and reporting the
+/// first as the second hides a real effect behind an apology.
+///
+/// The message alone proves nothing, which is the trap. The CLI suite runs `nazm` as a
+/// child process *so that* a stack overflow is contained, and a test asserting on the
+/// child's stderr prints that stderr — crash text included — while every binary reports
+/// normally. Matching on the text before checking completeness turned three correct
+/// catches into crashes.
+fn crash_signature(stdout: &str, stderr: &str) -> Option<&'static str> {
+    [
+        "fatal runtime error: stack overflow",
+        "has overflowed its stack",
+        "memory allocation of",
+        "SIGSEGV",
+        "SIGABRT",
+        "signal: 6",
+        "signal: 11",
+    ]
+    .into_iter()
+    .find(|sig| stderr.contains(sig) || stdout.contains(sig))
+}
+
+/// Run the suite. `baseline_results` is how many binaries reported when nothing was
+/// injected; pass 0 to measure the baseline itself.
+fn run_tests(root: &Path, baseline_results: usize) -> TestRun {
     let out = match Command::new(cargo())
         .arg("test")
         .arg("--workspace")
@@ -426,6 +495,7 @@ fn run_tests(root: &Path) -> TestRun {
         }
     }
 
+    let stderr_text = String::from_utf8_lossy(&out.stderr);
     let failing = text
         .lines()
         .filter_map(|l| l.strip_prefix("test result: FAILED. "))
@@ -433,6 +503,21 @@ fn run_tests(root: &Path) -> TestRun {
         .filter_map(|f| f.trim().strip_suffix(" failed"))
         .filter_map(|n| n.parse::<usize>().ok())
         .sum();
+
+    // Only now, with a count of the binaries that reported, can a crash be attributed.
+    // Crash text on its own means nothing: the CLI suite runs `nazm` as a child process
+    // precisely so that a stack overflow is contained, and when a test there asserts on
+    // the child's stderr it *prints that stderr*, crash message and all. Every binary
+    // still reported, so nothing died here — a test caught the defect exactly as
+    // intended. Reading the message alone turned three correct catches into crashes.
+    if result_lines < baseline_results {
+        if let Some(sig) = crash_signature(&text, &stderr_text) {
+            return TestRun::Crashed {
+                signature: sig.to_owned(),
+                result_lines,
+            };
+        }
+    }
 
     TestRun::Completed {
         failing,
@@ -442,4 +527,85 @@ fn run_tests(root: &Path) -> TestRun {
 
 fn cargo() -> String {
     std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned())
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::crash_signature;
+
+    #[test]
+    fn a_stack_overflow_is_recognised_as_a_crash() {
+        // Captured verbatim from a run where removing the parser's recursion bound
+        // killed the nazm-syntax test binary.
+        let stderr = "\nthread 'parser::nesting_tests::at_the_limit' (2568880) has \
+                      overflowed its stack\nfatal runtime error: stack overflow, \
+                      aborting\n";
+        // Which of the two stack-overflow signatures matches first is list order, not
+        // behaviour, and pinning it would make this a test of the list.
+        let found = crash_signature("", stderr).expect("a stack overflow is a crash");
+        assert!(found.contains("stack"), "unhelpful signature: {found}");
+    }
+
+    #[test]
+    fn an_ordinary_test_failure_is_not_a_crash() {
+        // The case that must not be swept into the crash bucket: a mutation being caught
+        // exactly as intended. Reading this as a crash would turn coverage into an
+        // apology about the runner.
+        let stdout = "test result: FAILED. 21 passed; 1 failed; 0 ignored\n\
+                      ---- parser::tests::x stdout ----\n\
+                      assertion `left == right` failed\n";
+        assert_eq!(crash_signature(stdout, ""), None);
+    }
+
+    #[test]
+    fn a_clean_run_is_not_a_crash() {
+        assert_eq!(
+            crash_signature("test result: ok. 265 passed; 0 failed\n", ""),
+            None
+        );
+    }
+
+    #[test]
+    fn a_crash_reported_on_stdout_is_still_a_crash() {
+        // libtest writes some of this to stdout depending on capture settings, so
+        // looking only at stderr would miss it.
+        assert_eq!(
+            crash_signature("fatal runtime error: stack overflow\n", ""),
+            Some("fatal runtime error: stack overflow")
+        );
+    }
+
+    #[test]
+    fn a_contained_child_crash_is_not_a_dead_binary() {
+        // The trap, as the CLI suite actually produces it: a test runs `nazm` on a
+        // program that overflows, asserts on the exit status, fails its assertion, and
+        // prints the child's stderr. `crash_signature` matches — which is why the caller
+        // must not consult it unless a binary is genuinely missing.
+        let stdout = "test recursion_runs ... FAILED\n\
+                      ---- recursion_runs stdout ----\n\
+                      got:\nthread 'nazm-eval' (3492985) has overflowed its stack\n\
+                      fatal runtime error: stack overflow, aborting\n\
+                      test result: FAILED. 11 passed; 1 failed; 0 ignored\n";
+        assert!(
+            crash_signature(stdout, "").is_some(),
+            "the text is present, so the guard cannot be the text"
+        );
+        // The count is what decides, and here nothing is missing.
+        assert_eq!(
+            stdout
+                .lines()
+                .filter(|l| l.starts_with("test result:"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_signal_death_is_a_crash() {
+        assert_eq!(
+            crash_signature("", "error: test failed, signal: 6 (SIGABRT)"),
+            Some("SIGABRT")
+        );
+    }
 }

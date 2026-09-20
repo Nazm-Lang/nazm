@@ -126,6 +126,13 @@ fn deep_trees_and_deep_recursion_report_rather_than_abort() {
     assert!(stderr.contains("N0102"), "got:\n{stderr}");
     assert_eq!(code, 1, "a check failure, not a crash");
 
+    // Nested parentheses, which no tree bound can catch: they build no node, so the
+    // parser-recursion bound is the only thing refusing them. Out of process because
+    // removing that bound leaves nothing bounding them at all.
+    let (_, stderr, code) = nazm(&["check", &example("bad/paren_nesting.nz")]);
+    assert!(stderr.contains("N0102"), "got:\n{stderr}");
+    assert_eq!(code, 1);
+
     // A long arithmetic chain: the likeliest deep tree in a real program, and the one
     // shape the nesting bound originally missed because its parse does not recurse.
     let (_, stderr, code) = nazm(&["run", &example("bad/long_chain.nz")]);
