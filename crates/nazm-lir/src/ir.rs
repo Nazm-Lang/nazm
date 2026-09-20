@@ -371,6 +371,8 @@ pub enum Builtin {
     StrsGet,
     StrsSet,
     StrsPush,
+    IntsPop,
+    StrsPop,
     ArgsCount,
     Arg,
     ReadFile,
@@ -401,6 +403,8 @@ impl Builtin {
             "strs_get" => Some(Self::StrsGet),
             "strs_set" => Some(Self::StrsSet),
             "strs_push" => Some(Self::StrsPush),
+            "ints_pop" => Some(Self::IntsPop),
+            "strs_pop" => Some(Self::StrsPop),
             "args_count" => Some(Self::ArgsCount),
             "arg" => Some(Self::Arg),
             "read_file" => Some(Self::ReadFile),
@@ -432,6 +436,8 @@ impl Builtin {
             Self::StrsGet => "strs_get",
             Self::StrsSet => "strs_set",
             Self::StrsPush => "strs_push",
+            Self::IntsPop => "ints_pop",
+            Self::StrsPop => "strs_pop",
             Self::ArgsCount => "args_count",
             Self::Arg => "arg",
             Self::ReadFile => "read_file",
@@ -447,12 +453,18 @@ impl Builtin {
     #[must_use]
     pub fn sequence(self) -> Option<Ty> {
         match self {
-            Self::IntsNew | Self::IntsLen | Self::IntsGet | Self::IntsSet | Self::IntsPush => {
-                Some(Ty::Ints)
-            }
-            Self::StrsNew | Self::StrsLen | Self::StrsGet | Self::StrsSet | Self::StrsPush => {
-                Some(Ty::Strs)
-            }
+            Self::IntsNew
+            | Self::IntsLen
+            | Self::IntsGet
+            | Self::IntsSet
+            | Self::IntsPush
+            | Self::IntsPop => Some(Ty::Ints),
+            Self::StrsNew
+            | Self::StrsLen
+            | Self::StrsGet
+            | Self::StrsSet
+            | Self::StrsPush
+            | Self::StrsPop => Some(Ty::Strs),
             _ => None,
         }
     }
@@ -470,8 +482,8 @@ impl Builtin {
             Self::StrConcat => &[Ty::Str, Ty::Str],
             Self::IntToStr | Self::StrFromByte => &[Ty::Int],
             Self::IntsNew | Self::StrsNew => &[],
-            Self::IntsLen => &[Ty::Ints],
-            Self::StrsLen => &[Ty::Strs],
+            Self::IntsLen | Self::IntsPop => &[Ty::Ints],
+            Self::StrsLen | Self::StrsPop => &[Ty::Strs],
             Self::IntsGet => &[Ty::Ints, Ty::Int],
             Self::StrsGet => &[Ty::Strs, Ty::Int],
             Self::IntsSet => &[Ty::Ints, Ty::Int, Ty::Int],
@@ -495,9 +507,10 @@ impl Builtin {
             | Self::IntsGet
             | Self::IntsSet
             | Self::IntsPush
+            | Self::IntsPop
             | Self::StrsSet
             | Self::StrsPush => Ty::Int,
-            Self::StrsGet | Self::Arg | Self::ReadFile => Ty::Str,
+            Self::StrsGet | Self::StrsPop | Self::Arg | Self::ReadFile => Ty::Str,
             Self::ArgsCount | Self::WriteFile | Self::Print | Self::EPrint | Self::ExitWith => {
                 Ty::Int
             }

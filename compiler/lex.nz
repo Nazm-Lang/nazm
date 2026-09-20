@@ -1,0 +1,256 @@
+// The Nazm tokeniser, written in Nazm — the library.
+//
+// `compiler/lexer.nz` is the command-line driver over this file. They are separate
+// because every top-level function is visible to every importer (`docs/spec.md`,
+// *Visibility is not expressible yet*), so a library that carried a `main` would
+// collide with the `main` of anything that imported it. That is the missing visibility
+// showing up in practice on the very first multi-file program, and splitting the driver
+// out is the honest workaround until privacy exists.
+//
+// The first component of the self-hosted compiler, and the first real test of the
+// bootstrap subset. It follows `docs/bootstrap-design.md` exactly: tokens live in
+// parallel `Ints`/`Strs` arrays addressed by index, spans are byte offsets so they mean
+// the same thing as `nazm-span::Span`, and **every loop is a loop** — there is no
+// recursion anywhere, which is what lets this compile natively today.
+//
+// Usage: nazmc-lex FILE
+// Output: one token per line, `kind start end`, then a final `EOF` line. A lexing error
+// prints `error N000n at OFFSET` to standard error and exits 1.
+
+// --- token kinds -------------------------------------------------------------------
+//
+// Integers rather than an enum, because the language has none. The numbering matches
+// `crates/nazm-syntax/src/lexer.rs` in *meaning*, not in value: the differential test
+// maps one to the other in one place.
+
+fn k_int() -> Int { 1 }
+fn k_str() -> Int { 2 }
+fn k_ident() -> Int { 3 }
+fn k_fn() -> Int { 10 }
+fn k_let() -> Int { 11 }
+fn k_if() -> Int { 12 }
+fn k_else() -> Int { 13 }
+fn k_true() -> Int { 14 }
+fn k_false() -> Int { 15 }
+fn k_mut() -> Int { 16 }
+fn k_while() -> Int { 17 }
+fn k_break() -> Int { 18 }
+fn k_continue() -> Int { 19 }
+fn k_return() -> Int { 20 }
+fn k_use() -> Int { 21 }
+fn k_lparen() -> Int { 30 }
+fn k_rparen() -> Int { 31 }
+fn k_lbrace() -> Int { 32 }
+fn k_rbrace() -> Int { 33 }
+fn k_comma() -> Int { 34 }
+fn k_colon() -> Int { 35 }
+fn k_semi() -> Int { 36 }
+fn k_arrow() -> Int { 37 }
+fn k_eq() -> Int { 38 }
+fn k_plus() -> Int { 40 }
+fn k_minus() -> Int { 41 }
+fn k_star() -> Int { 42 }
+fn k_slash() -> Int { 43 }
+fn k_percent() -> Int { 44 }
+fn k_eqeq() -> Int { 45 }
+fn k_noteq() -> Int { 46 }
+fn k_lt() -> Int { 47 }
+fn k_lteq() -> Int { 48 }
+fn k_gt() -> Int { 49 }
+fn k_gteq() -> Int { 50 }
+
+// --- byte classification -----------------------------------------------------------
+
+fn is_digit(b: Int) -> Bool { if b < 48 { false } else { b <= 57 } }
+
+fn is_alpha(b: Int) -> Bool {
+    if b == 95 { return true; }
+    if b >= 97 { if b <= 122 { return true; } }
+    if b >= 65 { if b <= 90 { return true; } }
+    false
+}
+
+fn is_alnum(b: Int) -> Bool { if is_alpha(b) { true } else { is_digit(b) } }
+
+fn is_space(b: Int) -> Bool {
+    if b == 32 { return true; }
+    if b == 9 { return true; }
+    if b == 10 { return true; }
+    if b == 13 { return true; }
+    false
+}
+
+// The byte at `i`, or -1 past the end. One place where "off the end" is expressed, so
+// the scanning loops below never index out of bounds.
+fn at(src: Str, i: Int) -> Int {
+    if i < 0 { return 0 - 1; }
+    if i >= str_len(src) { return 0 - 1; }
+    str_byte(src, i)
+}
+
+// --- keywords ----------------------------------------------------------------------
+
+fn keyword_kind(word: Str) -> Int {
+    if word == "fn" { return k_fn(); }
+    if word == "let" { return k_let(); }
+    if word == "if" { return k_if(); }
+    if word == "else" { return k_else(); }
+    if word == "true" { return k_true(); }
+    if word == "false" { return k_false(); }
+    if word == "mut" { return k_mut(); }
+    if word == "while" { return k_while(); }
+    if word == "break" { return k_break(); }
+    if word == "continue" { return k_continue(); }
+    if word == "return" { return k_return(); }
+    if word == "use" { return k_use(); }
+    k_ident()
+}
+
+// --- the scanner --------------------------------------------------------------------
+//
+// One pass, no backtracking, no recursion. `kinds`, `starts` and `ends` grow together
+// and are always the same length, which is the invariant the whole design rests on.
+
+fn push_token(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, kind: Int, from: Int, to: Int, text: Str) -> Int {
+    ints_push(kinds, kind);
+    ints_push(starts, from);
+    ints_push(ends, to);
+    strs_push(texts, text);
+    ints_len(kinds)
+}
+
+// Report and stop. Errors are located, which is the whole point of carrying byte offsets.
+fn fail(code: Str, at_offset: Int, detail: Str) -> Int {
+    eprint(str_concat("error ", code));
+    eprint(str_concat(" at ", int_to_str(at_offset)));
+    eprint(str_concat(": ", detail));
+    eprint(str_from_byte(10));
+    exit_with(1);
+    0
+}
+
+fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int {
+    let n = str_len(src);
+    let mut i = 0;
+    while i < n {
+        let b = at(src, i);
+
+        // Whitespace.
+        if is_space(b) { i = i + 1; continue; }
+
+        // `//` to end of line. A single `/` is division, so the second byte decides.
+        if b == 47 {
+            if at(src, i + 1) == 47 {
+                while i < n {
+                    if at(src, i) == 10 { break; }
+                    i = i + 1;
+                }
+                continue;
+            }
+        }
+
+        // Identifiers and keywords.
+        if is_alpha(b) {
+            let from = i;
+            while is_alnum(at(src, i)) { i = i + 1; }
+            let word = str_slice(src, from, i);
+            push_token(kinds, starts, ends, texts, keyword_kind(word), from, i, word);
+            continue;
+        }
+
+        // Integers, with `_` as a separator. The value is not computed here: the parser
+        // needs the digits, and overflow is its decision, not the scanner's.
+        if is_digit(b) {
+            let from = i;
+            while true {
+                let c = at(src, i);
+                if is_digit(c) { i = i + 1; continue; }
+                if c == 95 { i = i + 1; continue; }
+                break;
+            }
+            push_token(kinds, starts, ends, texts, k_int(), from, i, str_slice(src, from, i));
+            continue;
+        }
+
+        // Strings. No escapes, exactly as `docs/spec.md` says — a closing quote or a
+        // newline ends the scan, and a newline is an error.
+        if b == 34 {
+            let from = i;
+            i = i + 1;
+            while true {
+                let c = at(src, i);
+                if c == 34 { break; }
+                if c == 10 { fail("N0002", from, "this string has no closing quote"); }
+                if c < 0 { fail("N0002", from, "this string has no closing quote"); }
+                i = i + 1;
+            }
+            let text = str_slice(src, from + 1, i);
+            i = i + 1;
+            push_token(kinds, starts, ends, texts, k_str(), from, i, text);
+            continue;
+        }
+
+        // Two-byte operators, checked before their one-byte prefixes.
+        let next = at(src, i + 1);
+        if b == 45 {
+            if next == 62 {
+                push_token(kinds, starts, ends, texts, k_arrow(), i, i + 2, "");
+                i = i + 2;
+                continue;
+            }
+        }
+        if b == 61 {
+            if next == 61 {
+                push_token(kinds, starts, ends, texts, k_eqeq(), i, i + 2, "");
+                i = i + 2;
+                continue;
+            }
+        }
+        if b == 33 {
+            if next == 61 {
+                push_token(kinds, starts, ends, texts, k_noteq(), i, i + 2, "");
+                i = i + 2;
+                continue;
+            }
+            fail("N0001", i, "this character is not part of the language");
+        }
+        if b == 60 {
+            if next == 61 {
+                push_token(kinds, starts, ends, texts, k_lteq(), i, i + 2, "");
+                i = i + 2;
+                continue;
+            }
+        }
+        if b == 62 {
+            if next == 61 {
+                push_token(kinds, starts, ends, texts, k_gteq(), i, i + 2, "");
+                i = i + 2;
+                continue;
+            }
+        }
+
+        // One-byte tokens.
+        let mut kind = 0;
+        if b == 40 { kind = k_lparen(); }
+        if b == 41 { kind = k_rparen(); }
+        if b == 123 { kind = k_lbrace(); }
+        if b == 125 { kind = k_rbrace(); }
+        if b == 44 { kind = k_comma(); }
+        if b == 58 { kind = k_colon(); }
+        if b == 59 { kind = k_semi(); }
+        if b == 61 { kind = k_eq(); }
+        if b == 43 { kind = k_plus(); }
+        if b == 45 { kind = k_minus(); }
+        if b == 42 { kind = k_star(); }
+        if b == 47 { kind = k_slash(); }
+        if b == 37 { kind = k_percent(); }
+        if b == 60 { kind = k_lt(); }
+        if b == 62 { kind = k_gt(); }
+
+        if kind == 0 { fail("N0001", i, "this character is not part of the language"); }
+        push_token(kinds, starts, ends, texts, kind, i, i + 1, "");
+        i = i + 1;
+    }
+    ints_len(kinds)
+}
+

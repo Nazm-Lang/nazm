@@ -77,6 +77,14 @@ pub enum Intrinsic {
     StrsSet,
     /// `strs_push(a: Strs, v: Str) -> Int` — appends; returns the new length.
     StrsPush,
+    /// `ints_pop(a: Ints) -> Int` — removes and returns the last item.
+    ///
+    /// Fails with `N0405` when the sequence is empty. Without it a sequence cannot be
+    /// used as a stack, and an explicit work stack is how this language's compiler
+    /// traverses a tree without recursion — so this is not a convenience.
+    IntsPop,
+    /// `strs_pop(a: Strs) -> Str` — the same, for `Strs`.
+    StrsPop,
 
     // --- the outside world -------------------------------------------------------
     //
@@ -110,7 +118,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 26] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -127,6 +135,8 @@ impl Intrinsic {
         Self::StrsGet,
         Self::StrsSet,
         Self::StrsPush,
+        Self::IntsPop,
+        Self::StrsPop,
         Self::ArgsCount,
         Self::Arg,
         Self::ReadFile,
@@ -156,6 +166,8 @@ impl Intrinsic {
             Self::StrsGet => "strs_get",
             Self::StrsSet => "strs_set",
             Self::StrsPush => "strs_push",
+            Self::IntsPop => "ints_pop",
+            Self::StrsPop => "strs_pop",
             Self::ArgsCount => "args_count",
             Self::Arg => "arg",
             Self::ReadFile => "read_file",
@@ -176,8 +188,8 @@ impl Intrinsic {
             Self::StrConcat => &[Type::Str, Type::Str],
             Self::IntToStr | Self::StrFromByte => &[Type::Int],
             Self::IntsNew | Self::StrsNew => &[],
-            Self::IntsLen => &[Type::Ints],
-            Self::StrsLen => &[Type::Strs],
+            Self::IntsLen | Self::IntsPop => &[Type::Ints],
+            Self::StrsLen | Self::StrsPop => &[Type::Strs],
             Self::IntsGet => &[Type::Ints, Type::Int],
             Self::StrsGet => &[Type::Strs, Type::Int],
             Self::IntsSet => &[Type::Ints, Type::Int, Type::Int],
@@ -201,9 +213,10 @@ impl Intrinsic {
             | Self::IntsGet
             | Self::IntsSet
             | Self::IntsPush
+            | Self::IntsPop
             | Self::StrsSet
             | Self::StrsPush => Type::Int,
-            Self::StrsGet | Self::Arg | Self::ReadFile => Type::Str,
+            Self::StrsGet | Self::StrsPop | Self::Arg | Self::ReadFile => Type::Str,
             Self::ArgsCount | Self::WriteFile | Self::Print | Self::EPrint | Self::ExitWith => {
                 Type::Int
             }

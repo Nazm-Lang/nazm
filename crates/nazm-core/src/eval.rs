@@ -633,6 +633,35 @@ impl<'a> Interpreter<'a> {
                 index_fits(a.len())
                     .map_or_else(|| Err(bug("a sequence longer than `Int` can measure")), Ok)
             }
+            (Intrinsic::IntsPop, [Value::Ints(a)]) => {
+                let Some(mut a) = seq(a) else {
+                    return Err(bug("a sequence that could not be written"));
+                };
+                a.pop().map_or_else(
+                    || {
+                        Err(out_of_bounds(
+                            "this sequence is empty",
+                            "asked to remove the last item of an empty `Ints`".to_owned(),
+                        ))
+                    },
+                    |v| Ok(Value::Int(v)),
+                )
+            }
+            (Intrinsic::StrsPop, [Value::Strs(a)]) => {
+                let Some(mut a) = seq(a) else {
+                    return Err(bug("a sequence that could not be written"));
+                };
+                a.pop().map_or_else(
+                    || {
+                        Err(out_of_bounds(
+                            "this sequence is empty",
+                            "asked to remove the last item of an empty `Strs`".to_owned(),
+                        ))
+                    },
+                    |v| Ok(Value::Str(v)),
+                )
+            }
+
             // --- the outside world ---------------------------------------------
             (Intrinsic::ArgsCount, []) => index_fits(self.args.len())
                 .map_or_else(|| Err(bug("more arguments than `Int` can count")), Ok),

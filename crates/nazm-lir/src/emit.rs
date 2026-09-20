@@ -961,6 +961,38 @@ impl Emitter {
                     ty: Ty::Int,
                 };
             }
+            Builtin::IntsPop | Builtin::StrsPop => {
+                let seq = op.sequence().unwrap_or(Ty::Ints);
+                let elem = seq.element().unwrap_or(Ty::Int);
+                let len = self.fresh();
+                let _ = writeln!(self.out, "  %{len} = load i64, ptr %{}", arg(0));
+                let empty = self.fresh();
+                let _ = writeln!(self.out, "  %{empty} = icmp sle i64 %{len}, 0");
+                self.require(empty, "this sequence is empty", span);
+                let last = self.fresh();
+                let _ = writeln!(self.out, "  %{last} = sub i64 %{len}, 1");
+                let data_field = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{data_field} = getelementptr i8, ptr %{}, i64 16",
+                    arg(0)
+                );
+                let data = self.fresh();
+                let _ = writeln!(self.out, "  %{data} = load ptr, ptr %{data_field}");
+                let slot = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{slot} = getelementptr {}, ptr %{data}, i64 %{last}",
+                    elem.llvm()
+                );
+                let v = self.fresh();
+                let _ = writeln!(self.out, "  %{v} = load {}, ptr %{slot}", elem.llvm());
+                // The length is written back *after* the value is read, so the item is
+                // still inside the sequence while it is being fetched. Capacity is left
+                // alone: a stack that shrinks and grows should not reallocate.
+                let _ = writeln!(self.out, "  store i64 %{last}, ptr %{}", arg(0));
+                return Val::Of { value: v, ty: elem };
+            }
             Builtin::IntsPush | Builtin::StrsPush => {
                 self.needs_sequences = true;
                 let seq = op.sequence().unwrap_or(Ty::Ints);

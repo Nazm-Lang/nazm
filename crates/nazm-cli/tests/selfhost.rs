@@ -155,8 +155,8 @@ fn the_nazm_lexer_agrees_with_the_reference_on_every_source_in_the_tree() {
 
     // Its own source first — the largest and most varied `.nz` file there is, and the
     // one a self-hosting claim will eventually rest on.
-    let mut files = vec![root.join("compiler/lexer.nz")];
-    for folder in ["examples", "corpus"] {
+    let mut files = Vec::new();
+    for folder in ["compiler", "examples", "corpus"] {
         let path = root.join(folder);
         if let Ok(entries) = std::fs::read_dir(&path) {
             for entry in entries.flatten() {
@@ -267,5 +267,308 @@ fn a_lexing_error_is_located_and_stops_the_program() {
             errors.iter().any(|d| d.code.as_str() == code),
             "{source:?}: the reference did not report {code}: {errors:#?}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The syntax-tree comparison format
+//
+// A tree is compared as a **post-order dump with explicit arity**: one line per node,
+// `kind|arity|start|end|text`, children first. Post-order plus arity is a complete and
+// unambiguous encoding — a reader can rebuild the tree from it — so agreement on the
+// dump is agreement on the tree, without either side needing to expose node indices or
+// agree on how an arena is laid out.
+//
+// This function is the **specification** the Nazm parser is written against, and it is
+// exhaustive on every syntax enum for the same reason the token mapping is: a node kind
+// added to the language fails to compile here rather than quietly matching a wildcard.
+// ---------------------------------------------------------------------------
+
+fn dump_program(p: &nazm_core::__syntax::Program) -> String {
+    let mut out = String::new();
+    for f in &p.functions {
+        dump_function(f, &mut out);
+    }
+    push_node(&mut out, "program", p.functions.len(), 0, 0, "");
+    out
+}
+
+fn push_node(out: &mut String, kind: &str, arity: usize, start: u32, end: u32, text: &str) {
+    use std::fmt::Write as _;
+    let _ = writeln!(out, "{kind}|{arity}|{start}|{end}|{text}");
+}
+
+fn dump_function(f: &nazm_core::__syntax::Function, out: &mut String) {
+    for p in &f.params {
+        push_node(out, "param", 0, p.span.start, p.span.end, &format!("{}:{}", p.name, p.ty.name));
+    }
+    let arity = match &f.body {
+        Some(b) => {
+            dump_block(b, out);
+            f.params.len() + 1
+        }
+        None => f.params.len(),
+    };
+    push_node(
+        out,
+        "fn",
+        arity,
+        f.span.start,
+        f.span.end,
+        &format!("{}:{}", f.name, f.return_type.name),
+    );
+}
+
+fn dump_block(b: &nazm_core::__syntax::Block, out: &mut String) {
+    for s in &b.statements {
+        dump_stmt(s, out);
+    }
+    let mut arity = b.statements.len();
+    if let Some(t) = &b.tail {
+        dump_expr(t, out);
+        arity += 1;
+    }
+    push_node(
+        out,
+        "block",
+        arity,
+        b.span.start,
+        b.span.end,
+        if b.tail.is_some() { "tail" } else { "" },
+    );
+}
+
+fn dump_stmt(s: &nazm_core::__syntax::Stmt, out: &mut String) {
+    use nazm_core::__syntax::Stmt as S;
+    match s {
+        S::Let(l) => {
+            dump_expr(&l.value, out);
+            push_node(
+                out,
+                "let",
+                1,
+                l.span.start,
+                l.span.end,
+                &format!("{}:{}", l.name, u8::from(l.mutable)),
+            );
+        }
+        S::Assign(a) => {
+            dump_expr(&a.value, out);
+            push_node(out, "assign", 1, a.span.start, a.span.end, &a.name);
+        }
+        S::While(w) => {
+            dump_expr(&w.cond, out);
+            dump_block(&w.body, out);
+            push_node(out, "while", 2, w.span.start, w.span.end, "");
+        }
+        S::Return(r) => {
+            dump_expr(&r.value, out);
+            push_node(out, "return", 1, r.span.start, r.span.end, "");
+        }
+        S::Break { span } => push_node(out, "break", 0, span.start, span.end, ""),
+        S::Continue { span } => push_node(out, "continue", 0, span.start, span.end, ""),
+        S::Expr(e) => {
+            dump_expr(e, out);
+            push_node(out, "exprstmt", 1, e.span().start, e.span().end, "");
+        }
+    }
+}
+
+fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
+    use nazm_core::__syntax::Expr as E;
+    match e {
+        E::Int { value, span } => push_node(out, "int", 0, span.start, span.end, &value.to_string()),
+        E::Bool { value, span } => {
+            push_node(out, "bool", 0, span.start, span.end, &value.to_string());
+        }
+        E::Str { value, span } => push_node(out, "str", 0, span.start, span.end, value),
+        E::Var { name, span } => push_node(out, "var", 0, span.start, span.end, name),
+        E::Neg { operand, span, .. } => {
+            dump_expr(operand, out);
+            push_node(out, "neg", 1, span.start, span.end, "");
+        }
+        E::Binary {
+            op, lhs, rhs, span, ..
+        } => {
+            dump_expr(lhs, out);
+            dump_expr(rhs, out);
+            push_node(out, "bin", 2, span.start, span.end, op.symbol());
+        }
+        E::Call {
+            callee, args, span, ..
+        } => {
+            for a in args {
+                dump_expr(a, out);
+            }
+            push_node(out, "call", args.len(), span.start, span.end, callee);
+        }
+        E::If {
+            cond,
+            then_block,
+            else_block,
+            span,
+        } => {
+            dump_expr(cond, out);
+            dump_block(then_block, out);
+            let arity = match else_block {
+                Some(b) => {
+                    dump_block(b, out);
+                    3
+                }
+                None => 2,
+            };
+            push_node(out, "if", arity, span.start, span.end, "");
+        }
+        E::Block(b) => {
+            dump_block(b, out);
+            push_node(out, "blockexpr", 1, b.span.start, b.span.end, "");
+        }
+    }
+}
+
+#[test]
+fn the_dump_format_round_trips_the_shapes_it_will_be_used_on() {
+    // The comparison format is only as good as its ability to tell two trees apart, so
+    // this pins a few dumps by hand before anything is compared against them.
+    let (p, errors) = nazm_core::__syntax::parse_source("fn main() -> Int { 1 + 2 * 3 }");
+    assert!(errors.is_empty(), "{errors:#?}");
+    let dump = dump_program(&p);
+    let kinds: Vec<&str> = dump
+        .lines()
+        .map(|l| l.split('|').next().unwrap_or(""))
+        .collect();
+    // Post-order: 1, 2, 3, (2*3), (1 + …), block, fn, program.
+    assert_eq!(
+        kinds,
+        vec!["int", "int", "int", "bin", "bin", "block", "fn", "program"],
+        "{dump}"
+    );
+    // Precedence is visible in the shape: the inner `bin` is `*`.
+    let ops: Vec<&str> = dump
+        .lines()
+        .filter(|l| l.starts_with("bin|"))
+        .map(|l| l.rsplit('|').next().unwrap_or(""))
+        .collect();
+    assert_eq!(ops, vec!["*", "+"], "{dump}");
+
+    // Two trees that differ only in grouping must produce different dumps, or the
+    // comparison would pass on a parser that ignored precedence.
+    let (q, _) = nazm_core::__syntax::parse_source("fn main() -> Int { (1 + 2) * 3 }");
+    assert_ne!(dump_program(&q), dump, "the format cannot see grouping");
+}
+
+/// Build `compiler/parser.nz` natively and return the executable.
+fn build_parser(dir: &Path) -> PathBuf {
+    let source = repo_root().join("compiler/parser.nz");
+    assert!(source.exists(), "{} is missing", source.display());
+    let exe = dir.join("nzparse");
+    let out = Command::new(NAZM)
+        .args(["build", source.to_str().unwrap()])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("run nazm build");
+    assert!(
+        out.status.success(),
+        "the Nazm parser no longer compiles natively: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    exe
+}
+
+#[test]
+fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
+    // Whole expressions, compared as trees rather than as text: precedence,
+    // associativity, grouping, unary binding, call arity and every span. A parser that
+    // got precedence wrong would produce a differently *shaped* dump, which is why the
+    // format encodes shape rather than tokens.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_parser(dir.path());
+
+    let sources = [
+        "fn m() -> Int { 1 }",
+        "fn m() -> Int { 1 + 2 * 3 }",
+        "fn m() -> Int { 1 * 2 + 3 }",
+        "fn m() -> Int { (1 + 2) * 3 }",
+        "fn m() -> Int { 1 - 2 - 3 }",
+        "fn m() -> Int { 1 - (2 - 3) }",
+        "fn m() -> Int { 100 / 7 % 3 }",
+        "fn m() -> Int { -x }",
+        "fn m() -> Int { - -1 }",
+        "fn m() -> Int { 1 + -2 }",
+        "fn m() -> Int { -(1 + 2) }",
+        "fn m() -> Bool { a < b == c }",
+        "fn m() -> Bool { 1 < 2 }",
+        "fn m() -> Bool { true != false }",
+        "fn m() -> Int { f() }",
+        "fn m() -> Int { f(1) }",
+        "fn m() -> Int { f(1, 2) }",
+        "fn m() -> Int { f(g(1), 2 * 3, -4) }",
+        "fn m() -> Int { f(g(h(1))) }",
+        "fn m() -> Str { \"hello\" }",
+        "fn m(x: Int) -> Bool { true }",
+        "fn m(a: Int, b: Str) -> Str { b }",
+        "fn one() -> Int { 1 }\nfn two() -> Int { one() + one() }",
+        "use \"other.nz\";\nfn m() -> Int { 1 }",
+    ];
+
+    for source in sources {
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, source).expect("write");
+        let out = Command::new(&exe).arg(&file).output().expect("run");
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "the Nazm parser failed on {source:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // The driver prints the node count as `main`'s value; the dump is everything
+        // before it.
+        let text = String::from_utf8(out.stdout).expect("ASCII output");
+        let ours: String = text
+            .lines()
+            .filter(|l| l.contains('|'))
+            .map(|l| format!("{l}\n"))
+            .collect();
+
+        let (program, errors) = nazm_core::__syntax::parse_source(source);
+        assert!(errors.is_empty(), "{source:?}: {errors:#?}");
+        let theirs = dump_program(&program);
+
+        assert_eq!(ours, theirs, "trees differ for {source:?}");
+    }
+}
+
+#[test]
+fn the_nazm_parser_refuses_what_it_cannot_parse_yet_by_name() {
+    // The scope boundary is a *refusal*, not a misparse. A parser that quietly produced
+    // some tree for a statement it does not handle would agree with nothing and be
+    // discovered much later.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_parser(dir.path());
+
+    for (source, expected) in [
+        ("fn m() -> Int { let x = 1; x }", "`let`: statements are not implemented yet"),
+        (
+            "fn m() -> Int { if true { 1 } else { 2 } }",
+            "`if`: statements are not implemented yet",
+        ),
+        ("fn m() -> Int { 1; 2 }", "a statement: statements are not implemented yet"),
+        // Reported as the unclosed bracket, at the bracket — not as "expected an
+        // expression" at the brace, which would be true and useless.
+        ("fn m() -> Int { (1 }", "this bracket is never closed"),
+        ("fn m() -> Int { }", "expected an expression"),
+        ("fn m() Int { 1 }", "expected `->` and a return type"),
+    ] {
+        let file = dir.path().join("bad.nz");
+        std::fs::write(&file, source).expect("write");
+        let out = Command::new(&exe).arg(&file).output().expect("run");
+        assert_eq!(out.status.code(), Some(1), "{source:?} should be refused");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{source:?}: expected {expected:?}, got {stderr}"
+        );
+        assert!(stderr.contains("parse error at "), "{source:?}: {stderr}");
     }
 }
