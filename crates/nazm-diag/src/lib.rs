@@ -97,6 +97,11 @@ pub mod codes {
     /// The interpreter could not start. Not the program's fault, and said so plainly
     /// rather than reported as a failure of the code being run.
     pub const INTERPRETER_UNAVAILABLE: Code = Code::new("N0404");
+
+    /// An index outside a value's bounds: `str_byte` past the end, a slice whose range
+    /// is inverted or runs off either end. A *language* rule, unlike `N0402`/`N0403`:
+    /// `docs/spec.md` specifies the failure, so every implementation must produce it.
+    pub const INDEX_OUT_OF_BOUNDS: Code = Code::new("N0405");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

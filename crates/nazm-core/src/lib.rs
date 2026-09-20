@@ -6,10 +6,12 @@
 
 pub mod check;
 pub mod eval;
+pub mod intrinsic;
 pub mod types;
 
 pub use check::{check, Signature};
 pub use eval::{Interpreter, RuntimeError, Value};
+pub use intrinsic::Intrinsic;
 pub use types::Type;
 
 /// Re-exported so the CLI can parse without taking its own dependency on the syntax

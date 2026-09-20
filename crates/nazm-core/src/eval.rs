@@ -11,11 +11,22 @@ use std::collections::HashMap;
 use nazm_diag::{codes, Diagnostic};
 use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, While};
 
+use crate::intrinsic::Intrinsic;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Int(i64),
     Bool(bool),
-    Str(String),
+    /// **Bytes, not text.** `docs/spec.md` specifies `Str` as a byte sequence, and
+    /// `str_slice` is allowed to split a multi-byte character — so the representation
+    /// cannot be a Rust `String`, which refuses to hold the result.
+    ///
+    /// This was a real defect, not a hypothetical: with a `String` here,
+    /// `str_byte(str_slice("é", 0, 1), 0)` produced 239 (the first byte of the
+    /// replacement character `from_utf8_lossy` substituted) where the specification
+    /// requires 195. The host's text type was acting as an unstated specification,
+    /// which is exactly what the spec section warns against.
+    Str(Vec<u8>),
 }
 
 impl std::fmt::Display for Value {
@@ -23,7 +34,10 @@ impl std::fmt::Display for Value {
         match self {
             Self::Int(v) => write!(f, "{v}"),
             Self::Bool(v) => write!(f, "{v}"),
-            Self::Str(v) => write!(f, "{v}"),
+            // Rendering, not semantics: a `Str` that is not valid UTF-8 has no text
+            // form, and showing the replacement character is a display decision. No
+            // operation on `Str` goes through here.
+            Self::Str(v) => write!(f, "{}", String::from_utf8_lossy(v)),
         }
     }
 }
@@ -369,6 +383,92 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    /// Evaluate a built-in.
+    ///
+    /// Arity and argument types were established by checking, so a mismatch here is a
+    /// compiler bug and is reported as one rather than assumed away. The failures that
+    /// remain are the specified ones: an index outside a string (`N0405`) and an
+    /// overflowing length, which cannot happen for a string that fits in memory but is
+    /// handled rather than truncated.
+    fn intrinsic(
+        &mut self,
+        i: Intrinsic,
+        args: &[Value],
+        span: nazm_span::Span,
+    ) -> Result<Value, RuntimeError> {
+        let bug = |what: &str| RuntimeError {
+            diagnostic: Box::new(
+                Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    span,
+                    format!("`{}` was called with {what}", i.name()),
+                )
+                .help("this is a bug in the interpreter; the checker should have caught it"),
+            ),
+        };
+        let out_of_bounds = |detail: String| RuntimeError {
+            diagnostic: Box::new(
+                Diagnostic::error(codes::INDEX_OUT_OF_BOUNDS, span, detail).help(
+                    "`Str` is indexed in bytes, from 0; `str_len` gives the length in \
+                     bytes",
+                ),
+            ),
+        };
+
+        match (i, args) {
+            (Intrinsic::StrLen, [Value::Str(s)]) => {
+                // A length that does not fit in `Int` cannot arise from a string that
+                // fits in memory on any 64-bit host, but saying so is cheaper than
+                // discovering it.
+                i64::try_from(s.len()).map_or_else(
+                    |_| Err(bug("a string longer than `Int` can measure")),
+                    |n| Ok(Value::Int(n)),
+                )
+            }
+            (Intrinsic::StrByte, [Value::Str(s), Value::Int(at)]) => {
+                let index = usize::try_from(*at).ok().filter(|n| *n < s.len());
+                let Some(index) = index else {
+                    return Err(out_of_bounds(format!(
+                        "byte {at} is outside a `Str` of length {}",
+                        s.len()
+                    )));
+                };
+                s.get(index).map_or_else(
+                    || Err(bug("an index that passed its own bounds check")),
+                    |b| Ok(Value::Int(i64::from(*b))),
+                )
+            }
+            (Intrinsic::StrSlice, [Value::Str(s), Value::Int(from), Value::Int(to)]) => {
+                let ok =
+                    *from >= 0 && *to >= *from && usize::try_from(*to).is_ok_and(|t| t <= s.len());
+                if !ok {
+                    return Err(out_of_bounds(format!(
+                        "the slice {from}..{to} is not inside a `Str` of length {}",
+                        s.len()
+                    )));
+                }
+                let (a, b) = (
+                    usize::try_from(*from).unwrap_or(0),
+                    usize::try_from(*to).unwrap_or(0),
+                );
+                // Bytes, not characters: slicing is allowed to land inside a multi-byte
+                // sequence, and `docs/spec.md` says what that produces. Rust's `String`
+                // will not hold invalid UTF-8, so the bytes are carried as lossy text
+                // here — the *native* representation has no such constraint, and the
+                // specification is written to what both can do.
+                Ok(Value::Str(s.get(a..b).unwrap_or(&[]).to_vec()))
+            }
+            (Intrinsic::StrConcat, [Value::Str(a), Value::Str(b)]) => {
+                let mut out = Vec::with_capacity(a.len() + b.len());
+                out.extend_from_slice(a);
+                out.extend_from_slice(b);
+                Ok(Value::Str(out))
+            }
+            (Intrinsic::IntToStr, [Value::Int(n)]) => Ok(Value::Str(n.to_string().into_bytes())),
+            _ => Err(bug("arguments of the wrong shape")),
+        }
+    }
+
     /// Assign to the innermost binding of that name.
     ///
     /// Innermost, so a loop body assigning to a variable declared outside it updates that
@@ -440,7 +540,9 @@ impl<'a> Interpreter<'a> {
         let value = match e {
             Expr::Int { value, .. } => Value::Int(*value),
             Expr::Bool { value, .. } => Value::Bool(*value),
-            Expr::Str { value, .. } => Value::Str(value.clone()),
+            // A literal's bytes are the source's bytes, which are valid UTF-8 because
+            // the source is. Nothing downstream may assume that of every `Str`.
+            Expr::Str { value, .. } => Value::Str(value.clone().into_bytes()),
 
             Expr::Var { name, span } => env
                 .iter()
@@ -503,6 +605,13 @@ impl<'a> Interpreter<'a> {
                 for a in args {
                     values.push(take!(self, a, env));
                 }
+                // Built-ins are resolved before user functions, which costs nothing:
+                // the checker rejects a program that defines one, so the two sets are
+                // disjoint and the order is a statement of intent rather than a rule.
+                if let Some(i) = Intrinsic::by_name(callee) {
+                    return Ok(Flow::Fell(Some(self.intrinsic(i, &values, *span)?)));
+                }
+
                 let f = self
                     .functions
                     .get(callee)

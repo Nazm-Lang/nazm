@@ -14,6 +14,7 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Return, Stmt, While};
 
+use crate::intrinsic::Intrinsic;
 use crate::types::Type;
 
 #[derive(Debug, Clone)]
@@ -134,7 +135,21 @@ pub fn check(program: &Program) -> (HashMap<String, Signature>, Vec<Diagnostic>)
         loop_depth: 0,
     };
 
-    // Signatures first, so a call to a function defined later in the file resolves.
+    // Built-ins first, so a user definition of one collides with it rather than
+    // shadowing it. They share the ordinary function namespace deliberately: a call is
+    // a call, and `str_len(s)` should resolve by the same rule as any other.
+    for i in Intrinsic::ALL {
+        c.functions.insert(
+            i.name().to_owned(),
+            Signature {
+                params: i.params().to_vec(),
+                ret: i.ret(),
+                name_span: Span::new(0, 0),
+            },
+        );
+    }
+
+    // Signatures next, so a call to a function defined later in the file resolves.
     for f in &program.functions {
         c.collect_signature(f);
     }
@@ -181,6 +196,22 @@ impl Checker {
             .collect();
         let ret = self.resolve_type(&f.return_type.name, f.return_type.span);
 
+        // A built-in has no source span to point at, so "first defined here" would aim
+        // at byte zero. Said plainly instead.
+        if Intrinsic::by_name(&f.name).is_some() {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::DUPLICATE_FUNCTION,
+                    f.name_span,
+                    format!("`{}` is a built-in and cannot be redefined", f.name),
+                )
+                .help(
+                    "built-ins share the ordinary function namespace so that a call \
+                     always means the same thing; choose another name",
+                ),
+            );
+            return;
+        }
         if let Some(existing) = self.functions.get(&f.name) {
             self.errors.push(
                 Diagnostic::error(
