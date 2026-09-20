@@ -17,28 +17,26 @@
 //
 // A construct this increment does not parse is named, at its own position, rather than
 // left to fail as "expected an expression" — which would be true but useless.
-fn refuse_statement(kinds: Ints, starts: Ints, i: Int) -> Int {
+fn refuse_unimplemented(kinds: Ints, starts: Ints, i: Int) -> Int {
     let t = kind_at(kinds, i);
     let mut what = "";
-    if t == k_let() { what = "`let`"; }
-    if t == k_while() { what = "`while`"; }
-    if t == k_return() { what = "`return`"; }
-    if t == k_break() { what = "`break`"; }
-    if t == k_continue() { what = "`continue`"; }
     if t == k_if() { what = "`if`"; }
-    if t == k_semi() { what = "a statement"; }
+    if t == k_lbrace() { what = "a block used as an expression"; }
     if what == "" { return 0; }
-    die(str_concat(what, ": statements are not implemented yet in this parser"),
-        start_at(starts, i));
+    die(str_concat(what, ": not implemented yet in this parser"), start_at(starts, i));
     0
 }
 
-// `fn NAME(params) -> TYPE { EXPRESSION }`, with the whole expression grammar:
-// literals, variables, unary minus, `+ - * / %`, the six comparisons with their real
-// precedence and associativity, parentheses, and calls with any number of arguments.
-// **Statements, `while` and `if` are not parsed yet** — they need a block frame stack,
-// which is the next increment. A construct outside the scope is refused by name with a
-// located error, never misparsed.
+// Whole functions: parameters, a body of statements, `let` and `let mut`, assignment,
+// `while` with nested blocks, `return`, `break`, `continue`, expression statements and a
+// block's tail value — over the whole expression grammar (literals, variables, unary
+// minus, `+ - * / %`, the six comparisons with their real precedence and associativity,
+// parentheses, calls of any arity).
+//
+// **`if` is not parsed yet**, and neither is a bare block used as an expression. Both
+// suspend an expression part-way to parse a block, which the shunting-yard stacks cannot
+// yet express; that is the next increment. A construct outside the scope is refused by
+// name at its own position, never misparsed.
 
 use "lex.nz";
 
@@ -55,6 +53,13 @@ fn n_block() -> Int { 8 }
 fn n_param() -> Int { 9 }
 fn n_fn() -> Int { 10 }
 fn n_program() -> Int { 11 }
+fn n_let() -> Int { 12 }
+fn n_assign() -> Int { 13 }
+fn n_while() -> Int { 14 }
+fn n_return() -> Int { 15 }
+fn n_break() -> Int { 16 }
+fn n_continue() -> Int { 17 }
+fn n_exprstmt() -> Int { 18 }
 
 fn node_name(k: Int) -> Str {
     if k == n_int() { return "int"; }
@@ -68,6 +73,13 @@ fn node_name(k: Int) -> Str {
     if k == n_param() { return "param"; }
     if k == n_fn() { return "fn"; }
     if k == n_program() { return "program"; }
+    if k == n_let() { return "let"; }
+    if k == n_assign() { return "assign"; }
+    if k == n_while() { return "while"; }
+    if k == n_return() { return "return"; }
+    if k == n_break() { return "break"; }
+    if k == n_continue() { return "continue"; }
+    if k == n_exprstmt() { return "exprstmt"; }
     "?"
 }
 
@@ -381,7 +393,12 @@ fn reduce(ops: Ints, opat: Ints, vs: Ints, ve: Ints, nk: Ints, nar: Ints, nst: I
     0
 }
 
-// --- functions and the program -------------------------------------------------------
+// --- statements, blocks and functions, by an explicit frame stack --------------------
+//
+// A block contains statements; a `while` contains a block; a function body is a block.
+// That nesting is a stack, and here it is one — `fk`/`fstart`/`fcount`/`ftail`/`faux`/
+// `ftext`/`fparams`, innermost last — walked by a single loop. No recursion, which is
+// the same reason the expression parser uses sentinels rather than frames.
 
 fn expect(kinds: Ints, starts: Ints, i: Int, want: Int, what: Str) -> Int {
     if kind_at(kinds, i) != want {
@@ -390,78 +407,234 @@ fn expect(kinds: Ints, starts: Ints, i: Int, want: Int, what: Str) -> Int {
     i + 1
 }
 
-// `fn NAME(params) -> TYPE { EXPRESSION }`
-fn parse_function(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
-                  nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs) -> Int {
-    let fn_start = start_at(starts, from);
-    let mut i = expect(kinds, starts, from, k_fn(), "expected `fn`");
-    if kind_at(kinds, i) != k_ident() { die("expected a function name", start_at(starts, i)); }
-    let name = text_at(texts, i);
-    i = i + 1;
-    i = expect(kinds, starts, i, k_lparen(), "expected `(` after the function name");
+fn frame_body() -> Int { 1 }
+fn frame_while() -> Int { 2 }
 
-    let mut params = 0;
-    while kind_at(kinds, i) != k_rparen() {
-        if kind_at(kinds, i) != k_ident() { die("expected a parameter name", start_at(starts, i)); }
-        let pname = text_at(texts, i);
-        let pstart = start_at(starts, i);
-        i = i + 1;
-        i = expect(kinds, starts, i, k_colon(), "expected `:` after a parameter name");
-        if kind_at(kinds, i) != k_ident() { die("expected a type", start_at(starts, i)); }
-        let ptype = text_at(texts, i);
-        let pend = end_at(ends, i);
-        i = i + 1;
-        emit(nk, nar, nst, nen, ntx, n_param(), 0, pstart, pend,
-             str_concat(str_concat(pname, ":"), ptype));
-        params = params + 1;
-        if kind_at(kinds, i) == k_comma() { i = i + 1; }
-    }
-    i = i + 1;
+fn push_frame(fk: Ints, fstart: Ints, fcount: Ints, ftail: Ints, faux: Ints, fparams: Ints,
+              ftext: Strs, kind: Int, start: Int, aux: Int, params: Int, text: Str) -> Int {
+    ints_push(fk, kind);
+    ints_push(fstart, start);
+    ints_push(fcount, 0);
+    ints_push(ftail, 0);
+    ints_push(faux, aux);
+    ints_push(fparams, params);
+    strs_push(ftext, text);
+    ints_len(fk)
+}
 
-    i = expect(kinds, starts, i, k_arrow(), "expected `->` and a return type");
-    if kind_at(kinds, i) != k_ident() { die("expected a return type", start_at(starts, i)); }
-    let ret = text_at(texts, i);
-    i = i + 1;
+fn top(a: Ints) -> Int { ints_get(a, ints_len(a) - 1) }
 
-    // The body: `{ EXPRESSION }`. Statements need a block frame stack and are the next
-    // increment; anything that is not an expression is refused by name rather than
-    // half-parsed into something that looks like one.
-    let brace = start_at(starts, i);
-    i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the body");
-    refuse_statement(kinds, starts, i);
-    i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
-    refuse_statement(kinds, starts, i);
-    if kind_at(kinds, i) != k_rbrace() {
-        die("this parser handles a body that is one expression; statements are not implemented yet",
-            start_at(starts, i));
-    }
-    let close = end_at(ends, i);
-    i = i + 1;
-
-    emit(nk, nar, nst, nen, ntx, n_block(), 1, brace, close, "tail");
-    emit(nk, nar, nst, nen, ntx, n_fn(), params + 1, fn_start, close,
-         str_concat(str_concat(name, ":"), ret));
-    i
+fn bump(a: Ints) -> Int {
+    ints_set(a, ints_len(a) - 1, ints_get(a, ints_len(a) - 1) + 1);
+    0
 }
 
 fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                  nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs) -> Int {
+    let fk = ints_new();
+    let fstart = ints_new();
+    let fcount = ints_new();
+    let ftail = ints_new();
+    let faux = ints_new();
+    let fparams = ints_new();
+    let ftext = strs_new();
+
     let mut i = 0;
-    let mut count = 0;
+    let mut functions = 0;
+
     while i < ints_len(kinds) {
-        if kind_at(kinds, i) == k_use() {
-            // Imports are the driver's business, not the grammar's, and contribute no
-            // node — exactly as the reference parser treats them.
+        if ints_len(fk) == 0 {
+            // --- top level: an import, or a function header ------------------------
+            if kind_at(kinds, i) == k_use() {
+                // Imports are the driver's business, not the grammar's, and contribute
+                // no node — exactly as the reference parser treats them.
+                i = i + 1;
+                i = expect(kinds, starts, i, k_str(), "expected a quoted path");
+                i = expect(kinds, starts, i, k_semi(), "expected `;` after an import");
+                continue;
+            }
+            let fn_start = start_at(starts, i);
+            i = expect(kinds, starts, i, k_fn(), "expected `fn`");
+            if kind_at(kinds, i) != k_ident() {
+                die("expected a function name", start_at(starts, i));
+            }
+            let name = text_at(texts, i);
             i = i + 1;
-            i = expect(kinds, starts, i, k_str(), "expected a quoted path");
-            i = expect(kinds, starts, i, k_semi(), "expected `;` after an import");
+            i = expect(kinds, starts, i, k_lparen(), "expected `(` after the function name");
+            let mut params = 0;
+            while kind_at(kinds, i) != k_rparen() {
+                if kind_at(kinds, i) != k_ident() {
+                    die("expected a parameter name", start_at(starts, i));
+                }
+                let pname = text_at(texts, i);
+                let pstart = start_at(starts, i);
+                i = i + 1;
+                i = expect(kinds, starts, i, k_colon(), "expected `:` after a parameter name");
+                if kind_at(kinds, i) != k_ident() {
+                    die("expected a type", start_at(starts, i));
+                }
+                let ptype = text_at(texts, i);
+                let pend = end_at(ends, i);
+                i = i + 1;
+                emit(nk, nar, nst, nen, ntx, n_param(), 0, pstart, pend,
+                     str_concat(str_concat(pname, ":"), ptype));
+                params = params + 1;
+                if kind_at(kinds, i) == k_comma() { i = i + 1; }
+            }
+            i = i + 1;
+            i = expect(kinds, starts, i, k_arrow(), "expected `->` and a return type");
+            if kind_at(kinds, i) != k_ident() {
+                die("expected a return type", start_at(starts, i));
+            }
+            let ret = text_at(texts, i);
+            i = i + 1;
+            let brace = start_at(starts, i);
+            i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the body");
+            push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
+                       frame_body(), brace, fn_start, params,
+                       str_concat(str_concat(name, ":"), ret));
             continue;
         }
-        i = parse_function(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
-        count = count + 1;
+
+        // --- inside a block ---------------------------------------------------------
+        let t = kind_at(kinds, i);
+
+        if t == k_rbrace() {
+            let close = end_at(ends, i);
+            i = i + 1;
+            let kind = top(fk);
+            let start = top(fstart);
+            let count = top(fcount);
+            let tail = top(ftail);
+            let aux = top(faux);
+            let params = top(fparams);
+            let text = strs_get(ftext, strs_len(ftext) - 1);
+            ints_pop(fk);
+            ints_pop(fstart);
+            ints_pop(fcount);
+            ints_pop(ftail);
+            ints_pop(faux);
+            ints_pop(fparams);
+            strs_pop(ftext);
+            emit(nk, nar, nst, nen, ntx, n_block(), count + tail, start, close,
+                 if tail == 1 { "tail" } else { "" });
+            if kind == frame_while() {
+                // The condition was emitted before the body, so the two children are
+                // already in post-order and the `while` closes over them.
+                emit(nk, nar, nst, nen, ntx, n_while(), 2, aux, close, "");
+                bump(fcount);
+            } else {
+                emit(nk, nar, nst, nen, ntx, n_fn(), params + 1, aux, close, text);
+                functions = functions + 1;
+            }
+            continue;
+        }
+
+        if top(ftail) == 1 {
+            die("this block already produced its value; nothing can follow it",
+                start_at(starts, i));
+        }
+
+        if t == k_let() {
+            let stmt_start = start_at(starts, i);
+            i = i + 1;
+            let mut mutable = 0;
+            if kind_at(kinds, i) == k_mut() { mutable = 1; i = i + 1; }
+            if kind_at(kinds, i) != k_ident() {
+                die("expected a name after `let`", start_at(starts, i));
+            }
+            let name = text_at(texts, i);
+            i = i + 1;
+            i = expect(kinds, starts, i, k_eq(), "expected `=` in a `let`");
+            i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
+            let semi = end_at(ends, i);
+            i = expect(kinds, starts, i, k_semi(), "expected `;` after a `let`");
+            emit(nk, nar, nst, nen, ntx, n_let(), 1, stmt_start, semi,
+                 str_concat(str_concat(name, ":"), int_to_str(mutable)));
+            bump(fcount);
+            continue;
+        }
+
+        if t == k_ident() {
+            if kind_at(kinds, i + 1) == k_eq() {
+                let stmt_start = start_at(starts, i);
+                let name = text_at(texts, i);
+                i = i + 2;
+                i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
+                let semi = end_at(ends, i);
+                i = expect(kinds, starts, i, k_semi(), "expected `;` after an assignment");
+                emit(nk, nar, nst, nen, ntx, n_assign(), 1, stmt_start, semi, name);
+                bump(fcount);
+                continue;
+            }
+        }
+
+        if t == k_while() {
+            let stmt_start = start_at(starts, i);
+            i = i + 1;
+            i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
+            let brace = start_at(starts, i);
+            i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a loop body");
+            push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
+                       frame_while(), brace, stmt_start, 0, "");
+            continue;
+        }
+
+        if t == k_return() {
+            let stmt_start = start_at(starts, i);
+            i = i + 1;
+            i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
+            let semi = end_at(ends, i);
+            i = expect(kinds, starts, i, k_semi(), "expected `;` after a `return`");
+            emit(nk, nar, nst, nen, ntx, n_return(), 1, stmt_start, semi, "");
+            bump(fcount);
+            continue;
+        }
+
+        // The span of `break;` covers the `;` as well as the keyword, which is what the
+        // reference parser records — a statement's span is the statement, semicolon
+        // included.
+        if t == k_break() {
+            let stmt_start = start_at(starts, i);
+            i = i + 1;
+            let semi = end_at(ends, i);
+            i = expect(kinds, starts, i, k_semi(), "expected `;` after `break`");
+            emit(nk, nar, nst, nen, ntx, n_break(), 0, stmt_start, semi, "");
+            bump(fcount);
+            continue;
+        }
+
+        if t == k_continue() {
+            let stmt_start = start_at(starts, i);
+            i = i + 1;
+            let semi = end_at(ends, i);
+            i = expect(kinds, starts, i, k_semi(), "expected `;` after `continue`");
+            emit(nk, nar, nst, nen, ntx, n_continue(), 0, stmt_start, semi, "");
+            bump(fcount);
+            continue;
+        }
+
+        // An expression: a statement if a `;` follows, the block's value if not.
+        refuse_unimplemented(kinds, starts, i);
+        let expr_start = start_at(starts, i);
+        i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
+        if kind_at(kinds, i) == k_semi() {
+            let semi = end_at(ends, i);
+            let _ = semi;
+            emit(nk, nar, nst, nen, ntx, n_exprstmt(), 1, expr_start,
+                 end_at(ends, i - 1), "");
+            i = i + 1;
+            bump(fcount);
+        } else {
+            ints_set(ftail, ints_len(ftail) - 1, 1);
+        }
     }
-    emit(nk, nar, nst, nen, ntx, n_program(), count, 0, 0, "");
-    count
+
+    if ints_len(fk) > 0 {
+        die("this block is never closed", top(fstart));
+    }
+    emit(nk, nar, nst, nen, ntx, n_program(), functions, 0, 0, "");
+    functions
 }
 
 // --- driver --------------------------------------------------------------------------
