@@ -99,6 +99,9 @@ fn every_bad_example_is_refused_with_its_own_code() {
         ("bad/division_by_zero.nz", "N0401"),
         ("bad/assign_to_immutable.nz", "N0310"),
         ("bad/mutable_parameter.nz", "N0311"),
+        ("bad/break_outside_loop.nz", "N0312"),
+        ("bad/unreachable_after_break.nz", "N0313"),
+        ("bad/break_as_value.nz", "N0314"),
     ];
     for (file, code) in cases {
         let (_, stderr, status) = nazm(&["run", &example(file)]);
@@ -133,4 +136,11 @@ fn a_runaway_loop_reports_instead_of_hanging() {
         stderr.contains("--max-iterations"),
         "the diagnostic should say how to raise it: {stderr}"
     );
+}
+
+#[test]
+fn break_and_continue_run() {
+    let (stdout, _, code) = nazm(&["run", &example("primes.nz")]);
+    assert_eq!(stdout.trim(), "1060", "the sum of the primes below 100");
+    assert_eq!(code, 0);
 }

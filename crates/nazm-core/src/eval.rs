@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use nazm_diag::{codes, Diagnostic};
-use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, StmtBlock, While};
+use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, StmtBlock, StmtIf, While};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -40,6 +40,19 @@ pub struct RuntimeError {
 }
 
 type Env = Vec<HashMap<String, Value>>;
+
+/// How a statement finished.
+///
+/// A statement normally falls through to the next one; `break` and `continue` do not, and
+/// the loop that has to act on them may be several blocks up. Returning the signal rather
+/// than unwinding keeps the control flow visible in the types — every caller has to say
+/// what it does with a `Break` it did not expect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    Normal,
+    Break,
+    Continue,
+}
 
 /// Ten million iterations: high enough that no reasonable program reaches it, low enough
 /// that a runaway one reports in seconds rather than consuming the machine.
@@ -110,35 +123,87 @@ impl<'a> Interpreter<'a> {
 
     fn block_inner(&mut self, b: &Block, env: &mut Env) -> Result<Value, RuntimeError> {
         for stmt in &b.statements {
-            self.stmt(stmt, env)?;
+            match self.stmt(stmt, env)? {
+                Flow::Normal => {}
+                // Unreachable: the parser accepts `break` and `continue` only inside a
+                // statement block, and a loop consumes them. A diagnostic rather than a
+                // panic, so a parser change that made this possible reports rather than
+                // crashing.
+                Flow::Break | Flow::Continue => {
+                    return Err(RuntimeError {
+                        diagnostic: Diagnostic::error(
+                            codes::NOT_IN_A_LOOP,
+                            stmt.span(),
+                            "loop control escaped into an expression",
+                        ),
+                    })
+                }
+            }
         }
         self.expr(&b.tail, env)
     }
 
     /// A loop body: its own scope, so a `let` inside it does not leak between iterations.
-    fn stmt_block(&mut self, b: &StmtBlock, env: &mut Env) -> Result<(), RuntimeError> {
+    fn stmt_block(&mut self, b: &StmtBlock, env: &mut Env) -> Result<Flow, RuntimeError> {
         env.push(HashMap::new());
-        let out = (|| {
-            for stmt in &b.statements {
-                self.stmt(stmt, env)?;
+        let mut out = Ok(Flow::Normal);
+        for stmt in &b.statements {
+            match self.stmt(stmt, env) {
+                // A signal stops this block and travels outward to the loop.
+                Ok(Flow::Normal) => {}
+                other => {
+                    out = other;
+                    break;
+                }
             }
-            Ok(())
-        })();
+        }
         env.pop();
         out
     }
 
-    fn stmt(&mut self, stmt: &Stmt, env: &mut Env) -> Result<(), RuntimeError> {
+    fn stmt(&mut self, stmt: &Stmt, env: &mut Env) -> Result<Flow, RuntimeError> {
         match stmt {
             Stmt::Let(l) => {
                 let v = self.expr(&l.value, env)?;
                 if let Some(frame) = env.last_mut() {
                     frame.insert(l.name.clone(), v);
                 }
-                Ok(())
+                Ok(Flow::Normal)
             }
-            Stmt::Assign(a) => self.assign(a, env),
-            Stmt::While(w) => self.while_loop(w, env),
+            Stmt::Assign(a) => {
+                self.assign(a, env)?;
+                Ok(Flow::Normal)
+            }
+            // A loop consumes its own `break` and `continue`, so it always falls through.
+            Stmt::While(w) => {
+                self.while_loop(w, env)?;
+                Ok(Flow::Normal)
+            }
+            Stmt::If(i) => self.stmt_if(i, env),
+            Stmt::Break { .. } => Ok(Flow::Break),
+            Stmt::Continue { .. } => Ok(Flow::Continue),
+        }
+    }
+
+    fn stmt_if(&mut self, s: &StmtIf, env: &mut Env) -> Result<Flow, RuntimeError> {
+        let taken = match self.expr(&s.cond, env)? {
+            Value::Bool(b) => b,
+            other => {
+                return Err(RuntimeError {
+                    diagnostic: Diagnostic::error(
+                        codes::CONDITION_NOT_BOOL,
+                        s.cond.span(),
+                        format!("an `if` condition must be `Bool`, but this is `{other}`"),
+                    ),
+                })
+            }
+        };
+        if taken {
+            self.stmt_block(&s.then_block, env)
+        } else if let Some(e) = &s.else_block {
+            self.stmt_block(e, env)
+        } else {
+            Ok(Flow::Normal)
         }
     }
 
@@ -198,7 +263,10 @@ impl<'a> Interpreter<'a> {
             };
             self.iterations_left = left;
 
-            self.stmt_block(&w.body, env)?;
+            match self.stmt_block(&w.body, env)? {
+                Flow::Normal | Flow::Continue => {}
+                Flow::Break => return Ok(()),
+            }
         }
     }
 

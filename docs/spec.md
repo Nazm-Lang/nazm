@@ -135,11 +135,55 @@ followed by a tail expression*, and `while` is a statement. The tail is still re
 
 The condition must be `Bool`. There is still no truthiness.
 
-### `break` and `continue` are not in v0.2
+### `break` and `continue`, and the `if` they force
 
-Refused by name. They are useful and they are also the point at which a loop stops having
-one exit, which interacts with everything added later. Deferred deliberately rather than
-overlooked.
+```nazm
+while i < n {
+    if skip(i) {
+        i = i + 1;
+        continue;
+    }
+    if done(i) { break; }
+    total = total + i;
+    i = i + 1;
+}
+```
+
+Both are **statements**, they affect the **innermost** enclosing loop, and there are no
+labels. `continue` re-evaluates the condition.
+
+They are only legal inside a loop body, and **only in statement position**. `break` is not
+an expression and has no value, so `let x = break;` and `if c { break } else { 1 }` do not
+parse. Rust gives `break` the never type and makes this work; a never type is a real
+addition with consequences for every other inference rule, and it is not worth adding so
+that `break` can sit in an expression it has no business being in.
+
+**Which forced `if` to exist in two forms.** The useful shape is `while c { if d { break; } }`,
+and an `if` *expression* cannot hold it: an expression block must end in a tail, so
+`{ break; }` has no value to give. So:
+
+| form | branches | `else` | has a value |
+| --- | --- | --- | --- |
+| `if` **expression** | expression blocks, tail required | **required** | yes |
+| `if` **statement** | statement blocks, no tail | optional | no |
+
+Which one a given `if` is follows from where it appears: in statement position it is the
+statement form, and where a value is wanted it is the expression form. Nothing needs
+annotating, and the two cannot be confused because a statement has no value to misuse.
+
+### Code after `break` or `continue` is an error
+
+```nazm
+while c {
+    break;
+    i = i + 1;   // error: this can never run
+}
+```
+
+An error rather than a warning, because this language has no warning severity yet and
+silence is the wrong default for a statement that provably cannot execute. Relaxing an
+error to a warning later is a compatible change; tightening a warning to an error is not,
+so the strict choice is the reversible one.
 
 ### The iteration limit is the interpreter's, not the language's
 
@@ -153,7 +197,7 @@ implementation may choose differently.
 
 ### Not in v0.2, and unsupported rather than half-present
 
-`break`, `continue`, `return`, mutable parameters, effects, I/O, generics, user-defined
+`return`, labelled break, `for`, mutable parameters, effects, I/O, generics, user-defined
 types, modules, string concatenation, floating point. A program using any of them is
 rejected by name rather than misparsed into something else.
 

@@ -1,0 +1,7 @@
+fn main() -> Int {
+    let mut i = 0;
+    if i == 0 {
+        break;
+    }
+    i
+}

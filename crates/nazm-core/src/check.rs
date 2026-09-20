@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
-use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, StmtBlock, While};
+use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, StmtBlock, StmtIf, While};
 
 use crate::types::Type;
 
@@ -85,6 +85,12 @@ pub struct Checker {
     functions: HashMap<String, Signature>,
     scopes: Scopes,
     errors: Vec<Diagnostic>,
+    /// How many loops enclose the statement being checked.
+    ///
+    /// `break` and `continue` need a loop to affect. Tracking depth rather than a flag
+    /// costs nothing and means a loop inside a loop does not lose the outer one's count
+    /// when it finishes.
+    loop_depth: u32,
 }
 
 /// Check a program. Returns the signatures and every diagnostic found.
@@ -94,6 +100,7 @@ pub fn check(program: &Program) -> (HashMap<String, Signature>, Vec<Diagnostic>)
         functions: HashMap::new(),
         scopes: Scopes::default(),
         errors: Vec::new(),
+        loop_depth: 0,
     };
 
     // Signatures first, so a call to a function defined later in the file resolves.
@@ -269,16 +276,79 @@ impl Checker {
                 .help("Nazm has no truthiness: use a comparison such as `i < n`"),
             );
         }
+        self.loop_depth += 1;
         self.check_stmt_block(&w.body);
+        self.loop_depth -= 1;
     }
 
-    /// A loop body: its own scope, statements only, no value.
+    /// A statement block: its own scope, statements only, no value.
     fn check_stmt_block(&mut self, b: &StmtBlock) {
         self.scopes.push();
+
+        // Everything after a `break` or `continue` in the same block provably cannot run.
+        // Reported once, at the first such statement, rather than once per line.
+        let terminator = b
+            .statements
+            .iter()
+            .position(|s| matches!(s, Stmt::Break { .. } | Stmt::Continue { .. }));
+
+        if let Some(i) = terminator {
+            if let Some(dead) = b.statements.get(i + 1) {
+                let word = match b.statements.get(i) {
+                    Some(Stmt::Continue { .. }) => "continue",
+                    _ => "break",
+                };
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNREACHABLE_STATEMENT,
+                        dead.span(),
+                        "this can never run",
+                    )
+                    .secondary(
+                        b.statements.get(i).map_or(dead.span(), Stmt::span),
+                        format!("`{word}` leaves the block here"),
+                    ),
+                );
+            }
+        }
+
         for stmt in &b.statements {
             self.check_stmt(stmt);
         }
         self.scopes.pop();
+    }
+
+    fn check_stmt_if(&mut self, s: &StmtIf) {
+        let ct = self.check_expr(&s.cond, Some(Type::Bool));
+        if ct != Type::Bool {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::CONDITION_NOT_BOOL,
+                    s.cond.span(),
+                    format!("an `if` condition must be `Bool`, but this is `{ct}`"),
+                )
+                .help("Nazm has no truthiness: use a comparison such as `x != 0`"),
+            );
+        }
+        self.check_stmt_block(&s.then_block);
+        if let Some(e) = &s.else_block {
+            self.check_stmt_block(e);
+        }
+    }
+
+    fn check_loop_control(&mut self, word: &str, span: Span) {
+        if self.loop_depth == 0 {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::NOT_IN_A_LOOP,
+                    span,
+                    format!("`{word}` is only valid inside a loop"),
+                )
+                .help(format!(
+                    "there is no enclosing `while` for this `{word}` to affect"
+                )),
+            );
+        }
     }
 
     fn check_stmt(&mut self, stmt: &Stmt) {
@@ -302,6 +372,9 @@ impl Checker {
             }
             Stmt::Assign(a) => self.check_assign(a),
             Stmt::While(w) => self.check_while(w),
+            Stmt::If(i) => self.check_stmt_if(i),
+            Stmt::Break { span } => self.check_loop_control("break", *span),
+            Stmt::Continue { span } => self.check_loop_control("continue", *span),
         }
     }
 

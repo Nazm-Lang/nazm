@@ -58,6 +58,21 @@ pub enum Stmt {
     /// the oldest C bugs and nothing is gained by reproducing it.
     Assign(Assign),
     While(While),
+    /// `if cond { … }` with no value.
+    ///
+    /// Distinct from the `if` *expression*: its branches are statement blocks with no
+    /// tail, and `else` is optional. It exists because `while c { if d { break; } }` is
+    /// the useful shape and an expression block cannot hold `break` — it must end in a
+    /// value and `break` has none.
+    If(StmtIf),
+    /// Leave the innermost enclosing loop.
+    Break {
+        span: Span,
+    },
+    /// Start the innermost enclosing loop's next iteration, re-evaluating its condition.
+    Continue {
+        span: Span,
+    },
 }
 
 impl Stmt {
@@ -67,6 +82,8 @@ impl Stmt {
             Self::Let(l) => l.span,
             Self::Assign(a) => a.span,
             Self::While(w) => w.span,
+            Self::If(i) => i.span,
+            Self::Break { span } | Self::Continue { span } => *span,
         }
     }
 }
@@ -103,6 +120,16 @@ pub struct Assign {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StmtBlock {
     pub statements: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StmtIf {
+    pub cond: Expr,
+    pub then_block: StmtBlock,
+    /// Optional, unlike the expression form: a statement has no value, so there is
+    /// nothing for a missing branch to fail to produce.
+    pub else_block: Option<StmtBlock>,
     pub span: Span,
 }
 

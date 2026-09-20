@@ -252,8 +252,6 @@ fn a_duplicate_function_points_at_the_first_definition() {
 fn absent_features_are_refused_by_name() {
     for (src, word) in [
         ("fn main() -> Int { return 1 }", "return"),
-        ("fn main() -> Int { break }", "break"),
-        ("fn main() -> Int { continue }", "continue"),
         ("fn main() -> Int { for x in y { 1 } }", "for"),
         ("fn main() -> Int { match 1 { } }", "match"),
         ("fn main() -> Int { print(1) }", "print"),
@@ -517,4 +515,179 @@ fn loops_nest() {
         }
     ";
     assert_eq!(value(src), Value::Int(12));
+}
+
+// --- v0.3: break and continue -----------------------------------------------------
+
+#[test]
+fn break_leaves_the_loop() {
+    let src = r"
+        fn main() -> Int {
+            let mut i = 0;
+            while i < 100 {
+                if i == 7 { break; }
+                i = i + 1;
+            }
+            i
+        }
+    ";
+    assert_eq!(value(src), Value::Int(7));
+}
+
+#[test]
+fn continue_starts_the_next_iteration_and_re_evaluates_the_condition() {
+    // Sums only the odd numbers below 10, by skipping the even ones.
+    let src = r"
+        fn main() -> Int {
+            let mut total = 0;
+            let mut i = 0;
+            while i < 10 {
+                i = i + 1;
+                if i % 2 == 0 { continue; }
+                total = total + i;
+            }
+            total
+        }
+    ";
+    assert_eq!(value(src), Value::Int(25));
+}
+
+#[test]
+fn break_affects_only_the_innermost_loop() {
+    // There are no labels, so the outer loop must keep going. If `break` escaped to it,
+    // this would be 1 rather than 3.
+    let src = r"
+        fn main() -> Int {
+            let mut outer = 0;
+            let mut rounds = 0;
+            while outer < 3 {
+                let mut inner = 0;
+                while inner < 10 {
+                    if inner == 1 { break; }
+                    inner = inner + 1;
+                }
+                rounds = rounds + 1;
+                outer = outer + 1;
+            }
+            rounds
+        }
+    ";
+    assert_eq!(value(src), Value::Int(3));
+}
+
+#[test]
+fn continue_affects_only_the_innermost_loop() {
+    let src = r"
+        fn main() -> Int {
+            let mut count = 0;
+            let mut i = 0;
+            while i < 3 {
+                i = i + 1;
+                let mut j = 0;
+                while j < 4 {
+                    j = j + 1;
+                    if j == 2 { continue; }
+                    count = count + 1;
+                }
+            }
+            count
+        }
+    ";
+    assert_eq!(value(src), Value::Int(9));
+}
+
+#[test]
+fn break_outside_a_loop_says_so() {
+    assert_eq!(
+        sole_error("fn main() -> Int { let mut i = 0; if i == 0 { break; } i }"),
+        codes::NOT_IN_A_LOOP
+    );
+    assert_eq!(
+        sole_error("fn main() -> Int { let mut i = 0; if i == 0 { continue; } i }"),
+        codes::NOT_IN_A_LOOP
+    );
+}
+
+#[test]
+fn break_has_no_value_so_it_cannot_be_used_as_one() {
+    // Rust gives `break` the never type and makes this work. A never type is a real
+    // addition with consequences for every inference rule, and not worth adding so that
+    // `break` can sit somewhere it has no business being.
+    let src = "fn main() -> Int { let mut i = 0; while i < 2 { let x = break; i = i + x; } i }";
+    assert_eq!(sole_error(src), codes::CONTROL_FLOW_AS_VALUE);
+}
+
+#[test]
+fn code_after_break_is_refused() {
+    let src = "fn main() -> Int { let mut i = 0; while i < 2 { break; i = i + 1; } i }";
+    assert_eq!(sole_error(src), codes::UNREACHABLE_STATEMENT);
+}
+
+#[test]
+fn code_after_continue_is_refused_too() {
+    let src = "fn main() -> Int { let mut i = 0; while i < 2 { i = i + 1; continue; i = 99; } i }";
+    assert_eq!(sole_error(src), codes::UNREACHABLE_STATEMENT);
+}
+
+// --- v0.3: the two forms of `if` ---------------------------------------------------
+
+#[test]
+fn a_statement_if_needs_no_else() {
+    // The statement form has no value, so there is nothing for a missing branch to fail
+    // to produce.
+    let src = r"
+        fn main() -> Int {
+            let mut n = 0;
+            if true { n = 1; }
+            n
+        }
+    ";
+    assert_eq!(value(src), Value::Int(1));
+}
+
+#[test]
+fn an_if_expression_still_requires_else() {
+    // Without `else` it would have no value when the condition is false.
+    let src = "fn main() -> Int { let x = if true { 1 }; x }";
+    assert!(
+        !errors(src).is_empty(),
+        "an `if` used as a value needs both branches"
+    );
+}
+
+#[test]
+fn an_if_at_the_end_of_a_block_is_its_value() {
+    // The same syntax means the expression form here, because nothing follows it.
+    assert_eq!(
+        value("fn main() -> Int { if true { 1 } else { 2 } }"),
+        Value::Int(1)
+    );
+}
+
+#[test]
+fn an_if_followed_by_more_is_a_statement() {
+    // ...and the statement form here, because something does. Both branches assign, and
+    // neither produces a value.
+    let src = r"
+        fn main() -> Int {
+            let mut n = 0;
+            if false { n = 1; } else { n = 2; }
+            n
+        }
+    ";
+    assert_eq!(value(src), Value::Int(2));
+}
+
+#[test]
+fn a_statement_if_condition_must_still_be_bool() {
+    let src = "fn main() -> Int { let mut n = 0; if n { n = 1; } n }";
+    assert_eq!(sole_error(src), codes::CONDITION_NOT_BOOL);
+}
+
+#[test]
+fn a_statement_if_gets_its_own_scope() {
+    // A `let` inside it must not leak out, or the binding would exist only when the
+    // condition happened to be true.
+    let src = "fn main() -> Int { if true { let hidden = 1; } hidden }";
+    assert_eq!(sole_error(src), codes::UNDEFINED_VARIABLE);
 }

@@ -34,16 +34,25 @@ fn sum_to(n: Int) -> Int {
 }
 ```
 
-An executable subset — functions, `let` and `let mut`, assignment, `while`, `if`/`else`,
-arithmetic and comparison over `Int`, `Bool` and `Str` — lexed, parsed, type-checked and
-evaluated. No `break`, `return`, effects or I/O yet, and a program using them is **refused
-by name** rather than misparsed into something else.
+An executable subset — functions, `let` and `let mut`, assignment, `while` with `break`
+and `continue`, `if`/`else` as a statement or an expression, and arithmetic and comparison
+over `Int`, `Bool` and `Str` — lexed, parsed, type-checked and evaluated. No `return`,
+effects or I/O yet, and a program using them is **refused by name** rather than misparsed
+into something else.
 
 The semantics it commits to are in [`docs/spec.md`](docs/spec.md): overflow traps
 identically in every build, division by zero is an error, bindings are immutable unless
 written `let mut`, parameters are never mutable, assignment is a statement so `if (x = 1)`
 does not parse, shadowing is allowed in a nested scope and refused in the same one,
 arguments evaluate left to right, and a function's value is its final expression.
+
+`break` and `continue` affect the innermost loop and there are no labels. They are
+statements with no value, which is why `if` exists in two forms: an **expression** whose
+branches are expression blocks and whose `else` is required, and a **statement** whose
+branches hold statements and whose `else` is optional. Which one a given `if` is follows
+from where it appears, so nothing needs annotating. Code after a `break` is an error
+rather than a warning — relaxing an error later is a compatible change, tightening a
+warning is not.
 
 `nazm run` stops a non-terminating program after a configurable number of iterations. That
 is the interpreter's guard, not a language rule — with no `break` and no I/O such a program
