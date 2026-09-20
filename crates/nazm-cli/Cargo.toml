@@ -1,0 +1,26 @@
+[package]
+name = "nazm-cli"
+description = "The `nazm` command."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "nazm"
+path = "src/main.rs"
+
+[dependencies]
+nazm-span = { workspace = true }
+nazm-diag = { workspace = true }
+nazm-core = { workspace = true }
+clap = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

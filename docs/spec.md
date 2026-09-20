@@ -29,7 +29,76 @@ These are design commitments. Changing one is a re-founding decision, not an edi
 7. **Purity is a prerequisite, not a licence.** An empty effect row does not by itself
    authorise dropping, reordering, memoizing, or parallelising a call.
 
-## Open — Phase 1 must settle these
+## Settled for v0.1 — the executable subset
+
+These are the decisions the first interpreter needs and no more. Each is chosen for the
+same reason: **a reader should be able to predict what a line does from the line and the
+compiler's response to it.** Where two designs are defensible, the one that removes a
+question wins over the one that adds an option.
+
+### Integer overflow — traps, identically in every build
+
+`Int` is 64-bit signed. Overflow is an error that stops the program, in development and in
+release alike.
+
+Wrapping silently is the classic source of a bug nobody reads: the arithmetic looks
+correct and the number is wrong much later. Differing between debug and release is worse
+— it makes a class of bug reproducible only where it cannot be debugged. Trapping costs a
+check per operation, which matters for a language claiming performance, and the escape
+hatch when it does is an explicit wrapping operator, not a build flag.
+
+### Division by zero — an error, not a value and not undefined
+
+`/` and `%` by zero stop the program with a diagnostic. Not a NaN-like sentinel, which
+propagates silently; not undefined behaviour, which is unrepresentable in a language with
+no `unsafe` yet.
+
+### Shadowing — allowed in a nested scope, refused in the same one
+
+```nazm
+let x = 1;
+let x = 2;        // error: `x` is already defined in this scope
+if c { let x = 3; }   // fine: a different scope
+```
+
+Rust permits same-scope shadowing and it is genuinely convenient. It is refused here
+because of what it does to *reading a change*: when a later line mentions `x`, telling
+which binding it means requires scanning upward for every intervening `let`. A diff that
+inserts one silently changes the meaning of code it does not touch.
+
+### Argument evaluation order — left to right, specified
+
+Specified, not "unspecified for optimisation". Unspecified order is a licence for two
+correct compilers to disagree, and the resulting bug appears only after a toolchain
+upgrade. v0.1 has no side effects for the order to be observable through, which is
+precisely why it costs nothing to fix it now and would be a breaking change later.
+
+### Function returns — the final expression, and nothing else
+
+A function body is a block; the block's value is its final expression; that is the return
+value. There is no `return` statement in v0.1.
+
+One exit point means the value a function produces is always in the same place. `return`
+earns its keep with guard clauses, and it is not ruled out — it is deferred until there is
+something to guard against.
+
+### Types — `Int`, `Bool`, `Str`, and no inference across function boundaries
+
+Parameter and return types are always written. Local `let` bindings infer from their
+initialiser. Both branches of an `if` must have the same type, and a condition must be
+`Bool` — there is no truthiness.
+
+### Not in v0.1, and unsupported rather than half-present
+
+Mutation, loops, `return`, effects, I/O, generics, user-defined types, modules, string
+concatenation, floating point. A program using any of them is rejected by name rather
+than misparsed into something else.
+
+`nazm run` prints the value of `main`. There is deliberately no `print`: output is an
+effect, effects are the design's central mechanism, and a builtin that bypassed the effect
+system before it exists would be the wrong shape to unpick later.
+
+## Open — later phases must settle these
 
 ### Memory and values
 

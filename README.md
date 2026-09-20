@@ -15,13 +15,30 @@ whether the language should exist.
 
 ## What is actually here
 
-A benchmark harness, and nothing else. `crates/nazm-bench` measures what it costs an agent
-to build and maintain small backend services, in existing languages, today. No compiler, no
-parser, no type checker.
+**A `.nz` program runs.**
 
-That is on purpose. The decisive experiment sat at month 30 in the first version of this
-plan; it now sits at roughly month 13, and the harness has to exist and be shown to work
-before any of it means anything.
+```sh
+$ cargo run -p nazm-cli --bin nazm -- run examples/max.nz
+25
+```
+
+An executable subset — functions, `let`, `if`/`else`, arithmetic and comparison over
+`Int`, `Bool` and `Str` — lexed, parsed, type-checked and evaluated. No mutation, loops,
+effects or I/O yet, and a program using them is **refused by name** rather than misparsed
+into something else. The semantics it commits to are in [`docs/spec.md`](docs/spec.md):
+overflow traps identically in every build, division by zero is an error, shadowing is
+allowed in a nested scope and refused in the same one, arguments evaluate left to right,
+and a function's value is its final expression.
+
+Alongside it, a benchmark harness. `crates/nazm-bench` measures what it costs an agent to
+build and maintain small backend services, with a validated execution path for its
+development fixtures — containers, a restricted database role, verified cleanup. It cannot
+produce a benchmark number yet: there is no task corpus, no agent driver, and no provider
+adapter.
+
+The harness came first on purpose. The decisive experiment sat at month 30 in the first
+version of this plan; it now sits at roughly month 13, and the instrument has to be shown
+to work before anything it measures means anything.
 
 ## The argument
 

@@ -15,6 +15,17 @@
 /// in the layering before it can build.
 pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'static str]> {
     let deps: &[&str] = match crate_name {
+        // --- the language front end, in dependency order ---
+        // Spans depend on nothing: every later layer reports positions through them, so a
+        // dependency here would reach the whole compiler.
+        "nazm-span" => &[],
+        "nazm-diag" => &["nazm-span"],
+        "nazm-syntax" => &["nazm-span", "nazm-diag"],
+        "nazm-core" => &["nazm-span", "nazm-diag", "nazm-syntax"],
+        // The CLI deliberately does NOT depend on nazm-syntax: it goes through nazm-core,
+        // so there is one entry point into the front end rather than two that can drift.
+        "nazm-cli" => &["nazm-span", "nazm-diag", "nazm-core"],
+
         // The measurement instrument answers to nothing. It must stay usable — and
         // auditable — with no compiler present, because it has to run against arms A1 and
         // A2 before Nazm exists, and its results have to be defensible independently of it.

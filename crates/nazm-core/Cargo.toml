@@ -1,0 +1,18 @@
+[package]
+name = "nazm-core"
+description = "Type checking and evaluation for Nazm v0.1."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+nazm-span = { workspace = true }
+nazm-diag = { workspace = true }
+nazm-syntax = { workspace = true }
+
+[lints]
+workspace = true
