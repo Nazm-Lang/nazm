@@ -194,19 +194,38 @@ fn lookup_mut(names: Strs, nmut: Ints, want: Str) -> Int {
     0
 }
 
-fn bind(names: Strs, ntypes: Ints, nmut: Ints, name: Str, ty: Int, mutable: Int) -> Int {
+fn bind(names: Strs, ntypes: Ints, nmut: Ints, nslotof: Ints,
+        name: Str, ty: Int, mutable: Int, slot: Int) -> Int {
     strs_push(names, name);
     ints_push(ntypes, ty);
     ints_push(nmut, mutable);
+    ints_push(nslotof, slot);
     strs_len(names)
 }
 
-fn scope_close(marks: Ints, names: Strs, ntypes: Ints, nmut: Ints) -> Int {
+// The storage slot a name resolves to, or -1.
+//
+// Emission is a plain post-order scan and has no scopes, so **analysis annotates and
+// emission consumes**: every `var`, `assign` and `let` node is given the slot it means
+// here, where the scopes are, and the emitter reads it off the node. That is the same
+// division `nazm-lir` keeps between `lower` and `emit`, and it is why the emitter needs
+// no symbol table of its own.
+fn lookup_slot(names: Strs, nslotof: Ints, want: Str) -> Int {
+    let mut i = strs_len(names) - 1;
+    while i >= 0 {
+        if strs_get(names, i) == want { return ints_get(nslotof, i); }
+        i = i - 1;
+    }
+    0 - 1
+}
+
+fn scope_close(marks: Ints, names: Strs, ntypes: Ints, nmut: Ints, nslotof: Ints) -> Int {
     let mark = ints_pop(marks);
     while strs_len(names) > mark {
         strs_pop(names);
         ints_pop(ntypes);
         ints_pop(nmut);
+        ints_pop(nslotof);
     }
     mark
 }
@@ -301,7 +320,7 @@ fn collect_signatures(nk: Ints, nar: Ints, ntx: Strs, kids: Ints, kid_first: Int
 
 // --- checking -------------------------------------------------------------------------
 
-fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
+fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, nslot: Ints,
              kids: Ints, kid_first: Ints, root: Int,
              fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
              bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
@@ -311,7 +330,14 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
     let names = strs_new();
     let ntypes = ints_new();
     let nmut = ints_new();
+    let nslotof = ints_new();
     let ts = ints_new();          // the type stack: one entry per finished child
+    // One entry per node, so the emitter can index it directly. `-1` is "no slot".
+    while ints_len(nslot) < ints_len(nk) { ints_push(nslot, 0 - 1); }
+    // Slots are numbered per function, and the count is recorded on the `fn` node so
+    // the emitter knows how many `alloca`s its entry block needs.
+    let counter = ints_new();
+    ints_push(counter, 0);
     ints_push(work, root);
 
     while ints_len(work) > 0 {
@@ -320,7 +346,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
         if entry < 0 {
             let v = 0 - entry;
             if v % 3 == 0 {
-                scope_close(marks, names, ntypes, nmut);
+                scope_close(marks, names, ntypes, nmut, nslotof);
                 continue;
             }
             // --- finish: the children's types are the top of `ts` ---------------------
@@ -406,8 +432,11 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
             }
             if kind == n_let() {
                 let t = ints_pop(ts);
-                bind(names, ntypes, nmut, before_colon(text),
-                     t, str_to_int_flag(after_colon(text)));
+                let slot = ints_get(counter, 0);
+                ints_set(counter, 0, slot + 1);
+                ints_set(nslot, k, slot);
+                bind(names, ntypes, nmut, nslotof, before_colon(text),
+                     t, str_to_int_flag(after_colon(text)), slot);
                 ints_push(ts, t_unknown());
                 continue;
             }
@@ -420,6 +449,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
                     report(dcode, dstart, dend, dmsg, "N0310", from, from + str_len(text),
                            str_concat(str_concat("`", text), "` is not mutable"));
                 }
+                ints_set(nslot, k, lookup_slot(names, nslotof, text));
                 if agrees(t, want) == false {
                     let value = ints_get(kids, first);
                     report(dcode, dstart, dend, dmsg, "N0300",
@@ -455,6 +485,8 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
             if kind == n_fn() {
                 let mut d = 0;
                 while d < arity { ints_pop(ts); d = d + 1; }
+                // How many slots this function's entry block must allocate.
+                ints_set(nslot, k, ints_get(counter, 0));
                 ints_push(ts, t_unknown());
                 continue;
             }
@@ -487,19 +519,25 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
                        str_concat(str_concat("`", text), "` is not defined"));
                 ints_push(ts, t_unknown());
             } else {
+                ints_set(nslot, entry, lookup_slot(names, nslotof, text));
                 ints_push(ts, lookup_type(names, ntypes, text));
             }
             continue;
         }
 
         if kind == n_param() {
-            bind(names, ntypes, nmut, before_colon(text),
-                 type_of_name(after_colon(text)), 0);
+            let slot = ints_get(counter, 0);
+            ints_set(counter, 0, slot + 1);
+            ints_set(nslot, entry, slot);
+            bind(names, ntypes, nmut, nslotof, before_colon(text),
+                 type_of_name(after_colon(text)), 0, slot);
             ints_push(ts, t_unknown());
             continue;
         }
 
         if kind == n_fn() {
+            // Slots are per function: a caller's local and a callee's cannot share one.
+            ints_set(counter, 0, 0);
             ints_push(marks, strs_len(names));
             ints_push(work, mark_leave(entry));
         }
