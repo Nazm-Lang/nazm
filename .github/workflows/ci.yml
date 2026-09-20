@@ -41,6 +41,13 @@ jobs:
           NAZM_REQUIRE_NONUTF8: "1"
         run: cargo test --workspace --locked
 
+      # `cargo test` does not run these: they drive nested cargo builds and kill real
+      # process groups, and `cargo xtask mutate` below would pay their cost 44 times
+      # over. Ignored by default and run here, so they are executed rather than merely
+      # present.
+      - name: mutation-runner lifecycle
+        run: cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
+
       - name: project checks
         run: cargo xtask check
 

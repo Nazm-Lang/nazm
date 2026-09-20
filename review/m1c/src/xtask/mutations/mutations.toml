@@ -1,0 +1,603 @@
+# Mutation catalogue.
+#
+# Each entry names a defect the test suite claims to catch. `cargo xtask mutate` applies
+# one, rebuilds, runs the suite, and requires it to FAIL — then restores and requires it to
+# pass again.
+#
+# The verification that matters most is that the injection actually landed. Twice during
+# development a replacement silently matched nothing (cargo fmt had rewrapped the target),
+# the suite passed, and the result was indistinguishable from a surviving mutation. So a
+# no-op replacement is now a hard error, not a pass.
+
+[[mutation]]
+name = "acceptance-rate-denominator"
+why = "divides acceptances by acceptances, pinning every arm's rate at 1.0"
+file = "crates/nazm-bench/src/report.rs"
+find = "accepted as f64 / counted.len() as f64"
+replace = "accepted as f64 / counted.iter().filter(|a| a.is_accepted()).count() as f64"
+
+[[mutation]]
+name = "cost-numerator-drops-failures"
+why = "sums only successful attempts, so an arm that fails cheaply looks cheap"
+file = "crates/nazm-bench/src/report.rs"
+find = "let costs: Vec<&crate::cost::Cost> = counted.iter().map(|a| &a.cost).collect();"
+replace = "let costs: Vec<&crate::cost::Cost> = counted.iter().filter(|a| a.is_accepted()).map(|a| &a.cost).collect();"
+
+[[mutation]]
+name = "missing-cost-becomes-zero"
+why = "a dropped usage record silently reads as free"
+file = "crates/nazm-bench/src/cost.rs"
+find = """                CostComponent::Missing { reason } => {
+                    gaps.push((line.to_owned(), reason.clone()));
+                }"""
+replace = "                CostComponent::Missing { reason: _ } => {}"
+
+[[mutation]]
+name = "candidate-fault-becomes-void"
+why = "a crashing candidate leaves the denominator, so an unreliable arm looks better"
+file = "crates/nazm-bench/src/acceptance.rs"
+find = "            Self::CandidateFault { .. } => Outcome::Crash { signal: None },"
+replace = "            Self::CandidateFault { reason } => Outcome::HarnessError { reason },"
+
+[[mutation]]
+name = "skip-submission-drift-check"
+why = "grades a snapshot that changed after it was recorded"
+file = "crates/nazm-bench/src/acceptance.rs"
+find = "        if let Err(drift) = submission.verify_unchanged() {"
+replace = "        if let Err(drift) = Ok::<(), SubmissionDrift>(()) {"
+
+[[mutation]]
+name = "compare-against-the-baseline"
+why = "credits the language with the entire tooling contribution"
+file = "crates/nazm-bench/src/task.rs"
+find = "            Self::Nazm => Some(Self::TypescriptTooled),"
+replace = "            Self::Nazm => Some(Self::TypescriptBaseline),"
+
+[[mutation]]
+name = "void-spend-discarded"
+why = "hides money really spent on voided attempts"
+file = "crates/nazm-bench/src/report.rs"
+find = "    let void_costs: Vec<&crate::cost::Cost> = void.iter().map(|a| &a.cost).collect();"
+replace = "    let void_costs: Vec<&crate::cost::Cost> = Vec::new();"
+
+[[mutation]]
+name = "primary-metric-drops-void-spend"
+why = """
+computes the primary cost metric from counted attempts only, which is the defect that
+would let an arm spending $8 plus $12 of void work report $0.80 against a comparator's
+$1.00 and pass the gate on what is really a 2x cost regression
+"""
+file = "crates/nazm-bench/src/report.rs"
+find = "        total_cost_per_accepted: all_total.per_accepted(accepted),"
+replace = "        total_cost_per_accepted: total.per_accepted(accepted),"
+
+[[mutation]]
+name = "teardown-order-reversed"
+why = """
+removes networks and volumes before containers, which a real daemon refuses because a
+network with attached endpoints and a volume with a referencing container cannot be
+removed -- the ordering bug that leaks an attempt's resources
+"""
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = "            .partition(|r| r.kind == ResourceKind::Container);"
+replace = "            .partition(|r| r.kind != ResourceKind::Container);"
+
+[[mutation]]
+name = "cleanup-verification-skipped"
+why = "reports Clean without checking whether anything survived teardown"
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = "        if surviving.is_empty() && problems.is_empty() {"
+replace = "        if true {"
+
+[[mutation]]
+name = "unverifiable-cleanup-passes"
+why = """
+treats a cleanup that could not be verified as clean, which is the assumption that turns a
+detectable instrument fault into a silent independence violation
+"""
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = """                return Disposition::Quarantine {
+                    surviving: Vec::new(),
+                    reason: format!("cleanup could not be verified: {e}"),
+                };"""
+replace = "                return Disposition::Clean;"
+
+[[mutation]]
+name = "ownership-recorded-after-creation"
+why = """
+records the intent only after the create returns, reopening the window where an
+interruption leaves a resource that nothing knows the name of
+"""
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = """        self.ledger.intend(&self.cfg.attempt, &id)?;
+        let created = create(self.engine);"""
+replace = """        let created = create(self.engine);
+        self.ledger.intend(&self.cfg.attempt, &id)?;"""
+
+[[mutation]]
+name = "allocator-ignores-occupied-subnets"
+why = "hands out a subnet already in use, including by networks the harness does not own"
+file = "crates/nazm-bench/src/sandbox/network.rs"
+find = "        if !in_use.iter().any(|s| overlaps(s, &candidate.cidr())) {"
+replace = "        if true {"
+
+[[mutation]]
+name = "removal-skips-the-ownership-check"
+why = """
+removes a resource on the strength of the ledger's recorded intention alone, which deletes
+a stranger's container whenever a create failed because the name was already taken
+"""
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = "            Ownership::Absent => Ok(true),"
+replace = "            Ownership::Absent | Ownership::Foreign { .. } => Ok(true),"
+
+[[mutation]]
+name = "recovery-ignores-ownership"
+why = "cross-process recovery removes every ledger-claimed name without checking the token"
+file = "crates/nazm-bench/src/sandbox/recovery.rs"
+find = """                let _ = ledger.disowned(&entry.attempt, id);
+                out.foreign.push((id.clone(), found));"""
+replace = """                let _ = found;
+                let _ = engine.remove(id, true);"""
+
+[[mutation]]
+name = "recovery-ignores-dependency-order"
+why = """
+reconciles in ledger order, so a network is removed while its containers are still
+attached -- the engine refuses and the leftovers stay
+"""
+file = "crates/nazm-bench/src/sandbox/recovery.rs"
+find = "        .filter(|e| e.resource.kind == ResourceKind::Container)\n        .chain("
+replace = "        .filter(|e| e.resource.kind != ResourceKind::Container)\n        .chain("
+
+[[mutation]]
+name = "unknown-ownership-resolves-the-claim"
+why = """
+clears a ledger claim the engine could not resolve, which is unverified cleanup: the
+resource may exist even though the client never learned its id
+"""
+file = "crates/nazm-bench/src/sandbox/recovery.rs"
+find = "                if !resolved {"
+replace = "                if false {"
+
+[[mutation]]
+name = "ledger-keys-claims-by-engine-id"
+why = """
+keys outstanding claims by the whole ResourceId, so an Intended entry and its own Created
+entry become different rows and every completed attempt looks like it leaked everything
+"""
+file = "crates/nazm-bench/src/sandbox/ledger.rs"
+find = "                    && a.resource.name == b.resource.name"
+replace = "                    && a.resource.name == b.resource.name\n                    && a.resource.engine_id == b.resource.engine_id"
+
+[[mutation]]
+name = "ledger-claims-not-scoped-to-attempt"
+why = """
+keys outstanding claims by name alone, so a name reused by a later attempt merges into the
+earlier resolved claim and the new resource becomes invisible to recovery
+"""
+file = "crates/nazm-bench/src/sandbox/ledger.rs"
+find = """                a.run == b.run
+                    && a.attempt == b.attempt
+                    && a.resource.kind == b.resource.kind"""
+replace = """                a.resource.kind == b.resource.kind"""
+
+
+[[mutation]]
+name = "candidate-receives-admin-credentials"
+why = "hands the superuser password to the candidate alongside its own restricted URL"
+file = "crates/nazm-bench/src/sandbox/attempt.rs"
+find = """            env: vec![("DATABASE_URL".to_owned(), self.credentials.candidate_url())],"""
+replace = """            env: vec![
+                ("DATABASE_URL".to_owned(), self.credentials.candidate_url()),
+                (
+                    "POSTGRES_PASSWORD".to_owned(),
+                    self.credentials.superuser_password.clone(),
+                ),
+            ],"""
+
+# --- the language itself ------------------------------------------------------------
+#
+# The harness mutations above cover the benchmark's accounting. These cover the
+# interpreter, where a silent defect is worse: it changes what programs mean.
+
+[[mutation]]
+name = "call-depth-unbounded"
+why = """
+removes the recursion guard, so runaway recursion exhausts the host stack and kills the
+process with no diagnostic — the one failure a tool cannot explain to anyone
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = "                if self.depth > self.max_depth {"
+replace = "                if false {"
+
+[[mutation]]
+name = "call-depth-never-released"
+why = """
+leaves the counter raised after a call returns, so a long sequence of sibling calls hits
+the depth limit although nothing is nested
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = """                let out = self.call_body(Self::body_of(f)?, &mut call_env, callee);
+                self.depth -= 1;"""
+replace = """                let out = self.call_body(Self::body_of(f)?, &mut call_env, callee);"""
+
+[[mutation]]
+name = "a-returned-value-is-discarded"
+why = """
+drops the arm that turns a Flow::Return into the call's value, so every `return` reports
+that the function finished without producing anything
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = "            Flow::Return(v) | Flow::Fell(Some(v)) => Ok(v),"
+replace = """            Flow::Fell(Some(v)) => Ok(v),
+            Flow::Return(_) => Err(RuntimeError {
+                diagnostic: Box::new(Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    body.span,
+                    format!("`{name}` finished without producing a value"),
+                )),
+            }),"""
+
+[[mutation]]
+name = "return-does-not-leave-its-block"
+why = """
+stops only for `break` and `continue`, so a `return` runs the rest of the block and the
+statements after it decide the function's value
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = """            let flow = self.stmt(stmt, env)?;
+            if !flow.is_fall_through() {"""
+replace = """            let flow = self.stmt(stmt, env)?;
+            if matches!(flow, Flow::Break | Flow::Continue) {"""
+
+[[mutation]]
+name = "a-diverging-branch-forgets-the-other"
+why = """
+drops the rule that a branch which returns takes the other branch's type, so
+`if c { return 0; } else { 1 }` produces nothing instead of an Int
+"""
+file = "crates/nazm-core/src/check.rs"
+find = "                    (Completion::Diverges, other) | (other, Completion::Diverges) => other,"
+replace = """                    (Completion::Diverges, _) | (_, Completion::Diverges) => Completion::Unit,"""
+
+[[mutation]]
+name = "remainder-inherits-the-hardware-fault"
+why = """
+makes `smallest % -1` an overflow error, although its result is 0 and 0 is representable —
+the exception the spec exists to remove
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = "            (BinOp::Rem, Int(a), Int(b)) => Ok(Int(a.wrapping_rem(*b))),"
+replace = """            (BinOp::Rem, Int(a), Int(b)) => a
+                .checked_rem(*b)
+                .map(Int)
+                .ok_or_else(|| overflow("remainder")),"""
+
+[[mutation]]
+name = "negative-literals-not-range-checked"
+why = """
+folds any digit string after `-` into i64::MIN, so `-9223372036854775809` silently becomes
+a different number instead of being refused
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                    Ok(v) if v == 1u64 << 63 => {"
+replace = "                    Ok(_) => {"
+
+[[mutation]]
+name = "a-failed-body-drops-the-function"
+why = """
+restores the cascade: one syntax error inside a body deletes the whole declaration, and
+every call to it then reports that the function does not exist
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = """        let body = self.block();
+        if body.is_none() {
+            self.recover_to_item();
+        }"""
+replace = """        let body = Some(self.block()?);"""
+
+[[mutation]]
+name = "nesting-unbounded"
+why = """
+removes the parser's nesting limit, so a deeply nested tree exhausts the stack in whichever
+pass reaches it first — parser, checker, evaluator, or the destructor of the tree — and the
+process dies with no diagnostic
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = "        if self.depth > MAX_NESTING {"
+replace = "        if false {"
+
+[[mutation]]
+name = "nesting-counter-never-released"
+why = """
+counts every construct entered and none left, so nesting becomes a budget for the whole
+function and an ordinary flat body of 512 statements is refused as too deep
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = """    fn leave(&mut self) {
+        self.depth -= 1;
+    }"""
+replace = """    fn leave(&mut self) {}"""
+
+# Two entries were removed here rather than left failing, because neither described a
+# defect the tests could witness:
+#
+#   nesting-budget-shared-between-functions — dropping the per-item `p.depth = 0` reset
+#   survived, and correctly: every successful `enter` is matched by a `leave`, so the
+#   counter already returns to zero on its own. The reset is defence against a leak that
+#   does not currently exist. `chain-depth-never-unwound` below covers the one path where
+#   such a leak is possible, which is the coverage that was actually wanted.
+#
+#   checking-runs-on-the-callers-stack — parsing on the caller's stack instead of an owned
+#   one survived because, with nesting bounded at 512 and the worst shape costing ~14 KB a
+#   level, the deepest accepted tree needs about 7 MiB and the CLI's main thread has 8.
+#   The weakening is real for a caller with a smaller stack — which is what `parse_source`
+#   documents — but stack exhaustion is only observable out of process, and the only
+#   out-of-process vehicle here is a binary that happens to have enough. Catalogued as
+#   uncovered rather than as caught.
+
+[[mutation]]
+name = "a-chain-forgets-its-operands-depth"
+why = """
+measures a binary node as one above its right operand only, so a deep left operand stops
+counting — `- - - 1 + 1 + 1` then composes into a tree twice as deep as the limit, which is
+the defect the tree bound was added to close
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = "            lhs_depth = lhs_depth.max(rhs_depth) + 1;"
+replace = "            lhs_depth = rhs_depth + 1;"
+
+[[mutation]]
+name = "a-chain-starts-from-nothing"
+why = """
+starts a chain's depth at zero instead of at the operand already parsed, so everything
+below the first operator is uncounted
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = "        let mut lhs_depth = self.child();"
+replace = "        let mut lhs_depth = 0;"
+
+[[mutation]]
+name = "a-block-does-not-count-its-contents"
+why = """
+measures a block as one level whatever is inside it, so nesting inside a block escapes the
+tree bound entirely
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = "        self.built(deepest + 1)?;\n        Some(Block {"
+replace = "        self.built(1)?;\n        Some(Block {"
+
+[[mutation]]
+name = "an-if-ignores-its-condition-depth"
+why = """
+measures an `if` from its branches alone, so a deeply nested condition is not counted
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = """                let cond = self.expr()?;
+                let mut deepest = self.child();"""
+replace = """                let cond = self.expr()?;
+                let mut deepest = 0;"""
+
+[[mutation]]
+name = "parentheses-count-as-a-node"
+why = """
+adds a level for punctuation that builds nothing, so `((((x))))` is measured as four levels
+deeper than the tree it produces and ordinary parenthesised arithmetic is refused
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = """                // No node: `(x)` *is* `x`. `self.built` already holds the inner depth and
+                // must not be incremented, or the limit would count punctuation.
+                Some(inner)"""
+replace = """                self.built(self.child() + 1)?;
+                Some(inner)"""
+
+# `chain-depth-never-unwound` and `chain-depth-not-counted` were removed with the code they
+# targeted: a per-operator parser-recursion count in the Pratt loop, which was the first and
+# wrong attempt at bounding chain depth.
+#
+# `chain-depth-not-counted` survived a full run, and a survivor is a question, not a
+# verdict. What settled it was inspection: `binary` has exactly two recursive paths, and
+# only one of them is unbounded. `self.primary()` is counted by `enter`; `self.binary(bp+1)`
+# is bounded by the precedence ladder, since `bp` is at most 3 and a call at min_bp 4
+# matches no operator and returns at once — three frames, whatever the chain's length. The
+# count was therefore measuring loop iterations, not live frames, and the exact tree bound
+# covers what it was meant to.
+#
+# It did not, however, change nothing. Removing it *widens* what is accepted: a chain no
+# longer spends parser-recursion budget, so 200 parentheses around a 400-operator chain
+# now parses where it was previously refused for a 600 it never needed. That is the
+# correction, not a side effect — its tree is 401 deep and it recurses 201 — and
+# `a_chain_does_not_spend_the_recursion_budget` pins it so the widening cannot drift back.
+#
+# `a-chain-forgets-its-operands-depth` and `a-chain-starts-from-nothing` cover what
+# replaced it.
+
+[[mutation]]
+name = "a-flow-in-value-position-is-an-error"
+why = """
+treats a `return` raised inside an expression as a failure instead of propagating it, so
+`let x = if c { return 1; } else { 2 };` type-checks and then fails at run time
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = "            left => return Ok(left),"
+replace = "            left => return Err($slf.no_value($e)),"
+
+[[mutation]]
+name = "stack-not-sized-from-the-budget"
+why = """
+reserves a fixed stack however large the depth budget is, so `--max-depth` above the
+default promises a bound the stack cannot back and the program aborts instead of reporting
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = "    STACK_BASE_BYTES.saturating_add(max_depth.saturating_mul(STACK_BYTES_PER_CALL))"
+replace = "    STACK_BASE_BYTES"
+
+
+# --- submission identity -------------------------------------------------------------
+#
+# A digest that cannot tell two different submissions apart is not an identity, and every
+# one of these makes it blind to something a candidate controls.
+
+[[mutation]]
+name = "snapshot-renames-non-utf8-paths"
+why = """
+maps an unrepresentable name onto a lossy one instead of refusing it, so two distinct
+names collapse onto one manifest key and a file hides behind another's name
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = "    relative.to_str().map(str::to_owned).ok_or_else(|| {"
+replace = """    return Ok(relative.to_string_lossy().into_owned());
+    #[allow(unreachable_code)]
+    relative.to_str().map(str::to_owned).ok_or_else(|| {"""
+
+[[mutation]]
+name = "snapshot-accepts-symlinks"
+why = """
+lets a symlink through the freeze, so a link composed through another — `a -> .` with
+`b -> a/../outside` — resolves out of the snapshot, and an absolute one points back at the
+live workspace the freeze exists to escape
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = "        if meta.file_type().is_symlink() {"
+replace = "        if false {"
+
+[[mutation]]
+name = "snapshot-records-content-without-mode"
+why = """
+records only the content hash, so the same bytes at 0644 and 0755 are one submission to
+the digest although only one of them runs
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = """    format!(
+        "file:{:04o}:{:016x}",
+        meta.permissions().mode() & MODE_MASK,
+        fnv1a(bytes)
+    )"""
+replace = """    format!("file:{:016x}", fnv1a(bytes))"""
+
+[[mutation]]
+name = "snapshot-copies-with-the-umask"
+why = """
+leaves the copy at whatever the process umask produced, so the grader runs a file the
+candidate did not produce and the snapshot no longer matches its own manifest
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = "                fs::set_permissions(&dest, fs::Permissions::from_mode(wanted))?;"
+replace = ""
+
+[[mutation]]
+name = "snapshot-skips-the-mode-readback"
+why = """
+trusts that the mode was applied, so a filesystem that silently refuses bits produces a
+snapshot whose permissions differ from the manifest describing it — and every such
+submission verifies as drifted for a reason nobody can see
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = """    if got == wanted {
+        return Ok(());
+    }"""
+replace = """    if true {
+        return Ok(());
+    }"""
+
+[[mutation]]
+name = "freeze-accepts-evidence-about-another-attempt"
+why = """
+drops the attempt check on the quiescence token, so evidence that attempt A's candidate
+stopped authorises freezing attempt B's workspace — whose candidate may still be writing
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = "            if vouched != self.attempt_id {"
+replace = "            if false {"
+
+[[mutation]]
+name = "a-confirmed-stop-forgets-its-attempt"
+why = """
+builds the token without naming the attempt it is evidence about, so it vouches for every
+workspace equally and the check above can never fire
+"""
+file = "crates/nazm-bench/src/sandbox/execution.rs"
+find = "            &self.attempt,"
+replace = "            String::new(),"
+
+# `snapshot-skips-the-production-mode-readback` is deliberately absent, and this is the
+# reason rather than an oversight.
+#
+# Removing the `mode_matches(...)` call from `walk_tree` only has an effect when a
+# filesystem silently refuses permission bits, and every mode that could expose it —
+# 4755, 2755, 1755, 7777, 0000, 0400 — was preserved on the filesystems available here
+# when measured. So the mutation would survive today.
+#
+# That is a statement about what can be exercised here, not about what is possible:
+# injecting the fault — a FUSE mount that drops setuid, a seam that fakes the read-back —
+# would exercise it, and is the way to cover this later. It is left out of the runnable
+# catalogue for now rather than added as a guaranteed survivor.
+#
+# What is covered: `mode_matches` itself, by unit tests including the setuid case; and
+# the fact that the production path calls it at all, indirectly — `snapshot-copies-with-
+# the-umask` removes `set_permissions`, which makes the read-back's comparison fail, so
+# that mutation is caught *by* the read-back running in production.
+#
+# What is not covered: removing the call while `set_permissions` still succeeds. Recorded
+# as uncovered, alongside `checking-runs-on-the-callers-stack`.
+
+# ---------------------------------------------------------------------------
+# The native backend. Added with M1b; each verified individually through a
+# single-entry run in a disposable copy of the checkout, not by a catalogue run.
+# ---------------------------------------------------------------------------
+
+[[mutation]]
+name = "checked-add-loses-its-sign"
+why = """
+`docs/spec.md` says overflow traps. The emitter detects it with
+`llvm.sadd.with.overflow.i64`; the unsigned intrinsic is one letter away and is the
+mistake a reader would not see. `Int::MAX + 1` does not carry as an unsigned addition, so
+the guard never fires and the program prints the wrapped value instead of stopping —
+silently wrong arithmetic in a language whose first promise is that it traps.
+
+Caught by `addition_overflow_traps`, which requires exit 2 AND the N0400 code AND the
+message. Exit status alone would not discriminate: a mutant that died on a signal would
+also be non-zero.
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = 'ArithOp::Add => "sadd",'
+replace = 'ArithOp::Add => "uadd",'
+
+[[mutation]]
+name = "the-conditional-selects-the-wrong-branch"
+why = """
+The one thing an `if` has to get right. Swapping the branch labels compiles, produces
+well-formed IR that clang accepts, and every phi still names a real predecessor — so
+nothing structural catches it. Only running a program whose two branches differ does.
+
+Caught by `both_branch_outcomes_are_reachable` and others, which assert the exact printed
+value rather than merely that the program ran.
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = '"  br i1 %{c}, label %{then_label}, label %{else_label}"'
+replace = '"  br i1 %{c}, label %{else_label}, label %{then_label}"'
+
+[[mutation]]
+name = "two-same-typed-arguments-are-transposed"
+why = """
+The calling defect that survives everything structural. Swapping two arguments of the
+*same* type produces LLVM that is completely well-formed — right arity, right types, right
+symbol — so clang accepts it and no assertion about the emitted IR notices. Only running a
+program whose result depends on argument order does.
+
+Guarded on the two types being equal on purpose: a mutation that transposed differently
+typed arguments would emit `call i64 @nz.f1(i1 %a, i64 %b)`, clang would reject it, and
+the verdict would be UNUSABLE. A build failure is not evidence that an argument-order test
+discriminates — it is evidence that the IR was malformed, which is a different defect and
+one the tests below never had to catch.
+
+Caught by `arguments_are_not_swapped`, which uses noncommutative operations: `sub(10, 3)`
+is 7 and the transposition makes it -7. `mix(1, 2, 3)` catches a rotation as well.
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = "                let list = vals"
+replace = """                if vals.len() >= 2 && vals[0].1 == vals[1].1 {
+                    vals.swap(0, 1);
+                }
+                let list = vals"""

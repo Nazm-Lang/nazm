@@ -1,0 +1,16 @@
+[package]
+name = "nazm-lir"
+description = "The typed low-level representation, and the LLVM IR text a backend reads."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+nazm-span = { workspace = true }
+nazm-diag = { workspace = true }
+nazm-syntax = { workspace = true }
+
+[lints]
+workspace = true

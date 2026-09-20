@@ -1,11 +1,30 @@
-//! `nazm` — run a Nazm program.
+//! `nazm` — run, check, or natively compile a Nazm program.
 //!
 //! Exit status is part of the interface, not an afterthought: `0` ran, `1` did not
-//! type-check, `2` failed at runtime, `3` could not read the file. A caller that has to
-//! parse stderr to find out which happened is doing work the process could have told it.
+//! type-check, `2` failed at runtime, `3` could not read the file, `4` the build
+//! toolchain was missing or failed. A caller that has to parse stderr to find out which
+//! happened is doing work the process could have told it.
+//!
+//! # The contract a compiled program keeps
+//!
+//! Decided before the wrapper was written, because these are the parts a user depends on
+//! and they are awkward to change afterwards:
+//!
+//! | | |
+//! | --- | --- |
+//! | **Result** | The full signed 64-bit value, in decimal, on standard output, followed by a newline. **Not** the exit status, which is 8 bits and would silently truncate almost every `Int` |
+//! | **Success** | Exit `0` |
+//! | **Runtime failure** | Exit `2` — the same status `nazm run` uses — with one line on standard error: `nazm: error[CODE]: message at file:line:column` |
+//! | **Diagnostic category** | The same stable code the interpreter reports: `N0400` for overflow, `N0401` for division by zero |
+//! | **Source location** | Line and column of the operator that failed, resolved at compile time and baked into the binary as a constant |
+//! | **`--json`** | Applies to **build-time** diagnostics only. A generated executable has no diagnostic framework linked into it and emits the plain line above; promising JSON there would mean shipping a serialiser in every binary |
+//!
+//! `nazm run` and `nazm check` are unchanged by any of this.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+
+mod build;
 
 use clap::{Parser, Subcommand};
 use nazm_core::Outcome;
@@ -17,6 +36,10 @@ mod exit {
     pub(crate) const CHECK_FAILED: u8 = 1;
     pub(crate) const RUNTIME_FAILED: u8 = 2;
     pub(crate) const NO_SUCH_FILE: u8 = 3;
+    /// The build toolchain was missing, or failed on IR this compiler produced. Separate
+    /// from `CHECK_FAILED` on purpose: one means the program is wrong, the other means
+    /// the machine could not build a program that is fine.
+    pub(crate) const TOOLCHAIN_FAILED: u8 = 4;
 }
 
 #[derive(Parser, Debug)]
@@ -74,6 +97,30 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Compile to a native executable.
+    ///
+    /// A narrow subset for now — see `docs/roadmap.md` M1a. Anything outside it is
+    /// refused by name after ordinary checking; nothing is partially compiled.
+    Build {
+        file: PathBuf,
+        /// Where to write the executable. Defaults to the source's stem.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Emit diagnostics as one JSON object per line. Build-time only: see the module
+        /// documentation for why a generated executable does not do this.
+        #[arg(long)]
+        json: bool,
+        /// Also write the generated LLVM IR next to the executable, as `<out>.ll`.
+        #[arg(long)]
+        emit_ir: bool,
+        /// Optimisation level handed to `clang`.
+        ///
+        /// Defaults to 0. The specified arithmetic semantics hold at every level by
+        /// construction — overflow is an intrinsic and a branch, never `nsw` — and the
+        /// test suite compiles the same programs at 0 and 2 to keep that true.
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
+        opt_level: u8,
+    },
 }
 
 /// Parse `--max-depth`, refusing a budget no machine would grant the stack for.
@@ -102,6 +149,16 @@ fn max_depth(raw: &str) -> Result<usize, String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Command::Build {
+        file,
+        out,
+        json,
+        emit_ir,
+        opt_level,
+    } = cli.command
+    {
+        return build::run(&file, out.as_deref(), json, emit_ir, opt_level);
+    }
     let (path, json, limits) = match cli.command {
         Command::Run {
             file,
@@ -117,6 +174,9 @@ fn main() -> ExitCode {
             }),
         ),
         Command::Check { file, json } => (file, json, None),
+        // Handled above; `main` keeps its original shape for the two commands whose
+        // behaviour this increment must not change.
+        Command::Build { .. } => unreachable!("handled above"),
     };
 
     let text = match std::fs::read_to_string(&path) {
