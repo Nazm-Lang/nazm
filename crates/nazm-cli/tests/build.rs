@@ -405,17 +405,12 @@ fn constructs_outside_the_subset_are_refused_and_nothing_is_emitted() {
     // in M1d; `break`, `continue` and statement-position `if` in M1e; `return` in M1f.
     // What is left is what the backend still cannot lower.
     let cases: &[(&str, &str)] = &[
-        // The signature is refused before the body is looked at, so this names the
-        // return type — one mistake, one error, rather than also complaining about the
-        // value that return type made necessary.
+        // `main` must still return `Int`, even though `Str` is otherwise native: the
+        // platform wrapper prints an integer, and what a `Str` result would mean for an
+        // exit status is a decision nobody has made.
         (
             "fn main() -> Str {\n    \"hi\"\n}\n",
-            "a function returning `Str`",
-        ),
-        // A `Str` reached from a body whose signature is fine.
-        (
-            "fn main() -> Int {\n    let s = \"x\";\n    1\n}\n",
-            "a `Str` value",
+            "a `main` that does not return `Int`",
         ),
         (
             "fn main() -> Int {\n    { 1 }\n}\n",
@@ -500,7 +495,7 @@ fn a_program_that_does_not_check_is_a_check_failure_not_a_subset_failure() {
 
 #[test]
 fn build_diagnostics_are_available_as_json() {
-    let (dir, src) = write_program("fn main() -> Int {\n    let s = \"x\";\n    1\n}\n");
+    let (dir, src) = write_program("fn main() -> Int {\n    1 + 1;\n    3\n}\n");
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap(), "--json"])
         .arg("-o")
@@ -977,8 +972,8 @@ fn unsupported_constructs_inside_a_branch_are_refused_by_the_backend() {
             "from inside itself",
         ),
         (
-            "fn main() -> Int {\n    if \"a\" == \"b\" { 1 } else { 0 }\n}\n",
-            "a `Str` value",
+            "fn main() -> Int {\n    if true { { 1 } } else { 0 }\n}\n",
+            "a block used as an expression",
         ),
     ];
 
@@ -1649,12 +1644,8 @@ fn call_errors_belong_to_the_checker_not_the_backend() {
 fn unsupported_signatures_and_bodies_are_refused_by_name() {
     for (src, expected) in [
         (
-            "fn f(s: Str) -> Int { 1 }\nfn main() -> Int { f(\"x\") }\n",
-            "a parameter of type `Str`",
-        ),
-        (
-            "fn f(n: Int) -> Str { \"x\" }\nfn main() -> Int { 1 }\n",
-            "a function returning `Str`",
+            "fn f(n: Int) -> Int { n; 1 }\nfn main() -> Int { f(1) }\n",
+            "an expression statement",
         ),
         (
             "fn f(n: Int) -> Int {\n    let mut t = n;\n    while t < 10 { { t = t + 1; }; }\n    t\n}\n\
@@ -1662,8 +1653,8 @@ fn unsupported_signatures_and_bodies_are_refused_by_name() {
             "an expression statement",
         ),
         (
-            "fn f(n: Int) -> Int { let s = \"x\"; n }\nfn main() -> Int { f(1) }\n",
-            "a `Str` value",
+            "fn f(n: Int) -> Int { { let y = 2; }; n }\nfn main() -> Int { f(1) }\n",
+            "an expression statement",
         ),
     ] {
         let (dir, path) = write_program(src);
@@ -2083,8 +2074,8 @@ fn unsupported_control_flow_inside_a_loop_is_refused_and_nothing_is_published() 
             "an expression statement",
         ),
         (
-            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { let s = \"x\"; i = i + 1; }\n    i\n}\n",
-            "a `Str` value",
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i; i = i + 1; }\n    i\n}\n",
+            "an expression statement",
         ),
         // Recursion, reached from inside a loop. Still refused, and still for a reason
         // about the stack rather than about loops.
@@ -2156,7 +2147,7 @@ fn a_working_loop_executable_survives_a_later_refused_build() {
     // Now edit the source to something the backend refuses.
     std::fs::write(
         &src,
-        "fn main() -> Int {\n    let mut i = 0;\n    while i < 5 { let s = \"x\"; i = i + 1; }\n    i\n}\n",
+        "fn main() -> Int {\n    let mut i = 0;\n    while i < 5 { i = i + 1; { 1 }; }\n    i\n}\n",
     )
     .expect("write");
     let second = Command::new(NAZM)
@@ -3178,4 +3169,292 @@ fn a_wrongly_typed_return_belongs_to_the_checker() {
         );
         assert!(!exe.exists());
     }
+}
+
+// ---------------------------------------------------------------------------
+// B1 — `Str` as bytes, natively
+//
+// `Str` is `{ pointer, byte length }` by value. Slices share storage; concatenation and
+// `int_to_str` allocate from a region that is never freed. See
+// `docs/bootstrap-design.md`, *Memory model for the bootstrap*.
+// ---------------------------------------------------------------------------
+
+/// A program returning `Int`, checked against an expectation and the interpreter, at
+/// both optimisation levels. Like `expect_value` but for a whole multi-function program.
+fn expect_whole(src: &str, expected: &str) {
+    let interp = interpret(src);
+    assert_eq!(
+        interp.code,
+        Some(0),
+        "the interpreter rejected it: {}",
+        interp.stderr
+    );
+    assert_eq!(
+        interp.stdout.trim(),
+        expected,
+        "the expectation disagrees with the interpreter"
+    );
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt} build failed: {e:?}"));
+        let ran = run_exe(&built);
+        assert_eq!(ran.code, Some(0), "-O{opt}: {ran:?}");
+        assert_eq!(ran.stdout.trim(), expected, "-O{opt}");
+    }
+}
+
+#[test]
+fn str_len_and_str_byte_are_measured_in_bytes() {
+    expect_value(
+        "    str_len(\"hello\") + str_len(\"\") + str_len(\"é\")",
+        "7",
+    );
+    // 'a' is 97; the first byte of "é" is 0xC3 = 195, **zero**-extended. A sign-extended
+    // byte would make every value above 127 negative.
+    expect_value(
+        "    str_byte(\"abc\", 0) * 1000 + str_byte(\"é\", 0)",
+        "97195",
+    );
+    // v0.1 string literals have **no escapes**, so a byte that cannot be typed is
+    // built with `str_from_byte`. This is also the only way to test the specification's
+    // "an embedded NUL is an ordinary byte" clause: the string below is three bytes
+    // long and its middle byte is zero.
+    expect_value(
+        "    let s = str_concat(str_concat(\"a\", str_from_byte(0)), \"b\");\n    str_len(s) * 1000 + str_byte(s, 1) * 10 + str_byte(s, 2) - 97",
+        "3001",
+    );
+    expect_value("    str_byte(str_from_byte(255), 0)", "255");
+}
+
+#[test]
+fn a_slice_shares_storage_and_may_split_a_character() {
+    expect_value(
+        "    let s = str_slice(\"hello world\", 6, 11);\n    str_len(s) * 1000 + str_byte(s, 0)",
+        "5119",
+    );
+    // The case the interpreter's representation could not hold until `Value::Str` became
+    // bytes: half of a two-byte character is a one-byte `Str` whose byte is 195.
+    expect_value("    str_byte(str_slice(\"é\", 0, 1), 0)", "195");
+    // Empty slices at both ends, and a slice of the whole string.
+    expect_value(
+        "    str_len(str_slice(\"abc\", 0, 0)) + str_len(str_slice(\"abc\", 3, 3)) + str_len(str_slice(\"abc\", 0, 3))",
+        "3",
+    );
+}
+
+#[test]
+fn concatenation_and_equality_compare_bytes_not_buffers() {
+    // Two strings built different ways compare equal, which is the property a buffer
+    // comparison would get wrong.
+    expect_value(
+        "    let joined = str_concat(str_slice(\"xabcx\", 1, 3), \"cd\");\n    if joined == \"abcd\" { 1 } else { 0 }",
+        "1",
+    );
+    // Empty strings compare equal, which needs a valid pointer to hand to `memcmp`.
+    expect_value("    if \"\" == \"\" { 1 } else { 0 }", "1");
+    expect_value(
+        "    if str_concat(\"\", \"\") == \"\" { 1 } else { 0 }",
+        "1",
+    );
+    // Different lengths are unequal without reading past either buffer.
+    expect_value("    if \"ab\" == \"abc\" { 1 } else { 0 }", "0");
+    expect_value("    if \"ab\" != \"abc\" { 1 } else { 0 }", "1");
+    // No case folding and no normalisation.
+    expect_value("    if \"A\" == \"a\" { 1 } else { 0 }", "0");
+}
+
+#[test]
+fn int_to_str_covers_the_whole_int_range() {
+    expect_value("    str_len(int_to_str(0))", "1");
+    expect_value("    if int_to_str(0) == \"0\" { 1 } else { 0 }", "1");
+    expect_value("    if int_to_str(0 - 42) == \"-42\" { 1 } else { 0 }", "1");
+    // 19 and 20 bytes respectively — the widest results, and what the buffer is sized
+    // for.
+    expect_value(
+        "    if int_to_str(9223372036854775807) == \"9223372036854775807\" { 1 } else { 0 }",
+        "1",
+    );
+    expect_value(
+        "    if int_to_str(-9223372036854775808) == \"-9223372036854775808\" { 1 } else { 0 }",
+        "1",
+    );
+    expect_value("    str_len(int_to_str(-9223372036854775808))", "20");
+}
+
+#[test]
+fn str_travels_through_parameters_returns_locals_loops_and_joins() {
+    // The shape a tokeniser is made of, and the shape a `phi` of `{ptr, i64}` is made of.
+    expect_whole(
+        "fn count(s: Str, want: Int) -> Int {\n\
+         \x20   let mut i = 0;\n\
+         \x20   let mut n = 0;\n\
+         \x20   while i < str_len(s) {\n\
+         \x20       if str_byte(s, i) == want { n = n + 1; }\n\
+         \x20       i = i + 1;\n\
+         \x20   }\n\
+         \x20   n\n\
+         }\n\
+         fn repeat(s: Str, times: Int) -> Str {\n\
+         \x20   let mut out = \"\";\n\
+         \x20   let mut i = 0;\n\
+         \x20   while i < times { out = str_concat(out, s); i = i + 1; }\n\
+         \x20   out\n\
+         }\n\
+         fn pick(c: Bool) -> Str { if c { \"yes\" } else { \"no\" } }\n\
+         fn main() -> Int {\n\
+         \x20   count(repeat(\"ab\", 5), 97) * 100 + str_len(pick(true)) * 10 + str_len(pick(false))\n\
+         }\n",
+        "532",
+    );
+    // A `Str` returned early, and one returned from a body with no tail.
+    expect_whole(
+        "fn name_of(n: Int) -> Str {\n\
+         \x20   if n < 0 { return \"negative\"; }\n\
+         \x20   return \"other\";\n\
+         }\n\
+         fn main() -> Int { str_len(name_of(0 - 1)) * 10 + str_len(name_of(1)) }\n",
+        "85",
+    );
+}
+
+#[test]
+fn every_string_bound_fails_at_its_own_position() {
+    expect_runtime_error_at(
+        "    str_byte(\"abc\", 3)",
+        "N0405",
+        "this byte index is outside the `Str`",
+        "prog.nz:2:5",
+    );
+    expect_runtime_error_at(
+        "    str_byte(\"abc\", 0 - 1)",
+        "N0405",
+        "this byte index is outside the `Str`",
+        "prog.nz:2:5",
+    );
+    expect_runtime_error_at(
+        "    str_len(str_from_byte(256))",
+        "N0405",
+        "this is not a byte value",
+        "prog.nz:2:13",
+    );
+    expect_runtime_error_at(
+        "    str_len(str_slice(\"abc\", 2, 1))",
+        "N0405",
+        "this slice is not inside the `Str`",
+        "prog.nz:2:13",
+    );
+    expect_runtime_error_at(
+        "    str_len(str_slice(\"abc\", 0, 4))",
+        "N0405",
+        "this slice is not inside the `Str`",
+        "prog.nz:2:13",
+    );
+    // A bound reached only on a later loop iteration, so the guard is inside the loop.
+    expect_runtime_error_at(
+        "    let s = \"abc\";\n    let mut i = 0;\n    let mut n = 0;\n    while i < 10 { n = n + str_byte(s, i); i = i + 1; }\n    n",
+        "N0405",
+        "this byte index is outside the `Str`",
+        "prog.nz:5:28",
+    );
+}
+
+#[test]
+fn every_front_end_builtin_is_lowered_or_refused_by_name() {
+    // `nazm-lir` keeps its own table of the built-ins it can lower, because it may not
+    // depend on `nazm-core` and because backend coverage is its own statement. The risk
+    // that creates is drift: a built-in the front end gains and the backend never hears
+    // about. This test is the guard — it sees both crates, and requires every front-end
+    // built-in to either compile or be refused **by its own name**, never to fail some
+    // other way.
+    for i in nazm_core::Intrinsic::ALL {
+        let args: Vec<&str> = i
+            .params()
+            .iter()
+            .map(|t| match t {
+                nazm_core::Type::Int => "0",
+                nazm_core::Type::Bool => "true",
+                nazm_core::Type::Str => "\"ab\"",
+            })
+            .collect();
+        // Every built-in currently returns `Int` or `Str`; wrap the `Str` ones so `main`
+        // still returns `Int`.
+        let call = format!("{}({})", i.name(), args.join(", "));
+        let body = match i.ret() {
+            nazm_core::Type::Int => call,
+            nazm_core::Type::Str => format!("str_len({call})"),
+            nazm_core::Type::Bool => format!("if {call} {{ 1 }} else {{ 0 }}"),
+        };
+        let src = format!("fn main() -> Int {{ {body} }}\n");
+
+        let (dir, path) = write_program(&src);
+        let out = Command::new(NAZM)
+            .args(["build", path.to_str().unwrap()])
+            .arg("-o")
+            .arg(dir.path().join("prog"))
+            .output()
+            .expect("run");
+        if out.status.success() {
+            continue;
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains(&format!("the built-in `{}`", i.name())),
+            "`{}` neither compiles nor is refused by name — the backend's built-in table \
+             has drifted from the front end's: {stderr}",
+            i.name()
+        );
+    }
+}
+
+#[test]
+fn the_emitted_ir_for_strings_is_well_formed() {
+    let src = "fn describe(s: Str) -> Str {\n\
+               \x20   if str_len(s) == 0 { return \"empty\"; }\n\
+               \x20   str_concat(\"len=\", int_to_str(str_len(s)))\n\
+               }\n\
+               fn main() -> Int {\n\
+               \x20   let a = describe(\"\");\n\
+               \x20   let b = describe(str_slice(\"hello\", 1, 4));\n\
+               \x20   if a == \"empty\" { str_len(b) } else { 0 }\n\
+               }\n";
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("prog.nz");
+    std::fs::write(&path, src).expect("write");
+    let exe = dir.path().join("prog");
+    let out = Command::new(NAZM)
+        .args(["build", path.to_str().unwrap(), "--emit-ir"])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "clang rejected the generated IR: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("emitted IR");
+    assert_control_flow_is_well_formed(&ir);
+    // A `Str` is an aggregate, so equality is a branch and a `phi`, never an `icmp` on
+    // the pair — comparing buffers instead of bytes is the defect that would hide here.
+    assert!(
+        !ir.contains("icmp eq { ptr, i64 }"),
+        "two strings were compared as pairs rather than as bytes:\n{ir}"
+    );
+    assert!(
+        ir.contains("@memcmp"),
+        "no byte comparison was emitted:\n{ir}"
+    );
+    // Every literal gets a constant pair, so nothing is assembled from `undef` for a
+    // value known at compile time.
+    assert!(
+        ir.contains(".v = private unnamed_addr constant { ptr, i64 }"),
+        "{ir}"
+    );
+
+    let interp = interpret(src);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    let built = Built { dir, exe };
+    assert_eq!(run_exe(&built).stdout.trim(), interp.stdout.trim());
+    assert_eq!(run_exe(&built).stdout.trim(), "5");
 }

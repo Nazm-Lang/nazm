@@ -45,7 +45,9 @@
 
 use std::fmt::Write as _;
 
-use crate::ir::{ArithOp, Block, Expr, Function, Module, Stmt, Ty};
+use nazm_span::Span;
+
+use crate::ir::{ArithOp, Block, Builtin, Expr, Function, Module, Stmt, Ty};
 
 /// What this emitter has been verified against, recorded so a reader does not have to
 /// infer portability from silence.
@@ -68,6 +70,10 @@ struct Emitter {
     current: String,
     /// Error strings, interned so a program with the same failure twice carries it once.
     strings: Vec<(String, String)>,
+    /// `Str` literals, interned the same way and for the same reason. Kept apart from
+    /// the error strings because these are the program's data: they carry arbitrary
+    /// bytes and are never NUL-terminated.
+    blobs: Vec<(String, Vec<u8>)>,
     /// Where the source came from, for the runtime message.
     file: String,
     /// Byte offset of the start of each line, for turning a span into a position.
@@ -162,6 +168,83 @@ impl Emitter {
         let line = self.lines.partition_point(|&start| start <= offset);
         let line_start = self.lines.get(line.saturating_sub(1)).copied().unwrap_or(0);
         (line.max(1), offset - line_start + 1)
+    }
+
+    /// Intern a `Str` literal, and return the symbol of a **constant `{ptr, i64}`** for
+    /// it.
+    ///
+    /// A whole constant rather than a pointer the emitter then assembles: building the
+    /// pair with `insertvalue` from `undef` would work, but a literal is known entirely
+    /// at compile time and a load of a constant says so. Nothing is undefined even for
+    /// an instant.
+    ///
+    /// An empty literal still gets a byte of storage, so its pointer is valid to pass to
+    /// `memcmp`, which the specification's "equality compares bytes" rule needs for
+    /// `"" == ""`.
+    fn blob(&mut self, bytes: &[u8]) -> String {
+        if let Some((sym, _)) = self.blobs.iter().find(|(_, b)| b == bytes) {
+            return format!("{sym}.v");
+        }
+        let sym = format!("@.s{}", self.blobs.len());
+        self.blobs.push((sym.clone(), bytes.to_vec()));
+        format!("{sym}.v")
+    }
+
+    /// Build a `{ ptr, i64 }` from a pointer and a length already in registers.
+    fn make_str(&mut self, ptr: u32, len: u32) -> u32 {
+        // `undef` here is the standard way to build an aggregate, and **both** fields are
+        // written before the value is read — this is not the poison-producing shortcut
+        // the architecture rules forbid, which is about arithmetic whose overflow an
+        // optimiser may then assume away.
+        let half = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{half} = insertvalue {{ ptr, i64 }} undef, ptr %{ptr}, 0"
+        );
+        let whole = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{whole} = insertvalue {{ ptr, i64 }} %{half}, i64 %{len}, 1"
+        );
+        whole
+    }
+
+    fn str_parts(&mut self, s: u32) -> (u32, u32) {
+        let ptr = self.fresh();
+        let _ = writeln!(self.out, "  %{ptr} = extractvalue {{ ptr, i64 }} %{s}, 0");
+        let len = self.fresh();
+        let _ = writeln!(self.out, "  %{len} = extractvalue {{ ptr, i64 }} %{s}, 1");
+        (ptr, len)
+    }
+
+    /// Fail unless `ok`, with the out-of-bounds diagnostic.
+    fn require(&mut self, bad: u32, message: &str, span: Span) {
+        self.guard(
+            bad,
+            &Failure {
+                code: "N0405",
+                message: message.to_owned(),
+            },
+            span.start,
+        );
+    }
+
+    /// `malloc`, with the failure the specification names rather than a null pointer
+    /// loose in the program.
+    fn allocate(&mut self, bytes: u32, span: Span) -> u32 {
+        let buf = self.fresh();
+        let _ = writeln!(self.out, "  %{buf} = call ptr @malloc(i64 %{bytes})");
+        let null = self.fresh();
+        let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{buf}, null");
+        self.guard(
+            null,
+            &Failure {
+                code: "N0406",
+                message: "out of memory".to_owned(),
+            },
+            span.start,
+        );
+        buf
     }
 
     /// Intern a NUL-terminated constant and return `(symbol, byte length)`.
@@ -487,6 +570,17 @@ impl Emitter {
                 // Same left-to-right order, for the same reasons.
                 let a = operand!(self.expr(lhs));
                 let b = operand!(self.expr(rhs));
+                // `Str` is a two-field aggregate, so `icmp` does not apply to it: two
+                // strings are equal when they have the same bytes, not when they share
+                // a buffer. Ordering `Str` is refused by the checker, so only `==` and
+                // `!=` reach here.
+                if *operand_ty == Ty::Str {
+                    let out = self.string_equality(a, b, *op == crate::ir::CmpOp::NotEq);
+                    return Val::Of {
+                        value: out,
+                        ty: Ty::Bool,
+                    };
+                }
                 let out = self.fresh();
                 // No guard, because no comparison can fail: `icmp` on two `i64`s or two
                 // `i1`s is total.
@@ -532,6 +626,16 @@ impl Emitter {
                     ty: *ret,
                 }
             }
+            Expr::Str(bytes) => {
+                let sym = self.blob(bytes);
+                let n = self.fresh();
+                let _ = writeln!(self.out, "  %{n} = load {{ ptr, i64 }}, ptr {sym}");
+                Val::Of {
+                    value: n,
+                    ty: Ty::Str,
+                }
+            }
+            Expr::Builtin { op, args, span } => self.builtin(*op, args, *span),
             Expr::If {
                 cond,
                 then_block,
@@ -539,6 +643,190 @@ impl Emitter {
                 ..
             } => self.conditional(cond, then_block, else_block),
         }
+    }
+
+    /// The built-ins, each as the instructions it means.
+    ///
+    /// Arguments are evaluated left to right and **all of them before any work**, the
+    /// same rule calls follow, so an argument that fails or transfers stops the built-in
+    /// before it starts.
+    fn builtin(&mut self, op: Builtin, args: &[Expr], span: Span) -> Val {
+        let mut vals = Vec::new();
+        for a in args {
+            match self.expr(a) {
+                Val::Of { value, .. } => vals.push(value),
+                Val::Transferred => return Val::Transferred,
+            }
+        }
+        let arg = |i: usize| vals.get(i).copied().unwrap_or_default();
+
+        let value = match op {
+            Builtin::StrLen => {
+                let (_, len) = self.str_parts(arg(0));
+                return Val::Of {
+                    value: len,
+                    ty: Ty::Int,
+                };
+            }
+            Builtin::StrByte => {
+                let (ptr, len) = self.str_parts(arg(0));
+                let i = arg(1);
+                let neg = self.fresh();
+                let _ = writeln!(self.out, "  %{neg} = icmp slt i64 %{i}, 0");
+                let past = self.fresh();
+                let _ = writeln!(self.out, "  %{past} = icmp sge i64 %{i}, %{len}");
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{bad} = or i1 %{neg}, %{past}");
+                self.require(bad, "this byte index is outside the `Str`", span);
+                let at = self.fresh();
+                let _ = writeln!(self.out, "  %{at} = getelementptr i8, ptr %{ptr}, i64 %{i}");
+                let byte = self.fresh();
+                let _ = writeln!(self.out, "  %{byte} = load i8, ptr %{at}");
+                let wide = self.fresh();
+                // Zero-extended: a byte is `0..=255`, never negative. `sext` here would
+                // make every byte above 127 a negative `Int`.
+                let _ = writeln!(self.out, "  %{wide} = zext i8 %{byte} to i64");
+                return Val::Of {
+                    value: wide,
+                    ty: Ty::Int,
+                };
+            }
+            Builtin::StrSlice => {
+                let (ptr, len) = self.str_parts(arg(0));
+                let (from, to) = (arg(1), arg(2));
+                let neg = self.fresh();
+                let _ = writeln!(self.out, "  %{neg} = icmp slt i64 %{from}, 0");
+                let inverted = self.fresh();
+                let _ = writeln!(self.out, "  %{inverted} = icmp slt i64 %{to}, %{from}");
+                let past = self.fresh();
+                let _ = writeln!(self.out, "  %{past} = icmp sgt i64 %{to}, %{len}");
+                let a = self.fresh();
+                let _ = writeln!(self.out, "  %{a} = or i1 %{neg}, %{inverted}");
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{bad} = or i1 %{a}, %{past}");
+                self.require(bad, "this slice is not inside the `Str`", span);
+                // No copy: a slice of an immutable, never-freed buffer is a pointer and
+                // a length. See `docs/bootstrap-design.md`, *Memory model*.
+                let start = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{start} = getelementptr i8, ptr %{ptr}, i64 %{from}"
+                );
+                let n = self.fresh();
+                // Cannot overflow: the guard above establishes `0 <= from <= to`.
+                let _ = writeln!(self.out, "  %{n} = sub i64 %{to}, %{from}");
+                self.make_str(start, n)
+            }
+            Builtin::StrConcat => {
+                let (pa, la) = self.str_parts(arg(0));
+                let (pb, lb) = self.str_parts(arg(1));
+                let n = self.fresh();
+                // Two lengths that each fit in memory cannot sum past `Int`, so this is
+                // a plain add rather than a checked one.
+                let _ = writeln!(self.out, "  %{n} = add i64 %{la}, %{lb}");
+                // One byte more than needed, so an empty result still owns storage and
+                // its pointer stays valid to compare.
+                let room = self.fresh();
+                let _ = writeln!(self.out, "  %{room} = add i64 %{n}, 1");
+                let buf = self.allocate(room, span);
+                let _ = writeln!(
+                    self.out,
+                    "  call void @llvm.memcpy.p0.p0.i64(ptr %{buf}, ptr %{pa}, i64 %{la}, i1 false)"
+                );
+                let rest = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{rest} = getelementptr i8, ptr %{buf}, i64 %{la}"
+                );
+                let _ = writeln!(
+                    self.out,
+                    "  call void @llvm.memcpy.p0.p0.i64(ptr %{rest}, ptr %{pb}, i64 %{lb}, i1 false)"
+                );
+                self.make_str(buf, n)
+            }
+            Builtin::StrFromByte => {
+                let b = arg(0);
+                let low = self.fresh();
+                let _ = writeln!(self.out, "  %{low} = icmp slt i64 %{b}, 0");
+                let high = self.fresh();
+                let _ = writeln!(self.out, "  %{high} = icmp sgt i64 %{b}, 255");
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{bad} = or i1 %{low}, %{high}");
+                self.require(bad, "this is not a byte value", span);
+                let room = self.fresh();
+                let _ = writeln!(self.out, "  %{room} = add i64 1, 0");
+                let buf = self.allocate(room, span);
+                let narrow = self.fresh();
+                let _ = writeln!(self.out, "  %{narrow} = trunc i64 %{b} to i8");
+                let _ = writeln!(self.out, "  store i8 %{narrow}, ptr %{buf}");
+                let one = self.fresh();
+                let _ = writeln!(self.out, "  %{one} = add i64 1, 0");
+                self.make_str(buf, one)
+            }
+            Builtin::IntToStr => {
+                // 20 digits is the widest `Int` (`-9223372036854775808`), plus the NUL
+                // `snprintf` insists on writing.
+                let room = self.fresh();
+                let _ = writeln!(self.out, "  %{room} = add i64 21, 0");
+                let buf = self.allocate(room, span);
+                let written = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{written} = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %{buf}, \
+                     i64 21, ptr @.dec, i64 %{})",
+                    arg(0)
+                );
+                let n = self.fresh();
+                let _ = writeln!(self.out, "  %{n} = sext i32 %{written} to i64");
+                self.make_str(buf, n)
+            }
+        };
+        Val::Of { value, ty: Ty::Str }
+    }
+
+    /// `==` and `!=` on two `Str`s: equal lengths, then equal bytes.
+    ///
+    /// The length test guards the comparison rather than merely preceding it — `memcmp`
+    /// is only reached when both strings really are that long, so no path reads past
+    /// either buffer. Emitted as a branch and a `phi` for exactly that reason; an `and`
+    /// of two computed values would have evaluated the `memcmp` first.
+    fn string_equality(&mut self, a: u32, b: u32, negate: bool) -> u32 {
+        let (pa, la) = self.str_parts(a);
+        let (pb, lb) = self.str_parts(b);
+        let same_len = self.fresh();
+        let _ = writeln!(self.out, "  %{same_len} = icmp eq i64 %{la}, %{lb}");
+
+        let compare = format!("b{}", self.fresh());
+        let join = format!("b{}", self.fresh());
+        let short = self.current.clone();
+        let _ = writeln!(
+            self.out,
+            "  br i1 %{same_len}, label %{compare}, label %{join}"
+        );
+
+        self.open(&compare);
+        let diff = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{diff} = call i32 @memcmp(ptr %{pa}, ptr %{pb}, i64 %{la})"
+        );
+        let equal = self.fresh();
+        let _ = writeln!(self.out, "  %{equal} = icmp eq i32 %{diff}, 0");
+        let from_compare = self.current.clone();
+        let _ = writeln!(self.out, "  br label %{join}");
+
+        self.open(&join);
+        let out = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{out} = phi i1 [ false, %{short} ], [ %{equal}, %{from_compare} ]"
+        );
+        if !negate {
+            return out;
+        }
+        let flipped = self.fresh();
+        let _ = writeln!(self.out, "  %{flipped} = xor i1 %{out}, true");
+        flipped
     }
 
     /// Value-position `if`, as a conditional branch and a join with a `phi`.
@@ -747,6 +1035,7 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
         next: 0,
         current: "entry".to_owned(),
         strings: Vec::new(),
+        blobs: Vec::new(),
         file: file.to_owned(),
         lines: line_starts,
         source_len: source.len(),
@@ -791,6 +1080,16 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
         "declare {{i64, i1}} @llvm.smul.with.overflow.i64(i64, i64)"
     );
     let _ = writeln!(head, "declare i32 @printf(ptr noundef, ...)");
+    let _ = writeln!(
+        head,
+        "declare i32 @snprintf(ptr noundef, i64, ptr noundef, ...)"
+    );
+    let _ = writeln!(head, "declare ptr @malloc(i64)");
+    let _ = writeln!(head, "declare i32 @memcmp(ptr, ptr, i64)");
+    let _ = writeln!(
+        head,
+        "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)"
+    );
     let _ = writeln!(head, "declare i64 @write(i32, ptr, i64)");
     let _ = writeln!(head, "declare void @exit(i32) noreturn");
     head.push('\n');
@@ -801,6 +1100,28 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
         head,
         "@.fmt = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\""
     );
+    // `int_to_str`'s format. Separate from `@.fmt` because it has no newline: a `Str` is
+    // the digits and nothing else.
+    let _ = writeln!(
+        head,
+        "@.dec = private unnamed_addr constant [5 x i8] c\"%lld\\00\""
+    );
+    // `Str` literals: the bytes, and a constant pair naming them. An empty literal still
+    // gets a byte of storage so that its pointer is valid to hand to `memcmp`.
+    for (sym, bytes) in &e.blobs {
+        let stored = if bytes.is_empty() { &[0u8][..] } else { bytes };
+        let _ = writeln!(
+            head,
+            "{sym} = private unnamed_addr constant [{} x i8] c\"{}\"",
+            stored.len(),
+            escape_bytes(stored)
+        );
+        let _ = writeln!(
+            head,
+            "{sym}.v = private unnamed_addr constant {{ ptr, i64 }} {{ ptr {sym}, i64 {} }}",
+            bytes.len()
+        );
+    }
     for (sym, text) in &e.strings {
         let _ = writeln!(
             head,
@@ -888,6 +1209,19 @@ fn emit_function(e: &mut Emitter, f: &Function) {
     }
     let _ = writeln!(e.out, "}}");
     e.out.push('\n');
+}
+
+/// The same escaping for arbitrary bytes, which a `Str` literal may contain.
+fn escape_bytes(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for b in bytes {
+        if *b == b'"' || *b == b'\\' || !(0x20..0x7f).contains(b) {
+            let _ = write!(out, "\\{b:02X}");
+        } else {
+            out.push(*b as char);
+        }
+    }
+    out
 }
 
 /// LLVM's constant-string escaping: `\XX` for anything not printable ASCII.

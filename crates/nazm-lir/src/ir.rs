@@ -29,6 +29,13 @@ use nazm_span::Span;
 pub enum Ty {
     Int,
     Bool,
+    /// An immutable byte sequence, as `{ pointer, byte length }` by value.
+    ///
+    /// Not NUL-terminated: `docs/spec.md` makes an embedded zero an ordinary byte, so
+    /// the length is the length. The pointer is always valid to read `length` bytes
+    /// from, and for an empty string it still points at real storage — which is what
+    /// lets `memcmp` be called without a special case.
+    Str,
 }
 
 impl Ty {
@@ -38,6 +45,7 @@ impl Ty {
         match self {
             Self::Int => "i64",
             Self::Bool => "i1",
+            Self::Str => "{ ptr, i64 }",
         }
     }
 
@@ -46,6 +54,7 @@ impl Ty {
         match self {
             Self::Int => "Int",
             Self::Bool => "Bool",
+            Self::Str => "Str",
         }
     }
 }
@@ -204,6 +213,9 @@ pub enum Stmt {
 pub enum Expr {
     Int(i64),
     Bool(bool),
+    /// A string literal, as its **bytes**. The source is UTF-8 so a literal's bytes are
+    /// valid UTF-8; nothing downstream may assume that of every `Str`.
+    Str(Vec<u8>),
     Load {
         slot: usize,
         ty: Ty,
@@ -238,6 +250,18 @@ pub enum Expr {
         args: Vec<Expr>,
         ret: Ty,
     },
+    /// A built-in operation.
+    ///
+    /// Separate from [`Expr::Call`] because it resolves to emitted instructions rather
+    /// than to a `FuncId`, and because **the set this backend lowers is its own**. A
+    /// built-in the front end has and this does not is an ordinary backend limitation,
+    /// reported as `N0101` like any other, and `lower` refuses it by name rather than
+    /// emitting something approximate.
+    Builtin {
+        op: Builtin,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// Value-position `if`. Both branches are present and produce `ty`.
     ///
     /// There is no statement-position variant, and that is the point: this backend
@@ -267,6 +291,8 @@ impl Expr {
         match self {
             Self::Int(_) | Self::Neg { .. } | Self::Arith { .. } => Some(Ty::Int),
             Self::Bool(_) | Self::Compare { .. } => Some(Ty::Bool),
+            Self::Str(_) => Some(Ty::Str),
+            Self::Builtin { op, .. } => Some(op.ret()),
             Self::Load { ty, .. } => Some(*ty),
             Self::Call { ret, .. } => Some(*ret),
             Self::If { ty, .. } => *ty,
@@ -283,6 +309,74 @@ impl Expr {
 #[must_use]
 pub fn fits(e: &Expr, want: Ty) -> bool {
     e.ty().is_none_or(|t| t == want)
+}
+
+/// The built-ins this backend can lower.
+///
+/// Deliberately **not** a re-export of the front end's table: `nazm-lir` may not depend
+/// on `nazm-core` (see `xtask/src/rules.rs`), and more importantly it should not. Which
+/// built-ins compile natively is a coverage question with the same answer shape as the
+/// rest of the subset, and a front-end built-in missing here must produce a backend
+/// limitation diagnostic rather than a miscompile. A test in `nazm-cli`, which sees both
+/// crates, requires every front-end built-in to be either lowered or refused by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Builtin {
+    StrLen,
+    StrByte,
+    StrSlice,
+    StrConcat,
+    IntToStr,
+    StrFromByte,
+}
+
+impl Builtin {
+    #[must_use]
+    pub fn by_name(name: &str) -> Option<Self> {
+        match name {
+            "str_len" => Some(Self::StrLen),
+            "str_byte" => Some(Self::StrByte),
+            "str_slice" => Some(Self::StrSlice),
+            "str_concat" => Some(Self::StrConcat),
+            "int_to_str" => Some(Self::IntToStr),
+            "str_from_byte" => Some(Self::StrFromByte),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::StrLen => "str_len",
+            Self::StrByte => "str_byte",
+            Self::StrSlice => "str_slice",
+            Self::StrConcat => "str_concat",
+            Self::IntToStr => "int_to_str",
+            Self::StrFromByte => "str_from_byte",
+        }
+    }
+
+    /// Checked against the lowered arguments, the same way a call's are. The front end
+    /// has already established both, so this catches a *lowering* bug rather than a
+    /// program error — and a wrongly typed argument here is a module clang rejects for
+    /// a reason that names none of this.
+    #[must_use]
+    pub fn params(self) -> &'static [Ty] {
+        match self {
+            Self::StrLen => &[Ty::Str],
+            Self::StrByte => &[Ty::Str, Ty::Int],
+            Self::StrSlice => &[Ty::Str, Ty::Int, Ty::Int],
+            Self::StrConcat => &[Ty::Str, Ty::Str],
+            Self::IntToStr | Self::StrFromByte => &[Ty::Int],
+        }
+    }
+
+    #[must_use]
+    pub fn ret(self) -> Ty {
+        match self {
+            Self::StrLen | Self::StrByte => Ty::Int,
+            Self::StrSlice | Self::StrConcat | Self::IntToStr | Self::StrFromByte => Ty::Str,
+        }
+    }
 }
 
 /// The five arithmetic operators, each of which can fail.
