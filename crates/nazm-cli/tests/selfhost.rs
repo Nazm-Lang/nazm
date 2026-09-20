@@ -300,7 +300,14 @@ fn push_node(out: &mut String, kind: &str, arity: usize, start: u32, end: u32, t
 
 fn dump_function(f: &nazm_core::__syntax::Function, out: &mut String) {
     for p in &f.params {
-        push_node(out, "param", 0, p.span.start, p.span.end, &format!("{}:{}", p.name, p.ty.name));
+        push_node(
+            out,
+            "param",
+            0,
+            p.span.start,
+            p.span.end,
+            &format!("{}:{}", p.name, p.ty.name),
+        );
     }
     let arity = match &f.body {
         Some(b) => {
@@ -377,7 +384,9 @@ fn dump_stmt(s: &nazm_core::__syntax::Stmt, out: &mut String) {
 fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
     use nazm_core::__syntax::Expr as E;
     match e {
-        E::Int { value, span } => push_node(out, "int", 0, span.start, span.end, &value.to_string()),
+        E::Int { value, span } => {
+            push_node(out, "int", 0, span.start, span.end, &value.to_string())
+        }
         E::Bool { value, span } => {
             push_node(out, "bool", 0, span.start, span.end, &value.to_string());
         }
@@ -548,12 +557,18 @@ fn the_nazm_parser_refuses_what_it_cannot_parse_yet_by_name() {
     let exe = build_parser(dir.path());
 
     for (source, expected) in [
-        ("fn m() -> Int { let x = 1; x }", "`let`: statements are not implemented yet"),
+        (
+            "fn m() -> Int { let x = 1; x }",
+            "`let`: statements are not implemented yet",
+        ),
         (
             "fn m() -> Int { if true { 1 } else { 2 } }",
             "`if`: statements are not implemented yet",
         ),
-        ("fn m() -> Int { 1; 2 }", "a statement: statements are not implemented yet"),
+        (
+            "fn m() -> Int { 1; 2 }",
+            "a statement: statements are not implemented yet",
+        ),
         // Reported as the unclosed bracket, at the bracket — not as "expected an
         // expression" at the brace, which would be true and useless.
         ("fn m() -> Int { (1 }", "this bracket is never closed"),
