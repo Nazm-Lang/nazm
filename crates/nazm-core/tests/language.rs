@@ -258,11 +258,22 @@ fn a_duplicate_function_points_at_the_first_definition() {
 
 #[test]
 fn absent_features_are_refused_by_name() {
+    // And `print` is no longer one of them: it is a built-in now, checked by the
+    // ordinary call rule, so a wrong argument is a type error rather than a refusal.
+    assert_eq!(
+        sole_error("fn main() -> Int { print(1) }"),
+        codes::TYPE_MISMATCH
+    );
+
     for (src, word) in [
         ("fn main() -> Int { loop { 1 } }", "loop"),
         ("fn main() -> Int { for x in y { 1 } }", "for"),
         ("fn main() -> Int { match 1 { } }", "match"),
-        ("fn main() -> Int { print(1) }", "print"),
+        ("fn main() -> Int { struct S { } }", "struct"),
+        // `print` was on this list until B3, when it stopped being a name held for a
+        // feature that did not exist and became the feature. A reserved word earns its
+        // place by naming something absent; once it arrives, reserving it would be
+        // refusing the thing it was reserving.
     ] {
         match run(src) {
             Outcome::CheckFailed(ds) => {

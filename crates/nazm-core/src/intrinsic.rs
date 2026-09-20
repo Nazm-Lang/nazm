@@ -77,11 +77,40 @@ pub enum Intrinsic {
     StrsSet,
     /// `strs_push(a: Strs, v: Str) -> Int` — appends; returns the new length.
     StrsPush,
+
+    // --- the outside world -------------------------------------------------------
+    //
+    // **Ambient authority, and labelled as such.** These are callable from anywhere,
+    // and nothing in the language restricts which functions may reach the file system
+    // or the process arguments. That is a real limitation, not a design: see
+    // `docs/spec.md`, *What the outside-world built-ins do and do not promise*. The
+    // growth path is a capability parameter, and the built-ins are shaped so that
+    // adding one changes what may call them rather than what they mean.
+    /// `args_count() -> Int` — how many arguments the program was given, **excluding**
+    /// the program's own name.
+    ArgsCount,
+    /// `arg(i: Int) -> Str` — argument `i`, counting from zero, excluding the program
+    /// name. Fails with `N0405` outside `0..args_count()`.
+    Arg,
+    /// `read_file(path: Str) -> Str` — the file's bytes. Fails with `N0407`.
+    ReadFile,
+    /// `write_file(path: Str, data: Str) -> Int` — writes, truncating; returns the byte
+    /// count. Fails with `N0407`.
+    WriteFile,
+    /// `file_exists(path: Str) -> Bool` — whether the path can be opened for reading.
+    FileExists,
+    /// `print(s: Str) -> Int` — bytes to standard output; returns the count.
+    Print,
+    /// `eprint(s: Str) -> Int` — bytes to standard error; returns the count.
+    EPrint,
+    /// `exit_with(code: Int) -> Int` — ends the process. Never returns, which the type
+    /// system cannot say, so it is written `Int` and the value never arrives.
+    ExitWith,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 24] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -98,6 +127,14 @@ impl Intrinsic {
         Self::StrsGet,
         Self::StrsSet,
         Self::StrsPush,
+        Self::ArgsCount,
+        Self::Arg,
+        Self::ReadFile,
+        Self::WriteFile,
+        Self::FileExists,
+        Self::Print,
+        Self::EPrint,
+        Self::ExitWith,
     ];
 
     #[must_use]
@@ -119,6 +156,14 @@ impl Intrinsic {
             Self::StrsGet => "strs_get",
             Self::StrsSet => "strs_set",
             Self::StrsPush => "strs_push",
+            Self::ArgsCount => "args_count",
+            Self::Arg => "arg",
+            Self::ReadFile => "read_file",
+            Self::WriteFile => "write_file",
+            Self::FileExists => "file_exists",
+            Self::Print => "print",
+            Self::EPrint => "eprint",
+            Self::ExitWith => "exit_with",
         }
     }
 
@@ -139,6 +184,10 @@ impl Intrinsic {
             Self::StrsSet => &[Type::Strs, Type::Int, Type::Str],
             Self::IntsPush => &[Type::Ints, Type::Int],
             Self::StrsPush => &[Type::Strs, Type::Str],
+            Self::ArgsCount => &[],
+            Self::Arg | Self::ExitWith => &[Type::Int],
+            Self::ReadFile | Self::FileExists | Self::Print | Self::EPrint => &[Type::Str],
+            Self::WriteFile => &[Type::Str, Type::Str],
         }
     }
 
@@ -154,7 +203,11 @@ impl Intrinsic {
             | Self::IntsPush
             | Self::StrsSet
             | Self::StrsPush => Type::Int,
-            Self::StrsGet => Type::Str,
+            Self::StrsGet | Self::Arg | Self::ReadFile => Type::Str,
+            Self::ArgsCount | Self::WriteFile | Self::Print | Self::EPrint | Self::ExitWith => {
+                Type::Int
+            }
+            Self::FileExists => Type::Bool,
             Self::IntsNew => Type::Ints,
             Self::StrsNew => Type::Strs,
         }

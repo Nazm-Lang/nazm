@@ -442,6 +442,57 @@ it is newly *useful*: without it, a language with no unit type would force
 `let _unused = ints_push(a, 1);` at every mutation, which is a workaround for a missing
 type rather than a rule worth having.
 
+### What the outside-world built-ins do and do not promise
+
+A program can read its arguments, read and write files, write to standard output and
+standard error, and end the process. That is enough for a compiler, and it is all.
+
+| | |
+| --- | --- |
+| **Arguments** | `args_count()` and `arg(i)`, **excluding the program's own name**. `arg(i)` fails with `N0405` outside `0..args_count()` |
+| **Reading** | `read_file(path) -> Str` — the file's bytes, whatever they are. Fails with `N0407` |
+| **Writing** | `write_file(path, data) -> Int` — truncating; returns the byte count. Fails with `N0407` |
+| **Existence** | `file_exists(path) -> Bool` — whether it can be *opened for reading*, which is the question a program actually asks |
+| **Output** | `print(s)` and `eprint(s)` write bytes to descriptors 1 and 2 and return the count. Neither adds a newline: `str_from_byte(10)` is how you ask for one |
+| **Ending** | `exit_with(code)` ends the process. It never returns, which the type system cannot express, so it is written `Int` and the value never arrives |
+
+Excluding the program name from `arg(i)` is deliberate: a compiled program's `argv[0]` is
+a path and an interpreted one has no equivalent, so including it would make the same
+program mean different things under `nazm run` and `nazm build`. Excluded, they agree
+exactly.
+
+#### Authority is ambient, and that is a limitation
+
+**Nothing in the language restricts which functions may reach the file system.** Any
+function can call `read_file`. There is no capability parameter, no effect annotation,
+and no enforcement of any kind.
+
+This is stated rather than implied because the alternative — shipping the built-ins and
+describing the design as capability-based because a capability design exists in
+`docs/architecture.md` — would be a claim the implementation does not support. Partial
+enforcement labelled as full enforcement is worse than none.
+
+The growth path is a capability parameter on `main`, threaded to whatever needs it. The
+built-ins above are shaped so that adding one changes *what may call them*, not what they
+mean, so no program's behaviour changes when it arrives. That design is **not settled**,
+and in particular `main(io: IO)` is not chosen merely because an earlier note suggested
+it.
+
+#### There is no process spawning, deliberately
+
+A Nazm program cannot run another program. A compiler written in Nazm therefore emits
+LLVM IR to a file and a **script** invokes `clang` — which is the documented arrangement,
+and much narrower than a language-level `run_command` would be. Adding one would be the
+single largest authority grant available and it is not needed.
+
+#### Errors are values only where they can be
+
+There is no error type, no `Result`, and no exceptions. A failed read stops the program
+with `N0407`. A program that wants to *handle* a missing file asks `file_exists` first
+and reports it itself, which is what a compiler wants to do anyway. The gap between the
+check and the read is a real race, and for a compiler reading its own inputs it is an
+accepted one; closing it needs an error type, which is a later decision.
+
 ### The integer boundaries, stated rather than inherited
 
 Two's complement is asymmetric — there is one more negative `Int` than positive — and
