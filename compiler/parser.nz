@@ -20,7 +20,6 @@
 fn refuse_unimplemented(kinds: Ints, starts: Ints, i: Int) -> Int {
     let t = kind_at(kinds, i);
     let mut what = "";
-    if t == k_if() { what = "`if`"; }
     if t == k_lbrace() { what = "a block used as an expression"; }
     if what == "" { return 0; }
     die(str_concat(what, ": not implemented yet in this parser"), start_at(starts, i));
@@ -60,6 +59,7 @@ fn n_return() -> Int { 15 }
 fn n_break() -> Int { 16 }
 fn n_continue() -> Int { 17 }
 fn n_exprstmt() -> Int { 18 }
+fn n_if() -> Int { 19 }
 
 fn node_name(k: Int) -> Str {
     if k == n_int() { return "int"; }
@@ -80,6 +80,7 @@ fn node_name(k: Int) -> Str {
     if k == n_break() { return "break"; }
     if k == n_continue() { return "continue"; }
     if k == n_exprstmt() { return "exprstmt"; }
+    if k == n_if() { return "if"; }
     "?"
 }
 
@@ -121,6 +122,7 @@ fn op_symbol(kind: Int) -> Str {
 fn sent_paren() -> Int { 90 }
 fn sent_unary() -> Int { 91 }
 fn sent_call() -> Int { 92 }
+fn sent_if() -> Int { 93 }
 
 // --- the arena ---------------------------------------------------------------------
 
@@ -177,16 +179,22 @@ fn die(message: Str, offset: Int) -> Int {
 // negation from the `-` to its operand's end, and a parenthesised expression keeps its
 // own span rather than the brackets'.
 fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
-              nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs) -> Int {
-    let ops = ints_new();       // operator kinds and sentinels
-    let opat = ints_new();      // where each entry began, for spans
-    let cname = strs_new();     // call names, innermost last
-    let cargs = ints_new();     // arguments completed so far, per call
-    let vs = ints_new();        // operand span starts
-    let ve = ints_new();        // operand span ends
+              nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
+              ops: Ints, opat: Ints, cname: Strs, cargs: Ints, vs: Ints, ve: Ints,
+              status: Ints, resuming: Bool, base: Int) -> Int {
+    // `base` is how deep the operator stack was when *this* expression started. The
+    // stacks are shared — an `if` suspends one expression while the expressions inside
+    // its blocks are parsed — so every reduction stops here rather than at the bottom.
+    // Without it an inner expression reduces past the outer one's `if` sentinel.
     let mut i = from;
+    // Resuming means an `if` has just finished and its value is already on the operand
+    // stack, so parsing continues from *after* an operand rather than before one.
+    let mut skip_primary = resuming;
 
     while true {
+        if skip_primary {
+            skip_primary = false;
+        } else {
         // --- prefix: any run of unary minus -----------------------------------------
         while kind_at(kinds, i) == k_minus() {
             ints_push(ops, sent_unary());
@@ -233,6 +241,14 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
             i = i + 1;
             continue;
         }
+        if t == k_if() {
+            // The condition is an ordinary expression; the sentinel is what tells the
+            // `{` after it that this is an `if` rather than the end of a statement.
+            ints_push(ops, sent_if());
+            ints_push(opat, start_at(starts, i));
+            i = i + 1;
+            continue;
+        }
         if t == k_ident() {
             if kind_at(kinds, i + 1) == k_lparen() {
                 let name = text_at(texts, i);
@@ -264,12 +280,13 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
         if done_primary == false {
             die("expected an expression", start_at(starts, i));
         }
+        }
 
         // --- everything after an operand ---------------------------------------------
         while true {
             // Pending unary minus binds tighter than any binary operator, so it is
             // applied as soon as its operand exists.
-            while ints_len(ops) > 0 {
+            while ints_len(ops) > base {
                 if ints_get(ops, ints_len(ops) - 1) != sent_unary() { break; }
                 let at = ints_get(opat, ints_len(opat) - 1);
                 pop_op(ops, opat);
@@ -281,12 +298,27 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
             }
 
             let n = kind_at(kinds, i);
+
+            if n == k_lbrace() {
+                if innermost_is_if(ops, base) {
+                    // The condition is complete. Reduce it to the sentinel and hand
+                    // control back: the block is the frame machine's business, and the
+                    // stacks stay exactly as they are until it resumes this expression.
+                    while ints_len(ops) > base {
+                        if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 { break; }
+                        reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx);
+                    }
+                    ints_set(status, 0, 1);
+                    return i;
+                }
+            }
+
             let p = prec_of(n);
 
             if p > 0 {
                 // Left-associative: reduce everything of equal or higher precedence
                 // before pushing, which is what makes `a - b - c` group as `(a-b)-c`.
-                while ints_len(ops) > 0 {
+                while ints_len(ops) > base {
                     let top = ints_get(ops, ints_len(ops) - 1);
                     if prec_of(top) < p { break; }
                     reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx);
@@ -298,8 +330,9 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
             }
 
             if n == k_comma() {
-                if innermost_is_call(ops) == false { return i; }
-                while prec_of(ints_get(ops, ints_len(ops) - 1)) > 0 {
+                if innermost_is_call(ops, base) == false { return i; }
+                while ints_len(ops) > base {
+                    if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 { break; }
                     reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx);
                 }
                 ints_set(cargs, ints_len(cargs) - 1, ints_get(cargs, ints_len(cargs) - 1) + 1);
@@ -308,8 +341,9 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
             }
 
             if n == k_rparen() {
-                if ints_len(ops) == 0 { return i; }
-                while prec_of(ints_get(ops, ints_len(ops) - 1)) > 0 {
+                if ints_len(ops) == base { return i; }
+                while ints_len(ops) > base {
+                    if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 { break; }
                     reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx);
                 }
                 let top = ints_get(ops, ints_len(ops) - 1);
@@ -320,6 +354,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     i = i + 1;
                     continue;
                 }
+                if top == sent_if() { return i; }
                 if top == sent_call() {
                     let at = ints_get(opat, ints_len(opat) - 1);
                     pop_op(ops, opat);
@@ -342,12 +377,16 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
 
             // Anything else ends the expression. Whatever is still on the operator
             // stack is a real operator awaiting its reduction.
-            while ints_len(ops) > 0 {
+            while ints_len(ops) > base {
                 if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 {
                     die("this bracket is never closed", ints_get(opat, ints_len(opat) - 1));
                 }
                 reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx);
             }
+            // The stacks belong to the caller and must come back empty, so the finished
+            // expression's own entry is removed here rather than left for the next one.
+            pop_val(vs, ve);
+            ints_set(status, 0, 0);
             return i;
         }
     }
@@ -369,12 +408,25 @@ fn pop_call(cname: Strs, cargs: Ints) -> Int {
     ints_pop(cargs)
 }
 
-fn innermost_is_call(ops: Ints) -> Bool {
+fn innermost_is_if(ops: Ints, base: Int) -> Bool {
     let mut i = ints_len(ops) - 1;
-    while i >= 0 {
+    while i >= base {
+        let v = ints_get(ops, i);
+        if v == sent_if() { return true; }
+        if v == sent_call() { return false; }
+        if v == sent_paren() { return false; }
+        i = i - 1;
+    }
+    false
+}
+
+fn innermost_is_call(ops: Ints, base: Int) -> Bool {
+    let mut i = ints_len(ops) - 1;
+    while i >= base {
         let v = ints_get(ops, i);
         if v == sent_call() { return true; }
         if v == sent_paren() { return false; }
+        if v == sent_if() { return false; }
         i = i - 1;
     }
     false
@@ -409,6 +461,18 @@ fn expect(kinds: Ints, starts: Ints, i: Int, want: Int, what: Str) -> Int {
 
 fn frame_body() -> Int { 1 }
 fn frame_while() -> Int { 2 }
+fn frame_if_then() -> Int { 3 }
+fn frame_if_else() -> Int { 4 }
+
+// What to do once the expression now being parsed finally completes. It is a stack
+// because an `if` can suspend an expression that was itself the value of a `let`, and
+// the `let` still has to be finished afterwards.
+fn pend_none() -> Int { 0 }
+fn pend_let() -> Int { 1 }
+fn pend_assign() -> Int { 2 }
+fn pend_return() -> Int { 3 }
+fn pend_while() -> Int { 4 }
+fn pend_stmt() -> Int { 5 }
 
 fn push_frame(fk: Ints, fstart: Ints, fcount: Ints, ftail: Ints, faux: Ints, fparams: Ints,
               ftext: Strs, kind: Int, start: Int, aux: Int, params: Int, text: Str) -> Int {
@@ -429,6 +493,28 @@ fn bump(a: Ints) -> Int {
     0
 }
 
+// Close an `if`: pop its sentinel, replace the condition's operand entry with the `if`'s
+// own span, and emit the node. The children — condition, then-block, and any else-block —
+// are already in the arena in that order, which is what post-order means.
+// Whether the innermost pending expression is the thing to work on, or whether a block
+// opened inside it must be finished first.
+fn resumable(pk: Ints, pdepth: Ints, fk: Ints) -> Bool {
+    if ints_len(pk) == 0 { return false; }
+    ints_get(pdepth, ints_len(pdepth) - 1) == ints_len(fk)
+}
+
+fn finish_if(ops: Ints, opat: Ints, vs: Ints, ve: Ints,
+             nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
+             arity: Int, close: Int) -> Int {
+    let at = ints_get(opat, ints_len(opat) - 1);
+    pop_op(ops, opat);
+    pop_val(vs, ve);
+    emit(nk, nar, nst, nen, ntx, n_if(), arity, at, close, "");
+    ints_push(vs, at);
+    ints_push(ve, close);
+    0
+}
+
 fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                  nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs) -> Int {
     let fk = ints_new();
@@ -439,10 +525,103 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
     let fparams = ints_new();
     let ftext = strs_new();
 
+    // The expression machinery, created once: an `if` suspends an expression part-way
+    // to parse a block, so these have to outlive a single `parse_expr` call.
+    let ops = ints_new();
+    let opat = ints_new();
+    let cname = strs_new();
+    let cargs = ints_new();
+    let vs = ints_new();
+    let ve = ints_new();
+    let status = ints_new();
+    ints_push(status, 0);
+
+    // What the expression being parsed is *for*, innermost last.
+    let pk = ints_new();
+    let pstart = ints_new();
+    let ptext = strs_new();
+    // The block depth the expression was started at. An `if` inside it opens block
+    // frames, and while any of those are open the *block* is what needs parsing —
+    // the expression is suspended underneath them and must not be resumed early.
+    let pdepth = ints_new();
+    // How deep the operator stack was when each pending expression started.
+    let pbase = ints_new();
+
     let mut i = 0;
     let mut functions = 0;
+    let mut resuming = false;
 
     while i < ints_len(kinds) {
+        // --- an expression is in progress -------------------------------------------
+        if resumable(pk, pdepth, fk) {
+            i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx,
+                           ops, opat, cname, cargs, vs, ve, status, resuming,
+                           ints_get(pbase, ints_len(pbase) - 1));
+            resuming = false;
+            if ints_get(status, 0) == 1 {
+                // Suspended at an `if`'s `{`: the condition is done and the block is
+                // the frame machine's business.
+                let brace = start_at(starts, i);
+                i = i + 1;
+                push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
+                           frame_if_then(), brace, 0, 0, "");
+                continue;
+            }
+            // The expression finished. Complete whatever it was for.
+            let what = top(pk);
+            let at = top(pstart);
+            let text = strs_get(ptext, strs_len(ptext) - 1);
+            ints_pop(pk);
+            ints_pop(pstart);
+            ints_pop(pdepth);
+            ints_pop(pbase);
+            strs_pop(ptext);
+
+            if what == pend_while() {
+                let brace = start_at(starts, i);
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a loop body");
+                push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
+                           frame_while(), brace, at, 0, "");
+                continue;
+            }
+            if what == pend_stmt() {
+                if kind_at(kinds, i) == k_semi() {
+                    emit(nk, nar, nst, nen, ntx, n_exprstmt(), 1, at, end_at(ends, i - 1), "");
+                    i = i + 1;
+                    bump(fcount);
+                    continue;
+                }
+                if kind_at(kinds, i) == k_rbrace() {
+                    ints_set(ftail, ints_len(ftail) - 1, 1);
+                    continue;
+                }
+                // An expression that *starts* with `if` or `{` needs no `;` to be a
+                // statement — the same rule the reference parser follows, and the reason
+                // `if c { … } i = i + 1;` is two statements rather than a tail followed
+                // by something impossible.
+                if text == "blocklike" {
+                    emit(nk, nar, nst, nen, ntx, n_exprstmt(), 1, at, end_at(ends, i - 1), "");
+                    bump(fcount);
+                    continue;
+                }
+                die("expected `;` or `}` after this expression", start_at(starts, i));
+                continue;
+            }
+            let semi = end_at(ends, i);
+            i = expect(kinds, starts, i, k_semi(), "expected `;` to end this statement");
+            if what == pend_let() {
+                emit(nk, nar, nst, nen, ntx, n_let(), 1, at, semi, text);
+            }
+            if what == pend_assign() {
+                emit(nk, nar, nst, nen, ntx, n_assign(), 1, at, semi, text);
+            }
+            if what == pend_return() {
+                emit(nk, nar, nst, nen, ntx, n_return(), 1, at, semi, "");
+            }
+            bump(fcount);
+            continue;
+        }
+
         if ints_len(fk) == 0 {
             // --- top level: an import, or a function header ------------------------
             if kind_at(kinds, i) == k_use() {
@@ -518,6 +697,27 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             strs_pop(ftext);
             emit(nk, nar, nst, nen, ntx, n_block(), count + tail, start, close,
                  if tail == 1 { "tail" } else { "" });
+            if kind == frame_if_then() {
+                // `else` or not decides the arity, and the `if`'s span runs to whichever
+                // block closed last.
+                if kind_at(kinds, i) == k_else() {
+                    i = i + 1;
+                    let brace2 = start_at(starts, i);
+                    i = expect(kinds, starts, i, k_lbrace(),
+                               "expected `{` after `else`");
+                    push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
+                               frame_if_else(), brace2, 0, 0, "");
+                    continue;
+                }
+                finish_if(ops, opat, vs, ve, nk, nar, nst, nen, ntx, 2, close);
+                resuming = true;
+                continue;
+            }
+            if kind == frame_if_else() {
+                finish_if(ops, opat, vs, ve, nk, nar, nst, nen, ntx, 3, close);
+                resuming = true;
+                continue;
+            }
             if kind == frame_while() {
                 // The condition was emitted before the body, so the two children are
                 // already in post-order and the `while` closes over them.
@@ -546,12 +746,11 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             let name = text_at(texts, i);
             i = i + 1;
             i = expect(kinds, starts, i, k_eq(), "expected `=` in a `let`");
-            i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
-            let semi = end_at(ends, i);
-            i = expect(kinds, starts, i, k_semi(), "expected `;` after a `let`");
-            emit(nk, nar, nst, nen, ntx, n_let(), 1, stmt_start, semi,
-                 str_concat(str_concat(name, ":"), int_to_str(mutable)));
-            bump(fcount);
+            ints_push(pk, pend_let());
+            ints_push(pdepth, ints_len(fk));
+            ints_push(pbase, ints_len(ops));
+            ints_push(pstart, stmt_start);
+            strs_push(ptext, str_concat(str_concat(name, ":"), int_to_str(mutable)));
             continue;
         }
 
@@ -560,11 +759,12 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 let stmt_start = start_at(starts, i);
                 let name = text_at(texts, i);
                 i = i + 2;
-                i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
-                let semi = end_at(ends, i);
-                i = expect(kinds, starts, i, k_semi(), "expected `;` after an assignment");
-                emit(nk, nar, nst, nen, ntx, n_assign(), 1, stmt_start, semi, name);
-                bump(fcount);
+                ints_push(pk, pend_assign());
+                ints_push(pdepth, ints_len(fk));
+                ints_push(pbase, ints_len(ops));
+            ints_push(pbase, ints_len(ops));
+                ints_push(pstart, stmt_start);
+                strs_push(ptext, name);
                 continue;
             }
         }
@@ -572,22 +772,22 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         if t == k_while() {
             let stmt_start = start_at(starts, i);
             i = i + 1;
-            i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
-            let brace = start_at(starts, i);
-            i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a loop body");
-            push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
-                       frame_while(), brace, stmt_start, 0, "");
+            ints_push(pk, pend_while());
+            ints_push(pdepth, ints_len(fk));
+            ints_push(pbase, ints_len(ops));
+            ints_push(pstart, stmt_start);
+            strs_push(ptext, "");
             continue;
         }
 
         if t == k_return() {
             let stmt_start = start_at(starts, i);
             i = i + 1;
-            i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
-            let semi = end_at(ends, i);
-            i = expect(kinds, starts, i, k_semi(), "expected `;` after a `return`");
-            emit(nk, nar, nst, nen, ntx, n_return(), 1, stmt_start, semi, "");
-            bump(fcount);
+            ints_push(pk, pend_return());
+            ints_push(pdepth, ints_len(fk));
+            ints_push(pbase, ints_len(ops));
+            ints_push(pstart, stmt_start);
+            strs_push(ptext, "");
             continue;
         }
 
@@ -616,17 +816,14 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
 
         // An expression: a statement if a `;` follows, the block's value if not.
         refuse_unimplemented(kinds, starts, i);
-        let expr_start = start_at(starts, i);
-        i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx);
-        if kind_at(kinds, i) == k_semi() {
-            let semi = end_at(ends, i);
-            let _ = semi;
-            emit(nk, nar, nst, nen, ntx, n_exprstmt(), 1, expr_start,
-                 end_at(ends, i - 1), "");
-            i = i + 1;
-            bump(fcount);
+        ints_push(pk, pend_stmt());
+        ints_push(pdepth, ints_len(fk));
+        ints_push(pbase, ints_len(ops));
+        ints_push(pstart, start_at(starts, i));
+        if t == k_if() {
+            strs_push(ptext, "blocklike");
         } else {
-            ints_set(ftail, ints_len(ftail) - 1, 1);
+            strs_push(ptext, "");
         }
     }
 
