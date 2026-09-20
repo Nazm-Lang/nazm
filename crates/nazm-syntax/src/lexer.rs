@@ -15,6 +15,12 @@ use nazm_span::Span;
 pub enum TokenKind {
     // Literals and names
     Int(i64),
+    /// A literal too large for `Int`, kept as digits.
+    ///
+    /// `i64::MIN` is written `-9223372036854775808`, and its magnitude is one greater
+    /// than `i64::MAX` — so the lexer cannot produce it and the negation has to fold with
+    /// it in the parser. Rejecting it here would make the smallest `Int` unwritable.
+    IntTooLarge(String),
     Str(String),
     Ident(String),
 
@@ -29,6 +35,7 @@ pub enum TokenKind {
     While,
     Break,
     Continue,
+    Return,
 
     // Punctuation
     LParen,
@@ -63,6 +70,7 @@ impl TokenKind {
     pub fn describe(&self) -> String {
         match self {
             Self::Int(v) => format!("integer `{v}`"),
+            Self::IntTooLarge(d) => format!("integer `{d}`"),
             Self::Str(_) => "string literal".to_owned(),
             Self::Ident(n) => format!("`{n}`"),
             Self::Fn => "`fn`".to_owned(),
@@ -75,6 +83,7 @@ impl TokenKind {
             Self::While => "`while`".to_owned(),
             Self::Break => "`break`".to_owned(),
             Self::Continue => "`continue`".to_owned(),
+            Self::Return => "`return`".to_owned(),
             Self::LParen => "`(`".to_owned(),
             Self::RParen => "`)`".to_owned(),
             Self::LBrace => "`{`".to_owned(),
@@ -157,14 +166,13 @@ pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
                 }),
                 // Refused at the boundary rather than silently wrapped. A literal that
                 // does not fit the type it is written as is a mistake, not a value.
-                Err(_) => errors.push(
-                    Diagnostic::error(
-                        codes::INTEGER_TOO_LARGE,
-                        Span::new(at(start), at(i)),
-                        format!("`{raw}` does not fit in `Int`"),
-                    )
-                    .help("`Int` is a 64-bit signed integer"),
-                ),
+                // Not an error here: `-9223372036854775808` is a valid `Int` and its
+                // magnitude does not fit. The parser folds the sign and reports if it
+                // still does not.
+                Err(_) => tokens.push(Token {
+                    kind: TokenKind::IntTooLarge(raw),
+                    span: Span::new(at(start), at(i)),
+                }),
             }
             continue;
         }
@@ -186,6 +194,7 @@ pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
                 "while" => TokenKind::While,
                 "break" => TokenKind::Break,
                 "continue" => TokenKind::Continue,
+                "return" => TokenKind::Return,
                 _ => TokenKind::Ident(word.to_owned()),
             };
             tokens.push(Token {
@@ -342,10 +351,27 @@ mod tests {
     }
 
     #[test]
-    fn a_literal_too_large_for_int_is_refused_not_wrapped() {
-        let (_, e) = lex("99999999999999999999");
-        assert_eq!(e.len(), 1);
-        assert_eq!(e[0].code, codes::INTEGER_TOO_LARGE);
+    fn a_literal_too_large_for_int_is_kept_for_the_parser_to_judge() {
+        // Not an error here, and that is deliberate: `9223372036854775808` is out of
+        // range on its own and exactly in range after a `-`. Only the parser can see the
+        // sign, so the lexer hands over the digits rather than deciding without them.
+        let (t, e) = lex("9223372036854775808");
+        assert!(e.is_empty(), "the lexer should not judge this: {e:?}");
+        assert_eq!(
+            t[0].kind,
+            TokenKind::IntTooLarge("9223372036854775808".to_string())
+        );
+    }
+
+    #[test]
+    fn underscores_are_stripped_before_the_parser_sees_the_digits() {
+        // `-9_223_372_036_854_775_808` has to fold into `i64::MIN`, which it cannot do if
+        // the separators are still in the string the parser parses.
+        let (t, _) = lex("9_223_372_036_854_775_808");
+        assert_eq!(
+            t[0].kind,
+            TokenKind::IntTooLarge("9223372036854775808".to_string())
+        );
     }
 
     #[test]

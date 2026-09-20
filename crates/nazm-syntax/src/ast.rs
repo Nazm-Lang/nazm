@@ -19,7 +19,12 @@ pub struct Function {
     /// Always written. Inference across a function boundary would make a signature
     /// change invisible at the definition, which is the opposite of what a reader needs.
     pub return_type: TypeName,
-    pub body: Block,
+    /// `None` when the body failed to parse.
+    ///
+    /// The signature survives anyway, so calls to this function still check against real
+    /// parameter and return types instead of reporting that it does not exist. One
+    /// mistake should produce one error.
+    pub body: Option<Block>,
     pub span: Span,
 }
 
@@ -36,16 +41,17 @@ pub struct TypeName {
     pub span: Span,
 }
 
-/// Statements, then the expression the block evaluates to.
+/// Statements, then an optional tail expression.
 ///
-/// The tail is required. A block is an expression, and one with no value would need a
-/// unit type — a decision with consequences for function returns and every other block,
-/// too large to make in passing so that `while` can be an expression. So `while` and
-/// assignment are statements, which have no value, and the tail carries it.
+/// One `Block`, not two. Whether it produces a value is decided when checking, from
+/// whether there is a tail and whether the statements diverge — not from which syntactic
+/// form was parsed. The earlier design had an expression block and a statement block and a
+/// forward scanner to guess which one an `if` was, and that guess had a case it got wrong.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     pub statements: Vec<Stmt>,
-    pub tail: Box<Expr>,
+    /// Present when the block ends in an expression with no `;` after it.
+    pub tail: Option<Box<Expr>>,
     pub span: Span,
 }
 
@@ -58,13 +64,8 @@ pub enum Stmt {
     /// the oldest C bugs and nothing is gained by reproducing it.
     Assign(Assign),
     While(While),
-    /// `if cond { … }` with no value.
-    ///
-    /// Distinct from the `if` *expression*: its branches are statement blocks with no
-    /// tail, and `else` is optional. It exists because `while c { if d { break; } }` is
-    /// the useful shape and an expression block cannot hold `break` — it must end in a
-    /// value and `break` has none.
-    If(StmtIf),
+    /// Leave the enclosing function with this value.
+    Return(Return),
     /// Leave the innermost enclosing loop.
     Break {
         span: Span,
@@ -73,6 +74,10 @@ pub enum Stmt {
     Continue {
         span: Span,
     },
+    /// An expression evaluated and discarded.
+    ///
+    /// This is how an `if` reaches statement position without needing a second `if`.
+    Expr(Expr),
 }
 
 impl Stmt {
@@ -82,8 +87,9 @@ impl Stmt {
             Self::Let(l) => l.span,
             Self::Assign(a) => a.span,
             Self::While(w) => w.span,
-            Self::If(i) => i.span,
+            Self::Return(r) => r.span,
             Self::Break { span } | Self::Continue { span } => *span,
+            Self::Expr(e) => e.span(),
         }
     }
 }
@@ -109,34 +115,16 @@ pub struct Assign {
     pub span: Span,
 }
 
-/// Statements with no tail expression.
-///
-/// A loop body is this rather than a `Block`, and the distinction is not cosmetic: a
-/// `Block` must end in an expression because it *is* one, and a loop body has no value to
-/// give. Requiring a tail there would force every loop to end with a pointless expression.
-///
-/// The spec said `while` is a statement and stopped there; it took writing a loop to
-/// notice the body needed saying too.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StmtBlock {
-    pub statements: Vec<Stmt>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StmtIf {
-    pub cond: Expr,
-    pub then_block: StmtBlock,
-    /// Optional, unlike the expression form: a statement has no value, so there is
-    /// nothing for a missing branch to fail to produce.
-    pub else_block: Option<StmtBlock>,
+pub struct Return {
+    pub value: Expr,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct While {
     pub cond: Expr,
-    pub body: StmtBlock,
+    pub body: Block,
     pub span: Span,
 }
 
@@ -182,13 +170,31 @@ pub enum Expr {
     If {
         cond: Box<Expr>,
         then_block: Block,
-        else_block: Block,
+        /// Optional. Whether it is *required* depends on whether a value is wanted from
+        /// the `if`, which is a checking question, not a parsing one.
+        else_block: Option<Block>,
         span: Span,
     },
     Block(Box<Block>),
 }
 
 impl Expr {
+    /// The span, by reference, for callers inside a `match` on `self`.
+    #[must_use]
+    pub fn span_ref(&self) -> &Span {
+        match self {
+            Self::Int { span, .. }
+            | Self::Bool { span, .. }
+            | Self::Str { span, .. }
+            | Self::Var { span, .. }
+            | Self::Neg { span, .. }
+            | Self::Binary { span, .. }
+            | Self::Call { span, .. }
+            | Self::If { span, .. } => span,
+            Self::Block(b) => &b.span,
+        }
+    }
+
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
