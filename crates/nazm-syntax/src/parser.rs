@@ -27,14 +27,17 @@ const RESERVED: &[(&str, &str)] = &[
     ("use", "there are no modules yet"),
     ("mod", "there are no modules yet"),
     ("impl", "there are no methods yet"),
-    ("print", "there is no input or output yet"),
+    // `print` left this list when `print` became a built-in. The entry existed to refuse
+    // a name people would reach for before it worked; now it works, and refusing it
+    // would be refusing the thing it was reserving.
 ];
 
 /// What the language does have, for the help text on a refused construct.
 const SUPPORTED: &str = concat!(
     "the supported subset is functions, `let` and `let mut`, assignment, `while` with ",
-    "`break` and `continue`, `if`/`else` as a statement or an expression, and arithmetic ",
-    "and comparison over `Int`, `Bool` and `Str` — see docs/spec.md"
+    "`break` and `continue`, `return`, `if`/`else` as a statement or an expression, ",
+    "arithmetic and comparison over `Int`, `Bool` and `Str`, the `Ints` and `Strs` ",
+    "sequences, and the built-in operations on them — see docs/spec.md"
 );
 
 #[derive(Debug)]

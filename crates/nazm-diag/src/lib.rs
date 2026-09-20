@@ -108,6 +108,10 @@ pub mod codes {
     /// because its host aborts the process on allocation failure — a stated difference
     /// between the two, not a gap in the specification.
     pub const ALLOCATION_FAILED: Code = Code::new("N0406");
+
+    /// A file could not be read or written. The path is in the help, not the message,
+    /// so the two implementations report the same sentence.
+    pub const IO_FAILED: Code = Code::new("N0407");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -71,6 +71,13 @@ enum Command {
     /// Type-check and evaluate a program, printing the value of `main`.
     Run {
         file: PathBuf,
+        /// Arguments for the program itself, after `--`.
+        ///
+        /// What `arg(i)` sees, **excluding** the program's own name — so `arg(0)` means
+        /// the same thing here and in a compiled executable, where `argv[0]` is a path
+        /// nobody should depend on.
+        #[arg(last = true)]
+        args: Vec<String>,
         /// Emit diagnostics as one JSON object per line.
         ///
         /// The machine-readable form is the contract; the rendered text is a view of it.
@@ -170,16 +177,20 @@ fn main() -> ExitCode {
     let (path, json, limits) = match cli.command {
         Command::Run {
             file,
+            args,
             json,
             max_iterations,
             max_depth,
         } => (
             file,
             json,
-            Some(nazm_core::eval::Limits {
-                max_iterations,
-                max_depth,
-            }),
+            Some((
+                nazm_core::eval::Limits {
+                    max_iterations,
+                    max_depth,
+                },
+                args,
+            )),
         ),
         Command::Check { file, json } => (file, json, None),
         // Handled above; `main` keeps its original shape for the two commands whose
@@ -198,8 +209,8 @@ fn main() -> ExitCode {
 
     // Checking always runs; evaluation only when it passed. Running a program known to be
     // ill-typed produces a second, less useful error about the same mistake.
-    let outcome = if let Some(limits) = limits {
-        nazm_core::run_with_limits(file.text(), limits)
+    let outcome = if let Some((limits, args)) = limits {
+        nazm_core::run_with(file.text(), limits, args)
     } else {
         // Through `check_source`, which puts parsing and checking on the same
         // interpreter-owned stack `run` uses. Both recurse with the shape of the tree, so

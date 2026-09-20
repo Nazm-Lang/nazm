@@ -84,6 +84,8 @@ struct Emitter {
     /// language's rule (`docs/roadmap.md`, *Where a loop target binds*). Cleared at every
     /// function boundary, so no target can leak from one function into another.
     loops: Vec<Targets>,
+    /// Whether the I/O helpers and the argument globals are reached.
+    needs_io: bool,
     /// Whether the sequence helpers are reached. They are emitted only when they are —
     /// a program that never touches a sequence carries none of this.
     needs_sequences: bool,
@@ -777,6 +779,136 @@ impl Emitter {
                 );
                 self.make_str(buf, n)
             }
+            // --- the outside world ------------------------------------------------
+            //
+            // Ambient: nothing in the language restricts which functions may reach the
+            // file system. `docs/spec.md` says so plainly rather than implying a
+            // capability system that is not here.
+            Builtin::ArgsCount => {
+                self.needs_io = true;
+                let argc = self.fresh();
+                let _ = writeln!(self.out, "  %{argc} = load i64, ptr @nz.argc");
+                return Val::Of {
+                    value: argc,
+                    ty: Ty::Int,
+                };
+            }
+            Builtin::Arg => {
+                self.needs_io = true;
+                let i = arg(0);
+                let argc = self.fresh();
+                let _ = writeln!(self.out, "  %{argc} = load i64, ptr @nz.argc");
+                let neg = self.fresh();
+                let _ = writeln!(self.out, "  %{neg} = icmp slt i64 %{i}, 0");
+                let past = self.fresh();
+                let _ = writeln!(self.out, "  %{past} = icmp sge i64 %{i}, %{argc}");
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{bad} = or i1 %{neg}, %{past}");
+                self.require(bad, "this index is outside the arguments", span);
+                // `argv[0]` is the program's own name and is deliberately not visible:
+                // it is a path nobody should depend on, and excluding it is what makes
+                // `arg(i)` mean the same thing interpreted and compiled.
+                let shifted = self.fresh();
+                let _ = writeln!(self.out, "  %{shifted} = add i64 %{i}, 1");
+                let base = self.fresh();
+                let _ = writeln!(self.out, "  %{base} = load ptr, ptr @nz.argv");
+                let slot = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{slot} = getelementptr ptr, ptr %{base}, i64 %{shifted}"
+                );
+                let text = self.fresh();
+                let _ = writeln!(self.out, "  %{text} = load ptr, ptr %{slot}");
+                let len = self.fresh();
+                let _ = writeln!(self.out, "  %{len} = call i64 @strlen(ptr %{text})");
+                self.make_str(text, len)
+            }
+            Builtin::Print | Builtin::EPrint => {
+                let (ptr, len) = self.str_parts(arg(0));
+                let fd = if op == Builtin::Print { 1 } else { 2 };
+                let written = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{written} = call i64 @write(i32 {fd}, ptr %{ptr}, i64 %{len})"
+                );
+                return Val::Of {
+                    value: written,
+                    ty: Ty::Int,
+                };
+            }
+            Builtin::ExitWith => {
+                let narrow = self.fresh();
+                let _ = writeln!(self.out, "  %{narrow} = trunc i64 %{} to i32", arg(0));
+                let _ = writeln!(self.out, "  call void @exit(i32 %{narrow})");
+                let _ = writeln!(self.out, "  unreachable");
+                // The process is over, so there is no value and none is invented. This
+                // is the one built-in that transfers, and the emitter already has the
+                // vocabulary for that.
+                return Val::Transferred;
+            }
+            Builtin::ReadFile => {
+                self.needs_io = true;
+                let (ptr, len) = self.str_parts(arg(0));
+                let out = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{out} = call {{ ptr, i64 }} @nz.read_file(ptr %{ptr}, i64 %{len})"
+                );
+                let got = self.fresh();
+                let _ = writeln!(self.out, "  %{got} = extractvalue {{ ptr, i64 }} %{out}, 0");
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{bad} = icmp eq ptr %{got}, null");
+                self.guard(
+                    bad,
+                    &Failure {
+                        code: "N0407",
+                        message: "this file could not be read".to_owned(),
+                    },
+                    span.start,
+                );
+                return Val::Of {
+                    value: out,
+                    ty: Ty::Str,
+                };
+            }
+            Builtin::WriteFile => {
+                self.needs_io = true;
+                let (pp, pn) = self.str_parts(arg(0));
+                let (dp, dn) = self.str_parts(arg(1));
+                let n = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{n} = call i64 @nz.write_file(ptr %{pp}, i64 %{pn}, ptr %{dp}, i64 %{dn})"
+                );
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{bad} = icmp slt i64 %{n}, 0");
+                self.guard(
+                    bad,
+                    &Failure {
+                        code: "N0407",
+                        message: "this file could not be written".to_owned(),
+                    },
+                    span.start,
+                );
+                return Val::Of {
+                    value: n,
+                    ty: Ty::Int,
+                };
+            }
+            Builtin::FileExists => {
+                self.needs_io = true;
+                let (pp, pn) = self.str_parts(arg(0));
+                let yes = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{yes} = call i1 @nz.file_exists(ptr %{pp}, i64 %{pn})"
+                );
+                return Val::Of {
+                    value: yes,
+                    ty: Ty::Bool,
+                };
+            }
+
             // --- sequences -------------------------------------------------------
             //
             // The handle is a pointer to a `{ i64 len, i64 cap, ptr data }` header, so
@@ -1164,6 +1296,7 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
         source_len: source.len(),
         loops: Vec::new(),
         needs_sequences: false,
+        needs_io: false,
     };
 
     // One definition per function, in `FuncId` order so the IR reads in the order the
@@ -1176,8 +1309,17 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
     // `main` is an ordinary `@nz.f<N>` like every other function, so a program can
     // neither collide with `@main` nor with the runtime helper — and **only this wrapper
     // prints**. A helper function returns a value and writes nothing.
-    let _ = writeln!(e.out, "define i32 @main() {{");
+    let _ = writeln!(e.out, "define i32 @main(i32 %argc, ptr %argv) {{");
     let _ = writeln!(e.out, "entry:");
+    if e.needs_io {
+        // Stashed in globals so `args_count` and `arg` need no parameter threaded
+        // through every Nazm function. One fewer than `argc`, because `argv[0]` is the
+        // program's own name and is deliberately not visible.
+        let _ = writeln!(e.out, "  %argc64 = sext i32 %argc to i64");
+        let _ = writeln!(e.out, "  %nargs = sub i64 %argc64, 1");
+        let _ = writeln!(e.out, "  store i64 %nargs, ptr @nz.argc");
+        let _ = writeln!(e.out, "  store ptr %argv, ptr @nz.argv");
+    }
     let _ = writeln!(e.out, "  %result = call i64 {}()", module.entry.symbol());
     let _ = writeln!(
         e.out,
@@ -1212,6 +1354,29 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
     let _ = writeln!(head, "declare i32 @memcmp(ptr, ptr, i64)");
     if e.needs_sequences {
         let _ = writeln!(head, "declare ptr @realloc(ptr, i64)");
+    }
+    if e.needs_io {
+        for d in [
+            "declare i64 @strlen(ptr)",
+            "declare ptr @fopen(ptr, ptr)",
+            "declare i32 @fseek(ptr, i64, i32)",
+            "declare i64 @ftell(ptr)",
+            "declare i64 @fread(ptr, i64, i64, ptr)",
+            "declare i64 @fwrite(ptr, i64, i64, ptr)",
+            "declare i32 @fclose(ptr)",
+        ] {
+            let _ = writeln!(head, "{d}");
+        }
+        let _ = writeln!(head, "@nz.argc = internal global i64 0");
+        let _ = writeln!(head, "@nz.argv = internal global ptr null");
+        let _ = writeln!(
+            head,
+            "@.rb = private unnamed_addr constant [3 x i8] c\"rb\\00\""
+        );
+        let _ = writeln!(
+            head,
+            "@.wb = private unnamed_addr constant [3 x i8] c\"wb\\00\""
+        );
     }
     let _ = writeln!(
         head,
@@ -1272,10 +1437,118 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
     if e.needs_sequences {
         head.push_str(SEQUENCE_RUNTIME);
     }
+    if e.needs_io {
+        head.push_str(IO_RUNTIME);
+    }
     head.push('\n');
 
     head + &e.out
 }
+
+/// The file-system helpers, as generated LLVM.
+///
+/// Here rather than at the call sites because each is a dozen basic blocks and none of
+/// them needs a source position: every failure is signalled by a null pointer or a
+/// negative count, and the *call site* turns that into `N0407` at the right span. That
+/// split is the same one the sequence helpers use, for the same reason.
+///
+/// A Nazm `Str` is not NUL-terminated — the specification makes an embedded zero an
+/// ordinary byte — so `@nz.cstr` copies the path into a terminated buffer before any
+/// libc call sees it. Passing the bytes directly would truncate a path at the first
+/// zero, or read past the end of one that has none.
+const IO_RUNTIME: &str = r"
+define internal ptr @nz.cstr(ptr %p, i64 %n) {
+entry:
+  %room = add i64 %n, 1
+  %buf = call ptr @malloc(i64 %room)
+  %bad = icmp eq ptr %buf, null
+  br i1 %bad, label %fail, label %ok
+fail:
+  ret ptr null
+ok:
+  call void @llvm.memcpy.p0.p0.i64(ptr %buf, ptr %p, i64 %n, i1 false)
+  %end = getelementptr i8, ptr %buf, i64 %n
+  store i8 0, ptr %end
+  ret ptr %buf
+}
+
+define internal i1 @nz.file_exists(ptr %p, i64 %n) {
+entry:
+  %path = call ptr @nz.cstr(ptr %p, i64 %n)
+  %nopath = icmp eq ptr %path, null
+  br i1 %nopath, label %no, label %open
+open:
+  %f = call ptr @fopen(ptr %path, ptr @.rb)
+  %missing = icmp eq ptr %f, null
+  br i1 %missing, label %no, label %yes
+yes:
+  %ignored = call i32 @fclose(ptr %f)
+  ret i1 true
+no:
+  ret i1 false
+}
+
+define internal { ptr, i64 } @nz.read_file(ptr %p, i64 %n) {
+entry:
+  %path = call ptr @nz.cstr(ptr %p, i64 %n)
+  %nopath = icmp eq ptr %path, null
+  br i1 %nopath, label %fail, label %open
+open:
+  %f = call ptr @fopen(ptr %path, ptr @.rb)
+  %missing = icmp eq ptr %f, null
+  br i1 %missing, label %fail, label %measure
+measure:
+  ; SEEK_END is 2 and SEEK_SET is 0 on every target this is verified against.
+  %e = call i32 @fseek(ptr %f, i64 0, i32 2)
+  %len = call i64 @ftell(ptr %f)
+  %unmeasurable = icmp slt i64 %len, 0
+  br i1 %unmeasurable, label %closefail, label %reserve
+reserve:
+  %s = call i32 @fseek(ptr %f, i64 0, i32 0)
+  ; One byte more than the file, so an empty file still owns storage and its pointer
+  ; stays valid to compare.
+  %room = add i64 %len, 1
+  %buf = call ptr @malloc(i64 %room)
+  %nobuf = icmp eq ptr %buf, null
+  br i1 %nobuf, label %closefail, label %read
+read:
+  %got = call i64 @fread(ptr %buf, i64 1, i64 %len, ptr %f)
+  %c = call i32 @fclose(ptr %f)
+  %short = icmp ne i64 %got, %len
+  br i1 %short, label %fail, label %done
+done:
+  %a = insertvalue { ptr, i64 } undef, ptr %buf, 0
+  %b = insertvalue { ptr, i64 } %a, i64 %len, 1
+  ret { ptr, i64 } %b
+closefail:
+  %c2 = call i32 @fclose(ptr %f)
+  br label %fail
+fail:
+  %z = insertvalue { ptr, i64 } undef, ptr null, 0
+  %z2 = insertvalue { ptr, i64 } %z, i64 0, 1
+  ret { ptr, i64 } %z2
+}
+
+define internal i64 @nz.write_file(ptr %pp, i64 %pn, ptr %dp, i64 %dn) {
+entry:
+  %path = call ptr @nz.cstr(ptr %pp, i64 %pn)
+  %nopath = icmp eq ptr %path, null
+  br i1 %nopath, label %fail, label %open
+open:
+  %f = call ptr @fopen(ptr %path, ptr @.wb)
+  %missing = icmp eq ptr %f, null
+  br i1 %missing, label %fail, label %write
+write:
+  %got = call i64 @fwrite(ptr %dp, i64 1, i64 %dn, ptr %f)
+  %c = call i32 @fclose(ptr %f)
+  %short = icmp ne i64 %got, %dn
+  br i1 %short, label %fail, label %done
+done:
+  ret i64 %got
+fail:
+  ret i64 -1
+}
+";
 
 /// The two sequence helpers, as generated LLVM rather than a linked runtime crate.
 ///
@@ -1728,7 +2001,12 @@ mod tests {
         };
         let ir = ir_of(&calling(helper, Vec::new(), Ty::Int));
 
-        assert!(ir.contains("define i32 @main() {"), "{ir}");
+        // The C entry point takes `argc`/`argv` since B3; what matters here is that it
+        // is a separate, external wrapper around Nazm's `main`, not its signature.
+        assert!(
+            ir.contains("define i32 @main(i32 %argc, ptr %argv) {"),
+            "{ir}"
+        );
         assert!(
             ir.contains("define internal i64 @nz.f0("),
             "nazm main is not a wrapper: {ir}"
