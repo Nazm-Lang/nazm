@@ -504,6 +504,11 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
         "fn m() -> Int { 100 / 7 % 3 }",
         "fn m() -> Int { -x }",
         "fn m() -> Int { - -1 }",
+        // `Int::MIN`: its magnitude is one greater than `Int::MAX`, so the lexer cannot
+        // produce it and the negation has to fold with the literal. If the two parsers
+        // disagree here, one of them cannot express the smallest `Int` at all.
+        "fn m() -> Int { -9223372036854775808 }",
+        "fn m() -> Int { -9223372036854775808 % -1 }",
         "fn m() -> Int { 1 + -2 }",
         "fn m() -> Int { -(1 + 2) }",
         "fn m() -> Bool { a < b == c }",
@@ -869,13 +874,13 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
     // risk that creates is drift — a built-in added to the language and never taught to
     // the checker, which would then report a valid call as an unknown function. This is
     // the guard: it reads the Nazm source and requires a signature for every intrinsic.
-    let source = std::fs::read_to_string(repo_root().join("compiler/check.nz")).expect("read");
+    let source = std::fs::read_to_string(repo_root().join("compiler/analyse.nz")).expect("read");
     for i in nazm_core::Intrinsic::ALL {
         let needle = format!("\"{}\"", i.name());
         assert!(
             source.contains(&needle),
-            "`{}` has no signature in compiler/check.nz — the front end's built-ins and \
-             the Nazm checker's table have drifted",
+            "`{}` has no signature in compiler/analyse.nz — the front end's built-ins \
+             and the Nazm checker's table have drifted",
             i.name()
         );
     }
@@ -903,9 +908,259 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         assert_eq!(
             arity,
             i.params().len(),
-            "`{}` takes {} parameters but compiler/check.nz records {arity}",
+            "`{}` takes {} parameters but compiler/analyse.nz records {arity}",
             i.name(),
             i.params().len()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The compiler written in Nazm, end to end
+//
+// `compiler/emit.nz` reads a `.nz` file and writes LLVM IR. `clang` assembles it. The
+// result is a native executable produced by a compiler written in Nazm, with the Rust
+// implementation nowhere in the pipeline except as the bootstrap that compiled the
+// compiler — which is what `docs/NAZM_AUTONOMOUS_GOAL.md` §8 permits and a wrapper
+// shelling out to Rust is not.
+// ---------------------------------------------------------------------------
+
+/// Run a command, killing it if it outlives `limit`.
+///
+/// Its own copy rather than one shared with `tests/build.rs`: each integration test is a
+/// separate binary, and a compiled program that does not terminate would otherwise hang
+/// the suite rather than fail it.
+fn run_bounded(
+    cmd: &mut Command,
+    limit: std::time::Duration,
+) -> Option<(Option<i32>, String, String)> {
+    use std::process::Stdio;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait().expect("try_wait") {
+            Some(status) => {
+                let out = child.wait_with_output().expect("collect");
+                return Some((
+                    status.code(),
+                    String::from_utf8_lossy(&out.stdout).into_owned(),
+                    String::from_utf8_lossy(&out.stderr).into_owned(),
+                ));
+            }
+            None if start.elapsed() >= limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(5)),
+        }
+    }
+}
+
+fn build_emitter(dir: &Path) -> PathBuf {
+    let source = repo_root().join("compiler/emit.nz");
+    assert!(source.exists(), "{} is missing", source.display());
+    let exe = dir.join("nzemit");
+    let out = Command::new(NAZM)
+        .args(["build", source.to_str().unwrap()])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("run nazm build");
+    assert!(
+        out.status.success(),
+        "the Nazm emitter no longer compiles natively: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    exe
+}
+
+#[test]
+fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_interpreter() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+
+    // Every arithmetic shape `docs/spec.md` pins, including all four integer boundary
+    // cases. Written as explicit expectations *and* compared with the interpreter:
+    // an expectation can be written wrong, and differential agreement alone is
+    // satisfied by a bug both share.
+    let cases: &[(&str, &str)] = &[
+        ("1 + 2 * 3 - 4", "3"),
+        ("(1 + 2) * (3 - 4)", "-3"),
+        ("100 / 7", "14"),
+        ("100 % 7", "2"),
+        ("-(3 * 4)", "-12"),
+        ("- -5", "5"),
+        ("-7 / 2", "-3"),
+        ("-7 % 2", "-1"),
+        ("7 / -2", "-3"),
+        ("7 % -2", "1"),
+        ("9223372036854775807", "9223372036854775807"),
+        ("-9223372036854775808", "-9223372036854775808"),
+        ("9223372036854775807 - 1", "9223372036854775806"),
+        // `Int::MIN % -1` is 0: mathematically zero, zero is representable, and the
+        // hardware instruction that would compute it faults on exactly this pair.
+        ("-9223372036854775808 % -1", "0"),
+    ];
+
+    for (expr, expected) in cases {
+        let src = format!("fn main() -> Int {{ {expr} }}\n");
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, &src).expect("write");
+
+        let ir = Command::new(&emitter)
+            .arg(&file)
+            .output()
+            .expect("run emitter");
+        assert_eq!(
+            ir.status.code(),
+            Some(0),
+            "the Nazm compiler refused {expr:?}: {}",
+            String::from_utf8_lossy(&ir.stderr)
+        );
+        let ll = dir.path().join("case.ll");
+        std::fs::write(&ll, &ir.stdout).expect("write IR");
+
+        let exe = dir.path().join("case");
+        let built = Command::new("clang")
+            .args(["-Wno-override-module", "-o"])
+            .arg(&exe)
+            .arg(&ll)
+            .output()
+            .expect("run clang");
+        assert!(
+            built.status.success(),
+            "clang rejected IR from the Nazm compiler for {expr:?}: {}\n{}",
+            String::from_utf8_lossy(&built.stderr),
+            String::from_utf8_lossy(&ir.stdout)
+        );
+
+        let (code, stdout, _) =
+            run_bounded(&mut Command::new(&exe), std::time::Duration::from_secs(30))
+                .expect("the compiled program hung");
+        assert_eq!(code, Some(0), "{expr:?}: {stdout}");
+        assert_eq!(stdout.trim(), *expected, "{expr:?}");
+
+        // And the interpreter agrees with the same expectation.
+        let interp = Command::new(NAZM)
+            .args(["run", file.to_str().unwrap()])
+            .output()
+            .expect("run");
+        assert_eq!(
+            String::from_utf8_lossy(&interp.stdout).trim(),
+            *expected,
+            "the expectation disagrees with the interpreter for {expr:?}"
+        );
+    }
+}
+
+#[test]
+fn the_nazm_compiler_keeps_the_specified_failure_behaviour() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+
+    // Overflow is an intrinsic and a branch, never `nsw`; division by zero and
+    // `Int::MIN / -1` are guarded *before* the instruction that would fault. Each stops
+    // the program with exit 2 and a located diagnostic — not a signal, which is what
+    // `llvm.trap` would have given.
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "9223372036854775807 + 1",
+            "N0400",
+            "this addition overflows `Int`",
+        ),
+        (
+            "-9223372036854775808 - 1",
+            "N0400",
+            "this subtraction overflows `Int`",
+        ),
+        (
+            "9223372036854775807 * 2",
+            "N0400",
+            "this multiplication overflows `Int`",
+        ),
+        (
+            "-(-9223372036854775808)",
+            "N0400",
+            "this negation overflows `Int`",
+        ),
+        ("1 / 0", "N0401", "division by zero"),
+        ("1 % 0", "N0401", "division by zero"),
+        (
+            "-9223372036854775808 / -1",
+            "N0400",
+            "this division overflows `Int`",
+        ),
+    ];
+
+    for (expr, code, message) in cases {
+        let src = format!("fn main() -> Int {{ {expr} }}\n");
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, &src).expect("write");
+        let ir = Command::new(&emitter).arg(&file).output().expect("run");
+        assert_eq!(ir.status.code(), Some(0), "{expr:?}");
+        let ll = dir.path().join("case.ll");
+        std::fs::write(&ll, &ir.stdout).expect("write");
+        let exe = dir.path().join("case");
+        assert!(Command::new("clang")
+            .args(["-Wno-override-module", "-o"])
+            .arg(&exe)
+            .arg(&ll)
+            .output()
+            .expect("clang")
+            .status
+            .success());
+
+        let (status, stdout, stderr) =
+            run_bounded(&mut Command::new(&exe), std::time::Duration::from_secs(30)).expect("hung");
+        assert_eq!(status, Some(2), "{expr:?}: a runtime failure must exit 2");
+        assert!(stderr.contains(code), "{expr:?}: {stderr}");
+        assert!(stderr.contains(message), "{expr:?}: {stderr}");
+        assert!(
+            stderr.contains("case.nz:1:"),
+            "{expr:?}: no position: {stderr}"
+        );
+        assert!(stdout.is_empty(), "{expr:?}: nothing should be printed");
+
+        // The IR never uses `nsw`, which would let the optimiser delete the very branch
+        // meant to catch the overflow.
+        let text = String::from_utf8_lossy(&ir.stdout);
+        assert!(!text.contains("nsw"), "{expr:?}: emitted `nsw`:\n{text}");
+    }
+}
+
+#[test]
+fn the_nazm_compiler_refuses_what_it_cannot_emit_and_writes_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+
+    for (src, expected) in [
+        // Outside this increment's coverage: a backend limitation, reported as `N0101`.
+        ("fn main() -> Int { let x = 1; x }\n", "N0101"),
+        ("fn main() -> Bool { true }\n", "N0101"),
+        ("fn f() -> Int { 1 }\nfn main() -> Int { f() }\n", "N0101"),
+        // A program that does not check is a *check* failure, reported with the
+        // checker's own code — never as a backend limit.
+        ("fn main() -> Int { 1 + true }\n", "N0304"),
+        ("fn main() -> Int { undefined_name }\n", "N0200"),
+    ] {
+        let file = dir.path().join("bad.nz");
+        std::fs::write(&file, src).expect("write");
+        let out = Command::new(&emitter).arg(&file).output().expect("run");
+        assert_eq!(out.status.code(), Some(1), "{src:?} should be refused");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{src:?}: expected {expected}: {stderr}"
+        );
+        assert!(
+            out.stdout.is_empty(),
+            "{src:?}: emitted IR for a refused program"
         );
     }
 }

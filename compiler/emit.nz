@@ -1,0 +1,464 @@
+// LLVM IR emission for Nazm, written in Nazm.
+//
+// The fourth component, and the one that makes the others a *compiler*: it turns the node
+// arena into LLVM IR text, which `clang` assembles. Same arrangement as `nazm build` —
+// `docs/architecture.md` §1 says not to link LLVM in year one, and `clang` reads IR from
+// a file — and the same arrangement `docs/NAZM_AUTONOMOUS_GOAL.md` §8 permits: emitting
+// LLVM and invoking an external assembler is self-hosting, a wrapper that shells out to
+// the Rust compiler is not.
+//
+// # Scope of this increment
+//
+// `fn main() -> Int { EXPRESSION }` over integer arithmetic: literals, unary `-`, and
+// `+ - * / %` with the **specified** failure behaviour — overflow through
+// `llvm.*.with.overflow.i64` and an explicit branch, never `nsw`; division by zero and
+// `Int::MIN / -1` guarded before the instruction that would fault; `Int::MIN % -1`
+// answered with a constant because `srem` faults on that pair. Every failure reports its
+// own source position, resolved here and baked in as a constant, because the generated
+// program has no syntax tree to consult.
+//
+// Anything outside that is refused by name. The checker runs first, so a refusal here is
+// about *this backend's coverage*, never about the program being wrong — the same
+// distinction `nazm-lir` keeps.
+//
+// # Why a post-order scan is enough for this subset
+//
+// The arena is post-order, and an expression's operands are emitted before it. With no
+// control flow there are no basic blocks to open, so one left-to-right pass with a stack
+// of SSA value numbers emits in exactly the right order. Control flow will need the
+// marker walk `compiler/check.nz` uses; it is not needed yet and is not written yet.
+
+use "analyse.nz";
+
+// --- output assembly -------------------------------------------------------------
+
+fn nl() -> Str { str_from_byte(10) }
+
+// A double quote and a backslash, built rather than written: v0.1 string literals have
+// no escapes (`docs/spec.md`), so a quote cannot appear inside one. Emitting LLVM text
+// needs both constantly, which is the clearest argument for escapes the language has
+// produced so far — recorded rather than worked around silently.
+fn dq() -> Str { str_from_byte(34) }
+fn bs() -> Str { str_from_byte(92) }
+
+fn add_line(out: Strs, line: Str) -> Int {
+    strs_push(out, line);
+    strs_push(out, nl());
+    strs_len(out)
+}
+
+fn join(out: Strs) -> Str {
+    let mut s = "";
+    let mut i = 0;
+    while i < strs_len(out) {
+        s = str_concat(s, strs_get(out, i));
+        i = i + 1;
+    }
+    s
+}
+
+fn v(n: Int) -> Str { str_concat("%", int_to_str(n)) }
+
+// --- source positions --------------------------------------------------------------
+//
+// `line:column`, 1-based, from a byte offset — the same convention the renderer uses, so
+// a runtime error from a compiled program points where `nazm run` would.
+
+fn line_of(src: Str, offset: Int) -> Int {
+    let mut i = 0;
+    let mut line = 1;
+    while i < offset {
+        if str_byte(src, i) == 10 { line = line + 1; }
+        i = i + 1;
+    }
+    line
+}
+
+fn column_of(src: Str, offset: Int) -> Int {
+    let mut i = offset;
+    let mut col = 1;
+    while i > 0 {
+        if str_byte(src, i - 1) == 10 { return col; }
+        col = col + 1;
+        i = i - 1;
+    }
+    col
+}
+
+fn position(src: Str, path: Str, offset: Int) -> Str {
+    str_concat(str_concat(path, ":"),
+               str_concat(str_concat(int_to_str(line_of(src, offset)), ":"),
+                          int_to_str(column_of(src, offset))))
+}
+
+// --- the failure helper and its messages --------------------------------------------
+//
+// Not `llvm.trap`: a process killed by `SIGILL` is not the runtime-error contract
+// `docs/spec.md` promises, which is that the program *stops with a diagnostic*. So a
+// failing operation calls a generated helper that writes to descriptor 2 and exits 2 —
+// the same status `nazm run` uses.
+
+fn escape_byte(b: Int) -> Str {
+    if b == 34 { return str_concat(bs(), "22"); }
+    if b == 92 { return str_concat(bs(), "5C"); }
+    if b < 32 { return str_concat(bs(), hex2(b)); }
+    if b > 126 { return str_concat(bs(), hex2(b)); }
+    str_from_byte(b)
+}
+
+fn hex_digit(d: Int) -> Str {
+    if d < 10 { return int_to_str(d); }
+    if d == 10 { return "A"; }
+    if d == 11 { return "B"; }
+    if d == 12 { return "C"; }
+    if d == 13 { return "D"; }
+    if d == 14 { return "E"; }
+    "F"
+}
+
+fn hex2(b: Int) -> Str {
+    str_concat(hex_digit(b / 16), hex_digit(b % 16))
+}
+
+fn escaped(s: Str) -> Str {
+    let mut out = "";
+    let mut i = 0;
+    while i < str_len(s) {
+        out = str_concat(out, escape_byte(str_byte(s, i)));
+        i = i + 1;
+    }
+    out
+}
+
+// Interned: a program with the same failure twice carries the message once.
+fn message_index(msgs: Strs, text: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(msgs) {
+        if strs_get(msgs, i) == text { return i; }
+        i = i + 1;
+    }
+    strs_push(msgs, text);
+    strs_len(msgs) - 1
+}
+
+fn failure_text(code: Str, message: Str, at: Str) -> Str {
+    str_concat(str_concat(str_concat("nazm: error[", code), str_concat("]: ", message)),
+               str_concat(str_concat(" at ", at), nl()))
+}
+
+// Emit the branch that reports `msg` and never returns, then continue after it.
+//
+// The failure block ends in `unreachable`, so it is never a predecessor of anything.
+fn guard(out: Strs, msgs: Strs, next: Ints, cond: Int, code: Str, message: Str, at: Str) -> Int {
+    let text = failure_text(code, message, at);
+    let idx = message_index(msgs, text);
+    let fail = take_number(next);
+    let cont = take_number(next);
+    add_line(out, str_concat(str_concat("  br i1 ", v(cond)),
+                             str_concat(str_concat(", label %b", int_to_str(fail)),
+                                        str_concat(", label %b", int_to_str(cont)))));
+    add_line(out, str_concat(str_concat("b", int_to_str(fail)), ":"));
+    add_line(out, str_concat(str_concat("  call void @nz.fail(ptr @.m", int_to_str(idx)),
+                             str_concat(", i64 ", str_concat(int_to_str(str_len(text) + 1), ")"))));
+    add_line(out, "  unreachable");
+    add_line(out, str_concat(str_concat("b", int_to_str(cont)), ":"));
+    cont
+}
+
+fn take_number(next: Ints) -> Int {
+    let n = ints_get(next, 0);
+    ints_set(next, 0, n + 1);
+    n
+}
+
+// --- expressions ---------------------------------------------------------------------
+//
+// A post-order scan with a stack of SSA value numbers. Operands are already emitted when
+// their operator is reached, which is what post-order means.
+
+fn checked(out: Strs, msgs: Strs, next: Ints, intrinsic: Str, noun: Str,
+           a: Int, b: Int, at: Str) -> Int {
+    let r = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(r)),
+                             str_concat(str_concat(" = call {i64, i1} @llvm.", intrinsic),
+                                        str_concat(".with.overflow.i64(i64 ",
+                                                   str_concat(v(a), str_concat(", i64 ", str_concat(v(b), ")")))))));
+    let ov = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(ov)),
+                             str_concat(" = extractvalue {i64, i1} ", str_concat(v(r), ", 1"))));
+    guard(out, msgs, next, ov, "N0400", str_concat(str_concat("this ", noun), " overflows `Int`"), at);
+    let res = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(res)),
+                             str_concat(" = extractvalue {i64, i1} ", str_concat(v(r), ", 0"))));
+    res
+}
+
+// `a == Int::MIN && b == -1` — the one operand pair `sdiv` and `srem` fault on.
+fn min_over_minus_one(out: Strs, next: Ints, a: Int, b: Int) -> Int {
+    let is_min = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(is_min)),
+                             str_concat(" = icmp eq i64 ", str_concat(v(a), ", -9223372036854775808"))));
+    let is_m1 = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(is_m1)),
+                             str_concat(" = icmp eq i64 ", str_concat(v(b), ", -1"))));
+    let both = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(both)),
+                             str_concat(" = and i1 ", str_concat(v(is_min), str_concat(", ", v(is_m1))))));
+    both
+}
+
+fn divide(out: Strs, msgs: Strs, next: Ints, a: Int, b: Int, at: Str) -> Int {
+    let zero = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(zero)),
+                             str_concat(" = icmp eq i64 ", str_concat(v(b), ", 0"))));
+    guard(out, msgs, next, zero, "N0401", "division by zero", at);
+    let bad = min_over_minus_one(out, next, a, b);
+    guard(out, msgs, next, bad, "N0400", "this division overflows `Int`", at);
+    let res = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(res)),
+                             str_concat(" = sdiv i64 ", str_concat(v(a), str_concat(", ", v(b))))));
+    res
+}
+
+// Remainder, whose *only* failure is a zero divisor. `Int::MIN % -1` is mathematically
+// zero and zero is representable, so `docs/spec.md` specifies it as `0` — and the `srem`
+// instruction faults on that pair anyway, because it computes the quotient. The pair is
+// answered with a constant and never reaches the instruction.
+fn remainder(out: Strs, msgs: Strs, next: Ints, a: Int, b: Int, at: Str) -> Int {
+    let zero = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(zero)),
+                             str_concat(" = icmp eq i64 ", str_concat(v(b), ", 0"))));
+    guard(out, msgs, next, zero, "N0401", "division by zero", at);
+    let special = min_over_minus_one(out, next, a, b);
+    let is_zero = take_number(next);
+    let compute = take_number(next);
+    let after = take_number(next);
+    add_line(out, str_concat(str_concat("  br i1 ", v(special)),
+                             str_concat(str_concat(", label %b", int_to_str(is_zero)),
+                                        str_concat(", label %b", int_to_str(compute)))));
+    add_line(out, str_concat(str_concat("b", int_to_str(compute)), ":"));
+    let r = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(r)),
+                             str_concat(" = srem i64 ", str_concat(v(a), str_concat(", ", v(b))))));
+    add_line(out, str_concat("  br label %b", int_to_str(after)));
+    add_line(out, str_concat(str_concat("b", int_to_str(is_zero)), ":"));
+    add_line(out, str_concat("  br label %b", int_to_str(after)));
+    add_line(out, str_concat(str_concat("b", int_to_str(after)), ":"));
+    let res = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(res)),
+                             str_concat(str_concat(" = phi i64 [ ", v(r)),
+                                        str_concat(str_concat(", %b", int_to_str(compute)),
+                                                   str_concat(" ], [ 0, %b", str_concat(int_to_str(is_zero), " ]"))))));
+    res
+}
+
+fn emit_binary(out: Strs, msgs: Strs, next: Ints, op: Str, a: Int, b: Int, at: Str) -> Int {
+    if op == "+" { return checked(out, msgs, next, "sadd", "addition", a, b, at); }
+    if op == "-" { return checked(out, msgs, next, "ssub", "subtraction", a, b, at); }
+    if op == "*" { return checked(out, msgs, next, "smul", "multiplication", a, b, at); }
+    if op == "/" { return divide(out, msgs, next, a, b, at); }
+    if op == "%" { return remainder(out, msgs, next, a, b, at); }
+    0 - 1
+}
+
+// --- the module ------------------------------------------------------------------------
+
+fn refuse(message: Str, at: Str) -> Int {
+    eprint(str_concat(str_concat("nazm: error[N0101]: ", message),
+                      str_concat(str_concat(" at ", at), nl())));
+    eprint(str_concat("nazm: this emitter compiles `fn main() -> Int { EXPRESSION }` over integer arithmetic; everything else still runs under `nazm run`", nl()));
+    exit_with(1);
+    0
+}
+
+fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
+               naux: Ints, out: Strs, msgs: Strs) -> Int {
+    let next = ints_new();
+    ints_push(next, 0);
+    let vals = ints_new();
+
+    add_line(out, "define internal i64 @nz.main() {");
+    add_line(out, "entry:");
+
+    let mut k = 0;
+    while k < ints_len(nk) {
+        let kind = ints_get(nk, k);
+        let from = ints_get(nst, k);
+        let text = strs_get(ntx, k);
+
+        if kind == n_int() {
+            let n = take_number(next);
+            // Through an `add` rather than inline, so every expression has a value
+            // number and there is one shape to reason about. `-O2` folds it.
+            add_line(out, str_concat(str_concat("  ", v(n)),
+                                     str_concat(" = add i64 ", str_concat(text, ", 0"))));
+            ints_push(vals, n);
+        } else {
+            if kind == n_bin() {
+                let b = ints_pop(vals);
+                let a = ints_pop(vals);
+                let at = position(src, path, ints_get(naux, k));
+                let r = emit_binary(out, msgs, next, text, a, b, at);
+                if r < 0 { refuse(str_concat(str_concat("the operator `", text), "`"), at); }
+                ints_push(vals, r);
+            } else {
+                if kind == n_neg() {
+                    let a = ints_pop(vals);
+                    let zero = take_number(next);
+                    add_line(out, str_concat(str_concat("  ", v(zero)), " = add i64 0, 0"));
+                    let at = position(src, path, from);
+                    // The only negation without a representable result is `-Int::MIN`.
+                    let r = checked(out, msgs, next, "ssub", "negation", zero, a, at);
+                    ints_push(vals, r);
+                } else {
+                    if kind == n_block() {
+                        // One value: the tail. Statements are not in this subset.
+                        if text != "tail" {
+                            refuse("a body with no result expression",
+                                   position(src, path, from));
+                        }
+                    } else {
+                        if kind == n_fn() {
+                            if before_colon(text) != "main" {
+                                refuse("a function other than `main`", position(src, path, from));
+                            }
+                            if after_colon(text) != "Int" {
+                                refuse("a `main` that does not return `Int`",
+                                       position(src, path, from));
+                            }
+                        } else {
+                            if kind != n_program() {
+                                refuse(str_concat(str_concat("`", node_name(kind)), "`"),
+                                       position(src, path, from));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        k = k + 1;
+    }
+
+    if ints_len(vals) != 1 {
+        refuse("a program that did not produce exactly one value", position(src, path, 0));
+    }
+    add_line(out, str_concat("  ret i64 ", v(ints_pop(vals))));
+    add_line(out, "}");
+    ints_get(next, 0)
+}
+
+fn main() -> Int {
+    if args_count() < 1 {
+        eprint(str_concat("usage: emit FILE", nl()));
+        exit_with(2);
+    }
+    let path = arg(0);
+    if file_exists(path) == false {
+        eprint(str_concat(str_concat("cannot read ", path), nl()));
+        exit_with(2);
+    }
+    let src = read_file(path);
+
+    let kinds = ints_new();
+    let starts = ints_new();
+    let ends = ints_new();
+    let texts = strs_new();
+    lex(src, kinds, starts, ends, texts);
+
+    let nk = ints_new();
+    let nar = ints_new();
+    let nst = ints_new();
+    let nen = ints_new();
+    let ntx = strs_new();
+    let naux = ints_new();
+    parse_program(kinds, starts, ends, texts, nk, nar, nst, nen, ntx, naux);
+
+    // Checking first, always: a program that does not check is not a question about this
+    // backend's coverage, and emitting for one would produce something that runs.
+    let kids = ints_new();
+    let kid_first = ints_new();
+    build_children(nk, nar, kids, kid_first);
+    let fnames = strs_new();
+    let fret = ints_new();
+    let ffirst = ints_new();
+    let fcount = ints_new();
+    let fparams = ints_new();
+    collect_signatures(nk, nar, ntx, kids, kid_first, fnames, fret, ffirst, fcount, fparams);
+    let bnames = strs_new();
+    let bret = ints_new();
+    let bfirst = ints_new();
+    let bcount = ints_new();
+    let bparams = ints_new();
+    builtins(bnames, bret, bfirst, bcount, bparams);
+    let dcode = strs_new();
+    let dstart = ints_new();
+    let dend = ints_new();
+    let dmsg = strs_new();
+    check_all(nk, nar, nst, nen, ntx, naux, kids, kid_first, ints_len(nk) - 1,
+              fnames, fret, ffirst, fcount, fparams,
+              bnames, bret, bfirst, bcount, bparams,
+              dcode, dstart, dend, dmsg);
+    if strs_len(dcode) > 0 {
+        let mut d = 0;
+        while d < strs_len(dcode) {
+            eprint(str_concat(str_concat(str_concat("nazm: error[", strs_get(dcode, d)),
+                                         str_concat("]: ", strs_get(dmsg, d))),
+                              str_concat(str_concat(" at ",
+                                                    position(src, path, ints_get(dstart, d))), nl())));
+            d = d + 1;
+        }
+        exit_with(1);
+    }
+
+    let body = strs_new();
+    let msgs = strs_new();
+    emit_module(src, path, nk, nar, nst, nen, ntx, naux, body, msgs);
+
+    // The header comes last because interning the messages is what discovers them.
+    let head = strs_new();
+    add_line(head, "; Generated by the Nazm compiler, written in Nazm. Do not edit.");
+    add_line(head, str_concat(str_concat(str_concat("source_filename = ", dq()), path), dq()));
+    add_line(head, "declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)");
+    add_line(head, "declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)");
+    add_line(head, "declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)");
+    add_line(head, "declare i32 @printf(ptr noundef, ...)");
+    add_line(head, "declare i64 @write(i32, ptr, i64)");
+    add_line(head, "declare void @exit(i32) noreturn");
+    // `%lld` then a newline then NUL, written as LLVM's own escapes inside a quoted
+    // constant — which is why both the quote and the backslash have to be built.
+    add_line(head, str_concat(str_concat("@.fmt = private unnamed_addr constant [6 x i8] c", dq()),
+                              str_concat(str_concat("%lld", str_concat(bs(), "0A")),
+                                         str_concat(str_concat(bs(), "00"), dq()))));
+    let mut m = 0;
+    while m < strs_len(msgs) {
+        let text = strs_get(msgs, m);
+        add_line(head, str_concat(str_concat(str_concat("@.m", int_to_str(m)),
+                                             str_concat(" = private unnamed_addr constant [",
+                                                        int_to_str(str_len(text) + 1))),
+                                  str_concat(str_concat(str_concat(" x i8] c", dq()), escaped(text)),
+                                             str_concat(str_concat(bs(), "00"), dq()))));
+        m = m + 1;
+    }
+    add_line(head, "define internal void @nz.fail(ptr %m, i64 %n) noreturn {");
+    add_line(head, "  %w = call i64 @write(i32 2, ptr %m, i64 %n)");
+    add_line(head, "  call void @exit(i32 2)");
+    add_line(head, "  unreachable");
+    add_line(head, "}");
+
+    let tail = strs_new();
+    // The platform entry point is a wrapper, separate from Nazm's `main`, and **only it
+    // prints** — the full 64-bit value, because an exit status is 8 bits and would lie.
+    add_line(tail, "define i32 @main() {");
+    add_line(tail, "entry:");
+    add_line(tail, "  %r = call i64 @nz.main()");
+    add_line(tail, "  %p = call i32 (ptr, ...) @printf(ptr @.fmt, i64 %r)");
+    add_line(tail, "  ret i32 0");
+    add_line(tail, "}");
+
+    print(str_concat(str_concat(join(head), join(body)), join(tail)));
+    // `exit_with`, not a return: the platform wrapper prints `main`'s value, and this
+    // program's standard output *is* the LLVM module. A stray integer at the end of it
+    // is a module clang rejects.
+    exit_with(0);
+    0
+}
