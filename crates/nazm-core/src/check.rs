@@ -742,8 +742,11 @@ impl Checker {
             // Ordering is `Int` only: comparing strings needs a collation decision, and
             // ordering booleans is almost always a mistake.
             BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => lt == Type::Int && rt == Type::Int,
-            // Equality works on any single type, but not across two.
-            BinOp::Eq | BinOp::NotEq => lt == rt,
+            // Equality works on any single type, but not across two — and **not on a
+            // sequence**, where it would have to mean either "the same handle" or "the
+            // same contents" and the language has chosen neither. Offering one silently
+            // is how a program comes to depend on the wrong answer.
+            BinOp::Eq | BinOp::NotEq => lt == rt && !lt.is_sequence(),
         };
 
         if !ok {

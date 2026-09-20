@@ -1534,3 +1534,121 @@ fn strings_travel_through_parameters_locals_and_loops() {
         "3"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Sequences (B2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_sequence_is_a_handle_to_shared_storage() {
+    // The property everything else rests on: two bindings, one sequence.
+    assert_eq!(
+        value(
+            "fn main() -> Int {\n\
+             \x20   let a = ints_new();\n\
+             \x20   let b = a;\n\
+             \x20   ints_push(a, 1);\n\
+             \x20   ints_push(b, 2);\n\
+             \x20   ints_len(a) * 10 + ints_len(b)\n\
+             }"
+        )
+        .to_string(),
+        "22"
+    );
+    // And across a function boundary: the callee mutates the caller's sequence.
+    assert_eq!(
+        value(
+            "fn fill(a: Ints, n: Int) -> Int {\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < n { ints_push(a, i); i = i + 1; }\n\
+             \x20   ints_len(a)\n\
+             }\n\
+             fn main() -> Int {\n\
+             \x20   let a = ints_new();\n\
+             \x20   fill(a, 4);\n\
+             \x20   ints_len(a)\n\
+             }"
+        )
+        .to_string(),
+        "4"
+    );
+}
+
+#[test]
+fn sequence_reads_and_writes_are_bounds_checked() {
+    assert_eq!(
+        value("fn main() -> Int { let a = ints_new(); ints_push(a, 7); ints_get(a, 0) }")
+            .to_string(),
+        "7"
+    );
+    assert_eq!(
+        value(
+            "fn main() -> Int { let a = ints_new(); ints_push(a, 7); ints_set(a, 0, 9); ints_get(a, 0) }"
+        )
+        .to_string(),
+        "9"
+    );
+    assert_eq!(
+        sole_error("fn main() -> Int { let a = ints_new(); ints_get(a, 0) }"),
+        codes::INDEX_OUT_OF_BOUNDS
+    );
+    assert_eq!(
+        sole_error("fn main() -> Int { let a = ints_new(); ints_push(a, 1); ints_get(a, 1) }"),
+        codes::INDEX_OUT_OF_BOUNDS
+    );
+    assert_eq!(
+        sole_error(
+            "fn main() -> Int { let a = ints_new(); ints_push(a, 1); ints_set(a, 0 - 1, 2) }"
+        ),
+        codes::INDEX_OUT_OF_BOUNDS
+    );
+}
+
+#[test]
+fn strs_holds_strings_by_value() {
+    // A `Str` read out of a sequence is a value: changing the sequence afterwards does
+    // not change the string already read.
+    assert_eq!(
+        value(
+            "fn main() -> Int {\n\
+             \x20   let a = strs_new();\n\
+             \x20   strs_push(a, \"hello\");\n\
+             \x20   let first = strs_get(a, 0);\n\
+             \x20   strs_set(a, 0, \"x\");\n\
+             \x20   str_len(first) * 10 + str_len(strs_get(a, 0))\n\
+             }"
+        )
+        .to_string(),
+        "51"
+    );
+}
+
+#[test]
+fn sequences_are_not_comparable() {
+    // `==` would have to mean identity or contents, and the language has chosen
+    // neither. Refused rather than answered arbitrarily.
+    assert_eq!(
+        sole_error("fn main() -> Int { let a = ints_new(); let b = ints_new(); if a == b { 1 } else { 0 } }"),
+        codes::INVALID_OPERANDS
+    );
+    assert_eq!(
+        sole_error("fn main() -> Int { let a = strs_new(); if a != a { 1 } else { 0 } }"),
+        codes::INVALID_OPERANDS
+    );
+    // Nor mixable with anything else.
+    assert_eq!(
+        sole_error("fn main() -> Int { let a = ints_new(); ints_len(a) + a }"),
+        codes::INVALID_OPERANDS
+    );
+}
+
+#[test]
+fn an_expression_may_be_a_statement() {
+    // Without this, every sequence mutation would need a binding nobody wants.
+    assert_eq!(
+        value("fn main() -> Int { let a = ints_new(); ints_push(a, 1); ints_push(a, 2); ints_len(a) }")
+            .to_string(),
+        "2"
+    );
+    assert_eq!(value("fn main() -> Int { 1 + 1; 3 }").to_string(), "3");
+}

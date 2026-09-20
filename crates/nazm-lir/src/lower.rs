@@ -316,6 +316,8 @@ fn native_ty(name: &str) -> Option<Ty> {
         "Int" => Some(Ty::Int),
         "Bool" => Some(Ty::Bool),
         "Str" => Some(Ty::Str),
+        "Ints" => Some(Ty::Ints),
+        "Strs" => Some(Ty::Strs),
         _ => None,
     }
 }
@@ -619,10 +621,21 @@ fn lower_stmts(ctx: &mut Ctx, statements: &[AstStmt]) -> (Vec<Stmt>, Ends) {
                     return (stmts, ends);
                 }
             }
-            // Every other expression statement. A bare block and a discarded call are
-            // separate constructs with their own questions, and this increment answers
-            // neither.
-            AstStmt::Expr(e) => ctx.unsupported(e.span(), "an expression statement"),
+            // Every other expression statement: evaluated, and its value dropped —
+            // which is what `nazm run` does with it, and what the language means by
+            // putting a `;` after an expression. A sequence operation is written this
+            // way (`ints_push(a, 1);`), and having to bind a result nobody wants would
+            // be a workaround for the language's lack of a unit type rather than a
+            // rule worth having.
+            //
+            // A bare block is still refused, because `lower_expr` refuses
+            // `AstExpr::Block` — the refusal lives with the construct rather than with
+            // the position it was found in.
+            AstStmt::Expr(e) => {
+                if let Some(value) = lower_expr(ctx, e) {
+                    stmts.push(Stmt::Discard(value));
+                }
+            }
         }
     }
     (stmts, Ends::FallsThrough)

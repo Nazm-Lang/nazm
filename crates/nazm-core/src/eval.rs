@@ -7,13 +7,22 @@
 //! reproduces only in one build configuration is the worst kind to be handed.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use nazm_diag::{codes, Diagnostic};
 use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, While};
 
 use crate::intrinsic::Intrinsic;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A runtime value.
+///
+/// `PartialEq` is written out rather than derived, because a sequence has no derivable
+/// answer: `Mutex` does not compare, and comparing contents would be a language decision
+/// nobody has made. Sequences therefore compare by **identity** — the same storage or
+/// not — and the checker refuses `==` on them anyway (`N0304`), so the answer is never
+/// observable from a Nazm program. It exists so the rest of `Value` can still be
+/// compared.
+#[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
     Bool(bool),
@@ -27,6 +36,48 @@ pub enum Value {
     /// requires 195. The host's text type was acting as an unstated specification,
     /// which is exactly what the spec section warns against.
     Str(Vec<u8>),
+    /// A growable sequence of `Int`, **by reference**.
+    ///
+    /// `Rc<RefCell<…>>` is the reference semantics, stated rather than incidental: two
+    /// bindings of the same sequence are the same storage, and a push through one is
+    /// visible through the other. `docs/spec.md` says so, and the native representation
+    /// — a pointer to a header — behaves identically by construction.
+    ///
+    /// This is emphatically **not** a claim of ownership safety. Nothing prevents
+    /// aliasing, nothing tracks lifetimes, and nothing is ever freed. The contract
+    /// forbids claiming otherwise, so it is written down here rather than left for a
+    /// reader to discover.
+    /// `Arc<Mutex<…>>` rather than `Rc<RefCell<…>>` because the whole pipeline runs on
+    /// a thread the interpreter owns (`on_interpreter_stack`), so a `Value` has to be
+    /// `Send`. The lock is never contended — evaluation is single-threaded — and it is
+    /// not a concurrency mechanism.
+    Ints(Arc<Mutex<Vec<i64>>>),
+    /// The same, for `Str`.
+    Strs(Arc<Mutex<Vec<Vec<u8>>>>),
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Str(a), Self::Str(b)) => a == b,
+            (Self::Ints(a), Self::Ints(b)) => Arc::ptr_eq(a, b),
+            (Self::Strs(a), Self::Strs(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Value {}
+
+/// Take a sequence's contents, or report the poisoning that can only follow a panic.
+///
+/// The lock is never contended, so this only fails if a previous evaluation panicked
+/// while holding it — in which case the interpreter is already unsound and saying so is
+/// better than continuing.
+fn seq<T>(lock: &Mutex<T>) -> Option<std::sync::MutexGuard<'_, T>> {
+    lock.lock().ok()
 }
 
 impl std::fmt::Display for Value {
@@ -38,6 +89,16 @@ impl std::fmt::Display for Value {
             // form, and showing the replacement character is a display decision. No
             // operation on `Str` goes through here.
             Self::Str(v) => write!(f, "{}", String::from_utf8_lossy(v)),
+            // A sequence is never a program's result — `main` returns `Int` — so this
+            // is for diagnostics only, and says what it is rather than dumping it.
+            Self::Ints(v) => match v.lock() {
+                Ok(v) => write!(f, "Ints({} items)", v.len()),
+                Err(_) => f.write_str("Ints(unreadable)"),
+            },
+            Self::Strs(v) => match v.lock() {
+                Ok(v) => write!(f, "Strs({} items)", v.len()),
+                Err(_) => f.write_str("Strs(unreadable)"),
+            },
         }
     }
 }
@@ -420,6 +481,11 @@ impl<'a> Interpreter<'a> {
             ),
         };
 
+        /// A length as an `Int`, or `None` on a host where it would not fit.
+        fn index_fits(n: usize) -> Option<Value> {
+            i64::try_from(n).ok().map(Value::Int)
+        }
+
         match (i, args) {
             (Intrinsic::StrLen, [Value::Str(s)]) => {
                 // A length that does not fit in `Int` cannot arise from a string that
@@ -470,6 +536,82 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Str(out))
             }
             (Intrinsic::IntToStr, [Value::Int(n)]) => Ok(Value::Str(n.to_string().into_bytes())),
+            (Intrinsic::IntsNew, []) => Ok(Value::Ints(Arc::default())),
+            (Intrinsic::StrsNew, []) => Ok(Value::Strs(Arc::default())),
+            (Intrinsic::IntsLen, [Value::Ints(a)]) => seq(a)
+                .and_then(|a| index_fits(a.len()))
+                .map_or_else(|| Err(bug("a sequence that could not be read")), Ok),
+            (Intrinsic::StrsLen, [Value::Strs(a)]) => seq(a)
+                .and_then(|a| index_fits(a.len()))
+                .map_or_else(|| Err(bug("a sequence that could not be read")), Ok),
+            (Intrinsic::IntsGet, [Value::Ints(a), Value::Int(at)]) => {
+                let Some(a) = seq(a) else {
+                    return Err(bug("a sequence that could not be read"));
+                };
+                let Some(v) = usize::try_from(*at).ok().and_then(|i| a.get(i)) else {
+                    return Err(out_of_bounds(
+                        "this index is outside the sequence",
+                        format!("asked for item {at} of an `Ints` holding {}", a.len()),
+                    ));
+                };
+                Ok(Value::Int(*v))
+            }
+            (Intrinsic::StrsGet, [Value::Strs(a), Value::Int(at)]) => {
+                let Some(a) = seq(a) else {
+                    return Err(bug("a sequence that could not be read"));
+                };
+                let Some(v) = usize::try_from(*at).ok().and_then(|i| a.get(i)) else {
+                    return Err(out_of_bounds(
+                        "this index is outside the sequence",
+                        format!("asked for item {at} of a `Strs` holding {}", a.len()),
+                    ));
+                };
+                Ok(Value::Str(v.clone()))
+            }
+            (Intrinsic::IntsSet, [Value::Ints(a), Value::Int(at), Value::Int(v)]) => {
+                let Some(mut a) = seq(a) else {
+                    return Err(bug("a sequence that could not be written"));
+                };
+                let len = a.len();
+                let Some(slot) = usize::try_from(*at).ok().and_then(|i| a.get_mut(i)) else {
+                    return Err(out_of_bounds(
+                        "this index is outside the sequence",
+                        format!("asked to write item {at} of an `Ints` holding {len}"),
+                    ));
+                };
+                *slot = *v;
+                Ok(Value::Int(*at))
+            }
+            (Intrinsic::StrsSet, [Value::Strs(a), Value::Int(at), Value::Str(v)]) => {
+                let Some(mut a) = seq(a) else {
+                    return Err(bug("a sequence that could not be written"));
+                };
+                let len = a.len();
+                let Some(slot) = usize::try_from(*at).ok().and_then(|i| a.get_mut(i)) else {
+                    return Err(out_of_bounds(
+                        "this index is outside the sequence",
+                        format!("asked to write item {at} of a `Strs` holding {len}"),
+                    ));
+                };
+                slot.clone_from(v);
+                Ok(Value::Int(*at))
+            }
+            (Intrinsic::IntsPush, [Value::Ints(a), Value::Int(v)]) => {
+                let Some(mut a) = seq(a) else {
+                    return Err(bug("a sequence that could not be written"));
+                };
+                a.push(*v);
+                index_fits(a.len())
+                    .map_or_else(|| Err(bug("a sequence longer than `Int` can measure")), Ok)
+            }
+            (Intrinsic::StrsPush, [Value::Strs(a), Value::Str(v)]) => {
+                let Some(mut a) = seq(a) else {
+                    return Err(bug("a sequence that could not be written"));
+                };
+                a.push(v.clone());
+                index_fits(a.len())
+                    .map_or_else(|| Err(bug("a sequence longer than `Int` can measure")), Ok)
+            }
             (Intrinsic::StrFromByte, [Value::Int(b)]) => {
                 let Ok(byte) = u8::try_from(*b) else {
                     return Err(out_of_bounds(
@@ -803,5 +945,7 @@ fn type_name(v: &Value) -> &'static str {
         Value::Int(_) => "Int",
         Value::Bool(_) => "Bool",
         Value::Str(_) => "Str",
+        Value::Ints(_) => "Ints",
+        Value::Strs(_) => "Strs",
     }
 }

@@ -84,6 +84,9 @@ struct Emitter {
     /// language's rule (`docs/roadmap.md`, *Where a loop target binds*). Cleared at every
     /// function boundary, so no target can leak from one function into another.
     loops: Vec<Targets>,
+    /// Whether the sequence helpers are reached. They are emitted only when they are —
+    /// a program that never touches a sequence carries none of this.
+    needs_sequences: bool,
 }
 
 /// Where `break` and `continue` go for one loop.
@@ -227,6 +230,36 @@ impl Emitter {
             },
             span.start,
         );
+    }
+
+    /// A pointer to element `i` of a sequence, bounds-checked.
+    ///
+    /// The check is here rather than inside a helper because the diagnostic has to name
+    /// *this* call's source position, and a shared helper has only one.
+    fn sequence_slot(&mut self, handle: u32, index: u32, elem: Ty, span: Span) -> u32 {
+        let len = self.fresh();
+        let _ = writeln!(self.out, "  %{len} = load i64, ptr %{handle}");
+        let neg = self.fresh();
+        let _ = writeln!(self.out, "  %{neg} = icmp slt i64 %{index}, 0");
+        let past = self.fresh();
+        let _ = writeln!(self.out, "  %{past} = icmp sge i64 %{index}, %{len}");
+        let bad = self.fresh();
+        let _ = writeln!(self.out, "  %{bad} = or i1 %{neg}, %{past}");
+        self.require(bad, "this index is outside the sequence", span);
+        let data_field = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{data_field} = getelementptr i8, ptr %{handle}, i64 16"
+        );
+        let data = self.fresh();
+        let _ = writeln!(self.out, "  %{data} = load ptr, ptr %{data_field}");
+        let slot = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{slot} = getelementptr {}, ptr %{data}, i64 %{index}",
+            elem.llvm()
+        );
+        slot
     }
 
     /// `malloc`, with the failure the specification names rather than a null pointer
@@ -744,6 +777,96 @@ impl Emitter {
                 );
                 self.make_str(buf, n)
             }
+            // --- sequences -------------------------------------------------------
+            //
+            // The handle is a pointer to a `{ i64 len, i64 cap, ptr data }` header, so
+            // two bindings of one sequence are the same header and a push through
+            // either is visible through both. Growth rewrites the header in place;
+            // the handle never moves.
+            Builtin::IntsNew | Builtin::StrsNew => {
+                self.needs_sequences = true;
+                let h = self.fresh();
+                let _ = writeln!(self.out, "  %{h} = call ptr @nz.arr_new()");
+                let null = self.fresh();
+                let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{h}, null");
+                self.guard(
+                    null,
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    span.start,
+                );
+                return Val::Of {
+                    value: h,
+                    ty: op.ret(),
+                };
+            }
+            Builtin::IntsLen | Builtin::StrsLen => {
+                let n = self.fresh();
+                // `len` is the header's first field, so the handle points straight at it.
+                let _ = writeln!(self.out, "  %{n} = load i64, ptr %{}", arg(0));
+                return Val::Of {
+                    value: n,
+                    ty: Ty::Int,
+                };
+            }
+            Builtin::IntsGet | Builtin::StrsGet => {
+                let elem = op.sequence().and_then(Ty::element).unwrap_or(Ty::Int);
+                let slot = self.sequence_slot(arg(0), arg(1), elem, span);
+                let v = self.fresh();
+                let _ = writeln!(self.out, "  %{v} = load {}, ptr %{slot}", elem.llvm());
+                return Val::Of { value: v, ty: elem };
+            }
+            Builtin::IntsSet | Builtin::StrsSet => {
+                let elem = op.sequence().and_then(Ty::element).unwrap_or(Ty::Int);
+                let slot = self.sequence_slot(arg(0), arg(1), elem, span);
+                let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(2));
+                // The index written. The language has no unit type, and the index is
+                // the one answer that is always meaningful.
+                return Val::Of {
+                    value: arg(1),
+                    ty: Ty::Int,
+                };
+            }
+            Builtin::IntsPush | Builtin::StrsPush => {
+                self.needs_sequences = true;
+                let seq = op.sequence().unwrap_or(Ty::Ints);
+                let elem = seq.element().unwrap_or(Ty::Int);
+                let size = seq.element_size().unwrap_or(8);
+                let data = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{data} = call ptr @nz.arr_grow(ptr %{}, i64 {size})",
+                    arg(0)
+                );
+                let null = self.fresh();
+                let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{data}, null");
+                self.guard(
+                    null,
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    span.start,
+                );
+                let len = self.fresh();
+                let _ = writeln!(self.out, "  %{len} = load i64, ptr %{}", arg(0));
+                let slot = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{slot} = getelementptr {}, ptr %{data}, i64 %{len}",
+                    elem.llvm()
+                );
+                let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(1));
+                let grown = self.fresh();
+                let _ = writeln!(self.out, "  %{grown} = add i64 %{len}, 1");
+                let _ = writeln!(self.out, "  store i64 %{grown}, ptr %{}", arg(0));
+                return Val::Of {
+                    value: grown,
+                    ty: Ty::Int,
+                };
+            }
             Builtin::StrFromByte => {
                 let b = arg(0);
                 let low = self.fresh();
@@ -1040,6 +1163,7 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
         lines: line_starts,
         source_len: source.len(),
         loops: Vec::new(),
+        needs_sequences: false,
     };
 
     // One definition per function, in `FuncId` order so the IR reads in the order the
@@ -1086,6 +1210,9 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
     );
     let _ = writeln!(head, "declare ptr @malloc(i64)");
     let _ = writeln!(head, "declare i32 @memcmp(ptr, ptr, i64)");
+    if e.needs_sequences {
+        let _ = writeln!(head, "declare ptr @realloc(ptr, i64)");
+    }
     let _ = writeln!(
         head,
         "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)"
@@ -1142,10 +1269,77 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
     let _ = writeln!(head, "  call void @exit(i32 2)");
     let _ = writeln!(head, "  unreachable");
     let _ = writeln!(head, "}}");
+    if e.needs_sequences {
+        head.push_str(SEQUENCE_RUNTIME);
+    }
     head.push('\n');
 
     head + &e.out
 }
+
+/// The two sequence helpers, as generated LLVM rather than a linked runtime crate.
+///
+/// Generated because that is the smallest thing that works: `docs/architecture.md` keeps
+/// `nazm-rt` for when a runtime genuinely needs stack switching and a custom allocator,
+/// and neither of these does. They are emitted only into programs that use a sequence.
+///
+/// **Bounds checks are not here.** They live at each call site, because the diagnostic
+/// has to name that call's source position and a shared helper has only one. What is
+/// here is allocation and growth, which have no position to report — both signal failure
+/// by returning null, and the call site turns that into `N0406`.
+///
+/// The header is `{ i64 len, i64 cap, ptr data }`, 24 bytes. The handle is its address
+/// and never moves, which is what makes a sequence a reference: growth rewrites `data`
+/// and `cap` in place and every holder sees it.
+const SEQUENCE_RUNTIME: &str = r"
+define internal ptr @nz.arr_new() {
+entry:
+  %h = call ptr @malloc(i64 24)
+  %bad = icmp eq ptr %h, null
+  br i1 %bad, label %fail, label %ok
+fail:
+  ret ptr null
+ok:
+  store i64 0, ptr %h
+  %capp = getelementptr i8, ptr %h, i64 8
+  store i64 0, ptr %capp
+  %datap = getelementptr i8, ptr %h, i64 16
+  store ptr null, ptr %datap
+  ret ptr %h
+}
+
+define internal ptr @nz.arr_grow(ptr %h, i64 %elem) {
+entry:
+  %len = load i64, ptr %h
+  %capp = getelementptr i8, ptr %h, i64 8
+  %cap = load i64, ptr %capp
+  %datap = getelementptr i8, ptr %h, i64 16
+  %full = icmp sge i64 %len, %cap
+  br i1 %full, label %grow, label %done
+grow:
+  ; Doubling, with a floor of four. `realloc(null, n)` is `malloc(n)`, so the first
+  ; growth needs no special case.
+  %twice = mul i64 %cap, 2
+  %tiny = icmp slt i64 %twice, 4
+  %want = select i1 %tiny, i64 4, i64 %twice
+  %bytes = mul i64 %want, %elem
+  %old = load ptr, ptr %datap
+  %new = call ptr @realloc(ptr %old, i64 %bytes)
+  %failed = icmp eq ptr %new, null
+  br i1 %failed, label %oom, label %kept
+kept:
+  ; The header is updated only after the allocation succeeded, so a failed growth
+  ; leaves the sequence exactly as it was rather than half-resized.
+  store ptr %new, ptr %datap
+  store i64 %want, ptr %capp
+  br label %done
+oom:
+  ret ptr null
+done:
+  %data = load ptr, ptr %datap
+  ret ptr %data
+}
+";
 
 /// One function definition.
 ///
