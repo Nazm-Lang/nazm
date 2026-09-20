@@ -371,6 +371,14 @@ pub enum Builtin {
     StrsGet,
     StrsSet,
     StrsPush,
+    ArgsCount,
+    Arg,
+    ReadFile,
+    WriteFile,
+    FileExists,
+    Print,
+    EPrint,
+    ExitWith,
 }
 
 impl Builtin {
@@ -393,6 +401,14 @@ impl Builtin {
             "strs_get" => Some(Self::StrsGet),
             "strs_set" => Some(Self::StrsSet),
             "strs_push" => Some(Self::StrsPush),
+            "args_count" => Some(Self::ArgsCount),
+            "arg" => Some(Self::Arg),
+            "read_file" => Some(Self::ReadFile),
+            "write_file" => Some(Self::WriteFile),
+            "file_exists" => Some(Self::FileExists),
+            "print" => Some(Self::Print),
+            "eprint" => Some(Self::EPrint),
+            "exit_with" => Some(Self::ExitWith),
             _ => None,
         }
     }
@@ -416,6 +432,14 @@ impl Builtin {
             Self::StrsGet => "strs_get",
             Self::StrsSet => "strs_set",
             Self::StrsPush => "strs_push",
+            Self::ArgsCount => "args_count",
+            Self::Arg => "arg",
+            Self::ReadFile => "read_file",
+            Self::WriteFile => "write_file",
+            Self::FileExists => "file_exists",
+            Self::Print => "print",
+            Self::EPrint => "eprint",
+            Self::ExitWith => "exit_with",
         }
     }
 
@@ -454,6 +478,10 @@ impl Builtin {
             Self::StrsSet => &[Ty::Strs, Ty::Int, Ty::Str],
             Self::IntsPush => &[Ty::Ints, Ty::Int],
             Self::StrsPush => &[Ty::Strs, Ty::Str],
+            Self::ArgsCount => &[],
+            Self::Arg | Self::ExitWith => &[Ty::Int],
+            Self::ReadFile | Self::FileExists | Self::Print | Self::EPrint => &[Ty::Str],
+            Self::WriteFile => &[Ty::Str, Ty::Str],
         }
     }
 
@@ -469,7 +497,11 @@ impl Builtin {
             | Self::IntsPush
             | Self::StrsSet
             | Self::StrsPush => Ty::Int,
-            Self::StrsGet => Ty::Str,
+            Self::StrsGet | Self::Arg | Self::ReadFile => Ty::Str,
+            Self::ArgsCount | Self::WriteFile | Self::Print | Self::EPrint | Self::ExitWith => {
+                Ty::Int
+            }
+            Self::FileExists => Ty::Bool,
             Self::IntsNew => Ty::Ints,
             Self::StrsNew => Ty::Strs,
         }

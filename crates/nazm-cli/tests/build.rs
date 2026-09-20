@@ -1700,7 +1700,13 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
     // separate, external one. Asserted by shape rather than by which id each function
     // happened to get — that depends on declaration order and is not a property worth
     // pinning.
-    assert!(ir.contains("define i32 @main() {"), "{ir}");
+    // The C entry point takes `argc`/`argv` since B3, so that `arg(i)` has something
+    // to read. It takes them whether or not the program asks: the signature is fixed,
+    // and only the globals and the stores are conditional.
+    assert!(
+        ir.contains("define i32 @main(i32 %argc, ptr %argv) {"),
+        "{ir}"
+    );
     let defs: Vec<&str> = ir
         .lines()
         .filter(|l| l.starts_with("define internal i64 @nz.f"))
@@ -3623,4 +3629,226 @@ fn a_call_may_be_a_statement_but_a_bare_block_may_not() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("a block used as an expression"), "{stderr}");
+}
+
+// ---------------------------------------------------------------------------
+// B3 — arguments, files, output, exit
+//
+// Authority is ambient and the specification says so. What is tested here is that the
+// two implementations agree, not that anything is confined.
+// ---------------------------------------------------------------------------
+
+/// Build a program, run it with arguments, and compare everything with the interpreter.
+fn expect_same_run(src: &str, args: &[&str], stdout: &str, stderr: &str, code: i32) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("prog.nz");
+    std::fs::write(&path, src).expect("write");
+
+    let mut interp_cmd = Command::new(NAZM);
+    interp_cmd
+        .args(["run", path.to_str().unwrap()])
+        .arg("--")
+        .args(args);
+    let interp = run_bounded(&mut interp_cmd, DEADLINE).expect("the interpreter hung");
+    assert_eq!(interp.code, Some(code), "interpreter: {interp:?}");
+    assert_eq!(interp.stdout, stdout, "interpreter stdout");
+    assert!(
+        interp.stderr.contains(stderr),
+        "interpreter stderr {:?} lacks {stderr:?}",
+        interp.stderr
+    );
+
+    for opt in [0u8, 2] {
+        let exe = dir.path().join(format!("prog{opt}"));
+        let built = Command::new(NAZM)
+            .args(["build", path.to_str().unwrap()])
+            .arg("-o")
+            .arg(&exe)
+            .arg("--opt-level")
+            .arg(opt.to_string())
+            .output()
+            .expect("build");
+        assert!(
+            built.status.success(),
+            "-O{opt}: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let mut cmd = Command::new(&exe);
+        cmd.args(args);
+        let ran = run_bounded(&mut cmd, DEADLINE).expect("the compiled program hung");
+        assert_eq!(ran.code, Some(code), "-O{opt}: {ran:?}");
+        assert_eq!(ran.stdout, stdout, "-O{opt} stdout");
+        assert!(
+            ran.stderr.contains(stderr),
+            "-O{opt} stderr {:?} lacks {stderr:?}",
+            ran.stderr
+        );
+    }
+}
+
+#[test]
+fn arguments_exclude_the_program_name_in_both_implementations() {
+    // The reason they are excluded: a compiled `argv[0]` is a path and an interpreted
+    // program has no equivalent, so including it would make one program mean two
+    // things. Excluded, the two agree exactly — which is what this asserts.
+    let src = "fn main() -> Int {\n\
+               \x20   let mut i = 0;\n\
+               \x20   let mut total = 0;\n\
+               \x20   while i < args_count() {\n\
+               \x20       print(arg(i));\n\
+               \x20       print(str_from_byte(10));\n\
+               \x20       total = total + str_len(arg(i));\n\
+               \x20       i = i + 1;\n\
+               \x20   }\n\
+               \x20   total\n\
+               }\n";
+    // `main`'s value is printed by the platform wrapper; the exit status is 0. Those
+    // are different things and the helper keeps them apart.
+    expect_same_run(src, &["alpha", "beta"], "alpha\nbeta\n9\n", "", 0);
+    expect_same_run(src, &[], "0\n", "", 0);
+}
+
+#[test]
+fn an_argument_past_the_end_fails_at_its_own_position() {
+    let src = "fn main() -> Int { str_len(arg(0)) }\n";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("prog.nz");
+    std::fs::write(&path, src).expect("write");
+    let interp = run_bounded(
+        Command::new(NAZM).args(["run", path.to_str().unwrap()]),
+        DEADLINE,
+    )
+    .expect("hung");
+    assert_eq!(interp.code, Some(2), "{interp:?}");
+    assert!(interp.stderr.contains("N0405"), "{}", interp.stderr);
+    assert!(
+        interp
+            .stderr
+            .contains("this index is outside the arguments"),
+        "{}",
+        interp.stderr
+    );
+
+    let exe = dir.path().join("prog");
+    assert!(Command::new(NAZM)
+        .args(["build", path.to_str().unwrap()])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("build")
+        .status
+        .success());
+    let ran = run_bounded(&mut Command::new(&exe), DEADLINE).expect("hung");
+    assert_eq!(ran.code, Some(2), "{ran:?}");
+    assert!(ran.stderr.contains("N0405"), "{}", ran.stderr);
+    assert!(
+        ran.stderr.contains("this index is outside the arguments"),
+        "{}",
+        ran.stderr
+    );
+}
+
+#[test]
+fn a_file_round_trips_through_both_implementations() {
+    // Written by one run and read back by the same run, with the path supplied as an
+    // argument so the program has no compiled-in knowledge of where it is.
+    let src = "fn main() -> Int {\n\
+               \x20   let path = arg(0);\n\
+               \x20   let payload = str_concat(\"bytes: \", int_to_str(1234));\n\
+               \x20   write_file(path, payload);\n\
+               \x20   let back = read_file(path);\n\
+               \x20   if back == payload { str_len(back) } else { 0 - 1 }\n\
+               }\n";
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (i, _) in [0u8, 1, 2].iter().enumerate() {
+        let target = dir.path().join(format!("out{i}.txt"));
+        let _ = std::fs::remove_file(&target);
+    }
+    expect_same_run(
+        src,
+        &[dir.path().join("roundtrip.txt").to_str().unwrap()],
+        "11\n",
+        "",
+        0,
+    );
+    // The file really is on disk with the bytes the program wrote.
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("roundtrip.txt")).expect("the file"),
+        "bytes: 1234"
+    );
+}
+
+#[test]
+fn a_missing_file_is_reported_and_a_present_one_is_found() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let there = dir.path().join("present.txt");
+    std::fs::write(&there, "x").expect("write");
+    let src = "fn main() -> Int {\n\
+               \x20   if file_exists(arg(0)) { 1 } else { 0 }\n\
+               }\n";
+    expect_same_run(src, &[there.to_str().unwrap()], "1\n", "", 0);
+    expect_same_run(
+        src,
+        &[dir.path().join("absent.txt").to_str().unwrap()],
+        "0\n",
+        "",
+        0,
+    );
+
+    // Reading one that is not there stops the program, in both.
+    let failing = "fn main() -> Int { str_len(read_file(arg(0))) }\n";
+    expect_same_run(
+        failing,
+        &[dir.path().join("absent.txt").to_str().unwrap()],
+        "",
+        "this file could not be read",
+        2,
+    );
+}
+
+#[test]
+fn exit_with_ends_the_program_and_nothing_after_it_runs() {
+    // Also the only built-in that transfers control: everything after it is unreachable,
+    // and `main`'s value is never printed because `main` never returns.
+    let src = "fn main() -> Int {\n\
+               \x20   eprint(\"before\");\n\
+               \x20   exit_with(7);\n\
+               \x20   print(\"after\");\n\
+               \x20   0\n\
+               }\n";
+    // Nothing on standard output at all: `main` never returns, so the wrapper never
+    // prints, and `print("after")` is past a terminator.
+    expect_same_run(src, &[], "", "before", 7);
+}
+
+#[test]
+fn print_and_eprint_go_to_different_descriptors_and_add_nothing() {
+    // No trailing newline is added by either — `str_from_byte(10)` is how a program
+    // asks for one, and a compiler emitting IR depends on that being exact.
+    let src = "fn main() -> Int {\n\
+               \x20   print(\"out\");\n\
+               \x20   eprint(\"err\");\n\
+               \x20   print(str_from_byte(10));\n\
+               \x20   0\n\
+               }\n";
+    expect_same_run(src, &[], "out\n0\n", "err", 0);
+}
+
+#[test]
+fn a_program_without_io_carries_none_of_its_runtime() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("prog.nz");
+    std::fs::write(&path, "fn main() -> Int { 1 + 1 }\n").expect("write");
+    assert!(Command::new(NAZM)
+        .args(["build", path.to_str().unwrap(), "--emit-ir"])
+        .arg("-o")
+        .arg(dir.path().join("prog"))
+        .output()
+        .expect("run")
+        .status
+        .success());
+    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("IR");
+    for absent in ["@nz.read_file", "@nz.cstr", "@fopen", "@nz.argv"] {
+        assert!(!ir.contains(absent), "unused {absent} emitted:\n{ir}");
+    }
 }

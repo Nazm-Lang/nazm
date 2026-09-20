@@ -49,12 +49,21 @@ pub fn run(source: &str) -> Outcome {
 /// whether it fails to terminate by looping or by recursing.
 #[must_use]
 pub fn run_with_limits(source: &str, limits: eval::Limits) -> Outcome {
+    run_with(source, limits, Vec::new())
+}
+
+/// As [`run_with_limits`], with the arguments `arg(i)` will see.
+///
+/// Excluding the program's own name, so that `arg(0)` means the same thing interpreted
+/// and compiled — a native `argv[0]` is a path nobody should depend on.
+#[must_use]
+pub fn run_with(source: &str, limits: eval::Limits, args: Vec<String>) -> Outcome {
     // The whole pipeline on a stack the interpreter controls, sized from the budget it is
     // about to enforce. Every pass here recurses: the parser with the shape of the tree,
     // the checker and the evaluator with it again, and the drop at the end once more.
     // Honouring a 512-call bound on a caller's 2 MiB thread would be a guarantee we
     // cannot keep, and so would parsing a deeply nested expression there.
-    match eval::on_interpreter_stack(limits.max_depth, || pipeline(source, limits)) {
+    match eval::on_interpreter_stack(limits.max_depth, || pipeline(source, limits, args)) {
         Ok(outcome) => outcome,
         // The machine would not give us a thread. Nothing to do with the program, and
         // saying so beats blaming the code that was about to run. The span points at the
@@ -74,7 +83,7 @@ pub fn run_with_limits(source: &str, limits: eval::Limits) -> Outcome {
 }
 
 /// Parse, check, and evaluate. Always called on an interpreter-owned stack.
-fn pipeline(source: &str, limits: eval::Limits) -> Outcome {
+fn pipeline(source: &str, limits: eval::Limits, args: Vec<String>) -> Outcome {
     let (program, mut diagnostics) = nazm_syntax::parse_source(source);
     let parse_failed = !diagnostics.is_empty();
     let (_signatures, check_errors) = check(&program);
@@ -92,7 +101,11 @@ fn pipeline(source: &str, limits: eval::Limits) -> Outcome {
         return Outcome::CheckFailed(diagnostics);
     }
 
-    match Interpreter::new(&program).with_limits(limits).run_main() {
+    match Interpreter::new(&program)
+        .with_limits(limits)
+        .with_args(args)
+        .run_main()
+    {
         Ok(v) => Outcome::Value(v),
         Err(e) => Outcome::RuntimeFailed(*e.diagnostic),
     }

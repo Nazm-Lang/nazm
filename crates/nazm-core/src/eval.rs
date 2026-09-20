@@ -278,6 +278,10 @@ pub struct Interpreter<'a> {
     /// does not bound iteration. With no `break` and no I/O, a non-terminating program
     /// produces nothing whatsoever, and a tool that hangs is worse than one that reports.
     iterations_left: u64,
+    /// The program's own arguments, **excluding** the program name — `nazm run f.nz --
+    /// a b` gives `["a", "b"]`. Excluding it is what makes `arg(i)` mean the same thing
+    /// interpreted and compiled: a native `argv[0]` is a path nobody should depend on.
+    args: Vec<String>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -293,7 +297,15 @@ impl<'a> Interpreter<'a> {
             depth: 0,
             max_depth: DEFAULT_MAX_DEPTH,
             iterations_left: DEFAULT_MAX_ITERATIONS,
+            args: Vec::new(),
         }
+    }
+
+    /// The arguments `arg(i)` will see.
+    #[must_use]
+    pub fn with_args(mut self, args: Vec<String>) -> Self {
+        self.args = args;
+        self
     }
 
     /// Change both budgets. `nazm run --max-iterations` and `--max-depth` set these.
@@ -486,6 +498,15 @@ impl<'a> Interpreter<'a> {
             i64::try_from(n).ok().map(Value::Int)
         }
 
+        // The path and the host's reason go in the help, not the message, so the two
+        // implementations report the same sentence for the same failure — the native
+        // side knows neither at compile time.
+        let io_failed = |message: &str, path: &str, e: &std::io::Error| RuntimeError {
+            diagnostic: Box::new(
+                Diagnostic::error(codes::IO_FAILED, span, message).help(format!("`{path}`: {e}")),
+            ),
+        };
+
         match (i, args) {
             (Intrinsic::StrLen, [Value::Str(s)]) => {
                 // A length that does not fit in `Int` cannot arise from a string that
@@ -611,6 +632,62 @@ impl<'a> Interpreter<'a> {
                 a.push(v.clone());
                 index_fits(a.len())
                     .map_or_else(|| Err(bug("a sequence longer than `Int` can measure")), Ok)
+            }
+            // --- the outside world ---------------------------------------------
+            (Intrinsic::ArgsCount, []) => index_fits(self.args.len())
+                .map_or_else(|| Err(bug("more arguments than `Int` can count")), Ok),
+            (Intrinsic::Arg, [Value::Int(at)]) => {
+                let Some(a) = usize::try_from(*at).ok().and_then(|i| self.args.get(i)) else {
+                    return Err(out_of_bounds(
+                        "this index is outside the arguments",
+                        format!("asked for argument {at} of {} given", self.args.len()),
+                    ));
+                };
+                Ok(Value::Str(a.clone().into_bytes()))
+            }
+            (Intrinsic::ReadFile, [Value::Str(path)]) => {
+                let name = String::from_utf8_lossy(path).into_owned();
+                match std::fs::read(&name) {
+                    Ok(bytes) => Ok(Value::Str(bytes)),
+                    Err(e) => Err(io_failed("this file could not be read", &name, &e)),
+                }
+            }
+            (Intrinsic::WriteFile, [Value::Str(path), Value::Str(data)]) => {
+                let name = String::from_utf8_lossy(path).into_owned();
+                match std::fs::write(&name, data) {
+                    Ok(()) => index_fits(data.len())
+                        .map_or_else(|| Err(bug("a file longer than `Int` can measure")), Ok),
+                    Err(e) => Err(io_failed("this file could not be written", &name, &e)),
+                }
+            }
+            (Intrinsic::FileExists, [Value::Str(path)]) => {
+                let name = String::from_utf8_lossy(path).into_owned();
+                // Openable for reading, which is what the native side tests. "Exists"
+                // and "can be opened" differ for a directory or an unreadable file, and
+                // the built-in is named for the question a program actually asks.
+                Ok(Value::Bool(std::fs::File::open(&name).is_ok()))
+            }
+            (Intrinsic::Print, [Value::Str(data)]) | (Intrinsic::EPrint, [Value::Str(data)]) => {
+                use std::io::Write as _;
+                let written = if i == Intrinsic::Print {
+                    std::io::stdout().write_all(data).map(|()| data.len())
+                } else {
+                    std::io::stderr().write_all(data).map(|()| data.len())
+                };
+                match written {
+                    Ok(n) => index_fits(n)
+                        .map_or_else(|| Err(bug("more bytes than `Int` can count")), Ok),
+                    Err(e) => Err(io_failed("this output could not be written", "-", &e)),
+                }
+            }
+            (Intrinsic::ExitWith, [Value::Int(code)]) => {
+                // Ends the process, here as natively. The interpreter runs on a thread
+                // it owns, and `exit` from a thread ends the whole process — which is
+                // the point: `exit_with` means the program is over, not that this
+                // evaluation is.
+                use std::io::Write as _;
+                let _ = std::io::stdout().flush();
+                std::process::exit(i32::try_from(*code).unwrap_or(1))
             }
             (Intrinsic::StrFromByte, [Value::Int(b)]) => {
                 let Ok(byte) = u8::try_from(*b) else {

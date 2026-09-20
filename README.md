@@ -36,15 +36,16 @@ $ ./arithmetic          # no interpreter, no nazm process
 -54
 ```
 
-`nazm build` is the native path (**M1a–M1f**) and its subset is narrow on purpose:
+`nazm build` is the native path (**M1a–M1f, then B1–B3**) and its subset is narrow on purpose:
 several functions over `Int` and `Bool` with `fn main() -> Int` as the entry point,
 literals, `let` and `let mut` bindings, immutable parameters, assignment, `while` with
 `break` and `continue`, `return`, unary `-`, `+ - * / %`, the comparisons
 `== != < <= > >=`, `if` in **both statement and value position**, and non-recursive
-direct calls. That is the whole scalar language, and `docs/roadmap.md` carries the
-conformance table. Everything else — recursion, `Str`, bare blocks as expressions, other
-expression statements — is **refused by name** after ordinary checking, with no partial
-compilation, and still runs under `nazm run`. The arithmetic the specification
+direct calls — plus `Str` as a byte sequence, the `Ints` and `Strs` growable sequences,
+and the outside-world built-ins (arguments, files, output, exit). `docs/roadmap.md`
+carries the conformance table. What is left outside — recursion, bare blocks used as
+expressions, records, modules, concurrency — is **refused by name** after ordinary
+checking, with no partial compilation, and still runs under `nazm run`. The arithmetic the specification
 promises is preserved rather than inherited from the hardware: overflow is a checked
 intrinsic and a branch (never `nsw`, which would let the optimiser delete the check),
 `Int::MIN / -1` fails, and `Int::MIN % -1` is `0`. See

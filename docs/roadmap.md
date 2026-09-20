@@ -433,7 +433,8 @@ name with `N0101` and still runs under `nazm run`.
 | Strings | `Str` literals, `str_len`, `str_byte`, `str_slice`, `str_concat`, `str_from_byte`, `int_to_str`, `==`/`!=` | bytes, not characters; `{ptr, len}` by value; slices share storage; `N0405` on every out-of-range index |
 | Sequences | `Ints`, `Strs`; `_new`, `_len`, `_get`, `_set`, `_push` | **reference** types: a handle to a `{len, cap, data}` header. Shared, mutable, never freed; `==` refused |
 | Statements | a discarded expression (`ints_push(a, 1);`) | the language has no unit type, so a mutation would otherwise need a binding nobody wants |
-| **Not native** | recursion, bare blocks as expressions, records, modules, I/O, concurrency | recursion pends a measured native execution contract |
+| The outside world | `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` | **ambient authority, enforced nowhere** — stated in `docs/spec.md` rather than implied. No process spawning |
+| **Not native** | recursion, bare blocks as expressions, records, modules, concurrency | recursion pends a measured native execution contract |
 
 This is a *scalar* conformance statement. It does not say the language is complete; it
 says which programs over `Int` and `Bool` the backend compiles and with what semantics.
