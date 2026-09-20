@@ -352,24 +352,88 @@ fn enclosing_loop(nk: Ints, parent: Ints, childno: Ints, from: Int) -> Int {
     0 - 1
 }
 
-fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
-               naux: Ints, nslot: Ints, ntype: Ints,
-               parent: Ints, childno: Ints, substart: Ints, kids: Ints, kid_first: Ints,
-               out: Strs, msgs: Strs) -> Int {
-    let next = ints_new();
-    ints_push(next, 0);
-    let vals = ints_new();
+// The generated symbol for a function.
+//
+// From its index, **never from the source name**: a Nazm identifier would need escaping
+// rules to be safe in an LLVM identifier, and the escaping is the bug. It also means no
+// program can collide with `@main`, with `@nz.fail`, or with `printf`.
+fn symbol(fnames: Strs, name: Str) -> Str {
+    let mut i = 0;
+    while i < strs_len(fnames) {
+        if strs_get(fnames, i) == name {
+            return str_concat("@nz.f", int_to_str(i));
+        }
+        i = i + 1;
+    }
+    "@nz.unknown"
+}
 
-    add_line(out, "define internal i64 @nz.main() {");
+fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
+                 nk: Ints, nar: Ints, ntx: Strs, nslot: Ints, ntype: Ints,
+                 kids: Ints, kid_first: Ints, fnames: Strs, k: Int,
+                 src: Str, path: Str) -> Int {
+    // Numbering restarts per function: LLVM requires a function's unnamed values to be
+    // consecutive from zero, and `%p<n>`/`%slot<n>` are named so they consume none of it.
+    ints_set(next, 0, 0);
+    let text = strs_get(ntx, k);
+    let params = ints_get(nar, k) - 1;
+    let first = ints_get(kid_first, k);
+
+    let mut list = "";
+    let mut p = 0;
+    while p < params {
+        if p > 0 { list = str_concat(list, ", "); }
+        list = str_concat(list, str_concat("i64 %p", int_to_str(p)));
+        p = p + 1;
+    }
+    add_line(out, str_concat(str_concat("define internal i64 ", symbol(fnames, before_colon(text))),
+                             str_concat(str_concat("(", list), str_concat(") {   ; ", before_colon(text)))));
     add_line(out, "entry:");
-    // Every local gets its storage in the entry block, one `alloca` per binding, never
-    // on a path that runs more than once. A slot belongs to a binding, not to an
-    // execution of it — the same rule `nazm-lir` keeps.
-    let slots = slot_count(nk, nslot);
+    strs_set(current, 0, "entry");
+    ints_set(live, 0, 1);
+
+    // Every local gets its storage here, one `alloca` per binding, never on a path that
+    // runs more than once: a slot belongs to a binding, not to an execution of it.
+    let slots = ints_get(nslot, k);
     let mut sl = 0;
     while sl < slots {
         add_line(out, str_concat(str_concat("  %slot", int_to_str(sl)), " = alloca i64"));
         sl = sl + 1;
+    }
+    // Parameters arrive as SSA values and are stored into their slots at once, so the
+    // body reads them with the same `load` it uses for any local.
+    p = 0;
+    while p < params {
+        let slot = ints_get(nslot, ints_get(kids, first + p));
+        add_line(out, str_concat(str_concat("  store i64 %p", int_to_str(p)),
+                                 str_concat(", ptr %slot", int_to_str(slot))));
+        p = p + 1;
+    }
+    0
+}
+
+fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
+               naux: Ints, nslot: Ints, ntype: Ints,
+               parent: Ints, childno: Ints, substart: Ints, kids: Ints, kid_first: Ints,
+               fnames: Strs, out: Strs, msgs: Strs) -> Int {
+    let next = ints_new();
+    ints_push(next, 0);
+    let vals = ints_new();
+
+    // Where each function's `define` must be opened: before its subtree begins, since
+    // a post-order scan reaches the `fn` node only after its whole body.
+    let fn_at = ints_new();
+    let mut f = 0;
+    while f < ints_len(nk) {
+        ints_push(fn_at, 0 - 1);
+        f = f + 1;
+    }
+    f = 0;
+    while f < ints_len(nk) {
+        if ints_get(nk, f) == n_fn() {
+            ints_set(fn_at, ints_get(substart, f), f);
+        }
+        f = f + 1;
     }
 
     // Where the loop header of each `while` must be opened: before its condition's
@@ -404,6 +468,12 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         let from = ints_get(nst, k);
         let text = strs_get(ntx, k);
 
+        // A function's definition opens before its body, for the same reason.
+        if ints_get(fn_at, k) >= 0 {
+            open_function(out, current, live, next, vals, nk, nar, ntx, nslot, ntype,
+                          kids, kid_first, fnames, ints_get(fn_at, k), src, path);
+        }
+
         // A loop header opens before its condition, never after: `continue` and the back
         // edge both target it, so the condition is re-evaluated on every iteration.
         if ints_get(head_at, k) >= 0 {
@@ -412,6 +482,27 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             open_block(out, current, live, blk("h", w));
         }
 
+        if kind == n_param() {
+            // Handled by `open_function`, which stored it before the body began.
+        } else {
+        if kind == n_call() {
+            let argc = ints_get(nar, k);
+            let args = ints_new();
+            let mut a = 0;
+            while a < argc { ints_push(args, ints_pop(vals)); a = a + 1; }
+            let mut list = "";
+            a = argc - 1;
+            while a >= 0 {
+                if a < argc - 1 { list = str_concat(list, ", "); }
+                list = str_concat(list, str_concat("i64 ", v(ints_get(args, a))));
+                a = a - 1;
+            }
+            let n = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(n)),
+                                     str_concat(str_concat(" = call i64 ", symbol(fnames, text)),
+                                                str_concat(str_concat("(", list), ")"))));
+            ints_push(vals, n);
+        } else {
         if kind == n_bool() {
             let n = take_number(next);
             add_line(out, str_concat(str_concat("  ", v(n)),
@@ -520,13 +611,22 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                         }
                     } else {
                         if kind == n_fn() {
-                            if before_colon(text) != "main" {
-                                refuse("a function other than `main`", position(src, path, from));
-                            }
                             if after_colon(text) != "Int" {
-                                refuse("a `main` that does not return `Int`",
+                                refuse("a function that does not return `Int`",
                                        position(src, path, from));
                             }
+                            // A body whose every path returned has nothing to fall off
+                            // the end with and needs no terminator of its own — the
+                            // `ret` is already there.
+                            if ints_get(live, 0) == 1 {
+                                if ints_len(vals) != 1 {
+                                    refuse("a body that produces no value",
+                                           position(src, path, from));
+                                }
+                                add_line(out, str_concat("  ret i64 ", v(ints_pop(vals))));
+                            }
+                            add_line(out, "}");
+                            ints_set(live, 0, 0);
                         } else {
                             if kind != n_program() {
                                 refuse(str_concat(str_concat("`", node_name(kind)), "`"),
@@ -536,6 +636,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     }
                 }
             }
+        }
+        }
         }
         }
         }
@@ -609,15 +711,6 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         k = k + 1;
     }
 
-    // A body whose every path returned has nothing to fall off the end with, and needs
-    // no terminator of its own — the `ret` is already there.
-    if ints_get(live, 0) == 1 {
-        if ints_len(vals) != 1 {
-            refuse("a body that produces no value", position(src, path, 0));
-        }
-        add_line(out, str_concat("  ret i64 ", v(ints_pop(vals))));
-    }
-    add_line(out, "}");
     ints_get(next, 0)
 }
 
@@ -693,7 +786,7 @@ fn main() -> Int {
     let substart = ints_new();
     build_relations(nk, nar, kids, kid_first, parent, childno, substart);
     emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype,
-                parent, childno, substart, kids, kid_first, body, msgs);
+                parent, childno, substart, kids, kid_first, fnames, body, msgs);
 
     // The header comes last because interning the messages is what discovers them.
     let head = strs_new();
@@ -731,7 +824,7 @@ fn main() -> Int {
     // prints** — the full 64-bit value, because an exit status is 8 bits and would lie.
     add_line(tail, "define i32 @main() {");
     add_line(tail, "entry:");
-    add_line(tail, "  %r = call i64 @nz.main()");
+    add_line(tail, str_concat("  %r = call i64 ", str_concat(symbol(fnames, "main"), "()")));
     add_line(tail, "  %p = call i32 (ptr, ...) @printf(ptr @.fmt, i64 %r)");
     add_line(tail, "  ret i32 0");
     add_line(tail, "}");

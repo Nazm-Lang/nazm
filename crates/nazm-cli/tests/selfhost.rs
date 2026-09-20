@@ -1094,6 +1094,84 @@ fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_in
 }
 
 #[test]
+fn the_nazm_compiler_handles_several_functions_and_calls() {
+    // Whole programs rather than one expression: forward references, parameters,
+    // early returns, and a callee whose own loop runs inside its caller's.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+
+    let programs: &[(&str, &str)] = &[
+        ("fn double(n: Int) -> Int { n * 2 }\nfn main() -> Int { double(21) }\n", "42"),
+        (
+            "fn add(a: Int, b: Int) -> Int { a + b }\nfn main() -> Int { add(add(1, 2), add(3, 4)) }\n",
+            "10",
+        ),
+        // `main` calls a function declared *after* it.
+        ("fn main() -> Int { helper(5) }\nfn helper(n: Int) -> Int { n * n }\n", "25"),
+        (
+            "fn clamp(n: Int) -> Int { if n > 10 { return 10; } if n < 0 { return 0; } n }\n\
+             fn main() -> Int { let mut i = 0 - 3; let mut s = 0; while i < 14 { s = s + clamp(i); i = i + 1; } s }\n",
+            "85",
+        ),
+        (
+            "fn sum_to(n: Int) -> Int { let mut i = 1; let mut s = 0; while i <= n { s = s + i; i = i + 1; } s }\n\
+             fn main() -> Int { sum_to(100) }\n",
+            "5050",
+        ),
+    ];
+
+    for (src, expected) in programs {
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, src).expect("write");
+        let ir = Command::new(&emitter).arg(&file).output().expect("run");
+        assert_eq!(
+            ir.status.code(),
+            Some(0),
+            "the Nazm compiler refused a program: {}",
+            String::from_utf8_lossy(&ir.stderr)
+        );
+        let text = String::from_utf8_lossy(&ir.stdout).into_owned();
+        // Symbols are generated from the index, never from the source name: a Nazm
+        // identifier would need escaping rules to be safe in an LLVM identifier, and the
+        // escaping is the bug.
+        assert!(text.contains("@nz.f"), "no generated symbols:\n{text}");
+        assert!(
+            !text.contains("@double") && !text.contains("@helper"),
+            "a source name reached an LLVM identifier:\n{text}"
+        );
+
+        let ll = dir.path().join("case.ll");
+        std::fs::write(&ll, &ir.stdout).expect("write");
+        let exe = dir.path().join("case");
+        let built = Command::new("clang")
+            .args(["-Wno-override-module", "-o"])
+            .arg(&exe)
+            .arg(&ll)
+            .output()
+            .expect("clang");
+        assert!(
+            built.status.success(),
+            "clang rejected the IR: {}\n{text}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let (code, stdout, _) =
+            run_bounded(&mut Command::new(&exe), std::time::Duration::from_secs(30)).expect("hung");
+        assert_eq!(code, Some(0));
+        assert_eq!(stdout.trim(), *expected);
+
+        let interp = Command::new(NAZM)
+            .args(["run", file.to_str().unwrap()])
+            .output()
+            .expect("run");
+        assert_eq!(
+            String::from_utf8_lossy(&interp.stdout).trim(),
+            *expected,
+            "the expectation disagrees with the interpreter"
+        );
+    }
+}
+
+#[test]
 fn the_nazm_compiler_keeps_the_specified_failure_behaviour() {
     let dir = tempfile::tempdir().expect("tempdir");
     let emitter = build_emitter(dir.path());
@@ -1185,7 +1263,6 @@ fn the_nazm_compiler_refuses_what_it_cannot_emit_and_writes_nothing() {
         // Outside this increment's coverage: a backend limitation, reported as `N0101`.
         ("fn main() -> Bool { true }\n", "N0101"),
         ("fn main() -> Int { let s = \"x\"; 1 }\n", "N0101"),
-        ("fn f() -> Int { 1 }\nfn main() -> Int { f() }\n", "N0101"),
         // A program that does not check is a *check* failure, reported with the
         // checker's own code — never as a backend limit.
         ("fn main() -> Int { 1 + true }\n", "N0304"),
