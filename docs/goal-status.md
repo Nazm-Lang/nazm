@@ -12,7 +12,7 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `d0ad5ba` |
+| Current commit | `1377d39` |
 | Working tree | clean except this file |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
 | Disk | 13 GiB free of 460 GiB (**97 % full**) — `target/` alone is 3.7 GiB. Remove disposable copies promptly |
@@ -49,8 +49,8 @@ what was verified when it was written, not what is true now.
 | Name resolution in Nazm | **verified** | `compiler/check.nz`; same `(code, span)` as `nazm_core::check` for `N0200`/`N0201` over 15 sources, and accepts every standalone `.nz` in the tree |
 | Tree traversal in Nazm without recursion | **verified** | child index from the post-order arena, then a pre-order walk from a marker-carrying work stack |
 | Type checking in Nazm | **verified** | `compiler/analyse.nz`; same `(code, span)` as `nazm_core::check` for `N0300`/`N0301`/`N0303`/`N0304`/`N0310` over 35 sources |
-| **LLVM emission in Nazm** | **verified, for integer arithmetic** | `compiler/emit.nz`; 14 programs compiled by the Nazm compiler, assembled by `clang`, run, and checked against an explicit expectation *and* the interpreter. 7 failure cases check exit 2, code, message and position. No `nsw` anywhere |
-| Emission of locals, control flow, calls, `Str`, sequences | planned — the rest of Milestone C | needed before the compiler can compile itself |
+| **LLVM emission in Nazm** | **verified for the whole `Int` language** | `compiler/emit.nz`: arithmetic with every specified failure, locals, `if` as value and statement, `while`, `break`, `continue`, `return`, several functions, calls, forward references. ~40 programs compiled by the Nazm compiler, assembled by `clang`, run, and checked against an explicit expectation *and* the interpreter |
+| Emission of `Str`, sequences and the built-ins | planned — the rest of Milestone C | the last gap before the compiler can read its own source |
 | Native recursion | blocked by design | pending measured stack availability and frame size. **Not needed**: the compiler is iterative |
 | Concurrency, formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
 
@@ -58,10 +58,10 @@ what was verified when it was written, not what is true now.
 
 | Command | Result |
 | --- | --- |
-| `cargo test --workspace` | **450 passed, 0 failed, 6 ignored** |
+| `cargo test --workspace` | **451 passed, 0 failed, 6 ignored** |
 | — of which self-skipping | 10 `docker_boundary` tests exercise nothing without `NAZM_REQUIRE_DOCKER=1` |
 | — of which native end-to-end | 126 `nazm build` cases, each at `-O0` and `-O2` against the interpreter |
-| — of which self-hosting differentials | 13 |
+| — of which self-hosting differentials | 14 |
 | `cargo test -p xtask --test lifecycle -- --ignored` | 6 passed (separate; not in the 443) |
 | `cargo lint` (the CI alias) | 0 diagnostics |
 | `cargo fmt --all -- --check` | clean |
@@ -80,34 +80,30 @@ mutation lock is held (`target/.nazm-mutation-lock.v2` absent).
 
 ## Current task
 
-**Milestone C — broadening `compiler/emit.nz`.** The compiler written in Nazm now lexes,
-parses, resolves, type-checks and emits LLVM for integer arithmetic. What it cannot emit
-yet is everything its own source uses: locals, control flow, calls, `Str` and sequences.
-Closing that gap is what makes Milestone D (the C1→C2→C3 chain) possible at all.
+**Milestone C — `Str`, sequences and the built-ins in `compiler/emit.nz`.** The compiler
+written in Nazm now compiles the whole `Int` language. The remaining gap is exactly the
+feature set its own source uses: `Str` as `{ptr, len}`, `Ints`/`Strs` as headers, and the
+26 built-ins. Closing it is what makes Milestone D possible at all.
 
 ## Next exact action
 
-Extend `compiler/emit.nz` in this order, each verified the way the arithmetic cases are —
-compiled by the Nazm compiler, assembled by `clang`, run, and compared against an explicit
-expectation *and* the interpreter:
+Extend `compiler/emit.nz` to the non-`Int` types, in this order:
 
-1. **Locals and statements.** `let`, `let mut`, assignment, `var`. One `alloca` per
-   binding in the entry block — never on a loop path — and a slot map from the checker's
-   scope walk. This needs the marker walk `compiler/analyse.nz` already has, because the
-   post-order scan `emit.nz` uses today cannot open basic blocks.
-2. **Control flow.** `if` (statement and value), `while`, `break`, `continue`, `return`.
-   The lessons are already written down in `crates/nazm-lir/src/emit.rs`: a `phi` names
-   the block emission *ended* in, a loop's back edge targets the condition, `continue`
-   targets the condition and not the body, and a transfer in a loop's *condition*
-   belongs to the enclosing loop.
-3. **Calls and several functions.** Two passes — signatures, then bodies — so a forward
-   reference resolves; generated symbols `@nz.f<N>` from the index, never from a source
-   name.
-4. **`Str` and sequences**, and the built-ins the compiler itself calls. This is the
-   largest step and the last one before the compiler can read its own source.
+1. **Types on values.** The emitter assumes `i64` everywhere. `ntype` already records
+   each node's type, so the store/load/call/`phi`/`ret` sites read it instead — `Str` is
+   `{ ptr, i64 }`, `Ints`/`Strs` are `ptr`. This is mechanical but touches every emission
+   site, and is the prerequisite for the rest.
+2. **`Str` literals and the six string built-ins**, copying the shapes already proven in
+   `crates/nazm-lir/src/emit.rs`: a constant `{ptr, len}` pair per literal, slices that
+   share storage, `memcmp`-based equality guarded by a length test, `snprintf` for
+   `int_to_str`.
+3. **Sequences**: the `@nz.arr_new`/`@nz.arr_grow` helpers as generated text, bounds
+   checks at each call site so the diagnostic names that call's position.
+4. **The outside-world built-ins**, and `@main(i32, ptr)` with the argument globals.
 
-Then Milestone D: the C1→C2→C3 chain, with `compiler/bootstrap.sh` recording source
-digests, toolchain identities, commands and flags, and byte-comparing C2 against C3.
+Then the compiler can read its own source, and Milestone D's C1→C2→C3 chain becomes the
+next step — with `compiler/bootstrap.sh` recording source digests, toolchain identities,
+commands and flags, and byte-comparing C2 against C3.
 
 ## Unresolved decisions
 
@@ -127,7 +123,7 @@ digests, toolchain identities, commands and flags, and byte-comparing C2 against
 
 - [x] Scalar control flow verified, including `return` and transfers inside values — `ac39f7b`
 - [x] Bootstrap subset: text, structured data, collections, memory, file I/O, errors, modules — `053ed22`
-- [ ] Compiler frontend and lowering/emission in Nazm — **lexer, parser, name resolution, type checking and LLVM emission all written in Nazm and differentially verified; emission covers integer arithmetic only**
+- [ ] Compiler frontend and lowering/emission in Nazm — **lexer, parser, name resolution, type checking and LLVM emission all written in Nazm and differentially verified; emission covers the whole `Int` language but not `Str`, sequences or the built-ins**
 - [ ] C1 → C2 → C3 bootstrap with conformance and reproducibility
 - [ ] Ordinary independent programs compile with the Nazm-written compiler
 - [ ] Structured concurrency: transfer/capture rules, cancellation, cleanup
