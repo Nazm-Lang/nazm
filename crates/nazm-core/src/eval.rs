@@ -406,12 +406,17 @@ impl<'a> Interpreter<'a> {
                 .help("this is a bug in the interpreter; the checker should have caught it"),
             ),
         };
-        let out_of_bounds = |detail: String| RuntimeError {
+        // The *message* is the same sentence the compiled program writes, because the
+        // two implementations reporting the same failure differently is a difference a
+        // reader has to reconcile for no reason. What the interpreter knows and the
+        // backend cannot — the actual index and length — goes in the help, where it
+        // costs nothing and is not part of the contract.
+        let out_of_bounds = |message: &str, detail: String| RuntimeError {
             diagnostic: Box::new(
-                Diagnostic::error(codes::INDEX_OUT_OF_BOUNDS, span, detail).help(
-                    "`Str` is indexed in bytes, from 0; `str_len` gives the length in \
-                     bytes",
-                ),
+                Diagnostic::error(codes::INDEX_OUT_OF_BOUNDS, span, message).help(format!(
+                    "{detail}. `Str` is indexed in bytes, from 0; `str_len` gives the \
+                     length in bytes"
+                )),
             ),
         };
 
@@ -428,10 +433,10 @@ impl<'a> Interpreter<'a> {
             (Intrinsic::StrByte, [Value::Str(s), Value::Int(at)]) => {
                 let index = usize::try_from(*at).ok().filter(|n| *n < s.len());
                 let Some(index) = index else {
-                    return Err(out_of_bounds(format!(
-                        "byte {at} is outside a `Str` of length {}",
-                        s.len()
-                    )));
+                    return Err(out_of_bounds(
+                        "this byte index is outside the `Str`",
+                        format!("asked for byte {at} of a `Str` {} bytes long", s.len()),
+                    ));
                 };
                 s.get(index).map_or_else(
                     || Err(bug("an index that passed its own bounds check")),
@@ -442,10 +447,10 @@ impl<'a> Interpreter<'a> {
                 let ok =
                     *from >= 0 && *to >= *from && usize::try_from(*to).is_ok_and(|t| t <= s.len());
                 if !ok {
-                    return Err(out_of_bounds(format!(
-                        "the slice {from}..{to} is not inside a `Str` of length {}",
-                        s.len()
-                    )));
+                    return Err(out_of_bounds(
+                        "this slice is not inside the `Str`",
+                        format!("asked for {from}..{to} of a `Str` {} bytes long", s.len()),
+                    ));
                 }
                 let (a, b) = (
                     usize::try_from(*from).unwrap_or(0),
@@ -465,6 +470,15 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Str(out))
             }
             (Intrinsic::IntToStr, [Value::Int(n)]) => Ok(Value::Str(n.to_string().into_bytes())),
+            (Intrinsic::StrFromByte, [Value::Int(b)]) => {
+                let Ok(byte) = u8::try_from(*b) else {
+                    return Err(out_of_bounds(
+                        "this is not a byte value",
+                        format!("asked for byte {b}, which is outside 0..=255"),
+                    ));
+                };
+                Ok(Value::Str(vec![byte]))
+            }
             _ => Err(bug("arguments of the wrong shape")),
         }
     }

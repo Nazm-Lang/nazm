@@ -362,6 +362,8 @@ two implementations end up disagreeing:
 | **Ordering** | `< <= > >=` do **not** apply to `Str`. Ordering text needs a collation decision this language has not made |
 | **Concatenation** | `str_concat(a, b)` is the bytes of `a` followed by the bytes of `b` |
 | **Conversion** | `int_to_str(n)` is the decimal form, with a leading `-` when negative. `int_to_str(0)` is `"0"`, and the full `Int` range round-trips |
+| **Construction** | `str_from_byte(b)` is a one-byte `Str`, and fails with `N0405` unless `0 <= b <= 255`. v0.1 literals have **no escapes**, so this is the only way to write a byte you cannot type — a newline, a NUL, anything above 127 |
+| **Allocation** | `str_concat`, `int_to_str` and `str_from_byte` allocate; `str_slice` does not. A compiled program reports `N0406` if the allocator refuses. The interpreter cannot: its host aborts on allocation failure, and that difference is stated rather than papered over |
 | **Ownership** | Values, not references. Passing, returning, binding and copying a `Str` produce a string with the same bytes, and there is no way to observe whether a copy was made |
 | **Mutation** | There is none. No operation changes an existing `Str` |
 

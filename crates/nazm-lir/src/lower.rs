@@ -52,16 +52,20 @@ use nazm_syntax::{
 
 use std::collections::HashMap;
 
-use crate::ir::{fits, ArithOp, Block, CmpOp, Expr, FuncId, Function, Local, Module, Stmt, Ty};
+use crate::ir::{
+    fits, ArithOp, Block, Builtin, CmpOp, Expr, FuncId, Function, Local, Module, Stmt, Ty,
+};
 
 /// What the subset is, in one sentence, for every refusal to point at.
-const SUBSET: &str = "`nazm build` currently compiles functions over `Int` and `Bool` — \
-                      literals, `let` and `let mut` bindings, parameters, assignment, \
-                      `while` with `break` and `continue`, `return`, unary `-`, the \
-                      operators `+ - * / %`, the comparisons `== != < <= > >=`, \
-                      parentheses, `if` in both statement and value position, and \
-                      non-recursive direct calls — with `fn main() -> Int` as the entry \
-                      point. Everything else still runs under `nazm run`";
+const SUBSET: &str = "`nazm build` currently compiles functions over `Int`, `Bool` and \
+                      `Str` — literals, `let` and `let mut` bindings, parameters, \
+                      assignment, `while` with `break` and `continue`, `return`, unary \
+                      `-`, the operators `+ - * / %`, the comparisons `== != < <= > >=`, \
+                      parentheses, `if` in both statement and value position, the \
+                      built-ins `str_len` `str_byte` `str_slice` `str_concat` \
+                      `int_to_str`, and non-recursive direct calls — with \
+                      `fn main() -> Int` as the entry point. Everything else still runs \
+                      under `nazm run`";
 
 /// Constructs outside the native subset, with the spans that named them.
 #[derive(Debug)]
@@ -94,6 +98,12 @@ struct Ctx {
     /// `f` does not shadow a function `f`. Reproducing that is the point; inventing a
     /// shadowing rule here would make the two disagree.
     sigs: HashMap<String, Sig>,
+    /// Every function name the source declares, including those whose signature this
+    /// backend refused. It is what tells a refused user function apart from a front-end
+    /// built-in this backend does not lower: both reach the same arm with no `Sig`, and
+    /// they deserve different sentences. Checking has already rejected a name that is
+    /// neither (`N0201`).
+    declared: std::collections::HashSet<String>,
     /// Which functions each function calls, for the cycle check.
     calls: Vec<Vec<(FuncId, Span)>>,
     /// The function whose body is being lowered, for recording edges.
@@ -189,6 +199,7 @@ pub fn lower(program: &Program) -> Result<Module, LowerError> {
         scopes: vec![Vec::new()],
         locals: Vec::new(),
         sigs: HashMap::new(),
+        declared: std::collections::HashSet::new(),
         calls: Vec::new(),
         current: FuncId(0),
         ret_ty: Ty::Int,
@@ -201,6 +212,7 @@ pub fn lower(program: &Program) -> Result<Module, LowerError> {
     // producing a second diagnostic about the same mistake.
     let mut order: Vec<&AstFn> = Vec::new();
     for f in &program.functions {
+        ctx.declared.insert(f.name.clone());
         if ctx.sigs.contains_key(&f.name) {
             continue;
         }
@@ -303,6 +315,7 @@ fn native_ty(name: &str) -> Option<Ty> {
     match name {
         "Int" => Some(Ty::Int),
         "Bool" => Some(Ty::Bool),
+        "Str" => Some(Ty::Str),
         _ => None,
     }
 }
@@ -794,10 +807,7 @@ fn lower_expr(ctx: &mut Ctx, e: &AstExpr) -> Option<Expr> {
     match e {
         AstExpr::Int { value, .. } => Some(Expr::Int(*value)),
         AstExpr::Bool { value, .. } => Some(Expr::Bool(*value)),
-        AstExpr::Str { span, .. } => {
-            ctx.unsupported(*span, "a `Str` value");
-            None
-        }
+        AstExpr::Str { value, .. } => Some(Expr::Str(value.clone().into_bytes())),
         AstExpr::Var { name, span } => match ctx.resolve(name) {
             Some((slot, ty)) => Some(Expr::Load { slot, ty }),
             None => {
@@ -922,15 +932,28 @@ fn lower_call(ctx: &mut Ctx, callee: &str, callee_span: Span, args: &[AstExpr]) 
     // to be unusable — a program with problems in two arguments should report two.
     let lowered: Vec<Option<Expr>> = args.iter().map(|a| lower_expr(ctx, a)).collect();
 
+    // A built-in is not a `FuncId` and never enters the call graph, so the cycle check
+    // does not see it and cannot: it is emitted as instructions, and instructions do not
+    // recurse.
+    if let Some(op) = Builtin::by_name(callee) {
+        return lower_builtin(ctx, op, lowered, callee_span);
+    }
+
     let Some(Sig { id, ret, params }) = ctx.sigs.get(callee) else {
         // The checker reports an unknown function (`N0201`) and a mismatched signature
         // (`N0303`, `N0300`) already. Reaching here means the callee exists in the source
         // but this backend refused its signature — a different fact, and worth saying so
         // rather than repeating the checker.
-        ctx.unsupported(
-            callee_span,
-            &format!("a call to `{callee}`, whose signature this backend refused"),
-        );
+        // A front-end built-in this backend does not lower is a coverage gap, and reads
+        // as one. Anything else is a user function whose signature was refused above.
+        if ctx.declared.contains(callee) {
+            ctx.unsupported(
+                callee_span,
+                &format!("a call to `{callee}`, whose signature this backend refused"),
+            );
+        } else {
+            ctx.unsupported(callee_span, &format!("the built-in `{callee}`"));
+        }
         return None;
     };
 
@@ -966,6 +989,36 @@ fn lower_call(ctx: &mut Ctx, callee: &str, callee_span: Span, args: &[AstExpr]) 
         args,
         ret,
     })
+}
+
+/// A built-in, checked against this backend's own table.
+///
+/// The front end has already established arity and argument types, so a disagreement
+/// here is a *lowering* bug rather than a program error — and it is reported as one,
+/// because a wrongly typed argument would otherwise reach clang as a malformed call.
+fn lower_builtin(
+    ctx: &mut Ctx,
+    op: Builtin,
+    lowered: Vec<Option<Expr>>,
+    span: Span,
+) -> Option<Expr> {
+    let args: Vec<Expr> = lowered.into_iter().collect::<Option<_>>()?;
+    let params = op.params();
+    if args.len() != params.len() || !args.iter().zip(params).all(|(a, want)| fits(a, *want)) {
+        ctx.errors.push(
+            Diagnostic::error(
+                codes::UNSUPPORTED_CONSTRUCT,
+                span,
+                format!(
+                    "`nazm build` lowered `{}` with the wrong arguments",
+                    op.name()
+                ),
+            )
+            .help("this is a bug in the compiler; `nazm run` still works"),
+        );
+        return None;
+    }
+    Some(Expr::Builtin { op, args, span })
 }
 
 /// Value-position `if`, and only that.

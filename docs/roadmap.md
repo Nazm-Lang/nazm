@@ -418,7 +418,7 @@ name with `N0101` and still runs under `nazm run`.
 
 | Area | Native | Notes |
 | --- | --- | --- |
-| Types | `Int` (signed 64-bit), `Bool` | `Str` is frontend-only |
+| Types | `Int` (signed 64-bit), `Bool`, `Str` | `Str` is an immutable byte sequence |
 | Literals | integer, `true`, `false` | full `Int` range including `Int::MIN` |
 | Arithmetic | `+ - * / %`, unary `-` | checked at every optimisation level; intrinsic + branch, never `nsw` |
 | Arithmetic failures | overflow `N0400`, division by zero `N0401` | `Int::MIN / -1` fails; **`Int::MIN % -1` is `0`** |
@@ -430,7 +430,8 @@ name with `N0101` and still runs under `nazm run`.
 | Transfers | `break`, `continue`, `return` | a transfer in a loop *condition* targets the enclosing loop |
 | Functions | several, forward references, direct calls, `Int`/`Bool` parameters and returns | `fn main() -> Int` is the entry point; only the wrapper prints |
 | Evaluation order | left to right, operands and arguments | observable through which failure fires and which transfer wins |
-| **Not native** | recursion, `Str`, collections, records, modules, I/O, concurrency | recursion pends a measured native execution contract |
+| Strings | `Str` literals, `str_len`, `str_byte`, `str_slice`, `str_concat`, `str_from_byte`, `int_to_str`, `==`/`!=` | bytes, not characters; `{ptr, len}` by value; slices share storage; `N0405` on every out-of-range index |
+| **Not native** | recursion, collections, records, modules, I/O, concurrency | recursion pends a measured native execution contract |
 
 This is a *scalar* conformance statement. It does not say the language is complete; it
 says which programs over `Int` and `Bool` the backend compiles and with what semantics.
