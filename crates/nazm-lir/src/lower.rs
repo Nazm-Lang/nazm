@@ -12,13 +12,37 @@
 //! emits something for a program it did not fully understand is worse than one that
 //! stops, because the something runs.
 //!
-//! # The one `if`
+//! # The one `if`, in two positions
 //!
-//! `docs/spec.md` has a single `if` whose meaning is decided by checking, not by syntax.
-//! This backend compiles it **only in value position**, and the way that stays true is
-//! that a statement-position `if` never arrives here as an `if` at all — it arrives as
-//! `Stmt::Expr`, which is refused. There is no arm below that handles an `if` generically
-//! and then discovers what else it covered.
+//! `docs/spec.md` has a single `if` whose meaning is decided by checking, not by syntax,
+//! and this file does not add a second. The same `AstExpr::If` becomes `Stmt::If` when it
+//! is found where no value is wanted and `Expr::If` when it is found where one is — which
+//! is the position, not the syntax, exactly as checking decides it. There are three such
+//! places and they are named, not discovered: a statement (`AstStmt::Expr`), the tail of
+//! a body that wants no value ([`lower_body`]), and anywhere an expression is lowered
+//! ([`lower_expr`]).
+//!
+//! What differs between the two is **completion**, and that is represented rather than
+//! implied. A statement `if` without `else` always falls through; one whose branches both
+//! transfer never does; a value `if` with one transferring branch takes its value from
+//! the other. [`Ends`] records which, for statement sequences, and `Option` on
+//! [`Block::result`] and on `Expr::If`'s type records it for values.
+//!
+//! # Blocks that produce a value, and blocks that do not
+//!
+//! A function body and a value-position `if` branch produce a value; a loop body and a
+//! statement-`if` branch do not. Those are different obligations, so they are different
+//! functions here — [`lower_block`] returns a [`Block`] and [`lower_body`] returns a
+//! `Vec<Stmt>` — over a shared [`lower_stmts`] that has no opinion about either.
+//!
+//! # Where `break` and `continue` may appear
+//!
+//! Only inside a loop **body**. A loop's *condition* is outside that loop: a transfer
+//! raised there targets the enclosing one. That is the existing language's rule, taken
+//! from `check.rs` (which raises `loop_depth` around the body alone) and from `eval.rs`
+//! (whose `take!` lets a `Flow::Break` from the condition leave `while_loop`), not
+//! invented here. [`Ctx::loop_depth`] reproduces it so that a `break` this backend cannot
+//! place is refused rather than emitted somewhere plausible.
 
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
@@ -28,13 +52,14 @@ use nazm_syntax::{
 
 use std::collections::HashMap;
 
-use crate::ir::{ArithOp, Block, CmpOp, Expr, FuncId, Function, Local, Module, Stmt, Ty};
+use crate::ir::{fits, ArithOp, Block, CmpOp, Expr, FuncId, Function, Local, Module, Stmt, Ty};
 
 /// What the subset is, in one sentence, for every refusal to point at.
 const SUBSET: &str = "`nazm build` currently compiles functions over `Int` and `Bool` — \
-                      literals, immutable `let` bindings and parameters, unary `-`, the \
-                      operators `+ - * / %`, the comparisons `== != < <= > >=`, \
-                      parentheses, `if`/`else` used as a value, and non-recursive direct \
+                      literals, `let` and `let mut` bindings, parameters, assignment, \
+                      `while` with `break` and `continue`, unary `-`, the operators \
+                      `+ - * / %`, the comparisons `== != < <= > >=`, parentheses, `if` \
+                      in both statement and value position, and non-recursive direct \
                       calls — with `fn main() -> Int` as the entry point. Everything else \
                       still runs under `nazm run`";
 
@@ -73,7 +98,24 @@ struct Ctx {
     calls: Vec<Vec<(FuncId, Span)>>,
     /// The function whose body is being lowered, for recording edges.
     current: FuncId,
+    /// How many loop **bodies** enclose the statement being lowered.
+    ///
+    /// Mirrors the checker's field of the same name, including where it is raised: around
+    /// a loop's body and not around its condition. Reset per function, because a loop
+    /// target cannot cross a function boundary.
+    loop_depth: u32,
     errors: Vec<Diagnostic>,
+}
+
+/// How a statement sequence finishes. The checker's `Completion`, minus the value case
+/// that a statement sequence cannot have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ends {
+    /// Reaches the end; whatever follows can run.
+    FallsThrough,
+    /// Every path leaves through `break` or `continue`. Nothing after it can run, and the
+    /// checker has already said so (`N0313`).
+    Transfers,
 }
 
 impl Ctx {
@@ -146,6 +188,7 @@ pub fn lower(program: &Program) -> Result<Module, LowerError> {
         sigs: HashMap::new(),
         calls: Vec::new(),
         current: FuncId(0),
+        loop_depth: 0,
         errors: Vec::new(),
     };
 
@@ -269,6 +312,9 @@ fn lower_function(ctx: &mut Ctx, f: &AstFn) -> Option<Function> {
     ctx.scopes = vec![Vec::new()];
     ctx.locals = Vec::new();
     ctx.current = id;
+    // No loop target crosses a function boundary, so the depth starts at zero here and
+    // not wherever the previous function left it.
+    ctx.loop_depth = 0;
 
     // Parameters are the first slots, in order, so the emitter can store the incoming
     // arguments into them without a separate notion of what a parameter is. They are
@@ -287,7 +333,19 @@ fn lower_function(ctx: &mut Ctx, f: &AstFn) -> Option<Function> {
     // rather than by coincidence.
     let body = f.body.as_ref()?;
     let block = ctx.scoped(|ctx| lower_block(ctx, body))?;
-    if block.result.ty() != ret {
+    let Some(result) = block.result.as_ref() else {
+        // The body transfers control. Unreachable: that needs a `break` or `continue`,
+        // and one outside a loop is `N0312` — there is no loop at function-body level.
+        ctx.unsupported(
+            body.span,
+            &format!(
+                "a `{}` whose body leaves through a loop it is not in",
+                f.name
+            ),
+        );
+        return None;
+    };
+    if !fits(result, ret) {
         // Unreachable after checking, which requires the body to produce the declared
         // type. Reported rather than assumed away.
         ctx.unsupported(
@@ -295,7 +353,7 @@ fn lower_function(ctx: &mut Ctx, f: &AstFn) -> Option<Function> {
             &format!(
                 "a `{}` whose body produces `{}` but is declared `{}`",
                 f.name,
-                block.result.ty().name(),
+                result.ty().map_or("nothing", Ty::name),
                 ret.name()
             ),
         );
@@ -403,41 +461,21 @@ fn report_cycles(ctx: &mut Ctx, functions: &[Function]) {
 
 /// A block used as a value: statements, then a tail.
 ///
-/// Reached for `main`'s body and for an `if` branch, and for nothing else. A bare
-/// `{ … }` in expression position is refused in [`lower_expr`] rather than routed here,
-/// so "which blocks may this backend compile" has one answer written in one place.
+/// Reached for a function body and for a value-position `if` branch, and for nothing
+/// else. A bare `{ … }` in expression position is refused in [`lower_expr`], and a block
+/// that wants no value goes to [`lower_body`] — so "which blocks may this backend
+/// compile" has one answer written in one place.
 fn lower_block(ctx: &mut Ctx, b: &AstBlock) -> Option<Block> {
-    let mut stmts = Vec::new();
-    for s in &b.statements {
-        match s {
-            AstStmt::Let(l) if !l.mutable => {
-                // The initialiser is lowered *before* the name is bound, so `let x = x;`
-                // reads the outer `x` exactly as the checker says it does.
-                let value = lower_expr(ctx, &l.value);
-                let ty = value.as_ref().map_or(Ty::Int, Expr::ty);
-                let slot = ctx.bind(&l.name, ty);
-                if let Some(value) = value {
-                    stmts.push(Stmt::Let { slot, value });
-                }
-            }
-            AstStmt::Let(l) => {
-                ctx.unsupported(l.span, "`let mut`");
-                // Bound anyway. The binding is real in the source, and leaving it out
-                // would make every later mention of the name report a second error about
-                // a name that is perfectly well defined — one mistake, several errors,
-                // which is the thing this front end is built to avoid.
-                let value = lower_expr(ctx, &l.value);
-                let ty = value.as_ref().map_or(Ty::Int, Expr::ty);
-                ctx.bind(&l.name, ty);
-            }
-            AstStmt::Assign(a) => ctx.unsupported(a.span, "assignment"),
-            AstStmt::While(w) => ctx.unsupported(w.span, "`while`"),
-            AstStmt::Return(r) => ctx.unsupported(r.span, "`return`"),
-            AstStmt::Break { span } => ctx.unsupported(*span, "`break`"),
-            AstStmt::Continue { span } => ctx.unsupported(*span, "`continue`"),
-            // Where a statement-position `if` lands, and it stays refused.
-            AstStmt::Expr(e) => ctx.unsupported(e.span(), "an expression statement"),
-        }
+    let (stmts, ends) = lower_stmts(ctx, &b.statements);
+
+    if ends == Ends::Transfers {
+        // Every path through the statements leaves, so the block has no value. There is
+        // no tail to lower either: one written after a transfer is `N0313`, which the
+        // checker reports before lowering runs.
+        return Some(Block {
+            stmts,
+            result: None,
+        });
     }
 
     let Some(tail) = &b.tail else {
@@ -448,8 +486,269 @@ fn lower_block(ctx: &mut Ctx, b: &AstBlock) -> Option<Block> {
     let result = lower_expr(ctx, tail)?;
     Some(Block {
         stmts,
-        result: Box::new(result),
+        result: Some(Box::new(result)),
     })
+}
+
+/// A body that wants no value: a loop body, or a branch of a statement-position `if`.
+///
+/// The caller decides the scope. A loop body and an `if` branch are both scopes in the
+/// language, and both callers wrap this in [`Ctx::scoped`]; doing it here instead would
+/// hide which construct owns the scope.
+///
+/// # The tail
+///
+/// A block in this position may still have a tail, and what it means depends on what it
+/// is. An `if` is a **statement-position `if`** — `while c { … if d { x = 1; } }` parses
+/// the trailing `if` as the body's tail, and `check_while` accepts it because its
+/// completion is Unit. Anything else is a value the language discards: `check_expr` for
+/// an `if` with no `else` returns Unit whatever its branch produced, so `if c { 1 }`
+/// evaluates the `1` and drops it, and `nazm run` does exactly that.
+fn lower_body(ctx: &mut Ctx, b: &AstBlock) -> (Vec<Stmt>, Ends) {
+    let (mut stmts, ends) = lower_stmts(ctx, &b.statements);
+
+    if let Some(tail) = &b.tail {
+        if ends == Ends::Transfers {
+            // Unreachable: a tail after a transfer is `N0313`. Nothing is lowered for it,
+            // which is also what emission would do with it.
+            return (stmts, ends);
+        }
+        if let AstExpr::If {
+            cond,
+            then_block,
+            else_block,
+            span,
+        } = tail.as_ref()
+        {
+            let (stmt, tail_ends) =
+                lower_statement_if(ctx, cond, then_block, else_block.as_ref(), *span);
+            stmts.extend(stmt);
+            return (stmts, tail_ends);
+        }
+        if let Some(value) = lower_expr(ctx, tail) {
+            stmts.push(Stmt::Discard(value));
+        }
+    }
+
+    (stmts, ends)
+}
+
+/// The statements every kind of block shares.
+///
+/// A statement that cannot be lowered records a diagnostic and contributes nothing, which
+/// is safe because [`lower`] returns `Err` whenever any diagnostic was recorded — no
+/// module is ever built out of a partially lowered body.
+fn lower_stmts(ctx: &mut Ctx, statements: &[AstStmt]) -> (Vec<Stmt>, Ends) {
+    let mut stmts = Vec::new();
+    for s in statements {
+        match s {
+            // `let` and `let mut` lower identically. Mutability is a *checking* property:
+            // it decides whether an assignment to this binding is legal, and the checker
+            // has already decided that (`N0310`). Encoding it again here would be a
+            // second mutability rule, and two rules are two chances to disagree.
+            AstStmt::Let(l) => {
+                // The initialiser is lowered *before* the name is bound, so `let x = x;`
+                // reads the outer `x` exactly as the checker says it does.
+                let value = lower_expr(ctx, &l.value);
+                // A binding whose initialiser always transfers is typed `Int`, which is
+                // not a guess: `check_stmt` asks `value_type(&l.value, None)`, and that
+                // returns `expected.unwrap_or(Int)` for a `Completion::Diverges`. The
+                // binding is never written, so the choice is observable only in whether
+                // the two implementations agree about the program being legal.
+                let ty = value.as_ref().and_then(Expr::ty).unwrap_or(Ty::Int);
+                let slot = ctx.bind(&l.name, ty);
+                if let Some(value) = value {
+                    stmts.push(Stmt::Let { slot, value });
+                }
+            }
+            AstStmt::Assign(a) => stmts.extend(lower_assign(ctx, a)),
+            AstStmt::While(w) => stmts.extend(lower_while(ctx, w)),
+            AstStmt::Return(r) => ctx.unsupported(r.span, "`return`"),
+            AstStmt::Break { span } => {
+                if loop_target(ctx, "break", *span) {
+                    stmts.push(Stmt::Break);
+                    return (stmts, Ends::Transfers);
+                }
+            }
+            AstStmt::Continue { span } => {
+                if loop_target(ctx, "continue", *span) {
+                    stmts.push(Stmt::Continue);
+                    return (stmts, Ends::Transfers);
+                }
+            }
+            // A statement-position `if`: the same `if` as everywhere else, found where
+            // no value is wanted.
+            AstStmt::Expr(AstExpr::If {
+                cond,
+                then_block,
+                else_block,
+                span,
+            }) => {
+                let (stmt, ends) =
+                    lower_statement_if(ctx, cond, then_block, else_block.as_ref(), *span);
+                stmts.extend(stmt);
+                if ends == Ends::Transfers {
+                    return (stmts, ends);
+                }
+            }
+            // Every other expression statement. A bare block and a discarded call are
+            // separate constructs with their own questions, and this increment answers
+            // neither.
+            AstStmt::Expr(e) => ctx.unsupported(e.span(), "an expression statement"),
+        }
+    }
+    (stmts, Ends::FallsThrough)
+}
+
+/// Whether a `break` or `continue` has a loop to affect.
+///
+/// The checker reports `N0312` for one that does not, so a `false` here means this
+/// resolver disagrees with the checker — a compiler bug, reported as one. Emission relies
+/// on it: a `Stmt::Break` reaches the emitter only from inside a `Stmt::While` body, so
+/// the emitter's target stack is never empty when it reads one.
+fn loop_target(ctx: &mut Ctx, word: &str, span: Span) -> bool {
+    if ctx.loop_depth > 0 {
+        return true;
+    }
+    ctx.errors.push(
+        Diagnostic::error(
+            codes::NOT_IN_A_LOOP,
+            span,
+            format!("`{word}` reached the native backend with no loop to affect"),
+        )
+        .help("this is a bug in the compiler; `nazm run` still works"),
+    );
+    false
+}
+
+/// Statement-position `if`, with or without `else`.
+///
+/// # Completion
+///
+/// Without an `else` the statement **always falls through**, whatever the branch does,
+/// because the condition may be false — which is exactly what `check_expr` says by
+/// returning `Completion::Unit` for a no-`else` `if` regardless of its branch. With an
+/// `else` it transfers only when *both* branches do.
+fn lower_statement_if(
+    ctx: &mut Ctx,
+    cond: &AstExpr,
+    then_block: &AstBlock,
+    else_block: Option<&AstBlock>,
+    span: Span,
+) -> (Option<Stmt>, Ends) {
+    // The condition is lowered outside both branch scopes: it is evaluated before either
+    // and cannot see a binding made inside one.
+    let cond = lower_expr(ctx, cond);
+
+    let (then_body, then_ends) = ctx.scoped(|ctx| lower_body(ctx, then_block));
+    let else_lowered = else_block.map(|b| ctx.scoped(|ctx| lower_body(ctx, b)));
+
+    let Some(cond) = cond else {
+        return (None, Ends::FallsThrough);
+    };
+    if !fits(&cond, Ty::Bool) {
+        // Unreachable after checking, which requires a `Bool` condition (`N0301`).
+        ctx.unsupported(span, "an `if` whose condition is not a `Bool`");
+        return (None, Ends::FallsThrough);
+    }
+
+    let ends = match else_lowered.as_ref().map(|(_, e)| *e) {
+        Some(Ends::Transfers) if then_ends == Ends::Transfers => Ends::Transfers,
+        _ => Ends::FallsThrough,
+    };
+
+    (
+        Some(Stmt::If {
+            cond,
+            then_body,
+            else_body: else_lowered.map(|(b, _)| b),
+        }),
+        ends,
+    )
+}
+
+/// `name = value;` — a store into the slot `name` resolves to *now*.
+///
+/// # Which binding
+///
+/// Resolution is the same innermost-first walk a read uses, so an assignment reaches
+/// whatever the name means at that point in the text. Inside a loop body that has
+/// shadowed an outer binding, an assignment written *before* the inner `let` reaches the
+/// outer slot and one written after reaches the inner — which is exactly what the
+/// interpreter does, because each iteration enters the body with a fresh frame and the
+/// inner name is not in it until its `let` runs again.
+///
+/// # Order
+///
+/// The value is lowered first and stored second, and the emitter keeps that order: a
+/// right-hand side that fails at run time, or that transfers control, takes its own path
+/// and the slot is never written. An assignment is not a place where a half-evaluated
+/// expression can leave a local holding something.
+fn lower_assign(ctx: &mut Ctx, a: &nazm_syntax::Assign) -> Option<Stmt> {
+    let value = lower_expr(ctx, &a.value);
+
+    let Some((slot, ty)) = ctx.resolve(&a.name) else {
+        // The checker reports an assignment to an undefined name (`N0200`) already, so
+        // reaching here means this resolver disagrees with it — a compiler bug, and worth
+        // reporting as one rather than as "unsupported".
+        ctx.errors.push(
+            Diagnostic::error(
+                codes::UNDEFINED_VARIABLE,
+                a.name_span,
+                format!("`{}` is not a local the native backend can see", a.name),
+            )
+            .help("this is a bug in the compiler; `nazm run` still works"),
+        );
+        return None;
+    };
+
+    let value = value?;
+    if !fits(&value, ty) {
+        // Unreachable after checking, which requires an assignment to match the binding's
+        // declared type (`N0300`). Reported rather than assumed away: a mismatched store
+        // is a miscompile, and LLVM would reject the module for a reason that named none
+        // of this.
+        ctx.unsupported(
+            a.span,
+            &format!(
+                "an assignment of `{}` to `{}`, which is `{}`",
+                value.ty().map_or("nothing", Ty::name),
+                a.name,
+                ty.name()
+            ),
+        );
+        return None;
+    }
+
+    Some(Stmt::Assign { slot, value })
+}
+
+/// `while cond { body }`.
+///
+/// The condition is lowered **outside** the body's scope and **outside its loop depth**.
+/// Outside the scope because a binding made in the body is not visible to it; outside the
+/// depth because a `break` written in a condition belongs to the *enclosing* loop, which
+/// is the existing language's rule in both implementations. Raising the depth around the
+/// condition too would silently retarget such a `break` at this loop — a miscompile of a
+/// program that runs correctly today.
+fn lower_while(ctx: &mut Ctx, w: &nazm_syntax::While) -> Option<Stmt> {
+    let cond = lower_expr(ctx, &w.cond);
+
+    ctx.loop_depth += 1;
+    // Lowered whether or not the condition did, so a program with problems in both
+    // reports both.
+    let (body, _) = ctx.scoped(|ctx| lower_body(ctx, &w.body));
+    ctx.loop_depth -= 1;
+
+    let cond = cond?;
+    if !fits(&cond, Ty::Bool) {
+        // Unreachable after checking, which requires a `Bool` condition (`N0301`) — there
+        // is no truthiness in this language.
+        ctx.unsupported(w.cond.span(), "a `while` whose condition is not a `Bool`");
+        return None;
+    }
+
+    Some(Stmt::While { cond, body })
 }
 
 fn lower_expr(ctx: &mut Ctx, e: &AstExpr) -> Option<Expr> {
@@ -481,7 +780,7 @@ fn lower_expr(ctx: &mut Ctx, e: &AstExpr) -> Option<Expr> {
             operand, op_span, ..
         } => {
             let operand = lower_expr(ctx, operand)?;
-            if operand.ty() != Ty::Int {
+            if !fits(&operand, Ty::Int) {
                 // Unreachable after checking, which rejects `-true`. Reported rather than
                 // assumed away: the emitter has no `i1` negation to fall back on.
                 ctx.unsupported(*op_span, "negation of a non-`Int` value");
@@ -534,7 +833,7 @@ fn lower_binary(
     let (lhs, rhs) = (lhs?, rhs?);
 
     if let Some(op) = arithmetic(op) {
-        if lhs.ty() != Ty::Int || rhs.ty() != Ty::Int {
+        if !fits(&lhs, Ty::Int) || !fits(&rhs, Ty::Int) {
             // Unreachable after checking: arithmetic is `Int` only.
             ctx.unsupported(op_span, "arithmetic on a non-`Int` value");
             return None;
@@ -548,18 +847,26 @@ fn lower_binary(
     }
 
     let cmp = comparison(op)?;
-    if lhs.ty() != rhs.ty() {
-        // Unreachable after checking, which requires both sides of `==` to be one type.
-        ctx.unsupported(op_span, "a comparison of two different types");
-        return None;
+    if let (Some(l), Some(r)) = (lhs.ty(), rhs.ty()) {
+        if l != r {
+            // Unreachable after checking, which requires both sides of `==` to be one
+            // type. An operand that always transfers has no type to disagree with.
+            ctx.unsupported(op_span, "a comparison of two different types");
+            return None;
+        }
     }
-    if cmp.is_ordering() && lhs.ty() != Ty::Int {
-        ctx.unsupported(op_span, &format!("ordering `{}` values", lhs.ty().name()));
+    // Whichever operand has a type; they agree when both do. When *neither* does — both
+    // sides always transfer — no `icmp` is ever emitted, because emission stops at the
+    // left operand, so the recorded type is never read. `Int` is recorded rather than
+    // left unrepresentable, and this is the one place in the file where that matters.
+    let operand_ty = lhs.ty().or_else(|| rhs.ty()).unwrap_or(Ty::Int);
+    if cmp.is_ordering() && !fits(&lhs, Ty::Int) {
+        ctx.unsupported(op_span, &format!("ordering `{}` values", operand_ty.name()));
         return None;
     }
     Some(Expr::Compare {
         op: cmp,
-        operand_ty: lhs.ty(),
+        operand_ty,
         lhs: Box::new(lhs),
         rhs: Box::new(rhs),
     })
@@ -603,7 +910,7 @@ fn lower_call(ctx: &mut Ctx, callee: &str, callee_span: Span, args: &[AstExpr]) 
     // would catch is a *lowering* bug — an argument that acquired the wrong type on the
     // way here — and that is a miscompile rather than a diagnostic. LLVM would reject
     // the call too, but "clang rejected our IR" is a much worse way to find out.
-    if args.len() != params.len() || args.iter().zip(&params).any(|(a, want)| a.ty() != *want) {
+    if args.len() != params.len() || !args.iter().zip(&params).all(|(a, want)| fits(a, *want)) {
         ctx.errors.push(
             Diagnostic::error(
                 codes::UNSUPPORTED_CONSTRUCT,
@@ -648,7 +955,7 @@ fn lower_if(
     let else_lowered = ctx.scoped(|ctx| lower_block(ctx, else_block));
 
     let cond = cond?;
-    if cond.ty() != Ty::Bool {
+    if !fits(&cond, Ty::Bool) {
         // Unreachable after checking, which requires a `Bool` condition — there is no
         // truthiness in this language.
         ctx.unsupported(span, "an `if` whose condition is not a `Bool`");
@@ -656,20 +963,31 @@ fn lower_if(
     }
     let (then_lowered, else_lowered) = (then_lowered?, else_lowered?);
 
-    let ty = then_lowered.result.ty();
-    if ty != else_lowered.result.ty() {
-        // Also unreachable after checking, which requires the branches to agree unless
-        // one diverges — and every diverging construct is refused above.
-        ctx.unsupported(span, "an `if` whose branches produce different types");
-        return None;
+    // A branch that transfers contributes no type, and the checker says the same:
+    // `(Diverges, other) => other`. So the `if`'s type is whichever branch has one, and
+    // `None` — both branches transfer — means the expression never produces a value at
+    // all. Nothing downstream is allowed to invent one for it.
+    let (then_ty, else_ty) = (block_ty(&then_lowered), block_ty(&else_lowered));
+    if let (Some(a), Some(b)) = (then_ty, else_ty) {
+        if a != b {
+            // Also unreachable after checking, which requires the branches to agree
+            // unless one of them leaves.
+            ctx.unsupported(span, "an `if` whose branches produce different types");
+            return None;
+        }
     }
 
     Some(Expr::If {
         cond: Box::new(cond),
         then_block: Box::new(then_lowered),
         else_block: Box::new(else_lowered),
-        ty,
+        ty: then_ty.or(else_ty),
     })
+}
+
+/// The type a value block produces, or `None` when it never produces one.
+fn block_ty(b: &Block) -> Option<Ty> {
+    b.result.as_ref().and_then(|e| e.ty())
 }
 
 fn arithmetic(op: AstOp) -> Option<ArithOp> {

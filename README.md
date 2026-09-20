@@ -36,15 +36,25 @@ $ ./arithmetic          # no interpreter, no nazm process
 -54
 ```
 
-`nazm build` is the native path (**M1a + M1b**) and its subset is narrow on purpose: one
-`fn main() -> Int`, `Int` and `Bool` literals, immutable `let` bindings of either, unary
-`-`, `+ - * / %`, the comparisons `== != < <= > >=`, and `if`/`else` **used as a value**,
-with branch-local bindings and nesting. Everything else — functions, loops, mutation,
-`return`, `Str` — is **refused by name** after ordinary checking, with no partial
-compilation, and still runs under `nazm run`. The arithmetic the specification promises
-is preserved rather than inherited from the hardware: overflow is a checked intrinsic and
-a branch (never `nsw`, which would let the optimiser delete the check), `Int::MIN / -1`
-fails, and `Int::MIN % -1` is `0`. See [`docs/roadmap.md`](docs/roadmap.md).
+`nazm build` is the native path (**M1a–M1e**) and its subset is narrow on purpose:
+several functions over `Int` and `Bool` with `fn main() -> Int` as the entry point,
+literals, `let` and `let mut` bindings, immutable parameters, assignment, `while` with
+`break` and `continue`, unary `-`, `+ - * / %`, the comparisons `== != < <= > >=`, `if`
+in **both statement and value position**, and non-recursive direct calls. Everything else
+— recursion, `return`, `Str`, bare blocks as expressions, other expression statements —
+is **refused by name** after ordinary checking, with no partial compilation, and still
+runs under `nazm run`. The arithmetic the specification
+promises is preserved rather than inherited from the hardware: overflow is a checked
+intrinsic and a branch (never `nsw`, which would let the optimiser delete the check),
+`Int::MIN / -1` fails, and `Int::MIN % -1` is `0`. See
+[`docs/roadmap.md`](docs/roadmap.md).
+
+**A compiled program has no iteration budget.** `nazm run` stops a runaway loop after
+`--max-iterations` and says so (`N0402`); a `nazm build` executable does not stop. The
+limits are the interpreter's and never were the language's — `docs/spec.md` says so — and
+the native backend has not adopted a replacement. The two implementations agree on what a
+*terminating* program produces, which is the claim the test suite makes and the only one
+it is entitled to.
 
 ```nazm
 fn first_pair_with_product(target: Int, limit: Int) -> Int {

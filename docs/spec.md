@@ -332,6 +332,14 @@ nesting limit is the parser's; this implementation has all three so that a runaw
 fails visibly instead of consuming a machine. A different implementation may choose
 differently.
 
+**`nazm build` is that different implementation, and it has chosen none of them.** A
+compiled program has no iteration budget and no call-depth budget: a loop whose condition
+never becomes false runs until something kills it, with no `N0402`. This is stated here so
+that the difference is part of the record rather than a discovery. The two implementations
+agree on what a *terminating* program produces; they do not agree on what a runaway one
+does, and no test claims otherwise. Recursion is refused outright by that backend for the
+related reason — see `docs/roadmap.md`, *Recursion: pending a native execution contract*.
+
 ### The integer boundaries, stated rather than inherited
 
 Two's complement is asymmetric — there is one more negative `Int` than positive — and

@@ -9,3 +9,9 @@
 # Benchmark output: run logs, trajectories, and cost records. Large, and the
 # holdout results must be published deliberately rather than committed by accident.
 /bench-runs/
+
+# Review bundles are local evidence artefacts, regenerated per milestone. Keeping them
+# out of history stops the repository growing by a snapshot of itself each time.
+/review/m1d/
+/review/m1e/
+/review/*.tar.gz
