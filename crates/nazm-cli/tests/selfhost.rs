@@ -717,11 +717,12 @@ fn sorted_diagnostics(lines: &str) -> Vec<(String, u32, u32)> {
 }
 
 #[test]
-fn the_nazm_checker_resolves_names_exactly_as_the_reference_does() {
-    // **Scope, stated:** `compiler/check.nz` reports undefined variables (`N0200`) and
-    // undefined functions (`N0201`) and nothing else, so the sources below are chosen so
-    // that those are the only errors the reference finds. A checker compared only on
-    // programs it happens to accept would agree with everything.
+fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
+    // **Scope, stated:** `compiler/check.nz` reports `N0200`, `N0201`, `N0300`, `N0301`,
+    // `N0303`, `N0304` and `N0310`, and nothing else — no `N0204`, no unreachable-code
+    // or shadowing rules. The sources below are chosen so those are the only errors the
+    // reference finds, because a checker compared only on programs it happens to accept
+    // would agree with everything.
     let dir = tempfile::tempdir().expect("tempdir");
     let exe = build_checker(dir.path());
 
@@ -751,6 +752,36 @@ fn the_nazm_checker_resolves_names_exactly_as_the_reference_does() {
         "fn m() -> Int { let mut i = 0; while i < 1 { let inner = 1; i = i + 1; } inner }",
         // A parameter is not visible in another function.
         "fn a(p: Int) -> Int { p }\nfn m() -> Int { p }",
+
+        // --- types ---------------------------------------------------------------
+        // Clean, and exercising every type the language has.
+        "fn m() -> Int { let a = ints_new(); ints_push(a, 1); ints_get(a, 0) }",
+        "fn m() -> Int { let s = strs_new(); strs_push(s, \"x\"); str_len(strs_get(s, 0)) }",
+        "fn m(x: Int, s: Str) -> Int { if x > 0 { str_len(s) } else { 0 } }",
+        "fn m() -> Int { let mut b = true; b = false; if b { 1 } else { 0 } }",
+        "fn f(a: Int, b: Str) -> Str { str_concat(b, int_to_str(a)) }\nfn m() -> Int { str_len(f(1, \"x\")) }",
+        // Arithmetic on a non-`Int`, both ways round.
+        "fn m() -> Int { 1 + true }",
+        "fn m() -> Int { let s = \"a\"; 1 + s }",
+        // Ordering is `Int` only; equality works on one type but not across two.
+        "fn m() -> Bool { \"a\" < \"b\" }",
+        "fn m() -> Bool { true < false }",
+        "fn m() -> Bool { 1 == true }",
+        // Sequences are not comparable: identity or contents, and neither is chosen.
+        "fn m() -> Int { let a = ints_new(); let b = ints_new(); if a == b { 1 } else { 0 } }",
+        // Conditions must be `Bool` — there is no truthiness.
+        "fn m() -> Int { if 1 { 2 } else { 3 } }",
+        "fn m() -> Int { let mut i = 0; while i { i = i + 1; } i }",
+        // Argument count and argument type.
+        "fn m() -> Int { str_len(\"a\", \"b\") }",
+        "fn m() -> Int { str_len(1) }",
+        "fn f(a: Int) -> Int { a }\nfn m() -> Int { f(\"x\") }",
+        "fn f(a: Int) -> Int { a }\nfn m() -> Int { f() }",
+        // Assignment: mutability and type.
+        "fn m() -> Int { let x = 1; x = 2; x }",
+        "fn m() -> Int { let mut b = true; b = 1; 0 }",
+        // A parameter is never mutable.
+        "fn f(a: Int) -> Int { a = 2; a }\nfn m() -> Int { f(1) }",
     ];
 
     for source in sources {
@@ -762,7 +793,12 @@ fn the_nazm_checker_resolves_names_exactly_as_the_reference_does() {
         let theirs: Vec<(String, u32, u32)> = {
             let mut v: Vec<(String, u32, u32)> = nazm_core::check_source(source)
                 .into_iter()
-                .filter(|d| d.code.as_str() == "N0200" || d.code.as_str() == "N0201")
+                .filter(|d| {
+                    matches!(
+                        d.code.as_str(),
+                        "N0200" | "N0201" | "N0300" | "N0301" | "N0303" | "N0304" | "N0310"
+                    )
+                })
                 .map(|d| {
                     (
                         d.code.as_str().to_owned(),
@@ -775,7 +811,7 @@ fn the_nazm_checker_resolves_names_exactly_as_the_reference_does() {
             v
         };
 
-        assert_eq!(ours, theirs, "name resolution differs for {source:?}");
+        assert_eq!(ours, theirs, "checking differs for {source:?}");
         // Exit status is part of the interface, not decoration.
         assert_eq!(
             out.status.code(),
@@ -823,5 +859,53 @@ fn the_nazm_checker_accepts_the_compiler_it_is_part_of() {
                 file.display()
             );
         }
+    }
+}
+
+#[test]
+fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
+    // `compiler/check.nz` carries its own table of built-in signatures, transcribed from
+    // `nazm-core/src/intrinsic.rs`, because a Nazm program cannot read a Rust enum. The
+    // risk that creates is drift — a built-in added to the language and never taught to
+    // the checker, which would then report a valid call as an unknown function. This is
+    // the guard: it reads the Nazm source and requires a signature for every intrinsic.
+    let source = std::fs::read_to_string(repo_root().join("compiler/check.nz")).expect("read");
+    for i in nazm_core::Intrinsic::ALL {
+        let needle = format!("\"{}\"", i.name());
+        assert!(
+            source.contains(&needle),
+            "`{}` has no signature in compiler/check.nz — the front end's built-ins and \
+             the Nazm checker's table have drifted",
+            i.name()
+        );
+    }
+    // And the arity the Nazm table records must match, since a wrong one turns a valid
+    // call into `N0303`. Checked by counting the non-`n` arguments on each line.
+    for i in nazm_core::Intrinsic::ALL {
+        let line = source
+            .lines()
+            .find(|l| l.contains(&format!("\"{}\"", i.name())) && l.contains("add_builtin"))
+            .unwrap_or_else(|| panic!("`{}` is not registered with add_builtin", i.name()));
+        let after_name = line
+            .split(&format!("\"{}\", ", i.name()))
+            .nth(1)
+            .unwrap_or_default();
+        // `ret, p1, p2, p3` — the parameters are whichever of the three are not `n`.
+        // The last line of `builtins` is that function's return value, so it ends `)`
+        // rather than `);` — trailing punctuation is stripped per argument instead of
+        // from the line, which handles both.
+        let args: Vec<&str> = after_name.split(", ").collect();
+        let arity = args
+            .iter()
+            .skip(1)
+            .filter(|a| a.trim().trim_end_matches([')', ';']) != "n")
+            .count();
+        assert_eq!(
+            arity,
+            i.params().len(),
+            "`{}` takes {} parameters but compiler/check.nz records {arity}",
+            i.name(),
+            i.params().len()
+        );
     }
 }
