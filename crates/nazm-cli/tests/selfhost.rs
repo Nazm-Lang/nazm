@@ -519,6 +519,19 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
         "fn m(a: Int, b: Str) -> Str { b }",
         "fn one() -> Int { 1 }\nfn two() -> Int { one() + one() }",
         "use \"other.nz\";\nfn m() -> Int { 1 }",
+        // Statements, `while`, and nested blocks.
+        "fn m() -> Int { let x = 1; x }",
+        "fn m() -> Int { let mut x = 1; x = 2; x }",
+        "fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; } i }",
+        "fn m() -> Int { let mut i = 0; while i < 3 { break; } i }",
+        "fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; continue; } i }",
+        "fn m() -> Int { return 1; }",
+        "fn m() -> Int { f(1); 2 }",
+        "fn m() -> Int { let mut i = 0; while i < 2 { let mut j = 0; while j < 2 { j = j + 1; } i = i + 1; } i }",
+        // An empty body is valid *syntax* — the checker is what rejects it, which is the
+        // frontend-validity/backend-coverage split the project keeps everywhere else.
+        "fn m() -> Int { }",
+        "fn total(n: Int) -> Int {\n    let mut i = 0;\n    let mut s = 0;\n    while i < n {\n        s = s + i;\n        i = i + 1;\n    }\n    return s;\n}\n",
     ];
 
     for source in sources {
@@ -558,21 +571,20 @@ fn the_nazm_parser_refuses_what_it_cannot_parse_yet_by_name() {
 
     for (source, expected) in [
         (
-            "fn m() -> Int { let x = 1; x }",
-            "`let`: statements are not implemented yet",
-        ),
-        (
             "fn m() -> Int { if true { 1 } else { 2 } }",
-            "`if`: statements are not implemented yet",
+            "`if`: not implemented yet",
         ),
         (
-            "fn m() -> Int { 1; 2 }",
-            "a statement: statements are not implemented yet",
+            "fn m() -> Int { { 1 } }",
+            "a block used as an expression: not implemented yet",
+        ),
+        (
+            "fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; }",
+            "this block is never closed",
         ),
         // Reported as the unclosed bracket, at the bracket — not as "expected an
         // expression" at the brace, which would be true and useless.
         ("fn m() -> Int { (1 }", "this bracket is never closed"),
-        ("fn m() -> Int { }", "expected an expression"),
         ("fn m() Int { 1 }", "expected `->` and a return type"),
     ] {
         let file = dir.path().join("bad.nz");
