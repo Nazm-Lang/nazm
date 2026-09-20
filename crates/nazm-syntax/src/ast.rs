@@ -9,6 +9,23 @@ use nazm_span::Span;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub functions: Vec<Function>,
+    /// `use "path";` items, in source order.
+    ///
+    /// The parser records them and does nothing else with them: resolving a path means
+    /// reading files, which is the driver's job, not the grammar's. By the time a
+    /// `Program` reaches the checker every import has already been loaded and merged,
+    /// so these are here for tooling and for the diagnostic when one cannot be found.
+    pub imports: Vec<Import>,
+}
+
+/// `use "path";`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Import {
+    /// The text between the quotes, exactly as written.
+    pub path: String,
+    /// The string literal's span, which is where a "cannot find" diagnostic points.
+    pub path_span: Span,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

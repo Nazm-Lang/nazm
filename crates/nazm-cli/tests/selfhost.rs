@@ -117,6 +117,7 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::Break => 18,
                 T::Continue => 19,
                 T::Return => 20,
+                T::Use => 21,
                 T::LParen => 30,
                 T::RParen => 31,
                 T::LBrace => 32,

@@ -30,6 +30,7 @@ fn k_while() -> Int { 17 }
 fn k_break() -> Int { 18 }
 fn k_continue() -> Int { 19 }
 fn k_return() -> Int { 20 }
+fn k_use() -> Int { 21 }
 fn k_lparen() -> Int { 30 }
 fn k_rparen() -> Int { 31 }
 fn k_lbrace() -> Int { 32 }
@@ -94,6 +95,7 @@ fn keyword_kind(word: Str) -> Int {
     if word == "break" { return k_break(); }
     if word == "continue" { return k_continue(); }
     if word == "return" { return k_return(); }
+    if word == "use" { return k_use(); }
     k_ident()
 }
 

@@ -50,13 +50,35 @@ pub struct LineCol {
     pub column: u32,
 }
 
-/// One source file, with its line starts precomputed.
+/// One file merged into a [`SourceFile`] buffer.
+#[derive(Debug, Clone)]
+struct Segment {
+    name: String,
+    /// Where this file's text begins in the combined buffer.
+    start: u32,
+    /// Index into `line_starts` of this file's first line, so a line number can be
+    /// reported relative to the file a reader is looking at rather than to the buffer.
+    first_line: usize,
+}
+
+/// The source of one compilation, with its line starts precomputed.
+///
+/// # Why one buffer rather than a list of files
+///
+/// A [`Span`] is a pair of byte offsets and carries no file identity, and giving it one
+/// would touch every diagnostic, every AST node and every test in the workspace. So a
+/// multi-file program is **concatenated into one buffer** and the buffer remembers where
+/// each file began: spans stay globally unique and comparable, and rendering asks which
+/// segment an offset falls in. A single-file program is the same structure with one
+/// segment, so there is one code path rather than two.
 #[derive(Debug, Clone)]
 pub struct SourceFile {
     name: String,
     text: String,
     /// Byte offset of each line's first character. Always starts with 0.
     line_starts: Vec<u32>,
+    /// In load order, never empty. `start` is non-decreasing.
+    segments: Vec<Segment>,
 }
 
 impl SourceFile {
@@ -71,10 +93,83 @@ impl SourceFile {
                 line_starts.push(u32::try_from(i + 1).unwrap_or(u32::MAX));
             }
         }
+        let name = name.into();
         Self {
-            name: name.into(),
+            segments: vec![Segment {
+                name: name.clone(),
+                start: 0,
+                first_line: 0,
+            }],
+            name,
             text,
             line_starts,
+        }
+    }
+
+    /// Several files as one buffer, in load order.
+    ///
+    /// Each part is given a trailing newline if it lacks one, so a file that does not end
+    /// in one cannot join its last line to the next file's first.
+    #[must_use]
+    pub fn from_parts(parts: Vec<(String, String)>) -> Self {
+        let root = parts.first().map_or_else(String::new, |(n, _)| n.clone());
+        let mut text = String::new();
+        let mut line_starts = vec![0u32];
+        let mut segments = Vec::new();
+        for (name, part) in parts {
+            segments.push(Segment {
+                name,
+                start: u32::try_from(text.len()).unwrap_or(u32::MAX),
+                first_line: line_starts.len() - 1,
+            });
+            let from = text.len();
+            text.push_str(&part);
+            if !part.ends_with('\n') {
+                text.push('\n');
+            }
+            // Only the bytes just appended, so building an N-file buffer stays linear
+            // rather than rescanning everything once per file.
+            for (i, b) in text.bytes().enumerate().skip(from) {
+                if b == b'\n' {
+                    line_starts.push(u32::try_from(i + 1).unwrap_or(u32::MAX));
+                }
+            }
+        }
+        if segments.is_empty() {
+            segments.push(Segment {
+                name: root.clone(),
+                start: 0,
+                first_line: 0,
+            });
+        }
+        Self {
+            name: root,
+            text,
+            line_starts,
+            segments,
+        }
+    }
+
+    /// The name of the file an offset falls in.
+    ///
+    /// For a single-file buffer this is always [`SourceFile::name`]; for a merged one it
+    /// is the file a reader would open to find that byte.
+    #[must_use]
+    pub fn name_at(&self, offset: u32) -> &str {
+        self.segment_at(offset)
+            .map_or(self.name.as_str(), |s| s.name.as_str())
+    }
+
+    /// Every file in this buffer, in load order.
+    #[must_use]
+    pub fn file_names(&self) -> Vec<&str> {
+        self.segments.iter().map(|s| s.name.as_str()).collect()
+    }
+
+    fn segment_at(&self, offset: u32) -> Option<&Segment> {
+        match self.segments.binary_search_by_key(&offset, |s| s.start) {
+            Ok(i) => self.segments.get(i),
+            Err(i) => self.segments.get(i.saturating_sub(1)),
         }
     }
 
@@ -109,8 +204,11 @@ impl SourceFile {
             .text
             .get(line_start as usize..offset as usize)
             .unwrap_or("");
+        // Relative to the file the offset is in, not to the combined buffer: a reader
+        // has the file open, not the concatenation.
+        let first = self.segment_at(offset).map_or(0, |s| s.first_line);
         LineCol {
-            line: u32::try_from(line_idx + 1).unwrap_or(u32::MAX),
+            line: u32::try_from(line_idx.saturating_sub(first) + 1).unwrap_or(u32::MAX),
             column: u32::try_from(prefix.chars().count() + 1).unwrap_or(u32::MAX),
         }
     }
@@ -189,5 +287,54 @@ mod tests {
     fn slicing_a_span_returns_its_text() {
         let f = SourceFile::new("x.nz", "fn main");
         assert_eq!(f.slice(Span::new(3, 7)), Some("main"));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod multi_file {
+    use super::*;
+
+    #[test]
+    fn a_merged_buffer_reports_the_file_and_the_line_within_it() {
+        let f = SourceFile::from_parts(vec![
+            ("a.nz".to_owned(), "one\ntwo\n".to_owned()),
+            ("b.nz".to_owned(), "three\nfour".to_owned()),
+        ]);
+        // a.nz occupies 0..8, b.nz 8..
+        assert_eq!(f.name_at(0), "a.nz");
+        assert_eq!(f.name_at(7), "a.nz");
+        assert_eq!(f.name_at(8), "b.nz");
+        assert_eq!(f.name_at(20), "b.nz");
+
+        // Lines are counted within the file a reader would open, not across the buffer.
+        assert_eq!(f.line_col(0), LineCol { line: 1, column: 1 });
+        assert_eq!(f.line_col(4), LineCol { line: 2, column: 1 });
+        assert_eq!(f.line_col(8), LineCol { line: 1, column: 1 });
+        assert_eq!(f.line_col(14), LineCol { line: 2, column: 1 });
+
+        assert_eq!(f.line_text(8), "three");
+        assert_eq!(f.line_text(14), "four");
+        assert_eq!(f.file_names(), vec!["a.nz", "b.nz"]);
+    }
+
+    #[test]
+    fn a_part_without_a_trailing_newline_does_not_join_the_next_file() {
+        let f = SourceFile::from_parts(vec![
+            ("a.nz".to_owned(), "let x = 1;".to_owned()),
+            ("b.nz".to_owned(), "let y = 2;".to_owned()),
+        ]);
+        assert_eq!(f.line_text(0), "let x = 1;");
+        assert_eq!(f.line_text(11), "let y = 2;");
+        assert_eq!(f.name_at(11), "b.nz");
+    }
+
+    #[test]
+    fn a_single_file_is_the_same_structure_with_one_segment() {
+        let f = SourceFile::new("only.nz", "a\nb\n");
+        assert_eq!(f.name_at(0), "only.nz");
+        assert_eq!(f.name_at(3), "only.nz");
+        assert_eq!(f.file_names(), vec!["only.nz"]);
+        assert_eq!(f.line_col(2), LineCol { line: 2, column: 1 });
     }
 }

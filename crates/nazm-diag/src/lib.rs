@@ -66,6 +66,8 @@ pub mod codes {
     pub const ALREADY_DEFINED_IN_SCOPE: Code = Code::new("N0202");
     pub const DUPLICATE_FUNCTION: Code = Code::new("N0203");
     pub const MISSING_MAIN: Code = Code::new("N0204");
+    /// `use "path";` named a file that could not be read.
+    pub const MODULE_NOT_FOUND: Code = Code::new("N0205");
 
     // Types
     pub const TYPE_MISMATCH: Code = Code::new("N0300");
@@ -221,7 +223,15 @@ impl Diagnostic {
         let at = file.line_col(self.primary.span.start);
 
         let _ = writeln!(out, "error[{}]: {}", self.code, self.message);
-        let _ = writeln!(out, "  --> {}:{}:{}", file.name(), at.line, at.column);
+        // `name_at`, not `name`: a merged multi-file buffer must name the file a reader
+        // would open, and for a single-file one the two are the same.
+        let _ = writeln!(
+            out,
+            "  --> {}:{}:{}",
+            file.name_at(self.primary.span.start),
+            at.line,
+            at.column
+        );
 
         let line = file.line_text(self.primary.span.start);
         let gutter = at.line.to_string();
@@ -245,7 +255,17 @@ impl Diagnostic {
 
         for s in &self.secondary {
             let sat = file.line_col(s.span.start);
-            let _ = writeln!(out, "{pad} = at {}:{}: {}", sat.line, sat.column, s.message);
+            // A secondary in *another* file names it. Without this, "declared here" in a
+            // multi-file program gives a line number with no file to look it up in —
+            // and silently means the wrong file's line.
+            let here = file.name_at(self.primary.span.start);
+            let there = file.name_at(s.span.start);
+            let where_ = if here == there {
+                format!("{}:{}", sat.line, sat.column)
+            } else {
+                format!("{there}:{}:{}", sat.line, sat.column)
+            };
+            let _ = writeln!(out, "{pad} = at {where_}: {}", s.message);
         }
         if let Some(h) = &self.help {
             let _ = writeln!(out, "{pad} = help: {h}");

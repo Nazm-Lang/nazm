@@ -434,7 +434,8 @@ name with `N0101` and still runs under `nazm run`.
 | Sequences | `Ints`, `Strs`; `_new`, `_len`, `_get`, `_set`, `_push` | **reference** types: a handle to a `{len, cap, data}` header. Shared, mutable, never freed; `==` refused |
 | Statements | a discarded expression (`ints_push(a, 1);`) | the language has no unit type, so a mutation would otherwise need a binding nobody wants |
 | The outside world | `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` | **ambient authority, enforced nowhere** — stated in `docs/spec.md` rather than implied. No process spawning |
-| **Not native** | recursion, bare blocks as expressions, records, modules, concurrency | recursion pends a measured native execution contract |
+| Modules | `use "path";`, resolved relative to the importing file | every reachable file merged into one buffer; diamonds load once, cycles terminate; **no visibility yet** |
+| **Not native** | recursion, bare blocks as expressions, records, concurrency | recursion pends a measured native execution contract |
 
 This is a *scalar* conformance statement. It does not say the language is complete; it
 says which programs over `Int` and `Bool` the backend compiles and with what semantics.

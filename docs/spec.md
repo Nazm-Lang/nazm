@@ -493,6 +493,47 @@ and reports it itself, which is what a compiler wants to do anyway. The gap betw
 check and the read is a real race, and for a compiler reading its own inputs it is an
 accepted one; closing it needs an error type, which is a later decision.
 
+### A file is a module, and `use` names one by path
+
+```nazm
+use "util.nz";
+use "sub/deep.nz";
+
+fn main() -> Int { quad(5) }
+```
+
+| | |
+| --- | --- |
+| **Syntax** | `use "path";`, at the top level only. The path is a **quoted string**, not an identifier chain: a path is data, so there is no module-path grammar to design and nothing that could be mistaken for one |
+| **Resolution** | Relative to the **importing file's** directory, always. Never to the working directory, never to a search path, never to an environment variable — a build that depends on where it was started is not reproducible |
+| **Loading** | Every reachable file is read once, keyed by its canonical path, and concatenated into one buffer that is then checked as a single program |
+| **Order** | The root first, then its imports depth-first in source order. Deterministic, and a function of the import graph alone |
+| **Diamonds** | A file imported twice is loaded once |
+| **Cycles** | **Allowed.** The second visit finds the file already loaded and stops. Nothing depends on order — signatures are collected before any body — so a cycle has no meaning to get wrong |
+| **Names** | All top-level functions from every loaded file share one namespace. A name defined twice is `N0203`, and the diagnostic names **both files** |
+| **Missing file** | `N0205`, pointing at the quoted path |
+| **Declarations** | There is no `mod`. A file is the module |
+
+#### Visibility is not expressible yet, and that has a cost
+
+**Every top-level function is visible to every file in the program.** There is no `pub`,
+no privacy, and no way to keep a helper to its own file.
+
+This is enough for the compiler this subset exists to bootstrap, which has no secrets from
+itself. It is recorded here rather than left implicit because the consequence is real:
+**adding private-by-default later would break every multi-file program that relies on
+today's behaviour.** Whatever visibility eventually arrives has to be added before this
+part of the language is called stable, and a program written now should not assume
+otherwise.
+
+#### One buffer, and what that means for positions
+
+The merged program is one byte buffer, so a `Span` stays a plain pair of offsets and
+means the same thing everywhere. Diagnostics name the file an offset falls in and report
+**line numbers within that file**, so a reader opens the file the message names and finds
+the line it gives. A cross-file secondary label names its file too; without that,
+"first defined here" would give a line number with no file to look it up in.
+
 ### The integer boundaries, stated rather than inherited
 
 Two's complement is asymmetric — there is one more negative `Int` than positive — and

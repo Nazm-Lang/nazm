@@ -18,8 +18,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use nazm_span::SourceFile;
-
 use crate::{emit, exit};
 
 /// Compile, or explain what stopped it.
@@ -30,14 +28,13 @@ pub(crate) fn run(
     emit_ir: bool,
     opt_level: u8,
 ) -> ExitCode {
-    let text = match std::fs::read_to_string(input) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("nazm: cannot read {}: {e}", input.display());
+    let file = match crate::load::load(input) {
+        Ok(f) => f,
+        Err((partial, diagnostics)) => {
+            emit(&diagnostics, &partial, json);
             return ExitCode::from(exit::NO_SUCH_FILE);
         }
     };
-    let file = SourceFile::new(input.display().to_string(), text);
 
     let output = match out {
         Some(p) => p.to_path_buf(),

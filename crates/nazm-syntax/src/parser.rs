@@ -9,7 +9,8 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 
 use crate::ast::{
-    Assign, BinOp, Block, Expr, Function, Let, Param, Program, Return, Stmt, TypeName, While,
+    Assign, BinOp, Block, Expr, Function, Import, Let, Param, Program, Return, Stmt, TypeName,
+    While,
 };
 use crate::lexer::{Token, TokenKind};
 
@@ -24,8 +25,12 @@ const RESERVED: &[(&str, &str)] = &[
     ("struct", "there are no user-defined types yet"),
     ("enum", "there are no user-defined types yet"),
     ("match", "there is no pattern matching yet"),
-    ("use", "there are no modules yet"),
-    ("mod", "there are no modules yet"),
+    // `use` left this list when imports arrived; `mod` stays, because there is no
+    // module *declaration* — a file is the unit, and `use` names one by path.
+    (
+        "mod",
+        "a file is the module; import one with `use \"other.nz\";`",
+    ),
     ("impl", "there are no methods yet"),
     // `print` left this list when `print` became a built-in. The entry existed to refuse
     // a name people would reach for before it worked; now it works, and refusing it
@@ -65,8 +70,17 @@ pub fn parse(tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
         reported_too_deep: false,
     };
     let mut functions = Vec::new();
+    let mut imports = Vec::new();
 
     while !p.at(&TokenKind::Eof) {
+        if p.at(&TokenKind::Use) {
+            if let Some(i) = p.import() {
+                imports.push(i);
+            } else {
+                p.recover_to_item();
+            }
+            continue;
+        }
         // Per item: abandoning one function unwinds out of `leave()` calls that never
         // ran, and a stale count would shrink the budget for every function after it.
         p.depth = 0;
@@ -82,7 +96,7 @@ pub fn parse(tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
         }
     }
 
-    (Program { functions }, p.errors)
+    (Program { functions, imports }, p.errors)
 }
 
 /// How deep the syntax tree may be.
@@ -253,6 +267,36 @@ impl<'a> Parser<'a> {
             return true;
         }
         false
+    }
+
+    /// `use "path";`
+    ///
+    /// Only at the top level, and only with a string literal — a path is data, not an
+    /// identifier chain, so there is no module-path grammar to design and nothing that
+    /// could be mistaken for one.
+    fn import(&mut self) -> Option<Import> {
+        let start = self.expect(&TokenKind::Use, "to start an import")?;
+        let path_span = self.peek_span();
+        let path = match self.advance() {
+            TokenKind::Str(p) => p,
+            other => {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        path_span,
+                        format!("expected a quoted path, found {}", other.describe()),
+                    )
+                    .help("an import is written `use \"other.nz\";`"),
+                );
+                return None;
+            }
+        };
+        let end = self.expect(&TokenKind::Semi, "to end an import")?;
+        Some(Import {
+            path,
+            path_span,
+            span: start.join(end),
+        })
     }
 
     fn function(&mut self) -> Option<Function> {
