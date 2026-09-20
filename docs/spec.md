@@ -340,6 +340,60 @@ agree on what a *terminating* program produces; they do not agree on what a runa
 does, and no test claims otherwise. Recursion is refused outright by that backend for the
 related reason — see `docs/roadmap.md`, *Recursion: pending a native execution contract*.
 
+### Strings are bytes, and what that commits to
+
+`Str` is an **immutable sequence of bytes**. Not of characters, and not of Unicode scalar
+values. The decision is forced rather than chosen: Nazm has no character type, and
+inventing one to index strings with would be a second text abstraction added for the sake
+of the first.
+
+The commitments, each stated because leaving one to the host language's behaviour is how
+two implementations end up disagreeing:
+
+| | |
+| --- | --- |
+| **Length** | `str_len(s)` is the number of **bytes**. `str_len("é")` is 2 |
+| **Indexing** | `str_byte(s, i)` is the byte at offset `i`, as an `Int` in `0..=255`. Never negative, never a code point |
+| **Bounds** | `str_byte` fails with `N0405` unless `0 <= i < str_len(s)`. There is no wrapping, no clamping, and no sentinel return |
+| **Slicing** | `str_slice(s, a, b)` is the bytes in `[a, b)`, and fails with `N0405` unless `0 <= a <= b <= str_len(s)`. `a == b` is the empty string, and `a == str_len(s)` is allowed |
+| **UTF-8 boundaries** | A slice **may** split a multi-byte sequence. The result is a `Str` whose bytes are not valid UTF-8, and that is not an error. Validity is a property of *some* strings, not of the type |
+| **Embedded NUL** | A `Str` may contain zero bytes, and they are ordinary bytes. Length comes from the length, never from a terminator |
+| **Equality** | `==` and `!=` compare byte sequences. Equal length and equal bytes. No normalisation, no case folding, no collation |
+| **Ordering** | `< <= > >=` do **not** apply to `Str`. Ordering text needs a collation decision this language has not made |
+| **Concatenation** | `str_concat(a, b)` is the bytes of `a` followed by the bytes of `b` |
+| **Conversion** | `int_to_str(n)` is the decimal form, with a leading `-` when negative. `int_to_str(0)` is `"0"`, and the full `Int` range round-trips |
+| **Ownership** | Values, not references. Passing, returning, binding and copying a `Str` produce a string with the same bytes, and there is no way to observe whether a copy was made |
+| **Mutation** | There is none. No operation changes an existing `Str` |
+
+Source positions stay byte offsets throughout — `Span` is a byte range, diagnostics point
+at byte ranges, and `str_len` counts the same units. A compiler written in Nazm therefore
+reports positions that mean the same thing as the ones this implementation reports,
+without a conversion step that could be got wrong.
+
+#### What an implementation may not infer from its host
+
+The reference implementation is written in Rust, whose `String` cannot hold invalid UTF-8.
+That is a property of *that host*, not of `Str`, and the specification above is written to
+what a byte sequence can do. Where the two differ — a slice that splits a code point — the
+specification governs and the Rust interpreter's representation is the thing that has to
+accommodate it.
+
+This is not hypothetical. The interpreter's `Value::Str` was a Rust `String` when this
+section was written, and `str_byte(str_slice("é", 0, 1), 0)` produced **239** — the first
+byte of the replacement character the lossy conversion substituted — where the
+specification requires **195**. The test that asserts 195 was written from this section
+and found the defect immediately; the representation is now `Vec<u8>`. A host type
+standing in for an unstated specification is the trap, and it had already been walked
+into.
+
+#### Built-ins share the ordinary function namespace
+
+`str_len`, `str_byte`, `str_slice`, `str_concat` and `int_to_str` are called like any
+other function and checked by the ordinary call rule. **They may not be redefined**: a
+program declaring `fn str_len` is rejected (`N0203`) rather than shadowing the built-in,
+because a call whose meaning depends on what happens to be in scope is exactly what this
+language is trying not to have.
+
 ### The integer boundaries, stated rather than inherited
 
 Two's complement is asymmetric — there is one more negative `Int` than positive — and

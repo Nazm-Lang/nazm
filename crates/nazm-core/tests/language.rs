@@ -1346,3 +1346,191 @@ fn chains_in_sequence_are_not_cumulative() {
         Value::Int(400)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Strings as bytes (B1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn str_len_counts_bytes_not_characters() {
+    assert_eq!(
+        value("fn main() -> Int { str_len(\"hello\") }").to_string(),
+        "5"
+    );
+    assert_eq!(value("fn main() -> Int { str_len(\"\") }").to_string(), "0");
+    // Two bytes, one character. The specification says bytes, so this is 2.
+    assert_eq!(
+        value("fn main() -> Int { str_len(\"é\") }").to_string(),
+        "2"
+    );
+    // Four bytes, one character.
+    assert_eq!(
+        value("fn main() -> Int { str_len(\"😀\") }").to_string(),
+        "4"
+    );
+}
+
+#[test]
+fn str_byte_reads_one_byte_and_refuses_to_leave_the_string() {
+    assert_eq!(
+        value("fn main() -> Int { str_byte(\"abc\", 0) }").to_string(),
+        "97"
+    );
+    assert_eq!(
+        value("fn main() -> Int { str_byte(\"abc\", 2) }").to_string(),
+        "99"
+    );
+    // The first byte of a two-byte sequence, as a byte: 0xC3.
+    assert_eq!(
+        value("fn main() -> Int { str_byte(\"é\", 0) }").to_string(),
+        "195"
+    );
+
+    assert_eq!(
+        sole_error("fn main() -> Int { str_byte(\"abc\", 3) }"),
+        codes::INDEX_OUT_OF_BOUNDS
+    );
+    assert_eq!(
+        sole_error("fn main() -> Int { str_byte(\"abc\", 0 - 1) }"),
+        codes::INDEX_OUT_OF_BOUNDS
+    );
+    assert_eq!(
+        sole_error("fn main() -> Int { str_byte(\"\", 0) }"),
+        codes::INDEX_OUT_OF_BOUNDS
+    );
+}
+
+#[test]
+fn str_slice_is_half_open_and_may_split_a_character() {
+    assert_eq!(
+        value("fn main() -> Int { str_len(str_slice(\"hello\", 1, 4)) }").to_string(),
+        "3"
+    );
+    // Empty slices at both ends are legal, including one at the very end.
+    assert_eq!(
+        value("fn main() -> Int { str_len(str_slice(\"hello\", 2, 2)) }").to_string(),
+        "0"
+    );
+    assert_eq!(
+        value("fn main() -> Int { str_len(str_slice(\"hello\", 5, 5)) }").to_string(),
+        "0"
+    );
+    assert_eq!(
+        value("fn main() -> Int { str_len(str_slice(\"hello\", 0, 5)) }").to_string(),
+        "5"
+    );
+
+    // Splitting a multi-byte sequence is allowed and produces a one-byte `Str`.
+    assert_eq!(
+        value("fn main() -> Int { str_byte(str_slice(\"é\", 0, 1), 0) }").to_string(),
+        "195"
+    );
+
+    assert_eq!(
+        sole_error("fn main() -> Int { str_len(str_slice(\"abc\", 2, 1)) }"),
+        codes::INDEX_OUT_OF_BOUNDS
+    );
+    assert_eq!(
+        sole_error("fn main() -> Int { str_len(str_slice(\"abc\", 0, 4)) }"),
+        codes::INDEX_OUT_OF_BOUNDS
+    );
+    assert_eq!(
+        sole_error("fn main() -> Int { str_len(str_slice(\"abc\", 0 - 1, 2)) }"),
+        codes::INDEX_OUT_OF_BOUNDS
+    );
+}
+
+#[test]
+fn str_concat_and_equality_compare_bytes() {
+    assert_eq!(
+        value("fn main() -> Int { if str_concat(\"ab\", \"cd\") == \"abcd\" { 1 } else { 0 } }")
+            .to_string(),
+        "1"
+    );
+    assert_eq!(
+        value("fn main() -> Int { if str_concat(\"\", \"x\") == \"x\" { 1 } else { 0 } }")
+            .to_string(),
+        "1"
+    );
+    // No normalisation and no case folding.
+    assert_eq!(
+        value("fn main() -> Int { if \"A\" == \"a\" { 1 } else { 0 } }").to_string(),
+        "0"
+    );
+    assert_eq!(
+        value("fn main() -> Int { if \"ab\" != \"abc\" { 1 } else { 0 } }").to_string(),
+        "1"
+    );
+}
+
+#[test]
+fn int_to_str_round_trips_the_whole_range() {
+    assert_eq!(
+        value("fn main() -> Int { str_len(int_to_str(0)) }").to_string(),
+        "1"
+    );
+    assert_eq!(
+        value("fn main() -> Int { if int_to_str(0) == \"0\" { 1 } else { 0 } }").to_string(),
+        "1"
+    );
+    assert_eq!(
+        value("fn main() -> Int { if int_to_str(0 - 42) == \"-42\" { 1 } else { 0 } }").to_string(),
+        "1"
+    );
+    assert_eq!(value("fn main() -> Int { if int_to_str(9223372036854775807) == \"9223372036854775807\" { 1 } else { 0 } }").to_string(), "1");
+    // Written with unary minus: `9223372036854775808` on its own is `N0003`, and the
+    // lexer is right to say so — only the negated form is in range.
+    assert_eq!(value("fn main() -> Int { if int_to_str(-9223372036854775808) == \"-9223372036854775808\" { 1 } else { 0 } }").to_string(), "1");
+}
+
+#[test]
+fn a_builtin_may_not_be_redefined_or_miscalled() {
+    assert_eq!(
+        sole_error("fn str_len(s: Str) -> Int { 0 }\nfn main() -> Int { 1 }"),
+        codes::DUPLICATE_FUNCTION
+    );
+    // The ordinary call rule applies to built-ins: arity and argument types.
+    assert_eq!(
+        sole_error("fn main() -> Int { str_len(1) }"),
+        codes::TYPE_MISMATCH
+    );
+    assert_eq!(
+        sole_error("fn main() -> Int { str_len(\"a\", \"b\") }"),
+        codes::WRONG_ARGUMENT_COUNT
+    );
+    assert_eq!(
+        sole_error("fn main() -> Int { str_byte(\"a\") }"),
+        codes::WRONG_ARGUMENT_COUNT
+    );
+    // `str_slice` returns `Str`, so using it where an `Int` is wanted is a type error.
+    assert_eq!(
+        sole_error("fn main() -> Int { str_slice(\"abc\", 0, 1) }"),
+        codes::TYPE_MISMATCH
+    );
+    // Ordering strings is still refused.
+    assert_eq!(
+        sole_error("fn main() -> Int { if \"a\" < \"b\" { 1 } else { 0 } }"),
+        codes::INVALID_OPERANDS
+    );
+}
+
+#[test]
+fn strings_travel_through_parameters_locals_and_loops() {
+    // The shape a tokeniser is made of: walk a string byte by byte, accumulate.
+    assert_eq!(
+        value(
+            "fn count(s: Str, want: Int) -> Int {\n\
+         \x20   let mut i = 0;\n\
+         \x20   let mut n = 0;\n\
+         \x20   while i < str_len(s) {\n\
+         \x20       if str_byte(s, i) == want { n = n + 1; }\n\
+         \x20       i = i + 1;\n\
+         \x20   }\n\
+         \x20   n\n\
+         }\n\
+         fn main() -> Int { count(\"banana\", 97) }"
+        )
+        .to_string(),
+        "3"
+    );
+}
