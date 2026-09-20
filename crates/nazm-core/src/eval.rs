@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use nazm_diag::{codes, Diagnostic};
 use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, While};
@@ -54,6 +55,80 @@ pub enum Value {
     Ints(Arc<Mutex<Vec<i64>>>),
     /// The same, for `Str`.
     Strs(Arc<Mutex<Vec<Vec<u8>>>>),
+    /// A bounded channel of `Int`, by reference.
+    ///
+    /// The one value designed to be shared between tasks: its operations *are* the
+    /// synchronisation, which is why `docs/spec.md` lets it cross a `spawn` while a
+    /// sequence may not.
+    Chan(Arc<Channel>),
+}
+
+/// A bounded queue with a close flag.
+///
+/// One mutex and one condition variable. Both senders and receivers wait on the same
+/// variable and every change notifies all of them — which is not the fastest arrangement
+/// and is the obviously correct one, and `docs/spec.md` promises no fairness anyway.
+#[derive(Debug)]
+pub struct Channel {
+    state: Mutex<ChannelState>,
+    changed: std::sync::Condvar,
+    capacity: usize,
+}
+
+#[derive(Debug, Default)]
+struct ChannelState {
+    queue: std::collections::VecDeque<i64>,
+    closed: bool,
+}
+
+impl Channel {
+    fn new(capacity: usize) -> Self {
+        Self {
+            state: Mutex::new(ChannelState::default()),
+            changed: std::sync::Condvar::new(),
+            capacity,
+        }
+    }
+
+    /// Queue a value, or report that the channel is closed — in which case **the value
+    /// was not sent**, which is what `docs/spec.md` promises.
+    fn send(&self, value: i64) -> Option<bool> {
+        let mut state = self.state.lock().ok()?;
+        while !state.closed && state.queue.len() >= self.capacity {
+            state = self.changed.wait(state).ok()?;
+        }
+        if state.closed {
+            return Some(false);
+        }
+        state.queue.push_back(value);
+        drop(state);
+        self.changed.notify_all();
+        Some(true)
+    }
+
+    /// Take a value, or report that the channel is closed **and drained**. Values queued
+    /// before a close are still delivered: closing ends a channel, it does not discard
+    /// what is in it.
+    fn recv(&self) -> Option<Option<i64>> {
+        let mut state = self.state.lock().ok()?;
+        while state.queue.is_empty() && !state.closed {
+            state = self.changed.wait(state).ok()?;
+        }
+        let taken = state.queue.pop_front();
+        drop(state);
+        self.changed.notify_all();
+        Some(taken)
+    }
+
+    /// Idempotent, and wakes everyone: a blocked sender and a blocked receiver both have
+    /// to find out, and neither can be left waiting on a channel nobody will touch again.
+    fn close(&self) -> Option<()> {
+        let mut state = self.state.lock().ok()?;
+        state.closed = true;
+        drop(state);
+        self.changed.notify_all();
+        Some(())
+    }
 }
 
 impl PartialEq for Value {
@@ -64,6 +139,7 @@ impl PartialEq for Value {
             (Self::Str(a), Self::Str(b)) => a == b,
             (Self::Ints(a), Self::Ints(b)) => Arc::ptr_eq(a, b),
             (Self::Strs(a), Self::Strs(b)) => Arc::ptr_eq(a, b),
+            (Self::Chan(a), Self::Chan(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -99,6 +175,7 @@ impl std::fmt::Display for Value {
                 Ok(v) => write!(f, "Strs({} items)", v.len()),
                 Err(_) => f.write_str("Strs(unreadable)"),
             },
+            Self::Chan(_) => f.write_str("Chan"),
         }
     }
 }
@@ -265,9 +342,44 @@ impl Default for Limits {
     }
 }
 
+/// Join anything still running when an interpreter is dropped off the normal path.
+///
+/// `Stmt::Scope` joins its own tasks; this covers the case it cannot — a panic unwinding
+/// through a scope, where the handles would otherwise be dropped and the threads detached.
+/// `std::thread::scope` gets this for free; starting tasks eagerly means writing it down.
+impl Drop for Interpreter {
+    fn drop(&mut self) {
+        for level in std::mem::take(&mut self.pending) {
+            for handle in level {
+                drop(handle.join());
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
-pub struct Interpreter<'a> {
-    functions: HashMap<String, &'a Function>,
+pub struct Interpreter {
+    /// The program, shared with every task.
+    ///
+    /// Owned through an `Arc` rather than borrowed, because a task's closure has to be
+    /// `'static`: it outlives the stack frame that started it by construction, and
+    /// nothing borrowed from the caller can be handed to it. The alternative — running
+    /// the whole scope body inside `std::thread::scope` — means threading the scope
+    /// handle through every method of the interpreter, including the ones that have
+    /// nothing to do with concurrency.
+    program: Arc<Program>,
+    /// Name to index in `program.functions`. Shared with tasks for the same reason.
+    functions: Arc<HashMap<String, usize>>,
+    /// Tasks started by the innermost `scope`, innermost last.
+    ///
+    /// A stack, because a scope may contain another and the inner one joins first.
+    ///
+    /// A task starts **when its `spawn` runs**, not at the closing brace. Collecting
+    /// them and starting them all at the end reads as an optimisation and is a
+    /// deadlock: a body that fills a bounded channel before its readers exist blocks
+    /// forever, and that is the shape of every worker pool. The first concurrent
+    /// program written against this interpreter hung on exactly that.
+    pending: Vec<Vec<JoinHandle<Result<(), RuntimeError>>>>,
     /// Bounded so an accidental infinite recursion reports rather than aborting the
     /// process with a stack overflow, which produces no diagnostic at all.
     depth: usize,
@@ -284,16 +396,22 @@ pub struct Interpreter<'a> {
     args: Vec<String>,
 }
 
-impl<'a> Interpreter<'a> {
+impl Interpreter {
     #[must_use]
-    pub fn new(program: &'a Program) -> Self {
+    ///
+    /// The tree is cloned once, here, so that tasks can share it. One copy per run of a
+    /// program is not a cost worth designing around; one copy per task would be.
+    pub fn new(program: &Program) -> Self {
         let functions = program
             .functions
             .iter()
-            .map(|f| (f.name.clone(), f))
+            .enumerate()
+            .map(|(i, f)| (f.name.clone(), i))
             .collect();
         Self {
-            functions,
+            program: Arc::new(program.clone()),
+            functions: Arc::new(functions),
+            pending: Vec::new(),
             depth: 0,
             max_depth: DEFAULT_MAX_DEPTH,
             iterations_left: DEFAULT_MAX_ITERATIONS,
@@ -318,10 +436,14 @@ impl<'a> Interpreter<'a> {
 
     /// Evaluate `main` and return its value.
     pub fn run_main(&mut self) -> Result<Value, RuntimeError> {
+        // Cloned before the lookup so that the body being run borrows the clone and not
+        // `self`, which `call_body` needs mutably.
+        let program = Arc::clone(&self.program);
         let main = self
             .functions
             .get("main")
             .copied()
+            .map(|i| &program.functions[i])
             .ok_or_else(|| RuntimeError {
                 diagnostic: Box::new(Diagnostic::error(
                     codes::MISSING_MAIN,
@@ -411,6 +533,48 @@ impl<'a> Interpreter<'a> {
             Stmt::Return(r) => Ok(Flow::Return(take!(self, &r.value, env))),
             Stmt::Break { .. } => Ok(Flow::Break),
             Stmt::Continue { .. } => Ok(Flow::Continue),
+            Stmt::Scope(sc) => {
+                // Tasks run while the body does. The closing brace joins every one of
+                // them, and joins them *before* propagating a failure of the body —
+                // returning early would leave tasks running past the scope that promised
+                // to contain them, which is the one guarantee this construct exists for.
+                self.pending.push(Vec::new());
+                let flow = self.block(&sc.body, env);
+                let joined = Self::join_all(self.pending.pop().unwrap_or_default());
+                // The body's failure wins: a task that failed because the body stopped
+                // feeding it is a consequence, not the cause.
+                let flow = flow?;
+                joined?;
+                Ok(match flow {
+                    // A `scope` produces nothing; a `break` or `return` inside one still
+                    // travels outward, after the join.
+                    Flow::Fell(_) => Flow::Fell(None),
+                    other => other,
+                })
+            }
+            Stmt::Spawn(sp) => {
+                let mut values = Vec::with_capacity(sp.args.len());
+                for a in &sp.args {
+                    values.push(take!(self, a, env));
+                }
+                // Checked before starting anything: a task with no scope to join it is
+                // the one case where starting it would be unrecoverable. Unreachable —
+                // the checker reports `N0320`.
+                if self.pending.is_empty() {
+                    return Err(RuntimeError {
+                        diagnostic: Box::new(Diagnostic::error(
+                            codes::SPAWN_OUTSIDE_SCOPE,
+                            sp.span,
+                            "`spawn` reached the interpreter with no scope to join it",
+                        )),
+                    });
+                }
+                let task = self.start_task(&sp.callee, values, sp.span)?;
+                if let Some(scope) = self.pending.last_mut() {
+                    scope.push(task);
+                }
+                Ok(Flow::Fell(None))
+            }
             Stmt::Expr(e) => {
                 // The value is dropped; the flow is not. An `if` in statement position
                 // may still `return` or `break`, and that has to travel outward.
@@ -647,6 +811,46 @@ impl<'a> Interpreter<'a> {
                     |v| Ok(Value::Int(v)),
                 )
             }
+            (Intrinsic::ChanNew, [Value::Int(capacity)]) => {
+                let Ok(capacity) = usize::try_from(*capacity).map(|c| c.max(0)) else {
+                    return Err(out_of_bounds(
+                        "a channel needs a capacity of at least 1",
+                        format!("asked for a capacity of {capacity}"),
+                    ));
+                };
+                if capacity == 0 {
+                    return Err(out_of_bounds(
+                        "a channel needs a capacity of at least 1",
+                        "asked for a capacity of 0".to_owned(),
+                    ));
+                }
+                Ok(Value::Chan(Arc::new(Channel::new(capacity))))
+            }
+            (Intrinsic::ChanSend, [Value::Chan(c), Value::Int(value)]) => c
+                .send(*value)
+                .map_or_else(|| Err(bug("a channel that could not be locked")), |sent| {
+                    Ok(Value::Bool(sent))
+                }),
+            (Intrinsic::ChanRecv, [Value::Chan(c), Value::Ints(out)]) => {
+                let Some(taken) = c.recv() else {
+                    return Err(bug("a channel that could not be locked"));
+                };
+                match taken {
+                    Some(v) => {
+                        let Some(mut out) = seq(out) else {
+                            return Err(bug("a sequence that could not be written"));
+                        };
+                        out.push(v);
+                        Ok(Value::Bool(true))
+                    }
+                    None => Ok(Value::Bool(false)),
+                }
+            }
+            (Intrinsic::ChanClose, [Value::Chan(c)]) => c
+                .close()
+                .map_or_else(|| Err(bug("a channel that could not be locked")), |()| {
+                    Ok(Value::Int(0))
+                }),
             (Intrinsic::StrJoin, [Value::Strs(parts), Value::Str(sep)]) => {
                 let Some(parts) = seq(parts) else {
                     return Err(bug("a sequence that could not be read"));
@@ -743,6 +947,119 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Str(vec![byte]))
             }
             _ => Err(bug("arguments of the wrong shape")),
+        }
+    }
+
+    /// Start one task and hand back the handle its scope will join.
+    ///
+    /// One OS thread per task, and `docs/spec.md` says so rather than implying anything
+    /// else. Each task gets its **own** interpreter over the same program: the state
+    /// shared between tasks is exactly the channels they were handed, which is what the
+    /// capture rule is for.
+    ///
+    /// Each task gets its own iteration and depth budgets rather than a share of the
+    /// parent's. Splitting them would make a program's own limit depend on how many
+    /// tasks happened to be running, which is not something a person can reason about.
+    fn start_task(
+        &self,
+        callee: &str,
+        args: Vec<Value>,
+        span: nazm_span::Span,
+    ) -> Result<JoinHandle<Result<(), RuntimeError>>, RuntimeError> {
+        let index = self
+            .functions
+            .get(callee)
+            .copied()
+            .ok_or_else(|| RuntimeError {
+                diagnostic: Box::new(Diagnostic::error(
+                    codes::UNDEFINED_FUNCTION,
+                    span,
+                    format!("`{callee}` is not a function"),
+                )),
+            })?;
+        let program = Arc::clone(&self.program);
+        let functions = Arc::clone(&self.functions);
+        let max_depth = self.max_depth;
+        let iterations_left = self.iterations_left;
+        let name = callee.to_string();
+
+        std::thread::Builder::new()
+            .name(name.clone())
+            // The same reservation the main evaluation thread gets, for the same reason:
+            // the depth limit has to be reached before the stack is, or a deep recursion
+            // inside a task crashes the process with no diagnostic at all.
+            .stack_size(stack_for(max_depth))
+            .spawn(move || {
+                let mut task = Self {
+                    program: Arc::clone(&program),
+                    functions,
+                    pending: Vec::new(),
+                    depth: 0,
+                    max_depth,
+                    iterations_left,
+                    // A task has no arguments of its own: `arg(i)` is the program's
+                    // command line, and a task is not a program.
+                    args: Vec::new(),
+                };
+                let f = &program.functions[index];
+                let mut env: Env = vec![HashMap::new()];
+                if let Some(frame) = env.last_mut() {
+                    for (p, v) in f.params.iter().zip(args) {
+                        frame.insert(p.name.clone(), v);
+                    }
+                }
+                Self::body_of(f).and_then(|body| task.call_body(body, &mut env, &name).map(|_| ()))
+            })
+            .map_err(|e| RuntimeError {
+                diagnostic: Box::new(
+                    Diagnostic::error(
+                        codes::INTERPRETER_UNAVAILABLE,
+                        span,
+                        format!("could not start a task for `{callee}`: {e}"),
+                    )
+                    .help(
+                        "each task is an operating-system thread; this is a limit of the \
+                         machine, not of the program",
+                    ),
+                ),
+            })
+    }
+
+    /// Wait for every task of one scope.
+    ///
+    /// Every handle is joined even after one has failed. Returning at the first failure
+    /// would leave the rest running, and a scope that does not contain its tasks is not
+    /// a scope.
+    ///
+    /// A task that fails ends the whole program, because that is what the specification
+    /// promises — tasks do not have private failure modes. The first failure is reported
+    /// and the rest are treated as consequences of it.
+    fn join_all(tasks: Vec<JoinHandle<Result<(), RuntimeError>>>) -> Result<(), RuntimeError> {
+        let mut first: Option<RuntimeError> = None;
+        for handle in tasks {
+            let outcome = match handle.join() {
+                Ok(outcome) => outcome,
+                // A panic is an interpreter bug, not a program error, but it still has to
+                // come out as a diagnostic: resuming the unwind here would lose the other
+                // tasks still waiting to be joined.
+                Err(_) => Err(RuntimeError {
+                    diagnostic: Box::new(
+                        Diagnostic::error(
+                            codes::INTERPRETER_UNAVAILABLE,
+                            nazm_span::Span::new(0, 0),
+                            "a task ended abnormally",
+                        )
+                        .help("this is a bug in the interpreter"),
+                    ),
+                }),
+            };
+            if let Err(e) = outcome {
+                first.get_or_insert(e);
+            }
+        }
+        match first {
+            Some(e) => Err(e),
+            None => Ok(()),
         }
     }
 
@@ -889,10 +1206,12 @@ impl<'a> Interpreter<'a> {
                     return Ok(Flow::Fell(Some(self.intrinsic(i, &values, *span)?)));
                 }
 
+                let program = Arc::clone(&self.program);
                 let f = self
                     .functions
                     .get(callee)
                     .copied()
+                    .map(|i| &program.functions[i])
                     .ok_or_else(|| RuntimeError {
                         diagnostic: Box::new(Diagnostic::error(
                             codes::UNDEFINED_FUNCTION,
@@ -966,7 +1285,7 @@ impl<'a> Interpreter<'a> {
     /// A missing body means the parser reported an error, and a program with errors is
     /// never evaluated — so this is unreachable. It reports rather than panicking,
     /// because a bug in that reasoning should still produce something readable.
-    fn body_of(f: &'a Function) -> Result<&'a Block, RuntimeError> {
+    fn body_of(f: &Function) -> Result<&Block, RuntimeError> {
         f.body.as_ref().ok_or_else(|| RuntimeError {
             diagnostic: Box::new(
                 Diagnostic::error(
@@ -1068,5 +1387,6 @@ fn type_name(v: &Value) -> &'static str {
         Value::Str(_) => "Str",
         Value::Ints(_) => "Ints",
         Value::Strs(_) => "Strs",
+        Value::Chan(_) => "Chan",
     }
 }

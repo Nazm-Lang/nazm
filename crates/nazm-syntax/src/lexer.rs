@@ -37,6 +37,8 @@ pub enum TokenKind {
     Continue,
     Return,
     Use,
+    Scope,
+    Spawn,
 
     // Punctuation
     LParen,
@@ -86,6 +88,8 @@ impl TokenKind {
             Self::Continue => "`continue`".to_owned(),
             Self::Return => "`return`".to_owned(),
             Self::Use => "`use`".to_owned(),
+            Self::Scope => "`scope`".to_owned(),
+            Self::Spawn => "`spawn`".to_owned(),
             Self::LParen => "`(`".to_owned(),
             Self::RParen => "`)`".to_owned(),
             Self::LBrace => "`{`".to_owned(),
@@ -198,6 +202,8 @@ pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
                 "continue" => TokenKind::Continue,
                 "return" => TokenKind::Return,
                 "use" => TokenKind::Use,
+                "scope" => TokenKind::Scope,
+                "spawn" => TokenKind::Spawn,
                 _ => TokenKind::Ident(word.to_owned()),
             };
             tokens.push(Token {

@@ -297,6 +297,20 @@ fn add_builtin(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: In
     strs_len(bnames)
 }
 
+// Built-ins the language has and this compiler deliberately does not lower.
+//
+// Concurrency is outside the bootstrap subset: the compiler is single-threaded and does
+// not use a channel anywhere, so `docs/bootstrap-design.md` leaves it out. Naming them
+// here rather than letting them fall through to "is not a function" is what keeps the
+// omission a decision instead of a gap.
+fn outside_bootstrap_subset(name: Str) -> Bool {
+    if name == "chan_new" { return true; }
+    if name == "chan_send" { return true; }
+    if name == "chan_recv" { return true; }
+    if name == "chan_close" { return true; }
+    false
+}
+
 fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints) -> Int {
     let n = t_unknown();
     add_builtin(bnames, bret, bfirst, bcount, bparams, "str_len", t_int(), t_str(), n, n);
@@ -730,6 +744,16 @@ fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
     }
 
     if found == false {
+        if outside_bootstrap_subset(name) {
+            // The language has it; this compiler does not. Saying "is not a function"
+            // here would send a reader looking for a typo in a name that is spelled
+            // correctly — the difference between the language and its bootstrap
+            // compiler is the fact they need.
+            report(dcode, dstart, dend, dmsg, "N0201", from, from + str_len(name),
+                   str_concat(str_concat("`", name),
+                              "` is outside the bootstrap subset this compiler accepts"));
+            return t_unknown();
+        }
         report(dcode, dstart, dend, dmsg, "N0201", from, from + str_len(name),
                str_concat(str_concat("`", name), "` is not a function"));
         return t_unknown();

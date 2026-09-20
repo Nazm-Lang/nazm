@@ -534,6 +534,141 @@ means the same thing everywhere. Diagnostics name the file an offset falls in an
 the line it gives. A cross-file secondary label names its file too; without that,
 "first defined here" would give a line number with no file to look it up in.
 
+### Structured concurrency: scopes, tasks and channels
+
+This is the **initial** model. It is deliberately small, and what it does not claim is as
+much a part of the specification as what it does — see *What this model does not promise*
+below.
+
+```nazm
+fn worker(jobs: Chan, results: Chan) -> Int {
+    let buf = ints_new();
+    while chan_recv(jobs, buf) {
+        chan_send(results, ints_pop(buf) * 2);
+    }
+    0
+}
+
+fn main() -> Int {
+    let jobs = chan_new(4);
+    let results = chan_new(4);
+    scope {
+        spawn worker(jobs, results);
+        spawn worker(jobs, results);
+        let mut i = 0;
+        while i < 10 { chan_send(jobs, i); i = i + 1; }
+        chan_close(jobs);
+    }
+    chan_close(results);
+    let buf = ints_new();
+    let mut total = 0;
+    while chan_recv(results, buf) { total = total + ints_pop(buf); }
+    total
+}
+```
+
+#### Scopes and tasks
+
+| | |
+| --- | --- |
+| **Creation** | `spawn f(args);` starts a task running `f`. It is a statement, and `f` must be a named function — there are no function values, so there is nothing else it could be |
+| **Where** | Only inside a `scope { … }` block. `spawn` outside one is `N0320` |
+| **Joining** | A `scope` block does not finish until **every** task spawned inside it has finished. There is no way to leave a task running past its scope, and no way to detach one. That is the whole point of the word |
+| **Nesting** | A `scope` may contain another. The inner one joins first, because it closes first |
+| **The scope's value** | None. `scope { … }` is a statement |
+| **Result propagation** | A task's return value is **discarded**. Results travel through channels, which is the one mechanism, rather than two |
+| **Error propagation** | A task that fails at run time — overflow, a bad index, a failed allocation — ends the **whole program** with its diagnostic and exit status 2, exactly as the same failure would in `main`. Tasks do not have private failure modes |
+
+#### When a task starts, and when a scope waits
+
+**A task starts when its `spawn` runs**, not when the scope closes. It runs *alongside*
+the rest of the scope's body.
+
+This is not an implementation detail, and it is written down because the first
+implementation got it wrong. Collecting the spawned tasks and starting them all at the
+closing brace reads like a harmless reordering — every task still runs, and every task is
+still joined. It deadlocks the example at the top of this section: the body sends ten jobs
+into a channel of capacity four before any worker exists to take them, so the fifth send
+blocks forever and the closing brace that would have started the workers is never reached.
+That is the shape of every worker pool, so the property is part of the language.
+
+The closing brace waits for every task, **including when the body itself failed**. A
+failure that returned immediately would leave tasks running past the scope that promised
+to contain them, which is the one thing a scope is for. When both the body and a task
+fail, the body's failure is the one reported: a task that failed because the body stopped
+feeding it is a consequence, not a cause.
+
+There is no cancellation beyond closing a channel. A scope whose body fails still waits
+for tasks that may be blocked on a channel nobody will now close, and such a program
+hangs rather than reporting. Closing the channels a task waits on is the program's
+responsibility, and the `while chan_recv(c, buf)` loop is the idiom that makes it work.
+
+#### What may cross into a task
+
+**`spawn` arguments may be `Int`, `Bool`, `Str` or `Chan`, and nothing else.** Passing an
+`Ints` or a `Strs` is rejected with `N0321`.
+
+The reason is not stylistic. `Ints` and `Strs` are handles to shared mutable storage with
+no synchronisation of any kind (*Sequences are shared, mutable, and never freed*). Letting
+one cross into a task would be a data race the language had invited, and no amount of
+documentation would make it safe. `Int`, `Bool` and `Str` are values — a task gets its own
+copy of what it was given, and nothing it does is visible to anyone else. `Chan` is the
+exception on purpose: it is the primitive *designed* to be shared, and its operations are
+the synchronisation.
+
+A task also cannot see its caller's locals. It runs a named function with the arguments it
+was given, and a function has never been able to see its caller's bindings.
+
+#### Channels
+
+`Chan` is a **bounded** queue of `Int`.
+
+| | |
+| --- | --- |
+| `chan_new(capacity)` | A channel holding at most `capacity` values. `capacity` must be at least 1, or `N0405` |
+| `chan_send(c, v)` | Blocks while the channel is full. Returns `true` when the value was queued, `false` if the channel is closed — in which case **the value was not sent** |
+| `chan_recv(c, out)` | Blocks while the channel is empty. On success pushes one value onto `out` and returns `true`. Returns `false` when the channel is closed **and** drained |
+| `chan_close(c)` | Closes it. Idempotent, and wakes every blocked sender and receiver |
+
+Closing is the cancellation mechanism, and `chan_send` and `chan_recv` are the
+**observation points**: a task that loops on `while chan_recv(c, buf)` stops when the
+channel closes, without needing a separate cancellation flag. Values already queued when
+a channel closes are still received — closing ends a channel, it does not discard it.
+
+`Chan` is a reference, like a sequence, and is not comparable with `==`.
+
+#### Lifetime and cleanup
+
+A task's arguments are values or channels, so nothing it holds can dangle: values are
+copied, and a channel outlives every scope that uses it because nothing is ever freed.
+There are no destructors to run and nothing to reclaim — the same bootstrap memory model
+the rest of the language has (`docs/bootstrap-design.md`).
+
+Cleanup is therefore about *joining*, not about freeing, and joining is guaranteed by the
+scope's closing brace.
+
+#### What this model does not promise
+
+**The runtime is one operating-system thread per task, and that is all it is.** Every one
+of the following is *not* claimed, because none of it is implemented:
+
+- No M:N scheduling, no green threads, no work stealing, no task density. A program that
+  spawns ten thousand tasks will try to create ten thousand OS threads.
+- **No deadlock freedom.** Two tasks that each wait for the other wait forever. Nothing in
+  the capture rules prevents it, and no ownership discipline implies it. Neither does a
+  scope: it waits for its tasks unconditionally, so a body that blocks on a task that
+  cannot proceed hangs the program.
+- **No cancellation** other than closing a channel. There is no cancellation token, no
+  interruption, no timeout, and a failure elsewhere does not unblock anybody.
+- No fairness guarantee between tasks blocked on the same channel.
+- No memory-ordering guarantees beyond what the channel operations themselves provide.
+  There is no shared mutable state to order, because the capture rule removes it.
+- No priorities, no timeouts, no `select`.
+
+The interface is deliberately separable from the runtime: `scope`, `spawn` and the four
+channel operations say nothing about threads, so a different runtime strategy could
+replace this one without changing what a program means.
+
 ### The integer boundaries, stated rather than inherited
 
 Two's complement is asymmetric — there is one more negative `Int` than positive — and

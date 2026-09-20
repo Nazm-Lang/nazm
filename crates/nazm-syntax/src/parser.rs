@@ -9,8 +9,8 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 
 use crate::ast::{
-    Assign, BinOp, Block, Expr, Function, Import, Let, Param, Program, Return, Stmt, TypeName,
-    While,
+    Assign, BinOp, Block, Expr, Function, Import, Let, Param, Program, Return, Scope, Spawn,
+    Stmt, TypeName, While,
 };
 use crate::lexer::{Token, TokenKind};
 
@@ -299,6 +299,57 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// `scope { … }`
+    fn scope(&mut self) -> Option<Scope> {
+        let start = self.expect(&TokenKind::Scope, "to start a scope")?;
+        let body = self.block()?;
+        Some(Scope {
+            span: start.join(body.span),
+            body,
+        })
+    }
+
+    /// `spawn f(args);`
+    fn spawn(&mut self) -> Option<Spawn> {
+        let start = self.expect(&TokenKind::Spawn, "to start a task")?;
+        let callee_span = self.peek_span();
+        let callee = match self.advance() {
+            TokenKind::Ident(n) => n,
+            other => {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        callee_span,
+                        format!("expected a function name after `spawn`, found {}", other.describe()),
+                    )
+                    .help(
+                        "a task runs a named function: `spawn worker(jobs);`. There are \
+                         no function values to pass instead",
+                    ),
+                );
+                return None;
+            }
+        };
+        self.expect(&TokenKind::LParen, "to start the arguments")?;
+        let mut args = Vec::new();
+        if !self.at(&TokenKind::RParen) {
+            loop {
+                args.push(self.expr()?);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect(&TokenKind::RParen, "to end the arguments")?;
+        let end = self.expect(&TokenKind::Semi, "to end a `spawn`")?;
+        Some(Spawn {
+            callee,
+            callee_span,
+            args,
+            span: start.join(end),
+        })
+    }
+
     fn function(&mut self) -> Option<Function> {
         let start = self.peek_span();
 
@@ -448,6 +499,16 @@ impl<'a> Parser<'a> {
             }
             if self.at(&TokenKind::Break) || self.at(&TokenKind::Continue) {
                 statements.push(self.loop_control()?);
+                continue;
+            }
+            if self.at(&TokenKind::Scope) {
+                statements.push(Stmt::Scope(self.scope()?));
+                deepest = deepest.max(self.child());
+                continue;
+            }
+            if self.at(&TokenKind::Spawn) {
+                statements.push(Stmt::Spawn(self.spawn()?));
+                deepest = deepest.max(self.child());
                 continue;
             }
             if let Some(a) = self.try_assign()? {
@@ -1124,6 +1185,12 @@ mod ast_depth_tests {
                                 stack.push((Node::Block(&w.body), d + 1));
                             }
                             Stmt::Expr(e) => stack.push((Node::Expr(e), d + 1)),
+                            Stmt::Scope(sc) => stack.push((Node::Block(&sc.body), d + 1)),
+                            Stmt::Spawn(sp) => {
+                                for a in &sp.args {
+                                    stack.push((Node::Expr(a), d + 1));
+                                }
+                            }
                             Stmt::Break { .. } | Stmt::Continue { .. } => {}
                         }
                     }

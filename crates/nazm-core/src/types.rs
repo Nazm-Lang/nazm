@@ -21,6 +21,9 @@ pub enum Type {
     Ints,
     /// A growable sequence of `Str`, by reference, with the same rules.
     Strs,
+    /// A bounded channel of `Int`, by reference. The one type designed to be shared
+    /// between tasks — see `docs/spec.md`, *Structured concurrency*.
+    Chan,
 }
 
 impl Type {
@@ -34,6 +37,17 @@ impl Type {
         matches!(self, Self::Ints | Self::Strs)
     }
 
+    /// Whether a value of this type may be passed to a task.
+    ///
+    /// `Int`, `Bool` and `Str` are values, so a task gets its own copy. `Chan` is the
+    /// primitive designed to be shared and its operations are the synchronisation. A
+    /// sequence is a handle to unsynchronised shared mutable storage, and letting one
+    /// cross would be a data race the language had invited.
+    #[must_use]
+    pub fn may_cross_into_a_task(self) -> bool {
+        !self.is_sequence()
+    }
+
     /// Parse a written type name. `None` for anything else, so an unknown type is
     /// reported as such rather than silently treated as one of these.
     #[must_use]
@@ -44,13 +58,14 @@ impl Type {
             "Str" => Some(Self::Str),
             "Ints" => Some(Self::Ints),
             "Strs" => Some(Self::Strs),
+            "Chan" => Some(Self::Chan),
             _ => None,
         }
     }
 
     #[must_use]
     pub fn all_names() -> &'static str {
-        "`Int`, `Bool`, `Str`, `Ints`, `Strs`"
+        "`Int`, `Bool`, `Str`, `Ints`, `Strs`, `Chan`"
     }
 }
 
@@ -62,6 +77,7 @@ impl fmt::Display for Type {
             Self::Str => "Str",
             Self::Ints => "Ints",
             Self::Strs => "Strs",
+            Self::Chan => "Chan",
         })
     }
 }
