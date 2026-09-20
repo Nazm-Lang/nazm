@@ -90,6 +90,7 @@ pub fn stop_candidate<E: ContainerEngine>(
     // Confirm it actually stopped rather than assuming the kill took effect.
     match sandbox.engine().wait_until_exit(&id, grace)? {
         Some(state) => Ok(StopOutcome {
+            attempt: sandbox.names().attempt.clone(),
             exit_code: state.exit_code,
             oom_killed: state.oom_killed,
             started_at: state.started_at,
@@ -102,8 +103,33 @@ pub fn stop_candidate<E: ContainerEngine>(
     }
 }
 
+impl StopOutcome {
+    /// The evidence that the workspace is quiet, for [`crate::workspace::Workspace::freeze`].
+    ///
+    /// Available only from a `StopOutcome`, and one of those exists only when the
+    /// candidate container was killed and then *observed* to have exited — see
+    /// [`stop_candidate`], which returns an error rather than a `StopOutcome` when the
+    /// container is still running after the grace period.
+    ///
+    /// The container is the only writer: the work volume is mounted writable into the
+    /// candidate and nowhere else, and killing the container takes its descendants with
+    /// it, detached ones included.
+    #[must_use]
+    pub fn writers_stopped(&self) -> crate::workspace::WritersStopped {
+        crate::workspace::WritersStopped::confirmed(
+            &self.attempt,
+            format!(
+                "candidate container observed exited (code {:?}, oom {})",
+                self.exit_code, self.oom_killed
+            ),
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StopOutcome {
+    /// Which attempt's candidate this is the stop of.
+    pub attempt: String,
     pub exit_code: Option<i32>,
     pub oom_killed: bool,
     pub started_at: Option<String>,
@@ -269,6 +295,7 @@ mod tests {
     #[test]
     fn a_timeout_outranks_the_exit_code() {
         let stop = StopOutcome {
+            attempt: "test-attempt".to_owned(),
             exit_code: Some(0),
             oom_killed: false,
             started_at: None,
@@ -285,6 +312,7 @@ mod tests {
     #[test]
     fn oom_comes_from_engine_state_not_from_the_candidates_output() {
         let stop = StopOutcome {
+            attempt: "test-attempt".to_owned(),
             exit_code: Some(137),
             oom_killed: true,
             started_at: None,

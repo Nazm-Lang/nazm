@@ -433,3 +433,111 @@ file = "crates/nazm-core/src/eval.rs"
 find = "    STACK_BASE_BYTES.saturating_add(max_depth.saturating_mul(STACK_BYTES_PER_CALL))"
 replace = "    STACK_BASE_BYTES"
 
+
+# --- submission identity -------------------------------------------------------------
+#
+# A digest that cannot tell two different submissions apart is not an identity, and every
+# one of these makes it blind to something a candidate controls.
+
+[[mutation]]
+name = "snapshot-renames-non-utf8-paths"
+why = """
+maps an unrepresentable name onto a lossy one instead of refusing it, so two distinct
+names collapse onto one manifest key and a file hides behind another's name
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = "    relative.to_str().map(str::to_owned).ok_or_else(|| {"
+replace = """    return Ok(relative.to_string_lossy().into_owned());
+    #[allow(unreachable_code)]
+    relative.to_str().map(str::to_owned).ok_or_else(|| {"""
+
+[[mutation]]
+name = "snapshot-accepts-symlinks"
+why = """
+lets a symlink through the freeze, so a link composed through another — `a -> .` with
+`b -> a/../outside` — resolves out of the snapshot, and an absolute one points back at the
+live workspace the freeze exists to escape
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = "        if meta.file_type().is_symlink() {"
+replace = "        if false {"
+
+[[mutation]]
+name = "snapshot-records-content-without-mode"
+why = """
+records only the content hash, so the same bytes at 0644 and 0755 are one submission to
+the digest although only one of them runs
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = """    format!(
+        "file:{:04o}:{:016x}",
+        meta.permissions().mode() & MODE_MASK,
+        fnv1a(bytes)
+    )"""
+replace = """    format!("file:{:016x}", fnv1a(bytes))"""
+
+[[mutation]]
+name = "snapshot-copies-with-the-umask"
+why = """
+leaves the copy at whatever the process umask produced, so the grader runs a file the
+candidate did not produce and the snapshot no longer matches its own manifest
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = "                fs::set_permissions(&dest, fs::Permissions::from_mode(wanted))?;"
+replace = ""
+
+[[mutation]]
+name = "snapshot-skips-the-mode-readback"
+why = """
+trusts that the mode was applied, so a filesystem that silently refuses bits produces a
+snapshot whose permissions differ from the manifest describing it — and every such
+submission verifies as drifted for a reason nobody can see
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = """    if got == wanted {
+        return Ok(());
+    }"""
+replace = """    if true {
+        return Ok(());
+    }"""
+
+[[mutation]]
+name = "freeze-accepts-evidence-about-another-attempt"
+why = """
+drops the attempt check on the quiescence token, so evidence that attempt A's candidate
+stopped authorises freezing attempt B's workspace — whose candidate may still be writing
+"""
+file = "crates/nazm-bench/src/workspace.rs"
+find = "            if vouched != self.attempt_id {"
+replace = "            if false {"
+
+[[mutation]]
+name = "a-confirmed-stop-forgets-its-attempt"
+why = """
+builds the token without naming the attempt it is evidence about, so it vouches for every
+workspace equally and the check above can never fire
+"""
+file = "crates/nazm-bench/src/sandbox/execution.rs"
+find = "            &self.attempt,"
+replace = "            String::new(),"
+
+# `snapshot-skips-the-production-mode-readback` is deliberately absent, and this is the
+# reason rather than an oversight.
+#
+# Removing the `mode_matches(...)` call from `walk_tree` only has an effect when a
+# filesystem silently refuses permission bits, and every mode that could expose it —
+# 4755, 2755, 1755, 7777, 0000, 0400 — was preserved on the filesystems available here
+# when measured. So the mutation would survive today.
+#
+# That is a statement about what can be exercised here, not about what is possible:
+# injecting the fault — a FUSE mount that drops setuid, a seam that fakes the read-back —
+# would exercise it, and is the way to cover this later. It is left out of the runnable
+# catalogue for now rather than added as a guaranteed survivor.
+#
+# What is covered: `mode_matches` itself, by unit tests including the setuid case; and
+# the fact that the production path calls it at all, indirectly — `snapshot-copies-with-
+# the-umask` removes `set_permissions`, which makes the read-back's comparison fail, so
+# that mutation is caught *by* the read-back running in production.
+#
+# What is not covered: removing the call while `set_permissions` still succeeds. Recorded
+# as uncovered, alongside `checking-runs-on-the-callers-stack`.

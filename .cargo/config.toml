@@ -1,5 +1,6 @@
 [alias]
 xtask = "run --package xtask --"
-# Mirrors the CI gate exactly. If this passes locally and CI fails, one of the two
-# is lying; keeping them textually identical is what makes that detectable.
+# Mirrors the CI gate exactly: `.github/workflows/ci.yml` runs this alias rather than
+# spelling the flags out again, so the two cannot drift. Until that workflow existed this
+# comment described a comparison with nothing on the other side of it.
 lint = "clippy --workspace --all-targets --locked -- -D warnings"

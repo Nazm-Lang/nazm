@@ -173,7 +173,7 @@ independent acceptance tests and specified static checks."**
 ```sh
 cargo build --workspace
 cargo test  --workspace
-cargo lint              # clippy, mirrors CI exactly
+cargo lint              # clippy; CI runs this same alias, so they cannot drift
 cargo xtask check       # architectural gates
 ```
 
@@ -190,7 +190,7 @@ Almost everything. Specifically:
   the performance claims, which are a backend question. The subset is the one described
   above; everything else in `docs/spec.md` under *Open* is undecided.
 - **The harness is partial.** Real, tested, and mutation-checked (`cargo xtask mutate`,
-  37 catalogued defects, all caught): the accounting and comparison path (`nazm-bench
+  44 runnable catalogued defects, all caught — plus two defects documented in `mutations.toml` as *uncovered*, which a passing run says nothing about): the accounting and comparison path (`nazm-bench
   selftest`, 15 cases), per-attempt workspace management, the submission freeze, and the
   independent acceptance runner. **Not written:** agent drivers, a provider adapter, and
   all but one task fixture — so the harness cannot produce a benchmark number, and `run`
