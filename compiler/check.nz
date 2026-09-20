@@ -59,7 +59,8 @@ fn main() -> Int {
     let dstart = ints_new();
     let dend = ints_new();
     let dmsg = strs_new();
-    check_all(nk, nar, nst, nen, ntx, naux, kids, kid_first, ints_len(nk) - 1,
+    let nslot = ints_new();
+    check_all(nk, nar, nst, nen, ntx, naux, nslot, kids, kid_first, ints_len(nk) - 1,
               fnames, fret, ffirst, fcount, fparams,
               bnames, bret, bfirst, bcount, bparams,
               dcode, dstart, dend, dmsg);
