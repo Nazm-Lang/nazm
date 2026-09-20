@@ -36,6 +36,37 @@ pub enum Ty {
     /// from, and for an empty string it still points at real storage — which is what
     /// lets `memcmp` be called without a special case.
     Str,
+    /// A growable sequence of `Int`: a **pointer to a header**, `{ len, cap, data }`.
+    ///
+    /// The handle is the header's address and never changes, which is what gives these
+    /// reference semantics: growth reallocates `data` and rewrites the header in place,
+    /// so every holder of the handle sees it. See `docs/spec.md`, *Sequences are shared,
+    /// mutable, and never freed*.
+    Ints,
+    /// The same, with 16-byte `{ ptr, i64 }` elements.
+    Strs,
+}
+
+impl Ty {
+    /// Bytes one element of this sequence occupies, for indexing and growth.
+    #[must_use]
+    pub fn element_size(self) -> Option<u32> {
+        match self {
+            Self::Ints => Some(8),
+            Self::Strs => Some(16),
+            _ => None,
+        }
+    }
+
+    /// The LLVM type of one element.
+    #[must_use]
+    pub fn element(self) -> Option<Self> {
+        match self {
+            Self::Ints => Some(Self::Int),
+            Self::Strs => Some(Self::Str),
+            _ => None,
+        }
+    }
 }
 
 impl Ty {
@@ -46,6 +77,7 @@ impl Ty {
             Self::Int => "i64",
             Self::Bool => "i1",
             Self::Str => "{ ptr, i64 }",
+            Self::Ints | Self::Strs => "ptr",
         }
     }
 
@@ -55,6 +87,8 @@ impl Ty {
             Self::Int => "Int",
             Self::Bool => "Bool",
             Self::Str => "Str",
+            Self::Ints => "Ints",
+            Self::Strs => "Strs",
         }
     }
 }
@@ -327,6 +361,16 @@ pub enum Builtin {
     StrConcat,
     IntToStr,
     StrFromByte,
+    IntsNew,
+    IntsLen,
+    IntsGet,
+    IntsSet,
+    IntsPush,
+    StrsNew,
+    StrsLen,
+    StrsGet,
+    StrsSet,
+    StrsPush,
 }
 
 impl Builtin {
@@ -339,6 +383,16 @@ impl Builtin {
             "str_concat" => Some(Self::StrConcat),
             "int_to_str" => Some(Self::IntToStr),
             "str_from_byte" => Some(Self::StrFromByte),
+            "ints_new" => Some(Self::IntsNew),
+            "ints_len" => Some(Self::IntsLen),
+            "ints_get" => Some(Self::IntsGet),
+            "ints_set" => Some(Self::IntsSet),
+            "ints_push" => Some(Self::IntsPush),
+            "strs_new" => Some(Self::StrsNew),
+            "strs_len" => Some(Self::StrsLen),
+            "strs_get" => Some(Self::StrsGet),
+            "strs_set" => Some(Self::StrsSet),
+            "strs_push" => Some(Self::StrsPush),
             _ => None,
         }
     }
@@ -352,6 +406,30 @@ impl Builtin {
             Self::StrConcat => "str_concat",
             Self::IntToStr => "int_to_str",
             Self::StrFromByte => "str_from_byte",
+            Self::IntsNew => "ints_new",
+            Self::IntsLen => "ints_len",
+            Self::IntsGet => "ints_get",
+            Self::IntsSet => "ints_set",
+            Self::IntsPush => "ints_push",
+            Self::StrsNew => "strs_new",
+            Self::StrsLen => "strs_len",
+            Self::StrsGet => "strs_get",
+            Self::StrsSet => "strs_set",
+            Self::StrsPush => "strs_push",
+        }
+    }
+
+    /// The sequence type this operates on, for the ones that operate on a sequence.
+    #[must_use]
+    pub fn sequence(self) -> Option<Ty> {
+        match self {
+            Self::IntsNew | Self::IntsLen | Self::IntsGet | Self::IntsSet | Self::IntsPush => {
+                Some(Ty::Ints)
+            }
+            Self::StrsNew | Self::StrsLen | Self::StrsGet | Self::StrsSet | Self::StrsPush => {
+                Some(Ty::Strs)
+            }
+            _ => None,
         }
     }
 
@@ -367,6 +445,15 @@ impl Builtin {
             Self::StrSlice => &[Ty::Str, Ty::Int, Ty::Int],
             Self::StrConcat => &[Ty::Str, Ty::Str],
             Self::IntToStr | Self::StrFromByte => &[Ty::Int],
+            Self::IntsNew | Self::StrsNew => &[],
+            Self::IntsLen => &[Ty::Ints],
+            Self::StrsLen => &[Ty::Strs],
+            Self::IntsGet => &[Ty::Ints, Ty::Int],
+            Self::StrsGet => &[Ty::Strs, Ty::Int],
+            Self::IntsSet => &[Ty::Ints, Ty::Int, Ty::Int],
+            Self::StrsSet => &[Ty::Strs, Ty::Int, Ty::Str],
+            Self::IntsPush => &[Ty::Ints, Ty::Int],
+            Self::StrsPush => &[Ty::Strs, Ty::Str],
         }
     }
 
@@ -375,6 +462,16 @@ impl Builtin {
         match self {
             Self::StrLen | Self::StrByte => Ty::Int,
             Self::StrSlice | Self::StrConcat | Self::IntToStr | Self::StrFromByte => Ty::Str,
+            Self::IntsLen
+            | Self::StrsLen
+            | Self::IntsGet
+            | Self::IntsSet
+            | Self::IntsPush
+            | Self::StrsSet
+            | Self::StrsPush => Ty::Int,
+            Self::StrsGet => Ty::Str,
+            Self::IntsNew => Ty::Ints,
+            Self::StrsNew => Ty::Strs,
         }
     }
 }

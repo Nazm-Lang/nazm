@@ -52,17 +52,52 @@ pub enum Intrinsic {
     /// there is no way to produce a newline, and a compiler that cannot emit a newline
     /// cannot emit LLVM IR.
     StrFromByte,
+
+    // --- sequences ---------------------------------------------------------------
+    /// `ints_new() -> Ints` — an empty sequence.
+    IntsNew,
+    /// `ints_len(a: Ints) -> Int`
+    IntsLen,
+    /// `ints_get(a: Ints, i: Int) -> Int` — fails with `N0405` outside `0..len`.
+    IntsGet,
+    /// `ints_set(a: Ints, i: Int, v: Int) -> Int` — fails with `N0405` outside
+    /// `0..len`. Returns the index written, because the language has no unit type and
+    /// every function returns something; the index is the one answer that is always
+    /// meaningful.
+    IntsSet,
+    /// `ints_push(a: Ints, v: Int) -> Int` — appends; returns the **new length**.
+    IntsPush,
+    /// `strs_new() -> Strs`
+    StrsNew,
+    /// `strs_len(a: Strs) -> Int`
+    StrsLen,
+    /// `strs_get(a: Strs, i: Int) -> Str`
+    StrsGet,
+    /// `strs_set(a: Strs, i: Int, v: Str) -> Int` — the index written, as `ints_set`.
+    StrsSet,
+    /// `strs_push(a: Strs, v: Str) -> Int` — appends; returns the new length.
+    StrsPush,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 16] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
         Self::StrConcat,
         Self::IntToStr,
         Self::StrFromByte,
+        Self::IntsNew,
+        Self::IntsLen,
+        Self::IntsGet,
+        Self::IntsSet,
+        Self::IntsPush,
+        Self::StrsNew,
+        Self::StrsLen,
+        Self::StrsGet,
+        Self::StrsSet,
+        Self::StrsPush,
     ];
 
     #[must_use]
@@ -74,6 +109,16 @@ impl Intrinsic {
             Self::StrConcat => "str_concat",
             Self::IntToStr => "int_to_str",
             Self::StrFromByte => "str_from_byte",
+            Self::IntsNew => "ints_new",
+            Self::IntsLen => "ints_len",
+            Self::IntsGet => "ints_get",
+            Self::IntsSet => "ints_set",
+            Self::IntsPush => "ints_push",
+            Self::StrsNew => "strs_new",
+            Self::StrsLen => "strs_len",
+            Self::StrsGet => "strs_get",
+            Self::StrsSet => "strs_set",
+            Self::StrsPush => "strs_push",
         }
     }
 
@@ -85,6 +130,15 @@ impl Intrinsic {
             Self::StrSlice => &[Type::Str, Type::Int, Type::Int],
             Self::StrConcat => &[Type::Str, Type::Str],
             Self::IntToStr | Self::StrFromByte => &[Type::Int],
+            Self::IntsNew | Self::StrsNew => &[],
+            Self::IntsLen => &[Type::Ints],
+            Self::StrsLen => &[Type::Strs],
+            Self::IntsGet => &[Type::Ints, Type::Int],
+            Self::StrsGet => &[Type::Strs, Type::Int],
+            Self::IntsSet => &[Type::Ints, Type::Int, Type::Int],
+            Self::StrsSet => &[Type::Strs, Type::Int, Type::Str],
+            Self::IntsPush => &[Type::Ints, Type::Int],
+            Self::StrsPush => &[Type::Strs, Type::Str],
         }
     }
 
@@ -93,6 +147,16 @@ impl Intrinsic {
         match self {
             Self::StrLen | Self::StrByte => Type::Int,
             Self::StrSlice | Self::StrConcat | Self::IntToStr | Self::StrFromByte => Type::Str,
+            Self::IntsLen
+            | Self::StrsLen
+            | Self::IntsGet
+            | Self::IntsSet
+            | Self::IntsPush
+            | Self::StrsSet
+            | Self::StrsPush => Type::Int,
+            Self::StrsGet => Type::Str,
+            Self::IntsNew => Type::Ints,
+            Self::StrsNew => Type::Strs,
         }
     }
 
