@@ -50,6 +50,12 @@ pub enum SandboxError {
 /// Names are deterministic, so a collision on create is itself a leak detector.
 #[derive(Debug, Clone)]
 pub struct Names {
+    /// The attempt these names belong to.
+    ///
+    /// Kept rather than only baked into the strings, so evidence derived from this
+    /// sandbox can say *which* attempt it is evidence about — see
+    /// [`crate::workspace::WritersStopped`].
+    pub attempt: String,
     pub network: String,
     pub db: String,
     pub db_volume: String,
@@ -62,6 +68,7 @@ impl Names {
     pub fn for_attempt(run: &str, attempt: &str) -> Self {
         let p = format!("nazm-{run}-{attempt}");
         Self {
+            attempt: attempt.to_owned(),
             network: format!("{p}-net"),
             db: format!("{p}-db"),
             db_volume: format!("{p}-pgdata"),
