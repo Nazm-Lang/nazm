@@ -359,6 +359,82 @@ contributes no `Incoming` at all.
 treats `None` as fitting whatever the context wants — which is not a concession, it is the
 checker's own rule, `value_type` returning `expected` for a `Completion::Diverges`.
 
+### M1f subset — the accepted/rejected table
+
+Written before implementation. Anything refused **still runs under `nazm run`**.
+
+| Construct | `nazm build` | Note |
+| --- | --- | --- |
+| everything in M1a–M1e | accept | unchanged |
+| **`return e;`** | **accept** | M1f |
+| **early `return` from anywhere a statement may appear** | **accept** | including inside a loop, inside a statement `if`, and inside a nested loop |
+| **a body every path of which returns** | **accept** | such a body has no tail, and needs none: `check_function` accepts `Completion::Diverges` without one |
+| **`return` in a value position** | **accept** | `let x = if c { return 1; } else { 2 };` and the other four positions M1e established |
+| **a `return` whose operand itself transfers** | **accept** | `return if c { break; } else { 1 };` — the `break` wins, and no `ret` is written, matching the interpreter's `take!` |
+| `return` from `main` | accept | `main` is an ordinary `@nz.f<N>`; **only the platform wrapper prints** |
+| recursion, direct or mutual | refuse (`N0101`) | unchanged, and still pending a measured native execution contract |
+| `Str`, bare blocks as expressions, non-`if` expression statements | refuse | unchanged |
+| `return` with the wrong type; `return` outside a function | **not the backend's business** | the checker reports `N0300`; the parser rejects the latter |
+
+#### One `ret` per `return`, not a shared exit block
+
+**Direct typed returns.** Each `return` emits its own `ret <ty> %v`, which LLVM allows and
+which needs no target stack, no `phi`, and no epilogue.
+
+A single exit block collecting every return through a `phi` is the shape a language with
+destructors needs, because cleanup has to run on every path and wants one place to live.
+Nazm has no cleanup mechanism yet — no destructors, no `defer`, no owned heap values — so
+that shape would be scaffolding for a requirement that does not exist, and the contract
+(§5) forbids adding an IR layer to match an aspirational diagram. When cleanup arrives it
+is a localised change: the `ret` sites become branches to one block.
+
+#### A body with no tail stops being a defect
+
+M1e's `emit_function` wrote `unreachable` when a body produced no value, as a terminator
+for a case lowering refused. `return` makes the case real, and the right answer is not
+`unreachable` — it is **nothing at all**, because the block already holds the `ret` that
+transferred. Appending a second terminator is invalid IR, and the structural check
+(exactly one terminator per block, at its last instruction) is what fails if this is got
+wrong.
+
+### M1f status — implemented, and the scalar conformance table
+
+**Added:** native `return`, as one `ret` per return site. A body every path of which
+returns now legitimately has no tail, and emission writes **no** terminator for it,
+because the `ret` is already there — the `unreachable` M1e wrote for that arm was correct
+only while the case could not arise, and has been removed.
+
+**Front end:** unchanged. `N0300` for a wrongly typed `return` stays the checker's.
+
+**The one subtlety:** a `return` whose operand itself transfers. `return if c { break; }
+else { 1 };` raises the `break` and writes no `ret`, matching the interpreter's `take!`
+exactly, and it falls out of the existing `Val::Transferred` discipline rather than
+needing a rule.
+
+#### Scalar conformance — what `nazm build` compiles as of M1f
+
+This table is the current answer to "what is native". Everything not listed is refused by
+name with `N0101` and still runs under `nazm run`.
+
+| Area | Native | Notes |
+| --- | --- | --- |
+| Types | `Int` (signed 64-bit), `Bool` | `Str` is frontend-only |
+| Literals | integer, `true`, `false` | full `Int` range including `Int::MIN` |
+| Arithmetic | `+ - * / %`, unary `-` | checked at every optimisation level; intrinsic + branch, never `nsw` |
+| Arithmetic failures | overflow `N0400`, division by zero `N0401` | `Int::MIN / -1` fails; **`Int::MIN % -1` is `0`** |
+| Comparison | `== != < <= > >=` | signed; ordering is `Int` only |
+| Bindings | `let`, `let mut`, immutable parameters | one slot per binding, allocated in the entry block |
+| Assignment | `name = value;` | a statement, no value; an interrupted right-hand side writes nothing |
+| Conditionals | `if`/`else` as a value; `if` with and without `else` as a statement | one source `if`; position decides |
+| Loops | `while` | no iteration budget in compiled code |
+| Transfers | `break`, `continue`, `return` | a transfer in a loop *condition* targets the enclosing loop |
+| Functions | several, forward references, direct calls, `Int`/`Bool` parameters and returns | `fn main() -> Int` is the entry point; only the wrapper prints |
+| Evaluation order | left to right, operands and arguments | observable through which failure fires and which transfer wins |
+| **Not native** | recursion, `Str`, collections, records, modules, I/O, concurrency | recursion pends a measured native execution contract |
+
+This is a *scalar* conformance statement. It does not say the language is complete; it
+says which programs over `Int` and `Bool` the backend compiles and with what semantics.
+
 ### M1e status — implemented
 
 **Added:** `break`; `continue`; statement-position `if` with and without `else`,

@@ -658,3 +658,26 @@ find = """        self.loops.push(Targets {
             head: head.clone(),"""
 replace = """        self.loops.push(Targets {
             head: body_label.clone(),"""
+
+[[mutation]]
+name = "return-does-not-end-the-block-it-is-in"
+why = """
+`return` diverges, and lowering records that by ending the statement sequence with
+`Ends::Transfers`. Dropping it to `Ends::FallsThrough` makes lowering believe a body
+whose every path returns still falls off the end, so it then demands a tail expression
+and **refuses a valid program** with "a block with no final result expression".
+
+A behavioural catch rather than a structural one: the mutant compiles, emits nothing
+malformed, and simply rejects source the language accepts. `nazm run` executes the same
+program, which is what makes the refusal wrong rather than a matter of taste.
+
+Caught by `a_body_where_every_path_returns_needs_no_tail` and the `classify` program in
+`the_emitted_ir_for_a_return_heavy_function_is_well_formed`, both of which fail at the
+build step with a diagnostic instead of producing a value.
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = """                // A `return` leaves the function whether or not its operand lowered, so
+                // the rest of the block is unreachable either way — and the checker has
+                // already reported anything written after it (`N0313`).
+                return (stmts, Ends::Transfers);"""
+replace = """                return (stmts, Ends::FallsThrough);"""
