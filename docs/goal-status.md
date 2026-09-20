@@ -12,7 +12,7 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `9bf4078` |
+| Current commit | `940875d` |
 | Working tree | clean except this file |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
 | Disk | 13 GiB free of 460 GiB (**97 % full**) — `target/` alone is 3.7 GiB. Remove disposable copies promptly |
@@ -23,7 +23,7 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | **A** — scalar control flow, incl. `return` | **complete** (`ac39f7b`) |
 | **B** — the bootstrap subset | **complete** (`053ed22`): B1 text, B2 sequences, B3 I/O, B4 modules, B5 strategy |
-| **C** — compiler in Nazm | **started**: tokeniser done, parser done except `if` |
+| **C** — compiler in Nazm | **started**: tokeniser done, **parser done** (whole grammar). No checker, lowering or emission |
 | **D** — C1→C2→C3 bootstrap | not started |
 | **E** — structured concurrency | not started |
 | **F** — AI-native developer experience | not started (structured diagnostics and `--json` predate this goal) |
@@ -45,7 +45,7 @@ what was verified when it was written, not what is true now.
 | Native arguments, files, output, exit | verified | `23ee970`; **ambient authority, enforced nowhere** |
 | Modules: `use`, relative resolution, diamonds, cycles | verified | `053ed22`; **no visibility control** |
 | Tokeniser written in Nazm | verified | `compiler/lex.nz` + `lexer.nz`; agrees with `nazm_syntax::lex` token- and span-wise over every `.nz` in the tree |
-| Parser written in Nazm | verified **for its scope** | `compiler/parser.nz`; same tree as the reference over 34 sources. **`if` and bare-block expressions refused by name** |
+| Parser written in Nazm | **verified** | `compiler/parser.nz`; the **whole grammar**. Same tree as the reference over 50 hand-written sources **and over its own source and the tokeniser's** — 2000+ nodes, node- and span-identical. Only a bare block used as an expression is refused |
 | Checker / lowering / emission in Nazm | planned | nothing exists |
 | Native recursion | blocked by design | pending measured stack availability and frame size. **Not needed**: the compiler is iterative |
 | Concurrency, formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
@@ -54,10 +54,10 @@ what was verified when it was written, not what is true now.
 
 | Command | Result |
 | --- | --- |
-| `cargo test --workspace` | **443 passed, 0 failed, 6 ignored** |
+| `cargo test --workspace` | **444 passed, 0 failed, 6 ignored** |
 | — of which self-skipping | 10 `docker_boundary` tests exercise nothing without `NAZM_REQUIRE_DOCKER=1` |
 | — of which native end-to-end | 126 `nazm build` cases, each at `-O0` and `-O2` against the interpreter |
-| — of which self-hosting differentials | 6 |
+| — of which self-hosting differentials | 7 |
 | `cargo test -p xtask --test lifecycle -- --ignored` | 6 passed (separate; not in the 443) |
 | `cargo lint` (the CI alias) | 0 diagnostics |
 | `cargo fmt --all -- --check` | clean |
@@ -76,36 +76,35 @@ mutation lock is held (`target/.nazm-mutation-lock.v2` absent).
 
 ## Current task
 
-**Milestone C — `if` in `compiler/parser.nz`.** It is the last piece of the grammar.
+**Milestone C — a checker in Nazm.** The front end's first two passes are done and
+verified against the reference; what remains for a compiler is name resolution and type
+checking, then lowering and LLVM emission, then the driver.
 
-## Next exact action, with the design
+## Next exact action
 
-`if` is the only construct that **suspends an expression part-way** to parse a block, so
-the shunting-yard stacks must outlive one `parse_expr` call. The change:
+Write `compiler/check.nz` over the node arena `compiler/parser.nz` produces.
 
-1. Hoist `ops`, `opat`, `cname`, `cargs`, `vs`, `ve` out of `parse_expr` into
-   `parse_program`, and pass them in. They are sequences, so they are references and
-   persist across calls for free.
-2. Give `parse_expr` a `resuming: Bool` — when true it starts in the postfix loop rather
-   than the prefix loop — and a one-element `Ints` status cell, because the language has
-   no tuples: `0` = the expression finished, `1` = it suspended at an `if`'s `{`.
-3. In `parse_expr`'s primary position, `if` pushes sentinel `93` with the `if`'s start
-   and continues, so the condition parses as an ordinary expression. When `{` is reached
-   with `93` innermost, reduce to the sentinel and return status `1`.
-4. Add frame kinds `frame_if_then` and `frame_if_else`. On status `1` the frame machine
-   pushes `frame_if_then`. Closing it emits the block node, then either sees `else`
-   (expect `{`, push `frame_if_else`) or emits `if` with arity 2, pops sentinel `93`,
-   pushes the `if`'s span onto `vs`/`ve`, and calls `parse_expr` with `resuming = true`.
-   Closing `frame_if_else` emits the block and then `if` with arity 3.
-5. The statement context must also become a stack — `pk`/`pstart`/`ptext` — because the
-   frame machine calls `parse_expr` from five places (`let` value, assignment value,
-   `return` value, `while` condition, statement-or-tail) and each needs a different
-   continuation after the expression finally completes.
+The arena is **post-order with arity**, which is a stack machine's natural input: a single
+left-to-right pass with an `Ints` operand stack visits every node exactly once, children
+before parents, with no traversal recursion at all. Type checking is therefore a fold —
+push each leaf's type, pop `arity` types at each internal node, check them, push the
+result — which is why the dump format was chosen for the comparison in the first place.
 
-Reference spans, already measured: `if` spans from the `if` keyword to the last block's
-`}`; a block from `{` to `}`; the arity is 2 without `else` and 3 with.
+Needed:
 
-After that, in order: name resolution and type checking in Nazm (Milestone C), then D.
+1. A symbol table as parallel arrays: `sym_name: Strs`, `sym_kind: Ints`,
+   `sym_type: Ints`, `sym_scope: Ints`. Lookup walks outward by scope index; a hash map
+   is not needed and is not proposed.
+2. A signature pass over the `fn` nodes before any body, so a forward reference resolves
+   — the same two-pass shape `nazm-lir::lower` uses.
+3. Diagnostics as `diag_code: Strs`, `diag_start/diag_end: Ints`, `diag_message: Strs`,
+   reported with the **same codes** the reference uses so the two can be compared.
+4. A differential test in `crates/nazm-cli/tests/selfhost.rs` comparing the set of
+   `(code, span)` pairs against `nazm_core::check` over the same sources — including the
+   invalid ones, because a checker that accepts everything agrees with nothing.
+
+After that: lowering and LLVM emission in Nazm (Milestone C), then the C1→C2→C3 chain
+(Milestone D).
 
 ## Unresolved decisions
 
