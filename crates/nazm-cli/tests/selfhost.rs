@@ -675,3 +675,153 @@ fn the_nazm_parser_refuses_what_it_cannot_parse_yet_by_name() {
         assert!(stderr.contains("parse error at "), "{source:?}: {stderr}");
     }
 }
+
+/// Build `compiler/check.nz` natively and return the executable.
+fn build_checker(dir: &Path) -> PathBuf {
+    let source = repo_root().join("compiler/check.nz");
+    assert!(source.exists(), "{} is missing", source.display());
+    let exe = dir.join("nzcheck");
+    let out = Command::new(NAZM)
+        .args(["build", source.to_str().unwrap()])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("run nazm build");
+    assert!(
+        out.status.success(),
+        "the Nazm checker no longer compiles natively: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    exe
+}
+
+/// The `(code, start, end)` of every diagnostic, sorted.
+fn sorted_diagnostics(lines: &str) -> Vec<(String, u32, u32)> {
+    let mut out: Vec<(String, u32, u32)> = lines
+        .lines()
+        .filter(|l| l.contains('|'))
+        .map(|l| {
+            let parts: Vec<&str> = l.split('|').collect();
+            let [code, start, end, ..] = parts.as_slice() else {
+                panic!("unexpected line {l:?}");
+            };
+            (
+                (*code).to_owned(),
+                start.parse().expect("start"),
+                end.parse().expect("end"),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn the_nazm_checker_resolves_names_exactly_as_the_reference_does() {
+    // **Scope, stated:** `compiler/check.nz` reports undefined variables (`N0200`) and
+    // undefined functions (`N0201`) and nothing else, so the sources below are chosen so
+    // that those are the only errors the reference finds. A checker compared only on
+    // programs it happens to accept would agree with everything.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_checker(dir.path());
+
+    let sources = [
+        // Clean programs: the checker must find nothing, which is the half that a
+        // checker reporting errors everywhere would fail.
+        "fn m() -> Int { 1 }",
+        "fn m(x: Int) -> Int { x }",
+        "fn m() -> Int { let x = 1; x }",
+        "fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; } i }",
+        "fn a() -> Int { 1 }\nfn m() -> Int { a() }",
+        // A forward reference: `m` calls `b`, defined after it.
+        "fn m() -> Int { b() }\nfn b() -> Int { 1 }",
+        // Built-ins share the ordinary function namespace.
+        "fn m() -> Int { str_len(\"ab\") }",
+        "fn m() -> Int { let a = ints_new(); ints_push(a, 1); ints_len(a) }",
+        // Shadowing in a nested scope, and a binding that leaves scope with its block.
+        "fn m() -> Int { let x = 1; let y = if true { let x = 2; x } else { x }; y }",
+        // `let x = x;` reads the *outer* x — a binding is not visible in its own
+        // initialiser, which is why binding is a marker rather than immediate.
+        "fn m(x: Int) -> Int { let x = x; x }",
+        // Now the failures.
+        "fn m() -> Int { c }",
+        "fn m() -> Int { g() }",
+        "fn f(a: Int) -> Int {\n    let b = a + 1;\n    b + c\n}\nfn m() -> Int { f(1) + g(2) }\n",
+        // Out of scope after its block ends.
+        "fn m() -> Int { let mut i = 0; while i < 1 { let inner = 1; i = i + 1; } inner }",
+        // A parameter is not visible in another function.
+        "fn a(p: Int) -> Int { p }\nfn m() -> Int { p }",
+    ];
+
+    for source in sources {
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, source).expect("write");
+        let out = Command::new(&exe).arg(&file).output().expect("run");
+        let ours = sorted_diagnostics(&String::from_utf8_lossy(&out.stdout));
+
+        let theirs: Vec<(String, u32, u32)> = {
+            let mut v: Vec<(String, u32, u32)> = nazm_core::check_source(source)
+                .into_iter()
+                .filter(|d| d.code.as_str() == "N0200" || d.code.as_str() == "N0201")
+                .map(|d| {
+                    (
+                        d.code.as_str().to_owned(),
+                        d.primary.span.start,
+                        d.primary.span.end,
+                    )
+                })
+                .collect();
+            v.sort();
+            v
+        };
+
+        assert_eq!(ours, theirs, "name resolution differs for {source:?}");
+        // Exit status is part of the interface, not decoration.
+        assert_eq!(
+            out.status.code(),
+            Some(i32::from(!theirs.is_empty())),
+            "wrong exit status for {source:?}"
+        );
+    }
+}
+
+#[test]
+fn the_nazm_checker_accepts_the_compiler_it_is_part_of() {
+    // The strongest available check short of self-hosting: run the Nazm checker over
+    // every Nazm source in the tree — including its own — and require it to find nothing
+    // the reference does not.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_checker(dir.path());
+    let root = repo_root();
+
+    let mut files = Vec::new();
+    for folder in ["compiler", "examples"] {
+        if let Ok(entries) = std::fs::read_dir(root.join(folder)) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().is_some_and(|e| e == "nz") {
+                    files.push(p);
+                }
+            }
+        }
+    }
+    files.sort();
+    assert!(files.len() >= 5, "only {} sources", files.len());
+
+    for file in &files {
+        let out = Command::new(&exe).arg(file).output().expect("run");
+        let ours = sorted_diagnostics(&String::from_utf8_lossy(&out.stdout));
+        // A file that `use`s another is resolved by the driver, not by this checker, so
+        // its imported names look undefined in isolation. Those files are checked as a
+        // whole program by `nazm check`, which is what the assertion below uses.
+        let source = std::fs::read_to_string(file).expect("read");
+        let standalone = !source.contains("use \"");
+        if standalone {
+            assert!(
+                ours.is_empty(),
+                "{}: the Nazm checker rejected a source the reference accepts: {ours:?}",
+                file.display()
+            );
+        }
+    }
+}
