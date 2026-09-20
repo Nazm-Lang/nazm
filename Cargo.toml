@@ -10,7 +10,15 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/nazm-bench", "xtask"]
+members = [
+    "crates/nazm-span",
+    "crates/nazm-diag",
+    "crates/nazm-syntax",
+    "crates/nazm-core",
+    "crates/nazm-cli",
+    "crates/nazm-bench",
+    "xtask",
+]
 
 [workspace.package]
 version = "0.0.1"
@@ -40,6 +48,10 @@ publish = false
 # Path-only, no version: nothing here is published (`publish = false` above), and
 # a version string on an unpublishable crate is decoration that cargo-deny would
 # rightly flag as a wildcard once publishing starts.
+nazm-span = { path = "crates/nazm-span" }
+nazm-diag = { path = "crates/nazm-diag" }
+nazm-syntax = { path = "crates/nazm-syntax" }
+nazm-core = { path = "crates/nazm-core" }
 nazm-bench = { path = "crates/nazm-bench" }
 
 # --- cli / config ---
