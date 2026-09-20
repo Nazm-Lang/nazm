@@ -712,7 +712,9 @@ fn run_one_attempt(
         }
     }
     let sealed = dir.join(format!("{attempt}-sealed"));
-    let submission = ws.freeze(&sealed).unwrap();
+    // The token comes from the stop above, which observed the container exit. A stop
+    // that failed would have returned an error and there would be nothing to freeze with.
+    let submission = ws.freeze(&sealed, &stop.writers_stopped()).unwrap();
 
     // 4. Fresh acceptance state: the candidate's own writes must not be what it is graded
     //    against.
