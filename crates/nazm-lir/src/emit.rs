@@ -86,6 +86,8 @@ struct Emitter {
     loops: Vec<Targets>,
     /// Whether the I/O helpers and the argument globals are reached.
     needs_io: bool,
+    /// Whether `str_join`'s helper is reached.
+    needs_join: bool,
     /// Whether the sequence helpers are reached. They are emitted only when they are —
     /// a program that never touches a sequence carries none of this.
     needs_sequences: bool,
@@ -961,6 +963,33 @@ impl Emitter {
                     ty: Ty::Int,
                 };
             }
+            Builtin::StrJoin => {
+                self.needs_sequences = true;
+                self.needs_join = true;
+                let (sp, sn) = self.str_parts(arg(1));
+                let out = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{out} = call {{ ptr, i64 }} @nz.str_join(ptr %{}, ptr %{sp}, i64 %{sn})",
+                    arg(0)
+                );
+                let got = self.fresh();
+                let _ = writeln!(self.out, "  %{got} = extractvalue {{ ptr, i64 }} %{out}, 0");
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{bad} = icmp eq ptr %{got}, null");
+                self.guard(
+                    bad,
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    span.start,
+                );
+                return Val::Of {
+                    value: out,
+                    ty: Ty::Str,
+                };
+            }
             Builtin::IntsPop | Builtin::StrsPop => {
                 let seq = op.sequence().unwrap_or(Ty::Ints);
                 let elem = seq.element().unwrap_or(Ty::Int);
@@ -1329,6 +1358,7 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
         loops: Vec::new(),
         needs_sequences: false,
         needs_io: false,
+        needs_join: false,
     };
 
     // One definition per function, in `FuncId` order so the IR reads in the order the
@@ -1472,10 +1502,89 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
     if e.needs_io {
         head.push_str(IO_RUNTIME);
     }
+    if e.needs_join {
+        head.push_str(JOIN_RUNTIME);
+    }
     head.push('\n');
 
     head + &e.out
 }
+
+/// `str_join`, as generated LLVM.
+///
+/// A loop, so it cannot be inlined at the call site the way the other built-ins are: it
+/// measures every part, allocates **once**, and copies. That is the whole point — the
+/// same result built with `str_concat` in a loop is quadratic in time and memory, and
+/// with nothing ever freed the compiler written in Nazm exhausted memory assembling its
+/// own output before this existed.
+///
+/// Signals allocation failure by returning a null pointer, which the call site turns
+/// into `N0406` at the right span.
+const JOIN_RUNTIME: &str = r"
+define internal { ptr, i64 } @nz.str_join(ptr %h, ptr %sp, i64 %sn) {
+entry:
+  %n = load i64, ptr %h
+  %dp = getelementptr i8, ptr %h, i64 16
+  %data = load ptr, ptr %dp
+  br label %sum
+sum:
+  %i = phi i64 [ 0, %entry ], [ %i2, %sumbody ]
+  %acc = phi i64 [ 0, %entry ], [ %acc2, %sumbody ]
+  %more = icmp slt i64 %i, %n
+  br i1 %more, label %sumbody, label %alloc
+sumbody:
+  %e = getelementptr { ptr, i64 }, ptr %data, i64 %i
+  %lp = getelementptr i8, ptr %e, i64 8
+  %li = load i64, ptr %lp
+  %acc2 = add i64 %acc, %li
+  %i2 = add i64 %i, 1
+  br label %sum
+alloc:
+  ; One separator between each pair, so n-1 of them, and none for an empty sequence.
+  %less = sub i64 %n, 1
+  %neg = icmp slt i64 %less, 0
+  %gaps = select i1 %neg, i64 0, i64 %less
+  %sepbytes = mul i64 %gaps, %sn
+  %total = add i64 %acc, %sepbytes
+  ; One byte more, so an empty result still owns storage and its pointer stays valid.
+  %room = add i64 %total, 1
+  %buf = call ptr @malloc(i64 %room)
+  %bad = icmp eq ptr %buf, null
+  br i1 %bad, label %fail, label %copy
+copy:
+  %j = phi i64 [ 0, %alloc ], [ %j2, %tail ]
+  %off = phi i64 [ 0, %alloc ], [ %off3, %tail ]
+  %more2 = icmp slt i64 %j, %n
+  br i1 %more2, label %body, label %done
+body:
+  %first = icmp eq i64 %j, 0
+  br i1 %first, label %tail, label %gap
+gap:
+  %d1 = getelementptr i8, ptr %buf, i64 %off
+  call void @llvm.memcpy.p0.p0.i64(ptr %d1, ptr %sp, i64 %sn, i1 false)
+  %off1 = add i64 %off, %sn
+  br label %tail
+tail:
+  %off2 = phi i64 [ %off, %body ], [ %off1, %gap ]
+  %e2 = getelementptr { ptr, i64 }, ptr %data, i64 %j
+  %p2 = load ptr, ptr %e2
+  %l2p = getelementptr i8, ptr %e2, i64 8
+  %l2 = load i64, ptr %l2p
+  %d2 = getelementptr i8, ptr %buf, i64 %off2
+  call void @llvm.memcpy.p0.p0.i64(ptr %d2, ptr %p2, i64 %l2, i1 false)
+  %off3 = add i64 %off2, %l2
+  %j2 = add i64 %j, 1
+  br label %copy
+done:
+  %a = insertvalue { ptr, i64 } undef, ptr %buf, 0
+  %b = insertvalue { ptr, i64 } %a, i64 %total, 1
+  ret { ptr, i64 } %b
+fail:
+  %z = insertvalue { ptr, i64 } undef, ptr null, 0
+  %z2 = insertvalue { ptr, i64 } %z, i64 0, 1
+  ret { ptr, i64 } %z2
+}
+";
 
 /// The file-system helpers, as generated LLVM.
 ///
