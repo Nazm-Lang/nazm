@@ -1,7 +1,10 @@
-fn main() -> Int {
-    let mut i = 0;
-    while i < 10 {
-        break;
+fn early(n: Int) -> Int {
+    if n < 0 {
+        return 0;
     }
-    i
+    n
+}
+
+fn main() -> Int {
+    early(-1)
 }

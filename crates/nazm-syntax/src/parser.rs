@@ -9,16 +9,19 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 
 use crate::ast::{
-    Assign, BinOp, Block, Expr, Function, Let, Param, Program, Stmt, StmtBlock, TypeName, While,
+    Assign, BinOp, Block, Expr, Function, Let, Param, Program, Stmt, StmtBlock, StmtIf, TypeName,
+    While,
 };
 use crate::lexer::{Token, TokenKind};
 
 /// Constructs that are deliberately absent from v0.1, so they can be refused by name.
 const RESERVED: &[(&str, &str)] = &[
     ("for", "there is no `for`; iterate with `while`"),
+    (
+        "label",
+        "there are no loop labels; `break` leaves the innermost loop",
+    ),
     ("loop", "there is no `loop`; write `while true`"),
-    ("break", "a loop runs until its condition is false"),
-    ("continue", "a loop runs until its condition is false"),
     ("return", "a function's value is its final expression"),
     ("struct", "there are no user-defined types yet"),
     ("enum", "there are no user-defined types yet"),
@@ -31,9 +34,9 @@ const RESERVED: &[(&str, &str)] = &[
 
 /// What the language does have, for the help text on a refused construct.
 const SUPPORTED: &str = concat!(
-    "the supported subset is functions, `let` and `let mut`, assignment, `while`, ",
-    "`if`/`else`, arithmetic and comparison over `Int`, `Bool` and `Str` — see ",
-    "docs/spec.md"
+    "the supported subset is functions, `let` and `let mut`, assignment, `while` with ",
+    "`break` and `continue`, `if`/`else` as a statement or an expression, and arithmetic ",
+    "and comparison over `Int`, `Bool` and `Str` — see docs/spec.md"
 );
 
 #[derive(Debug)]
@@ -255,6 +258,12 @@ impl<'a> Parser<'a> {
                 statements.push(Stmt::Let(self.let_stmt()?));
             } else if self.at(&TokenKind::While) {
                 statements.push(Stmt::While(self.while_stmt()?));
+            } else if self.at(&TokenKind::If) && !self.if_is_the_tail() {
+                // An `if` here is a statement unless it is the last thing in the block,
+                // in which case it is the block's value. Without this, a function body
+                // could not hold `if c { x = 1; }` at all — the form would exist only
+                // inside loops, which is not a rule anyone would guess.
+                statements.push(Stmt::If(self.stmt_if()?));
             } else if let Some(a) = self.try_assign()? {
                 statements.push(Stmt::Assign(a));
             } else {
@@ -317,12 +326,28 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// A loop body: statements, no tail expression.
+    /// A loop body or statement-`if` branch: statements, no tail expression.
     fn stmt_block(&mut self) -> Option<StmtBlock> {
-        let open = self.expect(&TokenKind::LBrace, "to start a loop body")?;
+        let open = self.expect(&TokenKind::LBrace, "to start a statement block")?;
         let mut statements = Vec::new();
         loop {
-            if self.at(&TokenKind::Let) {
+            if self.at(&TokenKind::Break) {
+                let span = self.peek_span();
+                self.advance();
+                let semi = self.expect(&TokenKind::Semi, "after `break`")?;
+                statements.push(Stmt::Break {
+                    span: span.join(semi),
+                });
+            } else if self.at(&TokenKind::Continue) {
+                let span = self.peek_span();
+                self.advance();
+                let semi = self.expect(&TokenKind::Semi, "after `continue`")?;
+                statements.push(Stmt::Continue {
+                    span: span.join(semi),
+                });
+            } else if self.at(&TokenKind::If) {
+                statements.push(Stmt::If(self.stmt_if()?));
+            } else if self.at(&TokenKind::Let) {
                 statements.push(Stmt::Let(self.let_stmt()?));
             } else if self.at(&TokenKind::While) {
                 statements.push(Stmt::While(self.while_stmt()?));
@@ -385,6 +410,74 @@ impl<'a> Parser<'a> {
             value,
             span: name_span.join(semi),
         }))
+    }
+
+    /// Whether the `if` at the cursor is the block's tail expression.
+    ///
+    /// Decided by looking, not by backtracking: the two forms have different branch types,
+    /// so the choice has to be made before the branches are parsed. This walks forward
+    /// over the `if`, balancing braces, past an optional `else`, and asks whether what
+    /// follows closes the block.
+    ///
+    /// A brace-delimited *condition* — `if { true } { 1 } else { 2 }` — confuses the
+    /// count. That is a parse error rather than a silent misreading, and a block
+    /// expression as a condition is not something this language needs to get right before
+    /// it has a reason to.
+    fn if_is_the_tail(&self) -> bool {
+        let mut i = self.pos + 1; // past `if`
+        let mut depth = 0i32;
+        let mut opened = false;
+
+        while let Some(t) = self.tokens.get(i) {
+            match t.kind {
+                TokenKind::LBrace => {
+                    depth += 1;
+                    opened = true;
+                }
+                TokenKind::RBrace => {
+                    depth -= 1;
+                    if opened && depth == 0 {
+                        // Closed a branch. An `else` means another one follows.
+                        let next = self.tokens.get(i + 1).map(|t| &t.kind);
+                        if matches!(next, Some(TokenKind::Else)) {
+                            opened = false;
+                            i += 2;
+                            continue;
+                        }
+                        return matches!(next, Some(TokenKind::RBrace) | None);
+                    }
+                }
+                TokenKind::Eof => break,
+                _ => {}
+            }
+            i += 1;
+        }
+        // Unbalanced. Treat it as the tail so the expression parser reports the problem
+        // with the position and message it already has for it.
+        true
+    }
+
+    /// `if cond { … }` in statement position, with an optional `else`.
+    ///
+    /// Only reachable from a statement block, so it cannot be confused with the `if`
+    /// expression: where a value is wanted, the expression form is what gets parsed.
+    fn stmt_if(&mut self) -> Option<StmtIf> {
+        let start = self.peek_span();
+        self.advance();
+        let cond = self.expr()?;
+        let then_block = self.stmt_block()?;
+        let else_block = if self.eat(&TokenKind::Else) {
+            Some(self.stmt_block()?)
+        } else {
+            None
+        };
+        let end = else_block.as_ref().map_or(then_block.span, |b| b.span);
+        Some(StmtIf {
+            cond,
+            then_block,
+            else_block,
+            span: start.join(end),
+        })
     }
 
     fn expr(&mut self) -> Option<Expr> {
@@ -517,6 +610,28 @@ impl<'a> Parser<'a> {
                 } else {
                     Some(Expr::Var { name, span })
                 }
+            }
+            kw @ (TokenKind::Break | TokenKind::Continue) => {
+                // "expected an expression, found `break`" is true and unhelpful. The
+                // reason is that `break` has no value, and saying so points at the fix.
+                let word = if matches!(kw, TokenKind::Break) {
+                    "break"
+                } else {
+                    "continue"
+                };
+                self.advance();
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::CONTROL_FLOW_AS_VALUE,
+                        span,
+                        format!("`{word}` has no value, so it cannot be used as one"),
+                    )
+                    .help(
+                        "`break` and `continue` are statements. Write `if c { break; }` \
+                         rather than using it where a value is expected",
+                    ),
+                );
+                None
             }
             other => {
                 self.errors.push(Diagnostic::error(
