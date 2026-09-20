@@ -1,0 +1,303 @@
+// Name resolution for Nazm, written in Nazm.
+//
+// Third component of the self-hosted compiler. It reads the node arena
+// `compiler/parse.nz` produces and reports undefined variables (`N0200`) and undefined
+// functions (`N0201`) with the spans the reference checker gives them.
+//
+// # Traversing a post-order arena without recursion
+//
+// The arena is post-order with arity, which is a stack machine's natural input: one
+// left-to-right pass with an operand stack recovers every node's children, because a
+// node's children are exactly the `arity` subtrees immediately before it. That pass
+// builds a child index, and a second pass walks the tree in *pre-order* from an explicit
+// work stack — which is what scoping needs, since a scope opens before the statements
+// inside it are seen.
+//
+// Neither pass recurses. See `docs/bootstrap-design.md`, *Traversal is iterative,
+// always*.
+//
+// Usage: check FILE
+// Output: one diagnostic per line, `CODE|start|end|message`, to standard output. Exits 1
+// if there were any, 0 if not.
+
+use "parse.nz";
+
+// --- the child index -----------------------------------------------------------------
+//
+// `kid_first[k]` is where node `k`'s children begin in `kids`, and `nar[k]` says how
+// many there are, in source order.
+
+fn build_children(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints) -> Int {
+    let stack = ints_new();
+    let mut k = 0;
+    while k < ints_len(nk) {
+        let arity = ints_get(nar, k);
+        // The `arity` most recent roots are this node's children. Popped in reverse and
+        // written back in order, so `kids` reads left to right like the source does.
+        let taken = ints_new();
+        let mut t = 0;
+        while t < arity {
+            ints_push(taken, ints_pop(stack));
+            t = t + 1;
+        }
+        ints_push(kid_first, ints_len(kids));
+        let mut j = arity - 1;
+        while j >= 0 {
+            ints_push(kids, ints_get(taken, j));
+            j = j - 1;
+        }
+        ints_push(stack, k);
+        k = k + 1;
+    }
+    ints_len(stack)
+}
+
+// --- scopes ---------------------------------------------------------------------------
+//
+// A flat stack of names with a stack of marks. Entering a scope pushes a mark; leaving
+// truncates back to it. Innermost-first lookup is a backwards scan, which is what the
+// reference checker's `Scopes::lookup` does with a vector of maps.
+
+fn scope_enter(marks: Ints, names: Strs) -> Int {
+    ints_push(marks, strs_len(names));
+    ints_len(marks)
+}
+
+fn scope_leave(marks: Ints, names: Strs) -> Int {
+    let mark = ints_pop(marks);
+    while strs_len(names) > mark {
+        strs_pop(names);
+    }
+    mark
+}
+
+fn scope_has(names: Strs, want: Str) -> Bool {
+    let mut i = strs_len(names) - 1;
+    while i >= 0 {
+        if strs_get(names, i) == want { return true; }
+        i = i - 1;
+    }
+    false
+}
+
+fn has_function(fnames: Strs, want: Str) -> Bool {
+    let mut i = 0;
+    while i < strs_len(fnames) {
+        if strs_get(fnames, i) == want { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// `name:type` and `name:mut` texts carry two fields; this takes the part before the `:`.
+fn before_colon(s: Str) -> Str {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 58 { return str_slice(s, 0, i); }
+        i = i + 1;
+    }
+    s
+}
+
+fn report(dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs,
+          code: Str, from: Int, to: Int, message: Str) -> Int {
+    strs_push(dcode, code);
+    ints_push(dstart, from);
+    ints_push(dend, to);
+    strs_push(dmsg, message);
+    strs_len(dcode)
+}
+
+// --- the walk ---------------------------------------------------------------------
+//
+// Pre-order, from an explicit work stack, because a scope opens *before* the statements
+// inside it are seen and a post-order arena alone cannot say that. Entries are:
+//
+//   >= 0            a node to visit
+//   -(2k + 2)       leave the scope that node k opened
+//   -(2k + 3)       bind the name node k declares
+//
+// Two marker families rather than two stacks: the order between a binding and a scope
+// exit matters, and one stack is the only way to keep it.
+
+fn mark_leave(k: Int) -> Int { 0 - (2 * k + 2) }
+fn mark_bind(k: Int) -> Int { 0 - (2 * k + 3) }
+
+fn resolve(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
+           kids: Ints, kid_first: Ints, root: Int, fnames: Strs,
+           dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+    let work = ints_new();
+    let marks = ints_new();
+    let names = strs_new();
+    ints_push(work, root);
+
+    while ints_len(work) > 0 {
+        let entry = ints_pop(work);
+
+        if entry < 0 {
+            let v = 0 - entry;
+            if v % 2 == 0 {
+                scope_leave(marks, names);
+            } else {
+                // A `let` binds only *after* its initialiser has been resolved, so
+                // `let x = x;` reads the outer `x` — which is what the reference
+                // checker does, and the reason this is a marker rather than a binding
+                // made when the `let` node was first seen.
+                strs_push(names, before_colon(strs_get(ntx, (v - 3) / 2)));
+            }
+            continue;
+        }
+
+        let kind = ints_get(nk, entry);
+        let arity = ints_get(nar, entry);
+        let first = ints_get(kid_first, entry);
+        let text = strs_get(ntx, entry);
+
+        if kind == n_var() {
+            if scope_has(names, text) == false {
+                report(dcode, dstart, dend, dmsg, "N0200",
+                       ints_get(nst, entry), ints_get(nen, entry),
+                       str_concat(str_concat("`", text), "` is not defined"));
+            }
+        }
+
+        if kind == n_call() {
+            if has_function(fnames, text) == false {
+                // The callee's own span, not the whole call's: the reference points at
+                // the name, and the name begins where the call does and is as long as
+                // the text the node carries.
+                let at = ints_get(nst, entry);
+                report(dcode, dstart, dend, dmsg, "N0201",
+                       at, at + str_len(text),
+                       str_concat(str_concat("`", text), "` is not a function"));
+            }
+        }
+
+        if kind == n_param() {
+            strs_push(names, before_colon(text));
+        }
+
+        if kind == n_let() {
+            // Bind after the initialiser, never before.
+            ints_push(work, mark_bind(entry));
+        }
+
+        if kind == n_fn() {
+            // Parameters live in a scope of their own, outside the body's.
+            scope_enter(marks, names);
+            ints_push(work, mark_leave(entry));
+        }
+
+        if kind == n_block() {
+            scope_enter(marks, names);
+            ints_push(work, mark_leave(entry));
+        }
+
+        let mut j = arity - 1;
+        while j >= 0 {
+            ints_push(work, ints_get(kids, first + j));
+            j = j - 1;
+        }
+    }
+    strs_len(dcode)
+}
+
+fn main() -> Int {
+    if args_count() < 1 {
+        eprint("usage: check FILE");
+        eprint(str_from_byte(10));
+        exit_with(2);
+    }
+    let path = arg(0);
+    if file_exists(path) == false {
+        eprint(str_concat("cannot read ", path));
+        eprint(str_from_byte(10));
+        exit_with(2);
+    }
+    let src = read_file(path);
+
+    let kinds = ints_new();
+    let starts = ints_new();
+    let ends = ints_new();
+    let texts = strs_new();
+    lex(src, kinds, starts, ends, texts);
+
+    let nk = ints_new();
+    let nar = ints_new();
+    let nst = ints_new();
+    let nen = ints_new();
+    let ntx = strs_new();
+    parse_program(kinds, starts, ends, texts, nk, nar, nst, nen, ntx);
+
+    let kids = ints_new();
+    let kid_first = ints_new();
+    build_children(nk, nar, kids, kid_first);
+
+    // Signatures before any body, so a forward reference resolves — the same two-pass
+    // shape `nazm-lir::lower` uses, and for the same reason.
+    let fnames = strs_new();
+    let mut k = 0;
+    while k < ints_len(nk) {
+        if ints_get(nk, k) == n_fn() {
+            strs_push(fnames, before_colon(strs_get(ntx, k)));
+        }
+        k = k + 1;
+    }
+    // The built-ins share the ordinary function namespace, exactly as `docs/spec.md`
+    // says, so a call to one is not an undefined function.
+    add_builtins(fnames);
+
+    let dcode = strs_new();
+    let dstart = ints_new();
+    let dend = ints_new();
+    let dmsg = strs_new();
+    resolve(nk, nar, nst, nen, ntx, kids, kid_first, ints_len(nk) - 1, fnames,
+            dcode, dstart, dend, dmsg);
+
+    let mut out = "";
+    let mut d = 0;
+    while d < strs_len(dcode) {
+        out = str_concat(out, strs_get(dcode, d));
+        out = str_concat(out, "|");
+        out = str_concat(out, int_to_str(ints_get(dstart, d)));
+        out = str_concat(out, "|");
+        out = str_concat(out, int_to_str(ints_get(dend, d)));
+        out = str_concat(out, "|");
+        out = str_concat(out, strs_get(dmsg, d));
+        out = str_concat(out, str_from_byte(10));
+        d = d + 1;
+    }
+    print(out);
+    if strs_len(dcode) > 0 { exit_with(1); }
+    0
+}
+
+fn add_builtins(fnames: Strs) -> Int {
+    strs_push(fnames, "str_len");
+    strs_push(fnames, "str_byte");
+    strs_push(fnames, "str_slice");
+    strs_push(fnames, "str_concat");
+    strs_push(fnames, "str_from_byte");
+    strs_push(fnames, "int_to_str");
+    strs_push(fnames, "ints_new");
+    strs_push(fnames, "ints_len");
+    strs_push(fnames, "ints_get");
+    strs_push(fnames, "ints_set");
+    strs_push(fnames, "ints_push");
+    strs_push(fnames, "ints_pop");
+    strs_push(fnames, "strs_new");
+    strs_push(fnames, "strs_len");
+    strs_push(fnames, "strs_get");
+    strs_push(fnames, "strs_set");
+    strs_push(fnames, "strs_push");
+    strs_push(fnames, "strs_pop");
+    strs_push(fnames, "args_count");
+    strs_push(fnames, "arg");
+    strs_push(fnames, "read_file");
+    strs_push(fnames, "write_file");
+    strs_push(fnames, "file_exists");
+    strs_push(fnames, "print");
+    strs_push(fnames, "eprint");
+    strs_push(fnames, "exit_with");
+    strs_len(fnames)
+}
