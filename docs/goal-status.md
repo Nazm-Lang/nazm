@@ -12,7 +12,7 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `1377d39` |
+| Current commit | `82645f2` |
 | Working tree | clean except this file |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
 | Disk | 13 GiB free of 460 GiB (**97 % full**) — `target/` alone is 3.7 GiB. Remove disposable copies promptly |
@@ -23,8 +23,8 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | **A** — scalar control flow, incl. `return` | **complete** (`ac39f7b`) |
 | **B** — the bootstrap subset | **complete** (`053ed22`): B1 text, B2 sequences, B3 I/O, B4 modules, B5 strategy |
-| **C** — compiler in Nazm | **substantially advanced**: lexer, parser, name resolution, type checking and **LLVM emission** all written in Nazm and differentially verified. Emission covers integer arithmetic only |
-| **D** — C1→C2→C3 bootstrap | not started |
+| **C** — compiler in Nazm | **complete for the bootstrap subset**: lexer, parser, name resolution, type checking and LLVM emission, all in Nazm, all differentially verified |
+| **D** — C1→C2→C3 bootstrap | **complete**: `compiler/bootstrap.sh`; C2 and C3 byte-identical, 5 conformance cases agreeing with the interpreter. Caveats in `docs/bootstrap.md` |
 | **E** — structured concurrency | not started |
 | **F** — AI-native developer experience | not started (structured diagnostics and `--json` predate this goal) |
 | **G** — performance and release integration | not started |
@@ -49,8 +49,10 @@ what was verified when it was written, not what is true now.
 | Name resolution in Nazm | **verified** | `compiler/check.nz`; same `(code, span)` as `nazm_core::check` for `N0200`/`N0201` over 15 sources, and accepts every standalone `.nz` in the tree |
 | Tree traversal in Nazm without recursion | **verified** | child index from the post-order arena, then a pre-order walk from a marker-carrying work stack |
 | Type checking in Nazm | **verified** | `compiler/analyse.nz`; same `(code, span)` as `nazm_core::check` for `N0300`/`N0301`/`N0303`/`N0304`/`N0310` over 35 sources |
-| **LLVM emission in Nazm** | **verified for the whole `Int` language** | `compiler/emit.nz`: arithmetic with every specified failure, locals, `if` as value and statement, `while`, `break`, `continue`, `return`, several functions, calls, forward references. ~40 programs compiled by the Nazm compiler, assembled by `clang`, run, and checked against an explicit expectation *and* the interpreter |
-| Emission of `Str`, sequences and the built-ins | planned — the rest of Milestone C | the last gap before the compiler can read its own source |
+| **LLVM emission in Nazm** | **verified for the whole bootstrap language** | `compiler/emit.nz`: arithmetic with every specified failure, locals, control flow, transfers, functions, calls, `Str`, sequences and all 27 built-ins |
+| **Self-hosting** | **verified** | `compiler/bootstrap.sh`: C2 and C3 byte-identical in IR *and* executable; 5 conformance cases agree across C2, C3 and the interpreter |
+| `use` resolution in the Nazm compiler | **not done** | S is concatenated by the bootstrap script. Stated in `docs/bootstrap.md` |
+| Recursion in the Nazm compiler's output | **unguarded** | the Rust backend refuses recursion pending a stack contract; the Nazm one emits it. A real divergence, recorded here |
 | Native recursion | blocked by design | pending measured stack availability and frame size. **Not needed**: the compiler is iterative |
 | Concurrency, formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
 
@@ -58,10 +60,10 @@ what was verified when it was written, not what is true now.
 
 | Command | Result |
 | --- | --- |
-| `cargo test --workspace` | **451 passed, 0 failed, 6 ignored** |
+| `cargo test --workspace` | **452 passed, 0 failed, 6 ignored** |
 | — of which self-skipping | 10 `docker_boundary` tests exercise nothing without `NAZM_REQUIRE_DOCKER=1` |
 | — of which native end-to-end | 126 `nazm build` cases, each at `-O0` and `-O2` against the interpreter |
-| — of which self-hosting differentials | 14 |
+| — of which self-hosting differentials | 15, including the full bootstrap chain |
 | `cargo test -p xtask --test lifecycle -- --ignored` | 6 passed (separate; not in the 443) |
 | `cargo lint` (the CI alias) | 0 diagnostics |
 | `cargo fmt --all -- --check` | clean |
@@ -80,30 +82,32 @@ mutation lock is held (`target/.nazm-mutation-lock.v2` absent).
 
 ## Current task
 
-**Milestone C — `Str`, sequences and the built-ins in `compiler/emit.nz`.** The compiler
-written in Nazm now compiles the whole `Int` language. The remaining gap is exactly the
-feature set its own source uses: `Str` as `{ptr, len}`, `Ints`/`Strs` as headers, and the
-26 built-ins. Closing it is what makes Milestone D possible at all.
+**Milestone E — initial structured concurrency.** Milestones A–D are complete. E, F and G
+remain, and none has been started.
 
 ## Next exact action
 
-Extend `compiler/emit.nz` to the non-`Int` types, in this order:
+**Milestone E, structured concurrency.** Nothing exists. The contract (§10) asks for one
+coherent initial model, not a general one:
 
-1. **Types on values.** The emitter assumes `i64` everywhere. `ntype` already records
-   each node's type, so the store/load/call/`phi`/`ret` sites read it instead — `Str` is
-   `{ ptr, i64 }`, `Ints`/`Strs` are `ptr`. This is mechanical but touches every emission
-   site, and is the prerequisite for the rest.
-2. **`Str` literals and the six string built-ins**, copying the shapes already proven in
-   `crates/nazm-lir/src/emit.rs`: a constant `{ptr, len}` pair per literal, slices that
-   share storage, `memcmp`-based equality guarded by a length test, `snprintf` for
-   `int_to_str`.
-3. **Sequences**: the `@nz.arr_new`/`@nz.arr_grow` helpers as generated text, bounds
-   checks at each call site so the diagnostic names that call's position.
-4. **The outside-world built-ins**, and `@main(i32, ptr)` with the argument globals.
+1. **Specify before implementing**, in `docs/spec.md`: scoped task creation and joining
+   with defined result and error propagation; explicit cross-task capture rules that
+   reject illegal shared mutation — `Ints`/`Strs` are shared mutable handles, so the
+   rule has to say plainly what may cross a scope boundary; a bounded channel with
+   specified close behaviour; cooperative cancellation with named observation points; and
+   the lifetime of tasks and captured resources, with **no implicit detached work**.
+2. **A scoped OS-thread runtime is an acceptable first implementation** and must be
+   described as exactly that. No claim of M:N scheduling, green threads, work stealing or
+   task density until implemented and measured.
+3. Tests: cancellation, a failed task, joins, channel close, blocked send and receive,
+   nested scopes, resource cleanup. Compare **permitted outcomes and invariants**, not
+   scheduling traces. No claim of deadlock freedom follows from ownership checking.
+4. Then re-run `compiler/bootstrap.sh`, because §10 requires final bootstrap verification
+   to include every compiler change delivered under this goal.
 
-Then the compiler can read its own source, and Milestone D's C1→C2→C3 chain becomes the
-next step — with `compiler/bootstrap.sh` recording source digests, toolchain identities,
-commands and flags, and byte-comparing C2 against C3.
+After E: **F** (grammar artefact, versioned diagnostic JSON schema, capability inventory,
+formatter, machine-applicable fixes, one scripted repair workflow) and **G** (measurement
+suite, baselines, one evidence-driven optimisation pass, release candidate).
 
 ## Unresolved decisions
 
@@ -123,9 +127,9 @@ commands and flags, and byte-comparing C2 against C3.
 
 - [x] Scalar control flow verified, including `return` and transfers inside values — `ac39f7b`
 - [x] Bootstrap subset: text, structured data, collections, memory, file I/O, errors, modules — `053ed22`
-- [ ] Compiler frontend and lowering/emission in Nazm — **lexer, parser, name resolution, type checking and LLVM emission all written in Nazm and differentially verified; emission covers the whole `Int` language but not `Str`, sequences or the built-ins**
-- [ ] C1 → C2 → C3 bootstrap with conformance and reproducibility
-- [ ] Ordinary independent programs compile with the Nazm-written compiler
+- [x] Compiler frontend and lowering/emission in Nazm — `82645f2`; external dependencies (`clang`, libc) documented in `docs/bootstrap.md`
+- [x] C1 → C2 → C3 bootstrap with conformance and reproducibility — `82645f2`; byte-identical, caveats stated
+- [x] Ordinary independent programs compile with the Nazm-written compiler — 5 conformance cases plus ~40 end-to-end programs
 - [ ] Structured concurrency: transfer/capture rules, cancellation, cleanup
 - [ ] Developer interfaces, grammar/guide, formatting, repair workflow
 - [ ] Performance baselines, profiling/optimisation pass, no unsupported speed claims
