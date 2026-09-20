@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
-use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Return, Stmt, While};
+use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Return, Spawn, Stmt, While};
 
 use crate::intrinsic::Intrinsic;
 use crate::types::Type;
@@ -116,6 +116,12 @@ pub struct Checker {
     errors: Vec<Diagnostic>,
     /// The enclosing function's declared return type, for checking `return`.
     return_type: Option<Type>,
+    /// How many `scope` blocks enclose the statement being checked.
+    ///
+    /// `spawn` needs one: a task with no scope would be detached work, and the model
+    /// has none. Depth rather than a flag, so a nested scope does not lose the outer
+    /// one's count when it closes.
+    scope_depth: u32,
     /// How many loops enclose the statement being checked.
     ///
     /// `break` and `continue` need a loop to affect. Tracking depth rather than a flag
@@ -132,6 +138,7 @@ pub fn check(program: &Program) -> (HashMap<String, Signature>, Vec<Diagnostic>)
         scopes: Scopes::default(),
         errors: Vec::new(),
         return_type: None,
+        scope_depth: 0,
         loop_depth: 0,
     };
 
@@ -390,7 +397,116 @@ impl Checker {
                 self.check_loop_control("continue", *span);
                 true
             }
+            Stmt::Scope(s) => {
+                // A scope joins every task it started, so it always completes — and a
+                // `break` inside one still leaves the enclosing loop, exactly as a
+                // nested block does.
+                self.scope_depth += 1;
+                let completion = self.check_block(&s.body, None);
+                self.scope_depth -= 1;
+                if let (Completion::Value(t), Some(tail)) = (completion, &s.body.tail) {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::TYPE_MISMATCH,
+                            tail.span(),
+                            format!("a `scope` has no value, but this produces `{t}`"),
+                        )
+                        .help("add `;` to discard it, or send it through a channel"),
+                    );
+                }
+                false
+            }
+            Stmt::Spawn(s) => {
+                self.check_spawn(s);
+                false
+            }
             Stmt::Expr(e) => self.check_expr(e, None).diverges(),
+        }
+    }
+
+    /// `spawn f(args);`
+    ///
+    /// The call itself is checked by the ordinary rule — a task is a function call that
+    /// happens elsewhere, not a different kind of call. What is extra is *where* it may
+    /// appear and *what* may cross into it.
+    fn check_spawn(&mut self, s: &Spawn) {
+        if self.scope_depth == 0 {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::SPAWN_OUTSIDE_SCOPE,
+                    s.span,
+                    "`spawn` is only valid inside a `scope`",
+                )
+                .help(
+                    "a task outside a scope would be detached work, and nothing would \
+                     join it; wrap it in `scope { … }`",
+                ),
+            );
+        }
+
+        let Some(sig) = self.functions.get(&s.callee).cloned() else {
+            self.errors.push(Diagnostic::error(
+                codes::UNDEFINED_FUNCTION,
+                s.callee_span,
+                format!("`{}` is not a function", s.callee),
+            ));
+            for a in &s.args {
+                self.check_expr(a, None);
+            }
+            return;
+        };
+
+        if s.args.len() != sig.params.len() {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::WRONG_ARGUMENT_COUNT,
+                    s.span,
+                    format!(
+                        "`{}` takes {} argument{}, but {} {} given",
+                        s.callee,
+                        sig.params.len(),
+                        if sig.params.len() == 1 { "" } else { "s" },
+                        s.args.len(),
+                        if s.args.len() == 1 { "was" } else { "were" }
+                    ),
+                )
+                .secondary(sig.name_span, "defined here"),
+            );
+        }
+
+        for (i, a) in s.args.iter().enumerate() {
+            let want = sig.params.get(i).copied();
+            let got = self.value_type(a, want);
+            if let Some(want) = want {
+                if got != want {
+                    self.errors.push(Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        a.span(),
+                        format!(
+                            "argument {} of `{}` is `{want}`, but this is `{got}`",
+                            i + 1,
+                            s.callee
+                        ),
+                    ));
+                }
+            }
+            // The capture rule. A sequence is a handle to unsynchronised shared mutable
+            // storage, so letting one cross into a task would be a data race the
+            // language had invited — see `docs/spec.md`.
+            if !got.may_cross_into_a_task() {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::ILLEGAL_TASK_CAPTURE,
+                        a.span(),
+                        format!("a `{got}` may not be passed to a task"),
+                    )
+                    .help(
+                        "`Ints` and `Strs` are handles to shared mutable storage with no \
+                         synchronisation. Pass `Int`, `Bool` or `Str` values, or a `Chan`, \
+                         which is the primitive designed to be shared",
+                    ),
+                );
+            }
         }
     }
 
@@ -746,7 +862,7 @@ impl Checker {
             // sequence**, where it would have to mean either "the same handle" or "the
             // same contents" and the language has chosen neither. Offering one silently
             // is how a program comes to depend on the wrong answer.
-            BinOp::Eq | BinOp::NotEq => lt == rt && !lt.is_sequence(),
+            BinOp::Eq | BinOp::NotEq => lt == rt && !lt.is_sequence() && lt != Type::Chan,
         };
 
         if !ok {

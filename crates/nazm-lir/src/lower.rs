@@ -585,6 +585,11 @@ fn lower_stmts(ctx: &mut Ctx, statements: &[AstStmt]) -> (Vec<Stmt>, Ends) {
             }
             AstStmt::Assign(a) => stmts.extend(lower_assign(ctx, a)),
             AstStmt::While(w) => stmts.extend(lower_while(ctx, w)),
+            // Concurrency is frontend-only for now: `nazm run` executes it and
+            // `nazm build` refuses it by name, which is the same
+            // frontend-validity/backend-coverage split every other gap here uses.
+            AstStmt::Scope(sc) => ctx.unsupported(sc.span, "`scope`"),
+            AstStmt::Spawn(sp) => ctx.unsupported(sp.span, "`spawn`"),
             AstStmt::Return(r) => {
                 if let Some(stmt) = lower_return(ctx, r) {
                     stmts.push(stmt);

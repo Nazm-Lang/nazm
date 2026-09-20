@@ -95,6 +95,30 @@ pub enum Stmt {
     ///
     /// This is how an `if` reaches statement position without needing a second `if`.
     Expr(Expr),
+    /// `scope { … }` — a block that does not finish until every task spawned inside it
+    /// has. A statement, not an expression: it produces no value, and there is nothing a
+    /// join could sensibly return.
+    Scope(Scope),
+    /// `spawn f(args);` — start a task.
+    ///
+    /// The callee is a **name**, not an expression: the language has no function values,
+    /// so there is nothing else it could be, and writing it as a call expression would
+    /// suggest otherwise.
+    Spawn(Spawn),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scope {
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spawn {
+    pub callee: String,
+    pub callee_span: Span,
+    pub args: Vec<Expr>,
+    pub span: Span,
 }
 
 impl Stmt {
@@ -106,6 +130,8 @@ impl Stmt {
             Self::While(w) => w.span,
             Self::Return(r) => r.span,
             Self::Break { span } | Self::Continue { span } => *span,
+            Self::Scope(s) => s.span,
+            Self::Spawn(s) => s.span,
             Self::Expr(e) => e.span(),
         }
     }
