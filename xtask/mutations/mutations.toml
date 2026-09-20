@@ -195,3 +195,191 @@ replace = """            env: vec![
                     self.credentials.superuser_password.clone(),
                 ),
             ],"""
+
+# --- the language itself ------------------------------------------------------------
+#
+# The harness mutations above cover the benchmark's accounting. These cover the
+# interpreter, where a silent defect is worse: it changes what programs mean.
+
+[[mutation]]
+name = "call-depth-unbounded"
+why = """
+removes the recursion guard, so runaway recursion exhausts the host stack and kills the
+process with no diagnostic — the one failure a tool cannot explain to anyone
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = "                if self.depth > self.max_depth {"
+replace = "                if false {"
+
+[[mutation]]
+name = "call-depth-never-released"
+why = """
+leaves the counter raised after a call returns, so a long sequence of sibling calls hits
+the depth limit although nothing is nested
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = """                let out = self.call_body(Self::body_of(f)?, &mut call_env, callee);
+                self.depth -= 1;"""
+replace = """                let out = self.call_body(Self::body_of(f)?, &mut call_env, callee);"""
+
+[[mutation]]
+name = "a-returned-value-is-discarded"
+why = """
+drops the arm that turns a Flow::Return into the call's value, so every `return` reports
+that the function finished without producing anything
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = "            Flow::Return(v) | Flow::Fell(Some(v)) => Ok(v),"
+replace = """            Flow::Fell(Some(v)) => Ok(v),
+            Flow::Return(_) => Err(RuntimeError {
+                diagnostic: Box::new(Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    body.span,
+                    format!("`{name}` finished without producing a value"),
+                )),
+            }),"""
+
+[[mutation]]
+name = "return-does-not-leave-its-block"
+why = """
+stops only for `break` and `continue`, so a `return` runs the rest of the block and the
+statements after it decide the function's value
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = """            let flow = self.stmt(stmt, env)?;
+            if !flow.is_fall_through() {"""
+replace = """            let flow = self.stmt(stmt, env)?;
+            if matches!(flow, Flow::Break | Flow::Continue) {"""
+
+[[mutation]]
+name = "a-diverging-branch-forgets-the-other"
+why = """
+drops the rule that a branch which returns takes the other branch's type, so
+`if c { return 0; } else { 1 }` produces nothing instead of an Int
+"""
+file = "crates/nazm-core/src/check.rs"
+find = "                    (Completion::Diverges, other) | (other, Completion::Diverges) => other,"
+replace = """                    (Completion::Diverges, _) | (_, Completion::Diverges) => Completion::Unit,"""
+
+[[mutation]]
+name = "remainder-inherits-the-hardware-fault"
+why = """
+makes `smallest % -1` an overflow error, although its result is 0 and 0 is representable —
+the exception the spec exists to remove
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = "            (BinOp::Rem, Int(a), Int(b)) => Ok(Int(a.wrapping_rem(*b))),"
+replace = """            (BinOp::Rem, Int(a), Int(b)) => a
+                .checked_rem(*b)
+                .map(Int)
+                .ok_or_else(|| overflow("remainder")),"""
+
+[[mutation]]
+name = "negative-literals-not-range-checked"
+why = """
+folds any digit string after `-` into i64::MIN, so `-9223372036854775809` silently becomes
+a different number instead of being refused
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                    Ok(v) if v == 1u64 << 63 => Some(Expr::Int {"
+replace = "                    Ok(_) => Some(Expr::Int {"
+
+[[mutation]]
+name = "a-failed-body-drops-the-function"
+why = """
+restores the cascade: one syntax error inside a body deletes the whole declaration, and
+every call to it then reports that the function does not exist
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = """        let body = self.block();
+        if body.is_none() {
+            self.recover_to_item();
+        }"""
+replace = """        let body = Some(self.block()?);"""
+
+[[mutation]]
+name = "nesting-unbounded"
+why = """
+removes the parser's nesting limit, so a deeply nested tree exhausts the stack in whichever
+pass reaches it first — parser, checker, evaluator, or the destructor of the tree — and the
+process dies with no diagnostic
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = "        if self.depth > MAX_NESTING {"
+replace = "        if false {"
+
+[[mutation]]
+name = "nesting-counter-never-released"
+why = """
+counts every construct entered and none left, so nesting becomes a budget for the whole
+function and an ordinary flat body of 512 statements is refused as too deep
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = """    fn leave(&mut self) {
+        self.depth -= 1;
+    }"""
+replace = """    fn leave(&mut self) {}"""
+
+# Two entries were removed here rather than left failing, because neither described a
+# defect the tests could witness:
+#
+#   nesting-budget-shared-between-functions — dropping the per-item `p.depth = 0` reset
+#   survived, and correctly: every successful `enter` is matched by a `leave`, so the
+#   counter already returns to zero on its own. The reset is defence against a leak that
+#   does not currently exist. `chain-depth-never-unwound` below covers the one path where
+#   such a leak is possible, which is the coverage that was actually wanted.
+#
+#   checking-runs-on-the-callers-stack — parsing on the caller's stack instead of an owned
+#   one survived because, with nesting bounded at 512 and the worst shape costing ~14 KB a
+#   level, the deepest accepted tree needs about 7 MiB and the CLI's main thread has 8.
+#   The weakening is real for a caller with a smaller stack — which is what `parse_source`
+#   documents — but stack exhaustion is only observable out of process, and the only
+#   out-of-process vehicle here is a binary that happens to have enough. Catalogued as
+#   uncovered rather than as caught.
+
+[[mutation]]
+name = "chain-depth-never-unwound"
+why = """
+leaves a binary chain's levels counted after the chain ends, so a function with several
+long arithmetic expressions in sequence is refused as too deeply nested
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = """        self.unwind(chain);
+        Some(lhs)"""
+replace = """        Some(lhs)"""
+
+[[mutation]]
+name = "chain-depth-not-counted"
+why = """
+counts only parse recursion, so `1 + 1 + ...` builds a tree nested one level per operator
+that nothing bounds — and the checker, evaluator and destructor each walk it until the
+stack runs out
+"""
+file = "crates/nazm-syntax/src/parser.rs"
+find = """            if !self.enter() {
+                self.unwind(chain);
+                return None;
+            }
+            chain += 1;"""
+replace = """            chain += 0;"""
+
+[[mutation]]
+name = "a-flow-in-value-position-is-an-error"
+why = """
+treats a `return` raised inside an expression as a failure instead of propagating it, so
+`let x = if c { return 1; } else { 2 };` type-checks and then fails at run time
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = "            left => return Ok(left),"
+replace = "            left => return Err($slf.no_value($e)),"
+
+[[mutation]]
+name = "stack-not-sized-from-the-budget"
+why = """
+reserves a fixed stack however large the depth budget is, so `--max-depth` above the
+default promises a bound the stack cannot back and the program aborts instead of reporting
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = "    STACK_BASE_BYTES.saturating_add(max_depth.saturating_mul(STACK_BYTES_PER_CALL))"
+replace = "    STACK_BASE_BYTES"
+

@@ -10,8 +10,10 @@ writes most code, languages should be redesigned to save tokens. The evidence sa
 otherwise. What the evidence *does* show is that agents waste enormous effort fighting
 compilers and churning over code that already works — and that is attackable.
 
-So this repository does not yet contain a language. It contains the instrument that decides
-whether the language should exist.
+So this repository contains two things, in the order that matters. First, the instrument
+that decides whether the language should exist. Second, a small executable language to
+point it at — an interpreter, not a compiler, which is why nothing here speaks to the
+performance claims yet.
 
 ## What is actually here
 
@@ -23,22 +25,27 @@ $ cargo run -p nazm-cli --bin nazm -- run examples/max.nz
 ```
 
 ```nazm
-fn sum_to(n: Int) -> Int {
-    let mut total = 0;
-    let mut i = 1;
-    while i <= n {
-        total = total + i;
-        i = i + 1;
+fn first_pair_with_product(target: Int, limit: Int) -> Int {
+    let mut a = 2;
+    while a < limit {
+        let mut b = a;
+        while b < limit {
+            if a * b == target {
+                return a * 100 + b;
+            }
+            b = b + 1;
+        }
+        a = a + 1;
     }
-    total
+    0 - 1
 }
 ```
 
-An executable subset — functions, `let` and `let mut`, assignment, `while` with `break`
-and `continue`, `if`/`else` as a statement or an expression, and arithmetic and comparison
-over `Int`, `Bool` and `Str` — lexed, parsed, type-checked and evaluated. No `return`,
-effects or I/O yet, and a program using them is **refused by name** rather than misparsed
-into something else.
+An executable subset — functions, recursion, `let` and `let mut`, assignment, `while` with
+`break` and `continue`, `return`, `if`/`else`, and arithmetic and comparison over `Int`,
+`Bool` and `Str` — lexed, parsed, type-checked and evaluated. No collections, user-defined
+types, effects or I/O yet, and a program using them is **refused by name** rather than
+misparsed into something else.
 
 The semantics it commits to are in [`docs/spec.md`](docs/spec.md): overflow traps
 identically in every build, division by zero is an error, bindings are immutable unless
@@ -46,17 +53,31 @@ written `let mut`, parameters are never mutable, assignment is a statement so `i
 does not parse, shadowing is allowed in a nested scope and refused in the same one,
 arguments evaluate left to right, and a function's value is its final expression.
 
-`break` and `continue` affect the innermost loop and there are no labels. They are
-statements with no value, which is why `if` exists in two forms: an **expression** whose
-branches are expression blocks and whose `else` is required, and a **statement** whose
-branches hold statements and whose `else` is optional. Which one a given `if` is follows
-from where it appears, so nothing needs annotating. Code after a `break` is an error
+There is **one** block and **one** `if`. A block is statements followed by an optional
+tail expression — an expression with no `;` after it — and whether a block or an `if`
+produces a value is decided when checking, not by its syntax. So `break`, `continue` and
+`return` need no second form of anything: a branch that leaves takes the other branch's
+type, and a body where every path returns needs no tail. Code after a `break` is an error
 rather than a warning — relaxing an error later is a compatible change, tightening a
 warning is not.
 
-`nazm run` stops a non-terminating program after a configurable number of iterations. That
-is the interpreter's guard, not a language rule — with no `break` and no I/O such a program
-produces nothing at all, and a tool that hangs is worse than one that reports.
+One mistake produces one error. A syntax error inside a function body does not delete the
+function: the signature survives, so calls to it still check against real types rather
+than reporting that it does not exist.
+
+`nazm run` stops a non-terminating program after a configurable number of loop iterations
+(`--max-iterations`) or nested calls (`--max-depth`), and the parser refuses expressions
+and blocks nested more than 512 deep. Three guards because there are three ways to run out
+and none implies the others: `fn f(n: Int) -> Int { f(n) }` never loops, and `((((1))))`
+adds no call frames at all while recursing through the parser, the checker, the evaluator
+and the destructor of the tree.
+
+The pipeline runs on a thread whose stack the interpreter sets itself, **sized from the
+depth budget it is about to enforce**, so raising `--max-depth` raises the reservation with
+it and the bound holds above the default rather than only at it. A machine that will not
+grant the reservation reports it; a budget no machine would grant is refused with the
+figure. The tests parse the deepest tree the parser accepts — four shapes, each edge found
+by asking the parser — on exactly the stack the contract documents.
 
 Alongside it, a benchmark harness. `crates/nazm-bench` measures what it costs an agent to
 build and maintain small backend services, with a validated execution path for its
@@ -159,9 +180,12 @@ have built the eventual backend.
 
 Almost everything. Specifically:
 
-- **No language.** No lexer, parser, type checker, IR, interpreter, or backend.
+- **The language is an interpreter, not a compiler.** Lexer, parser, type checker and
+  tree-walking evaluator, no IR and no backend — so nothing here says anything yet about
+  the performance claims, which are a backend question. The subset is the one described
+  above; everything else in `docs/spec.md` under *Open* is undecided.
 - **The harness is partial.** Real, tested, and mutation-checked (`cargo xtask mutate`,
-  7 catalogued defects, all caught): the accounting and comparison path (`nazm-bench
+  34 catalogued defects, all caught): the accounting and comparison path (`nazm-bench
   selftest`, 15 cases), per-attempt workspace management, the submission freeze, and the
   independent acceptance runner. **Not written:** agent drivers, a provider adapter, and
   all but one task fixture — so the harness cannot produce a benchmark number, and `run`

@@ -37,15 +37,42 @@ pub enum Outcome {
 /// ill-typed produces a second, less useful error about the same mistake.
 #[must_use]
 pub fn run(source: &str) -> Outcome {
-    run_with_limit(source, eval::DEFAULT_MAX_ITERATIONS)
+    run_with_limits(source, eval::Limits::default())
 }
 
-/// As [`run`], with an explicit iteration budget.
+/// As [`run`], with explicit budgets.
 ///
-/// The budget is the interpreter's, not the language's — see `docs/spec.md`. It exists so
-/// a non-terminating program reports instead of consuming the machine.
+/// The budgets are the interpreter's, not the language's — see `docs/spec.md`. They exist
+/// so that a program which does not terminate reports instead of consuming the machine,
+/// whether it fails to terminate by looping or by recursing.
 #[must_use]
-pub fn run_with_limit(source: &str, max_iterations: u64) -> Outcome {
+pub fn run_with_limits(source: &str, limits: eval::Limits) -> Outcome {
+    // The whole pipeline on a stack the interpreter controls, sized from the budget it is
+    // about to enforce. Every pass here recurses: the parser with the shape of the tree,
+    // the checker and the evaluator with it again, and the drop at the end once more.
+    // Honouring a 512-call bound on a caller's 2 MiB thread would be a guarantee we
+    // cannot keep, and so would parsing a deeply nested expression there.
+    match eval::on_interpreter_stack(limits.max_depth, || pipeline(source, limits)) {
+        Ok(outcome) => outcome,
+        // The machine would not give us a thread. Nothing to do with the program, and
+        // saying so beats blaming the code that was about to run. The span points at the
+        // start of the file because no position would be more honest than that.
+        Err(e) => Outcome::RuntimeFailed(
+            nazm_diag::Diagnostic::error(
+                nazm_diag::codes::INTERPRETER_UNAVAILABLE,
+                nazm_span::Span::new(0, 0),
+                format!("could not start the evaluator: {e}"),
+            )
+            .help(
+                "the interpreter runs on a thread of its own so that its limits mean \
+                 something; this machine would not give it one",
+            ),
+        ),
+    }
+}
+
+/// Parse, check, and evaluate. Always called on an interpreter-owned stack.
+fn pipeline(source: &str, limits: eval::Limits) -> Outcome {
     let (program, mut diagnostics) = nazm_syntax::parse_source(source);
     let parse_failed = !diagnostics.is_empty();
     let (_signatures, check_errors) = check(&program);
@@ -63,11 +90,34 @@ pub fn run_with_limit(source: &str, max_iterations: u64) -> Outcome {
         return Outcome::CheckFailed(diagnostics);
     }
 
-    match Interpreter::new(&program)
-        .with_max_iterations(max_iterations)
-        .run_main()
-    {
+    match Interpreter::new(&program).with_limits(limits).run_main() {
         Ok(v) => Outcome::Value(v),
-        Err(e) => Outcome::RuntimeFailed(e.diagnostic),
+        Err(e) => Outcome::RuntimeFailed(*e.diagnostic),
     }
+}
+
+/// Parse and check without evaluating, on the same owned stack.
+///
+/// `nazm check` needs the stack as much as `nazm run` does: parsing and checking recurse
+/// with the shape of the tree, and neither has anything to do with call depth.
+#[must_use]
+pub fn check_source(source: &str) -> Vec<nazm_diag::Diagnostic> {
+    eval::on_interpreter_stack(0, || {
+        let (program, mut diagnostics) = nazm_syntax::parse_source(source);
+        let parse_failed = !diagnostics.is_empty();
+        let (_, check_errors) = check(&program);
+        diagnostics.extend(
+            check_errors
+                .into_iter()
+                .filter(|d| !(parse_failed && d.code == nazm_diag::codes::MISSING_MAIN)),
+        );
+        diagnostics
+    })
+    .unwrap_or_else(|e| {
+        vec![nazm_diag::Diagnostic::error(
+            nazm_diag::codes::INTERPRETER_UNAVAILABLE,
+            nazm_span::Span::new(0, 0),
+            format!("could not start the checker: {e}"),
+        )]
+    })
 }
