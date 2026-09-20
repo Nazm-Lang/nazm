@@ -57,11 +57,11 @@ use crate::ir::{fits, ArithOp, Block, CmpOp, Expr, FuncId, Function, Local, Modu
 /// What the subset is, in one sentence, for every refusal to point at.
 const SUBSET: &str = "`nazm build` currently compiles functions over `Int` and `Bool` — \
                       literals, `let` and `let mut` bindings, parameters, assignment, \
-                      `while` with `break` and `continue`, unary `-`, the operators \
-                      `+ - * / %`, the comparisons `== != < <= > >=`, parentheses, `if` \
-                      in both statement and value position, and non-recursive direct \
-                      calls — with `fn main() -> Int` as the entry point. Everything else \
-                      still runs under `nazm run`";
+                      `while` with `break` and `continue`, `return`, unary `-`, the \
+                      operators `+ - * / %`, the comparisons `== != < <= > >=`, \
+                      parentheses, `if` in both statement and value position, and \
+                      non-recursive direct calls — with `fn main() -> Int` as the entry \
+                      point. Everything else still runs under `nazm run`";
 
 /// Constructs outside the native subset, with the spans that named them.
 #[derive(Debug)]
@@ -98,6 +98,9 @@ struct Ctx {
     calls: Vec<Vec<(FuncId, Span)>>,
     /// The function whose body is being lowered, for recording edges.
     current: FuncId,
+    /// The declared return type of the function being lowered, for checking `return`.
+    /// Reset per function, like everything else about a function's body.
+    ret_ty: Ty,
     /// How many loop **bodies** enclose the statement being lowered.
     ///
     /// Mirrors the checker's field of the same name, including where it is raised: around
@@ -188,6 +191,7 @@ pub fn lower(program: &Program) -> Result<Module, LowerError> {
         sigs: HashMap::new(),
         calls: Vec::new(),
         current: FuncId(0),
+        ret_ty: Ty::Int,
         loop_depth: 0,
         errors: Vec::new(),
     };
@@ -312,6 +316,7 @@ fn lower_function(ctx: &mut Ctx, f: &AstFn) -> Option<Function> {
     ctx.scopes = vec![Vec::new()];
     ctx.locals = Vec::new();
     ctx.current = id;
+    ctx.ret_ty = ret;
     // No loop target crosses a function boundary, so the depth starts at zero here and
     // not wherever the previous function left it.
     ctx.loop_depth = 0;
@@ -333,17 +338,19 @@ fn lower_function(ctx: &mut Ctx, f: &AstFn) -> Option<Function> {
     // rather than by coincidence.
     let body = f.body.as_ref()?;
     let block = ctx.scoped(|ctx| lower_block(ctx, body))?;
+    // No tail is legitimate now: a body every path of which returns has nothing to fall
+    // off the end with, and `check_function` accepts exactly that by treating
+    // `Completion::Diverges` as satisfying the signature. Emission writes no terminator
+    // for such a body, because the `ret` is already there.
     let Some(result) = block.result.as_ref() else {
-        // The body transfers control. Unreachable: that needs a `break` or `continue`,
-        // and one outside a loop is `N0312` — there is no loop at function-body level.
-        ctx.unsupported(
-            body.span,
-            &format!(
-                "a `{}` whose body leaves through a loop it is not in",
-                f.name
-            ),
-        );
-        return None;
+        return Some(Function {
+            id,
+            name: f.name.clone(),
+            locals: std::mem::take(&mut ctx.locals),
+            params,
+            ret,
+            body: block,
+        });
     };
     if !fits(result, ret) {
         // Unreachable after checking, which requires the body to produce the declared
@@ -563,7 +570,15 @@ fn lower_stmts(ctx: &mut Ctx, statements: &[AstStmt]) -> (Vec<Stmt>, Ends) {
             }
             AstStmt::Assign(a) => stmts.extend(lower_assign(ctx, a)),
             AstStmt::While(w) => stmts.extend(lower_while(ctx, w)),
-            AstStmt::Return(r) => ctx.unsupported(r.span, "`return`"),
+            AstStmt::Return(r) => {
+                if let Some(stmt) = lower_return(ctx, r) {
+                    stmts.push(stmt);
+                }
+                // A `return` leaves the function whether or not its operand lowered, so
+                // the rest of the block is unreachable either way — and the checker has
+                // already reported anything written after it (`N0313`).
+                return (stmts, Ends::Transfers);
+            }
             AstStmt::Break { span } => {
                 if loop_target(ctx, "break", *span) {
                     stmts.push(Stmt::Break);
@@ -598,6 +613,30 @@ fn lower_stmts(ctx: &mut Ctx, statements: &[AstStmt]) -> (Vec<Stmt>, Ends) {
         }
     }
     (stmts, Ends::FallsThrough)
+}
+
+/// `return e;` — leave the function with `e`.
+///
+/// No loop target is consulted: a `return` inside a loop leaves the *function*, which is
+/// what both existing implementations do (`eval.rs` lets `Flow::Return` travel out
+/// through `while_loop`) and why this needs nothing from the target stack.
+fn lower_return(ctx: &mut Ctx, r: &nazm_syntax::Return) -> Option<Stmt> {
+    let value = lower_expr(ctx, &r.value)?;
+    if !fits(&value, ctx.ret_ty) {
+        // Unreachable after checking, which requires a `return` to match the signature
+        // (`N0300`). Reported rather than assumed away: a `ret` of the wrong type is a
+        // module clang rejects for a reason that names none of this.
+        ctx.unsupported(
+            r.span,
+            &format!(
+                "a `return` of `{}` from a function declared `{}`",
+                value.ty().map_or("nothing", Ty::name),
+                ctx.ret_ty.name()
+            ),
+        );
+        return None;
+    }
+    Some(Stmt::Return(value))
 }
 
 /// Whether a `break` or `continue` has a loop to affect.

@@ -187,6 +187,12 @@ pub enum Stmt {
     /// branch of a statement-position `if`. `nazm run` evaluates it and drops the value,
     /// so this does too — what survives is a runtime failure or a control transfer.
     Discard(Expr),
+    /// Leave the enclosing **function** with this value.
+    ///
+    /// Not a loop transfer: a `return` inside a loop leaves the function, which is why it
+    /// needs no target from the loop stack and emits its own `ret`. See `docs/roadmap.md`,
+    /// *One `ret` per `return`, not a shared exit block*.
+    Return(Expr),
     /// Leave the innermost enclosing loop.
     Break,
     /// Start the innermost enclosing loop's next iteration, **re-evaluating its

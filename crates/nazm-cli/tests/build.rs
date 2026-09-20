@@ -402,10 +402,9 @@ fn the_two_implementations_report_the_same_source_position() {
 #[test]
 fn constructs_outside_the_subset_are_refused_and_nothing_is_emitted() {
     // `if` and the comparisons left this list in M1b; `let mut`, assignment and `while`
-    // in M1d; `break`, `continue` and statement-position `if` in M1e. What is left is
-    // what the backend still cannot lower.
+    // in M1d; `break`, `continue` and statement-position `if` in M1e; `return` in M1f.
+    // What is left is what the backend still cannot lower.
     let cases: &[(&str, &str)] = &[
-        ("fn main() -> Int {\n    return 1;\n}\n", "`return`"),
         // The signature is refused before the body is looked at, so this names the
         // return type — one mistake, one error, rather than also complaining about the
         // value that return type made necessary.
@@ -501,7 +500,7 @@ fn a_program_that_does_not_check_is_a_check_failure_not_a_subset_failure() {
 
 #[test]
 fn build_diagnostics_are_available_as_json() {
-    let (dir, src) = write_program("fn main() -> Int {\n    return 1;\n}\n");
+    let (dir, src) = write_program("fn main() -> Int {\n    let s = \"x\";\n    1\n}\n");
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap(), "--json"])
         .arg("-o")
@@ -969,14 +968,8 @@ fn unsupported_constructs_inside_a_branch_are_refused_by_the_backend() {
             "an expression statement",
         ),
         (
-            "fn main() -> Int {\n    if true { return 1; } else { 0 }\n}\n",
-            "`return`",
-        ),
-        // `return` stays refused even where the surrounding conditional and loop are
-        // fully supported — the refusal is about `return`, not about its neighbourhood.
-        (
-            "fn main() -> Int {\n    if true { let mut i = 0; while i < 2 { if i == 1 { return 7; } i = i + 1; } i } else { 0 }\n}\n",
-            "`return`",
+            "fn main() -> Int {\n    if true { { let y = 2; }; 1 } else { 0 }\n}\n",
+            "an expression statement",
         ),
         (
             "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) } }\n\
@@ -1669,8 +1662,8 @@ fn unsupported_signatures_and_bodies_are_refused_by_name() {
             "an expression statement",
         ),
         (
-            "fn f(n: Int) -> Int { return n; }\nfn main() -> Int { f(1) }\n",
-            "`return`",
+            "fn f(n: Int) -> Int { let s = \"x\"; n }\nfn main() -> Int { f(1) }\n",
+            "a `Str` value",
         ),
     ] {
         let (dir, path) = write_program(src);
@@ -2077,40 +2070,28 @@ fn assignment_and_loop_condition_errors_belong_to_the_checker() {
 
 #[test]
 fn unsupported_control_flow_inside_a_loop_is_refused_and_nothing_is_published() {
-    // What is left after M1e. `break` and `continue` compile; `return` does not, and it
-    // does not start to just because everything around it does.
+    // What is left after M1f. `break`, `continue`, statement `if` and `return` all
+    // compile now, so what remains inside a loop is the constructs that were never in
+    // scope: a bare block as a statement, a discarded call, and `Str`.
     for (src, expected) in [
-        (
-            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { return 9; }\n    i\n}\n",
-            "`return`",
-        ),
-        // Inside a nested loop, so the refusal is not something the outer loop's arm
-        // happens to catch.
-        (
-            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 {\n        let mut j = 0;\n        while j < 2 { return 1; }\n        i = i + 1;\n    }\n    i\n}\n",
-            "`return`",
-        ),
-        // Inside a statement-position `if` inside a loop — the two constructs M1e adds,
-        // wrapped around the one it does not.
-        (
-            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { if i == 1 { return 4; } i = i + 1; }\n    i\n}\n",
-            "`return`",
-        ),
-        // A `return` in the `else` of a statement `if` whose `then` legitimately breaks.
-        (
-            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { if i == 1 { break; } else { return 4; } }\n    i\n}\n",
-            "`return`",
-        ),
-        // And inside a loop in a helper function.
-        (
-            "fn f(n: Int) -> Int {\n    let mut t = 0;\n    while t < n { return t; }\n    t\n}\n\
-             fn main() -> Int { f(3) }\n",
-            "`return`",
-        ),
-        // A bare block as a statement is still a separate construct.
         (
             "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; { 1 }; }\n    i\n}\n",
             "an expression statement",
+        ),
+        (
+            "fn one() -> Int { 1 }\nfn main() -> Int {\n    let mut i = 0;\n    while i < 3 { one(); i = i + 1; }\n    i\n}\n",
+            "an expression statement",
+        ),
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { let s = \"x\"; i = i + 1; }\n    i\n}\n",
+            "a `Str` value",
+        ),
+        // Recursion, reached from inside a loop. Still refused, and still for a reason
+        // about the stack rather than about loops.
+        (
+            "fn f(n: Int) -> Int { if n < 1 { return 0; } return f(n - 1); }\n\
+             fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1 + f(2); }\n    i\n}\n",
+            "from inside itself",
         ),
     ] {
         let (dir, path) = write_program(src);
@@ -2175,7 +2156,7 @@ fn a_working_loop_executable_survives_a_later_refused_build() {
     // Now edit the source to something the backend refuses.
     std::fs::write(
         &src,
-        "fn main() -> Int {\n    let mut i = 0;\n    while i < 5 { return 9; }\n    i\n}\n",
+        "fn main() -> Int {\n    let mut i = 0;\n    while i < 5 { let s = \"x\"; i = i + 1; }\n    i\n}\n",
     )
     .expect("write");
     let second = Command::new(NAZM)
@@ -2857,4 +2838,344 @@ fn the_emitted_ir_for_nested_control_flow_is_well_formed() {
         interp.stdout.trim(),
         "the native program and the interpreter disagree"
     );
+}
+
+// ---------------------------------------------------------------------------
+// M1f — native `return`
+//
+// One `ret` per `return`, not a shared exit block: nothing needs cleanup on the way out
+// yet. See `docs/roadmap.md`, *M1f subset*.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_body_where_every_path_returns_needs_no_tail() {
+    // The shape that has no fall-through at all. `check_function` accepts it by treating
+    // `Completion::Diverges` as satisfying the signature, so lowering must produce a
+    // body with no result and emission must write **no** terminator of its own — the
+    // `ret` is already there. A stray `unreachable` after it would be a second
+    // terminator and clang would reject the module.
+    let src = "fn sign(n: Int) -> Int {\n\
+               \x20   if n < 0 { return 0 - 1; } else { return 1; }\n\
+               }\n\
+               fn main() -> Int { sign(0 - 5) * 10 + sign(3) }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    assert_eq!(interp.stdout.trim(), "-9");
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        let ran = run_exe(&built);
+        assert_eq!(ran.code, Some(0), "-O{opt}: {ran:?}");
+        assert_eq!(ran.stdout.trim(), "-9", "-O{opt}");
+    }
+
+    // A body that is nothing but a `return`, so the entry block itself ends in `ret`.
+    expect_value("    return 42;", "42");
+    // And one where the last statement returns after other work.
+    expect_value(
+        "    let mut i = 0;\n    while i < 3 { i = i + 1; }\n    return i * 7;",
+        "21",
+    );
+}
+
+#[test]
+fn an_early_return_leaves_the_function_not_the_loop() {
+    // `return` inside a loop skips the rest of the function, not just the iteration —
+    // the distinction `break` exists for. `first_div(91)` is 7, and 97 is prime so the
+    // loop finishes and the tail runs.
+    let src = "fn first_div(n: Int) -> Int {\n\
+               \x20   let mut d = 2;\n\
+               \x20   while d < n {\n\
+               \x20       if n % d == 0 { return d; }\n\
+               \x20       d = d + 1;\n\
+               \x20   }\n\
+               \x20   n\n\
+               }\n\
+               fn main() -> Int { first_div(91) * 100 + first_div(97) }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.stdout.trim(), "797", "{}", interp.stderr);
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        assert_eq!(run_exe(&built).stdout.trim(), "797", "-O{opt}");
+    }
+
+    // From inside a *nested* loop, leaving both at once — where `break` would leave one.
+    let src = "fn meet(target: Int) -> Int {\n\
+               \x20   let mut a = 0;\n\
+               \x20   while a < 5 {\n\
+               \x20       let mut b = 0;\n\
+               \x20       while b < 5 {\n\
+               \x20           if a * b == target { return a * 10 + b; }\n\
+               \x20           b = b + 1;\n\
+               \x20       }\n\
+               \x20       a = a + 1;\n\
+               \x20   }\n\
+               \x20   0 - 1\n\
+               }\n\
+               fn main() -> Int { meet(6) * 1000 + meet(99) }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.stdout.trim(), "22999", "{}", interp.stderr);
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        assert_eq!(run_exe(&built).stdout.trim(), "22999", "-O{opt}");
+    }
+}
+
+#[test]
+fn a_return_in_main_is_still_printed_only_by_the_wrapper() {
+    // `main` is an ordinary `@nz.f<N>`; the platform wrapper prints what it returns. A
+    // `return` from a *helper* must therefore print nothing of its own.
+    expect_program(
+        "fn shout() -> Int { return 5; }\n\
+         fn main() -> Int {\n\
+         \x20   let mut i = 0;\n\
+         \x20   while i < 10 { if i == 4 { return i * 11 + shout(); } i = i + 1; }\n\
+         \x20   0\n\
+         }\n",
+        "49",
+    );
+}
+
+#[test]
+fn return_reaches_every_value_position_the_frontend_accepts() {
+    // The five positions M1e established, now with `return` rather than `break`.
+    // 1. A `let` initialiser.
+    let src = "fn f(n: Int) -> Int {\n\
+               \x20   let x = if n > 10 { return 999; } else { n * 2 };\n\
+               \x20   x + 1\n\
+               }\n\
+               fn main() -> Int { f(3) * 1000 + f(20) }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.stdout.trim(), "7999", "{}", interp.stderr);
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        assert_eq!(run_exe(&built).stdout.trim(), "7999", "-O{opt}");
+    }
+
+    // 2. An assignment right-hand side, 3. an arithmetic operand, 4. a call argument,
+    // 5. a nested `if` condition — each returning early from a helper.
+    let src = "fn twice(n: Int) -> Int { n * 2 }\n\
+               fn rhs(n: Int) -> Int { let mut s = 1; s = if n > 0 { return 7; } else { 2 }; s }\n\
+               fn operand(n: Int) -> Int { 100 + (if n > 0 { return 8; } else { 3 }) }\n\
+               fn argument(n: Int) -> Int { twice(if n > 0 { return 9; } else { 4 }) }\n\
+               fn condition(n: Int) -> Int { if (if n > 0 { return 10; } else { true }) { 5 } else { 6 } }\n\
+               fn main() -> Int {\n\
+               \x20   rhs(1) * 10000 + operand(1) * 1000 + argument(1) * 100 + condition(1) * 10\n\
+               \x20       + rhs(0 - 1) + operand(0 - 1) + argument(0 - 1) + condition(0 - 1)\n\
+               }\n";
+    // Positive arguments take the `return`: 7, 8, 9, 10. Negative ones fall through:
+    // 2 + 103 + 8 + 5 = 118.
+    let interp = interpret(src);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    let expected = interp.stdout.trim().to_owned();
+    assert_eq!(
+        expected, "79118",
+        "the expectation disagrees with the interpreter"
+    );
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        assert_eq!(run_exe(&built).stdout.trim(), expected, "-O{opt}");
+    }
+}
+
+#[test]
+fn a_transferring_operand_beats_the_return_it_sits_in() {
+    // `return if c { break; } else { … }` — the `break` wins and no `ret` is written,
+    // which is what the interpreter's `take!` does with the same program. The loop is
+    // left, the function's tail runs, and the returned value is never produced.
+    let src = "fn h() -> Int {\n\
+               \x20   let mut i = 0;\n\
+               \x20   while i < 5 {\n\
+               \x20       i = i + 1;\n\
+               \x20       return if i == 3 { break; } else { i * 100 };\n\
+               \x20   }\n\
+               \x20   i\n\
+               }\n\
+               fn main() -> Int { h() }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    // The first iteration returns 100 outright, so the `break` is never reached — the
+    // point is that the compiled program agrees about which one happens.
+    assert_eq!(interp.stdout.trim(), "100");
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        assert_eq!(run_exe(&built).stdout.trim(), "100", "-O{opt}");
+    }
+
+    // And the shape where the `break` does win, because the transfer is guarded.
+    let src = "fn h() -> Int {\n\
+               \x20   let mut i = 0;\n\
+               \x20   while i < 5 {\n\
+               \x20       i = i + 1;\n\
+               \x20       return if i < 3 { continue; } else { i * 100 };\n\
+               \x20   }\n\
+               \x20   i\n\
+               }\n\
+               fn main() -> Int { h() }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.stdout.trim(), "300", "{}", interp.stderr);
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        assert_eq!(run_exe(&built).stdout.trim(), "300", "-O{opt}");
+    }
+}
+
+#[test]
+fn an_early_return_skips_the_operands_and_stores_after_it() {
+    // A store that never happens: the assignment's right-hand side returns first.
+    expect_value(
+        "    let mut kept = 11;\n    let mut i = 0;\n    while i < 3 {\n        i = i + 1;\n        if i == 2 { return kept; }\n        kept = kept + 100;\n    }\n    0",
+        "111",
+    );
+    // A failure *after* a `return` never fires, and the same failure before it does.
+    let src = "fn safe(n: Int) -> Int { if n > 0 { return 3; } 10 / n }\n\
+               fn main() -> Int { safe(1) }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    assert_eq!(interp.stdout.trim(), "3");
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        let ran = run_exe(&built);
+        assert_eq!(ran.code, Some(0), "-O{opt}: {ran:?}");
+        assert_eq!(ran.stdout.trim(), "3", "-O{opt}");
+    }
+    // The same helper with a zero argument reaches the division and fails there, at the
+    // division's own position rather than the `return`'s.
+    expect_runtime_error_at(
+        "    let z = 0;\n    z / z",
+        "N0401",
+        "division by zero",
+        "prog.nz:3:7",
+    );
+}
+
+#[test]
+fn return_carries_bool_as_well_as_int() {
+    let src = "fn even(n: Int) -> Bool {\n\
+               \x20   if n % 2 == 0 { return true; }\n\
+               \x20   return false;\n\
+               }\n\
+               fn main() -> Int { if even(4) { if even(7) { 0 } else { 42 } } else { 0 } }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.stdout.trim(), "42", "{}", interp.stderr);
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        assert_eq!(run_exe(&built).stdout.trim(), "42", "-O{opt}");
+    }
+}
+
+#[test]
+fn a_callee_returning_early_does_not_disturb_its_caller() {
+    // The caller's locals and loop keep going across a callee that left early.
+    let src = "fn clamp(n: Int) -> Int {\n\
+               \x20   if n > 10 { return 10; }\n\
+               \x20   if n < 0 { return 0; }\n\
+               \x20   n\n\
+               }\n\
+               fn main() -> Int {\n\
+               \x20   let mut i = 0 - 3;\n\
+               \x20   let mut s = 0;\n\
+               \x20   while i < 14 { s = s + clamp(i); i = i + 1; }\n\
+               \x20   s\n\
+               }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.stdout.trim(), "85", "{}", interp.stderr);
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        assert_eq!(run_exe(&built).stdout.trim(), "85", "-O{opt}");
+    }
+}
+
+#[test]
+fn the_emitted_ir_for_a_return_heavy_function_is_well_formed() {
+    // The structural check, aimed at the shape M1f adds: several `ret`s in one function,
+    // one of them ending the entry block's successor, and a body with no tail at all.
+    // Exactly one terminator per block is what catches a stray `unreachable` written
+    // after a `ret`.
+    let src = "fn classify(n: Int) -> Int {\n\
+               \x20   if n < 0 { return 0 - 1; }\n\
+               \x20   let mut i = 0;\n\
+               \x20   while i < n {\n\
+               \x20       if i * i == n { return i; }\n\
+               \x20       if i > 100 { break; }\n\
+               \x20       i = i + 1;\n\
+               \x20   }\n\
+               \x20   return 0;\n\
+               }\n\
+               fn main() -> Int { classify(49) * 100 + classify(0 - 2) + classify(5) }\n";
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("prog.nz");
+    std::fs::write(&path, src).expect("write");
+    let exe = dir.path().join("prog");
+    let out = Command::new(NAZM)
+        .args(["build", path.to_str().unwrap(), "--emit-ir"])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "clang rejected the generated IR: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("emitted IR");
+    let blocks = assert_control_flow_is_well_formed(&ir);
+    assert!(blocks > 10, "only {blocks} blocks");
+
+    // Three `ret`s in `classify` plus one in `main` plus the wrapper's `ret i32`.
+    let rets = ir.lines().filter(|l| l.trim().starts_with("ret ")).count();
+    assert_eq!(rets, 5, "expected one `ret` per return site:\n{ir}");
+    // The specific regression: a terminator written *after* a `ret`. Checked as that
+    // adjacency rather than by looking for `unreachable` anywhere — the `@nz.fail`
+    // helper ends in one legitimately, and an assertion that cannot tell the two apart
+    // fails on correct output.
+    let lines: Vec<&str> = ir.lines().map(str::trim).collect();
+    for pair in lines.windows(2) {
+        let (Some(first), Some(second)) = (pair.first(), pair.get(1)) else {
+            continue;
+        };
+        assert!(
+            !(first.starts_with("ret ") && *second == "unreachable"),
+            "a terminator was written after the body's own `ret`:\n{ir}"
+        );
+    }
+
+    let interp = interpret(src);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    let built = Built { dir, exe };
+    let ran = run_exe(&built);
+    assert_eq!(ran.stdout.trim(), interp.stdout.trim());
+    assert_eq!(ran.stdout.trim(), "699");
+}
+
+#[test]
+fn a_wrongly_typed_return_belongs_to_the_checker() {
+    for (src, code) in [
+        (
+            "fn f() -> Int { return true; }\nfn main() -> Int { f() }\n",
+            "N0300",
+        ),
+        (
+            "fn f() -> Bool { return 1; }\nfn main() -> Int { if f() { 1 } else { 0 } }\n",
+            "N0300",
+        ),
+    ] {
+        let (dir, path) = write_program(src);
+        let exe = dir.path().join("prog");
+        let out = Command::new(NAZM)
+            .args(["build", path.to_str().unwrap()])
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{code}: {stderr}");
+        assert!(stderr.contains(code), "expected {code}: {stderr}");
+        assert!(
+            !stderr.contains("N0101"),
+            "a language error was reported as a backend limit: {stderr}"
+        );
+        assert!(!exe.exists());
+    }
 }
