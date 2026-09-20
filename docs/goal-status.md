@@ -12,7 +12,7 @@ what was verified, not what is true now.
 | --- | --- |
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `23ee970` — B3 (arguments, files, output, exit) |
+| Current commit | `053ed22` — B4 (modules). **Milestone B complete** |
 | Uncommitted | see *Current task* |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
 | Disk | 12 GiB free of 460 GiB (**97 % full**) — avoid large artefacts, clean build dirs |
@@ -36,8 +36,11 @@ Status words: **verified** (executed evidence this session or an unbroken commit
 | Native arguments, files, output, exit | **verified** | `23ee970`; ambient authority, labelled as such |
 | Discarded expression statements | **verified** | `30c7b12` |
 | Native recursion | blocked by design | pending a measured native stack contract. **Not needed**: `docs/bootstrap-design.md` B5 chooses iterative compiler algorithms |
-| Modules / multi-file resolution | planned — Milestone B4 | nothing exists |
-| A tokeniser written in Nazm | **planned — next** | B's exit criterion, and Milestone C's first component |
+| Modules: `use`, relative resolution, diamonds, cycles | **verified** | `053ed22`; one merged buffer, per-file diagnostics; **no visibility** |
+| A tokeniser written in Nazm | **verified** | `84010df`; `compiler/lexer.nz`, 1891 tokens on its own source, agrees with `nazm_syntax::lex` token- and span-wise |
+| A parser written in Nazm | **planned — next** | Milestone C |
+| Checker / lowering / emission in Nazm | planned — Milestone C | nothing exists |
+| C1→C2→C3 bootstrap | planned — Milestone D | nothing exists |
 | Compiler written in Nazm | planned — Milestone C | nothing exists |
 | C1→C2→C3 bootstrap | planned — Milestone D | nothing exists |
 | Structured concurrency | planned — Milestone E | nothing exists |
@@ -45,7 +48,7 @@ Status words: **verified** (executed evidence this session or an unbroken commit
 | Performance baselines | planned — Milestone G | `docs/performance.md` is claims, not measurements |
 | Mutation runner, lifecycle tests, repository gates | verified | 49-entry catalogue, 6 lifecycle tests, `xtask check` 5/5 |
 
-## Verified commands (against `23ee970`)
+## Verified commands (against `053ed22`)
 
 | Command | Result |
 | --- | --- |
@@ -53,7 +56,7 @@ Status words: **verified** (executed evidence this session or an unbroken commit
 | `rustc --version` / `clang --version` | 1.98.1 (pinned) / Apple clang 21.0.0 |
 | `ps` for cargo/rustc/xtask/nazm | none running |
 | `ls target/.nazm-*` | no mutation lock; tree is not owned |
-| `cargo test --workspace` | **428 passed, 0 failed, 6 ignored** — 10 of the 428 are `docker_boundary` tests that self-skip; 120 are native build cases run at `-O0` and `-O2` against the interpreter |
+| `cargo test --workspace` | **440 passed, 0 failed, 6 ignored** — 10 self-skip (`docker_boundary`); 126 are native build cases at `-O0`/`-O2` against the interpreter; 3 are the self-hosting differential tests |
 | `cargo test -p xtask --test lifecycle -- --ignored` | 6 passed (not part of the 383) |
 | `cargo lint`, `cargo fmt --check`, `cargo xtask check`, `nazm-bench selftest` | clean / clean / 5-of-5 / 19-of-19 |
 
@@ -63,19 +66,18 @@ None. Disposable mutation copies live under `/tmp/claude-501/` and are removed a
 
 ## Current task
 
-**Milestone B — the bootstrap subset.** B1 (text), B2 (sequences) and B3 (I/O) are
-implemented and verified; B5's strategy is decided (iterative algorithms, no native
-recursion needed). What remains in B is **B4 (modules)** and B's exit criterion: *small
-Nazm programs that tokenise a source file, build and traverse syntax data, and report
-located errors, executing natively*.
+**Milestone C — the compiler, in Nazm.** Milestone B is complete: B1 text, B2 sequences,
+B3 I/O, B4 modules, B5 strategy (iterative, demonstrated by `compiler/lexer.nz`). B's
+exit criterion is met for tokenising, constructing output and located errors; *building
+and traversing structured syntax data* is the parser, which is C's first step.
 
 ## Next exact action
 
-Write `compiler/lexer.nz` — a Nazm tokeniser for Nazm source, using the parallel-array
-design in `docs/bootstrap-design.md` and iterative loops only. Run it natively over a
-real `.nz` file and check its token stream against `nazm-syntax`'s lexer. It is a
-**component of the eventual compiler**, not a demonstration. Then B4 (modules), so the
-compiler can be split across files.
+Write `compiler/parser.nz` — a Nazm parser over `compiler/lexer.nz`'s token arrays,
+building the node arena from `docs/bootstrap-design.md` (`node_kind`, `node_a/b/c`,
+`node_span_*`, `node_text`) with an **explicit work stack, never recursion**. Then extend
+`crates/nazm-cli/tests/selfhost.rs` to compare its node tree against
+`nazm_syntax::parse` on the same sources, the way the lexer is compared now.
 
 ## Unresolved decisions
 
@@ -91,7 +93,7 @@ compiler can be split across files.
 ## Definition of done (Section 13)
 
 - [x] Scalar control flow verified, including `return` and transfers inside values — `ac39f7b`
-- [ ] Bootstrap subset: text ✅, structured data ✅, collections ✅, memory ✅, file I/O ✅, errors ✅, **modules ⬜**
+- [x] Bootstrap subset: text, structured data, collections, memory, file I/O, errors, modules — `053ed22`
 - [ ] Compiler frontend + lowering/emission written in Nazm
 - [ ] C1 → C2 → C3 bootstrap with conformance and reproducibility
 - [ ] Ordinary independent programs compile with the Nazm-written compiler
