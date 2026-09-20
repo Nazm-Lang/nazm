@@ -202,6 +202,242 @@ replacing the interpreter · any new language feature.
 - A statement of what M1 does **not** establish: no performance claim, one target, one
   backend, no optimisation.
 
+### M1d subset — the accepted/rejected table
+
+Written before implementation, for the same reason as M1b's and M1c's: a backend broadens
+by accident when an AST node is handled generically. Anything refused **still runs under
+`nazm run`**.
+
+| Construct | `nazm build` | Note |
+| --- | --- | --- |
+| everything in M1a, M1b and M1c | accept | unchanged |
+| **`let mut` bindings of `Int` and `Bool`** | **accept** | M1d |
+| **assignment to such a local** | **accept** | M1d. A statement with no value, exactly as `docs/spec.md` has it |
+| **`while` with a `Bool` condition** | **accept** | M1d |
+| **`let`, `let mut`, assignment and nested `while` inside a loop body** | **accept** | M1d |
+| **all of the above inside any user-defined function** | **accept** | M1d. Not only `main` |
+| **a loop condition or body that calls a supported function** | **accept** | a call is an expression like any other; the cycle refusal is unchanged |
+| **an assignment whose value is an `if`/`else` expression** | **accept** | value-position `if` is M1b's, and assignment does not restrict it |
+| immutable parameters | unchanged | the language has no mutable parameter; `fn f(mut x: Int)` is refused by the parser |
+| existing scope and shadowing rules | unchanged | a loop body is a scope; an inner `let` shadows and does not overwrite |
+| existing final-expression function results | unchanged | a function still produces its body's tail expression |
+| checked arithmetic and runtime diagnostics | unchanged | the same guards, in a loop as anywhere else |
+| **`break`** | **refuse** (`N0101`) | M1d compiles the loop, not the loop exits |
+| **`continue`** | **refuse** (`N0101`) | same |
+| **`return`** | **refuse** (`N0101`) | unchanged from M1c |
+| **statement-position `if`** | **refuse** (`N0101`) | unchanged. It arrives as `Stmt::Expr`, which is refused; a loop body that *ends* in one arrives as the body block's tail, and that is refused too |
+| **a loop body ending in an expression** | **refuse** (`N0101`) | a loop body produces nothing, so a tail there is either a discarded value (the checker's `N0300`) or a statement-position `if` (above) |
+| recursion, direct or mutual | refuse (`N0101`) | unchanged, and see *Recursion* below |
+| `Str`, bare blocks as expressions, expression statements | refuse | unchanged |
+| assignment to an immutable binding; assigning the wrong type; a non-`Bool` loop condition | **not the backend's business** | the checker reports `N0310`, `N0300`, `N0301`. A backend limitation must never be reported as a language error, and the reverse is equally wrong |
+
+#### The native execution contract for loops
+
+**A compiled Nazm program can loop forever.** `nazm build` emits a back edge and nothing
+else: there is no iteration counter in the generated code, no budget, and no diagnostic
+for a loop whose condition never becomes false. Such a program runs until it is killed.
+
+This is a *difference from `nazm run`*, and it is stated rather than inherited.
+`docs/spec.md` already says the iteration and depth limits are the interpreter's and not
+the language's — "Nazm bounds neither iteration nor recursion… A different implementation
+may choose differently." The native backend is that different implementation, and the
+choice it has made for M1d is **no budget at all**.
+
+What that forbids, for this increment:
+
+- **No claim that the two implementations have the same resource behaviour.** They agree
+  on the *value* a terminating program produces. They do not agree on what a
+  non-terminating one does: `nazm run` reports `N0402` after 10,000,000 iterations;
+  the native program does not stop.
+- **No silent inheritance of `--max-iterations`.** The flag belongs to the interpreter and
+  is not read by `nazm build`.
+- **No new public flag introduced in passing.** A native execution budget is a language-
+  and CLI-visible decision with its own diagnostic, and it gets its own increment or none.
+- **Every test that runs a compiled program gets a deadline**, and a test that hits the
+  deadline is a *failure* — or, for the one mutation case that expects it, a specifically
+  named expected outcome. A timeout is never recorded as successful execution.
+
+Differential testing therefore compares only programs that terminate inside the
+interpreter's budget. That is a real restriction on what M1d's evidence covers, and it is
+the honest boundary of it.
+
+#### Recursion: pending a native execution contract, not a counter
+
+This supersedes the three-candidate framing in `review/m1c/HANDOFF.md`, which presented a
+call-depth counter as the recommended answer. The correction, point by point:
+
+1. **A call-depth counter alone does not guarantee a diagnostic before the native stack is
+   exhausted.** The counter bounds the number of frames. Whether that number of frames
+   fits is a question about frame size and about how much stack the process actually has,
+   and a counter answers neither. A budget of 512 says nothing until both are known.
+2. **The interpreter does not rely on a counter alone, and never did.** `--max-depth` is
+   one half of a pair: `nazm_core::eval::on_interpreter_stack` runs the whole pipeline on
+   a thread whose stack it sizes *from the budget it is about to enforce* — `24 MiB +
+   max_depth × 32 KiB`, with the per-call figure measured rather than guessed, and with
+   `N0404` when the host will not grant the reservation. It is the combination that makes
+   `N0403` arrive before the stack runs out. Copying only the counter into generated code
+   would copy the half that does not carry the guarantee.
+3. **Neither quantity has been established for native code.** `nazm build` produces a
+   process whose main-thread stack is the platform's (8 MiB on macOS, typically 8 MiB and
+   configurable on Linux), which this project has not measured, and the frame size of a
+   generated Nazm function has not been measured either. Emitting a bound derived from
+   neither would be a guarantee with no basis.
+4. **The specification already separates these.** `docs/spec.md`, *The iteration and depth
+   limits are the interpreter's, not the language's*: the limits are an implementation's
+   guards, not language semantics. So the native backend is not obliged to reproduce
+   `N0403`; it is obliged not to promise a diagnostic it cannot deliver.
+
+**Therefore:** the call-cycle refusal stays exactly as it is, and recursion is recorded as
+**pending a native execution contract with supporting evidence** — measured stack
+availability, measured frame requirements, and a decided answer to what a compiled program
+does when it exhausts the stack. It is *not* recorded as "remove the cycle detection and
+add a counter". No runtime crate and no stack-probing mechanism is added now.
+
+### M1e subset — the accepted/rejected table
+
+Written before implementation. Anything refused **still runs under `nazm run`**.
+
+| Construct | `nazm build` | Note |
+| --- | --- | --- |
+| everything in M1a–M1d | accept | unchanged |
+| **`break`** | **accept** | M1e |
+| **`continue`** | **accept** | M1e |
+| **statement-position `if`, with `else`** | **accept** | M1e |
+| **statement-position `if`, without `else`** | **accept** | M1e. Always has a fall-through path: the condition may be false |
+| **an `if` as a loop body's tail** | **accept** | M1e. This *is* statement-position `if` — the parser puts a trailing `if` in the block's `tail`, and `check_while` accepts it when its completion is Unit or Diverges |
+| **`break`/`continue` inside a value-position `if` branch** | **accept** | M1e: a `let` initialiser, an assignment right-hand side, an arithmetic operand, a call argument, a nested `if` condition. All five check and run today |
+| **both branches of a statement `if` transferring** | **accept** | no continuation is emitted, and the statements after are already `N0313` |
+| **one branch transferring, one falling through** | **accept** | only the falling-through branch reaches the continuation |
+| **a value-position `if` with one transferring branch** | **accept** | the value comes from the branch that reaches the join; the `phi` has one incoming |
+| **`break`/`continue` in a loop's condition** | **accept**, targeting the **enclosing** loop | not this loop's. See *Where a loop target binds* below |
+| `return` | **refuse** (`N0101`) | unchanged, and still refused inside an otherwise supported conditional |
+| recursion, direct or mutual | refuse (`N0101`) | unchanged; still pending a native execution contract |
+| bare blocks as expressions; expression statements other than `if` | refuse | unchanged. `{ … };` and `f(1);` are separate constructs with their own questions |
+| `Str`, logical operators, collections, another backend | refuse / absent | out of scope by instruction |
+| `break`/`continue` outside a loop; unreachable statements; a non-`Bool` condition | **not the backend's business** | the checker reports `N0312`, `N0313`, `N0301` |
+
+There is still **one** `if` in the source language. The backend does not add a second: a
+single `AstExpr::If` is lowered either as `Stmt::If` or as `Expr::If` depending on the
+position it is *found in*, which is the same thing checking does. What differs between the
+two is completion behaviour, and that is represented explicitly rather than by having two
+syntaxes.
+
+#### Where a loop target binds, and how it was established
+
+**A loop's condition is not inside that loop.** A `break` there leaves the *enclosing*
+loop; a `continue` there starts the enclosing loop's next iteration. This was read out of
+the existing implementations rather than assumed:
+
+- `nazm-core/src/check.rs` increments `loop_depth` around `check_block(&w.body)` **only**,
+  so a `break` in the outermost loop's condition is `N0312` — confirmed by compiling one.
+- `nazm-core/src/eval.rs` evaluates the condition through `take!`, so a `Flow::Break`
+  raised there returns straight out of `while_loop` and is consumed by the enclosing loop.
+
+Two probe programs pin the behaviour: with a `break` in an inner loop's condition the
+interpreter prints `102`, and with a `continue` there it prints `204` — both only
+explicable if the target is the outer loop. The backend therefore **pushes a loop's
+targets around its body and not around its condition**, and the tests assert the same two
+numbers natively.
+
+#### Completion, represented explicitly
+
+Emission carries three results, matching the checker's `Completion` one for one, so that
+no path has to invent a value it does not have:
+
+| Emission type | Meaning | The checker's name |
+| --- | --- | --- |
+| `Val::Of { value, ty }` | the expression produced a value, of this type, in the current block | `Completion::Value` |
+| `Reach::FallsThrough` | a statement sequence reached its end; more may be appended | `Completion::Unit` |
+| `Val::Transferred` / `Reach::Transferred` | control left along this path; there is no value and the current block already has its terminator | `Completion::Diverges` |
+
+`Incoming` pairs a branch's value **with the block it was produced in**, because those two
+are the halves of one `phi` incoming and naming a block that did not produce the value is
+exactly the defect the type exists to make unrepresentable. A branch that transferred
+contributes no `Incoming` at all.
+
+`Expr::ty` becomes `Option<Ty>`: `None` means "never produces a value". Lowering then
+treats `None` as fitting whatever the context wants — which is not a concession, it is the
+checker's own rule, `value_type` returning `expected` for a `Completion::Diverges`.
+
+### M1e status — implemented
+
+**Added:** `break`; `continue`; statement-position `if` with and without `else`,
+including as a loop body's tail; and `break`/`continue` inside the value positions the
+frontend accepts — a `let` initialiser, an assignment right-hand side, an arithmetic
+operand, a call argument, and a nested `if` condition.
+
+**Front end:** unchanged. `N0312` (outside a loop), `N0313` (unreachable statement),
+`N0301`, `N0300` and the interpreter's `Flow` are all as they were; M1e added no language
+rule and widened neither the parser nor the checker.
+
+**Completion:** three emission results, matching the checker's `Completion` one for one —
+`Val::Of { value, ty }`, `Reach::FallsThrough`, and `Val`/`Reach::Transferred`. The type
+travels *with* the value because every producer knows it locally, so nothing has to be
+re-derived later. `Incoming` pairs a branch's value with the block it was produced in,
+which makes "a `phi` naming a block that did not produce the value" unrepresentable rather
+than merely avoided. An `operand!` macro stops emission of an enclosing expression the
+moment a sub-expression transfers — the emitter's counterpart to the interpreter's
+`take!`, for the same reason and with the same consequences: earlier operands keep their
+effects, later ones are never emitted, an interrupted assignment writes no slot, and a
+call with an interrupted argument is never written at all.
+
+`Expr::ty` became `Option<Ty>`, and `fits` is the rule the checker already applies to a
+`Completion::Diverges`: an expression that always transfers stands in for whatever type
+the context wanted. `Block::result` became `Option`, `None` meaning the statements
+transfer. Neither is a place where a value is invented.
+
+**Loop targets:** an explicit stack of `Targets { head, exit }` on the emitter, pushed
+around a loop's **body** and popped before its exit block opens — so a nested loop cannot
+overwrite the enclosing one's, and a transfer in a *condition* reaches the enclosing loop,
+which is the existing language's rule. `continue` targets `head`, never the body, so the
+condition is re-evaluated including any call or checked arithmetic in it. The stack is
+cleared at every function boundary. A back edge is emitted only when the body's path still
+falls through.
+
+**Statement `if`:** with no `else` the false edge goes straight to the continuation, so the
+statement always falls through. With an `else`, the continuation is opened only if at
+least one branch still falls through; when both transfer, none is fabricated.
+
+**Not added, and refused by name:** `return` — including inside a fully supported
+conditional and loop — recursion, `Str`, bare blocks as expressions, and every expression
+statement that is not an `if`.
+
+### M1d status — implemented
+
+**Added:** `let mut` bindings of `Int` and `Bool`; assignment as a statement; `while` with
+a `Bool` condition; declarations, assignments and nested loops inside a loop body; all of
+it inside any user-defined function, not only `main`.
+
+**Front end:** unchanged. The parser, checker and interpreter already had every one of
+these constructs — `N0310` for assignment to an immutable binding, `N0300` for a wrong
+assignment type or a loop body that produces a value, `N0301` for a non-`Bool` condition —
+so M1d added no language rule and widened nothing to suit the backend.
+
+**IR:** two new statements. `Stmt::Assign { slot, value }`, which is the same store as
+`Stmt::Let` once the name is resolved and is routed through one emitter path so the two
+cannot drift; and `Stmt::While { cond, body }`, whose body is a statement sequence with no
+value, because a loop produces nothing and there is no type to carry. `Stmt::Let` is now
+documented as executing *every time it is reached*, which is what a declaration inside a
+loop means.
+
+**Lowering:** `lower_stmts` is shared; `lower_block` requires a tail and `lower_loop_body`
+refuses one. Mutability is not re-decided — the checker has already rejected an illegal
+assignment, and a second mutability rule here would be a second chance to disagree. A
+loop's condition is lowered *outside* the body's scope, so a binding made in the body is
+invisible to it.
+
+**Emission:** a condition block, a body block, a back edge to the **condition**, and an
+exit block. Not one `alloca` is emitted on the loop path: every slot is allocated in the
+function's entry block, because a slot belongs to a binding and not to an execution of
+one. A body-local declaration still stores on every iteration, so reusing the storage does
+not reuse the value. The conditional branch and the back edge are appended to whatever
+block emission has reached rather than to the label opened for it, which is what keeps
+terminators and predecessors right when a condition or body contains checked arithmetic, a
+call, or a nested `if`.
+
+**Not added, and refused by name:** `break`, `continue`, `return`, statement-position `if`
+(including as a loop body's tail), recursion, `Str`, bare blocks as expressions.
+
 ### M1c subset — the accepted/rejected table
 
 Written before implementation, for the same reason as M1b's: a backend broadens by

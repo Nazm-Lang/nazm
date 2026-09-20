@@ -18,6 +18,14 @@
 //! | **Diagnostic category** | The same stable code the interpreter reports: `N0400` for overflow, `N0401` for division by zero |
 //! | **Source location** | Line and column of the operator that failed, resolved at compile time and baked into the binary as a constant |
 //! | **`--json`** | Applies to **build-time** diagnostics only. A generated executable has no diagnostic framework linked into it and emits the plain line above; promising JSON there would mean shipping a serialiser in every binary |
+//! | **Resource limits** | **None.** A compiled program has no iteration budget and no call-depth budget. `--max-iterations` and `--max-depth` belong to `nazm run` and are not read here |
+//!
+//! That last row is a real difference between the two implementations and is stated
+//! rather than left to be discovered. `nazm run` stops a runaway loop with `N0402`; a
+//! compiled one runs until something kills it. `docs/spec.md` already places both limits
+//! in the interpreter rather than in the language, so the backend is not obliged to
+//! reproduce them — it is obliged not to imply it has. Adopting a native budget is a
+//! decision with its own diagnostic and its own increment, not a flag added in passing.
 //!
 //! `nazm run` and `nazm check` are unchanged by any of this.
 

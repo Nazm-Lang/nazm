@@ -601,3 +601,60 @@ replace = """                if vals.len() >= 2 && vals[0].1 == vals[1].1 {
                     vals.swap(0, 1);
                 }
                 let list = vals"""
+
+[[mutation]]
+name = "the-loop-reuses-its-first-condition"
+why = """
+The defect a loop exists to not have. The back edge is redirected from the condition block
+to the body block, so the condition is evaluated once, found true, and never looked at
+again — every loop that would have terminated runs away.
+
+Nothing structural catches it. The IR is well-formed, every block has a terminator, clang
+accepts the module, and `br label %b2` still appears in the emitted text because the block
+*before* the loop branches into the condition exactly as it did.
+
+Caught behaviourally by 13 tests, and the distinction between how they catch it is the
+point. Nine report a **deadline**, including
+`the_condition_is_reevaluated_on_every_iteration`, which runs the compiled program under an
+explicit 10-second limit at `-O0` and `-O2` and fails if it has not finished — that test
+exists because `nazm build` emits no iteration budget (`docs/roadmap.md`, *The native
+execution contract for loops*), so a suite without deadlines would hang rather than report.
+The other four terminate and fail on the **outcome**: their runaway bodies overflow `Int`
+within seconds, so the program exits 2 with `N0400` where 0 and a value were expected.
+Neither group alone would have been the whole story, and a timeout is recorded as a
+failure rather than as a result.
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """        self.stmts(body);
+        let _ = writeln!(self.out, "  br label %{head}");"""
+replace = """        self.stmts(body);
+        let _ = writeln!(self.out, "  br label %{body_label}");"""
+
+[[mutation]]
+name = "continue-jumps-to-the-body-not-the-condition"
+why = """
+The target-selection defect that `continue` exists to not have. The loop's recorded
+`head` target is replaced by its body label, so `continue` re-enters the body **without
+re-evaluating the condition** — skipping any call or checked arithmetic in it, and turning
+every loop a `continue` can reach into one that never re-tests its exit.
+
+Nothing structural catches it. Every block still has exactly one terminator, every branch
+still names a real block, every `phi` still names a real predecessor, and clang accepts
+the module — the emitted IR is well-formed, it just means something else. The back edge
+from the *bottom* of the body is untouched, so tests asserting that a back edge to the
+condition block exists still pass.
+
+Chosen over the mirror defect (`break` targeting the head) because this one is silent in
+the common case: a loop whose body ends in `continue` simply never terminates, while a
+misdirected `break` usually still exits.
+
+Caught by `continue_skips_the_rest_of_the_iteration_and_rechecks_the_condition`,
+`an_inner_continue_reevaluates_the_inner_condition` and others, behaviourally — by the
+subprocess deadline where the mutant no longer terminates, and by a wrong value where it
+does.
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """        self.loops.push(Targets {
+            head: head.clone(),"""
+replace = """        self.loops.push(Targets {
+            head: body_label.clone(),"""

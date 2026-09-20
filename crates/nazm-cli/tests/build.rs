@@ -27,9 +27,19 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
+
+/// How long any subprocess here may take before the test kills it and fails.
+///
+/// Generous, because this is not a performance assertion — it is the thing that stops a
+/// **compiled Nazm program from hanging the test suite**. `nazm build` emits no iteration
+/// budget (see `docs/roadmap.md`, *The native execution contract for loops*), so a
+/// miscompiled loop does not fail, it runs forever; without a deadline the suite would
+/// stop reporting rather than report a defect.
+const DEADLINE: Duration = Duration::from_secs(30);
 
 struct Built {
     dir: tempfile::TempDir,
@@ -54,47 +64,88 @@ fn write_program(body: &str) -> (tempfile::TempDir, PathBuf) {
 fn build_at(body: &str, opt: u8) -> Result<Built, Ran> {
     let (dir, src) = write_program(body);
     let exe = dir.path().join("prog");
-    let out = Command::new(NAZM)
-        .args(["build", src.to_str().unwrap()])
-        .arg("-o")
-        .arg(&exe)
-        .arg("--opt-level")
-        .arg(opt.to_string())
-        .output()
-        .expect("run nazm build");
-    if out.status.success() {
+    let out = run_bounded(
+        Command::new(NAZM)
+            .args(["build", src.to_str().unwrap()])
+            .arg("-o")
+            .arg(&exe)
+            .arg("--opt-level")
+            .arg(opt.to_string()),
+        DEADLINE,
+    )
+    .expect("`nazm build` did not terminate within the deadline");
+    if out.code == Some(0) {
         Ok(Built { dir, exe })
     } else {
-        Err(Ran {
-            code: out.status.code(),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        })
+        Err(out)
     }
 }
 
-fn run_exe(b: &Built) -> Ran {
-    let out = Command::new(&b.exe).output().expect("run the executable");
-    let _ = &b.dir;
-    Ran {
-        code: out.status.code(),
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+/// Run a command, killing it if it outlives `limit`.
+///
+/// `None` means the deadline was reached — **a distinct outcome from any exit status**,
+/// never folded into one. A compiled program that does not terminate has not "failed with
+/// no output"; it has not finished, and the two want different words in a failure message.
+///
+/// The child is killed *and reaped* on that path, so no test leaves a process behind for
+/// the next one to trip over. Output is piped and read once the child is gone; every
+/// program here prints at most one short line, well inside a pipe buffer, so there is no
+/// deadlock to arrange around.
+fn run_bounded(cmd: &mut Command, limit: Duration) -> Option<Ran> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+
+    let start = Instant::now();
+    loop {
+        match child.try_wait().expect("try_wait") {
+            Some(status) => {
+                let out = child.wait_with_output().expect("collect output");
+                return Some(Ran {
+                    code: status.code(),
+                    stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                });
+            }
+            None if start.elapsed() >= limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(5)),
+        }
     }
+}
+
+/// Run a built executable, failing the test if it outlives [`DEADLINE`].
+fn run_exe(b: &Built) -> Ran {
+    let _ = &b.dir;
+    run_exe_within(b, DEADLINE).unwrap_or_else(|| {
+        panic!(
+            "the compiled program did not terminate within {DEADLINE:?}. A timeout is a \
+             failure, not a result — `nazm build` emits no iteration budget, so a \
+             miscompiled loop runs forever instead of reporting."
+        )
+    })
+}
+
+/// Run a built executable with an explicit deadline, and say plainly whether it finished.
+fn run_exe_within(b: &Built, limit: Duration) -> Option<Ran> {
+    let _ = &b.dir;
+    run_bounded(&mut Command::new(&b.exe), limit)
 }
 
 fn interpret(body: &str) -> Ran {
     let (dir, src) = write_program(body);
-    let out = Command::new(NAZM)
-        .args(["run", src.to_str().unwrap()])
-        .output()
-        .expect("run nazm run");
+    let ran = run_bounded(
+        Command::new(NAZM).args(["run", src.to_str().unwrap()]),
+        DEADLINE,
+    );
     let _ = dir;
-    Ran {
-        code: out.status.code(),
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
+    ran.expect("`nazm run` did not terminate within the deadline")
 }
 
 fn program(body: &str) -> String {
@@ -350,17 +401,10 @@ fn the_two_implementations_report_the_same_source_position() {
 /// Everything outside the subset, refused by name and with nothing written.
 #[test]
 fn constructs_outside_the_subset_are_refused_and_nothing_is_emitted() {
-    // `if` and the comparison operators were on this list in M1a and are not any more:
-    // M1b compiles them. What is left is what the backend still cannot lower.
+    // `if` and the comparisons left this list in M1b; `let mut`, assignment and `while`
+    // in M1d; `break`, `continue` and statement-position `if` in M1e. What is left is
+    // what the backend still cannot lower.
     let cases: &[(&str, &str)] = &[
-        (
-            "fn main() -> Int {\n    let mut x = 1;\n    x = 2;\n    x\n}\n",
-            "`let mut`",
-        ),
-        (
-            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; }\n    i\n}\n",
-            "`while`",
-        ),
         ("fn main() -> Int {\n    return 1;\n}\n", "`return`"),
         // The signature is refused before the body is looked at, so this names the
         // return type — one mistake, one error, rather than also complaining about the
@@ -378,8 +422,14 @@ fn constructs_outside_the_subset_are_refused_and_nothing_is_emitted() {
             "fn main() -> Int {\n    { 1 }\n}\n",
             "a block used as an expression",
         ),
+        // Statement-position `if` compiles now; every *other* expression statement is
+        // still a separate construct with its own question, and stays refused.
         (
-            "fn main() -> Int {\n    if true { 1 } else { 2 };\n    3\n}\n",
+            "fn main() -> Int {\n    1 + 1;\n    3\n}\n",
+            "an expression statement",
+        ),
+        (
+            "fn helper() -> Int { 1 }\nfn main() -> Int {\n    helper();\n    3\n}\n",
             "an expression statement",
         ),
     ];
@@ -451,7 +501,7 @@ fn a_program_that_does_not_check_is_a_check_failure_not_a_subset_failure() {
 
 #[test]
 fn build_diagnostics_are_available_as_json() {
-    let (dir, src) = write_program("fn main() -> Int {\n    let mut x = 1;\n    x\n}\n");
+    let (dir, src) = write_program("fn main() -> Int {\n    return 1;\n}\n");
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap(), "--json"])
         .arg("-o")
@@ -915,11 +965,17 @@ fn front_end_type_errors_are_not_reported_as_backend_limits() {
 fn unsupported_constructs_inside_a_branch_are_refused_by_the_backend() {
     let cases: &[(&str, &str)] = &[
         (
-            "fn main() -> Int {\n    if true { let mut x = 1; x = 2; x } else { 0 }\n}\n",
-            "`let mut`",
+            "fn main() -> Int {\n    if true { 1 + 1; 2 } else { 0 }\n}\n",
+            "an expression statement",
         ),
         (
             "fn main() -> Int {\n    if true { return 1; } else { 0 }\n}\n",
+            "`return`",
+        ),
+        // `return` stays refused even where the surrounding conditional and loop are
+        // fully supported — the refusal is about `return`, not about its neighbourhood.
+        (
+            "fn main() -> Int {\n    if true { let mut i = 0; while i < 2 { if i == 1 { return 7; } i = i + 1; } i } else { 0 }\n}\n",
             "`return`",
         ),
         (
@@ -955,33 +1011,36 @@ fn unsupported_constructs_inside_a_branch_are_refused_by_the_backend() {
 }
 
 #[test]
-fn a_statement_position_if_is_still_refused() {
-    // The one `if` this backend compiles is the one in value position. A statement `if`
-    // arrives as an expression statement, which stays refused — deliberately, so that
-    // adding value-position `if` did not quietly also add the other one.
-    let src = "fn main() -> Int {\n    let x = 1;\n    if x > 0 { let y = 2; }\n    x\n}\n";
-    let (dir, path) = write_program(src);
-    let out = Command::new(NAZM)
-        .args(["build", path.to_str().unwrap()])
-        .arg("-o")
-        .arg(dir.path().join("prog"))
-        .output()
-        .expect("run");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("an expression statement"), "{stderr}");
+fn a_statement_position_if_compiles_but_other_expression_statements_do_not() {
+    // M1e adds the statement `if` and **only** that. The other expression statements —
+    // a bare block, a discarded call, a bare arithmetic expression — are separate
+    // constructs with their own questions, and they stay refused so that adding one did
+    // not quietly add the rest.
+    expect_value("    let mut x = 1;\n    if x > 0 { x = 5; }\n    x", "5");
+    // With no `else` and a false condition, the statement still falls through.
+    expect_value("    let mut x = 1;\n    if x > 9 { x = 5; }\n    x", "1");
 
-    // And `nazm run` still executes it, which is what makes this a backend limit.
-    let ran = Command::new(NAZM)
-        .args(["run", path.to_str().unwrap()])
-        .output()
-        .expect("run");
-    assert_eq!(
-        ran.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&ran.stderr)
-    );
+    for (src, expected) in [
+        (
+            "fn main() -> Int {\n    1 + 1;\n    3\n}\n",
+            "an expression statement",
+        ),
+        (
+            "fn main() -> Int {\n    { let y = 2; };\n    3\n}\n",
+            "an expression statement",
+        ),
+    ] {
+        let (dir, path) = write_program(src);
+        let out = Command::new(NAZM)
+            .args(["build", path.to_str().unwrap()])
+            .arg("-o")
+            .arg(dir.path().join("prog"))
+            .output()
+            .expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{stderr}");
+        assert!(stderr.contains(expected), "expected {expected:?}: {stderr}");
+    }
 }
 
 #[test]
@@ -1605,9 +1664,9 @@ fn unsupported_signatures_and_bodies_are_refused_by_name() {
             "a function returning `Str`",
         ),
         (
-            "fn f(n: Int) -> Int {\n    let mut t = n;\n    t = t + 1;\n    t\n}\n\
+            "fn f(n: Int) -> Int {\n    let mut t = n;\n    while t < 10 { { t = t + 1; }; }\n    t\n}\n\
              fn main() -> Int { f(1) }\n",
-            "`let mut`",
+            "an expression statement",
         ),
         (
             "fn f(n: Int) -> Int { return n; }\nfn main() -> Int { f(1) }\n",
@@ -1683,4 +1742,1119 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
     // Exactly one print, in the wrapper.
     assert_eq!(ir.matches("call i32 (ptr, ...) @printf").count(), 1, "{ir}");
     assert!(!ir.contains(" nsw "), "{ir}");
+}
+
+// ---------------------------------------------------------------------------
+// M1d — mutable locals, assignment, and `while`
+//
+// Every case here terminates inside the interpreter's iteration budget, which is what
+// makes differential comparison possible at all: `nazm build` emits **no** iteration
+// budget, so the two implementations agree on what a terminating program produces and do
+// not agree on what a non-terminating one does. See `docs/roadmap.md`, *The native
+// execution contract for loops*. Nothing below infers a resource guarantee from a passing
+// test, and every subprocess runs under a deadline whose expiry is a failure.
+// ---------------------------------------------------------------------------
+
+/// A runtime failure whose reported position is checked exactly, in both implementations.
+///
+/// `expect_runtime_error` only requires the file name to appear. Inside a loop that is too
+/// weak: the interesting failures are in a *condition* and in a *body*, which are
+/// different lines of the same statement, and a position that merely mentions the file
+/// would be satisfied by either.
+fn expect_runtime_error_at(body: &str, code: &str, message: &str, position: &str) {
+    let src = program(body);
+    let interp = interpret(&src);
+    assert_eq!(
+        interp.code,
+        Some(2),
+        "the interpreter did not fail: {interp:?}"
+    );
+    assert!(
+        interp.stderr.contains(code) && interp.stderr.contains(message),
+        "the expectation disagrees with the interpreter: {}",
+        interp.stderr
+    );
+    assert!(
+        interp.stderr.contains(position),
+        "the expected position {position} is not where the interpreter points: {}",
+        interp.stderr
+    );
+
+    for opt in [0u8, 2] {
+        let built = build_at(&src, opt).unwrap_or_else(|e| panic!("-O{opt} build failed: {e:?}"));
+        let ran = run_exe(&built);
+        assert_eq!(ran.code, Some(2), "-O{opt}: {ran:?}");
+        assert!(ran.stderr.contains(code), "-O{opt}: {}", ran.stderr);
+        assert!(ran.stderr.contains(message), "-O{opt}: {}", ran.stderr);
+        assert!(
+            ran.stderr.contains(position),
+            "-O{opt}: expected {position}: {}",
+            ran.stderr
+        );
+        assert!(ran.stdout.is_empty(), "-O{opt}: nothing should be printed");
+    }
+}
+
+#[test]
+fn a_loop_runs_zero_one_or_many_times() {
+    // Zero. The condition is false on entry, so the body never runs and the loop is not
+    // an error — the one case a `do/while` shape would get wrong.
+    expect_value(
+        "    let mut i = 0;\n    let mut n = 0;\n    while i < 0 { n = n + 1; i = i + 1; }\n    n",
+        "0",
+    );
+    // Exactly one.
+    expect_value(
+        "    let mut i = 0;\n    let mut n = 0;\n    while i < 1 { n = n + 7; i = i + 1; }\n    n",
+        "7",
+    );
+    // Many, with a count that a fencepost error would move by one in either direction.
+    expect_value(
+        "    let mut i = 0;\n    let mut n = 0;\n    while i < 5 { n = n + 1; i = i + 1; }\n    n",
+        "5",
+    );
+    // And a condition that is false on entry because a *mutable* local says so, rather
+    // than because a literal does.
+    expect_value(
+        "    let mut go = false;\n    let mut n = 0;\n    while go { n = n + 1; }\n    n",
+        "0",
+    );
+}
+
+#[test]
+fn sum_to_n_and_factorial_stay_inside_int() {
+    // Sum to 100: 5050, a number wrong by a visible amount if the loop runs once too
+    // often or too seldom.
+    expect_value(
+        "    let mut i = 1;\n    let mut total = 0;\n    while i <= 100 { total = total + i; i = i + 1; }\n    total",
+        "5050",
+    );
+    // 20! is 2,432,902,008,176,640,000 — the largest factorial that fits in `Int`, so
+    // this is also the boundary case for the checked multiply not firing early.
+    expect_value(
+        "    let mut k = 1;\n    let mut f = 1;\n    while k <= 20 { f = f * k; k = k + 1; }\n    f",
+        "2432902008176640000",
+    );
+}
+
+#[test]
+fn nested_loops_agree_with_the_interpreter() {
+    // A rectangle: 4 × 6 iterations of the inner body.
+    expect_value(
+        "    let mut i = 0;\n    let mut n = 0;\n    while i < 4 {\n        let mut j = 0;\n        while j < 6 { n = n + 1; j = j + 1; }\n        i = i + 1;\n    }\n    n",
+        "24",
+    );
+    // A triangle, where the inner bound depends on the outer variable — so the inner
+    // condition has to be re-read against a value the outer body changed.
+    expect_value(
+        "    let mut i = 0;\n    let mut n = 0;\n    while i < 5 {\n        let mut j = 0;\n        while j < i { n = n + 1; j = j + 1; }\n        i = i + 1;\n    }\n    n",
+        "10",
+    );
+    // Three deep, so the back edge of the middle loop is itself inside a loop body.
+    expect_value(
+        "    let mut a = 0;\n    let mut n = 0;\n    while a < 3 {\n        let mut b = 0;\n        while b < 3 {\n            let mut c = 0;\n            while c < 3 { n = n + 1; c = c + 1; }\n            b = b + 1;\n        }\n        a = a + 1;\n    }\n    n",
+        "27",
+    );
+}
+
+#[test]
+fn a_bool_local_changed_by_the_body_ends_the_loop() {
+    // The condition is a plain `Bool` load, so the only thing that can stop this loop is
+    // the body's store being visible to the next evaluation of the condition.
+    expect_value(
+        "    let mut go = true;\n    let mut n = 0;\n    while go {\n        n = n + 1;\n        go = n < 4;\n    }\n    n",
+        "4",
+    );
+    // The same, with the flag set from an `if`/`else` rather than a comparison.
+    expect_value(
+        "    let mut go = true;\n    let mut n = 0;\n    while go {\n        n = n + 3;\n        go = if n > 8 { false } else { true };\n    }\n    n",
+        "9",
+    );
+}
+
+#[test]
+fn helper_functions_are_callable_from_a_condition_and_a_body() {
+    let src = "fn below(n: Int, limit: Int) -> Bool { n < limit }\n\
+               fn twice(n: Int) -> Int { n * 2 }\n\
+               fn main() -> Int {\n\
+               \x20   let mut i = 1;\n\
+               \x20   let mut steps = 0;\n\
+               \x20   while below(i, 100) {\n\
+               \x20       i = twice(i);\n\
+               \x20       steps = steps + 1;\n\
+               \x20   }\n\
+               \x20   i + steps\n\
+               }\n";
+    // 1 → 2 → 4 → … → 128 is seven doublings.
+    let interp = interpret(src);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    assert_eq!(interp.stdout.trim(), "135");
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        let ran = run_exe(&built);
+        assert_eq!(ran.code, Some(0), "-O{opt}: {ran:?}");
+        assert_eq!(ran.stdout.trim(), "135", "-O{opt}");
+    }
+}
+
+#[test]
+fn an_assignment_value_may_be_an_if_else_expression() {
+    // The value-position `if` from M1b, now on the right of an `=`. Both branches of the
+    // `if` are inside the loop, so the join is reached once per iteration.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 0;\n    while i < 6 {\n        s = s + if i % 2 == 0 { i } else { 0 };\n        i = i + 1;\n    }\n    s",
+        "6",
+    );
+    // Nested, and with the `if` deciding the loop variable itself — a store whose value
+    // came from a branch, read back by the condition.
+    expect_value(
+        "    let mut i = 0;\n    let mut hops = 0;\n    while i < 20 {\n        i = if i < 5 { i + 1 } else { if i < 10 { i + 2 } else { i + 5 } };\n        hops = hops + 1;\n    }\n    hops",
+        "10",
+    );
+}
+
+#[test]
+fn a_loop_local_is_initialised_on_every_iteration() {
+    // The slot for `acc` is allocated once and reused; its *value* must not be. If the
+    // initialiser were hoisted out of the loop — storage reuse becoming value reuse —
+    // `acc` would accumulate across iterations and this would be 306 rather than 303.
+    expect_value(
+        "    let mut i = 0;\n    let mut total = 0;\n    while i < 3 {\n        let mut acc = 100;\n        acc = acc + i;\n        total = total + acc;\n        i = i + 1;\n    }\n    total",
+        "303",
+    );
+    // An immutable loop-local, which has the same obligation for a different reason: it
+    // is a fresh binding each time round, not one binding read three times.
+    expect_value(
+        "    let mut i = 0;\n    let mut total = 0;\n    while i < 4 {\n        let doubled = i * 2;\n        total = total + doubled;\n        i = i + 1;\n    }\n    total",
+        "12",
+    );
+}
+
+#[test]
+fn shadowing_inside_a_loop_leaves_the_outer_binding_alone() {
+    // `x` is assigned before the inner `let mut x`, so that assignment reaches the outer
+    // binding; the one after it reaches the inner. The inner binding is new on every
+    // iteration and its value is discarded at the end of each.
+    expect_value(
+        "    let mut x = 1;\n    let mut i = 0;\n    while i < 3 {\n        x = x + 10;\n        let mut x = 100;\n        x = x + 1;\n        i = i + 1;\n    }\n    x",
+        "31",
+    );
+    // The inner binding may even have a different type, which is only possible because
+    // it really is a separate binding rather than a reassignment.
+    expect_value(
+        "    let mut n = 5;\n    let mut i = 0;\n    while i < 2 {\n        let mut n = true;\n        n = false;\n        i = i + 1;\n    }\n    n",
+        "5",
+    );
+    // A nested loop's body shadowing the outer loop's counter, while the outer counter
+    // keeps advancing — the case where a shared slot would hang the program rather than
+    // produce a wrong number.
+    expect_value(
+        "    let mut i = 0;\n    let mut seen = 0;\n    while i < 3 {\n        let mut j = 0;\n        while j < 2 {\n            let i = 99;\n            seen = seen + i;\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    seen",
+        "594",
+    );
+}
+
+#[test]
+fn mutable_locals_in_different_functions_are_independent() {
+    // `count` exists in two functions at once, with different values, while one is on the
+    // other's stack. Sharing a slot space between functions would make the inner call
+    // overwrite the outer's counter.
+    let src = "fn inner(n: Int) -> Int {\n\
+               \x20   let mut count = 0;\n\
+               \x20   let mut total = 0;\n\
+               \x20   while count < n { total = total + 1; count = count + 1; }\n\
+               \x20   total\n\
+               }\n\
+               fn main() -> Int {\n\
+               \x20   let mut count = 0;\n\
+               \x20   let mut total = 0;\n\
+               \x20   while count < 4 {\n\
+               \x20       total = total + inner(count);\n\
+               \x20       count = count + 1;\n\
+               \x20   }\n\
+               \x20   total * 100 + count\n\
+               }\n";
+    // inner(0)+inner(1)+inner(2)+inner(3) = 0+1+2+3 = 6, and `main`'s own count reaches 4.
+    let interp = interpret(src);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    assert_eq!(interp.stdout.trim(), "604");
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        assert_eq!(run_exe(&built).stdout.trim(), "604", "-O{opt}");
+    }
+}
+
+#[test]
+fn a_failure_in_the_condition_reports_the_conditions_position() {
+    // `10 / d` with `d` reaching 0 — the failure is in the condition, on the `while` line,
+    // and not on any line of the body.
+    expect_runtime_error_at(
+        "    let mut d = 2;\n    let mut n = 0;\n    while 10 / d > 0 {\n        n = n + 1;\n        d = d - 1;\n    }\n    n",
+        "N0401",
+        "division by zero",
+        "prog.nz:4:14",
+    );
+}
+
+#[test]
+fn a_failure_in_the_body_reports_the_bodys_position() {
+    expect_runtime_error_at(
+        "    let m = 9223372036854775807;\n    let mut i = 0;\n    let mut x = 0;\n    while i < 3 {\n        x = m + 1;\n        i = i + 1;\n    }\n    x",
+        "N0400",
+        "this addition overflows `Int`",
+        "prog.nz:6:15",
+    );
+}
+
+#[test]
+fn a_loop_can_fail_on_a_later_iteration_rather_than_the_first() {
+    // The first iterations succeed and only a later one fails, so this is not satisfied
+    // by a compiler that evaluates the body once. `10 / (3 - i)` is fine for i = 0, 1, 2
+    // and divides by zero on the fourth pass.
+    expect_runtime_error_at(
+        "    let mut i = 0;\n    let mut q = 0;\n    while i < 6 {\n        q = q + 10 / (3 - i);\n        i = i + 1;\n    }\n    q",
+        "N0401",
+        "division by zero",
+        "prog.nz:5:20",
+    );
+    // Multiplication that only overflows after about forty iterations, which also shows
+    // the guard is inside the loop rather than hoisted out of it.
+    expect_runtime_error_at(
+        "    let mut x = 1;\n    let mut i = 0;\n    while i < 100 {\n        x = x * 3;\n        i = i + 1;\n    }\n    x",
+        "N0400",
+        "this multiplication overflows `Int`",
+        "prog.nz:5:15",
+    );
+}
+
+#[test]
+fn assignment_and_loop_condition_errors_belong_to_the_checker() {
+    // A backend limitation must never be reported as a language error, and the reverse is
+    // equally wrong. These three are the language's rules and `N0101` must not appear.
+    for (src, code) in [
+        (
+            "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n",
+            "N0310",
+        ),
+        (
+            "fn main() -> Int {\n    let mut b = true;\n    b = 1;\n    0\n}\n",
+            "N0300",
+        ),
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while i { i = i + 1; }\n    i\n}\n",
+            "N0301",
+        ),
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; missing = 1; }\n    i\n}\n",
+            "N0200",
+        ),
+        // A loop body whose tail produces a value is the checker's `N0300`, not the
+        // backend's refusal of a tail — so a reader is told the value is discarded rather
+        // than that the compiler cannot do loops.
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; i }\n    i\n}\n",
+            "N0300",
+        ),
+    ] {
+        let (dir, path) = write_program(src);
+        let exe = dir.path().join("prog");
+        let out = Command::new(NAZM)
+            .args(["build", path.to_str().unwrap()])
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{code}: {stderr}");
+        assert!(stderr.contains(code), "expected {code}: {stderr}");
+        assert!(
+            !stderr.contains("N0101"),
+            "a language error was reported as a backend limit: {stderr}"
+        );
+        assert!(!exe.exists(), "{code}: produced an executable");
+    }
+}
+
+#[test]
+fn unsupported_control_flow_inside_a_loop_is_refused_and_nothing_is_published() {
+    // What is left after M1e. `break` and `continue` compile; `return` does not, and it
+    // does not start to just because everything around it does.
+    for (src, expected) in [
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { return 9; }\n    i\n}\n",
+            "`return`",
+        ),
+        // Inside a nested loop, so the refusal is not something the outer loop's arm
+        // happens to catch.
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 {\n        let mut j = 0;\n        while j < 2 { return 1; }\n        i = i + 1;\n    }\n    i\n}\n",
+            "`return`",
+        ),
+        // Inside a statement-position `if` inside a loop — the two constructs M1e adds,
+        // wrapped around the one it does not.
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { if i == 1 { return 4; } i = i + 1; }\n    i\n}\n",
+            "`return`",
+        ),
+        // A `return` in the `else` of a statement `if` whose `then` legitimately breaks.
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { if i == 1 { break; } else { return 4; } }\n    i\n}\n",
+            "`return`",
+        ),
+        // And inside a loop in a helper function.
+        (
+            "fn f(n: Int) -> Int {\n    let mut t = 0;\n    while t < n { return t; }\n    t\n}\n\
+             fn main() -> Int { f(3) }\n",
+            "`return`",
+        ),
+        // A bare block as a statement is still a separate construct.
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; { 1 }; }\n    i\n}\n",
+            "an expression statement",
+        ),
+    ] {
+        let (dir, path) = write_program(src);
+        let exe = dir.path().join("prog");
+        let out = Command::new(NAZM)
+            .args(["build", path.to_str().unwrap()])
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{expected}: {stderr}");
+        assert!(stderr.contains("N0101"), "{expected}: {stderr}");
+        assert!(stderr.contains(expected), "expected {expected:?}: {stderr}");
+        assert!(
+            stderr.contains("nazm run"),
+            "{expected}: a refusal should say what still works: {stderr}"
+        );
+        assert!(!exe.exists(), "{expected}: produced an executable");
+
+        // Refused, not invalid: the interpreter runs every one of these.
+        let ran = Command::new(NAZM)
+            .args(["run", path.to_str().unwrap()])
+            .output()
+            .expect("run");
+        assert_eq!(
+            ran.status.code(),
+            Some(0),
+            "{expected}: `nazm run` should still accept it: {}",
+            String::from_utf8_lossy(&ran.stderr)
+        );
+    }
+}
+
+#[test]
+fn a_working_loop_executable_survives_a_later_refused_build() {
+    // The output is published only after `clang` succeeds, so a build that is refused for
+    // being outside the subset must leave the previous executable exactly as it was —
+    // the failure mode that costs someone a working artefact at the worst moment.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("prog.nz");
+    let exe = dir.path().join("prog");
+
+    std::fs::write(
+        &src,
+        "fn main() -> Int {\n    let mut i = 0;\n    while i < 5 { i = i + 1; }\n    i\n}\n",
+    )
+    .expect("write");
+    let first = Command::new(NAZM)
+        .args(["build", src.to_str().unwrap()])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("run");
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let before = std::fs::read(&exe).expect("read the executable");
+
+    // Now edit the source to something the backend refuses.
+    std::fs::write(
+        &src,
+        "fn main() -> Int {\n    let mut i = 0;\n    while i < 5 { return 9; }\n    i\n}\n",
+    )
+    .expect("write");
+    let second = Command::new(NAZM)
+        .args(["build", src.to_str().unwrap()])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("run");
+    assert_eq!(second.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&second.stderr).contains("N0101"));
+
+    assert_eq!(
+        std::fs::read(&exe).expect("read again"),
+        before,
+        "the refused build replaced a working executable"
+    );
+    let built = Built {
+        dir,
+        exe: exe.clone(),
+    };
+    let ran = run_exe(&built);
+    assert_eq!(ran.code, Some(0));
+    assert_eq!(
+        ran.stdout.trim(),
+        "5",
+        "the surviving executable still works"
+    );
+}
+
+#[test]
+fn many_iterations_with_body_locals_allocate_once_in_the_entry_block() {
+    // Two claims, and they are separate.
+    //
+    // The first is structural: **every `alloca` is in the entry block**, read out of the
+    // emitted IR. A slot belongs to a binding, not to an execution of it, so a body-local
+    // declaration allocates once however many times the loop goes round. An `alloca` on
+    // the loop path would grow the stack by a cell per iteration.
+    //
+    // The second is that a bounded run with such a body completes and produces the right
+    // number. That is *not* a whole-program memory bound: it says this program at this
+    // iteration count did not fail, and nothing about any other.
+    let src = "fn main() -> Int {\n\
+               \x20   let mut i = 0;\n\
+               \x20   let mut total = 0;\n\
+               \x20   while i < 20000 {\n\
+               \x20       let mut a = 1;\n\
+               \x20       let b = i % 7;\n\
+               \x20       let mut c = 0;\n\
+               \x20       a = a + b;\n\
+               \x20       c = a;\n\
+               \x20       total = total + c;\n\
+               \x20       i = i + 1;\n\
+               \x20   }\n\
+               \x20   total\n\
+               }\n";
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("prog.nz");
+    std::fs::write(&path, src).expect("write");
+    let exe = dir.path().join("prog");
+    let out = Command::new(NAZM)
+        .args(["build", path.to_str().unwrap(), "--emit-ir"])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("emitted IR");
+    let body: &str = ir
+        .split("define internal i64 @nz.f0()")
+        .nth(1)
+        .expect("main's definition");
+
+    // Walk the definition, tracking which block each line is in. Every `alloca` must be
+    // in `entry`, and `entry` is the block before the first label.
+    let mut block = "entry".to_owned();
+    let mut allocas = 0usize;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed == "}" {
+            break;
+        }
+        if let Some(label) = trimmed.strip_suffix(':') {
+            if !label.contains(char::is_whitespace) {
+                block = label.to_owned();
+                continue;
+            }
+        }
+        if trimmed.contains("alloca") {
+            allocas += 1;
+            assert_eq!(
+                block, "entry",
+                "an alloca outside the entry block, in {block}: {trimmed}"
+            );
+        }
+    }
+    // i, total, a, b, c.
+    assert_eq!(
+        allocas, 5,
+        "one slot per binding, no more and no fewer:\n{ir}"
+    );
+
+    // The loop really does go round: a back edge into the condition block exists.
+    assert!(
+        ir.contains("br label %b2"),
+        "no back edge to the condition block:\n{ir}"
+    );
+
+    // 20000 iterations of `(i % 7) + 1`.
+    let interp = interpret(src);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    let built = Built { dir, exe };
+    let ran = run_exe(&built);
+    assert_eq!(ran.code, Some(0), "{ran:?}");
+    assert_eq!(
+        ran.stdout.trim(),
+        interp.stdout.trim(),
+        "the native program and the interpreter disagree"
+    );
+    assert_eq!(ran.stdout.trim(), "79997");
+}
+
+#[test]
+fn the_condition_is_reevaluated_on_every_iteration() {
+    // The discriminating test for the loop's one load-bearing property. A back edge that
+    // jumped to the *body* instead of the condition block would evaluate the condition
+    // once, find it true, and never look again — so this program would never terminate.
+    //
+    // Deliberately given its own short deadline and asserted on directly, because the
+    // failure that defect produces is **non-termination, not a wrong value**. A test that
+    // only compared numbers would hang instead of failing.
+    let src = program(
+        "    let mut i = 0;\n    let mut n = 0;\n    while i < 3 {\n        n = n + 1;\n        i = i + 1;\n    }\n    n",
+    );
+    for opt in [0u8, 2] {
+        let built = build_at(&src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        let ran = run_exe_within(&built, Duration::from_secs(10)).unwrap_or_else(|| {
+            panic!(
+                "-O{opt}: the loop did not terminate within 10s — the condition is not \
+                 being re-evaluated. A timeout here is a failure, never a result."
+            )
+        });
+        assert_eq!(ran.code, Some(0), "-O{opt}: {ran:?}");
+        assert_eq!(ran.stdout.trim(), "3", "-O{opt}");
+    }
+
+    // The other half of the same property: the condition must see what the body stored.
+    // A loop whose condition read a stale copy would run forever here too.
+    expect_value(
+        "    let mut go = true;\n    let mut n = 0;\n    while go { n = n + 1; go = n < 10; }\n    n",
+        "10",
+    );
+}
+
+#[test]
+fn a_loop_inside_a_branch_is_the_joins_predecessor() {
+    // The predecessor rule, which a loop is the newest way to break. The `phi` at the
+    // join must name the block the branch *ended* in — for a branch containing a loop
+    // that is the loop's **exit** block, not the label the branch was opened with. Naming
+    // the entry label produces IR clang rejects, or worse, one it accepts with the wrong
+    // incoming value.
+    expect_value(
+        "    let mut n = 0;\n    let v = if n < 1 {\n        let mut i = 0;\n        let mut s = 0;\n        while i < 4 { s = s + i; i = i + 1; }\n        s\n    } else { 99 };\n    n = v + 1;\n    n",
+        "7",
+    );
+    // The other branch, so neither side is the only one exercised.
+    expect_value(
+        "    let mut n = 5;\n    let v = if n < 1 {\n        99\n    } else {\n        let mut i = 0;\n        while i < 3 { i = i + 1; }\n        i\n    };\n    v",
+        "3",
+    );
+    // A loop whose *condition* contains an `if`, so the conditional branch is emitted in
+    // the join block the `if` opened rather than in the loop's own head block.
+    expect_value(
+        "    let mut i = 0;\n    let mut n = 0;\n    while if n < 2 { i < 10 } else { false } {\n        n = n + 1;\n        i = i + 1;\n    }\n    i * 100 + n",
+        "202",
+    );
+    // And a loop in both branches of an `if` that is itself inside a loop body.
+    expect_value(
+        "    let mut outer = 0;\n    let mut total = 0;\n    while outer < 3 {\n        total = total + if outer % 2 == 0 {\n            let mut a = 0;\n            let mut x = 0;\n            while a < 2 { x = x + 10; a = a + 1; }\n            x\n        } else {\n            let mut b = 0;\n            let mut y = 0;\n            while b < 3 { y = y + 1; b = b + 1; }\n            y\n        };\n        outer = outer + 1;\n    }\n    total",
+        "43",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M1e — `break`, `continue`, and statement-position `if`
+//
+// Every case terminates inside the interpreter's budget, for the reason M1d records: a
+// compiled program has no iteration budget, so the two implementations agree on what a
+// terminating program produces and nothing more. Deadlines still apply to every
+// subprocess, and a timeout is a failure.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_loop_can_break_immediately() {
+    expect_value(
+        "    let mut i = 0;\n    while i < 10 { break; }\n    i",
+        "0",
+    );
+    // With work before the break, so "immediately" means the first iteration rather than
+    // no iteration.
+    expect_value(
+        "    let mut i = 0;\n    while i < 10 { i = i + 7; break; }\n    i",
+        "7",
+    );
+}
+
+#[test]
+fn continue_skips_the_rest_of_the_iteration_and_rechecks_the_condition() {
+    // `s` must miss exactly the skipped values, which a `continue` that fell through to
+    // the rest of the body would not, and one that jumped to the body rather than the
+    // condition would never terminate.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 0;\n    while i < 6 {\n        i = i + 1;\n        if i == 3 { continue; }\n        s = s + i;\n    }\n    s",
+        "18",
+    );
+    // The condition is re-read after a `continue`, including a change the body made to
+    // it immediately before continuing.
+    expect_value(
+        "    let mut i = 0;\n    let mut n = 0;\n    while i < 4 {\n        i = i + 1;\n        n = n + 1;\n        continue;\n    }\n    i * 10 + n",
+        "44",
+    );
+    // A condition with a call and checked arithmetic in it, re-evaluated on the path a
+    // `continue` takes — the case a jump straight to the body would skip.
+    let src = "fn limit() -> Int { 5 }\n\
+               fn main() -> Int {\n\
+               \x20   let mut i = 0;\n\
+               \x20   let mut n = 0;\n\
+               \x20   while i * 1 < limit() {\n\
+               \x20       i = i + 1;\n\
+               \x20       n = n + 1;\n\
+               \x20       continue;\n\
+               \x20   }\n\
+               \x20   n\n\
+               }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.stdout.trim(), "5", "{}", interp.stderr);
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        assert_eq!(run_exe(&built).stdout.trim(), "5", "-O{opt}");
+    }
+}
+
+#[test]
+fn break_and_continue_may_be_conditional() {
+    // Conditional break: stops at the first multiple of 7 above 20.
+    expect_value(
+        "    let mut n = 20;\n    while true {\n        n = n + 1;\n        if n % 7 == 0 { break; }\n    }\n    n",
+        "21",
+    );
+    // Conditional continue with an `else`, so both branches are written out.
+    expect_value(
+        "    let mut i = 0;\n    let mut odd = 0;\n    while i < 10 {\n        i = i + 1;\n        if i % 2 == 0 { continue; } else { odd = odd + i; }\n    }\n    odd",
+        "25",
+    );
+}
+
+#[test]
+fn a_statement_if_reaches_its_continuation_from_whichever_branches_fall_through() {
+    // Neither branch transfers: both reach the continuation.
+    expect_value(
+        "    let mut x = 0;\n    let mut i = 0;\n    while i < 4 {\n        i = i + 1;\n        if i % 2 == 0 { x = x + 10; } else { x = x + 1; }\n        x = x + 100;\n    }\n    x",
+        "422",
+    );
+    // Only the `else` falls through: the `then` breaks, so the continuation runs on
+    // exactly the iterations that took the `else`.
+    expect_value(
+        "    let mut x = 0;\n    let mut i = 0;\n    while i < 9 {\n        i = i + 1;\n        if i == 3 { break; } else { x = x + 1; }\n        x = x + 100;\n    }\n    x",
+        "202",
+    );
+    // Only the `then` falls through.
+    expect_value(
+        "    let mut x = 0;\n    let mut i = 0;\n    while i < 9 {\n        i = i + 1;\n        if i < 3 { x = x + 1; } else { break; }\n        x = x + 100;\n    }\n    x",
+        "202",
+    );
+    // **Both** branches transfer: there is no continuation at all, so the statement
+    // after the `if` can never run — and the checker says so before the backend does.
+    expect_value(
+        "    let mut i = 0;\n    let mut x = 0;\n    while i < 9 {\n        i = i + 1;\n        if i > 3 { break; } else { continue; }\n    }\n    i * 10 + x",
+        "40",
+    );
+}
+
+#[test]
+fn a_statement_if_without_else_always_falls_through() {
+    // Whatever the branch does. Even when it always transfers, the condition may be
+    // false, so the continuation is reachable and must be emitted.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        if i == 2 { continue; }\n        s = s + i;\n    }\n    s",
+        "13",
+    );
+    // A branch that always breaks, with a condition that is false for a while.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 0;\n    while i < 100 {\n        i = i + 1;\n        if i == 4 { break; }\n        s = s + i;\n    }\n    s",
+        "6",
+    );
+    // And nested: an `if` with no `else` inside an `if` with no `else`.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 0;\n    while i < 8 {\n        i = i + 1;\n        if i > 2 { if i % 2 == 1 { continue; } }\n        s = s + i;\n    }\n    s",
+        "21",
+    );
+}
+
+#[test]
+fn an_inner_break_leaves_only_the_inner_loop() {
+    // The outer loop must keep going, and the statement after the inner loop must run —
+    // a target stack that let the inner loop overwrite the outer's would leave both.
+    expect_value(
+        "    let mut o = 0;\n    let mut s = 0;\n    while o < 4 {\n        let mut j = 0;\n        while j < 10 {\n            if j == 2 { break; }\n            s = s + 1;\n            j = j + 1;\n        }\n        s = s + 100;\n        o = o + 1;\n    }\n    s",
+        "408",
+    );
+    // Reaching the *outer* loop's own control after the inner loop finishes: the outer
+    // `continue` must target the outer condition, not the inner one, which by then has
+    // been popped.
+    expect_value(
+        "    let mut o = 0;\n    let mut s = 0;\n    while o < 5 {\n        o = o + 1;\n        let mut j = 0;\n        while j < 3 { j = j + 1; }\n        if o % 2 == 0 { continue; }\n        s = s + j;\n    }\n    s",
+        "9",
+    );
+    // An outer `break` reached after an inner loop completed.
+    expect_value(
+        "    let mut o = 0;\n    let mut s = 0;\n    while o < 100 {\n        o = o + 1;\n        let mut j = 0;\n        while j < 2 { j = j + 1; s = s + 1; }\n        if o == 3 { break; }\n    }\n    o * 100 + s",
+        "306",
+    );
+}
+
+#[test]
+fn an_inner_continue_reevaluates_the_inner_condition() {
+    // If the inner `continue` jumped to the inner body, `j` would never be re-tested and
+    // this would not terminate; if it targeted the *outer* loop, `s` would be 0.
+    expect_value(
+        "    let mut o = 0;\n    let mut s = 0;\n    while o < 3 {\n        o = o + 1;\n        let mut j = 0;\n        while j < 5 {\n            j = j + 1;\n            if j % 2 == 0 { continue; }\n            s = s + 1;\n        }\n    }\n    s",
+        "9",
+    );
+}
+
+#[test]
+fn a_transfer_in_a_loop_condition_targets_the_enclosing_loop() {
+    // The rule taken from the existing implementations rather than assumed: a loop's
+    // condition is *not* inside that loop. `check.rs` raises `loop_depth` around the
+    // body alone, and `eval.rs` lets a `Flow::Break` raised in a condition leave
+    // `while_loop` — so the enclosing loop consumes it.
+    //
+    // These two numbers are only explicable under that rule, which is why they are the
+    // assertion: 102 means the outer loop stopped, and 204 means the outer loop skipped
+    // the rest of an iteration and then ran another one.
+    expect_value(
+        "    let mut o = 0;\n    let mut s = 0;\n    while o < 3 {\n        o = o + 1;\n        let mut j = 0;\n        while (if o == 2 { break; } else { j < 2 }) { j = j + 1; s = s + 1; }\n        s = s + 100;\n    }\n    s",
+        "102",
+    );
+    expect_value(
+        "    let mut o = 0;\n    let mut s = 0;\n    while o < 3 {\n        o = o + 1;\n        let mut j = 0;\n        while (if o == 2 { continue; } else { j < 2 }) { j = j + 1; s = s + 1; }\n        s = s + 100;\n    }\n    s",
+        "204",
+    );
+}
+
+#[test]
+fn control_transfers_out_of_every_value_position_the_frontend_accepts() {
+    // The five compositions named in the M1e scope table. Each was confirmed to check
+    // and run before any of this was implemented.
+
+    // 1. A `let` initialiser.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        let x = if i == 3 { break; } else { i };\n        s = s + x;\n    }\n    s",
+        "3",
+    );
+    // 2. An assignment right-hand side.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        s = if i == 3 { break; } else { s + i };\n    }\n    s",
+        "3",
+    );
+    // 3. An arithmetic operand.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        s = s + (if i == 3 { break; } else { i });\n    }\n    s",
+        "3",
+    );
+    // 4. A call argument.
+    let src = "fn dbl(n: Int) -> Int { n * 2 }\n\
+               fn main() -> Int {\n\
+               \x20   let mut i = 0;\n\
+               \x20   let mut s = 0;\n\
+               \x20   while i < 5 {\n\
+               \x20       i = i + 1;\n\
+               \x20       s = s + dbl(if i == 3 { break; } else { i });\n\
+               \x20   }\n\
+               \x20   s\n\
+               }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.stdout.trim(), "6", "{}", interp.stderr);
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        assert_eq!(run_exe(&built).stdout.trim(), "6", "-O{opt}");
+    }
+    // 5. A nested `if`'s condition.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        s = s + if (if i == 3 { break; } else { true }) { 10 } else { 0 };\n    }\n    s",
+        "20",
+    );
+    // Both branches transferring, in a `let` initialiser: the binding is never written
+    // and nothing after the statement runs.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        let x = if i == 3 { break; } else { continue; };\n        s = s + x;\n    }\n    s",
+        "0",
+    );
+}
+
+#[test]
+fn an_interrupted_expression_keeps_earlier_effects_and_skips_later_ones() {
+    // A failure *before* the transfer still happens: `10 / z` is the left operand and
+    // divides by zero on the first iteration, so the `break` to its right is never
+    // reached.
+    expect_runtime_error_at(
+        "    let z = 0;\n    let mut i = 0;\n    while i < 3 {\n        i = (10 / z) + (if true { break; } else { 1 });\n    }\n    i",
+        "N0401",
+        "division by zero",
+        "prog.nz:5:17",
+    );
+    // The same two operands the other way round: the transfer comes first, so the
+    // division is **not** evaluated and the program succeeds. Nothing but evaluation
+    // order distinguishes these two.
+    expect_value(
+        "    let z = 0;\n    let mut i = 0;\n    let mut s = 7;\n    while i < 3 {\n        s = (if true { break; } else { 1 }) + (10 / z);\n    }\n    s",
+        "7",
+    );
+    // An interrupted assignment performs no store: `s` keeps the value it had before the
+    // iteration that broke.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 100;\n    while i < 5 {\n        i = i + 1;\n        s = if i == 2 { break; } else { s + 1 };\n    }\n    s",
+        "101",
+    );
+    // A call with an interrupted argument is never entered. `boom(0)` would divide by
+    // zero, and a compiler that called it with whatever was lying around would say so.
+    let src = "fn boom(n: Int) -> Int { 10 / n }\n\
+               fn main() -> Int {\n\
+               \x20   let mut i = 0;\n\
+               \x20   let mut s = 0;\n\
+               \x20   while i < 3 {\n\
+               \x20       i = i + 1;\n\
+               \x20       s = s + boom(if i == 2 { break; } else { i });\n\
+               \x20   }\n\
+               \x20   s\n\
+               }\n";
+    let interp = interpret(src);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    assert_eq!(interp.stdout.trim(), "10");
+    for opt in [0u8, 2] {
+        let built = build_at(src, opt).unwrap_or_else(|e| panic!("-O{opt}: {e:?}"));
+        let ran = run_exe(&built);
+        assert_eq!(ran.code, Some(0), "-O{opt}: {ran:?}");
+        assert_eq!(ran.stdout.trim(), "10", "-O{opt}");
+    }
+    // Statements already executed keep their effects; statements after the transfer do
+    // not run at all.
+    expect_value(
+        "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        s = s + 1;\n        if i == 2 { break; }\n        s = s + 100;\n    }\n    s",
+        "102",
+    );
+}
+
+#[test]
+fn loop_locals_and_shadowing_survive_break_and_continue() {
+    // A body-local is re-initialised on every iteration, including the iterations a
+    // `continue` cut short.
+    expect_value(
+        "    let mut i = 0;\n    let mut total = 0;\n    while i < 5 {\n        i = i + 1;\n        let mut acc = 10;\n        if i % 2 == 0 { continue; }\n        acc = acc + i;\n        total = total + acc;\n    }\n    total",
+        "39",
+    );
+    // Shadowing inside a branch of a statement `if`, with the outer binding untouched.
+    expect_value(
+        "    let mut x = 1;\n    let mut i = 0;\n    while i < 3 {\n        i = i + 1;\n        if i < 3 { let mut x = 100; x = x + 1; continue; }\n        x = x + 10;\n    }\n    x",
+        "11",
+    );
+}
+
+#[test]
+fn misplaced_transfers_and_unreachable_code_belong_to_the_checker() {
+    for (src, code) in [
+        ("fn main() -> Int {\n    break;\n    1\n}\n", "N0312"),
+        ("fn main() -> Int {\n    continue;\n    1\n}\n", "N0312"),
+        // A `break` in the *outermost* loop's condition has no enclosing loop to affect,
+        // which is the checker's rule and the reason the backend pushes targets around
+        // the body alone.
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while (if i > 1 { break; } else { true }) { i = i + 1; }\n    i\n}\n",
+            "N0312",
+        ),
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { break; i = i + 1; }\n    i\n}\n",
+            "N0313",
+        ),
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { if i == 1 { break; } else { continue; } i = i + 1; }\n    i\n}\n",
+            "N0313",
+        ),
+    ] {
+        let (dir, path) = write_program(src);
+        let exe = dir.path().join("prog");
+        let out = Command::new(NAZM)
+            .args(["build", path.to_str().unwrap()])
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{code}: {stderr}");
+        assert!(stderr.contains(code), "expected {code}: {stderr}");
+        assert!(
+            !stderr.contains("N0101"),
+            "a language error was reported as a backend limit: {stderr}"
+        );
+        assert!(!exe.exists(), "{code}: produced an executable");
+    }
+}
+
+/// Structural facts about a generated module, read out of the text.
+///
+/// clang accepting the module is the real check and it runs on every case above; this
+/// adds *which* shape was emitted. It exists because the two ways control flow goes wrong
+/// here are both things a reader would have to hand-trace otherwise: an instruction
+/// appended after a terminator, and a `phi` naming a block that does not branch to it.
+///
+/// Returns the number of blocks inspected, so a test cannot pass by finding nothing.
+fn assert_control_flow_is_well_formed(ir: &str) -> usize {
+    let terminator = |l: &str| {
+        l.starts_with("br ")
+            || l.starts_with("ret ")
+            || l == "unreachable"
+            || l.starts_with("switch ")
+    };
+
+    let mut blocks = 0usize;
+    for function in ir.split("\ndefine ").skip(1) {
+        let body = function.split("\n}").next().unwrap_or_default();
+
+        // Pass one: the instructions of each block, in order. A function may open with
+        // an explicit `entry:` label or fall straight into instructions, so the first
+        // block is created by whichever comes first rather than seeded.
+        let mut named: Vec<(String, Vec<String>)> = Vec::new();
+        for line in body.lines().skip(1) {
+            let t = line.split(';').next().unwrap_or_default().trim().to_owned();
+            if t.is_empty() {
+                continue;
+            }
+            if let Some(label) = t.strip_suffix(':') {
+                if !label.contains(char::is_whitespace) {
+                    named.push((label.to_owned(), Vec::new()));
+                    continue;
+                }
+            }
+            if named.is_empty() {
+                named.push(("entry".to_owned(), Vec::new()));
+            }
+            if let Some((_, instrs)) = named.last_mut() {
+                instrs.push(t);
+            }
+        }
+
+        for (label, instrs) in &named {
+            blocks += 1;
+            let ends = instrs.iter().rposition(|l| terminator(l));
+            assert_eq!(
+                ends,
+                Some(instrs.len().saturating_sub(1)),
+                "block %{label} does not end in a terminator:\n{instrs:#?}"
+            );
+            let count = instrs.iter().filter(|l| terminator(l)).count();
+            assert_eq!(
+                count, 1,
+                "block %{label} has {count} terminators, so something was appended after \
+                 one:\n{instrs:#?}"
+            );
+        }
+
+        // Pass two: every `phi` incoming must name a block that really branches here.
+        for (label, instrs) in &named {
+            for instr in instrs {
+                let Some(rest) = instr.split(" = phi ").nth(1) else {
+                    continue;
+                };
+                for incoming in rest.split('[').skip(1) {
+                    let inside = incoming.split(']').next().unwrap_or_default();
+                    let from = inside
+                        .split(',')
+                        .nth(1)
+                        .unwrap_or_default()
+                        .trim()
+                        .trim_start_matches('%')
+                        .to_owned();
+                    let source = named.iter().find(|(n, _)| *n == from);
+                    let (_, source) = source.unwrap_or_else(|| {
+                        panic!(
+                            "phi in %{label} names %{from}, which is not a block in this function"
+                        )
+                    });
+                    assert!(
+                        source
+                            .iter()
+                            .any(|l| terminator(l) && l.contains(&format!("label %{label}"))),
+                        "phi in %{label} names %{from}, but %{from} does not branch there: \
+                         {source:#?}"
+                    );
+                }
+            }
+        }
+    }
+    blocks
+}
+
+#[test]
+fn the_emitted_ir_for_nested_control_flow_is_well_formed() {
+    // One program carrying every shape M1e adds at once: nested loops, `break` and
+    // `continue` at both depths, a statement `if` with and without `else`, a
+    // value-position `if` whose branches disagree about transferring, checked arithmetic
+    // inside a condition, and a call.
+    let src = "fn keep(n: Int) -> Bool { n % 4 != 0 }\n\
+               fn main() -> Int {\n\
+               \x20   let mut o = 0;\n\
+               \x20   let mut total = 0;\n\
+               \x20   while o < 6 {\n\
+               \x20       o = o + 1;\n\
+               \x20       if o == 5 { break; }\n\
+               \x20       let mut j = 0;\n\
+               \x20       while j * 1 < o {\n\
+               \x20           j = j + 1;\n\
+               \x20           if keep(j) { total = total + (if j > 2 { continue; } else { j }); } else { break; }\n\
+               \x20       }\n\
+               \x20       if o % 2 == 0 { continue; } else { total = total + 100; }\n\
+               \x20   }\n\
+               \x20   total\n\
+               }\n";
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("prog.nz");
+    std::fs::write(&path, src).expect("write");
+    let exe = dir.path().join("prog");
+    let out = Command::new(NAZM)
+        .args(["build", path.to_str().unwrap(), "--emit-ir"])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "clang rejected the generated IR: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("emitted IR");
+    let blocks = assert_control_flow_is_well_formed(&ir);
+    assert!(
+        blocks > 15,
+        "only {blocks} blocks — the shape is too simple to mean much"
+    );
+
+    // A `phi` with a single incoming is the value-position `if` whose other branch
+    // transferred: the value comes from the branch that actually reaches the join.
+    let single = ir
+        .lines()
+        .filter(|l| l.contains(" = phi "))
+        .filter(|l| l.matches('[').count() == 1)
+        .count();
+    assert_eq!(
+        single, 1,
+        "expected exactly one single-incoming phi, for the branch whose `else` \
+         continues:\n{ir}"
+    );
+
+    // And the whole thing produces the same number as the interpreter.
+    let interp = interpret(src);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    let built = Built { dir, exe };
+    let ran = run_exe(&built);
+    assert_eq!(ran.code, Some(0), "{ran:?}");
+    assert_eq!(
+        ran.stdout.trim(),
+        interp.stdout.trim(),
+        "the native program and the interpreter disagree"
+    );
 }
