@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let flag = true;
+    flag + 1
+}

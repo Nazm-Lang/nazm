@@ -342,6 +342,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "nazm-cli"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "nazm-core",
+ "nazm-diag",
+ "nazm-span",
+ "serde_json",
+]
+
+[[package]]
+name = "nazm-core"
+version = "0.0.1"
+dependencies = [
+ "nazm-diag",
+ "nazm-span",
+ "nazm-syntax",
+]
+
+[[package]]
+name = "nazm-diag"
+version = "0.0.1"
+dependencies = [
+ "nazm-span",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nazm-span"
+version = "0.0.1"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "nazm-syntax"
+version = "0.0.1"
+dependencies = [
+ "nazm-diag",
+ "nazm-span",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
