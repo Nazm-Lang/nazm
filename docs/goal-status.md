@@ -12,7 +12,7 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `18382fd` |
+| Current commit | `d0ad5ba` |
 | Working tree | clean except this file |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
 | Disk | 13 GiB free of 460 GiB (**97 % full**) — `target/` alone is 3.7 GiB. Remove disposable copies promptly |
@@ -23,7 +23,7 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | **A** — scalar control flow, incl. `return` | **complete** (`ac39f7b`) |
 | **B** — the bootstrap subset | **complete** (`053ed22`): B1 text, B2 sequences, B3 I/O, B4 modules, B5 strategy |
-| **C** — compiler in Nazm | **started**: tokeniser, parser and **name resolution** done and differentially verified. No type checking, lowering or emission |
+| **C** — compiler in Nazm | **substantially advanced**: lexer, parser, name resolution, type checking and **LLVM emission** all written in Nazm and differentially verified. Emission covers integer arithmetic only |
 | **D** — C1→C2→C3 bootstrap | not started |
 | **E** — structured concurrency | not started |
 | **F** — AI-native developer experience | not started (structured diagnostics and `--json` predate this goal) |
@@ -48,7 +48,9 @@ what was verified when it was written, not what is true now.
 | Parser written in Nazm | **verified** | `compiler/parser.nz`; the **whole grammar**. Same tree as the reference over 50 hand-written sources **and over its own source and the tokeniser's** — 2000+ nodes, node- and span-identical. Only a bare block used as an expression is refused |
 | Name resolution in Nazm | **verified** | `compiler/check.nz`; same `(code, span)` as `nazm_core::check` for `N0200`/`N0201` over 15 sources, and accepts every standalone `.nz` in the tree |
 | Tree traversal in Nazm without recursion | **verified** | child index from the post-order arena, then a pre-order walk from a marker-carrying work stack |
-| Type checking / lowering / emission in Nazm | planned | nothing exists |
+| Type checking in Nazm | **verified** | `compiler/analyse.nz`; same `(code, span)` as `nazm_core::check` for `N0300`/`N0301`/`N0303`/`N0304`/`N0310` over 35 sources |
+| **LLVM emission in Nazm** | **verified, for integer arithmetic** | `compiler/emit.nz`; 14 programs compiled by the Nazm compiler, assembled by `clang`, run, and checked against an explicit expectation *and* the interpreter. 7 failure cases check exit 2, code, message and position. No `nsw` anywhere |
+| Emission of locals, control flow, calls, `Str`, sequences | planned — the rest of Milestone C | needed before the compiler can compile itself |
 | Native recursion | blocked by design | pending measured stack availability and frame size. **Not needed**: the compiler is iterative |
 | Concurrency, formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
 
@@ -56,10 +58,10 @@ what was verified when it was written, not what is true now.
 
 | Command | Result |
 | --- | --- |
-| `cargo test --workspace` | **446 passed, 0 failed, 6 ignored** |
+| `cargo test --workspace` | **450 passed, 0 failed, 6 ignored** |
 | — of which self-skipping | 10 `docker_boundary` tests exercise nothing without `NAZM_REQUIRE_DOCKER=1` |
 | — of which native end-to-end | 126 `nazm build` cases, each at `-O0` and `-O2` against the interpreter |
-| — of which self-hosting differentials | 9 |
+| — of which self-hosting differentials | 13 |
 | `cargo test -p xtask --test lifecycle -- --ignored` | 6 passed (separate; not in the 443) |
 | `cargo lint` (the CI alias) | 0 diagnostics |
 | `cargo fmt --all -- --check` | clean |
@@ -78,34 +80,34 @@ mutation lock is held (`target/.nazm-mutation-lock.v2` absent).
 
 ## Current task
 
-**Milestone C — type checking in Nazm.** Lexing, parsing and name resolution are done and
-differentially verified. What remains for a compiler: types, then lowering, then LLVM
-emission, then a driver.
+**Milestone C — broadening `compiler/emit.nz`.** The compiler written in Nazm now lexes,
+parses, resolves, type-checks and emits LLVM for integer arithmetic. What it cannot emit
+yet is everything its own source uses: locals, control flow, calls, `Str` and sequences.
+Closing that gap is what makes Milestone D (the C1→C2→C3 chain) possible at all.
 
 ## Next exact action
 
-Extend `compiler/check.nz` from names to **types**, reusing the traversal that is already
-there.
+Extend `compiler/emit.nz` in this order, each verified the way the arithmetic cases are —
+compiled by the Nazm compiler, assembled by `clang`, run, and compared against an explicit
+expectation *and* the interpreter:
 
-Types are a **fold over the post-order arena** and need no second traversal: push each
-leaf's type, pop `arity` types at each internal node, check them, push the result. That
-is why the arena's post-order shape was chosen. Type codes can be small integers
-(`1 = Int`, `2 = Bool`, `3 = Str`, `4 = Ints`, `5 = Strs`), and the symbol table needs a
-parallel `sym_type: Ints` alongside the names `resolve` already keeps.
+1. **Locals and statements.** `let`, `let mut`, assignment, `var`. One `alloca` per
+   binding in the entry block — never on a loop path — and a slot map from the checker's
+   scope walk. This needs the marker walk `compiler/analyse.nz` already has, because the
+   post-order scan `emit.nz` uses today cannot open basic blocks.
+2. **Control flow.** `if` (statement and value), `while`, `break`, `continue`, `return`.
+   The lessons are already written down in `crates/nazm-lir/src/emit.rs`: a `phi` names
+   the block emission *ended* in, a loop's back edge targets the condition, `continue`
+   targets the condition and not the body, and a transfer in a loop's *condition*
+   belongs to the enclosing loop.
+3. **Calls and several functions.** Two passes — signatures, then bodies — so a forward
+   reference resolves; generated symbols `@nz.f<N>` from the index, never from a source
+   name.
+4. **`Str` and sequences**, and the built-ins the compiler itself calls. This is the
+   largest step and the last one before the compiler can read its own source.
 
-The codes to reproduce, and the reference function that produces each:
-`N0300` type mismatch (`check_assign`, `check_return`, `value_type`), `N0301` non-`Bool`
-condition (`check_while`, `check_expr`'s `If`), `N0303` wrong argument count,
-`N0304` invalid operands (`check_binary`), `N0310` assignment to an immutable binding.
-Built-in signatures come from `nazm-core/src/intrinsic.rs` and must be transcribed once
-into a table in Nazm, with a test that every built-in is present.
-
-Extend the differential in `crates/nazm-cli/tests/selfhost.rs` the same way the name test
-works: sorted `(code, span)` against `nazm_core::check`, over sources chosen so the
-reference produces only the codes the Nazm checker claims.
-
-After that: lowering and LLVM emission in Nazm (Milestone C), then the C1→C2→C3 chain
-(Milestone D).
+Then Milestone D: the C1→C2→C3 chain, with `compiler/bootstrap.sh` recording source
+digests, toolchain identities, commands and flags, and byte-comparing C2 against C3.
 
 ## Unresolved decisions
 
@@ -125,7 +127,7 @@ After that: lowering and LLVM emission in Nazm (Milestone C), then the C1→C2�
 
 - [x] Scalar control flow verified, including `return` and transfers inside values — `ac39f7b`
 - [x] Bootstrap subset: text, structured data, collections, memory, file I/O, errors, modules — `053ed22`
-- [ ] Compiler frontend and lowering/emission in Nazm — **lexer, parser and name resolution done and differentially verified; no type checking, lowering or emission**
+- [ ] Compiler frontend and lowering/emission in Nazm — **lexer, parser, name resolution, type checking and LLVM emission all written in Nazm and differentially verified; emission covers integer arithmetic only**
 - [ ] C1 → C2 → C3 bootstrap with conformance and reproducibility
 - [ ] Ordinary independent programs compile with the Nazm-written compiler
 - [ ] Structured concurrency: transfer/capture rules, cancellation, cleanup
