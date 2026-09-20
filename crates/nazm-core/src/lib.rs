@@ -17,7 +17,7 @@ pub use types::Type;
 /// Re-exported so the CLI can parse without taking its own dependency on the syntax
 /// crate. The double underscore marks it as plumbing rather than interface.
 pub mod __syntax {
-    pub use nazm_syntax::{parse_source, Program};
+    pub use nazm_syntax::{lex, parse_source, Program, TokenKind};
 }
 
 use nazm_diag::Diagnostic;
