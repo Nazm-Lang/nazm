@@ -185,7 +185,7 @@ fn die(message: Str, offset: Int) -> Int {
 fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
               nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
               ops: Ints, opat: Ints, cname: Strs, cargs: Ints, vs: Ints, ve: Ints,
-              status: Ints, resuming: Bool, base: Int) -> Int {
+              status: Ints, resuming: Bool, base: Int, naux: Ints) -> Int {
     // `base` is how deep the operator stack was when *this* expression started. The
     // stacks are shared — an `if` suspends one expression while the expressions inside
     // its blocks are parsed — so every reduction stops here rather than at the bottom.
@@ -310,7 +310,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     // stacks stay exactly as they are until it resumes this expression.
                     while ints_len(ops) > base {
                         if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 { break; }
-                        reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx);
+                        reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx, naux);
                     }
                     ints_set(status, 0, 1);
                     return i;
@@ -325,7 +325,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 while ints_len(ops) > base {
                     let top = ints_get(ops, ints_len(ops) - 1);
                     if prec_of(top) < p { break; }
-                    reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx);
+                    reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx, naux);
                 }
                 ints_push(ops, n);
                 ints_push(opat, start_at(starts, i));
@@ -337,7 +337,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 if innermost_is_call(ops, base) == false { return i; }
                 while ints_len(ops) > base {
                     if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 { break; }
-                    reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx);
+                    reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx, naux);
                 }
                 ints_set(cargs, ints_len(cargs) - 1, ints_get(cargs, ints_len(cargs) - 1) + 1);
                 i = i + 1;
@@ -348,7 +348,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 if ints_len(ops) == base { return i; }
                 while ints_len(ops) > base {
                     if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 { break; }
-                    reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx);
+                    reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx, naux);
                 }
                 let top = ints_get(ops, ints_len(ops) - 1);
                 if top == sent_paren() {
@@ -385,7 +385,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 {
                     die("this bracket is never closed", ints_get(opat, ints_len(opat) - 1));
                 }
-                reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx);
+                reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx, naux);
             }
             // The stacks belong to the caller and must come back empty, so the finished
             // expression's own entry is removed here rather than left for the next one.
@@ -436,14 +436,32 @@ fn innermost_is_call(ops: Ints, base: Int) -> Bool {
     false
 }
 
-fn reduce(ops: Ints, opat: Ints, vs: Ints, ve: Ints, nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs) -> Int {
+// `naux` is the arena's auxiliary-offset column: for a `bin` node it is the **operator's
+// own position**, which the node's span (left operand's start to right operand's end)
+// does not contain. The reference checker points `N0304` there, and lowering will need
+// it for the runtime diagnostics an arithmetic failure reports. It is not part of the
+// dump, so the tree comparison is unaffected.
+fn set_aux(naux: Ints, nk: Ints, value: Int) -> Int {
+    while ints_len(naux) < ints_len(nk) - 1 { ints_push(naux, 0); }
+    ints_push(naux, value);
+    ints_len(naux)
+}
+
+fn pad_aux(naux: Ints, nk: Ints) -> Int {
+    while ints_len(naux) < ints_len(nk) { ints_push(naux, 0); }
+    ints_len(naux)
+}
+
+fn reduce(ops: Ints, opat: Ints, vs: Ints, ve: Ints, nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints) -> Int {
     let op = ints_get(ops, ints_len(ops) - 1);
+    let op_at = ints_get(opat, ints_len(opat) - 1);
     pop_op(ops, opat);
     let rend = ints_get(ve, ints_len(ve) - 1);
     pop_val(vs, ve);
     let lstart = ints_get(vs, ints_len(vs) - 1);
     pop_val(vs, ve);
     emit(nk, nar, nst, nen, ntx, n_bin(), 2, lstart, rend, op_symbol(op));
+    set_aux(naux, nk, op_at);
     ints_push(vs, lstart);
     ints_push(ve, rend);
     0
@@ -520,7 +538,7 @@ fn finish_if(ops: Ints, opat: Ints, vs: Ints, ve: Ints,
 }
 
 fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
-                 nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs) -> Int {
+                 nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints) -> Int {
     let fk = ints_new();
     let fstart = ints_new();
     let fcount = ints_new();
@@ -560,7 +578,7 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         if resumable(pk, pdepth, fk) {
             i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx,
                            ops, opat, cname, cargs, vs, ve, status, resuming,
-                           ints_get(pbase, ints_len(pbase) - 1));
+                           ints_get(pbase, ints_len(pbase) - 1), naux);
             resuming = false;
             if ints_get(status, 0) == 1 {
                 // Suspended at an `if`'s `{`: the condition is done and the block is
@@ -835,6 +853,7 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         die("this block is never closed", top(fstart));
     }
     emit(nk, nar, nst, nen, ntx, n_program(), functions, 0, 0, "");
+    pad_aux(naux, nk);
     functions
 }
 

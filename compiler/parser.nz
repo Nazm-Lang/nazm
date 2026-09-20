@@ -30,7 +30,8 @@ fn main() -> Int {
     let nst = ints_new();
     let nen = ints_new();
     let ntx = strs_new();
-    parse_program(kinds, starts, ends, texts, nk, nar, nst, nen, ntx);
+    let naux = ints_new();
+    parse_program(kinds, starts, ends, texts, nk, nar, nst, nen, ntx, naux);
 
     // `kind|arity|start|end|text`, one node per line, in the order they were appended —
     // which is post-order, which is the whole encoding.
