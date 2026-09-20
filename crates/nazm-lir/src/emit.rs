@@ -73,6 +73,72 @@ struct Emitter {
     /// Byte offset of the start of each line, for turning a span into a position.
     lines: Vec<usize>,
     source_len: usize,
+    /// Active loops, innermost last. Pushed around a loop's **body** only — a `break` in
+    /// a loop's *condition* belongs to the enclosing loop, which is the existing
+    /// language's rule (`docs/roadmap.md`, *Where a loop target binds*). Cleared at every
+    /// function boundary, so no target can leak from one function into another.
+    loops: Vec<Targets>,
+}
+
+/// Where `break` and `continue` go for one loop.
+///
+/// `continue` targets the **condition**, never the body: re-evaluating the condition is
+/// what `continue` means, and jumping to the body would skip it — including any call or
+/// checked arithmetic it contains.
+struct Targets {
+    head: String,
+    exit: String,
+}
+
+/// What emitting an expression produced.
+///
+/// The checker's `Completion`, as emission sees it. The type travels with the value
+/// because every producer knows it locally, and deriving it later from the node would be
+/// a second answer to a question already answered.
+#[derive(Debug, Clone, Copy)]
+enum Val {
+    Of {
+        value: u32,
+        ty: Ty,
+    },
+    /// Control left along this path. There is no value, the current block already holds
+    /// its terminator, and **nothing may be invented for the caller to consume**.
+    Transferred,
+}
+
+/// Whether emission may keep appending to the current block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    FallsThrough,
+    /// A terminator has been written. Nothing may follow it, and this path is not a
+    /// predecessor of any join.
+    Transferred,
+}
+
+/// One branch's contribution to a join.
+///
+/// The value and the block it was produced in travel together because they are the two
+/// halves of one `phi` incoming; a `phi` naming a block that did not produce the value is
+/// precisely the defect this type makes unrepresentable. A branch that transferred
+/// contributes nothing at all, rather than a value nobody produced.
+enum Incoming {
+    Value { value: u32, ty: Ty, from: String },
+    Transferred,
+}
+
+/// Take an operand's value, or stop emitting this expression because control left it.
+///
+/// The emitter's counterpart to the interpreter's `take!`, and for the same reason: a
+/// `break` can sit inside anything used as a value, and when it does the enclosing
+/// expression has no value and never will. Everything already emitted keeps its effects;
+/// nothing after it is emitted at all.
+macro_rules! operand {
+    ($e:expr) => {
+        match $e {
+            Val::Of { value, .. } => value,
+            Val::Transferred => return Val::Transferred,
+        }
+    };
 }
 
 impl Emitter {
@@ -129,20 +195,212 @@ impl Emitter {
     }
 
     /// Statements, then the block's value.
-    fn block(&mut self, b: &Block) -> u32 {
-        for stmt in &b.stmts {
-            match stmt {
-                Stmt::Let { slot, value } => {
-                    let v = self.expr(value);
-                    let ty = value.ty().llvm();
-                    let _ = writeln!(self.out, "  store {ty} %{v}, ptr %slot{slot}");
-                }
-            }
+    fn block(&mut self, b: &Block) -> Val {
+        if self.stmts(&b.stmts) == Reach::Transferred {
+            return Val::Transferred;
         }
-        self.expr(&b.result)
+        match &b.result {
+            Some(e) => self.expr(e),
+            // Unreachable: lowering leaves this empty only when the statements transfer,
+            // and that path returned above. Reported as a transfer rather than as a
+            // value, because inventing one is the single thing this file must not do —
+            // the block left without a terminator is then a module clang rejects loudly,
+            // which is a much better failure than a program that runs and is wrong.
+            None => Val::Transferred,
+        }
     }
 
-    fn expr(&mut self, e: &Expr) -> u32 {
+    /// A statement sequence: a loop body, a statement-`if` branch, or a block's
+    /// statements. Shared by all three so they cannot acquire different semantics.
+    ///
+    /// Stops at the first statement that transfers. Anything after it is unreachable, and
+    /// the checker has already refused it (`N0313`) — but appending to a block that
+    /// already has a terminator is invalid IR, so this does not rely on that.
+    fn stmts(&mut self, stmts: &[Stmt]) -> Reach {
+        for stmt in stmts {
+            let reach = match stmt {
+                // One path for both, deliberately. A declaration and a reassignment are
+                // the same store once the slot is known, and giving them two arms here
+                // would be two places to keep a store correct.
+                //
+                // The value is emitted **before** the store. An operation that fails
+                // inside it branches to a block ending in `unreachable`; an operation
+                // that transfers branches to a loop target. Either way the store is not
+                // on a path from there, so an interrupted right-hand side never reaches
+                // the slot.
+                Stmt::Let { slot, value } | Stmt::Assign { slot, value } => {
+                    match self.expr(value) {
+                        Val::Of { value: v, ty } => {
+                            let _ =
+                                writeln!(self.out, "  store {} %{v}, ptr %slot{slot}", ty.llvm());
+                            Reach::FallsThrough
+                        }
+                        Val::Transferred => Reach::Transferred,
+                    }
+                }
+                // Evaluated for its effects; the value is dropped, exactly as `nazm run`
+                // drops it. What is not dropped is a transfer raised inside it.
+                Stmt::Discard(e) => match self.expr(e) {
+                    Val::Of { .. } => Reach::FallsThrough,
+                    Val::Transferred => Reach::Transferred,
+                },
+                Stmt::While { cond, body } => self.while_loop(cond, body),
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => self.statement_if(cond, then_body, else_body.as_deref()),
+                Stmt::Break => {
+                    self.transfer(|t| &t.exit);
+                    Reach::Transferred
+                }
+                Stmt::Continue => {
+                    self.transfer(|t| &t.head);
+                    Reach::Transferred
+                }
+            };
+            if reach == Reach::Transferred {
+                return Reach::Transferred;
+            }
+        }
+        Reach::FallsThrough
+    }
+
+    /// Branch to the innermost loop's exit or condition.
+    ///
+    /// The stack is never empty here: lowering refuses a `break` or `continue` outside a
+    /// loop, and the checker refuses it first (`N0312`), so a `Stmt::Break` reaches this
+    /// point only from inside a `Stmt::While` body. If it somehow were empty, emitting
+    /// nothing would leave the block without a terminator and clang would reject the
+    /// module — a loud failure rather than a jump to the wrong place.
+    fn transfer(&mut self, pick: impl Fn(&Targets) -> &String) {
+        if let Some(target) = self.loops.last() {
+            let label = pick(target).clone();
+            let _ = writeln!(self.out, "  br label %{label}");
+        }
+    }
+
+    /// `while`, as a condition block, a body block, a back edge and an exit block.
+    ///
+    /// # The back edge targets the condition, not the body
+    ///
+    /// That is the whole of the loop's meaning, and the one thing easy to get wrong.
+    /// Jumping back to the body would evaluate the condition once and then loop on its
+    /// first answer forever. `continue` targets the same label for the same reason.
+    ///
+    /// # The condition is not inside the loop
+    ///
+    /// The targets are pushed **after** the condition is emitted and popped before the
+    /// exit block is opened, so a `break` written in a condition leaves the *enclosing*
+    /// loop. That is the existing language's rule in both implementations, and pushing
+    /// earlier would silently retarget such a `break` at this loop.
+    ///
+    /// # No `alloca` here
+    ///
+    /// Every local has a slot in [`emit_function`]'s entry block, including locals
+    /// declared inside this body — a slot is per *binding*, not per execution of one.
+    ///
+    /// # Terminators
+    ///
+    /// The conditional branch and the back edge are appended to whatever block emission
+    /// has reached, never to the label opened for it: a condition or body may open blocks
+    /// of its own for a nested `if`, a checked-arithmetic guard, or a nested loop. And
+    /// the back edge is written **only if the body's path still falls through** — a body
+    /// ending in `break` or `continue` has its terminator already.
+    fn while_loop(&mut self, cond: &Expr, body: &[Stmt]) -> Reach {
+        let head = format!("b{}", self.fresh());
+        let body_label = format!("b{}", self.fresh());
+        let exit = format!("b{}", self.fresh());
+
+        // The block before the loop needs a terminator: control does not fall into a
+        // label in LLVM.
+        let _ = writeln!(self.out, "  br label %{head}");
+
+        self.open(&head);
+        let c = match self.expr(cond) {
+            Val::Of { value, .. } => value,
+            // The condition transferred unconditionally, so it left through an enclosing
+            // loop. Neither this body nor this exit can be reached, and emitting either
+            // would produce blocks with no predecessors.
+            Val::Transferred => return Reach::Transferred,
+        };
+        let _ = writeln!(self.out, "  br i1 %{c}, label %{body_label}, label %{exit}");
+
+        self.open(&body_label);
+        self.loops.push(Targets {
+            head: head.clone(),
+            exit: exit.clone(),
+        });
+        let reach = self.stmts(body);
+        self.loops.pop();
+        if reach == Reach::FallsThrough {
+            let _ = writeln!(self.out, "  br label %{head}");
+        }
+
+        // Always reachable: the condition's false edge goes here, whatever the body did.
+        self.open(&exit);
+        Reach::FallsThrough
+    }
+
+    /// Statement-position `if`: no value, and either branch may transfer.
+    ///
+    /// # Which continuations exist
+    ///
+    /// With no `else`, the false edge goes straight to the continuation, so the statement
+    /// **always falls through** however the branch ends. With an `else`, the continuation
+    /// is opened only if at least one branch still falls through — if both transfer, no
+    /// continuation is fabricated and the enclosing sequence stops here.
+    fn statement_if(
+        &mut self,
+        cond: &Expr,
+        then_body: &[Stmt],
+        else_body: Option<&[Stmt]>,
+    ) -> Reach {
+        let c = match self.expr(cond) {
+            Val::Of { value, .. } => value,
+            Val::Transferred => return Reach::Transferred,
+        };
+        let then_label = format!("b{}", self.fresh());
+        let cont = format!("b{}", self.fresh());
+
+        let Some(else_body) = else_body else {
+            let _ = writeln!(self.out, "  br i1 %{c}, label %{then_label}, label %{cont}");
+            self.open(&then_label);
+            if self.stmts(then_body) == Reach::FallsThrough {
+                let _ = writeln!(self.out, "  br label %{cont}");
+            }
+            self.open(&cont);
+            return Reach::FallsThrough;
+        };
+
+        let else_label = format!("b{}", self.fresh());
+        let _ = writeln!(
+            self.out,
+            "  br i1 %{c}, label %{then_label}, label %{else_label}"
+        );
+
+        self.open(&then_label);
+        let then_reach = self.stmts(then_body);
+        if then_reach == Reach::FallsThrough {
+            let _ = writeln!(self.out, "  br label %{cont}");
+        }
+
+        self.open(&else_label);
+        let else_reach = self.stmts(else_body);
+        if else_reach == Reach::FallsThrough {
+            let _ = writeln!(self.out, "  br label %{cont}");
+        }
+
+        if then_reach == Reach::FallsThrough || else_reach == Reach::FallsThrough {
+            self.open(&cont);
+            Reach::FallsThrough
+        } else {
+            // Both branches left. Nothing branches to `cont`, so it is never opened.
+            Reach::Transferred
+        }
+    }
+
+    fn expr(&mut self, e: &Expr) -> Val {
         match e {
             Expr::Int(v) => {
                 // Materialised through an `add` rather than used inline so that every
@@ -151,20 +409,26 @@ impl Emitter {
                 // arithmetic below genuinely execute during testing.
                 let n = self.fresh();
                 let _ = writeln!(self.out, "  %{n} = add i64 {v}, 0");
-                n
+                Val::Of {
+                    value: n,
+                    ty: Ty::Int,
+                }
             }
             Expr::Bool(v) => {
                 let n = self.fresh();
                 let _ = writeln!(self.out, "  %{n} = or i1 {v}, false");
-                n
+                Val::Of {
+                    value: n,
+                    ty: Ty::Bool,
+                }
             }
             Expr::Load { slot, ty } => {
                 let n = self.fresh();
                 let _ = writeln!(self.out, "  %{n} = load {}, ptr %slot{slot}", ty.llvm());
-                n
+                Val::Of { value: n, ty: *ty }
             }
             Expr::Neg { operand, span } => {
-                let v = self.expr(operand);
+                let v = operand!(self.expr(operand));
                 let r = self.fresh();
                 let _ = writeln!(
                     self.out,
@@ -182,21 +446,26 @@ impl Emitter {
                 );
                 let out = self.fresh();
                 let _ = writeln!(self.out, "  %{out} = extractvalue {{i64, i1}} %{r}, 0");
-                out
+                Val::Of {
+                    value: out,
+                    ty: Ty::Int,
+                }
             }
             Expr::Arith { op, lhs, rhs, span } => {
                 // Left, then right. `docs/spec.md` specifies the order, and here it is
-                // observable: it decides which diagnostic a program with two failing
-                // operands reports.
-                let a = self.expr(lhs);
-                let b = self.expr(rhs);
-                match op {
+                // observable twice over: it decides which diagnostic a program with two
+                // failing operands reports, and — since either side may contain a
+                // `break` — whether the right side is evaluated at all.
+                let a = operand!(self.expr(lhs));
+                let b = operand!(self.expr(rhs));
+                let value = match op {
                     ArithOp::Add | ArithOp::Sub | ArithOp::Mul => {
                         self.checked(*op, a, b, span.start)
                     }
                     ArithOp::Div => self.divide(a, b, span.start),
                     ArithOp::Rem => self.remainder(a, b, span.start),
-                }
+                };
+                Val::Of { value, ty: Ty::Int }
             }
             Expr::Compare {
                 op,
@@ -204,10 +473,9 @@ impl Emitter {
                 lhs,
                 rhs,
             } => {
-                // Same left-to-right order, for the same reason: either operand may be
-                // arithmetic that fails.
-                let a = self.expr(lhs);
-                let b = self.expr(rhs);
+                // Same left-to-right order, for the same reasons.
+                let a = operand!(self.expr(lhs));
+                let b = operand!(self.expr(rhs));
                 let out = self.fresh();
                 // No guard, because no comparison can fail: `icmp` on two `i64`s or two
                 // `i1`s is total.
@@ -217,18 +485,24 @@ impl Emitter {
                     op.predicate(),
                     operand_ty.llvm()
                 );
-                out
+                Val::Of {
+                    value: out,
+                    ty: Ty::Bool,
+                }
             }
             Expr::Call { callee, args, ret } => {
                 // Every argument is evaluated, left to right, **before** the call
                 // instruction is written. So an argument that fails stops the program
-                // there: the later arguments are never evaluated and the callee body is
-                // never entered. That is not an optimisation — the failing argument's
-                // guard branches to a block ending in `unreachable`, and nothing after it
-                // is on a path from there.
+                // there and an argument that transfers leaves through its loop target:
+                // either way the later arguments are never evaluated and the callee is
+                // never entered. That is not an optimisation — the call instruction is
+                // simply not on a path from where control went.
                 let mut vals = Vec::new();
                 for a in args {
-                    vals.push((self.expr(a), a.ty()));
+                    match self.expr(a) {
+                        Val::Of { value, ty } => vals.push((value, ty)),
+                        Val::Transferred => return Val::Transferred,
+                    }
                 }
                 let list = vals
                     .iter()
@@ -242,24 +516,36 @@ impl Emitter {
                     ret.llvm(),
                     callee.symbol()
                 );
-                out
+                Val::Of {
+                    value: out,
+                    ty: *ret,
+                }
             }
             Expr::If {
                 cond,
                 then_block,
                 else_block,
-                ty,
-            } => self.conditional(cond, then_block, else_block, *ty),
+                ..
+            } => self.conditional(cond, then_block, else_block),
         }
     }
 
-    /// `if`, as a conditional branch and a join with a `phi`.
+    /// Value-position `if`, as a conditional branch and a join with a `phi`.
     ///
     /// The condition is emitted once, before either branch, and only the selected
     /// branch's block is ever entered — so a failure in the branch not taken cannot run.
     /// That is not an optimisation; it is what a conditional branch means.
-    fn conditional(&mut self, cond: &Expr, then_b: &Block, else_b: &Block, ty: Ty) -> u32 {
-        let c = self.expr(cond);
+    ///
+    /// # Which branches reach the join
+    ///
+    /// Only the ones that produce a value. A branch ending in `break` or `continue` has
+    /// already branched somewhere else, contributes no `phi` incoming, and is not named
+    /// by one. When **one** branch transfers the `phi` has a single incoming, which is
+    /// how the value comes from the branch that actually arrives; when **both** do, there
+    /// is no join, no `phi`, and no value — the expression is emitted for its effects and
+    /// the caller is told control left.
+    fn conditional(&mut self, cond: &Expr, then_b: &Block, else_b: &Block) -> Val {
+        let c = operand!(self.expr(cond));
         let then_label = format!("b{}", self.fresh());
         let else_label = format!("b{}", self.fresh());
         let join_label = format!("b{}", self.fresh());
@@ -269,26 +555,53 @@ impl Emitter {
         );
 
         self.open(&then_label);
-        let then_v = self.block(then_b);
-        // Read **after** lowering the branch, not before: the branch may have opened
-        // blocks of its own — a nested `if`, or any checked arithmetic, whose guard opens
-        // a continuation. The predecessor the `phi` must name is where emission ended.
-        let then_pred = self.current.clone();
-        let _ = writeln!(self.out, "  br label %{join_label}");
+        let then_in = self.value_branch(then_b, &join_label);
 
         self.open(&else_label);
-        let else_v = self.block(else_b);
-        let else_pred = self.current.clone();
-        let _ = writeln!(self.out, "  br label %{join_label}");
+        let else_in = self.value_branch(else_b, &join_label);
+
+        let incomings: Vec<(u32, Ty, String)> = [then_in, else_in]
+            .into_iter()
+            .filter_map(|i| match i {
+                Incoming::Value { value, ty, from } => Some((value, ty, from)),
+                Incoming::Transferred => None,
+            })
+            .collect();
+
+        let Some((_, ty, _)) = incomings.first() else {
+            // Neither branch arrives. Nothing branched to the join, so it is never
+            // opened, and there is no value to hand back.
+            return Val::Transferred;
+        };
+        let ty = *ty;
 
         self.open(&join_label);
         let out = self.fresh();
-        let _ = writeln!(
-            self.out,
-            "  %{out} = phi {} [ %{then_v}, %{then_pred} ], [ %{else_v}, %{else_pred} ]",
-            ty.llvm()
-        );
-        out
+        let list = incomings
+            .iter()
+            .map(|(v, _, from)| format!("[ %{v}, %{from} ]"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(self.out, "  %{out} = phi {} {list}", ty.llvm());
+        Val::Of { value: out, ty }
+    }
+
+    /// Emit one branch of a value-position `if`, and branch to the join if it arrives.
+    ///
+    /// The predecessor is read **after** the branch is lowered, not before: the branch
+    /// may have opened blocks of its own — a nested `if`, any checked arithmetic, whose
+    /// guard opens a continuation, a nested loop — and the block a `phi` must name is the
+    /// one holding the jump to the join. Reading it here, next to the jump, is what keeps
+    /// the two from drifting apart.
+    fn value_branch(&mut self, b: &Block, join: &str) -> Incoming {
+        match self.block(b) {
+            Val::Of { value, ty } => {
+                let from = self.current.clone();
+                let _ = writeln!(self.out, "  br label %{join}");
+                Incoming::Value { value, ty, from }
+            }
+            Val::Transferred => Incoming::Transferred,
+        }
     }
 
     fn checked(&mut self, op: ArithOp, a: u32, b: u32, offset: u32) -> u32 {
@@ -426,6 +739,7 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
         file: file.to_owned(),
         lines: line_starts,
         source_len: source.len(),
+        loops: Vec::new(),
     };
 
     // One definition per function, in `FuncId` order so the IR reads in the order the
@@ -514,6 +828,9 @@ fn emit_function(e: &mut Emitter, f: &Function) {
     // numbering.
     e.next = 0;
     e.current = "entry".to_owned();
+    // No loop target crosses a function boundary. Push and pop are balanced, so this is
+    // already empty — clearing it says so rather than relying on it.
+    e.loops.clear();
 
     let params = f
         .locals
@@ -543,8 +860,21 @@ fn emit_function(e: &mut Emitter, f: &Function) {
     for (i, local) in f.locals.iter().take(f.params).enumerate() {
         let _ = writeln!(e.out, "  store {} %p{i}, ptr %slot{i}", local.ty.llvm());
     }
-    let v = e.block(&f.body);
-    let _ = writeln!(e.out, "  ret {} %{v}", f.ret.llvm());
+    match e.block(&f.body) {
+        Val::Of { value, .. } => {
+            let _ = writeln!(e.out, "  ret {} %{value}", f.ret.llvm());
+        }
+        // The body transferred, so the end of the function is not reachable and there is
+        // no value to return. `unreachable` is the terminator that says exactly that,
+        // and it is the honest one — a `ret` here would need a value nothing produced.
+        //
+        // Lowering refuses this shape (a function body can only transfer through a
+        // `break` outside a loop, which is `N0312`), so it is a terminator for a case
+        // that should not arise rather than one that does.
+        Val::Transferred => {
+            let _ = writeln!(e.out, "  unreachable");
+        }
+    }
     let _ = writeln!(e.out, "}}");
     e.out.push('\n');
 }
@@ -572,7 +902,7 @@ mod tests {
     fn block(result: Expr) -> Block {
         Block {
             stmts: Vec::new(),
-            result: Box::new(result),
+            result: Some(Box::new(result)),
         }
     }
 
@@ -586,7 +916,7 @@ mod tests {
                 ret: Ty::Int,
                 body: Block {
                     stmts,
-                    result: Box::new(result),
+                    result: Some(Box::new(result)),
                 },
             }],
             entry: FuncId(0),
@@ -605,11 +935,11 @@ mod tests {
                     ret: Ty::Int,
                     body: Block {
                         stmts: Vec::new(),
-                        result: Box::new(Expr::Call {
+                        result: Some(Box::new(Expr::Call {
                             callee: FuncId(1),
                             args,
                             ret,
-                        }),
+                        })),
                     },
                 },
                 helper,
@@ -769,7 +1099,7 @@ mod tests {
                     span: Span::new(0, 1),
                 })),
                 else_block: Box::new(block(Expr::Int(0))),
-                ty: Ty::Int,
+                ty: Some(Ty::Int),
             },
             Vec::new(),
             Vec::new(),
@@ -826,7 +1156,7 @@ mod tests {
             ret: Ty::Int,
             body: Block {
                 stmts: Vec::new(),
-                result: Box::new(Expr::Int(1)),
+                result: Some(Box::new(Expr::Int(1))),
             },
         };
         let ir = ir_of(&calling(helper, Vec::new(), Ty::Int));
@@ -854,7 +1184,7 @@ mod tests {
             ret: Ty::Int,
             body: Block {
                 stmts: Vec::new(),
-                result: Box::new(Expr::Int(7)),
+                result: Some(Box::new(Expr::Int(7))),
             },
         };
         let ir = ir_of(&calling(helper, Vec::new(), Ty::Int));
@@ -891,10 +1221,10 @@ mod tests {
             ret: Ty::Int,
             body: Block {
                 stmts: Vec::new(),
-                result: Box::new(Expr::Load {
+                result: Some(Box::new(Expr::Load {
                     slot: 0,
                     ty: Ty::Int,
-                }),
+                })),
             },
         };
         let ir = ir_of(&calling(
