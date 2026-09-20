@@ -12,7 +12,7 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `940875d` |
+| Current commit | `18382fd` |
 | Working tree | clean except this file |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
 | Disk | 13 GiB free of 460 GiB (**97 % full**) — `target/` alone is 3.7 GiB. Remove disposable copies promptly |
@@ -23,7 +23,7 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | **A** — scalar control flow, incl. `return` | **complete** (`ac39f7b`) |
 | **B** — the bootstrap subset | **complete** (`053ed22`): B1 text, B2 sequences, B3 I/O, B4 modules, B5 strategy |
-| **C** — compiler in Nazm | **started**: tokeniser done, **parser done** (whole grammar). No checker, lowering or emission |
+| **C** — compiler in Nazm | **started**: tokeniser, parser and **name resolution** done and differentially verified. No type checking, lowering or emission |
 | **D** — C1→C2→C3 bootstrap | not started |
 | **E** — structured concurrency | not started |
 | **F** — AI-native developer experience | not started (structured diagnostics and `--json` predate this goal) |
@@ -46,7 +46,9 @@ what was verified when it was written, not what is true now.
 | Modules: `use`, relative resolution, diamonds, cycles | verified | `053ed22`; **no visibility control** |
 | Tokeniser written in Nazm | verified | `compiler/lex.nz` + `lexer.nz`; agrees with `nazm_syntax::lex` token- and span-wise over every `.nz` in the tree |
 | Parser written in Nazm | **verified** | `compiler/parser.nz`; the **whole grammar**. Same tree as the reference over 50 hand-written sources **and over its own source and the tokeniser's** — 2000+ nodes, node- and span-identical. Only a bare block used as an expression is refused |
-| Checker / lowering / emission in Nazm | planned | nothing exists |
+| Name resolution in Nazm | **verified** | `compiler/check.nz`; same `(code, span)` as `nazm_core::check` for `N0200`/`N0201` over 15 sources, and accepts every standalone `.nz` in the tree |
+| Tree traversal in Nazm without recursion | **verified** | child index from the post-order arena, then a pre-order walk from a marker-carrying work stack |
+| Type checking / lowering / emission in Nazm | planned | nothing exists |
 | Native recursion | blocked by design | pending measured stack availability and frame size. **Not needed**: the compiler is iterative |
 | Concurrency, formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
 
@@ -54,10 +56,10 @@ what was verified when it was written, not what is true now.
 
 | Command | Result |
 | --- | --- |
-| `cargo test --workspace` | **444 passed, 0 failed, 6 ignored** |
+| `cargo test --workspace` | **446 passed, 0 failed, 6 ignored** |
 | — of which self-skipping | 10 `docker_boundary` tests exercise nothing without `NAZM_REQUIRE_DOCKER=1` |
 | — of which native end-to-end | 126 `nazm build` cases, each at `-O0` and `-O2` against the interpreter |
-| — of which self-hosting differentials | 7 |
+| — of which self-hosting differentials | 9 |
 | `cargo test -p xtask --test lifecycle -- --ignored` | 6 passed (separate; not in the 443) |
 | `cargo lint` (the CI alias) | 0 diagnostics |
 | `cargo fmt --all -- --check` | clean |
@@ -76,32 +78,31 @@ mutation lock is held (`target/.nazm-mutation-lock.v2` absent).
 
 ## Current task
 
-**Milestone C — a checker in Nazm.** The front end's first two passes are done and
-verified against the reference; what remains for a compiler is name resolution and type
-checking, then lowering and LLVM emission, then the driver.
+**Milestone C — type checking in Nazm.** Lexing, parsing and name resolution are done and
+differentially verified. What remains for a compiler: types, then lowering, then LLVM
+emission, then a driver.
 
 ## Next exact action
 
-Write `compiler/check.nz` over the node arena `compiler/parser.nz` produces.
+Extend `compiler/check.nz` from names to **types**, reusing the traversal that is already
+there.
 
-The arena is **post-order with arity**, which is a stack machine's natural input: a single
-left-to-right pass with an `Ints` operand stack visits every node exactly once, children
-before parents, with no traversal recursion at all. Type checking is therefore a fold —
-push each leaf's type, pop `arity` types at each internal node, check them, push the
-result — which is why the dump format was chosen for the comparison in the first place.
+Types are a **fold over the post-order arena** and need no second traversal: push each
+leaf's type, pop `arity` types at each internal node, check them, push the result. That
+is why the arena's post-order shape was chosen. Type codes can be small integers
+(`1 = Int`, `2 = Bool`, `3 = Str`, `4 = Ints`, `5 = Strs`), and the symbol table needs a
+parallel `sym_type: Ints` alongside the names `resolve` already keeps.
 
-Needed:
+The codes to reproduce, and the reference function that produces each:
+`N0300` type mismatch (`check_assign`, `check_return`, `value_type`), `N0301` non-`Bool`
+condition (`check_while`, `check_expr`'s `If`), `N0303` wrong argument count,
+`N0304` invalid operands (`check_binary`), `N0310` assignment to an immutable binding.
+Built-in signatures come from `nazm-core/src/intrinsic.rs` and must be transcribed once
+into a table in Nazm, with a test that every built-in is present.
 
-1. A symbol table as parallel arrays: `sym_name: Strs`, `sym_kind: Ints`,
-   `sym_type: Ints`, `sym_scope: Ints`. Lookup walks outward by scope index; a hash map
-   is not needed and is not proposed.
-2. A signature pass over the `fn` nodes before any body, so a forward reference resolves
-   — the same two-pass shape `nazm-lir::lower` uses.
-3. Diagnostics as `diag_code: Strs`, `diag_start/diag_end: Ints`, `diag_message: Strs`,
-   reported with the **same codes** the reference uses so the two can be compared.
-4. A differential test in `crates/nazm-cli/tests/selfhost.rs` comparing the set of
-   `(code, span)` pairs against `nazm_core::check` over the same sources — including the
-   invalid ones, because a checker that accepts everything agrees with nothing.
+Extend the differential in `crates/nazm-cli/tests/selfhost.rs` the same way the name test
+works: sorted `(code, span)` against `nazm_core::check`, over sources chosen so the
+reference produces only the codes the Nazm checker claims.
 
 After that: lowering and LLVM emission in Nazm (Milestone C), then the C1→C2→C3 chain
 (Milestone D).
@@ -124,7 +125,7 @@ After that: lowering and LLVM emission in Nazm (Milestone C), then the C1→C2�
 
 - [x] Scalar control flow verified, including `return` and transfers inside values — `ac39f7b`
 - [x] Bootstrap subset: text, structured data, collections, memory, file I/O, errors, modules — `053ed22`
-- [ ] Compiler frontend and lowering/emission in Nazm — **lexer and parser done; parser lacks `if`; no checker, lowering or emission**
+- [ ] Compiler frontend and lowering/emission in Nazm — **lexer, parser and name resolution done and differentially verified; no type checking, lowering or emission**
 - [ ] C1 → C2 → C3 bootstrap with conformance and reproducibility
 - [ ] Ordinary independent programs compile with the Nazm-written compiler
 - [ ] Structured concurrency: transfer/capture rules, cancellation, cleanup
