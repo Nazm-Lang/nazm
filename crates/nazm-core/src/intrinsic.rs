@@ -44,16 +44,25 @@ pub enum Intrinsic {
     StrConcat,
     /// `int_to_str(n: Int) -> Str` — decimal, with a leading `-` when negative.
     IntToStr,
+    /// `str_from_byte(b: Int) -> Str` — a one-byte `Str`.
+    ///
+    /// Fails with `N0405` unless `0 <= b <= 255`. This is how a program writes a byte it
+    /// cannot type: v0.1 string literals have **no escapes** (a deliberate deferral in
+    /// the lexer — an escape table is a decision about text encoding), so without this
+    /// there is no way to produce a newline, and a compiler that cannot emit a newline
+    /// cannot emit LLVM IR.
+    StrFromByte,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
         Self::StrConcat,
         Self::IntToStr,
+        Self::StrFromByte,
     ];
 
     #[must_use]
@@ -64,6 +73,7 @@ impl Intrinsic {
             Self::StrSlice => "str_slice",
             Self::StrConcat => "str_concat",
             Self::IntToStr => "int_to_str",
+            Self::StrFromByte => "str_from_byte",
         }
     }
 
@@ -74,7 +84,7 @@ impl Intrinsic {
             Self::StrByte => &[Type::Str, Type::Int],
             Self::StrSlice => &[Type::Str, Type::Int, Type::Int],
             Self::StrConcat => &[Type::Str, Type::Str],
-            Self::IntToStr => &[Type::Int],
+            Self::IntToStr | Self::StrFromByte => &[Type::Int],
         }
     }
 
@@ -82,7 +92,7 @@ impl Intrinsic {
     pub fn ret(self) -> Type {
         match self {
             Self::StrLen | Self::StrByte => Type::Int,
-            Self::StrSlice | Self::StrConcat | Self::IntToStr => Type::Str,
+            Self::StrSlice | Self::StrConcat | Self::IntToStr | Self::StrFromByte => Type::Str,
         }
     }
 

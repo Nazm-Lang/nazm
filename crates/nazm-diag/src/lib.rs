@@ -102,6 +102,12 @@ pub mod codes {
     /// is inverted or runs off either end. A *language* rule, unlike `N0402`/`N0403`:
     /// `docs/spec.md` specifies the failure, so every implementation must produce it.
     pub const INDEX_OUT_OF_BOUNDS: Code = Code::new("N0405");
+
+    /// The allocator refused. Reported where an implementation can detect it: a compiled
+    /// program checks what `malloc` returned. The interpreter cannot produce this,
+    /// because its host aborts the process on allocation failure — a stated difference
+    /// between the two, not a gap in the specification.
+    pub const ALLOCATION_FAILED: Code = Code::new("N0406");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
