@@ -3,7 +3,11 @@ name = "xtask"
 description = "Repository automation and architectural gates."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# Not `workspace = true`. The workspace floor (1.85) is the oldest compiler the *shipped*
+# crates need; this one is a development tool and needs `std::fs::File::try_lock`, which
+# stabilised in 1.89. Declaring it here keeps the library crates' floor where it belongs
+# instead of raising it for a tool nobody builds against.
+rust-version = "1.89"
 license.workspace = true
 publish = false
 
@@ -11,6 +15,11 @@ publish = false
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
+
+# Only for tests: the restoration and lifecycle tests build throwaway trees to
+# interrupt and repair, and they must never touch the real checkout.
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

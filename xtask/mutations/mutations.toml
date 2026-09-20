@@ -541,3 +541,63 @@ replace = "            String::new(),"
 #
 # What is not covered: removing the call while `set_permissions` still succeeds. Recorded
 # as uncovered, alongside `checking-runs-on-the-callers-stack`.
+
+# ---------------------------------------------------------------------------
+# The native backend. Added with M1b; each verified individually through a
+# single-entry run in a disposable copy of the checkout, not by a catalogue run.
+# ---------------------------------------------------------------------------
+
+[[mutation]]
+name = "checked-add-loses-its-sign"
+why = """
+`docs/spec.md` says overflow traps. The emitter detects it with
+`llvm.sadd.with.overflow.i64`; the unsigned intrinsic is one letter away and is the
+mistake a reader would not see. `Int::MAX + 1` does not carry as an unsigned addition, so
+the guard never fires and the program prints the wrapped value instead of stopping —
+silently wrong arithmetic in a language whose first promise is that it traps.
+
+Caught by `addition_overflow_traps`, which requires exit 2 AND the N0400 code AND the
+message. Exit status alone would not discriminate: a mutant that died on a signal would
+also be non-zero.
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = 'ArithOp::Add => "sadd",'
+replace = 'ArithOp::Add => "uadd",'
+
+[[mutation]]
+name = "the-conditional-selects-the-wrong-branch"
+why = """
+The one thing an `if` has to get right. Swapping the branch labels compiles, produces
+well-formed IR that clang accepts, and every phi still names a real predecessor — so
+nothing structural catches it. Only running a program whose two branches differ does.
+
+Caught by `both_branch_outcomes_are_reachable` and others, which assert the exact printed
+value rather than merely that the program ran.
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = '"  br i1 %{c}, label %{then_label}, label %{else_label}"'
+replace = '"  br i1 %{c}, label %{else_label}, label %{then_label}"'
+
+[[mutation]]
+name = "two-same-typed-arguments-are-transposed"
+why = """
+The calling defect that survives everything structural. Swapping two arguments of the
+*same* type produces LLVM that is completely well-formed — right arity, right types, right
+symbol — so clang accepts it and no assertion about the emitted IR notices. Only running a
+program whose result depends on argument order does.
+
+Guarded on the two types being equal on purpose: a mutation that transposed differently
+typed arguments would emit `call i64 @nz.f1(i1 %a, i64 %b)`, clang would reject it, and
+the verdict would be UNUSABLE. A build failure is not evidence that an argument-order test
+discriminates — it is evidence that the IR was malformed, which is a different defect and
+one the tests below never had to catch.
+
+Caught by `arguments_are_not_swapped`, which uses noncommutative operations: `sub(10, 3)`
+is 7 and the transposition makes it -7. `mix(1, 2, 3)` catches a rotation as well.
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = "                let list = vals"
+replace = """                if vals.len() >= 2 && vals[0].1 == vals[1].1 {
+                    vals.swap(0, 1);
+                }
+                let list = vals"""

@@ -1,0 +1,2337 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index d2a5a95..9102083 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -41,6 +41,13 @@ jobs:
+           NAZM_REQUIRE_NONUTF8: "1"
+         run: cargo test --workspace --locked
+ 
++      # `cargo test` does not run these: they drive nested cargo builds and kill real
++      # process groups, and `cargo xtask mutate` below would pay their cost 44 times
++      # over. Ignored by default and run here, so they are executed rather than merely
++      # present.
++      - name: mutation-runner lifecycle
++        run: cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
++
+       - name: project checks
+         run: cargo xtask check
+ 
+diff --git a/Cargo.toml b/Cargo.toml
+index e2fda9f..8d26974 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,12 +1,16 @@
+ # Nazm — an AI-native programming language.
+ #
++# Direction: docs/direction.md · Roadmap: docs/roadmap.md
+ # Design record: docs/architecture.md · Spec: docs/spec.md
+-# Evaluation protocol and pre-registered decision rule: docs/evaluation.md
+-# Plan: ~/.claude/plans/in-my-download-folder-sparkling-minsky.md
++# Evaluation protocol (draft, not pre-registered): docs/evaluation.md
+ #
+-# Phase 2 is the whole workspace right now: a benchmark harness and the
+-# architectural gates. There is deliberately no compiler here yet — the harness
+-# has to work, and be shown to work, before the language is worth building.
++# Two tracks in one workspace. The language — span, diag, syntax, core, cli — is
++# an interpreter: lexer, parser, checker, tree-walking evaluator, no IR and no
++# backend. Alongside it, nazm-bench, an agent-cost harness that now measures
++# specific claims rather than gating the project's existence (docs/direction.md).
++#
++# This header previously read "there is deliberately no compiler here yet". That
++# stopped being true on 2026-09-20, when a .nz program first executed.
+ 
+ [workspace]
+ resolver = "2"
+@@ -15,6 +19,7 @@ members = [
+     "crates/nazm-diag",
+     "crates/nazm-syntax",
+     "crates/nazm-core",
++    "crates/nazm-lir",
+     "crates/nazm-cli",
+     "crates/nazm-bench",
+     "xtask",
+@@ -24,10 +29,13 @@ members = [
+ version = "0.0.1"
+ edition = "2021"
+ # Pinned toolchain is 1.98.1 (see rust-toolchain.toml). This floor is lower on
+-# purpose: it is the oldest compiler the Phase 2 crates actually need, and CI
++# purpose: it is the oldest compiler the *shipped* crates actually need, and CI
+ # verifies the claim rather than trusting it. The floor will rise to 1.95+ when
+ # cranelift arrives in Stage 7 — at which point this line is the thing that has
+ # to change deliberately.
++#
++# xtask overrides it with 1.89: it needs std's file locking, and a development
++# tool's requirement has no business raising the floor for the crates that ship.
+ rust-version = "1.85"
+ license = "Apache-2.0"
+ repository = "https://github.com/mdferdousalam/nazm"
+@@ -52,6 +60,7 @@ nazm-span = { path = "crates/nazm-span" }
+ nazm-diag = { path = "crates/nazm-diag" }
+ nazm-syntax = { path = "crates/nazm-syntax" }
+ nazm-core = { path = "crates/nazm-core" }
++nazm-lir = { path = "crates/nazm-lir" }
+ nazm-bench = { path = "crates/nazm-bench" }
+ 
+ # --- cli / config ---
+diff --git a/README.md b/README.md
+index fc793e8..7930ada 100644
+--- a/README.md
++++ b/README.md
+@@ -1,7 +1,7 @@
+ # Nazm
+ 
+-**An AI-native programming language — or, first, an experiment to find out whether one is
+-worth building.**
++**An AI-native programming language: fast, memory-efficient, concurrent — with a compiler
++eventually written in Nazm itself.**
+ 
+ > نظم — *systematic order, well-formed arrangement.*
+ 
+@@ -10,20 +10,42 @@ writes most code, languages should be redesigned to save tokens. The evidence sa
+ otherwise. What the evidence *does* show is that agents waste enormous effort fighting
+ compilers and churning over code that already works — and that is attackable.
+ 
+-So this repository contains two things, in the order that matters. First, the instrument
+-that decides whether the language should exist. Second, a small executable language to
+-point it at — an interpreter, not a compiler, which is why nothing here speaks to the
+-performance claims yet.
++So this repository contains two things. **The language** — today an interpreter, not a
++compiler, which is why nothing here speaks to the performance claims yet. And **an
++agent-cost harness** built to measure specific claims about it honestly, including the
++uncomfortable one: that better tooling on an existing language might capture much of the
++benefit.
++
++The language is the primary track. That was decided on 2026-09-20 and recorded in
++[`docs/direction.md`](docs/direction.md); what comes next, in dependency order, is
++[`docs/roadmap.md`](docs/roadmap.md). The harness keeps its protocol, its thresholds and
++its control arm unchanged — it is now evidence for claims rather than a gate on the
++project's existence.
+ 
+ ## What is actually here
+ 
+-**A `.nz` program runs.**
++**A `.nz` program runs — and a subset of one now compiles.**
+ 
+ ```sh
+ $ cargo run -p nazm-cli --bin nazm -- run examples/max.nz
+ 25
++
++$ cargo run -p nazm-cli --bin nazm -- build arithmetic.nz -o arithmetic
++arithmetic
++$ ./arithmetic          # no interpreter, no nazm process
++-54
+ ```
+ 
++`nazm build` is the native path (**M1a + M1b**) and its subset is narrow on purpose: one
++`fn main() -> Int`, `Int` and `Bool` literals, immutable `let` bindings of either, unary
++`-`, `+ - * / %`, the comparisons `== != < <= > >=`, and `if`/`else` **used as a value**,
++with branch-local bindings and nesting. Everything else — functions, loops, mutation,
++`return`, `Str` — is **refused by name** after ordinary checking, with no partial
++compilation, and still runs under `nazm run`. The arithmetic the specification promises
++is preserved rather than inherited from the hardware: overflow is a checked intrinsic and
++a branch (never `nsw`, which would let the optimiser delete the check), `Int::MIN / -1`
++fails, and `Int::MIN % -1` is `0`. See [`docs/roadmap.md`](docs/roadmap.md).
++
+ ```nazm
+ fn first_pair_with_product(target: Int, limit: Int) -> Int {
+     let mut a = 2;
+@@ -90,9 +112,9 @@ development fixtures — containers, a restricted database role, verified cleanu
+ produce a benchmark number yet: there is no task corpus, no agent driver, and no provider
+ adapter.
+ 
+-The harness came first on purpose. The decisive experiment sat at month 30 in the first
+-version of this plan; it now sits at roughly month 13, and the instrument has to be shown
+-to work before anything it measures means anything.
++The harness was built first, and that was the right order: an instrument has to be shown
++to work before anything it measures means anything. It is now maintained rather than
++extended, until the claims in the roadmap need it.
+ 
+ ## The argument
+ 
+@@ -117,12 +139,15 @@ churn. None of that is fixed by shorter keywords. All of it is attackable by mak
+ programs unrepresentable, closing the check loop in milliseconds, and giving formatting no
+ degrees of freedom to churn over.
+ 
+-**Whether that is worth a new language, or just better tooling for TypeScript, is the
+-question this repository is built to answer** — and the answer may well be the second one.
++**Whether that is worth a new language, or just better tooling for TypeScript, is a real
++question and the harness is built to keep answering it honestly** — see
++[`docs/direction.md`](docs/direction.md) for what changed about how the answer is used.
+ 
+ ## The experiment
+ 
+-Three arms. The third is the hypothesis; the second is why the experiment is honest.
++Three arms. The third is the hypothesis; the second is why the experiment is honest. It
++measures specific claims — it no longer decides whether the language gets built
++([`docs/direction.md`](docs/direction.md)).
+ 
+ | Arm | Contents |
+ | --- | --- |
+@@ -130,18 +155,20 @@ Three arms. The third is the hypothesis; the second is why the experiment is hon
+ | **A2** | **TypeScript + improved agent tooling** — structured diagnostics, canonical formatter, repeat-edit detection |
+ | A3 | Nazm + comparable tooling |
+ 
+-If A2 captures most of the benefit, the right deliverable is better TypeScript tooling and
+-Nazm should not be built. The decision rule is written down and committed **before** the
+-evaluation runs — see [`docs/evaluation.md`](docs/evaluation.md).
++If A2 captures most of the benefit, that is a finding about the claim under test and it
++stays in the record. The decision rule, its thresholds and the cost policy are unchanged,
++and are written down **before** the evaluation runs — see
++[`docs/evaluation.md`](docs/evaluation.md).
+ 
+ First workload: small HTTP/JSON services on PostgreSQL — validation, transactions,
+ authorization, error handling, cancellation. First user: a backend developer using coding
+ agents to build and maintain services, so debugging and operations stay in scope rather
+ than just "generated programs pass tests".
+ 
+-## The design, if it gets built
++## The design it is being built toward
+ 
+-Documented in [`docs/architecture.md`](docs/architecture.md). In brief: mutable value
++Documented in [`docs/architecture.md`](docs/architecture.md), and staged in
++[`docs/roadmap.md`](docs/roadmap.md). In brief: mutable value
+ semantics so memory safety needs no lifetime annotations; effect rows, capabilities, and
+ position-sensitive taint so untrusted data cannot reach a code-construction site;
+ structured concurrency where data races are a compile error; and a four-tier compilation
+@@ -151,6 +178,19 @@ The answer to "does this need a new compiler design?" is **new front end, new IR
+ middle end, reused back end**. Code generation is decades of work with no novelty available
+ in it.
+ 
++**What comes next**, in dependency order and no further:
++
++| | |
++| --- | --- |
++| **M1** | A native vertical slice. The existing lexer, parser, checker and diagnostics, one new typed IR, LLVM IR emitted as text and assembled by `clang`, one target. A compiled program runs with no interpreter, and is differentially compared against the interpreter on the existing 98-case corpus |
++| **M2** | The facilities a compiler actually needs — value/copy/move and cleanup first, then strings, tagged unions, collections, arena-indexed recursive structures, modules, and a narrow capability-based I/O contract |
++| **M3** | The bootstrap: `Rust → C1`, `C1 → C2`, `C2 → C3`, with byte equality asserted only where determinism has been established |
++
++Self-hosting is the long-term objective and it is **M3, not next**. Nazm today has no
++collections, no user-defined types, no pattern matching, no string concatenation and no
++I/O, so a compiler cannot be written in it in any form. The Rust implementation is retained
++as the bootstrap seed and the differential oracle.
++
+ ## What this does not establish
+ 
+ Stated up front, because these are easy to blur:
+@@ -175,26 +215,46 @@ cargo build --workspace
+ cargo test  --workspace
+ cargo lint              # clippy; CI runs this same alias, so they cannot drift
+ cargo xtask check       # architectural gates
++
++# Not in the default set: these drive nested cargo builds and kill real process
++# groups, and `cargo xtask mutate` would otherwise pay their cost 44 times over.
++cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
+ ```
+ 
+ The toolchain is pinned to 1.98.1 in `rust-toolchain.toml`. That pin is load-bearing:
+ `cranelift` 0.135 declares MSRV 1.95.0, so the 1.93.1 an earlier draft assumed could not
+-have built the eventual backend.
++have built the eventual backend. The workspace's declared MSRV floor is 1.85; `xtask`
++declares 1.89 for itself, because it uses std's file locking and a development tool has no
++business raising the floor for the crates that ship.
+ 
+ ## What is not built yet
+ 
+ Almost everything. Specifically:
+ 
+-- **The language is an interpreter, not a compiler.** Lexer, parser, type checker and
+-  tree-walking evaluator, no IR and no backend — so nothing here says anything yet about
+-  the performance claims, which are a backend question. The subset is the one described
+-  above; everything else in `docs/spec.md` under *Open* is undecided.
++- **The language is an interpreter with one narrow native path.** Lexer, parser, type
++  checker and tree-walking evaluator, plus `nazm build` for `Int`/`Bool` expressions and
++  value-position `if` — no functions, loops, mutation or `Str`. One
++  IR level (`nazm-lir`), one backend (LLVM IR as text → `clang`), one verified target
++  (`aarch64-apple-darwin`); other targets are **unverified rather than unsupported**.
++  Nothing here says anything yet about the performance claims: `-O0` is the default, no
++  optimisation work has been done, and no measurement has been taken. The executable language is
++  **v0.3**; `docs/spec.md` keeps its sections versioned, so a *Settled for v0.1* entry
++  records what v0.1 decided rather than what is true now. Everything under *Open* is
++  undecided.
++- **No concurrency at all.** Not a partial implementation — nothing. `docs/spec.md` §6
++  settles the structured-concurrency borrow region as a *design*, and `docs/roadmap.md`
++  puts the specification work before any runtime. There is no scheduler and none is being
++  written.
+ - **The harness is partial.** Real, tested, and mutation-checked (`cargo xtask mutate`,
+-  44 runnable catalogued defects, all caught — plus two defects documented in `mutations.toml` as *uncovered*, which a passing run says nothing about): the accounting and comparison path (`nazm-bench
+-  selftest`, 15 cases), per-attempt workspace management, the submission freeze, and the
+-  independent acceptance runner. **Not written:** agent drivers, a provider adapter, and
+-  all but one task fixture — so the harness cannot produce a benchmark number, and `run`
+-  stays disabled.
++  44 runnable catalogued defects, all caught **as of `8d67a7d`** — plus two defects
++  documented in `mutations.toml` as *uncovered*, which a passing run says nothing about):
++  the accounting and comparison path (`nazm-bench selftest`, 19 cases), per-attempt
++  workspace management, the submission freeze, and the independent acceptance runner.
++  **Not written:** agent drivers, a provider adapter, and all but one task fixture — so
++  the harness cannot produce a benchmark number, and `run` stays disabled. The corpus has
++  **never accepted a known-good solution or rejected a known-bad one**: there is no
++  `reference/` or `broken/` directory anywhere, so it has not been shown to discriminate
++  at all.
+ - **Confinement works and is tested against a real daemon.** Each attempt gets a private
+   internal network, its own PostgreSQL container, and a candidate container with all
+   capabilities dropped, no published ports, and no host namespaces. Four tests under
+diff --git a/crates/nazm-cli/Cargo.toml b/crates/nazm-cli/Cargo.toml
+index fd9c388..699c3b8 100644
+--- a/crates/nazm-cli/Cargo.toml
++++ b/crates/nazm-cli/Cargo.toml
+@@ -17,10 +17,14 @@ path = "src/main.rs"
+ nazm-span = { workspace = true }
+ nazm-diag = { workspace = true }
+ nazm-core = { workspace = true }
++nazm-lir = { workspace = true }
+ clap = { workspace = true }
+ 
+ [dev-dependencies]
+ serde_json = { workspace = true }
++# Each build case needs a throwaway directory for its source, its executable and, in two
++# cases, a stub toolchain on PATH.
++tempfile = { workspace = true }
+ 
+ [lints]
+ workspace = true
+diff --git a/crates/nazm-cli/src/main.rs b/crates/nazm-cli/src/main.rs
+index a1276ee..cdb6f0b 100644
+--- a/crates/nazm-cli/src/main.rs
++++ b/crates/nazm-cli/src/main.rs
+@@ -1,12 +1,31 @@
+-//! `nazm` — run a Nazm program.
++//! `nazm` — run, check, or natively compile a Nazm program.
+ //!
+ //! Exit status is part of the interface, not an afterthought: `0` ran, `1` did not
+-//! type-check, `2` failed at runtime, `3` could not read the file. A caller that has to
+-//! parse stderr to find out which happened is doing work the process could have told it.
++//! type-check, `2` failed at runtime, `3` could not read the file, `4` the build
++//! toolchain was missing or failed. A caller that has to parse stderr to find out which
++//! happened is doing work the process could have told it.
++//!
++//! # The contract a compiled program keeps
++//!
++//! Decided before the wrapper was written, because these are the parts a user depends on
++//! and they are awkward to change afterwards:
++//!
++//! | | |
++//! | --- | --- |
++//! | **Result** | The full signed 64-bit value, in decimal, on standard output, followed by a newline. **Not** the exit status, which is 8 bits and would silently truncate almost every `Int` |
++//! | **Success** | Exit `0` |
++//! | **Runtime failure** | Exit `2` — the same status `nazm run` uses — with one line on standard error: `nazm: error[CODE]: message at file:line:column` |
++//! | **Diagnostic category** | The same stable code the interpreter reports: `N0400` for overflow, `N0401` for division by zero |
++//! | **Source location** | Line and column of the operator that failed, resolved at compile time and baked into the binary as a constant |
++//! | **`--json`** | Applies to **build-time** diagnostics only. A generated executable has no diagnostic framework linked into it and emits the plain line above; promising JSON there would mean shipping a serialiser in every binary |
++//!
++//! `nazm run` and `nazm check` are unchanged by any of this.
+ 
+ use std::path::PathBuf;
+ use std::process::ExitCode;
+ 
++mod build;
++
+ use clap::{Parser, Subcommand};
+ use nazm_core::Outcome;
+ use nazm_span::SourceFile;
+@@ -17,6 +36,10 @@ mod exit {
+     pub(crate) const CHECK_FAILED: u8 = 1;
+     pub(crate) const RUNTIME_FAILED: u8 = 2;
+     pub(crate) const NO_SUCH_FILE: u8 = 3;
++    /// The build toolchain was missing, or failed on IR this compiler produced. Separate
++    /// from `CHECK_FAILED` on purpose: one means the program is wrong, the other means
++    /// the machine could not build a program that is fine.
++    pub(crate) const TOOLCHAIN_FAILED: u8 = 4;
+ }
+ 
+ #[derive(Parser, Debug)]
+@@ -74,6 +97,30 @@ enum Command {
+         #[arg(long)]
+         json: bool,
+     },
++    /// Compile to a native executable.
++    ///
++    /// A narrow subset for now — see `docs/roadmap.md` M1a. Anything outside it is
++    /// refused by name after ordinary checking; nothing is partially compiled.
++    Build {
++        file: PathBuf,
++        /// Where to write the executable. Defaults to the source's stem.
++        #[arg(short, long)]
++        out: Option<PathBuf>,
++        /// Emit diagnostics as one JSON object per line. Build-time only: see the module
++        /// documentation for why a generated executable does not do this.
++        #[arg(long)]
++        json: bool,
++        /// Also write the generated LLVM IR next to the executable, as `<out>.ll`.
++        #[arg(long)]
++        emit_ir: bool,
++        /// Optimisation level handed to `clang`.
++        ///
++        /// Defaults to 0. The specified arithmetic semantics hold at every level by
++        /// construction — overflow is an intrinsic and a branch, never `nsw` — and the
++        /// test suite compiles the same programs at 0 and 2 to keep that true.
++        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
++        opt_level: u8,
++    },
+ }
+ 
+ /// Parse `--max-depth`, refusing a budget no machine would grant the stack for.
+@@ -102,6 +149,16 @@ fn max_depth(raw: &str) -> Result<usize, String> {
+ 
+ fn main() -> ExitCode {
+     let cli = Cli::parse();
++    if let Command::Build {
++        file,
++        out,
++        json,
++        emit_ir,
++        opt_level,
++    } = cli.command
++    {
++        return build::run(&file, out.as_deref(), json, emit_ir, opt_level);
++    }
+     let (path, json, limits) = match cli.command {
+         Command::Run {
+             file,
+@@ -117,6 +174,9 @@ fn main() -> ExitCode {
+             }),
+         ),
+         Command::Check { file, json } => (file, json, None),
++        // Handled above; `main` keeps its original shape for the two commands whose
++        // behaviour this increment must not change.
++        Command::Build { .. } => unreachable!("handled above"),
+     };
+ 
+     let text = match std::fs::read_to_string(&path) {
+diff --git a/crates/nazm-core/src/lib.rs b/crates/nazm-core/src/lib.rs
+index ad9b4b6..7016320 100644
+--- a/crates/nazm-core/src/lib.rs
++++ b/crates/nazm-core/src/lib.rs
+@@ -102,22 +102,64 @@ fn pipeline(source: &str, limits: eval::Limits) -> Outcome {
+ /// with the shape of the tree, and neither has anything to do with call depth.
+ #[must_use]
+ pub fn check_source(source: &str) -> Vec<nazm_diag::Diagnostic> {
+-    eval::on_interpreter_stack(0, || {
++    // `()` as the result, so the tree is built, walked and **dropped** inside the closure.
++    // Returning it would move a recursive structure onto whatever stack the caller
++    // happens to have, which is the thing this function exists to avoid.
++    match on_checked(source, |_| Ok::<(), Vec<nazm_diag::Diagnostic>>(())) {
++        Ok(()) => Vec::new(),
++        Err(d) => d,
++    }
++}
++
++/// Parse, check, and run `f` over the tree — all on the interpreter's own stack.
++///
++/// # Why the tree never leaves
++///
++/// `docs/spec.md` promises that the whole pipeline runs on a thread whose stack the
++/// interpreter sets itself, because **a bound only means something against a known
++/// stack**: macOS gives the main thread 8 MiB, a spawned thread 2 MiB, and the test
++/// harness 2 MiB per test. Parsing, checking, lowering, emitting and *dropping* the tree
++/// all recurse with its shape.
++///
++/// An earlier version of this file returned the `Program` to the caller. Nothing observed
++/// an abort at `MAX_NESTING` — drop frames are small — but it made the guarantee depend on
++/// the caller's stack and on frames staying small, neither of which the contract mentions.
++/// So `f` runs *here*, and only its result crosses back. `T: Send` is what stops a
++/// borrowed tree escaping with it.
++///
++/// # Errors
++///
++/// The parse and check diagnostics if there are any — in which case `f` is never called,
++/// because running a later pass over a tree known to be ill-typed produces a second, less
++/// useful error about the same mistake. Otherwise whatever `f` returns.
++pub fn on_checked<T, F>(source: &str, f: F) -> Result<T, Vec<nazm_diag::Diagnostic>>
++where
++    T: Send,
++    F: FnOnce(&__syntax::Program) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
++{
++    let run = || {
+         let (program, mut diagnostics) = nazm_syntax::parse_source(source);
+         let parse_failed = !diagnostics.is_empty();
+         let (_, check_errors) = check(&program);
++        // A function that failed to parse was never registered, so "this program has no
++        // `main`" would be reported for a file whose first line is `fn main`.
+         diagnostics.extend(
+             check_errors
+                 .into_iter()
+                 .filter(|d| !(parse_failed && d.code == nazm_diag::codes::MISSING_MAIN)),
+         );
+-        diagnostics
+-    })
+-    .unwrap_or_else(|e| {
+-        vec![nazm_diag::Diagnostic::error(
++        if diagnostics.is_empty() {
++            f(&program)
++        } else {
++            Err(diagnostics)
++        }
++    };
++
++    eval::on_interpreter_stack(0, run).unwrap_or_else(|e| {
++        Err(vec![nazm_diag::Diagnostic::error(
+             nazm_diag::codes::INTERPRETER_UNAVAILABLE,
+             nazm_span::Span::new(0, 0),
+             format!("could not start the checker: {e}"),
+-        )]
++        )])
+     })
+ }
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 36537f2..e370006 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -279,18 +279,29 @@ schedules, so those compare **permitted outcomes and invariants**, never identic
+ 
+ ## 7. Crate layout
+ 
+-Crates are created when their responsibility exists. **Phase 2 is `nazm-bench` and `xtask`
+-only** — there is no compiler yet, deliberately.
++Crates are created when their responsibility exists.
+ 
+-| Phase | Crates |
+-| --- | --- |
+-| **2 (current)** | `nazm-bench` · `xtask` |
+-| 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-hir` · `nazm-ty` · `nazm-core` · `nazm-mcp` · `nazm-cli` |
+-| 6 | `nazm-db` · `nazm-mir` · `nazm-lsp` |
+-| 7 | `nazm-lir` · `nazm-codegen-clif` · `nazm-link` · `nazm-driver` · `nazm-test` |
+-| 8 | `nazm-rt` |
+-| 9 | `nazm-mono` · `nazm-codegen-llvm` |
+-| 10 | `nazm-pkg` · `nazm-std-build` |
++**Corrected 2026-09-20.** This section read "Phase 2 is `nazm-bench` and `xtask` only —
++there is no compiler yet, deliberately", and that is no longer the case: the Phase 4
++front-end crates exist and a `.nz` program executes. What has *not* changed is that
++everything from `nazm-hir` downward is still design — no IR, no backend, no runtime. See
++[`roadmap.md`](roadmap.md) for the order the rest is now planned in.
++
++| Phase | Crates | State |
++| --- | --- | --- |
++| 2 | `nazm-bench` · `xtask` | **exists** |
++| 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-core` · `nazm-cli` | **exists** (as an interpreter; `nazm-core` is checker + evaluator, not the Core IR below) |
++| 4 | `nazm-hir` · `nazm-ty` · `nazm-mcp` | planned |
++| 6 | `nazm-db` · `nazm-mir` · `nazm-lsp` | planned |
++| 7 | `nazm-lir` · `nazm-codegen-clif` · `nazm-link` · `nazm-driver` · `nazm-test` | planned |
++| 8 | `nazm-rt` | planned |
++| 9 | `nazm-mono` · `nazm-codegen-llvm` | planned |
++| 10 | `nazm-pkg` · `nazm-std-build` | planned |
++
++One deliberate departure from this table is already recorded: [`roadmap.md`](roadmap.md)
++M1 brings `nazm-lir` and `nazm-codegen-llvm` forward, and does **not** create the levels
++between them and the AST. Five empty pass-through crates would match the diagram and carry
++no information.
+ 
+ Roles, in dependency order: `span` (files, byte spans, `FileId`, interned identifiers —
+ depends on nothing) · `diag` (stable error codes, fixits, JSON schema, renderer) · `syntax`
+diff --git a/docs/evaluation.md b/docs/evaluation.md
+index 8797513..197822d 100644
+--- a/docs/evaluation.md
++++ b/docs/evaluation.md
+@@ -2,8 +2,20 @@
+ 
+ **Status: draft. Not yet pre-registered.**
+ The decision rule in §6 becomes binding when it is committed and its commit hash is
+-recorded in `docs/evaluation-preregistration.md`. Until then it is a proposal and may
+-change freely. After that, it may not.
++recorded in `docs/evaluation-preregistration.md`. That file **does not exist**; until it
++does, the rule is a proposal and may change freely. After that, it may not.
++
++> **Scope changed 2026-09-20, contents unchanged.** This protocol no longer decides
++> whether the language project exists — see [`direction.md`](direction.md). It is now
++> **evidence for specific usability and performance claims**, and it is reproduced here
++> exactly as registered-in-draft: the arms, the metrics, the thresholds in §6 (`point
++> R_C ≤ 0.80` **and** `upper CB < 1.00`), the cost policy, and the void-rate rule are
++> untouched. Nothing has been relaxed to fit the new direction, and no earlier result has
++> been reinterpreted.
++>
++> **A2 keeps its role.** If improved tooling on an existing language captures most of a
++> measured benefit, that is a finding about the claim under test and it stays in the
++> record. It is no longer a stop condition.
+ 
+ ---
+ 
+diff --git a/docs/runbook.md b/docs/runbook.md
+index ca6084f..37d66ad 100644
+--- a/docs/runbook.md
++++ b/docs/runbook.md
+@@ -75,3 +75,82 @@ $ rustc --version  → 1.98.1 (pinned in rust-toolchain.toml)
+ The local `stable` was 1.93.1 (seven months behind) when this project started; the pin is
+ what makes that irrelevant. `cranelift` 0.135 declares MSRV 1.95.0, so the pin is
+ load-bearing for Stage 7 even though nothing depends on Cranelift yet.
++
++---
++
++## Recovering an interrupted mutation run
++
++`cargo xtask mutate` mutates the working tree in place and restores each file after
++testing it. If the run is killed in between, the tree is left holding a mutation and a
++write-ahead record at `target/.nazm-mutation-backup` describing how to undo it.
++
++**Recovery is not automatic, and that is deliberate.** Killing a run releases its lock at
++once — the runner's `cargo` and `rustc` descendants never held it, because Rust opens
++files `O_CLOEXEC` — so those descendants keep running and keep writing to the tree. The
++runner has no way to establish that they have stopped:
++
++* a **pid** may have been reused, and the one in the record belongs to a process that is
++  already gone;
++* a **content digest** describes the file at the instant it was read, not what will be
++  written to it next;
++* a **delay** proves nothing at any length.
++
++Restoring the source while one of them is still running, and then injecting the next
++mutation on top, would produce verdicts about a file two processes are editing. So a
++stranded record makes the next run **refuse to start**, and repair is an operator action.
++
++### The procedure
++
++1. **Establish that nothing is still writing to the tree.**
++
++   These commands help you look. **Neither is proof**, and the difference matters:
++
++   ```sh
++   pgrep -g <pgid>        # the interrupted run's process group, if you know it
++   pgrep -fl "$(pwd)"     # build and test processes mentioning this path
++   ```
++
++   A process-group search misses anything that called `setsid` or `setpgid`. A
++   path-or-name search misses a process whose command line does not mention the
++   checkout, one that holds an open descriptor to a file whose path has since changed,
++   and anything that has not started yet. Both are **investigative aids**; what
++   establishes quiescence is your knowledge of what you were running, and nothing here
++   can substitute for it.
++
++2. **Repair.**
++
++   ```sh
++   cargo xtask mutate-recover --confirm-no-writers
++   ```
++
++   The flag is **your attestation that the workspace is quiet** — not a check the tool
++   performs, and not a claim the searches above succeeded. The tool has no way to
++   perform such a check, which is precisely why recovery is not automatic and why no
++   automatic mechanism is being added. Recovery itself is still conservative: it restores the original bytes only
++   if the file still matches what the record describes, reports `already-restored` if the
++   run was killed after restoring but before clearing its record, and refuses outright if
++   the contents match neither. A file you edited by hand since the crash is never
++   overwritten.
++
++3. **Re-run.**
++
++   ```sh
++   cargo xtask mutate
++   ```
++
++### If recovery refuses
++
++It will say the file matches neither the mutation it applied nor the original it saved.
++That means something changed the file after the interruption. The original is still in
++`target/.nazm-mutation-backup`, after its fourth line. Compare it with the working copy,
++resolve by hand, then delete the record.
++
++### Interoperating with an older runner
++
++The lock protocol changed: it was a file whose *existence* was the lock, and it is now an
++advisory lock (`flock`) on `target/.nazm-mutation-lock.v2`, which is never unlinked. **The
++two protocols do not coordinate reliably, and the supported boundary is not to run both
++against one tree.** The new runner takes the old marker while it runs so an old runner
++usually stands down, and refuses to start if the old marker names a live process — but a
++first-protocol runner that has already passed its own check and not yet published is not
++covered by anything. Use one version.
+diff --git a/docs/spec.md b/docs/spec.md
+index 49e86d9..634f502 100644
+--- a/docs/spec.md
++++ b/docs/spec.md
+@@ -1,7 +1,12 @@
+ # Nazm language specification
+ 
+-**Status: v0.1 in progress (Phase 1). This is not yet a specification — it is the list of
+-decisions a specification has to make, with the ones already settled marked as such.**
++**Status: this is not yet a specification — it is the list of decisions a specification
++has to make, with the ones already settled marked as such.**
++
++**The current executable language is v0.3.** Sections are versioned and kept in order, so
++a *Settled for v0.1* entry records what v0.1 decided, not what is true now; where a later
++version changed one, the earlier entry says so and points forward. Everything under *Open*
++is undecided.
+ 
+ Publishing the open questions before the answers is deliberate. Every one of them was
+ either wrong or unstated in an earlier draft of the design, and the cost of discovering
+@@ -82,6 +87,12 @@ One exit point means the value a function produces is always in the same place.
+ earns its keep with guard clauses, and it is not ruled out — it is deferred until there is
+ something to guard against.
+ 
++> **Superseded in v0.3.** `return` exists and is implemented — see [`return`](#return)
++> below. This entry is kept rather than edited because it records what v0.1 committed to
++> and why, and the reasoning ("deferred until there is something to guard against") is
++> what the later section answers. **The current executable language is v0.3**; a function's
++> value is still its final expression, and `return` is for the paths that leave early.
++
+ ### Types — `Int`, `Bool`, `Str`, and no inference across function boundaries
+ 
+ Parameter and return types are always written. Local `let` bindings infer from their
+@@ -419,9 +430,16 @@ Required before `nazm test --backend=all` means anything:
+   grammar-constrained decoding is ever used).
+ - A cheatsheet under ~3k tokens, to be injected by `nazm init`.
+ 
+-## Non-goals for v0.1
++## Non-goals for the current interpreter milestone
+ 
+-Deliberately out of scope until the gate:
++Deliberately out of scope:
+ 
+ macros · comptime beyond constant folding · general effect handlers · whole-program taint ·
+-layout selection · self-hosting · a package manager · a module system beyond files
++layout selection · a package manager · a module system beyond files
++
++**Self-hosting was on this list and has been moved off it.** It is now a stated long-term
++objective — see [`direction.md`](direction.md) — and it remains outside this milestone,
++which is a different thing from being a non-goal. The staged path is
++[`roadmap.md`](roadmap.md) M3, and it is deliberately preceded by M2: the language has no
++collections, no user-defined types, no pattern matching, no string concatenation and no
++I/O, so a compiler cannot be written in it yet at all.
+diff --git a/xtask/Cargo.toml b/xtask/Cargo.toml
+index 354f322..5a99d82 100644
+--- a/xtask/Cargo.toml
++++ b/xtask/Cargo.toml
+@@ -3,7 +3,11 @@ name = "xtask"
+ description = "Repository automation and architectural gates."
+ version.workspace = true
+ edition.workspace = true
+-rust-version.workspace = true
++# Not `workspace = true`. The workspace floor (1.85) is the oldest compiler the *shipped*
++# crates need; this one is a development tool and needs `std::fs::File::try_lock`, which
++# stabilised in 1.89. Declaring it here keeps the library crates' floor where it belongs
++# instead of raising it for a tool nobody builds against.
++rust-version = "1.89"
+ license.workspace = true
+ publish = false
+ 
+@@ -12,5 +16,10 @@ serde = { workspace = true }
+ serde_json = { workspace = true }
+ toml = { workspace = true }
+ 
++# Only for tests: the restoration and lifecycle tests build throwaway trees to
++# interrupt and repair, and they must never touch the real checkout.
++[dev-dependencies]
++tempfile = { workspace = true }
++
+ [lints]
+ workspace = true
+diff --git a/xtask/mutations/mutations.toml b/xtask/mutations/mutations.toml
+index 479da2e..e3c3bd5 100644
+--- a/xtask/mutations/mutations.toml
++++ b/xtask/mutations/mutations.toml
+@@ -541,3 +541,63 @@ replace = "            String::new(),"
+ #
+ # What is not covered: removing the call while `set_permissions` still succeeds. Recorded
+ # as uncovered, alongside `checking-runs-on-the-callers-stack`.
++
++# ---------------------------------------------------------------------------
++# The native backend. Added with M1b; each verified individually through a
++# single-entry run in a disposable copy of the checkout, not by a catalogue run.
++# ---------------------------------------------------------------------------
++
++[[mutation]]
++name = "checked-add-loses-its-sign"
++why = """
++`docs/spec.md` says overflow traps. The emitter detects it with
++`llvm.sadd.with.overflow.i64`; the unsigned intrinsic is one letter away and is the
++mistake a reader would not see. `Int::MAX + 1` does not carry as an unsigned addition, so
++the guard never fires and the program prints the wrapped value instead of stopping —
++silently wrong arithmetic in a language whose first promise is that it traps.
++
++Caught by `addition_overflow_traps`, which requires exit 2 AND the N0400 code AND the
++message. Exit status alone would not discriminate: a mutant that died on a signal would
++also be non-zero.
++"""
++file = "crates/nazm-lir/src/emit.rs"
++find = 'ArithOp::Add => "sadd",'
++replace = 'ArithOp::Add => "uadd",'
++
++[[mutation]]
++name = "the-conditional-selects-the-wrong-branch"
++why = """
++The one thing an `if` has to get right. Swapping the branch labels compiles, produces
++well-formed IR that clang accepts, and every phi still names a real predecessor — so
++nothing structural catches it. Only running a program whose two branches differ does.
++
++Caught by `both_branch_outcomes_are_reachable` and others, which assert the exact printed
++value rather than merely that the program ran.
++"""
++file = "crates/nazm-lir/src/emit.rs"
++find = '"  br i1 %{c}, label %{then_label}, label %{else_label}"'
++replace = '"  br i1 %{c}, label %{else_label}, label %{then_label}"'
++
++[[mutation]]
++name = "two-same-typed-arguments-are-transposed"
++why = """
++The calling defect that survives everything structural. Swapping two arguments of the
++*same* type produces LLVM that is completely well-formed — right arity, right types, right
++symbol — so clang accepts it and no assertion about the emitted IR notices. Only running a
++program whose result depends on argument order does.
++
++Guarded on the two types being equal on purpose: a mutation that transposed differently
++typed arguments would emit `call i64 @nz.f1(i1 %a, i64 %b)`, clang would reject it, and
++the verdict would be UNUSABLE. A build failure is not evidence that an argument-order test
++discriminates — it is evidence that the IR was malformed, which is a different defect and
++one the tests below never had to catch.
++
++Caught by `arguments_are_not_swapped`, which uses noncommutative operations: `sub(10, 3)`
++is 7 and the transposition makes it -7. `mix(1, 2, 3)` catches a rotation as well.
++"""
++file = "crates/nazm-lir/src/emit.rs"
++find = "                let list = vals"
++replace = """                if vals.len() >= 2 && vals[0].1 == vals[1].1 {
++                    vals.swap(0, 1);
++                }
++                let list = vals"""
+diff --git a/xtask/src/main.rs b/xtask/src/main.rs
+index fb8b6ec..15e2f9f 100644
+--- a/xtask/src/main.rs
++++ b/xtask/src/main.rs
+@@ -16,9 +16,21 @@ fn main() -> ExitCode {
+         Some("check") => run_checks(),
+         Some("check-layering") => report(&[("layering", check_layering())]),
+         Some("check-codegen") => report(&[("codegen reach", check_codegen_reach())]),
++        Some("check-emission") => report(&[("emission reach", check_emission_reach())]),
+         Some("check-unsafe") => report(&[("unsafe policy", check_unsafe_policy())]),
+         Some("check-docs") => report(&[("doc claims", check_doc_claims())]),
+         Some("mutate") => report(&[("mutation coverage", run_mutations())]),
++        // Documented, because it is now the *only* way to recover an interrupted run:
++        // `mutate` refuses rather than repairing, since it cannot establish that the
++        // dead run's descendants have stopped.
++        Some("mutate-recover") => mutate_recover(&mut args),
++        // Hidden, and reachable only from the lifecycle tests. They exist because the
++        // properties they check cannot be observed from inside one process: mutual
++        // exclusion needs two independent processes to contend, and an interruption
++        // needs a process that did not create the state left behind. Kept out of `help`
++        // so they are not mistaken for an interface.
++        Some("mutate-run") => mutate_run(&mut args),
++        Some("mutate-hold") => mutate_hold(&mut args),
+         Some("help" | "--help" | "-h") | None => {
+             help();
+             ExitCode::SUCCESS
+@@ -37,10 +49,13 @@ fn help() {
+          Tasks:\n  \
+            check           run every gate\n  \
+            check-layering  crate dependency direction (rules.rs)\n  \
+-           check-codegen   no front-end crate reaches a code generator\n  \
++           check-codegen   no front-end crate *depends on* a code generator\n  \
++           check-emission  only the backend crate emits IR or runs clang\n  \
+            check-unsafe    the unsafe allowlist and the workspace lint agree\n  \
+            check-docs      documented claims that must stay true\n  \
+            mutate          inject catalogued defects; each must be caught\n  \
++           mutate-recover  repair a tree an interrupted mutation run left mutated;\n  \
++                           needs --confirm-no-writers, and read what it prints first\n  \
+            help            this message\n"
+     );
+ }
+@@ -49,6 +64,7 @@ fn run_checks() -> ExitCode {
+     report(&[
+         ("layering", check_layering()),
+         ("codegen reach", check_codegen_reach()),
++        ("emission reach", check_emission_reach()),
+         ("unsafe policy", check_unsafe_policy()),
+         ("doc claims", check_doc_claims()),
+     ])
+@@ -116,6 +132,83 @@ fn check_layering() -> Result<(), Vec<String>> {
+ /// The README says the decision rule is not yet pre-registered. The moment it *is*, that
+ /// sentence has to change, and the failure mode is that nobody remembers. So: if the
+ /// pre-registration file exists, the README must no longer claim otherwise.
++/// Only the crates that are supposed to may emit a backend artefact or run the toolchain.
++///
++/// # Why a source scan rather than a dependency scan
++///
++/// Text emission has no dependency to find. What it does have is a call site, and the
++/// property worth protecting is exactly about call sites: **a check-only path must not
++/// reach native emission or `clang`.** So this looks for the two capabilities by name in
++/// the source of every crate and requires them to appear only where `rules.rs` allows.
++///
++/// Stated precisely, because it is easy to overclaim: this is a **source-level check on
++/// where the capability is mentioned**, not a call-graph proof. It would not catch
++/// emission reached through a trait object or a re-export under another name. What it
++/// does catch is the realistic regression — someone calling `emit_llvm` or spawning
++/// `clang` from the checker because it was convenient — and it fails loudly when a new
++/// crate acquires either capability without being placed.
++///
++/// The behavioural half of the same claim is a test: `nazm check` run with an empty
++/// `PATH` must still succeed, which no amount of source scanning can establish.
++fn check_emission_reach() -> Result<(), Vec<String>> {
++    // The capability, and the text that betrays it.
++    const CAPABILITIES: &[(&str, &str)] = &[
++        ("emits LLVM IR", "emit_llvm"),
++        ("invokes the native toolchain", "\"clang\""),
++    ];
++
++    let Some(root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() else {
++        return Err(vec!["could not locate workspace root".to_owned()]);
++    };
++
++    let mut problems = Vec::new();
++    for (crate_dir, allowed) in rules::emission_allowlist() {
++        let src = root.join(crate_dir).join("src");
++        let Ok(files) = collect_rs(&src) else {
++            continue;
++        };
++        for file in files {
++            let Ok(text) = std::fs::read_to_string(&file) else {
++                continue;
++            };
++            for (what, needle) in CAPABILITIES {
++                if text.contains(needle) && !allowed.contains(what) {
++                    problems.push(format!(
++                        "{} mentions `{needle}`, so it {what} — but rules.rs does not \
++                         allow it to. A check-only path that can reach native emission or \
++                         the toolchain is the separation this rule exists to keep.",
++                        file.strip_prefix(root).unwrap_or(&file).display()
++                    ));
++                }
++            }
++        }
++    }
++
++    if problems.is_empty() {
++        Ok(())
++    } else {
++        Err(problems)
++    }
++}
++
++/// Every `.rs` under a directory. Tests live outside `src/`, so assertions about IR
++/// content in `tests/` are not mistaken for the capability itself.
++fn collect_rs(dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
++    let mut out = Vec::new();
++    let mut stack = vec![dir.to_path_buf()];
++    while let Some(d) = stack.pop() {
++        for entry in std::fs::read_dir(&d)? {
++            let path = entry?.path();
++            if path.is_dir() {
++                stack.push(path);
++            } else if path.extension().is_some_and(|e| e == "rs") {
++                out.push(path);
++            }
++        }
++    }
++    Ok(out)
++}
++
+ fn check_doc_claims() -> Result<(), Vec<String>> {
+     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+         .parent()
+@@ -163,11 +256,20 @@ fn check_doc_claims() -> Result<(), Vec<String>> {
+     }
+ }
+ 
+-/// No crate may reach a code generator unless `rules.rs` says it can.
++/// No crate may **depend on** a code generator unless `rules.rs` says it can.
++///
++/// # What this establishes, and what it does not
+ ///
+-/// The rule exists before either backend does, because it is cheap to state now and
+-/// contentious once someone has a reason to break it. `docs/architecture.md` §1 puts
+-/// Cranelift and LLVM behind the LIR contract; this is what keeps that true.
++/// It reads cargo metadata, so it is a statement about the dependency graph and nothing
++/// else. **Emitting LLVM IR as text is code generation and this check cannot see it** —
++/// `nazm-lir` generates a complete LLVM module with no codegen dependency at all, and
++/// passes here trivially. Describing that as architecture validation would be describing
++/// a vacuous result.
++///
++/// The capability question — *who may emit a backend artefact, and who may invoke the
++/// toolchain* — is [`check_emission_reach`], which looks at call sites instead. The two
++/// together are what `docs/architecture.md` §1 means by keeping Cranelift and LLVM behind
++/// the LIR contract; neither is sufficient alone.
+ fn check_codegen_reach() -> Result<(), Vec<String>> {
+     const CODEGEN_CRATES: &[&str] = &[
+         "cranelift",
+@@ -262,6 +364,125 @@ fn check_unsafe_policy() -> Result<(), Vec<String>> {
+ ///
+ /// Not part of `check`: it rebuilds and re-tests the workspace once per mutation, so it is
+ /// a scheduled job rather than a pre-commit gate.
++/// `--name value` pairs and bare `--name` switches, in any order.
++///
++/// Deliberately minimal. A switch is a `--name` whose next token is another `--name` or
++/// the end, and it maps to an empty string — the caller asks with `contains_key`. The
++/// first version required a value unconditionally, so a trailing `--confirm-no-writers`
++/// silently vanished and recovery refused a tree it had been told about. A flag a user
++/// typed and the program did not see is worse than no flag.
++fn flags(args: &mut impl Iterator<Item = String>) -> std::collections::HashMap<String, String> {
++    let mut out = std::collections::HashMap::new();
++    let mut args = args.peekable();
++    while let Some(a) = args.next() {
++        let Some(name) = a.strip_prefix("--") else {
++            continue;
++        };
++        let value = match args.peek() {
++            Some(next) if !next.starts_with("--") => args.next().unwrap_or_default(),
++            _ => String::new(),
++        };
++        out.insert(name.to_owned(), value);
++    }
++    out
++}
++
++fn need(f: &std::collections::HashMap<String, String>, k: &str) -> Result<String, ExitCode> {
++    match f.get(k) {
++        Some(v) => Ok(v.clone()),
++        None => {
++            eprintln!("missing --{k}");
++            Err(ExitCode::FAILURE)
++        }
++    }
++}
++
++/// Run the catalogue against an arbitrary root. The lifecycle tests point this at a
++/// disposable project so an interrupted run damages nothing that matters.
++fn mutate_run(args: &mut impl Iterator<Item = String>) -> ExitCode {
++    let f = flags(args);
++    let (Ok(root), Ok(catalogue)) = (need(&f, "root"), need(&f, "catalogue")) else {
++        return ExitCode::FAILURE;
++    };
++    match mutate::run_all(
++        std::path::Path::new(&root),
++        std::path::Path::new(&catalogue),
++    ) {
++        Ok(()) => ExitCode::SUCCESS,
++        Err(problems) => {
++            for p in problems {
++                println!("problem: {p}");
++            }
++            ExitCode::FAILURE
++        }
++    }
++}
++
++/// Take the lock, announce it, and hold it until told to stop.
++///
++/// The announcement is a file rather than a line on stdout because the test has to know
++/// the lock is *held* before it starts competing, and a pipe read is one more thing that
++/// can be buffered. Written after acquisition, so its existence is the fact it claims.
++fn mutate_hold(args: &mut impl Iterator<Item = String>) -> ExitCode {
++    let f = flags(args);
++    let (Ok(root), Ok(ready), Ok(release)) =
++        (need(&f, "root"), need(&f, "ready"), need(&f, "release"))
++    else {
++        return ExitCode::FAILURE;
++    };
++
++    let Ok(lock) = mutate::acquire_lock(std::path::Path::new(&root)) else {
++        eprintln!("hold: could not acquire");
++        return ExitCode::FAILURE;
++    };
++    if std::fs::write(&ready, "held").is_err() {
++        return ExitCode::FAILURE;
++    }
++
++    // Bounded, so a test that fails to signal leaves no process behind for the next one
++    // to trip over.
++    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
++    while !std::path::Path::new(&release).exists() {
++        if std::time::Instant::now() > deadline {
++            eprintln!("hold: released on the deadline, not on request");
++            return ExitCode::FAILURE;
++        }
++        std::thread::sleep(std::time::Duration::from_millis(20));
++    }
++    drop(lock);
++    ExitCode::SUCCESS
++}
++
++/// Startup recovery on its own, through the same function a real run calls.
++fn mutate_recover(args: &mut impl Iterator<Item = String>) -> ExitCode {
++    let f = flags(args);
++    // An operator runs this from the checkout and should not have to say where it is.
++    // The lifecycle tests pass `--root` to point it at a disposable project instead.
++    let root = match f.get("root") {
++        Some(r) => r.clone(),
++        None => match std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
++            Some(p) => p.display().to_string(),
++            None => {
++                eprintln!("could not locate the workspace root");
++                return ExitCode::FAILURE;
++            }
++        },
++    };
++    match mutate::recover(
++        std::path::Path::new(&root),
++        f.contains_key("confirm-no-writers"),
++    ) {
++        Ok(outcome) => {
++            println!("{outcome}");
++            ExitCode::SUCCESS
++        }
++        Err(e) => {
++            println!("error: {e}");
++            ExitCode::FAILURE
++        }
++    }
++}
++
+ fn run_mutations() -> Result<(), Vec<String>> {
+     let Some(root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() else {
+         return Err(vec!["could not locate workspace root".to_owned()]);
+diff --git a/xtask/src/mutate.rs b/xtask/src/mutate.rs
+index 26a6610..fe31608 100644
+--- a/xtask/src/mutate.rs
++++ b/xtask/src/mutate.rs
+@@ -41,7 +41,21 @@ fn backup_path(root: &Path) -> PathBuf {
+     root.join("target").join(".nazm-mutation-backup")
+ }
+ 
++/// The advisory lock the runner holds for the length of a run.
++///
++/// Deliberately **not** the path the first protocol used. That protocol treated the
++/// file's *existence* as the lock and unlinked it on release; this one keeps a file and
++/// locks it. Sharing one path between the two is not a smaller change, it is a broken
++/// one: the v2 file outlives its run, so an old runner's `create_new` would fail, it
++/// would read the file, judge the holder dead or unattributable, and **delete and
++/// recreate it** — at which point two v2 runners lock two different inodes and both
++/// believe they are alone. A separate path makes that impossible.
+ fn lock_path(root: &Path) -> PathBuf {
++    root.join("target").join(".nazm-mutation-lock.v2")
++}
++
++/// The first protocol's lock file. Read for interoperability, never locked.
++fn legacy_lock_path(root: &Path) -> PathBuf {
+     root.join("target").join(".nazm-mutation-lock")
+ }
+ 
+@@ -53,57 +67,311 @@ fn lock_path(root: &Path) -> PathBuf {
+ /// exactly like real regressions. Several minutes were spent diagnosing "broken" tests
+ /// that were only ever reading a file another process had deliberately damaged.
+ ///
+-/// Held as a file containing the pid, removed on completion. A stale lock from a killed
+-/// run is detected by signalling the pid.
+-struct RunLock {
+-    path: PathBuf,
++/// # Ownership is the kernel's answer, not a pid's
++///
++/// The first protocol recorded a pid and reasoned about it: create the file exclusively,
++/// and if that failed, decide from the pid inside whether the holder was gone. Two
++/// defects followed from that shape and neither was the last one. `kill -0 0` succeeds,
++/// so a malformed lock read as permanently held. Then reclaiming a dead holder's lock
++/// meant `remove` followed by `create`, which is not atomic: two runners that both saw
++/// the same dead holder could interleave — A removes, A creates, **B removes A's fresh
++/// lock**, B creates — and both would run.
++///
++/// Every repair of that shape is a repair to a race the process cannot actually
++/// arbitrate. So the decision is handed to the kernel: [`fs::File::try_lock`] on a file
++/// that is opened, locked, and **kept open for the whole run**. There is exactly one
++/// winner, the loser is told it lost, and a holder that dies has its lock released by the
++/// kernel with no reclaim path to get wrong. The file itself is never unlinked, so it is
++/// a stable object to lock rather than one whose identity changes under contention.
++///
++/// The pid written inside is **diagnostic only**. Nothing reads it to decide ownership.
++///
++/// # What the lock does not establish, and what nothing here establishes
++///
++/// Not quiescence. Rust opens files `O_CLOEXEC`, so the `cargo` processes this runner
++/// spawns do *not* inherit the lock; a runner killed mid-build has its lock released
++/// immediately while its `cargo` child is still running and still writing to the tree.
++/// Measured on this platform, not assumed.
++///
++/// An earlier version of this comment went on to claim that the write-ahead record
++/// covered the gap, because [`restore_stranded`] re-reads and re-digests the file before
++/// writing. **That was wrong, and it is the same error this project already corrected
++/// once for `(dev, ino)` in the harness snapshot code.** A digest establishes what a file
++/// contained at the instant it was read. It cannot establish that nothing will write the
++/// file afterwards, so it is a check against *prior* drift and not a quiescence proof.
++///
++/// There is no mechanism here that establishes quiescence, and the honest consequence is
++/// that automatic recovery is disabled: a stranded record makes [`run_all`] refuse rather
++/// than repair. See [`restore_stranded`] for the procedure that replaces it.
++#[derive(Debug)]
++pub(crate) struct RunLock {
++    /// Held open for the lifetime of the run. Dropping it releases the kernel's lock;
++    /// that is the whole release protocol, and the file stays on disk.
++    file: fs::File,
++    /// Removed on release so that a first-protocol runner stops seeing a held tree.
++    legacy_marker: PathBuf,
++}
++
++/// Why the tree could not be taken. Every variant fails closed.
++#[derive(Debug)]
++enum AcquireError {
++    /// Another v2 runner holds the lock. The ordinary case, and the only benign one.
++    Contended,
++    /// The filesystem does not implement advisory locking. Not contention, and not a
++    /// licence to continue: without the lock there is nothing to stop a second runner.
++    Unsupported(String),
++    /// The lock file could not be opened or locked for a reason of access, not of
++    /// contention.
++    Permission(String),
++    /// Anything else, reported as itself rather than folded into one of the above.
++    Other(String),
++    /// A first-protocol lock names a process that is alive. The protocols do not
++    /// coordinate, so this refuses rather than guessing.
++    LegacyRunner(u32),
++    /// A first-protocol lock exists and cannot be attributed to any process.
++    LegacyUnattributable(String),
++}
++
++impl AcquireError {
++    fn describe(&self, root: &Path) -> String {
++        match self {
++            Self::Contended => format!(
++                "another mutation run holds {}. Two runs corrupt each other's restores, \
++                 and a concurrent `cargo test` would see a mutated tree and report \
++                 failures that are not real.",
++                lock_path(root).display()
++            ),
++            Self::Unsupported(why) => format!(
++                "advisory locking is not available for {} ({why}). Refusing to run: \
++                 without it nothing prevents a second runner from mutating the same tree. \
++                 Run from a filesystem that supports file locking.",
++                lock_path(root).display()
++            ),
++            Self::Permission(why) => format!(
++                "cannot take the mutation lock at {} ({why}). Refusing rather than \
++                 continuing unlocked.",
++                lock_path(root).display()
++            ),
++            Self::Other(why) => format!(
++                "cannot take the mutation lock at {} ({why}). Refusing rather than \
++                 continuing unlocked.",
++                lock_path(root).display()
++            ),
++            Self::LegacyRunner(pid) => format!(
++                "a mutation run using the previous lock protocol appears to be active \
++                 (pid {pid}, holding {}). The two protocols do not coordinate, so this \
++                 run refuses rather than joining it.",
++                legacy_lock_path(root).display()
++            ),
++            Self::LegacyUnattributable(why) => format!(
++                "a lock file from the previous protocol is present at {} and cannot be \
++                 attributed to a process ({why}). Refusing rather than reclaiming. If no \
++                 mutation run is active, delete the file.",
++                legacy_lock_path(root).display()
++            ),
++        }
++    }
+ }
+ 
+ impl RunLock {
+-    fn acquire(root: &Path) -> Result<Self, String> {
++    fn acquire(root: &Path) -> Result<Self, AcquireError> {
+         let path = lock_path(root);
+-        if let Ok(existing) = fs::read_to_string(&path) {
+-            let pid = existing.trim();
+-            if pid_is_alive(pid) {
+-                return Err(format!(
+-                    "another mutation run is in progress (pid {pid}). Two runs corrupt \
+-                     each other's restores, and a concurrent `cargo test` would see a \
+-                     mutated tree and report failures that are not real."
+-                ));
+-            }
+-            // The holder is gone; `restore_stranded` deals with whatever it left.
+-            let _ = fs::remove_file(&path);
+-        }
+         if let Some(parent) = path.parent() {
+             let _ = fs::create_dir_all(parent);
+         }
+-        // `create_new` is the race-free part: read-then-write lets two runs both see no
+-        // lock and both create one. The pid check above only handles a *stale* lock.
+-        let mut f = fs::OpenOptions::new()
++
++        // Opened read+write and created if absent, never truncated on open: another
++        // runner may be holding a lock on this very file, and truncating it before
++        // asking for the lock would rewrite an object someone else owns.
++        let file = fs::File::options()
++            .read(true)
+             .write(true)
+-            .create_new(true)
++            .create(true)
++            .truncate(false)
+             .open(&path)
+-            .map_err(|e| format!("could not take the mutation lock: {e}"))?;
+-        use std::io::Write as _;
+-        write!(f, "{}", std::process::id())
+-            .map_err(|e| format!("could not record the mutation lock holder: {e}"))?;
+-        Ok(Self { path })
++            .map_err(|e| classify_io(&e))?;
++
++        match file.try_lock() {
++            Ok(()) => {}
++            Err(fs::TryLockError::WouldBlock) => return Err(AcquireError::Contended),
++            Err(fs::TryLockError::Error(e)) => return Err(classify_io(&e)),
++        }
++
++        // Held from here. Everything below may fail, and dropping `file` on the way out
++        // releases the kernel's lock, so no path leaves the tree marked as taken.
++        let legacy = legacy_lock_path(root);
++        claim_legacy_marker(&legacy)?;
++
++        // Diagnostic only. Written after the lock is held, so its contents can never be
++        // what another runner consults to decide whether it may proceed.
++        let _ = write_pid(&file);
++
++        Ok(Self {
++            file,
++            legacy_marker: legacy,
++        })
+     }
+ }
+ 
+-impl Drop for RunLock {
+-    fn drop(&mut self) {
+-        let _ = fs::remove_file(&self.path);
++/// Separate "someone else has it" from "this cannot work here" from "I am not allowed".
++///
++/// `ENOTSUP`/`EOPNOTSUPP` from some network filesystems, and `EINVAL` from a few others,
++/// mean the call will never succeed — silently proceeding there would leave the runner
++/// with no mutual exclusion at all on exactly the filesystems where a shared checkout is
++/// most likely.
++fn classify_io(e: &std::io::Error) -> AcquireError {
++    use std::io::ErrorKind;
++    match e.kind() {
++        ErrorKind::PermissionDenied => AcquireError::Permission(e.to_string()),
++        ErrorKind::Unsupported => AcquireError::Unsupported(e.to_string()),
++        _ => match e.raw_os_error() {
++            // ENOTSUP and EOPNOTSUPP share a value on macOS (45); on Linux EOPNOTSUPP is
++            // 95. EINVAL (22) is what some filesystems return for an unlockable file.
++            Some(45 | 95 | 22) => AcquireError::Unsupported(e.to_string()),
++            _ => AcquireError::Other(e.to_string()),
++        },
++    }
++}
++
++fn write_pid(file: &fs::File) -> std::io::Result<()> {
++    use std::io::{Seek, Write as _};
++    let mut f = file;
++    f.set_len(0)?;
++    f.rewind()?;
++    writeln!(f, "{}", std::process::id())?;
++    f.flush()
++}
++
++/// Take the first protocol's marker so that an old runner is *likely* to refuse to start.
++///
++/// # This is mitigation, not compatibility
++///
++/// **The two protocols do not coordinate, and this does not make them.** One treats a
++/// file's existence as the lock; the other locks a file. There is no sequence of
++/// unprivileged filesystem operations that makes those two agree, because the v1 side's
++/// logic is fixed and does not consult a lock.
++///
++/// The residual race is concrete and worth naming rather than implying away: a v2 runner
++/// reads the marker and finds it absent, a v1 runner publishes its own marker, and the v2
++/// runner then writes over it — both proceed. Creating the marker exclusively (below)
++/// removes exactly that interleaving, but a v1 runner that has already passed its own
++/// existence check and not yet published is still unaccounted for.
++///
++/// **The supported boundary is therefore: do not run a v1 and a v2 runner against the
++/// same tree.** What this code buys is that the common cases — a v1 marker already
++/// present, or a v1 runner starting after this one — are caught, and that a stale v1
++/// marker does not need a human. It is consulted only *after* the real lock is held, so
++/// no v2 runner's ownership decision depends on it.
++fn claim_legacy_marker(path: &Path) -> Result<(), AcquireError> {
++    match fs::read_to_string(path) {
++        Err(_) => {}
++        Ok(existing) => match holder_state(existing.trim()) {
++            // Holding the v2 lock already proves no v2 runner is here, so a live pid is
++            // either a v1 runner or an unrelated process that inherited the number.
++            // Either way it is not this run's to take.
++            Holder::Alive(pid) if pid != std::process::id() => {
++                return Err(AcquireError::LegacyRunner(pid))
++            }
++            Holder::Alive(_) => {}
++            Holder::Dead(pid) => {
++                println!(
++                    "  cleared      a first-protocol lock left by pid {pid}, which is no \
++                     longer running"
++                );
++                let _ = fs::remove_file(path);
++            }
++            Holder::Unknown(why) => return Err(AcquireError::LegacyUnattributable(why)),
++        },
++    }
++    // `create_new`, not `write`: overwriting would clobber a marker a v1 runner published
++    // between the read above and this line, and tell it that it holds a tree we are also
++    // about to mutate. If it lost the create, it is because someone else published first,
++    // and that someone must be judged rather than overwritten.
++    match fs::File::options().write(true).create_new(true).open(path) {
++        Ok(mut f) => {
++            use std::io::Write as _;
++            let _ = writeln!(f, "{}", std::process::id());
++            Ok(())
++        }
++        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
++            match holder_state(fs::read_to_string(path).unwrap_or_default().trim()) {
++                Holder::Alive(pid) if pid != std::process::id() => {
++                    Err(AcquireError::LegacyRunner(pid))
++                }
++                Holder::Alive(_) | Holder::Dead(_) => Ok(()),
++                Holder::Unknown(why) => Err(AcquireError::LegacyUnattributable(why)),
++            }
++        }
++        // The marker is advisory. Failing to write it is not a reason to refuse a tree
++        // whose real lock we hold.
++        Err(_) => Ok(()),
+     }
+ }
+ 
+-fn pid_is_alive(pid: &str) -> bool {
+-    Command::new("kill")
+-        .args(["-0", pid])
++/// What can be established about whoever holds the *legacy* marker.
++///
++/// Retained from the first protocol, narrowed to the one job it is still fit for. It is
++/// no longer an ownership decision for this runner — [`RunLock`] gets that from the
++/// kernel — only a judgement about whether a v1 runner may be active.
++#[derive(Debug)]
++enum Holder {
++    Alive(u32),
++    Dead(u32),
++    /// Neither could be established. Not the same as dead, and must not be treated as
++    /// it: a probe that failed says nothing about the process.
++    Unknown(String),
++}
++
++fn holder_state(pid: &str) -> Holder {
++    // Validated before any probe. `kill -0 0` addresses the current process group and
++    // succeeds; a negative number addresses another group. Neither answers the question
++    // being asked, so neither reaches the probe.
++    let Ok(n) = pid.parse::<u32>() else {
++        return Holder::Unknown(if pid.is_empty() {
++            "the lock is empty".to_owned()
++        } else {
++            format!("`{pid}` is not a process id")
++        });
++    };
++    if n == 0 {
++        return Holder::Unknown("0 is not a process id".to_owned());
++    }
++    process_exists(n)
++}
++
++/// Does this process exist?
++///
++/// `ps` rather than `kill -0`, because the answer has to distinguish "no such process"
++/// from "exists but is not yours". `kill -0` fails for both, and through the `kill`
++/// binary there is no errno to tell them apart — so a lock held by another user's live
++/// run would look dead and be stolen.
++fn process_exists(pid: u32) -> Holder {
++    match Command::new("ps")
++        .args(["-p", &pid.to_string(), "-o", "pid="])
+         .stdout(std::process::Stdio::null())
+         .stderr(std::process::Stdio::null())
+         .status()
+-        .is_ok_and(|s| s.success())
++    {
++        Ok(s) if s.success() => Holder::Alive(pid),
++        // `ps` ran and found nothing. That is an answer.
++        Ok(_) => Holder::Dead(pid),
++        // `ps` could not run at all. That is not.
++        Err(e) => Holder::Unknown(format!("could not probe pid {pid}: {e}")),
++    }
++}
++
++impl Drop for RunLock {
++    fn drop(&mut self) {
++        // The legacy marker is existence-based, so releasing it means removing it. The
++        // v2 lock file is *not* removed: it is the object the next runner locks, and
++        // unlinking it under a waiting process is how the old protocol lost mutual
++        // exclusion.
++        let _ = fs::remove_file(&self.legacy_marker);
++        // Closing the handle would release the lock anyway. Unlocking explicitly says so
++        // at the point it happens, and keeps the release from depending on exactly when
++        // the last clone of the descriptor goes away.
++        let _ = self.file.unlock();
++    }
+ }
+ 
+ /// One catalogued defect. Every field is required: a mutation that cannot say what it
+@@ -142,6 +410,13 @@ pub(crate) enum Verdict {
+     /// move the case to a suite that runs the program as a child process, where a crash
+     /// is an exit code the parent can assert on.
+     MutantCrashed { signature: String, missing: usize },
++    /// The mutation was injected and could **not** be taken back out.
++    ///
++    /// Fatal to the run, and the only verdict that is. Every other outcome leaves the
++    /// tree as it was found; this one leaves it mutated, so continuing would inject the
++    /// next defect on top of the last one and measure both at once. The record is kept,
++    /// which is what makes the tree recoverable afterwards.
++    NotRestored(String),
+     /// The suite did not run to completion: the runner errored, produced no results, or
+     /// produced fewer result lines than the baseline.
+     ///
+@@ -153,6 +428,35 @@ pub(crate) enum Verdict {
+     RunnerFailed(String),
+ }
+ 
++/// Take the tree's lock, for the hidden `mutate-hold` fixture.
++///
++/// The same acquisition a real run performs — the fixture exists so a *second* process
++/// can be shown to lose, which cannot be demonstrated from inside the one that won.
++pub(crate) fn acquire_lock(root: &Path) -> Result<RunLock, String> {
++    RunLock::acquire(root).map_err(|e| e.describe(root))
++}
++
++/// Recover an interrupted run. The operator's action, not the runner's.
++///
++/// `confirmed` is the operator asserting that nothing is still writing to this tree —
++/// the step [`run_all`] cannot take for itself and no longer pretends to. Without it,
++/// this prints the procedure and changes nothing.
++///
++/// The lock is taken first and held across the restore, so a *new* run cannot start
++/// underneath. That bounds v2 runners and nothing else; it says nothing about a dead
++/// run's surviving children, which is exactly why the attestation is required.
++pub(crate) fn recover(root: &Path, confirmed: bool) -> Result<String, String> {
++    let _lock = acquire_lock(root)?;
++    if !confirmed && backup_path(root).exists() {
++        return Err(stranded_refusal(root));
++    }
++    Ok(match restore_stranded(root)? {
++        Recovery::Repaired(f) => format!("repaired {f}"),
++        Recovery::AlreadyRestored(f) => format!("already-restored {f}"),
++        Recovery::Nothing => "nothing to recover".to_owned(),
++    })
++}
++
+ pub(crate) fn load(path: &Path) -> Result<Vec<Mutation>, String> {
+     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+     let catalogue: Catalogue =
+@@ -169,20 +473,30 @@ pub(crate) fn run_all(root: &Path, catalogue: &Path) -> Result<(), Vec<String>>
+         Err(e) => return Err(vec![e]),
+     };
+ 
+-    let _lock = match RunLock::acquire(root) {
++    // Bound to a name that lives to the end of this function on purpose. The kernel
++    // lock is released when this handle drops, so it has to outlive recovery, every
++    // injection, every test run, and every restoration — not just acquisition.
++    let run_lock = match RunLock::acquire(root) {
+         Ok(l) => l,
+-        Err(e) => return Err(vec![e]),
++        Err(e) => return Err(vec![e.describe(root)]),
+     };
+ 
+-    // A previous run may have been killed mid-mutation. Repair before measuring anything,
+-    // and say so: a silently repaired tree leaves whoever saw the last run's output
+-    // wondering why it looked wrong.
+-    match restore_stranded(root) {
+-        Ok(Some(file)) => {
+-            println!("  restored     {file} (a previous run was killed mid-mutation)");
+-        }
+-        Ok(None) => {}
+-        Err(e) => return Err(vec![e]),
++    // A previous run may have been killed mid-mutation. This used to repair it here and
++    // carry on. It no longer does, and the reason is the one thing this runner cannot
++    // establish: **whether the dead run's descendants have stopped.**
++    //
++    // The lock says nothing about them — it is released by the kernel the instant the
++    // coordinator dies, while its `cargo` and `rustc` children keep running and keep
++    // writing. Neither does the record: a digest says what a file held when it was read,
++    // not that nothing will write it next. Repairing under a live writer, and then
++    // injecting the next mutation on top, is how a run produces verdicts about a file
++    // two processes are editing.
++    //
++    // So recovery becomes an operator action, taken once quiescence has actually been
++    // checked. `restore_stranded` is unchanged and still correct about contents; it is
++    // simply no longer called by something that cannot know it is safe to call it.
++    if backup_path(root).exists() {
++        return Err(vec![stranded_refusal(root)]);
+     }
+ 
+     // Establish a baseline before touching anything. If the suite is already failing, or
+@@ -256,6 +570,16 @@ pub(crate) fn run_all(root: &Path, catalogue: &Path) -> Result<(), Vec<String>>
+                     m.name
+                 ));
+             }
++            Verdict::NotRestored(why) => {
++                println!("  NOT RESTORED {}", m.name);
++                problems.push(format!(
++                    "{}: {why} The run stopped here: every later verdict would have been \
++                     measured against a file still holding this mutation.",
++                    m.name
++                ));
++                // Deliberately not a `continue`. The tree is damaged.
++                break;
++            }
+             Verdict::RunnerFailed(why) => {
+                 println!("  RUNNER ERROR {}", m.name);
+                 problems.push(format!(
+@@ -268,6 +592,10 @@ pub(crate) fn run_all(root: &Path, catalogue: &Path) -> Result<(), Vec<String>>
+         }
+     }
+ 
++    // Every mutation has been injected and restored by now. Released explicitly so the
++    // extent of the critical section is visible here rather than inferred from scope.
++    drop(run_lock);
++
+     if problems.is_empty() {
+         Ok(())
+     } else {
+@@ -275,6 +603,41 @@ pub(crate) fn run_all(root: &Path, catalogue: &Path) -> Result<(), Vec<String>>
+     }
+ }
+ 
++/// Why this run will not start, and exactly what to do about it.
++///
++/// Deliberately a procedure rather than a suggestion. "Resolve by hand" without saying
++/// how is what makes an operator reach for `rm` on whichever file looks suspicious.
++fn stranded_refusal(root: &Path) -> String {
++    format!(
++        "a previous mutation run was interrupted and left a recovery record at {}. \n\
++         \n\
++         This run will not start, and recovery is not automatic. Killing a run releases \n\
++         its lock immediately, but its `cargo` and `rustc` descendants are not killed \n\
++         with it and keep writing to this tree. Nothing here can establish that they \n\
++         have stopped: a pid may have been reused, a matching digest only describes the \n\
++         instant it was read, and a delay proves nothing at all. Restoring the source \n\
++         while one of them is still running, and then injecting the next mutation on \n\
++         top, would produce verdicts about a file two processes are editing.\n\
++         \n\
++         To recover:\n\
++         \n\
++         1. Establish that nothing is still writing to this tree. `pgrep -g <pgid>` for \n\
++            the interrupted run's process group, or `pgrep -fl '{}'`, will *help you \n\
++            look* — but neither is proof. A process may have changed its group, been \n\
++            re-parented, hold a descriptor under a path that does not match, or be about \n\
++            to start. Treat them as investigative aids.\n\
++         2. Run `cargo xtask mutate-recover --confirm-no-writers`, which restores the \n\
++            original bytes only if the file still matches what the record describes, and \n\
++            refuses if it does not.\n\
++         3. Re-run `cargo xtask mutate`.\n\
++         \n\
++         The flag in step 2 is **your attestation that the workspace is quiet**, not a \n\
++         check this tool performs. It has no way to perform one.",
++        backup_path(root).display(),
++        root.display()
++    )
++}
++
+ fn apply_and_test(root: &Path, m: &Mutation, baseline_results: usize) -> Verdict {
+     let path: PathBuf = root.join(&m.file);
+     let Ok(original) = fs::read_to_string(&path) else {
+@@ -304,7 +667,12 @@ fn apply_and_test(root: &Path, m: &Mutation, baseline_results: usize) -> Verdict
+     // overwrite whatever is on disk — including edits made after the crash, by someone
+     // who had no idea a mutation was stranded there.
+     let backup = backup_path(root);
+-    let record = format!("{}\n{}\n{original}", m.file, digest(&mutated));
++    let record = format!(
++        "{RECORD_VERSION}\n{}\n{}\n{}\n{original}",
++        m.file,
++        digest(&mutated),
++        digest(&original)
++    );
+     if let Some(parent) = backup.parent() {
+         let _ = fs::create_dir_all(parent);
+     }
+@@ -341,47 +709,147 @@ fn apply_and_test(root: &Path, m: &Mutation, baseline_results: usize) -> Verdict
+         Verdict::DidNotBuild
+     };
+ 
+-    let _ = fs::write(&path, &original);
+-    let _ = fs::remove_file(&backup);
+-    verdict
++    finish(&path, &original, &backup, &m.file, verdict, |p, c| {
++        fs::write(p, c)
++    })
++}
++
++/// Put the original back, then clear the record — in that order, and only in that order.
++///
++/// The write is taken as a parameter so a test can fail it at the exact boundary that
++/// matters. That is a smaller seam than a filesystem trait: there is one call, its
++/// failure has one consequence, and the consequence is what needs a regression.
++///
++/// Clearing the record regardless of whether the restore succeeded — which is what this
++/// did — converts the one recoverable failure into an unrecoverable one. The file stays
++/// mutated and the write-ahead record that would have repaired it is gone, so the next
++/// run measures a damaged tree with no way to know.
++fn finish(
++    path: &Path,
++    original: &str,
++    backup: &Path,
++    file: &str,
++    verdict: Verdict,
++    write: impl FnOnce(&Path, &str) -> std::io::Result<()>,
++) -> Verdict {
++    match write(path, original) {
++        Ok(()) => {
++            let _ = fs::remove_file(backup);
++            verdict
++        }
++        Err(e) => Verdict::NotRestored(format!(
++            "{file} was mutated and could not be restored ({e}). Its original is \
++             preserved at {} and has deliberately been kept. Recover with \
++             `cargo xtask mutate-recover --confirm-no-writers` once nothing is still \
++             writing to this tree.",
++            backup.display()
++        )),
++    }
++}
++
++/// Marks the write-ahead record's layout, so a record this runner did not write is
++/// reported rather than misread.
++///
++/// The first layout was `file\ndigest(mutated)\noriginal`, whose first line is a path —
++/// distinguishable from this marker, which is the point. A record left by an older runner
++/// is a state this one cannot safely interpret, and guessing at it would risk writing the
++/// wrong bytes over a source file.
++const RECORD_VERSION: &str = "nazm-mutation-backup 2";
++
++/// What startup recovery found.
++#[derive(Debug, PartialEq, Eq)]
++pub(crate) enum Recovery {
++    /// A stranded mutation was found and the original restored.
++    Repaired(String),
++    /// The source was already the original; only the record was stranded. The run was
++    /// killed in the window between restoring the file and clearing its record.
++    AlreadyRestored(String),
++    /// Nothing to do.
++    Nothing,
+ }
+ 
+ /// Restore a mutation a killed run left applied.
+ ///
+-/// Returns what it restored, so the caller can say so rather than silently repairing and
++/// Returns what it did, so the caller can say so rather than silently repairing and
+ /// leaving the operator wondering why the previous run's results looked wrong.
+-fn restore_stranded(root: &Path) -> Result<Option<String>, String> {
++///
++/// # Why the already-restored case is not drift
++///
++/// `apply_and_test` restores the file and *then* removes the record, and a process killed
++/// between those two writes leaves an intact tree with a record still describing it. The
++/// first version of this function compared the file against the mutated digest only, so
++/// that state failed the comparison and was reported as "its contents have changed since
++/// … resolve by hand" — a demand for manual intervention on a tree that was already
++/// correct. Recording the original's digest as well is what separates "already restored"
++/// from "somebody edited this".
++fn restore_stranded(root: &Path) -> Result<Recovery, String> {
+     let backup = backup_path(root);
+     let Ok(record) = fs::read_to_string(&backup) else {
+-        return Ok(None);
++        return Ok(Recovery::Nothing);
+     };
+-    let Some((file, rest)) = record.split_once('\n') else {
+-        return Err(format!("the backup at {} is malformed", backup.display()));
++
++    let mut lines = record.splitn(5, '\n');
++    let malformed = || {
++        format!(
++            "the backup at {} is malformed. It was not written by this runner, or it was \
++             truncated. Nothing has been restored; inspect it and the working tree by hand.",
++            backup.display()
++        )
+     };
+-    let Some((expected_mutated, original)) = rest.split_once('\n') else {
+-        return Err(format!("the backup at {} is malformed", backup.display()));
++
++    if record.trim().is_empty() {
++        return Err(malformed());
++    }
++
++    match lines.next() {
++        Some(RECORD_VERSION) => {}
++        Some(_) => {
++            return Err(format!(
++                "the backup at {} was written by an earlier version of this runner, whose \
++                 record layout this one cannot safely interpret. It names a file and holds \
++                 its original contents after the second line. Restore it by hand, then \
++                 delete it.",
++                backup.display()
++            ))
++        }
++        None => return Err(malformed()),
++    }
++
++    let (Some(file), Some(expected_mutated), Some(expected_original), Some(original)) =
++        (lines.next(), lines.next(), lines.next(), lines.next())
++    else {
++        return Err(malformed());
+     };
+ 
+     let path = root.join(file);
+     let current = fs::read_to_string(&path)
+         .map_err(|e| format!("cannot read {file} to check it before restoring: {e}"))?;
++    let current_digest = digest(&current);
+ 
+-    // Only restore over the exact mutated content the backup expects. Anything else means
++    // Already correct: clear the record and say so. Writing the original again would be
++    // harmless but would also report a repair that did not happen.
++    if current_digest == expected_original {
++        let _ = fs::remove_file(&backup);
++        return Ok(Recovery::AlreadyRestored(file.to_owned()));
++    }
++
++    // Only restore over the exact mutated content the record expects. Anything else means
+     // the file changed after the crash — by an editor, a rebase, another tool — and
+     // overwriting it would destroy work to repair a problem the operator may not know
+     // exists. Stop, keep both, and let a human decide.
+-    if digest(&current) != expected_mutated {
++    if current_digest != expected_mutated {
+         return Err(format!(
+-            "a previous mutation run left {file} mutated, but its contents have changed \
+-             since. Refusing to restore over them. The original is preserved at {}; \
+-             compare it with the working copy and resolve by hand.",
++            "a previous mutation run left {file} mutated, but its contents match neither \
++             the mutation it applied nor the original it saved. Refusing to restore over \
++             them. The original is preserved at {}; compare it with the working copy and \
++             resolve by hand.",
+             backup.display()
+         ));
+     }
+ 
+     fs::write(&path, original).map_err(|e| format!("could not restore {file}: {e}"))?;
+     let _ = fs::remove_file(&backup);
+-    Ok(Some(file.to_owned()))
++    Ok(Recovery::Repaired(file.to_owned()))
+ }
+ 
+ /// FNV-1a, hex. Detects accidental divergence between a backup and a working copy, which
+@@ -530,10 +998,467 @@ fn cargo() -> String {
+ }
+ 
+ #[cfg(test)]
+-#[allow(clippy::expect_used)]
++#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+ mod tests {
+     use super::crash_signature;
+ 
++    use super::{
++        backup_path, digest, legacy_lock_path, lock_path, restore_stranded, AcquireError, Recovery,
++        RunLock,
++    };
++    use std::fs;
++    use std::path::Path;
++    use std::process::Command;
++
++    /// A root with one source file, mutated, and the write-ahead record describing it —
++    /// the state a run that was killed mid-mutation leaves behind.
++    fn stranded(original: &str, mutated: &str) -> (tempfile::TempDir, std::path::PathBuf) {
++        let root = tempfile::tempdir().expect("tempdir");
++        let src = root.path().join("src.rs");
++        fs::write(&src, mutated).expect("write mutated");
++        fs::create_dir_all(root.path().join("target")).expect("target");
++        fs::write(backup_path(root.path()), record_for(original, mutated)).expect("record");
++        (root, src)
++    }
++
++    fn record_for(original: &str, mutated: &str) -> String {
++        format!(
++            "{}\nsrc.rs\n{}\n{}\n{original}",
++            super::RECORD_VERSION,
++            digest(mutated),
++            digest(original)
++        )
++    }
++
++    #[test]
++    fn an_interrupted_run_is_repaired_at_startup() {
++        // The interruption case, which happened twice in one afternoon: a run killed
++        // between injecting and restoring leaves the tree damaged, and the next thing to
++        // read it — a test suite, a reviewer, an editor — sees a defect nobody wrote.
++        let (root, src) = stranded("fn f() -> u8 { 1 }\n", "fn f() -> u8 { 2 }\n");
++
++        assert_eq!(
++            restore_stranded(root.path()).expect("must repair"),
++            Recovery::Repaired("src.rs".to_owned()),
++            "and must say what it repaired"
++        );
++        assert_eq!(fs::read_to_string(&src).unwrap(), "fn f() -> u8 { 1 }\n");
++    }
++
++    #[test]
++    fn repairing_removes_the_record_it_created() {
++        // "Including removal of files created by the run": a record left behind makes
++        // the *next* run refuse to start, having already done its job.
++        let (root, _src) = stranded("original\n", "mutated\n");
++        assert!(backup_path(root.path()).exists(), "precondition");
++
++        restore_stranded(root.path()).expect("must repair");
++        assert!(
++            !backup_path(root.path()).exists(),
++            "the write-ahead record outlived the repair it described"
++        );
++    }
++
++    #[test]
++    fn an_already_restored_source_with_a_stranded_record_is_not_a_conflict() {
++        // The crash window between `fs::write(original)` and `fs::remove_file(backup)`.
++        // The tree is already correct and only the record is stale — but the first
++        // version of this function compared against the *mutated* digest alone, so it
++        // read the original as "changed since" and demanded a hand resolution on a tree
++        // that needed none. Recording the original's digest too is what tells the two
++        // apart.
++        let (root, src) = stranded("original\n", "mutated\n");
++        fs::write(&src, "original\n").expect("simulate the completed restore");
++
++        assert_eq!(
++            restore_stranded(root.path()).expect("must not be an error"),
++            Recovery::AlreadyRestored("src.rs".to_owned()),
++            "an already-repaired tree is not a conflict"
++        );
++        assert_eq!(
++            fs::read_to_string(&src).unwrap(),
++            "original\n",
++            "and nothing should have been rewritten"
++        );
++        assert!(
++            !backup_path(root.path()).exists(),
++            "the stale record must be cleared, or the next run trips on it again"
++        );
++    }
++
++    #[test]
++    fn a_file_edited_since_the_interruption_is_never_clobbered() {
++        // The exact incident this guard was written for. After a killed run the file was
++        // restored by hand; the record then no longer matched, and the runner refused
++        // rather than overwriting the repair. Losing someone's work to fix a problem
++        // they had already fixed is worse than stopping.
++        //
++        // "By hand" has to mean *differently* from the recorded original, or it is the
++        // already-restored case above rather than drift.
++        let (root, src) = stranded("original\n", "mutated\n");
++        fs::write(&src, "repaired by hand\n").expect("hand repair");
++
++        let err = restore_stranded(root.path()).expect_err("must refuse");
++        assert!(err.contains("match neither"), "{err}");
++        assert!(
++            err.contains("resolve by hand"),
++            "it must say what to do: {err}"
++        );
++
++        assert_eq!(
++            fs::read_to_string(&src).unwrap(),
++            "repaired by hand\n",
++            "the refusal overwrote the very work it was protecting"
++        );
++        assert!(
++            backup_path(root.path()).exists(),
++            "and the original must be kept for the comparison it asks for"
++        );
++    }
++
++    #[test]
++    fn a_clean_tree_needs_no_repair_and_says_nothing() {
++        // No record, nothing to do — and no noise implying something was wrong.
++        let root = tempfile::tempdir().expect("tempdir");
++        assert_eq!(
++            restore_stranded(root.path()).expect("clean"),
++            Recovery::Nothing
++        );
++    }
++
++    #[test]
++    fn a_malformed_record_is_reported_not_ignored() {
++        // A truncated record — killed mid-write — means a file may still be mutated with
++        // no way to know which. Silence would let the next run measure a damaged tree.
++        let v = super::RECORD_VERSION;
++        for bad in [
++            String::new(),
++            v.to_owned(),
++            format!("{v}\nsrc.rs"),
++            format!("{v}\nsrc.rs\nonedigest"),
++        ] {
++            let root = tempfile::tempdir().expect("tempdir");
++            fs::create_dir_all(root.path().join("target")).expect("target");
++            fs::write(backup_path(root.path()), &bad).expect("write");
++            match restore_stranded(root.path()) {
++                Err(e) => assert!(e.contains("malformed"), "{bad:?}: {e}"),
++                // An empty file is indistinguishable from none by `read_to_string`, so
++                // `Nothing` is acceptable there and only there.
++                Ok(Recovery::Nothing) => assert!(bad.is_empty(), "silently ignored {bad:?}"),
++                Ok(other) => panic!("claimed {other:?} from a malformed record {bad:?}"),
++            }
++        }
++    }
++
++    #[test]
++    fn a_record_from_the_previous_protocol_is_reported_not_guessed_at() {
++        // The first layout was `file\ndigest(mutated)\noriginal`. Read as the current one
++        // it would take the *original's first line* for a digest and the rest for the
++        // file's contents — writing truncated bytes over a source file. Refusing is the
++        // only safe reading of a record this version did not write.
++        let root = tempfile::tempdir().expect("tempdir");
++        fs::create_dir_all(root.path().join("target")).expect("target");
++        fs::write(root.path().join("src.rs"), "mutated\n").expect("src");
++        fs::write(
++            backup_path(root.path()),
++            format!("src.rs\n{}\noriginal\n", digest("mutated\n")),
++        )
++        .expect("write v1 record");
++
++        let err = restore_stranded(root.path()).expect_err("must refuse");
++        assert!(err.contains("earlier version"), "{err}");
++        assert_eq!(
++            fs::read_to_string(root.path().join("src.rs")).unwrap(),
++            "mutated\n",
++            "a record it cannot read must not cause a write"
++        );
++    }
++
++    #[test]
++    fn a_record_naming_a_missing_file_reports_rather_than_panicking() {
++        let root = tempfile::tempdir().expect("tempdir");
++        fs::create_dir_all(root.path().join("target")).expect("target");
++        fs::write(
++            backup_path(root.path()),
++            format!(
++                "{}\ngone.rs\n{}\n{}\noriginal\n",
++                super::RECORD_VERSION,
++                digest("mutated"),
++                digest("original\n")
++            ),
++        )
++        .expect("write");
++
++        let err = restore_stranded(root.path()).expect_err("must report");
++        assert!(err.contains("gone.rs"), "{err}");
++    }
++
++    #[test]
++    fn a_restore_that_fails_keeps_the_record_and_stops_the_run() {
++        // The one failure that turns a recoverable tree into an unrecoverable one. The
++        // record must survive it — clearing the record after a failed restore leaves the
++        // file mutated with nothing left to repair it from.
++        use super::{finish, Verdict};
++
++        let (root, src) = stranded("original\n", "mutated\n");
++        let backup = backup_path(root.path());
++
++        let verdict = finish(
++            &src,
++            "original\n",
++            &backup,
++            "src.rs",
++            Verdict::Survived,
++            |_, _| {
++                Err(std::io::Error::new(
++                    std::io::ErrorKind::PermissionDenied,
++                    "injected at the restoration boundary",
++                ))
++            },
++        );
++
++        // The failure propagates, and as the one verdict that is fatal to a run rather
++        // than a result about a mutation.
++        match &verdict {
++            Verdict::NotRestored(why) => {
++                assert!(why.contains("src.rs"), "{why}");
++                assert!(why.contains("could not be restored"), "{why}");
++                assert!(
++                    why.contains("mutate-recover"),
++                    "it must say how to fix it: {why}"
++                );
++            }
++            _ => panic!("a failed restore must not be reported as a mutation result"),
++        }
++
++        assert!(
++            backup.exists(),
++            "the record was cleared after a failed restore"
++        );
++        assert_eq!(
++            fs::read_to_string(&src).unwrap(),
++            "mutated\n",
++            "precondition: the file is still mutated"
++        );
++
++        // And the tree is still recoverable, to the exact original bytes.
++        assert_eq!(
++            restore_stranded(root.path()).expect("must repair"),
++            Recovery::Repaired("src.rs".to_owned())
++        );
++        assert_eq!(fs::read_to_string(&src).unwrap(), "original\n");
++        assert!(!backup.exists());
++    }
++
++    #[test]
++    fn a_successful_restore_clears_the_record() {
++        // The other half, so the test above is not satisfied by a `finish` that never
++        // clears anything.
++        use super::{finish, Verdict};
++
++        let (root, src) = stranded("original\n", "mutated\n");
++        let backup = backup_path(root.path());
++
++        let verdict = finish(
++            &src,
++            "original\n",
++            &backup,
++            "src.rs",
++            Verdict::Caught { failing: 1 },
++            |p, c| fs::write(p, c),
++        );
++
++        assert!(matches!(verdict, Verdict::Caught { failing: 1 }));
++        assert_eq!(fs::read_to_string(&src).unwrap(), "original\n");
++        assert!(
++            !backup.exists(),
++            "a successful restore must clear its record"
++        );
++    }
++
++    #[test]
++    fn a_second_acquisition_is_refused_while_one_is_held() {
++        // Two runners corrupt each other's restores, and a concurrent `cargo test` sees
++        // a mutated tree and reports failures that are not real — which is how the need
++        // for this lock was found in the first place.
++        //
++        // An advisory lock belongs to the open file description, not to the process, so
++        // a second `open` + `try_lock` here contends exactly as another process would.
++        // The cross-*process* case is proved in `tests/lifecycle.rs`, because only a
++        // separate process can show that a killed holder's lock is released.
++        let root = tempfile::tempdir().expect("tempdir");
++        let held = RunLock::acquire(root.path()).expect("first acquires");
++
++        match RunLock::acquire(root.path()) {
++            Err(AcquireError::Contended) => {}
++            Err(other) => panic!("wrong reason: {other:?}"),
++            Ok(_) => panic!("two runners acquired the same tree"),
++        }
++
++        drop(held);
++        RunLock::acquire(root.path()).expect("released, so the next may start");
++    }
++
++    #[test]
++    fn releasing_the_lock_keeps_its_file_and_lets_the_next_run_take_it() {
++        // Deliberately the opposite of the assertion this replaces. The first protocol
++        // unlinked its lock on release, and that was the defect: a file whose identity
++        // changes under contention cannot be the thing two processes agree on. The v2
++        // file is a stable object to lock, so what must be asserted is *release* — that
++        // a later acquisition succeeds — not absence.
++        let root = tempfile::tempdir().expect("tempdir");
++        let lock = RunLock::acquire(root.path()).expect("acquire");
++        assert!(lock_path(root.path()).exists(), "precondition");
++        drop(lock);
++
++        assert!(
++            lock_path(root.path()).exists(),
++            "the lock file is the coordination object and must survive release"
++        );
++        let again = RunLock::acquire(root.path()).expect("the lock must be free again");
++        drop(again);
++    }
++
++    #[test]
++    fn the_pid_inside_the_lock_is_diagnostic_only() {
++        // It is written *after* the lock is held, and nothing consults it to decide
++        // ownership. Corrupting it must therefore change nothing about who may run —
++        // which is the property the first protocol did not have, where this same byte
++        // string *was* the decision.
++        let root = tempfile::tempdir().expect("tempdir");
++        let lock = RunLock::acquire(root.path()).expect("acquire");
++        let written = fs::read_to_string(lock_path(root.path())).expect("read");
++        assert_eq!(written.trim(), std::process::id().to_string());
++        drop(lock);
++
++        for garbage in ["", "0", "-1", "not-a-pid", "99999999999999999999"] {
++            fs::write(lock_path(root.path()), garbage).expect("corrupt");
++            let taken = RunLock::acquire(root.path())
++                .unwrap_or_else(|e| panic!("{garbage:?} changed the verdict: {e:?}"));
++            drop(taken);
++        }
++    }
++
++    #[test]
++    fn a_first_protocol_lock_naming_a_live_process_is_refused() {
++        // The migration case. The two protocols cannot coordinate — one locks a file,
++        // the other treats existence as the lock — so the only safe reading of a v1
++        // marker naming a live process is that a v1 runner may be in the tree.
++        let root = tempfile::tempdir().expect("tempdir");
++        fs::create_dir_all(root.path().join("target")).expect("target");
++        // A process that is certainly alive and certainly not us, owned and reaped here
++        // so the test leaves nothing running.
++        let mut helper = Command::new("sleep").arg("30").spawn().expect("helper");
++        fs::write(legacy_lock_path(root.path()), helper.id().to_string()).expect("v1 lock");
++
++        let verdict = RunLock::acquire(root.path());
++
++        let _ = helper.kill();
++        let _ = helper.wait();
++
++        match verdict {
++            Err(AcquireError::LegacyRunner(_)) => {}
++            Err(other) => panic!("wrong reason: {other:?}"),
++            Ok(_) => panic!("joined a run using the previous protocol"),
++        }
++    }
++
++    #[test]
++    fn an_unattributable_first_protocol_lock_is_refused_not_stolen() {
++        // Reclaiming an unattributable marker is fail-open: if its holder is in fact
++        // alive, two runners end up on one tree. Refusing is fail-safe and costs an
++        // operator one `rm`.
++        for garbage in ["", "0", "-1", "not-a-pid", "99999999999999999999"] {
++            let root = tempfile::tempdir().expect("tempdir");
++            fs::create_dir_all(root.path().join("target")).expect("target");
++            fs::write(legacy_lock_path(root.path()), garbage).expect("write");
++
++            match RunLock::acquire(root.path()) {
++                Err(AcquireError::LegacyUnattributable(_)) => {}
++                Err(other) => panic!("{garbage:?}: wrong reason: {other:?}"),
++                Ok(_) => panic!("a v1 marker holding {garbage:?} was stolen"),
++            }
++            assert!(
++                legacy_lock_path(root.path()).exists(),
++                "{garbage:?}: refusing must not remove the marker it refused to judge"
++            );
++        }
++    }
++
++    #[test]
++    fn a_first_protocol_lock_from_a_dead_process_does_not_block() {
++        // The other half: a marker left by a killed v1 run must not need a human before
++        // anything can run again.
++        let root = tempfile::tempdir().expect("tempdir");
++        fs::create_dir_all(root.path().join("target")).expect("target");
++
++        let mut child = Command::new("true").spawn().expect("spawn");
++        let dead = child.id();
++        child.wait().expect("reap");
++        fs::write(legacy_lock_path(root.path()), dead.to_string()).expect("write");
++
++        let lock = RunLock::acquire(root.path()).expect("a dead v1 marker must not block");
++        assert_eq!(
++            fs::read_to_string(legacy_lock_path(root.path()))
++                .unwrap()
++                .trim(),
++            std::process::id().to_string(),
++            "and the marker must now name us, so a v1 runner stands down"
++        );
++        drop(lock);
++        assert!(
++            !legacy_lock_path(root.path()).exists(),
++            "the v1 marker is existence-based, so releasing it means removing it"
++        );
++    }
++
++    #[test]
++    fn a_dead_holder_is_distinguished_from_an_unprobeable_one() {
++        use super::{holder_state, Holder};
++
++        let mut child = Command::new("true").spawn().expect("spawn");
++        let dead = child.id();
++        child.wait().expect("reap");
++
++        assert!(matches!(holder_state(&dead.to_string()), Holder::Dead(_)));
++        assert!(matches!(
++            holder_state(&std::process::id().to_string()),
++            Holder::Alive(_)
++        ));
++        // Not dead. Nothing was established at all, and the two must not be conflated:
++        // "the probe failed" is not evidence the process is gone.
++        assert!(matches!(holder_state(""), Holder::Unknown(_)));
++        assert!(matches!(holder_state("0"), Holder::Unknown(_)));
++        assert!(matches!(holder_state("-1"), Holder::Unknown(_)));
++    }
++
++    #[test]
++    fn a_live_holder_is_still_recognised() {
++        // The other half: the fix must not make every marker reclaimable, which would
++        // remove the protection entirely.
++        use super::{holder_state, Holder};
++        assert!(
++            matches!(
++                holder_state(&std::process::id().to_string()),
++                Holder::Alive(_)
++            ),
++            "this very process should read as alive"
++        );
++    }
++
++    #[test]
++    fn the_digest_distinguishes_the_contents_it_is_asked_about() {
++        // A regression test on these specific contents, and nothing more. It does not
++        // establish collision resistance and is not meant to: FNV-1a has none, and the
++        // function's own doc says so. What it pins is that the refusal above actually
++        // discriminates for the inputs it will see in practice — a mutated file versus
++        // a hand-repaired one.
++        assert_eq!(digest("mutated\n"), digest("mutated\n"));
++        assert_ne!(digest("mutated\n"), digest("repaired by hand\n"));
++        assert_ne!(digest(""), digest("\n"));
++        let _ = Path::new("");
++    }
++
+     #[test]
+     fn a_stack_overflow_is_recognised_as_a_crash() {
+         // Captured verbatim from a run where removing the parser's recursion bound
+diff --git a/xtask/src/rules.rs b/xtask/src/rules.rs
+index 0202dac..bb12e33 100644
+--- a/xtask/src/rules.rs
++++ b/xtask/src/rules.rs
+@@ -22,9 +22,14 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
+         "nazm-diag" => &["nazm-span"],
+         "nazm-syntax" => &["nazm-span", "nazm-diag"],
+         "nazm-core" => &["nazm-span", "nazm-diag", "nazm-syntax"],
++        // Level 7 of the table in `docs/architecture.md` §2, and the only level built.
++        // It reads the syntax tree and produces LLVM IR *as text*, so it needs no
++        // code-generator dependency — which is why `may_depend_on_codegen` below stays
++        // false for it.
++        "nazm-lir" => &["nazm-span", "nazm-diag", "nazm-syntax"],
+         // The CLI deliberately does NOT depend on nazm-syntax: it goes through nazm-core,
+         // so there is one entry point into the front end rather than two that can drift.
+-        "nazm-cli" => &["nazm-span", "nazm-diag", "nazm-core"],
++        "nazm-cli" => &["nazm-span", "nazm-diag", "nazm-core", "nazm-lir"],
+ 
+         // The measurement instrument answers to nothing. It must stay usable — and
+         // auditable — with no compiler present, because it has to run against arms A1 and
+@@ -54,11 +59,38 @@ pub(crate) fn unsafe_allowed(crate_name: &str) -> Option<&'static str> {
+         .map(|(_, why)| *why)
+ }
+ 
++/// Which crates may emit a backend artefact or invoke the native toolchain.
++///
++/// Separate from [`may_depend_on_codegen`] because they establish different things.
++/// That one reads the dependency graph; **this one is about capability**, which is what
++/// actually matters once a backend emits LLVM IR as *text* and therefore has no codegen
++/// dependency to find.
++///
++/// `nazm-lir` emits IR and nothing else — it never runs a tool. `nazm-cli` is the driver
++/// and runs `clang`, but does not itself generate IR. Splitting them this way is what
++/// keeps `nazm check` structurally unable to reach either.
++pub(crate) fn emission_allowlist() -> &'static [(&'static str, &'static [&'static str])] {
++    &[
++        ("crates/nazm-span", &[]),
++        ("crates/nazm-diag", &[]),
++        ("crates/nazm-syntax", &[]),
++        // The checker and evaluator. Empty on purpose: this is the check-only path.
++        ("crates/nazm-core", &[]),
++        ("crates/nazm-lir", &["emits LLVM IR"]),
++        (
++            "crates/nazm-cli",
++            &["emits LLVM IR", "invokes the native toolchain"],
++        ),
++        ("crates/nazm-bench", &[]),
++    ]
++}
++
+ /// Crates that may depend on a code generator.
+ ///
+-/// The check this enables: nothing in the front end or the checker may reach Cranelift or
+-/// LLVM. It is written before either exists, because the rule is cheap now and contentious
+-/// later.
++/// The check this enables: nothing in the front end or the checker may **depend on**
++/// Cranelift or LLVM. It is written before either exists, because the rule is cheap now
++/// and contentious later. It says nothing about text emission — see
++/// [`emission_allowlist`] for that.
+ pub(crate) fn may_depend_on_codegen(crate_name: &str) -> bool {
+     matches!(
+         crate_name,
+@@ -95,6 +127,29 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn the_check_only_path_may_neither_emit_ir_nor_run_the_toolchain() {
++        // The separation the emission gate exists to keep. `nazm-core` is where `nazm
++        // check` lives, and it must not be able to reach either capability.
++        let list = emission_allowlist();
++        let find = |name: &str| {
++            list.iter()
++                .find(|(c, _)| *c == name)
++                .map(|(_, a)| *a)
++                .expect("every crate must be placed")
++        };
++        assert!(find("crates/nazm-core").is_empty());
++        assert!(find("crates/nazm-syntax").is_empty());
++        assert!(find("crates/nazm-diag").is_empty());
++        assert!(find("crates/nazm-bench").is_empty());
++        assert!(find("crates/nazm-lir").contains(&"emits LLVM IR"));
++        assert!(
++            !find("crates/nazm-lir").contains(&"invokes the native toolchain"),
++            "the emitter should produce text, not run tools"
++        );
++        assert!(find("crates/nazm-cli").contains(&"invokes the native toolchain"));
++    }
++
+     #[test]
+     fn the_front_end_may_not_reach_a_code_generator() {
+         for c in ["nazm-syntax", "nazm-ty", "nazm-mir", "nazm-bench"] {

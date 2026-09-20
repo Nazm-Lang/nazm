@@ -102,22 +102,64 @@ fn pipeline(source: &str, limits: eval::Limits) -> Outcome {
 /// with the shape of the tree, and neither has anything to do with call depth.
 #[must_use]
 pub fn check_source(source: &str) -> Vec<nazm_diag::Diagnostic> {
-    eval::on_interpreter_stack(0, || {
+    // `()` as the result, so the tree is built, walked and **dropped** inside the closure.
+    // Returning it would move a recursive structure onto whatever stack the caller
+    // happens to have, which is the thing this function exists to avoid.
+    match on_checked(source, |_| Ok::<(), Vec<nazm_diag::Diagnostic>>(())) {
+        Ok(()) => Vec::new(),
+        Err(d) => d,
+    }
+}
+
+/// Parse, check, and run `f` over the tree — all on the interpreter's own stack.
+///
+/// # Why the tree never leaves
+///
+/// `docs/spec.md` promises that the whole pipeline runs on a thread whose stack the
+/// interpreter sets itself, because **a bound only means something against a known
+/// stack**: macOS gives the main thread 8 MiB, a spawned thread 2 MiB, and the test
+/// harness 2 MiB per test. Parsing, checking, lowering, emitting and *dropping* the tree
+/// all recurse with its shape.
+///
+/// An earlier version of this file returned the `Program` to the caller. Nothing observed
+/// an abort at `MAX_NESTING` — drop frames are small — but it made the guarantee depend on
+/// the caller's stack and on frames staying small, neither of which the contract mentions.
+/// So `f` runs *here*, and only its result crosses back. `T: Send` is what stops a
+/// borrowed tree escaping with it.
+///
+/// # Errors
+///
+/// The parse and check diagnostics if there are any — in which case `f` is never called,
+/// because running a later pass over a tree known to be ill-typed produces a second, less
+/// useful error about the same mistake. Otherwise whatever `f` returns.
+pub fn on_checked<T, F>(source: &str, f: F) -> Result<T, Vec<nazm_diag::Diagnostic>>
+where
+    T: Send,
+    F: FnOnce(&__syntax::Program) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
+{
+    let run = || {
         let (program, mut diagnostics) = nazm_syntax::parse_source(source);
         let parse_failed = !diagnostics.is_empty();
         let (_, check_errors) = check(&program);
+        // A function that failed to parse was never registered, so "this program has no
+        // `main`" would be reported for a file whose first line is `fn main`.
         diagnostics.extend(
             check_errors
                 .into_iter()
                 .filter(|d| !(parse_failed && d.code == nazm_diag::codes::MISSING_MAIN)),
         );
-        diagnostics
-    })
-    .unwrap_or_else(|e| {
-        vec![nazm_diag::Diagnostic::error(
+        if diagnostics.is_empty() {
+            f(&program)
+        } else {
+            Err(diagnostics)
+        }
+    };
+
+    eval::on_interpreter_stack(0, run).unwrap_or_else(|e| {
+        Err(vec![nazm_diag::Diagnostic::error(
             nazm_diag::codes::INTERPRETER_UNAVAILABLE,
             nazm_span::Span::new(0, 0),
             format!("could not start the checker: {e}"),
-        )]
+        )])
     })
 }
