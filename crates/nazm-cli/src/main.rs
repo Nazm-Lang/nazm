@@ -33,6 +33,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod build;
+mod load;
 
 use clap::{Parser, Subcommand};
 use nazm_core::Outcome;
@@ -198,14 +199,17 @@ fn main() -> ExitCode {
         Command::Build { .. } => unreachable!("handled above"),
     };
 
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("nazm: cannot read {}: {e}", path.display());
+    // The root file and everything it imports, as one buffer. A program with no `use`
+    // takes the same path and produces a one-segment buffer.
+    let file = match load::load(&path) {
+        Ok(f) => f,
+        // The partial buffer comes back with the errors, so the caret lands on the
+        // `use` that could not be resolved rather than on nothing.
+        Err((partial, diagnostics)) => {
+            emit(&diagnostics, &partial, json);
             return ExitCode::from(exit::NO_SUCH_FILE);
         }
     };
-    let file = SourceFile::new(path.display().to_string(), text);
 
     // Checking always runs; evaluation only when it passed. Running a program known to be
     // ill-typed produces a second, less useful error about the same mistake.

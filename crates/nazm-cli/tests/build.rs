@@ -3852,3 +3852,185 @@ fn a_program_without_io_carries_none_of_its_runtime() {
         assert!(!ir.contains(absent), "unused {absent} emitted:\n{ir}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// B4 — modules
+// ---------------------------------------------------------------------------
+
+/// Write a tree of files and return its root.
+fn write_tree(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (name, text) in files {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir");
+        }
+        std::fs::write(&path, text).expect("write");
+    }
+    let root = dir.path().join(files.first().expect("a root file").0);
+    (dir, root)
+}
+
+fn run_root(root: &Path) -> Ran {
+    run_bounded(
+        Command::new(NAZM).args(["run", root.to_str().unwrap()]),
+        DEADLINE,
+    )
+    .expect("the interpreter hung")
+}
+
+fn build_root(dir: &Path, root: &Path) -> Result<PathBuf, Ran> {
+    let exe = dir.join("prog");
+    let out = run_bounded(
+        Command::new(NAZM)
+            .args(["build", root.to_str().unwrap()])
+            .arg("-o")
+            .arg(&exe),
+        DEADLINE,
+    )
+    .expect("the build hung");
+    if out.code == Some(0) {
+        Ok(exe)
+    } else {
+        Err(out)
+    }
+}
+
+#[test]
+fn a_program_can_span_several_files_and_a_diamond_loads_once() {
+    // `util.nz` is reached twice — directly and through `sub/deep.nz`. Loading it twice
+    // would make every function in it a duplicate definition.
+    let (dir, root) = write_tree(&[
+        (
+            "main.nz",
+            "use \"util.nz\";\nuse \"sub/deep.nz\";\n\nfn main() -> Int { quad(5) * 100 + str_len(greet()) + twice(1) }\n",
+        ),
+        (
+            "util.nz",
+            "fn twice(n: Int) -> Int { n * 2 }\nfn greet() -> Str { \"hello\" }\n",
+        ),
+        (
+            "sub/deep.nz",
+            "use \"../util.nz\";\nfn quad(n: Int) -> Int { twice(twice(n)) }\n",
+        ),
+    ]);
+
+    let interp = run_root(&root);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    assert_eq!(interp.stdout.trim(), "2007");
+
+    let exe = build_root(dir.path(), &root).expect("build");
+    let ran = run_bounded(&mut Command::new(&exe), DEADLINE).expect("hung");
+    assert_eq!(ran.code, Some(0), "{ran:?}");
+    assert_eq!(ran.stdout.trim(), "2007", "the compiled program disagrees");
+}
+
+#[test]
+fn an_import_cycle_terminates_and_is_not_an_error() {
+    // Nothing depends on load order — signatures are collected before any body — so a
+    // cycle has no meaning to get wrong, and refusing it would refuse a working program.
+    let (dir, root) = write_tree(&[
+        ("a.nz", "use \"b.nz\";\nfn main() -> Int { from_b() + 1 }\n"),
+        ("b.nz", "use \"a.nz\";\nfn from_b() -> Int { 41 }\n"),
+    ]);
+    let interp = run_root(&root);
+    assert_eq!(interp.code, Some(0), "{}", interp.stderr);
+    assert_eq!(interp.stdout.trim(), "42");
+    let exe = build_root(dir.path(), &root).expect("build");
+    assert_eq!(
+        run_bounded(&mut Command::new(&exe), DEADLINE)
+            .expect("hung")
+            .stdout
+            .trim(),
+        "42"
+    );
+}
+
+#[test]
+fn a_diagnostic_in_an_imported_file_names_that_file_and_its_own_line() {
+    // The property the merged buffer exists to keep: a reader opens the file the message
+    // names and finds the line it gives, not a line number into a concatenation.
+    let (_dir, root) = write_tree(&[
+        (
+            "main.nz",
+            "use \"lib.nz\";\nfn main() -> Int { helper() }\n",
+        ),
+        (
+            "lib.nz",
+            "fn unused() -> Int { 1 }\nfn helper() -> Int { \"oops\" }\n",
+        ),
+    ]);
+    let out = Command::new(NAZM)
+        .args(["check", root.to_str().unwrap()])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("N0300"), "{stderr}");
+    assert!(
+        stderr.contains("lib.nz:2:22"),
+        "wrong file or line: {stderr}"
+    );
+}
+
+#[test]
+fn a_name_defined_in_two_files_is_reported_with_both() {
+    let (_dir, root) = write_tree(&[
+        (
+            "main.nz",
+            "use \"lib.nz\";\nfn helper() -> Int { 2 }\nfn main() -> Int { helper() }\n",
+        ),
+        ("lib.nz", "fn helper() -> Int { 1 }\n"),
+    ]);
+    let out = Command::new(NAZM)
+        .args(["check", root.to_str().unwrap()])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("N0203"), "{stderr}");
+    // Both files named: a line number with no file is unusable across a program.
+    assert!(stderr.contains("lib.nz:1:4"), "{stderr}");
+    assert!(stderr.contains("main.nz:2:4"), "{stderr}");
+}
+
+#[test]
+fn a_missing_import_points_at_the_path_that_named_it() {
+    let (_dir, root) = write_tree(&[("main.nz", "use \"nope.nz\";\nfn main() -> Int { 1 }\n")]);
+    let out = Command::new(NAZM)
+        .args(["check", root.to_str().unwrap()])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("N0205"), "{stderr}");
+    assert!(stderr.contains("main.nz:1:5"), "{stderr}");
+    assert!(stderr.contains("cannot find `nope.nz`"), "{stderr}");
+}
+
+#[test]
+fn imports_resolve_relative_to_the_importing_file_not_the_working_directory() {
+    // Run from a directory that contains a *different* `util.nz`, and check the program
+    // still gets its own. A build that depends on where it was started is not
+    // reproducible, which is the whole point of the rule.
+    let (dir, root) = write_tree(&[
+        (
+            "app/main.nz",
+            "use \"util.nz\";\nfn main() -> Int { answer() }\n",
+        ),
+        ("app/util.nz", "fn answer() -> Int { 42 }\n"),
+        ("util.nz", "fn answer() -> Int { 0 - 1 }\n"),
+    ]);
+    let out = Command::new(NAZM)
+        .args(["run", root.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "42");
+}
