@@ -416,15 +416,12 @@ fn constructs_outside_the_subset_are_refused_and_nothing_is_emitted() {
             "fn main() -> Int {\n    { 1 }\n}\n",
             "a block used as an expression",
         ),
-        // Statement-position `if` compiles now; every *other* expression statement is
-        // still a separate construct with its own question, and stays refused.
+        // A bare block used as an expression is the one construct left outside the
+        // subset that is not recursion. Expression statements compile since B2: a
+        // language with no unit type otherwise forces a binding at every mutation.
         (
-            "fn main() -> Int {\n    1 + 1;\n    3\n}\n",
-            "an expression statement",
-        ),
-        (
-            "fn helper() -> Int { 1 }\nfn main() -> Int {\n    helper();\n    3\n}\n",
-            "an expression statement",
+            "fn main() -> Int {\n    { let y = 2; };\n    3\n}\n",
+            "a block used as an expression",
         ),
     ];
 
@@ -495,7 +492,7 @@ fn a_program_that_does_not_check_is_a_check_failure_not_a_subset_failure() {
 
 #[test]
 fn build_diagnostics_are_available_as_json() {
-    let (dir, src) = write_program("fn main() -> Int {\n    1 + 1;\n    3\n}\n");
+    let (dir, src) = write_program("fn main() -> Int {\n    { 1 }\n}\n");
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap(), "--json"])
         .arg("-o")
@@ -959,12 +956,12 @@ fn front_end_type_errors_are_not_reported_as_backend_limits() {
 fn unsupported_constructs_inside_a_branch_are_refused_by_the_backend() {
     let cases: &[(&str, &str)] = &[
         (
-            "fn main() -> Int {\n    if true { 1 + 1; 2 } else { 0 }\n}\n",
-            "an expression statement",
+            "fn main() -> Int {\n    if true { { 1 } } else { 0 }\n}\n",
+            "a block used as an expression",
         ),
         (
             "fn main() -> Int {\n    if true { { let y = 2; }; 1 } else { 0 }\n}\n",
-            "an expression statement",
+            "a block used as an expression",
         ),
         (
             "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) } }\n\
@@ -1008,14 +1005,16 @@ fn a_statement_position_if_compiles_but_other_expression_statements_do_not() {
     // With no `else` and a false condition, the statement still falls through.
     expect_value("    let mut x = 1;\n    if x > 9 { x = 5; }\n    x", "1");
 
+    expect_value("    1 + 1;\n    3", "3");
+
     for (src, expected) in [
         (
-            "fn main() -> Int {\n    1 + 1;\n    3\n}\n",
-            "an expression statement",
+            "fn main() -> Int {\n    { let y = 2; };\n    3\n}\n",
+            "a block used as an expression",
         ),
         (
-            "fn main() -> Int {\n    { let y = 2; };\n    3\n}\n",
-            "an expression statement",
+            "fn main() -> Int {\n    { 1 }\n}\n",
+            "a block used as an expression",
         ),
     ] {
         let (dir, path) = write_program(src);
@@ -1644,17 +1643,17 @@ fn call_errors_belong_to_the_checker_not_the_backend() {
 fn unsupported_signatures_and_bodies_are_refused_by_name() {
     for (src, expected) in [
         (
-            "fn f(n: Int) -> Int { n; 1 }\nfn main() -> Int { f(1) }\n",
-            "an expression statement",
+            "fn f(n: Int) -> Int { { 1 } }\nfn main() -> Int { f(1) }\n",
+            "a block used as an expression",
         ),
         (
             "fn f(n: Int) -> Int {\n    let mut t = n;\n    while t < 10 { { t = t + 1; }; }\n    t\n}\n\
              fn main() -> Int { f(1) }\n",
-            "an expression statement",
+            "a block used as an expression",
         ),
         (
             "fn f(n: Int) -> Int { { let y = 2; }; n }\nfn main() -> Int { f(1) }\n",
-            "an expression statement",
+            "a block used as an expression",
         ),
     ] {
         let (dir, path) = write_program(src);
@@ -2061,21 +2060,17 @@ fn assignment_and_loop_condition_errors_belong_to_the_checker() {
 
 #[test]
 fn unsupported_control_flow_inside_a_loop_is_refused_and_nothing_is_published() {
-    // What is left after M1f. `break`, `continue`, statement `if` and `return` all
-    // compile now, so what remains inside a loop is the constructs that were never in
-    // scope: a bare block as a statement, a discarded call, and `Str`.
+    // What is left after B2. `break`, `continue`, statement `if`, `return`, `Str` and
+    // discarded expressions all compile now, so what remains inside a loop is a bare
+    // block used as an expression, and recursion.
     for (src, expected) in [
         (
             "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; { 1 }; }\n    i\n}\n",
-            "an expression statement",
+            "a block used as an expression",
         ),
         (
-            "fn one() -> Int { 1 }\nfn main() -> Int {\n    let mut i = 0;\n    while i < 3 { one(); i = i + 1; }\n    i\n}\n",
-            "an expression statement",
-        ),
-        (
-            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i; i = i + 1; }\n    i\n}\n",
-            "an expression statement",
+            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { { 1 }; i = i + 1; }\n    i\n}\n",
+            "a block used as an expression",
         ),
         // Recursion, reached from inside a loop. Still refused, and still for a reason
         // about the stack rather than about loops.
@@ -3373,15 +3368,22 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
                 nazm_core::Type::Int => "0",
                 nazm_core::Type::Bool => "true",
                 nazm_core::Type::Str => "\"ab\"",
+                nazm_core::Type::Ints => "ints_new()",
+                nazm_core::Type::Strs => "strs_new()",
             })
             .collect();
         // Every built-in currently returns `Int` or `Str`; wrap the `Str` ones so `main`
         // still returns `Int`.
         let call = format!("{}({})", i.name(), args.join(", "));
+        // Wrapped so `main` still returns `Int`, whatever the built-in produces. The
+        // program is only built, never run, so an index that would be out of bounds at
+        // run time is fine here — this test is about lowering coverage.
         let body = match i.ret() {
             nazm_core::Type::Int => call,
             nazm_core::Type::Str => format!("str_len({call})"),
             nazm_core::Type::Bool => format!("if {call} {{ 1 }} else {{ 0 }}"),
+            nazm_core::Type::Ints => format!("ints_len({call})"),
+            nazm_core::Type::Strs => format!("strs_len({call})"),
         };
         let src = format!("fn main() -> Int {{ {body} }}\n");
 
@@ -3457,4 +3459,168 @@ fn the_emitted_ir_for_strings_is_well_formed() {
     let built = Built { dir, exe };
     assert_eq!(run_exe(&built).stdout.trim(), interp.stdout.trim());
     assert_eq!(run_exe(&built).stdout.trim(), "5");
+}
+
+// ---------------------------------------------------------------------------
+// B2 — sequences, natively
+//
+// A handle is a pointer to a `{ len, cap, data }` header, so growth rewrites the header
+// in place and every holder sees it. See `docs/spec.md`, *Sequences are shared, mutable,
+// and never freed*.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_native_sequence_is_shared_storage() {
+    expect_whole(
+        "fn fill(a: Ints, n: Int) -> Int {\n\
+         \x20   let mut i = 0;\n\
+         \x20   while i < n { ints_push(a, i * i); i = i + 1; }\n\
+         \x20   ints_len(a)\n\
+         }\n\
+         fn total(a: Ints) -> Int {\n\
+         \x20   let mut i = 0;\n\
+         \x20   let mut s = 0;\n\
+         \x20   while i < ints_len(a) { s = s + ints_get(a, i); i = i + 1; }\n\
+         \x20   s\n\
+         }\n\
+         fn main() -> Int {\n\
+         \x20   let a = ints_new();\n\
+         \x20   let b = a;\n\
+         \x20   fill(a, 5);\n\
+         \x20   ints_push(b, 100);\n\
+         \x20   ints_set(a, 0, 7);\n\
+         \x20   total(b) * 100 + ints_len(a)\n\
+         }\n",
+        "13706",
+    );
+}
+
+#[test]
+fn growth_survives_many_pushes_and_keeps_every_element() {
+    // Crosses the doubling boundary repeatedly, so a `realloc` that lost data or a
+    // header that was not rewritten would show up as a wrong sum rather than a crash.
+    expect_whole(
+        "fn main() -> Int {\n\
+         \x20   let a = ints_new();\n\
+         \x20   let mut i = 0;\n\
+         \x20   while i < 1000 { ints_push(a, i); i = i + 1; }\n\
+         \x20   let mut s = 0;\n\
+         \x20   let mut j = 0;\n\
+         \x20   while j < ints_len(a) { s = s + ints_get(a, j); j = j + 1; }\n\
+         \x20   s * 10 + ints_len(a) / 1000\n\
+         }\n",
+        "4995001",
+    );
+}
+
+#[test]
+fn strs_sequences_carry_strings_by_value() {
+    expect_whole(
+        "fn main() -> Int {\n\
+         \x20   let words = strs_new();\n\
+         \x20   strs_push(words, \"alpha\");\n\
+         \x20   strs_push(words, str_concat(\"be\", \"ta\"));\n\
+         \x20   let first = strs_get(words, 0);\n\
+         \x20   strs_set(words, 0, \"x\");\n\
+         \x20   let mut chars = 0;\n\
+         \x20   let mut i = 0;\n\
+         \x20   while i < strs_len(words) { chars = chars + str_len(strs_get(words, i)); i = i + 1; }\n\
+         \x20   str_len(first) * 100 + chars\n\
+         }\n",
+        "505",
+    );
+}
+
+#[test]
+fn every_sequence_bound_fails_at_its_own_position() {
+    expect_runtime_error_at(
+        "    let a = ints_new();\n    ints_get(a, 0)",
+        "N0405",
+        "this index is outside the sequence",
+        "prog.nz:3:5",
+    );
+    expect_runtime_error_at(
+        "    let a = ints_new();\n    ints_push(a, 1);\n    ints_set(a, 2, 5)",
+        "N0405",
+        "this index is outside the sequence",
+        "prog.nz:4:5",
+    );
+    expect_runtime_error_at(
+        "    let a = strs_new();\n    str_len(strs_get(a, 0 - 1))",
+        "N0405",
+        "this index is outside the sequence",
+        "prog.nz:3:13",
+    );
+}
+
+#[test]
+fn a_program_without_sequences_carries_none_of_their_runtime() {
+    // The helpers are emitted only where they are reached. Dead scaffolding in every
+    // program would be the easy mistake here.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("prog.nz");
+    std::fs::write(&path, "fn main() -> Int { 1 + 1 }\n").expect("write");
+    let out = Command::new(NAZM)
+        .args(["build", path.to_str().unwrap(), "--emit-ir"])
+        .arg("-o")
+        .arg(dir.path().join("prog"))
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("IR");
+    assert!(
+        !ir.contains("@nz.arr_new"),
+        "unused sequence runtime emitted:\n{ir}"
+    );
+    assert!(
+        !ir.contains("@realloc"),
+        "unused declaration emitted:\n{ir}"
+    );
+
+    // And a program that does use one carries it, with well-formed control flow.
+    let path2 = dir.path().join("seq.nz");
+    std::fs::write(
+        &path2,
+        "fn main() -> Int { let a = ints_new(); ints_push(a, 5); ints_get(a, 0) }\n",
+    )
+    .expect("write");
+    let out = Command::new(NAZM)
+        .args(["build", path2.to_str().unwrap(), "--emit-ir"])
+        .arg("-o")
+        .arg(dir.path().join("seq"))
+        .output()
+        .expect("run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ir = std::fs::read_to_string(dir.path().join("seq.ll")).expect("IR");
+    assert!(ir.contains("@nz.arr_new"), "{ir}");
+    assert!(ir.contains("@nz.arr_grow"), "{ir}");
+    assert_control_flow_is_well_formed(&ir);
+}
+
+#[test]
+fn a_call_may_be_a_statement_but_a_bare_block_may_not() {
+    expect_value(
+        "    let a = ints_new();\n    ints_push(a, 1);\n    ints_push(a, 2);\n    ints_len(a)",
+        "2",
+    );
+    expect_value("    1 + 1;\n    3", "3");
+
+    let (dir, path) = write_program("fn main() -> Int {\n    { let y = 2; };\n    3\n}\n");
+    let out = Command::new(NAZM)
+        .args(["build", path.to_str().unwrap()])
+        .arg("-o")
+        .arg(dir.path().join("prog"))
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("a block used as an expression"), "{stderr}");
 }

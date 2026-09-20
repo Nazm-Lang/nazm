@@ -396,6 +396,52 @@ program declaring `fn str_len` is rejected (`N0203`) rather than shadowing the b
 because a call whose meaning depends on what happens to be in scope is exactly what this
 language is trying not to have.
 
+### Sequences are shared, mutable, and never freed
+
+`Ints` and `Strs` are growable sequences of `Int` and of `Str`. They are the first
+**reference** types in the language, and every consequence of that is stated here rather
+than discovered.
+
+Named `Ints` and `Strs` rather than `[Int]` and `[Str]` on purpose: the lexer has no
+bracket tokens and the type grammar is a bare name, so concrete names commit to nothing
+about how a future generic `[T]` will look. A half-built `[T]` syntax would.
+
+| | |
+| --- | --- |
+| **Creation** | `ints_new()` and `strs_new()` produce a new, empty sequence |
+| **Identity** | A sequence value is a **handle**. Binding, passing and returning one share the storage; nothing is copied. `let b = a;` makes `b` and `a` the same sequence, and a push through either is visible through both |
+| **Mutation** | `ints_push`, `ints_set` and their `Strs` counterparts change shared storage. There is no immutable sequence and no copy operation |
+| **Length** | `ints_len` / `strs_len`, in elements |
+| **Indexing** | `ints_get(a, i)` / `strs_get(a, i)`, failing with `N0405` unless `0 <= i < len`. `ints_set(a, i, v)` has the same bound and returns **the index written** — the language has no unit type, and the index is the answer that is always meaningful |
+| **Appending** | `ints_push(a, v)` returns the **new length** |
+| **Growth failure** | Reported as `N0406` where the implementation can detect it. A failed growth leaves the sequence exactly as it was, never half-resized |
+| **Equality** | `==` and `!=` are **refused** on a sequence (`N0304`). They would have to mean either "the same storage" or "the same contents", and the language has chosen neither; offering one silently is how a program comes to depend on the wrong answer |
+| **Ordering** | Not applicable, for the same reason it is not applicable to `Str` |
+| **Destruction** | **There is none.** A sequence lives until the process exits |
+| **Element copying** | `strs_get` yields a `Str`, which is a value — changing the sequence afterwards does not change a `Str` already read out of it |
+
+#### What this is not
+
+It is **not an ownership system, and no safety is claimed from it.** Nothing prevents
+aliasing, nothing tracks lifetimes, nothing detects a sequence used after the code that
+built it has finished, and nothing is ever reclaimed. Peak memory grows with everything
+a program ever allocates.
+
+That is a deliberate bootstrap trade (`docs/bootstrap-design.md`, *Memory model*): a
+compiler reads input, writes output and exits, and reclaiming inside that lifetime buys
+nothing while costing an ownership system the bootstrap does not otherwise need. It is a
+**stated limitation with a cost that must be measured**, not a design anybody should
+inherit. A later allocator with reclamation is intended to change none of the meanings
+above.
+
+#### An expression may be a statement
+
+`ints_push(a, 1);` is an expression evaluated for its effect, with its value discarded.
+This is not new syntax — a block has always been statements and an optional tail — but
+it is newly *useful*: without it, a language with no unit type would force
+`let _unused = ints_push(a, 1);` at every mutation, which is a workaround for a missing
+type rather than a rule worth having.
+
 ### The integer boundaries, stated rather than inherited
 
 Two's complement is asymmetric — there is one more negative `Int` than positive — and
