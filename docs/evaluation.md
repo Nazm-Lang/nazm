@@ -2,8 +2,20 @@
 
 **Status: draft. Not yet pre-registered.**
 The decision rule in §6 becomes binding when it is committed and its commit hash is
-recorded in `docs/evaluation-preregistration.md`. Until then it is a proposal and may
-change freely. After that, it may not.
+recorded in `docs/evaluation-preregistration.md`. That file **does not exist**; until it
+does, the rule is a proposal and may change freely. After that, it may not.
+
+> **Scope changed 2026-09-20, contents unchanged.** This protocol no longer decides
+> whether the language project exists — see [`direction.md`](direction.md). It is now
+> **evidence for specific usability and performance claims**, and it is reproduced here
+> exactly as registered-in-draft: the arms, the metrics, the thresholds in §6 (`point
+> R_C ≤ 0.80` **and** `upper CB < 1.00`), the cost policy, and the void-rate rule are
+> untouched. Nothing has been relaxed to fit the new direction, and no earlier result has
+> been reinterpreted.
+>
+> **A2 keeps its role.** If improved tooling on an existing language captures most of a
+> measured benefit, that is a finding about the claim under test and it stays in the
+> record. It is no longer a stop condition.
 
 ---
 

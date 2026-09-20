@@ -1,7 +1,12 @@
 # Nazm language specification
 
-**Status: v0.1 in progress (Phase 1). This is not yet a specification — it is the list of
-decisions a specification has to make, with the ones already settled marked as such.**
+**Status: this is not yet a specification — it is the list of decisions a specification
+has to make, with the ones already settled marked as such.**
+
+**The current executable language is v0.3.** Sections are versioned and kept in order, so
+a *Settled for v0.1* entry records what v0.1 decided, not what is true now; where a later
+version changed one, the earlier entry says so and points forward. Everything under *Open*
+is undecided.
 
 Publishing the open questions before the answers is deliberate. Every one of them was
 either wrong or unstated in an earlier draft of the design, and the cost of discovering
@@ -81,6 +86,12 @@ value. There is no `return` statement in v0.1.
 One exit point means the value a function produces is always in the same place. `return`
 earns its keep with guard clauses, and it is not ruled out — it is deferred until there is
 something to guard against.
+
+> **Superseded in v0.3.** `return` exists and is implemented — see [`return`](#return)
+> below. This entry is kept rather than edited because it records what v0.1 committed to
+> and why, and the reasoning ("deferred until there is something to guard against") is
+> what the later section answers. **The current executable language is v0.3**; a function's
+> value is still its final expression, and `return` is for the paths that leave early.
 
 ### Types — `Int`, `Bool`, `Str`, and no inference across function boundaries
 
@@ -419,9 +430,16 @@ Required before `nazm test --backend=all` means anything:
   grammar-constrained decoding is ever used).
 - A cheatsheet under ~3k tokens, to be injected by `nazm init`.
 
-## Non-goals for v0.1
+## Non-goals for the current interpreter milestone
 
-Deliberately out of scope until the gate:
+Deliberately out of scope:
 
 macros · comptime beyond constant folding · general effect handlers · whole-program taint ·
-layout selection · self-hosting · a package manager · a module system beyond files
+layout selection · a package manager · a module system beyond files
+
+**Self-hosting was on this list and has been moved off it.** It is now a stated long-term
+objective — see [`direction.md`](direction.md) — and it remains outside this milestone,
+which is a different thing from being a non-goal. The staged path is
+[`roadmap.md`](roadmap.md) M3, and it is deliberately preceded by M2: the language has no
+collections, no user-defined types, no pattern matching, no string concatenation and no
+I/O, so a compiler cannot be written in it yet at all.

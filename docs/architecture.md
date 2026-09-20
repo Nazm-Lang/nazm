@@ -279,18 +279,29 @@ schedules, so those compare **permitted outcomes and invariants**, never identic
 
 ## 7. Crate layout
 
-Crates are created when their responsibility exists. **Phase 2 is `nazm-bench` and `xtask`
-only** — there is no compiler yet, deliberately.
+Crates are created when their responsibility exists.
 
-| Phase | Crates |
-| --- | --- |
-| **2 (current)** | `nazm-bench` · `xtask` |
-| 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-hir` · `nazm-ty` · `nazm-core` · `nazm-mcp` · `nazm-cli` |
-| 6 | `nazm-db` · `nazm-mir` · `nazm-lsp` |
-| 7 | `nazm-lir` · `nazm-codegen-clif` · `nazm-link` · `nazm-driver` · `nazm-test` |
-| 8 | `nazm-rt` |
-| 9 | `nazm-mono` · `nazm-codegen-llvm` |
-| 10 | `nazm-pkg` · `nazm-std-build` |
+**Corrected 2026-09-20.** This section read "Phase 2 is `nazm-bench` and `xtask` only —
+there is no compiler yet, deliberately", and that is no longer the case: the Phase 4
+front-end crates exist and a `.nz` program executes. What has *not* changed is that
+everything from `nazm-hir` downward is still design — no IR, no backend, no runtime. See
+[`roadmap.md`](roadmap.md) for the order the rest is now planned in.
+
+| Phase | Crates | State |
+| --- | --- | --- |
+| 2 | `nazm-bench` · `xtask` | **exists** |
+| 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-core` · `nazm-cli` | **exists** (as an interpreter; `nazm-core` is checker + evaluator, not the Core IR below) |
+| 4 | `nazm-hir` · `nazm-ty` · `nazm-mcp` | planned |
+| 6 | `nazm-db` · `nazm-mir` · `nazm-lsp` | planned |
+| 7 | `nazm-lir` · `nazm-codegen-clif` · `nazm-link` · `nazm-driver` · `nazm-test` | planned |
+| 8 | `nazm-rt` | planned |
+| 9 | `nazm-mono` · `nazm-codegen-llvm` | planned |
+| 10 | `nazm-pkg` · `nazm-std-build` | planned |
+
+One deliberate departure from this table is already recorded: [`roadmap.md`](roadmap.md)
+M1 brings `nazm-lir` and `nazm-codegen-llvm` forward, and does **not** create the levels
+between them and the AST. Five empty pass-through crates would match the diagram and carry
+no information.
 
 Roles, in dependency order: `span` (files, byte spans, `FileId`, interned identifiers —
 depends on nothing) · `diag` (stable error codes, fixits, JSON schema, renderer) · `syntax`

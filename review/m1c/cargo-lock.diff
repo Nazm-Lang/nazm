@@ -1,0 +1,39 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 047be62..1a0170b 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -348,8 +348,10 @@ dependencies = [
+  "clap",
+  "nazm-core",
+  "nazm-diag",
++ "nazm-lir",
+  "nazm-span",
+  "serde_json",
++ "tempfile",
+ ]
+ 
+ [[package]]
+@@ -370,6 +372,15 @@ dependencies = [
+  "serde_json",
+ ]
+ 
++[[package]]
++name = "nazm-lir"
++version = "0.0.1"
++dependencies = [
++ "nazm-diag",
++ "nazm-span",
++ "nazm-syntax",
++]
++
+ [[package]]
+ name = "nazm-span"
+ version = "0.0.1"
+@@ -776,6 +787,7 @@ version = "0.0.1"
+ dependencies = [
+  "serde",
+  "serde_json",
++ "tempfile",
+  "toml",
+ ]
+ 

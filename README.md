@@ -1,7 +1,7 @@
 # Nazm
 
-**An AI-native programming language — or, first, an experiment to find out whether one is
-worth building.**
+**An AI-native programming language: fast, memory-efficient, concurrent — with a compiler
+eventually written in Nazm itself.**
 
 > نظم — *systematic order, well-formed arrangement.*
 
@@ -10,19 +10,41 @@ writes most code, languages should be redesigned to save tokens. The evidence sa
 otherwise. What the evidence *does* show is that agents waste enormous effort fighting
 compilers and churning over code that already works — and that is attackable.
 
-So this repository contains two things, in the order that matters. First, the instrument
-that decides whether the language should exist. Second, a small executable language to
-point it at — an interpreter, not a compiler, which is why nothing here speaks to the
-performance claims yet.
+So this repository contains two things. **The language** — today an interpreter, not a
+compiler, which is why nothing here speaks to the performance claims yet. And **an
+agent-cost harness** built to measure specific claims about it honestly, including the
+uncomfortable one: that better tooling on an existing language might capture much of the
+benefit.
+
+The language is the primary track. That was decided on 2026-09-20 and recorded in
+[`docs/direction.md`](docs/direction.md); what comes next, in dependency order, is
+[`docs/roadmap.md`](docs/roadmap.md). The harness keeps its protocol, its thresholds and
+its control arm unchanged — it is now evidence for claims rather than a gate on the
+project's existence.
 
 ## What is actually here
 
-**A `.nz` program runs.**
+**A `.nz` program runs — and a subset of one now compiles.**
 
 ```sh
 $ cargo run -p nazm-cli --bin nazm -- run examples/max.nz
 25
+
+$ cargo run -p nazm-cli --bin nazm -- build arithmetic.nz -o arithmetic
+arithmetic
+$ ./arithmetic          # no interpreter, no nazm process
+-54
 ```
+
+`nazm build` is the native path (**M1a + M1b**) and its subset is narrow on purpose: one
+`fn main() -> Int`, `Int` and `Bool` literals, immutable `let` bindings of either, unary
+`-`, `+ - * / %`, the comparisons `== != < <= > >=`, and `if`/`else` **used as a value**,
+with branch-local bindings and nesting. Everything else — functions, loops, mutation,
+`return`, `Str` — is **refused by name** after ordinary checking, with no partial
+compilation, and still runs under `nazm run`. The arithmetic the specification promises
+is preserved rather than inherited from the hardware: overflow is a checked intrinsic and
+a branch (never `nsw`, which would let the optimiser delete the check), `Int::MIN / -1`
+fails, and `Int::MIN % -1` is `0`. See [`docs/roadmap.md`](docs/roadmap.md).
 
 ```nazm
 fn first_pair_with_product(target: Int, limit: Int) -> Int {
@@ -90,9 +112,9 @@ development fixtures — containers, a restricted database role, verified cleanu
 produce a benchmark number yet: there is no task corpus, no agent driver, and no provider
 adapter.
 
-The harness came first on purpose. The decisive experiment sat at month 30 in the first
-version of this plan; it now sits at roughly month 13, and the instrument has to be shown
-to work before anything it measures means anything.
+The harness was built first, and that was the right order: an instrument has to be shown
+to work before anything it measures means anything. It is now maintained rather than
+extended, until the claims in the roadmap need it.
 
 ## The argument
 
@@ -117,12 +139,15 @@ churn. None of that is fixed by shorter keywords. All of it is attackable by mak
 programs unrepresentable, closing the check loop in milliseconds, and giving formatting no
 degrees of freedom to churn over.
 
-**Whether that is worth a new language, or just better tooling for TypeScript, is the
-question this repository is built to answer** — and the answer may well be the second one.
+**Whether that is worth a new language, or just better tooling for TypeScript, is a real
+question and the harness is built to keep answering it honestly** — see
+[`docs/direction.md`](docs/direction.md) for what changed about how the answer is used.
 
 ## The experiment
 
-Three arms. The third is the hypothesis; the second is why the experiment is honest.
+Three arms. The third is the hypothesis; the second is why the experiment is honest. It
+measures specific claims — it no longer decides whether the language gets built
+([`docs/direction.md`](docs/direction.md)).
 
 | Arm | Contents |
 | --- | --- |
@@ -130,18 +155,20 @@ Three arms. The third is the hypothesis; the second is why the experiment is hon
 | **A2** | **TypeScript + improved agent tooling** — structured diagnostics, canonical formatter, repeat-edit detection |
 | A3 | Nazm + comparable tooling |
 
-If A2 captures most of the benefit, the right deliverable is better TypeScript tooling and
-Nazm should not be built. The decision rule is written down and committed **before** the
-evaluation runs — see [`docs/evaluation.md`](docs/evaluation.md).
+If A2 captures most of the benefit, that is a finding about the claim under test and it
+stays in the record. The decision rule, its thresholds and the cost policy are unchanged,
+and are written down **before** the evaluation runs — see
+[`docs/evaluation.md`](docs/evaluation.md).
 
 First workload: small HTTP/JSON services on PostgreSQL — validation, transactions,
 authorization, error handling, cancellation. First user: a backend developer using coding
 agents to build and maintain services, so debugging and operations stay in scope rather
 than just "generated programs pass tests".
 
-## The design, if it gets built
+## The design it is being built toward
 
-Documented in [`docs/architecture.md`](docs/architecture.md). In brief: mutable value
+Documented in [`docs/architecture.md`](docs/architecture.md), and staged in
+[`docs/roadmap.md`](docs/roadmap.md). In brief: mutable value
 semantics so memory safety needs no lifetime annotations; effect rows, capabilities, and
 position-sensitive taint so untrusted data cannot reach a code-construction site;
 structured concurrency where data races are a compile error; and a four-tier compilation
@@ -150,6 +177,19 @@ strategy where `nazm check` — no codegen at all — is the loop agents actuall
 The answer to "does this need a new compiler design?" is **new front end, new IR, new
 middle end, reused back end**. Code generation is decades of work with no novelty available
 in it.
+
+**What comes next**, in dependency order and no further:
+
+| | |
+| --- | --- |
+| **M1** | A native vertical slice. The existing lexer, parser, checker and diagnostics, one new typed IR, LLVM IR emitted as text and assembled by `clang`, one target. A compiled program runs with no interpreter, and is differentially compared against the interpreter on the existing 98-case corpus |
+| **M2** | The facilities a compiler actually needs — value/copy/move and cleanup first, then strings, tagged unions, collections, arena-indexed recursive structures, modules, and a narrow capability-based I/O contract |
+| **M3** | The bootstrap: `Rust → C1`, `C1 → C2`, `C2 → C3`, with byte equality asserted only where determinism has been established |
+
+Self-hosting is the long-term objective and it is **M3, not next**. Nazm today has no
+collections, no user-defined types, no pattern matching, no string concatenation and no
+I/O, so a compiler cannot be written in it in any form. The Rust implementation is retained
+as the bootstrap seed and the differential oracle.
 
 ## What this does not establish
 
@@ -175,26 +215,46 @@ cargo build --workspace
 cargo test  --workspace
 cargo lint              # clippy; CI runs this same alias, so they cannot drift
 cargo xtask check       # architectural gates
+
+# Not in the default set: these drive nested cargo builds and kill real process
+# groups, and `cargo xtask mutate` would otherwise pay their cost 44 times over.
+cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
 ```
 
 The toolchain is pinned to 1.98.1 in `rust-toolchain.toml`. That pin is load-bearing:
 `cranelift` 0.135 declares MSRV 1.95.0, so the 1.93.1 an earlier draft assumed could not
-have built the eventual backend.
+have built the eventual backend. The workspace's declared MSRV floor is 1.85; `xtask`
+declares 1.89 for itself, because it uses std's file locking and a development tool has no
+business raising the floor for the crates that ship.
 
 ## What is not built yet
 
 Almost everything. Specifically:
 
-- **The language is an interpreter, not a compiler.** Lexer, parser, type checker and
-  tree-walking evaluator, no IR and no backend — so nothing here says anything yet about
-  the performance claims, which are a backend question. The subset is the one described
-  above; everything else in `docs/spec.md` under *Open* is undecided.
+- **The language is an interpreter with one narrow native path.** Lexer, parser, type
+  checker and tree-walking evaluator, plus `nazm build` for `Int`/`Bool` expressions and
+  value-position `if` — no functions, loops, mutation or `Str`. One
+  IR level (`nazm-lir`), one backend (LLVM IR as text → `clang`), one verified target
+  (`aarch64-apple-darwin`); other targets are **unverified rather than unsupported**.
+  Nothing here says anything yet about the performance claims: `-O0` is the default, no
+  optimisation work has been done, and no measurement has been taken. The executable language is
+  **v0.3**; `docs/spec.md` keeps its sections versioned, so a *Settled for v0.1* entry
+  records what v0.1 decided rather than what is true now. Everything under *Open* is
+  undecided.
+- **No concurrency at all.** Not a partial implementation — nothing. `docs/spec.md` §6
+  settles the structured-concurrency borrow region as a *design*, and `docs/roadmap.md`
+  puts the specification work before any runtime. There is no scheduler and none is being
+  written.
 - **The harness is partial.** Real, tested, and mutation-checked (`cargo xtask mutate`,
-  44 runnable catalogued defects, all caught — plus two defects documented in `mutations.toml` as *uncovered*, which a passing run says nothing about): the accounting and comparison path (`nazm-bench
-  selftest`, 15 cases), per-attempt workspace management, the submission freeze, and the
-  independent acceptance runner. **Not written:** agent drivers, a provider adapter, and
-  all but one task fixture — so the harness cannot produce a benchmark number, and `run`
-  stays disabled.
+  44 runnable catalogued defects, all caught **as of `8d67a7d`** — plus two defects
+  documented in `mutations.toml` as *uncovered*, which a passing run says nothing about):
+  the accounting and comparison path (`nazm-bench selftest`, 19 cases), per-attempt
+  workspace management, the submission freeze, and the independent acceptance runner.
+  **Not written:** agent drivers, a provider adapter, and all but one task fixture — so
+  the harness cannot produce a benchmark number, and `run` stays disabled. The corpus has
+  **never accepted a known-good solution or rejected a known-bad one**: there is no
+  `reference/` or `broken/` directory anywhere, so it has not been shown to discriminate
+  at all.
 - **Confinement works and is tested against a real daemon.** Each attempt gets a private
   internal network, its own PostgreSQL container, and a candidate container with all
   capabilities dropped, no published ports, and no host namespaces. Four tests under

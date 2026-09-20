@@ -1,12 +1,16 @@
 # Nazm — an AI-native programming language.
 #
+# Direction: docs/direction.md · Roadmap: docs/roadmap.md
 # Design record: docs/architecture.md · Spec: docs/spec.md
-# Evaluation protocol and pre-registered decision rule: docs/evaluation.md
-# Plan: ~/.claude/plans/in-my-download-folder-sparkling-minsky.md
+# Evaluation protocol (draft, not pre-registered): docs/evaluation.md
 #
-# Phase 2 is the whole workspace right now: a benchmark harness and the
-# architectural gates. There is deliberately no compiler here yet — the harness
-# has to work, and be shown to work, before the language is worth building.
+# Two tracks in one workspace. The language — span, diag, syntax, core, cli — is
+# an interpreter: lexer, parser, checker, tree-walking evaluator, no IR and no
+# backend. Alongside it, nazm-bench, an agent-cost harness that now measures
+# specific claims rather than gating the project's existence (docs/direction.md).
+#
+# This header previously read "there is deliberately no compiler here yet". That
+# stopped being true on 2026-09-20, when a .nz program first executed.
 
 [workspace]
 resolver = "2"
@@ -15,6 +19,7 @@ members = [
     "crates/nazm-diag",
     "crates/nazm-syntax",
     "crates/nazm-core",
+    "crates/nazm-lir",
     "crates/nazm-cli",
     "crates/nazm-bench",
     "xtask",
@@ -24,10 +29,13 @@ members = [
 version = "0.0.1"
 edition = "2021"
 # Pinned toolchain is 1.98.1 (see rust-toolchain.toml). This floor is lower on
-# purpose: it is the oldest compiler the Phase 2 crates actually need, and CI
+# purpose: it is the oldest compiler the *shipped* crates actually need, and CI
 # verifies the claim rather than trusting it. The floor will rise to 1.95+ when
 # cranelift arrives in Stage 7 — at which point this line is the thing that has
 # to change deliberately.
+#
+# xtask overrides it with 1.89: it needs std's file locking, and a development
+# tool's requirement has no business raising the floor for the crates that ship.
 rust-version = "1.85"
 license = "Apache-2.0"
 repository = "https://github.com/mdferdousalam/nazm"
@@ -52,6 +60,7 @@ nazm-span = { path = "crates/nazm-span" }
 nazm-diag = { path = "crates/nazm-diag" }
 nazm-syntax = { path = "crates/nazm-syntax" }
 nazm-core = { path = "crates/nazm-core" }
+nazm-lir = { path = "crates/nazm-lir" }
 nazm-bench = { path = "crates/nazm-bench" }
 
 # --- cli / config ---

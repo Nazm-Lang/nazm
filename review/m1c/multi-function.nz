@@ -1,0 +1,33 @@
+// The representative multi-function program for the M1c review bundle.
+//
+// Exercises, in one program:
+//   * several top-level functions, and a forward reference — `main` calls `scale`
+//     and `sign`, both declared below it;
+//   * zero-, one- and three-parameter functions;
+//   * a `Bool`-returning function whose result is used as a condition;
+//   * nested calls, and a call supplying an argument to arithmetic;
+//   * a helper shared by two callers;
+//   * value-position `if` inside a function body.
+//
+//   nazm run   → 99
+//   nazm build → an executable that prints 99, at -O0 and -O2
+fn clamp(value: Int, lo: Int, hi: Int) -> Int {
+    if value < lo { lo } else { if value > hi { hi } else { value } }
+}
+
+fn main() -> Int {
+    let raw = scale(9);
+    clamp(raw, 0, 100) + sign(0 - 4)
+}
+
+fn scale(n: Int) -> Int {
+    n * 13
+}
+
+fn sign(n: Int) -> Int {
+    if is_negative(n) { 0 - 1 } else { if n == 0 { 0 } else { 1 } }
+}
+
+fn is_negative(n: Int) -> Bool {
+    n < 0
+}

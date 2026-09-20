@@ -348,8 +348,10 @@ dependencies = [
  "clap",
  "nazm-core",
  "nazm-diag",
+ "nazm-lir",
  "nazm-span",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -368,6 +370,15 @@ dependencies = [
  "nazm-span",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "nazm-lir"
+version = "0.0.1"
+dependencies = [
+ "nazm-diag",
+ "nazm-span",
+ "nazm-syntax",
 ]
 
 [[package]]
@@ -776,6 +787,7 @@ version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
+ "tempfile",
  "toml",
 ]
 

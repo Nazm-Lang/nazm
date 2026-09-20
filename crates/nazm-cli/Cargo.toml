@@ -17,10 +17,14 @@ path = "src/main.rs"
 nazm-span = { workspace = true }
 nazm-diag = { workspace = true }
 nazm-core = { workspace = true }
+nazm-lir = { workspace = true }
 clap = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# Each build case needs a throwaway directory for its source, its executable and, in two
+# cases, a stub toolchain on PATH.
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

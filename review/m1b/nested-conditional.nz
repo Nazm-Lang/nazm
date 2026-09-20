@@ -1,0 +1,21 @@
+// The representative nested-conditional program for the M1b review bundle.
+//
+// Exercises, in one program: Bool locals, all the comparison shapes that matter,
+// an `if` used as another `if`'s condition (a Bool intermediate result), an `if`
+// nested inside a branch, a branch-local binding that shadows an outer one, and
+// checked arithmetic inside a branch — which is what makes the branch end in a
+// block other than the one it started in, and so exercises the phi-predecessor rule.
+//
+//   nazm run   → 101
+//   nazm build → an executable that prints 101
+fn main() -> Int {
+    let a = 12;
+    let b = 5;
+    let big = a > b;
+    if if big { a % b == 2 } else { false } {
+        let a = 100;
+        if a - b > 90 { a + 1 } else { a - 1 }
+    } else {
+        0 - 1
+    }
+}
