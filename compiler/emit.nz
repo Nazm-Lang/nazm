@@ -252,7 +252,28 @@ fn remainder(out: Strs, msgs: Strs, next: Ints, a: Int, b: Int, at: Str) -> Int 
     res
 }
 
+fn predicate(op: Str) -> Str {
+    if op == "==" { return "eq"; }
+    if op == "!=" { return "ne"; }
+    // Signed on purpose: `Int` is signed 64-bit, so `-1 < 1` must hold, and `ult` would
+    // compare the two's-complement bit patterns and make it false.
+    if op == "<" { return "slt"; }
+    if op == "<=" { return "sle"; }
+    if op == ">" { return "sgt"; }
+    if op == ">=" { return "sge"; }
+    ""
+}
+
 fn emit_binary(out: Strs, msgs: Strs, next: Ints, op: Str, a: Int, b: Int, at: Str) -> Int {
+    let pred = predicate(op);
+    if pred != "" {
+        // No guard: no comparison can fail. `icmp` on two `i64`s is total.
+        let n = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(n)),
+                                 str_concat(str_concat(" = icmp ", pred),
+                                            str_concat(" i64 ", str_concat(v(a), str_concat(", ", v(b)))))));
+        return n;
+    }
     if op == "+" { return checked(out, msgs, next, "sadd", "addition", a, b, at); }
     if op == "-" { return checked(out, msgs, next, "ssub", "subtraction", a, b, at); }
     if op == "*" { return checked(out, msgs, next, "smul", "multiplication", a, b, at); }
@@ -284,8 +305,57 @@ fn refuse(message: Str, at: Str) -> Int {
     0
 }
 
+// A label for one of a node's basic blocks. Named from the node index and a role, so no
+// two constructs can collide and a reader can find the source of any block.
+fn blk(role: Str, k: Int) -> Str {
+    str_concat(str_concat("b", role), int_to_str(k))
+}
+
+fn open_block(out: Strs, current: Strs, live: Ints, name: Str) -> Int {
+    add_line(out, str_concat(name, ":"));
+    ints_set(live, 0, 1);
+    // The block emission is *in* — which is the predecessor a `phi` must name, and is
+    // not the label a branch was opened with once that branch has opened blocks of its
+    // own. Tracked here so the `phi` can read it back.
+    strs_set(current, 0, name);
+    0
+}
+
+// A branch, unless the block already has a terminator.
+//
+// `break`, `continue` and `return` end the block they are in, and the boundary between
+// two children would otherwise append a second terminator after one — which is invalid
+// IR, and the single easiest mistake to make here.
+fn branch(out: Strs, live: Ints, target: Str) -> Int {
+    if ints_get(live, 0) == 0 { return 0; }
+    add_line(out, str_concat("  br label %", target));
+    ints_set(live, 0, 0);
+    0
+}
+
+// The loop a `break` or `continue` belongs to, or -1.
+//
+// Walks outward, and a `while` only counts when the path came up through its **body**:
+// a loop's condition is not inside that loop, so a transfer raised there belongs to the
+// enclosing one. That is the existing language's rule, read out of both reference
+// implementations rather than invented here.
+fn enclosing_loop(nk: Ints, parent: Ints, childno: Ints, from: Int) -> Int {
+    let mut node = from;
+    while node >= 0 {
+        let p = ints_get(parent, node);
+        if p < 0 { return 0 - 1; }
+        if ints_get(nk, p) == n_while() {
+            if ints_get(childno, node) == 1 { return p; }
+        }
+        node = p;
+    }
+    0 - 1
+}
+
 fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
-               naux: Ints, nslot: Ints, out: Strs, msgs: Strs) -> Int {
+               naux: Ints, nslot: Ints, ntype: Ints,
+               parent: Ints, childno: Ints, substart: Ints, kids: Ints, kid_first: Ints,
+               out: Strs, msgs: Strs) -> Int {
     let next = ints_new();
     ints_push(next, 0);
     let vals = ints_new();
@@ -302,12 +372,94 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         sl = sl + 1;
     }
 
+    // Where the loop header of each `while` must be opened: before its condition's
+    // subtree begins, because `continue` and the back edge both target it.
+    let head_at = ints_new();
+    let mut h = 0;
+    while h < ints_len(nk) {
+        ints_push(head_at, 0 - 1);
+        h = h + 1;
+    }
+    h = 0;
+    while h < ints_len(nk) {
+        if ints_get(nk, h) == n_while() {
+            let cond = ints_get(kids, ints_get(kid_first, h));
+            ints_set(head_at, ints_get(substart, cond), h);
+        }
+        h = h + 1;
+    }
+
+    let current = strs_new();
+    strs_push(current, "entry");
+    // Whether the current block can still take instructions.
+    let live = ints_new();
+    ints_push(live, 1);
+    // One entry per `if`, holding the value and predecessor its branches contributed.
+    let phi_val = ints_new();
+    let phi_blk = strs_new();
+
     let mut k = 0;
     while k < ints_len(nk) {
         let kind = ints_get(nk, k);
         let from = ints_get(nst, k);
         let text = strs_get(ntx, k);
 
+        // A loop header opens before its condition, never after: `continue` and the back
+        // edge both target it, so the condition is re-evaluated on every iteration.
+        if ints_get(head_at, k) >= 0 {
+            let w = ints_get(head_at, k);
+            branch(out, live, blk("h", w));
+            open_block(out, current, live, blk("h", w));
+        }
+
+        if kind == n_bool() {
+            let n = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(n)),
+                                     str_concat(" = or i1 ", str_concat(text, ", false"))));
+            ints_push(vals, n);
+        } else {
+        if kind == n_block() {
+            // Structure only: a block's value, if it has one, is its tail's and is
+            // already on the stack.
+        } else {
+        if kind == n_while() {
+            // Structure only: the header, the body and the exit are opened at the
+            // boundaries between its children.
+        } else {
+        if kind == n_if() {
+            if ints_get(ntype, k) != 0 {
+                // Only the branches that produced a value contribute an incoming, and
+                // each names the block emission *ended* in rather than the label the
+                // branch was opened with.
+                let b = strs_pop(phi_blk);
+                let bv = ints_pop(phi_val);
+                let a = strs_pop(phi_blk);
+                let av = ints_pop(phi_val);
+                let n = take_number(next);
+                add_line(out, str_concat(str_concat("  ", v(n)),
+                                         str_concat(str_concat(" = phi i64 [ ", v(av)),
+                                                    str_concat(str_concat(", %", a),
+                                                               str_concat(str_concat(" ], [ ", v(bv)),
+                                                                          str_concat(str_concat(", %", b), " ]"))))));
+                ints_push(vals, n);
+            }
+        } else {
+        if kind == n_break() {
+            let w = enclosing_loop(nk, parent, childno, k);
+            if w < 0 { refuse("a `break` with no loop to leave", position(src, path, from)); }
+            branch(out, live, blk("x", w));
+        } else {
+        if kind == n_continue() {
+            let w = enclosing_loop(nk, parent, childno, k);
+            if w < 0 { refuse("a `continue` with no loop to repeat", position(src, path, from)); }
+            // The header, never the body: `continue` re-evaluates the condition.
+            branch(out, live, blk("h", w));
+        } else {
+        if kind == n_return() {
+            let value = ints_pop(vals);
+            add_line(out, str_concat("  ret i64 ", v(value)));
+            ints_set(live, 0, 0);
+        } else {
         if kind == n_var() {
             let n = take_number(next);
             add_line(out, str_concat(str_concat("  ", v(n)),
@@ -330,8 +482,11 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         } else {
         if kind == n_exprstmt() {
             // Evaluated for its effects; the value is dropped, exactly as `nazm run`
-            // drops it.
-            ints_pop(vals);
+            // drops it. **Only if there was one**: a statement-position `if` produces
+            // nothing, and popping for it would take someone else's value.
+            if ints_get(ntype, ints_get(kids, ints_get(kid_first, k))) != 0 {
+                ints_pop(vals);
+            }
         } else {
         if kind == n_int() {
             let n = take_number(next);
@@ -386,13 +541,82 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         }
         }
         }
+        }
+        }
+        }
+        }
+        }
+        }
+        }
+
+        // --- the boundary between two children ------------------------------------
+        //
+        // A post-order scan reaches a node after its children, so this is where a
+        // branch and a label go: between the condition and the branch that depends on
+        // it, and between one branch and the next.
+        let p = ints_get(parent, k);
+        if p >= 0 {
+            let pk = ints_get(nk, p);
+            let which = ints_get(childno, k);
+            let parity = ints_get(nar, p);
+
+            if pk == n_while() {
+                if which == 0 {
+                    let c = ints_pop(vals);
+                    add_line(out, str_concat(str_concat("  br i1 ", v(c)),
+                                             str_concat(str_concat(", label %", blk("y", p)),
+                                                        str_concat(", label %", blk("x", p)))));
+                    open_block(out, current, live, blk("y", p));
+                } else {
+                    // The back edge targets the header, so the condition runs again.
+                    branch(out, live, blk("h", p));
+                    open_block(out, current, live, blk("x", p));
+                }
+            }
+
+            if pk == n_if() {
+                if which == 0 {
+                    let c = ints_pop(vals);
+                    let other = if parity == 3 { blk("e", p) } else { blk("j", p) };
+                    add_line(out, str_concat(str_concat("  br i1 ", v(c)),
+                                             str_concat(str_concat(", label %", blk("t", p)),
+                                                        str_concat(", label %", other))));
+                    open_block(out, current, live, blk("t", p));
+                } else {
+                    // The predecessor is read **after** the branch was emitted, not
+                    // before: a branch may have opened blocks of its own for a nested
+                    // `if` or a checked-arithmetic guard, and the block a `phi` must
+                    // name is the one emission ended in.
+                    if ints_get(ntype, p) != 0 {
+                        ints_push(phi_val, ints_get(vals, ints_len(vals) - 1));
+                        strs_push(phi_blk, strs_get(current, 0));
+                        ints_pop(vals);
+                    }
+                    branch(out, live, blk("j", p));
+                    if which == 1 {
+                        if parity == 3 {
+                            open_block(out, current, live, blk("e", p));
+                        } else {
+                            open_block(out, current, live, blk("j", p));
+                        }
+                    } else {
+                        open_block(out, current, live, blk("j", p));
+                    }
+                }
+            }
+        }
+
         k = k + 1;
     }
 
-    if ints_len(vals) != 1 {
-        refuse("a program that did not produce exactly one value", position(src, path, 0));
+    // A body whose every path returned has nothing to fall off the end with, and needs
+    // no terminator of its own — the `ret` is already there.
+    if ints_get(live, 0) == 1 {
+        if ints_len(vals) != 1 {
+            refuse("a body that produces no value", position(src, path, 0));
+        }
+        add_line(out, str_concat("  ret i64 ", v(ints_pop(vals))));
     }
-    add_line(out, str_concat("  ret i64 ", v(ints_pop(vals))));
     add_line(out, "}");
     ints_get(next, 0)
 }
@@ -445,7 +669,8 @@ fn main() -> Int {
     let dend = ints_new();
     let dmsg = strs_new();
     let nslot = ints_new();
-    check_all(nk, nar, nst, nen, ntx, naux, nslot, kids, kid_first, ints_len(nk) - 1,
+    let ntype = ints_new();
+    check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, kids, kid_first, ints_len(nk) - 1,
               fnames, fret, ffirst, fcount, fparams,
               bnames, bret, bfirst, bcount, bparams,
               dcode, dstart, dend, dmsg);
@@ -463,7 +688,12 @@ fn main() -> Int {
 
     let body = strs_new();
     let msgs = strs_new();
-    emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, body, msgs);
+    let parent = ints_new();
+    let childno = ints_new();
+    let substart = ints_new();
+    build_relations(nk, nar, kids, kid_first, parent, childno, substart);
+    emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype,
+                parent, childno, substart, kids, kid_first, body, msgs);
 
     // The header comes last because interning the messages is what discovers them.
     let head = strs_new();
