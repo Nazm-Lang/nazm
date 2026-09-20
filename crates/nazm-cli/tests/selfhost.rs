@@ -531,6 +531,23 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
         // An empty body is valid *syntax* — the checker is what rejects it, which is the
         // frontend-validity/backend-coverage split the project keeps everywhere else.
         "fn m() -> Int { }",
+        // `if`: the one construct that suspends an expression part-way to parse a block.
+        "fn m() -> Int { if true { 1 } else { 2 } }",
+        "fn m() -> Int { if true { 1 } }",
+        "fn m(x: Int) -> Int { if x > 0 { 1 } else { 0 - 1 } }",
+        "fn m() -> Int { let x = if true { 1 } else { 2 }; x }",
+        "fn m(s: Int) -> Int { s + if s > 0 { 1 } else { 0 } }",
+        "fn m() -> Int { f(if true { 1 } else { 2 }) }",
+        "fn m() -> Int { f(1, if true { 2 } else { 3 }, 4) }",
+        "fn m() -> Int { if true { if false { 1 } else { 2 } } else { 3 } }",
+        "fn m() -> Int { if if true { false } else { true } { 1 } else { 2 } }",
+        "fn m() -> Int { let mut i = 0; while i < 3 { if i == 1 { i = 9; } i = i + 1; } i }",
+        "fn m() -> Int { let mut i = 0; while i < 3 { if i == 1 { break; } else { continue; } } i }",
+        "fn m(x: Int) -> Int { return if x > 0 { 1 } else { 2 }; }",
+        "fn m(x: Int) -> Int { let mut y = 0; y = if x > 0 { 1 } else { 2 }; y }",
+        "fn m(x: Int) -> Int { let mut i = 0; while if i < x { true } else { false } { i = i + 1; } i }",
+        "fn m() -> Int { (if true { 1 } else { 2 }) * 3 }",
+        "fn m() -> Int { -if true { 1 } else { 2 } }",
         "fn total(n: Int) -> Int {\n    let mut i = 0;\n    let mut s = 0;\n    while i < n {\n        s = s + i;\n        i = i + 1;\n    }\n    return s;\n}\n",
     ];
 
@@ -562,6 +579,69 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
 }
 
 #[test]
+fn the_nazm_parser_agrees_with_the_reference_on_every_source_in_the_tree() {
+    // The real test of a parser: whole files, including its own source and the
+    // tokeniser's — the largest and most varied Nazm programs that exist.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_parser(dir.path());
+    let root = repo_root();
+
+    let mut files = Vec::new();
+    for folder in ["compiler", "examples"] {
+        if let Ok(entries) = std::fs::read_dir(root.join(folder)) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().is_some_and(|e| e == "nz") {
+                    files.push(p);
+                }
+            }
+        }
+    }
+    files.sort();
+    assert!(files.len() >= 5, "only {} sources found", files.len());
+
+    let mut nodes = 0usize;
+    for file in &files {
+        let source = std::fs::read_to_string(file).expect("read");
+        let (program, errors) = nazm_core::__syntax::parse_source(&source);
+        assert!(errors.is_empty(), "{}: {errors:#?}", file.display());
+        let theirs = dump_program(&program);
+
+        let out = Command::new(&exe).arg(file).output().expect("run");
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "the Nazm parser failed on {}: {}",
+            file.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8(out.stdout).expect("ASCII output");
+        let ours: String = text
+            .lines()
+            .filter(|l| l.contains('|'))
+            .map(|l| format!("{l}\n"))
+            .collect();
+
+        // Compared line by line so a failure names the node rather than printing two
+        // thousand-line dumps.
+        for (n, (a, b)) in ours.lines().zip(theirs.lines()).enumerate() {
+            assert_eq!(a, b, "{}: node {n}", file.display());
+        }
+        assert_eq!(
+            ours.lines().count(),
+            theirs.lines().count(),
+            "{}: different number of nodes",
+            file.display()
+        );
+        nodes += theirs.lines().count();
+    }
+    assert!(
+        nodes > 2000,
+        "only {nodes} nodes compared — too few to mean much"
+    );
+}
+
+#[test]
 fn the_nazm_parser_refuses_what_it_cannot_parse_yet_by_name() {
     // The scope boundary is a *refusal*, not a misparse. A parser that quietly produced
     // some tree for a statement it does not handle would agree with nothing and be
@@ -570,10 +650,6 @@ fn the_nazm_parser_refuses_what_it_cannot_parse_yet_by_name() {
     let exe = build_parser(dir.path());
 
     for (source, expected) in [
-        (
-            "fn m() -> Int { if true { 1 } else { 2 } }",
-            "`if`: not implemented yet",
-        ),
         (
             "fn m() -> Int { { 1 } }",
             "a block used as an expression: not implemented yet",
