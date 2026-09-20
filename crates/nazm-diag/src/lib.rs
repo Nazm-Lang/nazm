@@ -71,9 +71,15 @@ pub mod codes {
     pub const INVALID_OPERANDS: Code = Code::new("N0304");
     pub const UNKNOWN_TYPE: Code = Code::new("N0305");
 
+    // Mutation
+    pub const ASSIGN_TO_IMMUTABLE: Code = Code::new("N0310");
+    pub const MUTABLE_PARAMETER: Code = Code::new("N0311");
+
     // Execution
     pub const INTEGER_OVERFLOW: Code = Code::new("N0400");
     pub const DIVISION_BY_ZERO: Code = Code::new("N0401");
+    /// The interpreter's iteration guard, not a language rule. See `docs/spec.md`.
+    pub const ITERATION_LIMIT: Code = Code::new("N0402");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -282,8 +288,11 @@ mod tests {
             codes::WRONG_ARGUMENT_COUNT,
             codes::INVALID_OPERANDS,
             codes::UNKNOWN_TYPE,
+            codes::ASSIGN_TO_IMMUTABLE,
+            codes::MUTABLE_PARAMETER,
             codes::INTEGER_OVERFLOW,
             codes::DIVISION_BY_ZERO,
+            codes::ITERATION_LIMIT,
         ];
         let mut seen: Vec<&str> = all.iter().map(Code::as_str).collect();
         let before = seen.len();

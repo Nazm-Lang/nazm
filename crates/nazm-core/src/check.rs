@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
-use nazm_syntax::{BinOp, Block, Expr, Function, Program};
+use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, StmtBlock, While};
 
 use crate::types::Type;
 
@@ -23,10 +23,17 @@ pub struct Signature {
     pub name_span: Span,
 }
 
+/// What is known about a binding.
+#[derive(Debug, Clone, Copy)]
+struct Binding {
+    ty: Type,
+    mutable: bool,
+}
+
 /// Lexical scopes. Innermost last.
 #[derive(Debug, Default)]
 struct Scopes {
-    frames: Vec<HashMap<String, Type>>,
+    frames: Vec<HashMap<String, Binding>>,
 }
 
 impl Scopes {
@@ -38,7 +45,7 @@ impl Scopes {
         self.frames.pop();
     }
 
-    fn lookup(&self, name: &str) -> Option<Type> {
+    fn lookup(&self, name: &str) -> Option<Binding> {
         self.frames.iter().rev().find_map(|f| f.get(name).copied())
     }
 
@@ -51,9 +58,9 @@ impl Scopes {
         self.frames.last().is_some_and(|f| f.contains_key(name))
     }
 
-    fn define(&mut self, name: &str, ty: Type) {
+    fn define(&mut self, name: &str, ty: Type, mutable: bool) {
         if let Some(f) = self.frames.last_mut() {
-            f.insert(name.to_owned(), ty);
+            f.insert(name.to_owned(), Binding { ty, mutable });
         }
     }
 }
@@ -168,7 +175,10 @@ impl Checker {
                     format!("`{}` is listed twice in this parameter list", p.name),
                 ));
             }
-            self.scopes.define(&p.name, ty);
+            // Parameters are never mutable. A mutable parameter is a local copy, which
+            // reads as an out-parameter to anyone who has not checked the calling
+            // convention; `let mut` in the body says the same thing unambiguously.
+            self.scopes.define(&p.name, ty, false);
         }
 
         let declared = self.resolve_type(&f.return_type.name, f.return_type.span);
@@ -193,26 +203,106 @@ impl Checker {
 
     fn check_block(&mut self, b: &Block, expected: Option<Type>) -> Type {
         self.scopes.push();
-        for l in &b.lets {
-            let ty = self.check_expr(&l.value, None);
-            if self.scopes.defined_here(&l.name) {
-                self.errors.push(
-                    Diagnostic::error(
-                        codes::ALREADY_DEFINED_IN_SCOPE,
-                        l.name_span,
-                        format!("`{}` is already defined in this scope", l.name),
-                    )
-                    .help(
-                        "Nazm allows shadowing in a nested scope but not in the same one, \
-                         so a later mention of a name is never ambiguous",
-                    ),
-                );
-            }
-            self.scopes.define(&l.name, ty);
+        for stmt in &b.statements {
+            self.check_stmt(stmt);
         }
         let ty = self.check_expr(&b.tail, expected);
         self.scopes.pop();
         ty
+    }
+
+    fn check_assign(&mut self, a: &Assign) {
+        let Some(binding) = self.scopes.lookup(&a.name) else {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::UNDEFINED_VARIABLE,
+                    a.name_span,
+                    format!("`{}` is not defined", a.name),
+                )
+                .help("assignment changes an existing binding; `let` introduces one"),
+            );
+            self.check_expr(&a.value, None);
+            return;
+        };
+
+        if !binding.mutable {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::ASSIGN_TO_IMMUTABLE,
+                    a.name_span,
+                    format!("`{}` is not mutable", a.name),
+                )
+                .help("bindings are immutable unless written `let mut`")
+                .fix(
+                    a.name_span,
+                    format!("mut {}", a.name),
+                    "make the binding mutable",
+                ),
+            );
+        }
+
+        // Checked against the binding's type, so a reassignment cannot change it. A
+        // variable whose type depends on how far through the function you are is exactly
+        // the thing a reader cannot predict.
+        let vt = self.check_expr(&a.value, Some(binding.ty));
+        if vt != binding.ty {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    a.value.span(),
+                    format!("`{}` is `{}`, but this is `{vt}`", a.name, binding.ty),
+                )
+                .secondary(a.name_span, format!("declared `{}` here", binding.ty)),
+            );
+        }
+    }
+
+    fn check_while(&mut self, w: &While) {
+        let ct = self.check_expr(&w.cond, Some(Type::Bool));
+        if ct != Type::Bool {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::CONDITION_NOT_BOOL,
+                    w.cond.span(),
+                    format!("a `while` condition must be `Bool`, but this is `{ct}`"),
+                )
+                .help("Nazm has no truthiness: use a comparison such as `i < n`"),
+            );
+        }
+        self.check_stmt_block(&w.body);
+    }
+
+    /// A loop body: its own scope, statements only, no value.
+    fn check_stmt_block(&mut self, b: &StmtBlock) {
+        self.scopes.push();
+        for stmt in &b.statements {
+            self.check_stmt(stmt);
+        }
+        self.scopes.pop();
+    }
+
+    fn check_stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Let(l) => {
+                let ty = self.check_expr(&l.value, None);
+                if self.scopes.defined_here(&l.name) {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::ALREADY_DEFINED_IN_SCOPE,
+                            l.name_span,
+                            format!("`{}` is already defined in this scope", l.name),
+                        )
+                        .help(
+                            "Nazm allows shadowing in a nested scope but not in the same \
+                             one, so a later mention of a name is never ambiguous",
+                        ),
+                    );
+                }
+                self.scopes.define(&l.name, ty, l.mutable);
+            }
+            Stmt::Assign(a) => self.check_assign(a),
+            Stmt::While(w) => self.check_while(w),
+        }
     }
 
     /// Check an expression, returning its type.
@@ -227,7 +317,7 @@ impl Checker {
             Expr::Str { .. } => Type::Str,
 
             Expr::Var { name, span } => match self.scopes.lookup(name) {
-                Some(t) => t,
+                Some(b) => b.ty,
                 None => {
                     let mut d = Diagnostic::error(
                         codes::UNDEFINED_VARIABLE,

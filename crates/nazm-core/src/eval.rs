@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use nazm_diag::{codes, Diagnostic};
-use nazm_syntax::{BinOp, Block, Expr, Function, Program};
+use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, StmtBlock, While};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -41,6 +41,10 @@ pub struct RuntimeError {
 
 type Env = Vec<HashMap<String, Value>>;
 
+/// Ten million iterations: high enough that no reasonable program reaches it, low enough
+/// that a runaway one reports in seconds rather than consuming the machine.
+pub const DEFAULT_MAX_ITERATIONS: u64 = 10_000_000;
+
 #[derive(Debug)]
 pub struct Interpreter<'a> {
     functions: HashMap<String, &'a Function>,
@@ -48,6 +52,12 @@ pub struct Interpreter<'a> {
     /// process with a stack overflow, which produces no diagnostic at all.
     depth: usize,
     max_depth: usize,
+    /// Loop iterations remaining.
+    ///
+    /// An interpreter guard, not a language rule — `docs/spec.md` is explicit that Nazm
+    /// does not bound iteration. With no `break` and no I/O, a non-terminating program
+    /// produces nothing whatsoever, and a tool that hangs is worse than one that reports.
+    iterations_left: u64,
 }
 
 #[allow(clippy::result_large_err)]
@@ -63,7 +73,15 @@ impl<'a> Interpreter<'a> {
             functions,
             depth: 0,
             max_depth: 512,
+            iterations_left: DEFAULT_MAX_ITERATIONS,
         }
+    }
+
+    /// Change the iteration budget. `nazm run --max-iterations` sets this.
+    #[must_use]
+    pub fn with_max_iterations(mut self, n: u64) -> Self {
+        self.iterations_left = n;
+        self
     }
 
     /// Evaluate `main` and return its value.
@@ -85,15 +103,103 @@ impl<'a> Interpreter<'a> {
 
     fn block(&mut self, b: &Block, env: &mut Env) -> Result<Value, RuntimeError> {
         env.push(HashMap::new());
-        for l in &b.lets {
-            let v = self.expr(&l.value, env)?;
-            if let Some(frame) = env.last_mut() {
-                frame.insert(l.name.clone(), v);
-            }
-        }
-        let out = self.expr(&b.tail, env);
+        let out = self.block_inner(b, env);
         env.pop();
         out
+    }
+
+    fn block_inner(&mut self, b: &Block, env: &mut Env) -> Result<Value, RuntimeError> {
+        for stmt in &b.statements {
+            self.stmt(stmt, env)?;
+        }
+        self.expr(&b.tail, env)
+    }
+
+    /// A loop body: its own scope, so a `let` inside it does not leak between iterations.
+    fn stmt_block(&mut self, b: &StmtBlock, env: &mut Env) -> Result<(), RuntimeError> {
+        env.push(HashMap::new());
+        let out = (|| {
+            for stmt in &b.statements {
+                self.stmt(stmt, env)?;
+            }
+            Ok(())
+        })();
+        env.pop();
+        out
+    }
+
+    fn stmt(&mut self, stmt: &Stmt, env: &mut Env) -> Result<(), RuntimeError> {
+        match stmt {
+            Stmt::Let(l) => {
+                let v = self.expr(&l.value, env)?;
+                if let Some(frame) = env.last_mut() {
+                    frame.insert(l.name.clone(), v);
+                }
+                Ok(())
+            }
+            Stmt::Assign(a) => self.assign(a, env),
+            Stmt::While(w) => self.while_loop(w, env),
+        }
+    }
+
+    /// Assign to the innermost binding of that name.
+    ///
+    /// Innermost, so a loop body assigning to a variable declared outside it updates that
+    /// one rather than creating a shadow that vanishes each iteration — which would make
+    /// every accumulator silently do nothing.
+    fn assign(&mut self, a: &Assign, env: &mut Env) -> Result<(), RuntimeError> {
+        let v = self.expr(&a.value, env)?;
+        for frame in env.iter_mut().rev() {
+            if let Some(slot) = frame.get_mut(&a.name) {
+                *slot = v;
+                return Ok(());
+            }
+        }
+        // Unreachable once checking has run; a diagnostic rather than a panic so a
+        // checker bug surfaces as a report.
+        Err(RuntimeError {
+            diagnostic: Diagnostic::error(
+                codes::UNDEFINED_VARIABLE,
+                a.name_span,
+                format!("`{}` is not defined", a.name),
+            ),
+        })
+    }
+
+    fn while_loop(&mut self, w: &While, env: &mut Env) -> Result<(), RuntimeError> {
+        loop {
+            match self.expr(&w.cond, env)? {
+                Value::Bool(false) => return Ok(()),
+                Value::Bool(true) => {}
+                other => {
+                    return Err(RuntimeError {
+                        diagnostic: Diagnostic::error(
+                            codes::CONDITION_NOT_BOOL,
+                            w.cond.span(),
+                            format!("a `while` condition must be `Bool`, but this is `{other}`"),
+                        ),
+                    })
+                }
+            }
+
+            let Some(left) = self.iterations_left.checked_sub(1) else {
+                return Err(RuntimeError {
+                    diagnostic: Diagnostic::error(
+                        codes::ITERATION_LIMIT,
+                        w.span,
+                        "this program exceeded the interpreter's iteration limit",
+                    )
+                    .help(
+                        "Nazm does not bound iteration; `nazm run` does, so a \
+                         non-terminating program reports instead of hanging. Raise it with \
+                         `--max-iterations`, or check the loop's condition ever becomes false",
+                    ),
+                });
+            };
+            self.iterations_left = left;
+
+            self.stmt_block(&w.body, env)?;
+        }
     }
 
     fn expr(&mut self, e: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {

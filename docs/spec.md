@@ -88,11 +88,74 @@ Parameter and return types are always written. Local `let` bindings infer from t
 initialiser. Both branches of an `if` must have the same type, and a condition must be
 `Bool` — there is no truthiness.
 
-### Not in v0.1, and unsupported rather than half-present
+## Settled for v0.2 — mutation and iteration
 
-Mutation, loops, `return`, effects, I/O, generics, user-defined types, modules, string
-concatenation, floating point. A program using any of them is rejected by name rather
-than misparsed into something else.
+### Mutation is opt-in and visible at the binding
+
+```nazm
+let x = 1;        // immutable
+let mut n = 0;    // mutable
+n = n + 1;        // assignment is a statement
+x = 2;            // error: `x` is not mutable
+```
+
+Immutable by default, `mut` to opt in. The alternative — mutable by default with a `const`
+opt-out — puts the annotation on the rarer case and makes the common one silent, so a
+reader has to check every binding to know whether a later line can change it.
+
+Assignment is a **statement**, not an expression. It has no value, so `if (x = 1) { … }`
+does not parse. That is one of the oldest C bugs and there is nothing to gain by
+reproducing it.
+
+**Parameters are not mutable**, and `fn f(mut x: Int)` is refused by name. A mutable
+parameter is a local copy, which looks like an out-parameter to anyone who has not checked
+the calling convention. A `let mut` inside the body says the same thing without the
+ambiguity.
+
+Assignment does not change a binding's type: `n` declared from an `Int` stays `Int`.
+
+### `while` is a statement, and there is no loop value
+
+```nazm
+fn sum_to(n: Int) -> Int {
+    let mut total = 0;
+    let mut i = 1;
+    while i <= n {
+        total = total + i;
+        i = i + 1;
+    }
+    total
+}
+```
+
+A loop has no natural value. The two ways to give it one are a unit type or an arbitrary
+rule, and a unit type is a real decision with consequences for function returns and block
+tails — too large to make in passing for the sake of `while`. So a block is *statements
+followed by a tail expression*, and `while` is a statement. The tail is still required.
+
+The condition must be `Bool`. There is still no truthiness.
+
+### `break` and `continue` are not in v0.2
+
+Refused by name. They are useful and they are also the point at which a loop stops having
+one exit, which interacts with everything added later. Deferred deliberately rather than
+overlooked.
+
+### The iteration limit is the interpreter's, not the language's
+
+With no `break` and no I/O, a non-terminating program produces nothing at all. A tool that
+hangs is worse than one that reports, so `nazm run` stops after a configurable number of
+loop iterations (`--max-iterations`, default 10,000,000) and says so.
+
+This is **not** a language rule. Nazm does not bound iteration; this interpreter does, so
+that a runaway program fails visibly instead of silently consuming a machine. A different
+implementation may choose differently.
+
+### Not in v0.2, and unsupported rather than half-present
+
+`break`, `continue`, `return`, mutable parameters, effects, I/O, generics, user-defined
+types, modules, string concatenation, floating point. A program using any of them is
+rejected by name rather than misparsed into something else.
 
 `nazm run` prints the value of `main`. There is deliberately no `print`: output is an
 effect, effects are the design's central mechanism, and a builtin that bypassed the effect

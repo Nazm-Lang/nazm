@@ -44,6 +44,13 @@ enum Command {
         /// The machine-readable form is the contract; the rendered text is a view of it.
         #[arg(long)]
         json: bool,
+        /// Stop after this many loop iterations.
+        ///
+        /// An interpreter guard, not a language rule: with no `break` and no I/O a
+        /// non-terminating program produces nothing, and a tool that hangs is worse than
+        /// one that reports.
+        #[arg(long, default_value_t = nazm_core::eval::DEFAULT_MAX_ITERATIONS)]
+        max_iterations: u64,
     },
     /// Type-check without evaluating.
     Check {
@@ -55,9 +62,13 @@ enum Command {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let (path, json, run_it) = match cli.command {
-        Command::Run { file, json } => (file, json, true),
-        Command::Check { file, json } => (file, json, false),
+    let (path, json, limit) = match cli.command {
+        Command::Run {
+            file,
+            json,
+            max_iterations,
+        } => (file, json, Some(max_iterations)),
+        Command::Check { file, json } => (file, json, None),
     };
 
     let text = match std::fs::read_to_string(&path) {
@@ -71,8 +82,8 @@ fn main() -> ExitCode {
 
     // Checking always runs; evaluation only when it passed. Running a program known to be
     // ill-typed produces a second, less useful error about the same mistake.
-    let outcome = if run_it {
-        nazm_core::run(file.text())
+    let outcome = if let Some(limit) = limit {
+        nazm_core::run_with_limit(file.text(), limit)
     } else {
         let (program, mut diagnostics) = nazm_syntax_parse(file.text());
         let (_, errs) = nazm_core::check(&program);
