@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let big = 9223372036854775807;
+    let small = -9223372036854775808;
+    // `Int::MIN % -1` is 0: mathematically zero, and zero is representable.
+    let a = small % -1;
+    let b = -7 / 2;
+    let c = -7 % 2;
+    a + b * 10 + c + big - big
+}
