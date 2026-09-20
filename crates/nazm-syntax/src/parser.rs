@@ -42,10 +42,12 @@ pub struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
     errors: Vec<Diagnostic>,
-    /// Current expression/block nesting, against [`MAX_NESTING`].
+    /// Current parser recursion, against [`MAX_NESTING`].
     depth: usize,
-    /// Whether the nesting limit has already been reported for this item.
-    too_deep: bool,
+    /// Depth of the subtree most recently built, against [`MAX_NESTING`].
+    built: usize,
+    /// Whether the limit has already been reported for this item.
+    reported_too_deep: bool,
 }
 
 /// Parse a whole program. Returns whatever was understood plus every error found.
@@ -56,7 +58,8 @@ pub fn parse(tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
         pos: 0,
         errors: Vec::new(),
         depth: 0,
-        too_deep: false,
+        built: 0,
+        reported_too_deep: false,
     };
     let mut functions = Vec::new();
 
@@ -64,7 +67,8 @@ pub fn parse(tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
         // Per item: abandoning one function unwinds out of `leave()` calls that never
         // ran, and a stale count would shrink the budget for every function after it.
         p.depth = 0;
-        p.too_deep = false;
+        p.built = 0;
+        p.reported_too_deep = false;
         match p.function() {
             Some(f) => functions.push(f),
             None => {
@@ -78,13 +82,22 @@ pub fn parse(tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
     (Program { functions }, p.errors)
 }
 
-/// How deeply expressions and blocks may nest.
+/// How deep the syntax tree may be.
 ///
 /// Call depth is not the only way to run out of stack: `((((1))))`, `- - - - 1` and
 /// `{ { { 1 } } }` recurse through the parser, the checker, the evaluator and finally the
 /// destructor of the tree itself, without a single call frame in the program. Bounding
 /// the *tree* at parse time bounds all four at once, and is the only one of the four that
 /// can report rather than abort.
+///
+/// This is a bound on the tree, measured as the tree is built — not on how deeply the
+/// parser recursed to build it. The two differ, and the difference is not small. An
+/// earlier version counted parser recursion and was wrong in both directions: parentheses
+/// build no node at all, so `((((1))))` is a tree of depth 2 however many there are; and
+/// `- - - 1 + 1 + 1` parses its operand *before* the chain of `+` starts counting, so the
+/// operand's levels were released and the two composed into a tree twice as deep as the
+/// limit. A test that measured the tree instead of the counter found 1022 against a limit
+/// of 512, and nesting the composition would have compounded it further.
 ///
 /// 512 is far past anything written by hand. It is not far past what a generator emits:
 /// Nazm has no `else if`, so a dispatch chain written as `else { if … }` costs two levels
@@ -102,42 +115,66 @@ pub const MAX_NESTING: usize = 512;
 pub const PARSE_STACK_BYTES: usize = 24 * 1024 * 1024;
 
 impl<'a> Parser<'a> {
-    /// Enter one level of nesting, or report that the tree is too deep.
+    /// Record the depth of the subtree just built, and report if it is too deep.
+    ///
+    /// Returns `None` when it is, so callers propagate with `?` exactly as they do for a
+    /// syntax error. Every construction site calls this, and the depth it passes is
+    /// `1 + max(children)` — which is what makes the bound exact rather than an estimate
+    /// of it.
+    fn built(&mut self, depth: usize) -> Option<usize> {
+        self.built = depth;
+        if depth > MAX_NESTING {
+            self.too_deep();
+            return None;
+        }
+        Some(depth)
+    }
+
+    /// The depth of the subtree most recently built. Read immediately after parsing a
+    /// child, before anything else can overwrite it.
+    fn child(&self) -> usize {
+        self.built
+    }
+
+    /// Enter one level of parser recursion, or report that it has gone too far.
+    ///
+    /// Separate from the tree bound, and both are needed: the parser is itself a stack
+    /// consumer, and parentheses make it recurse without building anything. Without this,
+    /// `((((…))))` would parse until the stack ran out and then have nothing to measure.
     fn enter(&mut self) -> bool {
         self.depth += 1;
         if self.depth > MAX_NESTING {
-            // Once only: at this depth every enclosing level would report the same thing
-            // on the way out, which is one error per paren.
-            if !self.too_deep {
-                self.too_deep = true;
-                self.errors.push(
-                    Diagnostic::error(
-                        codes::NESTING_TOO_DEEP,
-                        self.peek_span(),
-                        format!("expressions and blocks may nest {MAX_NESTING} deep"),
-                    )
-                    .help(
-                        "this is the parser's limit, not the language's: a deeper tree \
-                         would exhaust the stack in a later pass, where it could only \
-                         crash rather than report",
-                    ),
-                );
-            }
+            self.too_deep();
             return false;
         }
         true
     }
 
-    fn leave(&mut self) {
-        self.depth -= 1;
+    /// Report that the limit was passed — once per item, not once per level.
+    ///
+    /// Every enclosing level would otherwise report the same thing on the way out, which
+    /// is one error per paren.
+    fn too_deep(&mut self) {
+        if self.reported_too_deep {
+            return;
+        }
+        self.reported_too_deep = true;
+        self.errors.push(
+            Diagnostic::error(
+                codes::NESTING_TOO_DEEP,
+                self.peek_span(),
+                format!("expressions and blocks may nest {MAX_NESTING} deep"),
+            )
+            .help(
+                "this is the parser's limit, not the language's: a deeper tree would \
+                 exhaust the stack in a later pass, where it could only crash rather \
+                 than report",
+            ),
+        );
     }
 
-    /// Leave `n` levels at once.
-    ///
-    /// For a chain counted in a loop rather than by recursion, where there is no nesting
-    /// of calls to unwind through one `leave` at a time.
-    fn unwind(&mut self, levels: usize) {
-        self.depth -= levels;
+    fn leave(&mut self) {
+        self.depth -= 1;
     }
 
     fn peek(&self) -> &TokenKind {
@@ -343,18 +380,23 @@ impl<'a> Parser<'a> {
         let open = self.expect(&TokenKind::LBrace, "to start a block")?;
         let mut statements = Vec::new();
         let mut tail = None;
+        let mut deepest = 0;
 
         while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            // A statement is not itself a node: its depth is its deepest sub-expression.
             if self.at(&TokenKind::Let) {
                 statements.push(Stmt::Let(self.let_stmt()?));
+                deepest = deepest.max(self.child());
                 continue;
             }
             if self.at(&TokenKind::While) {
                 statements.push(Stmt::While(self.while_stmt()?));
+                deepest = deepest.max(self.child());
                 continue;
             }
             if self.at(&TokenKind::Return) {
                 statements.push(Stmt::Return(self.return_stmt()?));
+                deepest = deepest.max(self.child());
                 continue;
             }
             if self.at(&TokenKind::Break) || self.at(&TokenKind::Continue) {
@@ -363,11 +405,13 @@ impl<'a> Parser<'a> {
             }
             if let Some(a) = self.try_assign()? {
                 statements.push(Stmt::Assign(a));
+                deepest = deepest.max(self.child());
                 continue;
             }
 
             let block_like = self.at(&TokenKind::If) || self.at(&TokenKind::LBrace);
             let e = self.expr()?;
+            deepest = deepest.max(self.child());
 
             if self.eat(&TokenKind::Semi) {
                 // Explicitly discarded.
@@ -396,6 +440,7 @@ impl<'a> Parser<'a> {
         }
 
         let close = self.expect(&TokenKind::RBrace, "to close the block")?;
+        self.built(deepest + 1)?;
         Some(Block {
             statements,
             tail,
@@ -486,7 +531,11 @@ impl<'a> Parser<'a> {
         let start = self.peek_span();
         self.advance();
         let cond = self.expr()?;
+        let cond_depth = self.child();
         let body = self.block()?;
+        // Both children count: a `while` whose condition is deeper than its body is
+        // bounded by the condition.
+        self.built = cond_depth.max(self.child());
         Some(While {
             cond,
             span: start.join(body.span),
@@ -535,16 +584,17 @@ impl<'a> Parser<'a> {
     /// Pratt loop. Comparison binds loosest, then `+`/`-`, then `*`/`/`/`%`.
     ///
     /// The loop does not recurse, but the tree it builds does: `1 + 1 + 1` is
-    /// `((1 + 1) + 1)`, one level of left spine per operator. The checker, the evaluator
-    /// and the destructor of the tree all walk that spine, so each operator is counted
-    /// against the same nesting budget as everything else.
-    ///
-    /// Counting parse recursion alone would have left this unbounded — and a long
-    /// arithmetic chain is by far the likeliest deep tree in a real program, which makes
-    /// it the worst possible shape to have missed.
+    /// `((1 + 1) + 1)`, one level of left spine per operator. So a chain costs nothing
+    /// against the parser-recursion bound and everything against the tree bound, which
+    /// is why the two are separate measurements and why `lhs_depth` carries the operand's
+    /// own depth into the node built on top of it.
     fn binary(&mut self, min_bp: u8) -> Option<Expr> {
         let mut lhs = self.primary()?;
-        let mut chain = 0;
+        // The operand's own depth, which the node built on top of it adds to. Counting
+        // only the operators would miss this entirely: `- - - 1 + 1 + 1` releases the
+        // negations before the first `+` is seen, and the two compose into a tree as deep
+        // as both together.
+        let mut lhs_depth = self.child();
 
         loop {
             let (op, bp) = match self.peek() {
@@ -564,22 +614,20 @@ impl<'a> Parser<'a> {
             if bp < min_bp {
                 break;
             }
-            if !self.enter() {
-                self.unwind(chain);
-                return None;
-            }
-            chain += 1;
             let op_span = self.peek_span();
             self.advance();
             // `bp + 1`: all these operators are left-associative, so `a - b - c` is
             // `(a - b) - c`. Getting this wrong is silent for `+` and wrong for `-`.
             //
-            // Not `?`: an early return here would leave the chain's levels counted, and
-            // the item's remaining budget short by however far it had got.
-            let Some(rhs) = self.binary(bp + 1) else {
-                self.unwind(chain);
-                return None;
-            };
+            // This recursion needs no budget of its own: `bp` is at most 3, and a call at
+            // min_bp 4 matches no operator and returns immediately, so the binary-to-
+            // binary chain is at most three frames however long the expression. The
+            // unbounded path into an operand goes through `primary`, which `enter`
+            // counts.
+            let rhs = self.binary(bp + 1)?;
+            let rhs_depth = self.child();
+            lhs_depth = lhs_depth.max(rhs_depth) + 1;
+            self.built(lhs_depth)?;
             let span = lhs.span().join(rhs.span());
             lhs = Expr::Binary {
                 op,
@@ -589,7 +637,9 @@ impl<'a> Parser<'a> {
                 span,
             };
         }
-        self.unwind(chain);
+        // The loop may not have run, in which case this restores the operand's own depth
+        // over whatever the last `rhs` left behind.
+        self.built = lhs_depth;
         Some(lhs)
     }
 
@@ -617,10 +667,13 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let full = op_span.join(lit_span);
                 return match digits.parse::<u64>() {
-                    Ok(v) if v == 1u64 << 63 => Some(Expr::Int {
-                        value: i64::MIN,
-                        span: full,
-                    }),
+                    Ok(v) if v == 1u64 << 63 => {
+                        self.built(1)?;
+                        Some(Expr::Int {
+                            value: i64::MIN,
+                            span: full,
+                        })
+                    }
                     _ => {
                         self.errors.push(
                             Diagnostic::error(
@@ -636,6 +689,7 @@ impl<'a> Parser<'a> {
             }
             // Binds tighter than any binary operator, so `-a * b` is `(-a) * b`.
             let operand = self.primary()?;
+            self.built(self.child() + 1)?;
             let full = op_span.join(operand.span());
             return Some(Expr::Neg {
                 operand: Box::new(operand),
@@ -647,6 +701,7 @@ impl<'a> Parser<'a> {
         match self.peek().clone() {
             TokenKind::Int(value) => {
                 self.advance();
+                self.built(1)?;
                 Some(Expr::Int { value, span })
             }
             TokenKind::IntTooLarge(digits) => {
@@ -666,27 +721,35 @@ impl<'a> Parser<'a> {
             }
             TokenKind::True => {
                 self.advance();
+                self.built(1)?;
                 Some(Expr::Bool { value: true, span })
             }
             TokenKind::False => {
                 self.advance();
+                self.built(1)?;
                 Some(Expr::Bool { value: false, span })
             }
             TokenKind::Str(value) => {
                 self.advance();
+                self.built(1)?;
                 Some(Expr::Str { value, span })
             }
             TokenKind::If => {
                 self.advance();
                 let cond = self.expr()?;
+                let mut deepest = self.child();
                 let then_block = self.block()?;
+                deepest = deepest.max(self.child());
                 // Optional. Whether a missing `else` is an error depends on whether a
                 // value is wanted from the `if`, and that is a checking question.
                 let else_block = if self.eat(&TokenKind::Else) {
-                    Some(self.block()?)
+                    let b = self.block()?;
+                    deepest = deepest.max(self.child());
+                    Some(b)
                 } else {
                     None
                 };
+                self.built(deepest + 1)?;
                 let end = else_block.as_ref().map_or(then_block.span, |b| b.span);
                 Some(Expr::If {
                     cond: Box::new(cond),
@@ -699,10 +762,13 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let inner = self.expr()?;
                 self.expect(&TokenKind::RParen, "to close the group")?;
+                // No node: `(x)` *is* `x`. `self.built` already holds the inner depth and
+                // must not be incremented, or the limit would count punctuation.
                 Some(inner)
             }
             TokenKind::LBrace => {
                 let b = self.block()?;
+                self.built(self.child() + 1)?;
                 Some(Expr::Block(Box::new(b)))
             }
             TokenKind::Ident(name) => {
@@ -713,13 +779,16 @@ impl<'a> Parser<'a> {
                 self.advance();
                 if self.eat(&TokenKind::LParen) {
                     let mut args = Vec::new();
+                    let mut deepest = 0;
                     while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
                         args.push(self.expr()?);
+                        deepest = deepest.max(self.child());
                         if !self.eat(&TokenKind::Comma) {
                             break;
                         }
                     }
                     let close = self.expect(&TokenKind::RParen, "to close the argument list")?;
+                    self.built(deepest + 1)?;
                     Some(Expr::Call {
                         callee: name,
                         callee_span: span,
@@ -727,6 +796,7 @@ impl<'a> Parser<'a> {
                         span: span.join(close),
                     })
                 } else {
+                    self.built(1)?;
                     Some(Expr::Var { name, span })
                 }
             }
@@ -938,5 +1008,459 @@ mod nesting_tests {
                 "not bounded: {errors:#?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::integer_division)]
+mod ast_depth_tests {
+    //! Does the nesting counter actually bound the depth of the tree it produces?
+    //!
+    //! The counter is a proxy. What matters is the tree, because that is what the
+    //! checker, the evaluator and the destructor recurse over — and the two can disagree:
+    //! a flat operator count could reject a shallow expression, and a counter released at
+    //! the wrong moment could admit a deep one. So these tests measure the tree itself and
+    //! compare it against the limit, over shapes built by composing every construct that
+    //! recurses.
+
+    use super::{MAX_NESTING, PARSE_STACK_BYTES};
+    use crate::{parse_source, Block, Expr, Program, Stmt};
+    use nazm_diag::codes;
+
+    fn on_the_documented_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .stack_size(PARSE_STACK_BYTES)
+                .spawn_scoped(scope, f)
+                .expect("spawn")
+                .join()
+                .expect("join")
+        })
+    }
+
+    /// Longest root-to-leaf path through the tree, counted in nodes.
+    ///
+    /// Computed from child relationships alone. It never reads `Parser::built` or any
+    /// other number the parser recorded — if it did, the test and the implementation
+    /// could agree while both being wrong, which is the failure mode this is here to
+    /// rule out. The only thing shared with the production accounting is the convention
+    /// that a statement is not a node and a parenthesis is not a node, and those are
+    /// visible in the tree itself: there is no `Stmt` or `Paren` node to count.
+    ///
+    /// Iterative on purpose: a recursive walker would overflow on exactly the trees this
+    /// exists to catch, and a measuring instrument that dies on the interesting case is
+    /// no instrument at all.
+    fn depth(program: &Program) -> usize {
+        enum Node<'a> {
+            Expr(&'a Expr),
+            Block(&'a Block),
+        }
+
+        let mut deepest = 0;
+        let mut stack: Vec<(Node<'_>, usize)> = program
+            .functions
+            .iter()
+            .filter_map(|f| f.body.as_ref().map(|b| (Node::Block(b), 1)))
+            .collect();
+
+        while let Some((node, d)) = stack.pop() {
+            deepest = deepest.max(d);
+            match node {
+                Node::Block(b) => {
+                    for s in &b.statements {
+                        match s {
+                            Stmt::Let(l) => stack.push((Node::Expr(&l.value), d + 1)),
+                            Stmt::Assign(a) => stack.push((Node::Expr(&a.value), d + 1)),
+                            Stmt::Return(r) => stack.push((Node::Expr(&r.value), d + 1)),
+                            Stmt::While(w) => {
+                                stack.push((Node::Expr(&w.cond), d + 1));
+                                stack.push((Node::Block(&w.body), d + 1));
+                            }
+                            Stmt::Expr(e) => stack.push((Node::Expr(e), d + 1)),
+                            Stmt::Break { .. } | Stmt::Continue { .. } => {}
+                        }
+                    }
+                    if let Some(t) = &b.tail {
+                        stack.push((Node::Expr(t), d + 1));
+                    }
+                }
+                Node::Expr(e) => match e {
+                    Expr::Int { .. } | Expr::Bool { .. } | Expr::Str { .. } | Expr::Var { .. } => {}
+                    Expr::Neg { operand, .. } => stack.push((Node::Expr(operand), d + 1)),
+                    Expr::Binary { lhs, rhs, .. } => {
+                        stack.push((Node::Expr(lhs), d + 1));
+                        stack.push((Node::Expr(rhs), d + 1));
+                    }
+                    Expr::Call { args, .. } => {
+                        for a in args {
+                            stack.push((Node::Expr(a), d + 1));
+                        }
+                    }
+                    Expr::If {
+                        cond,
+                        then_block,
+                        else_block,
+                        ..
+                    } => {
+                        stack.push((Node::Expr(cond), d + 1));
+                        stack.push((Node::Block(then_block), d + 1));
+                        if let Some(b) = else_block {
+                            stack.push((Node::Block(b), d + 1));
+                        }
+                    }
+                    Expr::Block(b) => stack.push((Node::Block(b), d + 1)),
+                },
+            }
+        }
+        deepest
+    }
+
+    /// Wrap `inner` in one layer of each construct that recurses, `times` deep.
+    fn layer(kind: &str, times: usize, inner: &str) -> String {
+        match kind {
+            "paren" => format!("{}{inner}{}", "(".repeat(times), ")".repeat(times)),
+            "neg" => format!("{}{inner}", "- ".repeat(times)),
+            "block" => format!("{}{inner}{}", "{ ".repeat(times), " }".repeat(times)),
+            "call" => format!("{}{inner}{}", "f(".repeat(times), ")".repeat(times)),
+            "if" => format!(
+                "{}{inner}{}",
+                "if true { ".repeat(times),
+                " } else { 0 }".repeat(times)
+            ),
+            // Left-associative, so this nests on the left spine without recursing.
+            "chain" => format!("{inner}{}", " + 1".repeat(times)),
+            // Mixed precedence, which nests on the right as well as the left.
+            "mixed" => format!("{inner}{}", " + 1 * 2 - 3".repeat(times)),
+            other => panic!("unknown shape {other}"),
+        }
+    }
+
+    /// Every combination of two shapes, plus each shape alone.
+    fn compositions() -> Vec<(String, String)> {
+        const KINDS: [&str; 7] = ["paren", "neg", "block", "call", "if", "chain", "mixed"];
+        let mut out = Vec::new();
+        for outer in KINDS {
+            out.push((outer.to_string(), layer(outer, 120, "1")));
+            for inner in KINDS {
+                // 60 of each, so a correct bound accepts the pair and a counter that
+                // released the outer layers early would let the total run past it.
+                let body = layer(outer, 60, &layer(inner, 60, "1"));
+                out.push((format!("{outer}+{inner}"), body));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn no_accepted_program_is_deeper_than_the_limit() {
+        // The property the bound exists for, stated over the tree rather than over the
+        // counter that is supposed to track it.
+        on_the_documented_stack(|| {
+            for (name, body) in compositions() {
+                let src = format!("fn f(n: Int) -> Int {{ n }}\nfn main() -> Int {{ {body} }}");
+                let (program, errors) = parse_source(&src);
+                if errors.iter().any(|d| d.code == codes::NESTING_TOO_DEEP) {
+                    continue;
+                }
+                let d = depth(&program);
+                assert!(
+                    d <= MAX_NESTING,
+                    "{name}: accepted a tree {d} deep, limit is {MAX_NESTING}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn composition_is_not_rejected_when_it_fits() {
+        // The other half: a bound that refused everything would satisfy the test above.
+        // Two shapes at 60 layers each are nowhere near 512, so all of them must parse.
+        on_the_documented_stack(|| {
+            for (name, body) in compositions() {
+                let src = format!("fn f(n: Int) -> Int {{ n }}\nfn main() -> Int {{ {body} }}");
+                let (_, errors) = parse_source(&src);
+                assert!(
+                    !errors.iter().any(|d| d.code == codes::NESTING_TOO_DEEP),
+                    "{name}: refused a tree that fits"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_deep_operand_followed_by_a_long_chain() {
+        // The exact counterexample that broke the previous bound, kept by name so the
+        // 49-pair search never becomes the only thing standing between this and a
+        // regression. 510 negations then 510 additions: the negations are parsed and
+        // their levels released before the first `+` is counted, so a parser-recursion
+        // counter sees 511 while the tree is 1020 deep. Measured, it was accepted at
+        // 1022 against a limit of 512.
+        on_the_documented_stack(|| {
+            let body = format!("{}1{}", "- ".repeat(510), " + 1".repeat(510));
+            let src = format!("fn main() -> Int {{ {body} }}");
+            let (program, errors) = parse_source(&src);
+            assert!(
+                errors.iter().any(|d| d.code == codes::NESTING_TOO_DEEP),
+                "the composition that was accepted at 1022 deep: {errors:#?}"
+            );
+            assert!(
+                depth(&program) <= MAX_NESTING,
+                "even rejected, nothing over the limit may be retained"
+            );
+        });
+    }
+
+    #[test]
+    fn parentheses_do_not_consume_the_budget() {
+        // `(x)` is `x`, so grouping must cost nothing. Counting the punctuation would
+        // refuse ordinary parenthesised arithmetic for depth it does not have — the
+        // over-conservative direction, which no "never too deep" assertion can see.
+        // Parentheses around the leftmost operand of a long chain: the parser recurses
+        // once per paren and the chain adds nothing to that, while the chain drives the
+        // tree depth and the parens add nothing to that. Each bound sees only its own
+        // half, which is the point — counting the punctuation as a node would make the
+        // tree measure 800 for a tree of 401.
+        on_the_documented_stack(|| {
+            let src = format!(
+                "fn main() -> Int {{ {}1{}{} }}",
+                "(".repeat(400),
+                ")".repeat(400),
+                " + 1".repeat(400)
+            );
+            let (program, errors) = parse_source(&src);
+            assert!(
+                errors.is_empty(),
+                "400 parens around the operand of a 400-long chain: {errors:#?}"
+            );
+            let d = depth(&program);
+            assert!(
+                d < 410,
+                "tree is {d} deep for a 400-long chain — the parentheses are nodes"
+            );
+        });
+    }
+
+    #[test]
+    fn a_deep_condition_counts_toward_the_tree() {
+        // Every `if` in `compositions` has the condition `true`, so a condition is the
+        // one child that search never makes deep. It is a child like any other: the
+        // checker and the evaluator walk into it exactly as far.
+        on_the_documented_stack(|| {
+            let cond = format!("1{} == 0", " + 1".repeat(400));
+            let src = format!(
+                "fn main() -> Int {{ if {cond} {{ 1 }} else {{ 0 }}{} }}",
+                " + 1".repeat(200)
+            );
+            let (program, errors) = parse_source(&src);
+            assert!(
+                errors.iter().any(|d| d.code == codes::NESTING_TOO_DEEP),
+                "a 400-deep condition beneath a 200-long chain is over the limit: \
+                 {errors:#?}"
+            );
+            assert!(
+                depth(&program) <= MAX_NESTING,
+                "retained a tree {} deep",
+                depth(&program)
+            );
+        });
+    }
+
+    #[test]
+    fn a_deep_condition_within_the_limit_is_accepted() {
+        // The other direction, so the test above cannot be satisfied by refusing every
+        // condition: the same shape, small enough to fit.
+        on_the_documented_stack(|| {
+            let cond = format!("1{} == 0", " + 1".repeat(100));
+            let src = format!(
+                "fn main() -> Int {{ if {cond} {{ 1 }} else {{ 0 }}{} }}",
+                " + 1".repeat(100)
+            );
+            let (_, errors) = parse_source(&src);
+            assert!(errors.is_empty(), "{errors:#?}");
+        });
+    }
+
+    #[test]
+    fn a_chain_does_not_spend_the_recursion_budget() {
+        // A Pratt loop holds no frame per operator, so a chain must not be charged for
+        // parser recursion. An earlier version charged it, and refused this for a budget
+        // it never needed: 200 parentheses (201 frames) around a 400-operator chain
+        // (a tree 401 deep), both comfortably inside their own limits, rejected for the
+        // 600 of their sum. Pinned so the widening cannot drift back.
+        on_the_documented_stack(|| {
+            let src = format!(
+                "fn main() -> Int {{ {}1{}{} }}",
+                "(".repeat(200),
+                " + 1".repeat(400),
+                ")".repeat(200)
+            );
+            let (program, errors) = parse_source(&src);
+            assert!(errors.is_empty(), "{errors:#?}");
+            let d = depth(&program);
+            assert!(d <= MAX_NESTING, "tree is {d} deep");
+        });
+    }
+
+    #[test]
+    fn nothing_over_the_limit_is_ever_retained() {
+        // Rejection has to happen before an oversized parent is kept, not after. What is
+        // handed back is what the checker, the evaluator and the destructor will walk,
+        // so an over-deep tree returned alongside an error is still an over-deep tree.
+        on_the_documented_stack(|| {
+            // Shapes refused outright, where the partial tree built before the limit
+            // fired is what gets handed back and then dropped.
+            //
+            // One layer past the configured limit, rather than a round number chosen by
+            // eye: the smallest input that probes the bound, so the probe moves with
+            // `MAX_NESTING` instead of with whatever stack this machine happened to
+            // have. It is not a guarantee of a clean failure — with a bound mutated
+            // away, whether 513 levels abort still depends on stack size and frame size,
+            // and a small enough stack would crash here rather than fail an assertion.
+            // Containment for that case is the CLI suite, where the program runs as a
+            // child process and a crash is an exit code the parent can assert on.
+            //
+            // Parentheses are absent from this list on purpose. They build no node, so
+            // the tree bound cannot see them and the recursion bound is the only thing
+            // refusing them — which leaves an over-limit paren probe unbounded the
+            // moment that bound is removed, with the stack rather than the limit
+            // deciding what happens. `examples/bad/paren_nesting.nz` covers them from
+            // the CLI suite.
+            let over_limit = MAX_NESTING + 1;
+            for over in [
+                format!("fn main() -> Int {{ {}1 }}", "- ".repeat(over_limit)),
+                format!("fn main() -> Int {{ 1{} }}", " + 1".repeat(over_limit)),
+                format!(
+                    "fn main() -> Int {{ {}1{} }}",
+                    "{ ".repeat(over_limit),
+                    " }".repeat(over_limit)
+                ),
+                format!("{}1{}", "- ".repeat(510), " + 1".repeat(510)),
+            ] {
+                let (program, errors) = parse_source(&over);
+                assert!(!errors.is_empty(), "should have been refused");
+                assert!(
+                    depth(&program) <= MAX_NESTING,
+                    "retained an over-deep tree after refusing it"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_composition_at_its_own_edge_is_still_within_the_limit() {
+        // Compositions well inside the limit prove nothing about the limit. This finds
+        // where each pair is actually refused and checks the deepest tree still accepted
+        // there — which is where a counter released too early would show up, by letting
+        // the outer layers stop being counted once the inner ones finished.
+        const KINDS: [&str; 7] = ["paren", "neg", "block", "call", "if", "chain", "mixed"];
+        on_the_documented_stack(|| {
+            for outer in KINDS {
+                for inner in KINDS {
+                    let build = |n: usize| {
+                        format!(
+                            "fn f(n: Int) -> Int {{ n }}\nfn main() -> Int {{ {} }}",
+                            layer(outer, n, &layer(inner, n, "1"))
+                        )
+                    };
+                    let refused = |n: usize| {
+                        parse_source(&build(n))
+                            .1
+                            .iter()
+                            .any(|d| d.code == codes::NESTING_TOO_DEEP)
+                    };
+                    let (mut lo, mut hi) = (1usize, MAX_NESTING);
+                    while hi - lo > 1 {
+                        let mid = (lo + hi) / 2;
+                        if refused(mid) {
+                            hi = mid;
+                        } else {
+                            lo = mid;
+                        }
+                    }
+                    let (program, errors) = parse_source(&build(lo));
+                    assert!(errors.is_empty(), "{outer}+{inner} at {lo}: {errors:#?}");
+                    let d = depth(&program);
+                    assert!(
+                        d <= MAX_NESTING,
+                        "{outer}+{inner}: accepted a tree {d} deep at {lo} layers each, \
+                         limit is {MAX_NESTING}"
+                    );
+                    assert!(
+                        refused(lo + 1),
+                        "{outer}+{inner}: {} should be refused",
+                        lo + 1
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn the_counter_tracks_the_tree_at_the_edge_of_each_shape() {
+        // At the edge the two must agree closely, or the counter is bounding something
+        // other than what the later passes walk.
+        on_the_documented_stack(|| {
+            for kind in ["paren", "neg", "block", "call", "if", "chain", "mixed"] {
+                // Bounded, and the bound matters more than the step. An open-ended
+                // search for "the depth at which this is refused" stops being a search
+                // the moment nothing is refused — it becomes a climb until the stack
+                // gives out, which is a crash rather than a report and takes the rest of
+                // the binary with it. Three times the limit is past any real edge, and
+                // reaching the end without a refusal is itself the failure.
+                let mut edge = 0;
+                let ceiling = MAX_NESTING * 3;
+                let mut refused_somewhere = false;
+                for n in (1..=ceiling).step_by(8) {
+                    let src = format!(
+                        "fn f(n: Int) -> Int {{ n }}\nfn main() -> Int {{ {} }}",
+                        layer(kind, n, "1")
+                    );
+                    if parse_source(&src)
+                        .1
+                        .iter()
+                        .any(|d| d.code == codes::NESTING_TOO_DEEP)
+                    {
+                        refused_somewhere = true;
+                        break;
+                    }
+                    edge = n;
+                }
+                assert!(
+                    refused_somewhere,
+                    "{kind}: never refused up to {ceiling} layers — nothing is bounding \
+                     this shape, so there is no edge to measure"
+                );
+                let src = format!(
+                    "fn f(n: Int) -> Int {{ n }}\nfn main() -> Int {{ {} }}",
+                    layer(kind, edge, "1")
+                );
+                let (program, errors) = parse_source(&src);
+                assert!(errors.is_empty(), "{kind}: {errors:#?}");
+                let d = depth(&program);
+                assert!(
+                    d <= MAX_NESTING,
+                    "{kind}: deepest accepted tree is {d}, limit is {MAX_NESTING}"
+                );
+
+                // Parentheses are the one shape that builds no node at all: `((((1))))`
+                // parses to `Int 1`, depth 2 however many there were. What the counter
+                // bounds for them is the parser's own recursion, which is real — the
+                // parser is a stack consumer like the passes after it — so the limit is
+                // doing its job while the tree stays trivial.
+                if kind == "paren" {
+                    assert_eq!(d, 2, "parentheses should build no node");
+                    continue;
+                }
+
+                // For every shape that does build nodes, the counter has to track the
+                // tree closely, or it is bounding something the later passes do not walk
+                // and the real depth could run past it. Measured: 498 to 506 against 512.
+                assert!(
+                    d * 2 >= MAX_NESTING,
+                    "{kind}: deepest accepted tree is only {d} against a limit of \
+                     {MAX_NESTING} — the counter is tracking something else"
+                );
+            }
+        });
     }
 }

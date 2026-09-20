@@ -66,11 +66,16 @@ function: the signature survives, so calls to it still check against real types 
 than reporting that it does not exist.
 
 `nazm run` stops a non-terminating program after a configurable number of loop iterations
-(`--max-iterations`) or nested calls (`--max-depth`), and the parser refuses expressions
-and blocks nested more than 512 deep. Three guards because there are three ways to run out
-and none implies the others: `fn f(n: Int) -> Int { f(n) }` never loops, and `((((1))))`
-adds no call frames at all while recursing through the parser, the checker, the evaluator
-and the destructor of the tree.
+(`--max-iterations`) or nested calls (`--max-depth`), and the parser refuses a syntax tree
+more than 512 deep — measuring the tree as it builds it, node by node, not guessing from
+how deeply it recursed. Those are different numbers: `((((1))))` recurses four times and
+builds a tree of depth 2, while `1 + 1 + …` is parsed by a loop that never recurses and
+builds one level per operator. Both are bounded, separately.
+
+Three guards because there are three ways to run out and none implies the others:
+`fn f(n: Int) -> Int { f(n) }` never loops, and a deep expression adds no call frames at
+all while recursing through the parser, the checker, the evaluator and the destructor of
+the tree.
 
 The pipeline runs on a thread whose stack the interpreter sets itself, **sized from the
 depth budget it is about to enforce**, so raising `--max-depth` raises the reservation with
@@ -185,7 +190,7 @@ Almost everything. Specifically:
   the performance claims, which are a backend question. The subset is the one described
   above; everything else in `docs/spec.md` under *Open* is undecided.
 - **The harness is partial.** Real, tested, and mutation-checked (`cargo xtask mutate`,
-  34 catalogued defects, all caught): the accounting and comparison path (`nazm-bench
+  37 catalogued defects, all caught): the accounting and comparison path (`nazm-bench
   selftest`, 15 cases), per-attempt workspace management, the submission freeze, and the
   independent acceptance runner. **Not written:** agent drivers, a provider adapter, and
   all but one task fixture — so the harness cannot produce a benchmark number, and `run`

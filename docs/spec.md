@@ -288,11 +288,25 @@ Call depth is not the only way to run out of stack. `((((1))))`, `- - - - 1` and
 of the tree itself**, without a single call frame in the program — so a call-depth budget
 never sees them, and `nazm check` never reaches the evaluator at all.
 
-One bound covers all four, because they all walk the same tree: **expressions and blocks
-may nest 512 deep** (`N0102`). Parsing is the only one of the four passes that can report
-rather than abort, so that is where the limit lives. Reported once per item, not once per
-paren, and counted per item so one over-deep function does not shrink the budget for the
-next.
+**The syntax tree may be 512 deep** (`N0102`), measured as it is built: every node
+records `1 + max(children)`, so the bound is on the tree the later passes walk rather than
+an estimate of it. Parsing is the only pass that can report rather than abort, so that is
+where the limit lives. Reported once per item, not once per level.
+
+A *second* bound, the same size, applies to the parser's own recursion, because the parser
+is a stack consumer too and the two are not the same measurement. Parentheses build no
+node — `((((1))))` is a tree of depth 2 however many there are — so only the recursion
+bound constrains them. Conversely `1 + 1 + …` is parsed by a loop that never recurses, and
+only the tree bound constrains it.
+
+Getting this wrong is easy and was got wrong first. Counting parser recursion alone looked
+sufficient, and was not: in `- - - 1 + 1 + 1` the operand is parsed and its levels released
+*before* the chain of `+` starts counting, so the peak count is the larger of the two while
+the tree is as deep as both together. A test that measured the tree rather than the counter
+found one accepted at 1022 against a limit of 512, and composing the shapes would have
+compounded it further. The bound is now exact because it is taken from the nodes
+themselves; the tests check the deepest tree accepted for every pairing of seven shapes,
+each pair probed at its own edge rather than somewhere comfortably inside it.
 
 512 is far past anything written by hand. It is not far past what a generator emits: Nazm
 has no `else if`, so a dispatch chain written as `else { if … }` costs two levels an arm.
