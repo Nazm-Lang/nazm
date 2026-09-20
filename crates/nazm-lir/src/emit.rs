@@ -250,6 +250,17 @@ impl Emitter {
                     then_body,
                     else_body,
                 } => self.statement_if(cond, then_body, else_body.as_deref()),
+                // Its own `ret`, not a branch to a shared exit. Nothing needs cleanup
+                // on the way out yet, so an epilogue block would be scaffolding for a
+                // requirement that does not exist. An operand that transfers instead
+                // wins outright — the `break` in `return if c { break; } else { 1 };`
+                // leaves the loop and no `ret` is written, matching `take!`.
+                Stmt::Return(e) => {
+                    if let Val::Of { value, ty } = self.expr(e) {
+                        let _ = writeln!(self.out, "  ret {} %{value}", ty.llvm());
+                    }
+                    Reach::Transferred
+                }
                 Stmt::Break => {
                     self.transfer(|t| &t.exit);
                     Reach::Transferred
@@ -864,16 +875,16 @@ fn emit_function(e: &mut Emitter, f: &Function) {
         Val::Of { value, .. } => {
             let _ = writeln!(e.out, "  ret {} %{value}", f.ret.llvm());
         }
-        // The body transferred, so the end of the function is not reachable and there is
-        // no value to return. `unreachable` is the terminator that says exactly that,
-        // and it is the honest one — a `ret` here would need a value nothing produced.
+        // The body transferred, which since M1f is ordinary: every path returned, so the
+        // current block already holds its `ret` and **nothing more may be written**.
+        // Appending `unreachable` here — as this arm did while the case could not arise —
+        // would give the block two terminators and produce a module clang rejects.
         //
-        // Lowering refuses this shape (a function body can only transfer through a
-        // `break` outside a loop, which is `N0312`), so it is a terminator for a case
-        // that should not arise rather than one that does.
-        Val::Transferred => {
-            let _ = writeln!(e.out, "  unreachable");
-        }
+        // If a block somehow reached here without a terminator it would have none at
+        // all, and clang would say so loudly. That is the right failure; the alternative,
+        // `unreachable` on a path control really takes, is undefined behaviour in
+        // silence.
+        Val::Transferred => {}
     }
     let _ = writeln!(e.out, "}}");
     e.out.push('\n');
