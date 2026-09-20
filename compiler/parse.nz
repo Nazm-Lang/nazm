@@ -123,6 +123,27 @@ fn op_symbol(kind: Int) -> Str {
     "?"
 }
 
+// Whether a decimal literal is above `Int::MAX`.
+//
+// `Int::MIN`'s magnitude is one greater than `Int::MAX`, so the lexer cannot produce it
+// and the negation has to fold with the literal — which means the parser has to know
+// which literals are out of range. Same length compares lexicographically because
+// decimal digits sort like their values.
+fn int_too_large(text: Str) -> Bool {
+    let limit = "9223372036854775807";
+    if str_len(text) > str_len(limit) { return true; }
+    if str_len(text) < str_len(limit) { return false; }
+    let mut i = 0;
+    while i < str_len(text) {
+        let a = str_byte(text, i);
+        let b = str_byte(limit, i);
+        if a > b { return true; }
+        if a < b { return false; }
+        i = i + 1;
+    }
+    false
+}
+
 fn sent_paren() -> Int { 90 }
 fn sent_unary() -> Int { 91 }
 fn sent_call() -> Int { 92 }
@@ -201,6 +222,12 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
         } else {
         // --- prefix: any run of unary minus -----------------------------------------
         while kind_at(kinds, i) == k_minus() {
+            // `-` immediately before an out-of-range literal is not a negation of it:
+            // the two fold into one literal, which is the only way `Int::MIN` can be
+            // written. Left for the primary section, which is where literals are made.
+            if kind_at(kinds, i + 1) == k_int() {
+                if int_too_large(text_at(texts, i + 1)) { break; }
+            }
             ints_push(ops, sent_unary());
             ints_push(opat, start_at(starts, i));
             i = i + 1;
@@ -210,7 +237,24 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
         let t = kind_at(kinds, i);
         let mut done_primary = false;
 
+        if t == k_minus() {
+            // Only reachable from the fold above: `-` and an out-of-range literal are
+            // one node, spanning both.
+            let text = text_at(texts, i + 1);
+            if text != "9223372036854775808" {
+                die("this integer does not fit in `Int`", start_at(starts, i));
+            }
+            emit(nk, nar, nst, nen, ntx, n_int(), 0, start_at(starts, i),
+                 end_at(ends, i + 1), str_concat("-", text));
+            ints_push(vs, start_at(starts, i));
+            ints_push(ve, end_at(ends, i + 1));
+            i = i + 2;
+            done_primary = true;
+        }
         if t == k_int() {
+            if int_too_large(text_at(texts, i)) {
+                die("this integer does not fit in `Int`", start_at(starts, i));
+            }
             emit(nk, nar, nst, nen, ntx, n_int(), 0, start_at(starts, i), end_at(ends, i), text_at(texts, i));
             ints_push(vs, start_at(starts, i));
             ints_push(ve, end_at(ends, i));
