@@ -1,10 +1,9 @@
-fn early(n: Int) -> Int {
-    if n < 0 {
-        return 0;
-    }
-    n
-}
-
 fn main() -> Int {
-    early(-1)
+    let mut total = 0;
+    let mut i = 0;
+    loop {
+        total = total + i;
+        i = i + 1;
+    }
+    total
 }

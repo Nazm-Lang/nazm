@@ -53,6 +53,10 @@ pub mod codes {
     pub const INTEGER_TOO_LARGE: Code = Code::new("N0003");
 
     // Parsing
+    /// An expression or block nested past the parser's limit. A parse-time bound, so
+    /// every later pass over the tree — checking, evaluating, and dropping it — inherits
+    /// it without needing a limit of its own.
+    pub const NESTING_TOO_DEEP: Code = Code::new("N0102");
     pub const UNEXPECTED_TOKEN: Code = Code::new("N0100");
     pub const UNSUPPORTED_CONSTRUCT: Code = Code::new("N0101");
 
@@ -82,11 +86,17 @@ pub mod codes {
     /// `break` or `continue` where a value is expected.
     pub const CONTROL_FLOW_AS_VALUE: Code = Code::new("N0314");
 
+    /// Runaway recursion, caught before the stack is exhausted.
+    pub const CALL_DEPTH_LIMIT: Code = Code::new("N0403");
+
     // Execution
     pub const INTEGER_OVERFLOW: Code = Code::new("N0400");
     pub const DIVISION_BY_ZERO: Code = Code::new("N0401");
     /// The interpreter's iteration guard, not a language rule. See `docs/spec.md`.
     pub const ITERATION_LIMIT: Code = Code::new("N0402");
+    /// The interpreter could not start. Not the program's fault, and said so plainly
+    /// rather than reported as a failure of the code being run.
+    pub const INTERPRETER_UNAVAILABLE: Code = Code::new("N0404");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -303,6 +313,7 @@ mod tests {
             codes::INTEGER_OVERFLOW,
             codes::DIVISION_BY_ZERO,
             codes::ITERATION_LIMIT,
+            codes::CALL_DEPTH_LIMIT,
         ];
         let mut seen: Vec<&str> = all.iter().map(Code::as_str).collect();
         let before = seen.len();

@@ -135,6 +135,43 @@ followed by a tail expression*, and `while` is a statement. The tail is still re
 
 The condition must be `Bool`. There is still no truthiness.
 
+### One block, and completion decided by checking
+
+A block is **statements followed by an optional tail expression**. There is one `Block`
+and one `if`; whether either produces a value is determined when checking, not by which
+syntactic form was parsed.
+
+The tail is simply *an expression not followed by `;`*:
+
+```nazm
+{ let x = 1; x }      // tail: the block's value is `x`
+{ let x = 1; x; }     // no tail: `x;` is a statement, the block has no value
+{ if c { a() } }      // tail: the `if`'s value is the block's
+{ if c { a(); } d }   // the `if` is a statement; `d` is the tail
+```
+
+A block-like expression — `if`, `while`, a bare `{ … }` — needs no `;` in statement
+position, so `if c { x = 1; }` followed by more statements reads naturally.
+
+An earlier version had two of everything: an expression block and a statement block, an
+`if` expression and an `if` statement, and a function that scanned forward balancing braces
+to guess which `if` it was looking at. That guess had a case it got wrong, and every
+construct added afterwards would have needed its own place in it. **This is the replacement
+and the scanner is gone.**
+
+Checking gives each block one of three completions, which are internal — the language has
+no `unit` or `never` type to write:
+
+| completion | meaning |
+| --- | --- |
+| **value** | falls off the end with a value of some type |
+| **unit** | falls off the end with no value |
+| **diverges** | never falls off the end: every path `return`s, `break`s or `continue`s |
+
+A function body must complete with a value of the declared type, or diverge. An `if` used
+where a value is wanted must have both branches, and they must agree — unless one diverges,
+in which case the other decides. Unreachable code is a statement after one that diverges.
+
 ### `break` and `continue`, and the `if` they force
 
 ```nazm
@@ -158,20 +195,54 @@ parse. Rust gives `break` the never type and makes this work; a never type is a 
 addition with consequences for every other inference rule, and it is not worth adding so
 that `break` can sit in an expression it has no business being in.
 
-**Which forced `if` to exist in two forms.** The useful shape is `while c { if d { break; } }`,
-and an `if` *expression* cannot hold it: an expression block must end in a tail, so
-`{ break; }` has no value to give. So:
+`while c { if d { break; } }` works because a block's tail is optional: `{ break; }`
+completes by diverging, which is not the same as completing with no value, and neither is
+an error unless something wanted a value from it.
 
-| form | branches | `else` | has a value |
-| --- | --- | --- | --- |
-| `if` **expression** | expression blocks, tail required | **required** | yes |
-| `if` **statement** | statement blocks, no tail | optional | no |
+### `return`
 
-Which one a given `if` is follows from where it appears: in statement position it is the
-statement form, and where a value is wanted it is the expression form. Nothing needs
-annotating, and the two cannot be confused because a statement has no value to misuse.
+```nazm
+fn classify(n: Int) -> Str {
+    if n < 0 {
+        return "negative";
+    }
+    if n == 0 {
+        return "zero";
+    }
+    "positive"
+}
+```
 
-### Code after `break` or `continue` is an error
+`return expression;` leaves the enclosing **function**, not merely the enclosing loop, and
+its value must match the declared return type. A function whose every path returns needs no
+tail expression.
+
+**`return;` with no value is not supported.** It would need a unit type to mean anything,
+and that is a decision this language has not made. Refused by name.
+
+A function's value is still its final expression; `return` is for the paths that leave
+early, which is the case it earns its keep on.
+
+**`return` is a statement, but a block is an expression**, so a `return` may sit inside
+anything used as a value:
+
+```nazm
+let x = if n > 0 { return 1; } else { 2 };
+let y = g(if n > 0 { return 7; } else { 2 });
+while (if n > 0 { return 4; } else { i < 3 }) { … }
+```
+
+Each of these leaves the function. The enclosing expression has no value and never will,
+so evaluation of it stops where the `return` was raised: in `1 + if c { return 5; } else
+{ 2 }`, the left operand has already been evaluated and the addition never happens. The
+same applies to `break` and `continue` in a value position, and to a `return` nested
+inside another — the inner one leaves first, so the outer never gets a value to return.
+
+This follows from the checker rather than being a separate rule: a diverging branch takes
+the other branch's type, which is what makes these programs well-typed in the first place.
+An evaluator that refused them would be rejecting programs the type system accepts.
+
+### Code after `break`, `continue` or `return` is an error
 
 ```nazm
 while c {
@@ -185,20 +256,86 @@ silence is the wrong default for a statement that provably cannot execute. Relax
 error to a warning later is a compatible change; tightening a warning to an error is not,
 so the strict choice is the reversible one.
 
-### The iteration limit is the interpreter's, not the language's
+### The iteration and depth limits are the interpreter's, not the language's
 
 With no `break` and no I/O, a non-terminating program produces nothing at all. A tool that
-hangs is worse than one that reports, so `nazm run` stops after a configurable number of
-loop iterations (`--max-iterations`, default 10,000,000) and says so.
+hangs is worse than one that reports, so `nazm run` stops and says so — after a
+configurable number of loop iterations (`--max-iterations`, default 10,000,000) or nested
+calls (`--max-depth`, default 512).
 
-This is **not** a language rule. Nazm does not bound iteration; this interpreter does, so
-that a runaway program fails visibly instead of silently consuming a machine. A different
-implementation may choose differently.
+Both are needed, and one does not imply the other: `fn f(n: Int) -> Int { f(n) }` never
+loops, so the iteration budget never sees it. Unbounded, it exhausts the host stack and
+kills the process with no diagnostic at all — the one failure a tool cannot explain.
 
-### Not in v0.2, and unsupported rather than half-present
+**A bound only means something against a known stack**, and a library cannot know its
+caller's: macOS gives the main thread 8 MiB, a spawned thread 2 MiB, and the test harness
+2 MiB per test. So the interpreter runs the whole pipeline — parsing, checking, evaluating
+and dropping the tree — on a thread whose stack it sets itself, and **sizes that stack from
+the budget it is about to enforce**: `24 MiB + max_depth × 32 KiB`. Raising `--max-depth`
+raises the reservation with it, so the guarantee holds above the default rather than only
+at it. A machine that will not grant the reservation says so (`N0404`) instead of failing
+part-way in, and a budget past `1,000,000` is refused with the figure it would have cost.
 
-`return`, labelled break, `for`, mutable parameters, effects, I/O, generics, user-defined
-types, modules, string concatenation, floating point. A program using any of them is
+The per-call figure is measured, not guessed: about 6.6 KB per nested call for ordinary
+code on a debug build and about 17 KB for deliberately heavy frames, doubled to 32 KiB. A
+test recurses to the bound and requires a diagnostic, so a construct that made frames dear
+enough to close the gap fails the suite rather than surfacing as an abort in a terminal.
+
+### Nesting is bounded at parse time, which bounds every pass after it
+
+Call depth is not the only way to run out of stack. `((((1))))`, `- - - - 1` and
+`{ { { 1 } } }` recurse through the parser, the checker, the evaluator **and the destructor
+of the tree itself**, without a single call frame in the program — so a call-depth budget
+never sees them, and `nazm check` never reaches the evaluator at all.
+
+One bound covers all four, because they all walk the same tree: **expressions and blocks
+may nest 512 deep** (`N0102`). Parsing is the only one of the four passes that can report
+rather than abort, so that is where the limit lives. Reported once per item, not once per
+paren, and counted per item so one over-deep function does not shrink the budget for the
+next.
+
+512 is far past anything written by hand. It is not far past what a generator emits: Nazm
+has no `else if`, so a dispatch chain written as `else { if … }` costs two levels an arm.
+A limit tight enough for a 2 MiB stack would have been about 64, which is a real constraint
+on real code — so the stack is raised instead, and `parse_source` states the requirement it
+cannot enforce. The worst shape measured is nested blocks, at about 14 KB per level; the
+tests parse the deepest tree the parser accepts, for four shapes, on exactly the documented
+stack, finding each shape's edge by asking the parser rather than by counting levels.
+
+Neither budget is a language rule. Nazm bounds neither iteration nor recursion, and the
+nesting limit is the parser's; this implementation has all three so that a runaway program
+fails visibly instead of consuming a machine. A different implementation may choose
+differently.
+
+### The integer boundaries, stated rather than inherited
+
+Two's complement is asymmetric — there is one more negative `Int` than positive — and
+every language that leaves the consequences to the hardware gets a rule with an exception
+in it. Nazm states all four cases:
+
+| expression | result | why |
+| --- | --- | --- |
+| `-9223372036854775808` | the smallest `Int` | The sign folds into the literal. The magnitude alone is out of range, so lexing the digits and negating afterwards would make the smallest `Int` unwritable — an arbitrary hole in the range |
+| `-9223372036854775809` | error, out of range | The fold checks the magnitude rather than assuming any digits after `-` will fit |
+| `-x` where `x` is the smallest `Int` | **traps** | The result has no representation. Traps in every build, like all overflow |
+| `x / -1` where `x` is the smallest `Int` | **traps** | The quotient is one past the largest `Int`. On x86 this faults in hardware; a checked division is what turns it into a diagnostic instead of a dead process |
+| `x % -1` where `x` is the smallest `Int` | **0** | Mathematically zero, and zero is representable. The same hardware instruction faults on it and Rust's `checked_rem` reports nothing, but inheriting that would make the rule *"`%` fails on a zero divisor, and also on one exact pair of operands"* — a wart to memorise for no gain |
+
+The through-line: `%` has exactly one failure case, a zero divisor. Overflow traps
+wherever the result genuinely cannot be represented, and nowhere else.
+
+### One mistake, one error
+
+A parse error inside a function body does not delete the function. Its signature is kept,
+so calls to it still check against real parameter and return types instead of reporting
+that it does not exist — which would be several errors for one mistake, the exact failure
+this language is meant to avoid. Nothing is said about the body itself: statements that
+were never built would be claims about the parser's guess, not about the program.
+
+### Not in v0.3, and unsupported rather than half-present
+
+Valueless `return`, labelled break, `for`, `loop`, mutable parameters, effects, I/O,
+generics, user-defined types, modules, string concatenation, floating point. A program using any of them is
 rejected by name rather than misparsed into something else.
 
 `nazm run` prints the value of `main`. There is deliberately no `print`: output is an

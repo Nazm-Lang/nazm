@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
-use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, StmtBlock, StmtIf, While};
+use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Return, Stmt, While};
 
 use crate::types::Type;
 
@@ -80,11 +80,41 @@ struct BinaryCheck {
     rhs_span: Span,
 }
 
+/// How a block or expression finishes.
+///
+/// Internal. The language has no `unit` or `never` type to write, and adding one to model
+/// this would be a public decision made for an implementation's convenience.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Completion {
+    /// Falls off the end with a value.
+    Value(Type),
+    /// Falls off the end with no value.
+    Unit,
+    /// Never falls off the end: every path returns, breaks or continues.
+    Diverges,
+}
+
+impl Completion {
+    /// The type, when there is one.
+    fn ty(self) -> Option<Type> {
+        match self {
+            Self::Value(t) => Some(t),
+            Self::Unit | Self::Diverges => None,
+        }
+    }
+
+    fn diverges(self) -> bool {
+        matches!(self, Self::Diverges)
+    }
+}
+
 #[derive(Debug)]
 pub struct Checker {
     functions: HashMap<String, Signature>,
     scopes: Scopes,
     errors: Vec<Diagnostic>,
+    /// The enclosing function's declared return type, for checking `return`.
+    return_type: Option<Type>,
     /// How many loops enclose the statement being checked.
     ///
     /// `break` and `continue` need a loop to affect. Tracking depth rather than a flag
@@ -100,6 +130,7 @@ pub fn check(program: &Program) -> (HashMap<String, Signature>, Vec<Diagnostic>)
         functions: HashMap::new(),
         scopes: Scopes::default(),
         errors: Vec::new(),
+        return_type: None,
         loop_depth: 0,
     };
 
@@ -189,33 +220,166 @@ impl Checker {
         }
 
         let declared = self.resolve_type(&f.return_type.name, f.return_type.span);
-        let actual = self.check_block(&f.body, Some(declared));
+        let Some(body) = &f.body else {
+            // The body failed to parse; the parse error is already reported. Anything
+            // said about statements that were never built would be about the parser's
+            // guess, not the program.
+            self.scopes.pop();
+            return;
+        };
+        let previous = self.return_type.replace(declared);
+        let completion = self.check_block(body, Some(declared));
+        self.return_type = previous;
 
-        if actual != declared {
-            self.errors.push(
-                Diagnostic::error(
-                    codes::TYPE_MISMATCH,
-                    f.body.tail.span(),
-                    format!(
-                        "`{}` returns `{actual}`, but its signature says `{declared}`",
-                        f.name
+        match completion {
+            // Every path returned. No tail is needed, and demanding one would force a
+            // dummy expression after code that cannot reach it.
+            Completion::Diverges => {}
+            Completion::Value(actual) if actual == declared => {}
+            Completion::Value(actual) => {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        body.tail.as_ref().map_or(body.span, |t| t.span()),
+                        format!(
+                            "`{}` returns `{actual}`, but its signature says `{declared}`",
+                            f.name
+                        ),
+                    )
+                    .secondary(f.return_type.span, format!("declared `{declared}` here")),
+                );
+            }
+            Completion::Unit => {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        body.span,
+                        format!(
+                            "`{}` must produce a `{declared}`, but this body does not",
+                            f.name
+                        ),
+                    )
+                    .secondary(f.return_type.span, format!("declared `{declared}` here"))
+                    .help(
+                        "a function's value is its final expression — one with no `;` \
+                         after it — or it returns on every path",
                     ),
-                )
-                .secondary(f.return_type.span, format!("declared `{declared}` here"))
-                .help("a function's value is its final expression"),
-            );
+                );
+            }
         }
         self.scopes.pop();
     }
 
-    fn check_block(&mut self, b: &Block, expected: Option<Type>) -> Type {
+    fn check_block(&mut self, b: &Block, expected: Option<Type>) -> Completion {
         self.scopes.push();
-        for stmt in &b.statements {
-            self.check_stmt(stmt);
-        }
-        let ty = self.check_expr(&b.tail, expected);
+        let completion = self.check_block_inner(b, expected);
         self.scopes.pop();
-        ty
+        completion
+    }
+
+    fn check_block_inner(&mut self, b: &Block, expected: Option<Type>) -> Completion {
+        let mut diverged_at: Option<nazm_span::Span> = None;
+
+        for stmt in &b.statements {
+            if let Some(at) = diverged_at {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNREACHABLE_STATEMENT,
+                        stmt.span(),
+                        "this can never run",
+                    )
+                    .secondary(at, "control leaves the block here"),
+                );
+                // Keep checking the rest for type errors, but report unreachability once.
+                diverged_at = None;
+            }
+            if self.check_stmt(stmt) {
+                diverged_at = Some(stmt.span());
+            }
+        }
+
+        // A block whose statements diverge never reaches its tail.
+        if diverged_at.is_some() {
+            if let Some(tail) = &b.tail {
+                self.errors.push(Diagnostic::error(
+                    codes::UNREACHABLE_STATEMENT,
+                    tail.span(),
+                    "this can never run",
+                ));
+            }
+            return Completion::Diverges;
+        }
+
+        match &b.tail {
+            Some(tail) => self.check_expr(tail, expected),
+            None => Completion::Unit,
+        }
+    }
+
+    /// Check one statement. Returns whether it diverges.
+    fn check_stmt(&mut self, stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Let(l) => {
+                let ty = self.value_type(&l.value, None);
+                if self.scopes.defined_here(&l.name) {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::ALREADY_DEFINED_IN_SCOPE,
+                            l.name_span,
+                            format!("`{}` is already defined in this scope", l.name),
+                        )
+                        .help(
+                            "Nazm allows shadowing in a nested scope but not in the same \
+                             one, so a later mention of a name is never ambiguous",
+                        ),
+                    );
+                }
+                self.scopes.define(&l.name, ty, l.mutable);
+                false
+            }
+            Stmt::Assign(a) => {
+                self.check_assign(a);
+                false
+            }
+            Stmt::While(w) => {
+                self.check_while(w);
+                // A `while` always completes: its condition may be false on entry, and
+                // there is no way to tell that it will not be.
+                false
+            }
+            Stmt::Return(r) => {
+                self.check_return(r);
+                true
+            }
+            Stmt::Break { span } => {
+                self.check_loop_control("break", *span);
+                true
+            }
+            Stmt::Continue { span } => {
+                self.check_loop_control("continue", *span);
+                true
+            }
+            Stmt::Expr(e) => self.check_expr(e, None).diverges(),
+        }
+    }
+
+    fn check_return(&mut self, r: &Return) {
+        let Some(declared) = self.return_type else {
+            // Unreachable: every expression is checked inside some function.
+            self.check_expr(&r.value, None);
+            return;
+        };
+        let actual = self.value_type(&r.value, Some(declared));
+        if actual != declared {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    r.value.span(),
+                    format!("this returns `{actual}`, but the function returns `{declared}`"),
+                )
+                .help("`return` leaves the function, so its value must match the signature"),
+            );
+        }
     }
 
     fn check_assign(&mut self, a: &Assign) {
@@ -251,7 +415,7 @@ impl Checker {
         // Checked against the binding's type, so a reassignment cannot change it. A
         // variable whose type depends on how far through the function you are is exactly
         // the thing a reader cannot predict.
-        let vt = self.check_expr(&a.value, Some(binding.ty));
+        let vt = self.value_type(&a.value, Some(binding.ty));
         if vt != binding.ty {
             self.errors.push(
                 Diagnostic::error(
@@ -265,7 +429,7 @@ impl Checker {
     }
 
     fn check_while(&mut self, w: &While) {
-        let ct = self.check_expr(&w.cond, Some(Type::Bool));
+        let ct = self.value_type(&w.cond, Some(Type::Bool));
         if ct != Type::Bool {
             self.errors.push(
                 Diagnostic::error(
@@ -277,62 +441,25 @@ impl Checker {
             );
         }
         self.loop_depth += 1;
-        self.check_stmt_block(&w.body);
+        let body = self.check_block(&w.body, None);
         self.loop_depth -= 1;
-    }
 
-    /// A statement block: its own scope, statements only, no value.
-    fn check_stmt_block(&mut self, b: &StmtBlock) {
-        self.scopes.push();
-
-        // Everything after a `break` or `continue` in the same block provably cannot run.
-        // Reported once, at the first such statement, rather than once per line.
-        let terminator = b
-            .statements
-            .iter()
-            .position(|s| matches!(s, Stmt::Break { .. } | Stmt::Continue { .. }));
-
-        if let Some(i) = terminator {
-            if let Some(dead) = b.statements.get(i + 1) {
-                let word = match b.statements.get(i) {
-                    Some(Stmt::Continue { .. }) => "continue",
-                    _ => "break",
-                };
-                self.errors.push(
-                    Diagnostic::error(
-                        codes::UNREACHABLE_STATEMENT,
-                        dead.span(),
-                        "this can never run",
-                    )
-                    .secondary(
-                        b.statements.get(i).map_or(dead.span(), Stmt::span),
-                        format!("`{word}` leaves the block here"),
-                    ),
-                );
-            }
-        }
-
-        for stmt in &b.statements {
-            self.check_stmt(stmt);
-        }
-        self.scopes.pop();
-    }
-
-    fn check_stmt_if(&mut self, s: &StmtIf) {
-        let ct = self.check_expr(&s.cond, Some(Type::Bool));
-        if ct != Type::Bool {
+        // A loop body is run for its effect. A tail value there is silently discarded,
+        // which is almost always a missing `;` or a missing assignment.
+        if let (Completion::Value(t), Some(tail)) = (body, &w.body.tail) {
             self.errors.push(
                 Diagnostic::error(
-                    codes::CONDITION_NOT_BOOL,
-                    s.cond.span(),
-                    format!("an `if` condition must be `Bool`, but this is `{ct}`"),
+                    codes::TYPE_MISMATCH,
+                    tail.span(),
+                    format!("a loop body has no value, but this produces `{t}`"),
                 )
-                .help("Nazm has no truthiness: use a comparison such as `x != 0`"),
+                .help("add `;` to discard it, or assign it to something")
+                .fix(
+                    nazm_span::Span::new(tail.span().end, tail.span().end),
+                    ";",
+                    "discard the value",
+                ),
             );
-        }
-        self.check_stmt_block(&s.then_block);
-        if let Some(e) = &s.else_block {
-            self.check_stmt_block(e);
         }
     }
 
@@ -351,46 +478,40 @@ impl Checker {
         }
     }
 
-    fn check_stmt(&mut self, stmt: &Stmt) {
-        match stmt {
-            Stmt::Let(l) => {
-                let ty = self.check_expr(&l.value, None);
-                if self.scopes.defined_here(&l.name) {
-                    self.errors.push(
-                        Diagnostic::error(
-                            codes::ALREADY_DEFINED_IN_SCOPE,
-                            l.name_span,
-                            format!("`{}` is already defined in this scope", l.name),
-                        )
+    /// The type of an expression used where a value is required.
+    ///
+    /// A diverging expression can stand in for any type: control never reaches the point
+    /// where the value would be used.
+    fn value_type(&mut self, e: &Expr, expected: Option<Type>) -> Type {
+        match self.check_expr(e, expected) {
+            Completion::Value(t) => t,
+            Completion::Diverges => expected.unwrap_or(Type::Int),
+            Completion::Unit => {
+                self.errors.push(
+                    Diagnostic::error(codes::TYPE_MISMATCH, e.span(), "this produces no value")
                         .help(
-                            "Nazm allows shadowing in a nested scope but not in the same \
-                             one, so a later mention of a name is never ambiguous",
+                            "an `if` used as a value needs an `else`, and a block used as one \
+                         needs a final expression with no `;` after it",
                         ),
-                    );
-                }
-                self.scopes.define(&l.name, ty, l.mutable);
+                );
+                expected.unwrap_or(Type::Int)
             }
-            Stmt::Assign(a) => self.check_assign(a),
-            Stmt::While(w) => self.check_while(w),
-            Stmt::If(i) => self.check_stmt_if(i),
-            Stmt::Break { span } => self.check_loop_control("break", *span),
-            Stmt::Continue { span } => self.check_loop_control("continue", *span),
         }
     }
 
-    /// Check an expression, returning its type.
+    /// Check an expression, returning how it completes.
     ///
     /// `expected` is used only for recovery: when an error makes the real type
     /// unknowable, it is returned so the caller does not then report a second, invented
     /// mismatch.
-    fn check_expr(&mut self, e: &Expr, expected: Option<Type>) -> Type {
+    fn check_expr(&mut self, e: &Expr, expected: Option<Type>) -> Completion {
         match e {
-            Expr::Int { .. } => Type::Int,
-            Expr::Bool { .. } => Type::Bool,
-            Expr::Str { .. } => Type::Str,
+            Expr::Int { .. } => Completion::Value(Type::Int),
+            Expr::Bool { .. } => Completion::Value(Type::Bool),
+            Expr::Str { .. } => Completion::Value(Type::Str),
 
             Expr::Var { name, span } => match self.scopes.lookup(name) {
-                Some(b) => b.ty,
+                Some(b) => Completion::Value(b.ty),
                 None => {
                     let mut d = Diagnostic::error(
                         codes::UNDEFINED_VARIABLE,
@@ -401,9 +522,23 @@ impl Checker {
                         d = d.help(format!("`{name}` is a function — call it as `{name}(...)`"));
                     }
                     self.errors.push(d);
-                    expected.unwrap_or(Type::Int)
+                    Completion::Value(expected.unwrap_or(Type::Int))
                 }
             },
+
+            Expr::Neg {
+                operand, op_span, ..
+            } => {
+                let t = self.value_type(operand, Some(Type::Int));
+                if t != Type::Int {
+                    self.errors.push(Diagnostic::error(
+                        codes::INVALID_OPERANDS,
+                        *op_span,
+                        format!("`-` applies to `Int`, but this is `{t}`"),
+                    ));
+                }
+                Completion::Value(Type::Int)
+            }
 
             Expr::Binary {
                 op,
@@ -412,9 +547,9 @@ impl Checker {
                 op_span,
                 ..
             } => {
-                let lt = self.check_expr(lhs, None);
-                let rt = self.check_expr(rhs, None);
-                self.check_binary(
+                let lt = self.value_type(lhs, None);
+                let rt = self.value_type(rhs, None);
+                Completion::Value(self.check_binary(
                     &BinaryCheck {
                         op: *op,
                         lt,
@@ -424,21 +559,7 @@ impl Checker {
                         rhs_span: rhs.span(),
                     },
                     expected,
-                )
-            }
-
-            Expr::Neg {
-                operand, op_span, ..
-            } => {
-                let t = self.check_expr(operand, Some(Type::Int));
-                if t != Type::Int {
-                    self.errors.push(Diagnostic::error(
-                        codes::INVALID_OPERANDS,
-                        *op_span,
-                        format!("`-` applies to `Int`, but this is `{t}`"),
-                    ));
-                }
-                Type::Int
+                ))
             }
 
             Expr::Call {
@@ -456,7 +577,7 @@ impl Checker {
                     for a in args {
                         self.check_expr(a, None);
                     }
-                    return expected.unwrap_or(Type::Int);
+                    return Completion::Value(expected.unwrap_or(Type::Int));
                 };
 
                 if args.len() != sig.params.len() {
@@ -476,11 +597,10 @@ impl Checker {
                     );
                 }
 
-                // Arguments are checked left to right, matching the evaluation order the
-                // spec fixes. Reporting them out of order would be confusing for no gain.
+                // Left to right, matching the evaluation order the spec fixes.
                 for (i, a) in args.iter().enumerate() {
                     let want = sig.params.get(i).copied();
-                    let got = self.check_expr(a, want);
+                    let got = self.value_type(a, want);
                     if let Some(want) = want {
                         if got != want {
                             self.errors.push(Diagnostic::error(
@@ -494,7 +614,7 @@ impl Checker {
                         }
                     }
                 }
-                sig.ret
+                Completion::Value(sig.ret)
             }
 
             Expr::If {
@@ -503,7 +623,7 @@ impl Checker {
                 else_block,
                 ..
             } => {
-                let ct = self.check_expr(cond, Some(Type::Bool));
+                let ct = self.value_type(cond, Some(Type::Bool));
                 if ct != Type::Bool {
                     self.errors.push(
                         Diagnostic::error(
@@ -514,20 +634,59 @@ impl Checker {
                         .help("Nazm has no truthiness: use a comparison such as `x != 0`"),
                     );
                 }
-                let tt = self.check_block(then_block, expected);
-                let et = self.check_block(else_block, expected.or(Some(tt)));
-                if tt != et {
-                    self.errors.push(
-                        Diagnostic::error(
-                            codes::BRANCH_TYPES_DIFFER,
-                            else_block.tail.span(),
-                            format!("this branch is `{et}`, but the other is `{tt}`"),
-                        )
-                        .secondary(then_block.tail.span(), format!("this one is `{tt}`"))
-                        .help("both branches of an `if` must have the same type"),
-                    );
+
+                let then_c = self.check_block(then_block, expected);
+                let Some(else_block) = else_block else {
+                    // No `else`. Unit whatever the branch does — even when it returns on
+                    // every path, the condition may be false, so the `if` itself always
+                    // completes. Usable as a statement; the caller reports if it wanted a
+                    // value, which is where the context to say so lives.
+                    return Completion::Unit;
+                };
+                let else_c = self.check_block(else_block, expected.or(then_c.ty()));
+
+                match (then_c, else_c) {
+                    // One branch leaving means the other decides. Without this,
+                    // `if c { return 0; } else { 1 }` would be an error for having
+                    // "different" branches, which is exactly the shape `return` is for.
+                    (Completion::Diverges, other) | (other, Completion::Diverges) => other,
+                    (Completion::Value(a), Completion::Value(b)) if a == b => Completion::Value(a),
+                    (Completion::Value(a), Completion::Value(b)) => {
+                        self.errors.push(
+                            Diagnostic::error(
+                                codes::BRANCH_TYPES_DIFFER,
+                                else_block
+                                    .tail
+                                    .as_ref()
+                                    .map_or(else_block.span, |t| t.span()),
+                                format!("this branch is `{b}`, but the other is `{a}`"),
+                            )
+                            .secondary(
+                                then_block
+                                    .tail
+                                    .as_ref()
+                                    .map_or(then_block.span, |t| t.span()),
+                                format!("this one is `{a}`"),
+                            )
+                            .help("both branches of an `if` must have the same type"),
+                        );
+                        Completion::Value(a)
+                    }
+                    // One branch produces a value and the other does not.
+                    (Completion::Value(a), Completion::Unit)
+                    | (Completion::Unit, Completion::Value(a)) => {
+                        self.errors.push(
+                            Diagnostic::error(
+                                codes::BRANCH_TYPES_DIFFER,
+                                *e.span_ref(),
+                                format!("one branch produces `{a}` and the other produces nothing"),
+                            )
+                            .help("both branches of an `if` must agree, or neither may produce a value"),
+                        );
+                        Completion::Value(a)
+                    }
+                    (Completion::Unit, Completion::Unit) => Completion::Unit,
                 }
-                tt
             }
 
             Expr::Block(b) => self.check_block(b, expected),

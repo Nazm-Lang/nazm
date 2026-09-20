@@ -1,0 +1,11 @@
+fn down(n: Int) -> Int {
+    if n == 0 {
+        0
+    } else {
+        down(n - 1)
+    }
+}
+
+fn main() -> Int {
+    down(1000000)
+}

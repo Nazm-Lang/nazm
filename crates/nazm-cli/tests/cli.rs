@@ -102,6 +102,9 @@ fn every_bad_example_is_refused_with_its_own_code() {
         ("bad/break_outside_loop.nz", "N0312"),
         ("bad/unreachable_after_break.nz", "N0313"),
         ("bad/break_as_value.nz", "N0314"),
+        ("bad/bare_return.nz", "N0101"),
+        ("bad/return_type_mismatch.nz", "N0300"),
+        ("bad/runaway_recursion.nz", "N0403"),
     ];
     for (file, code) in cases {
         let (_, stderr, status) = nazm(&["run", &example(file)]);
@@ -111,6 +114,105 @@ fn every_bad_example_is_refused_with_its_own_code() {
             "{file} should report {code}, got:\n{stderr}"
         );
     }
+}
+
+#[test]
+fn deep_trees_and_deep_recursion_report_rather_than_abort() {
+    // Both of these run as child processes on purpose. Remove either guarantee — the
+    // parser's nesting limit, or sizing the stack from the depth budget — and the program
+    // dies of stack exhaustion. An in-process test cannot survive its own subject to
+    // report that; here the abort is just a child exit the parent reads.
+    let (_, stderr, code) = nazm(&["run", &example("bad/nesting_too_deep.nz")]);
+    assert!(stderr.contains("N0102"), "got:\n{stderr}");
+    assert_eq!(code, 1, "a check failure, not a crash");
+
+    // A long arithmetic chain: the likeliest deep tree in a real program, and the one
+    // shape the nesting bound originally missed because its parse does not recurse.
+    let (_, stderr, code) = nazm(&["run", &example("bad/long_chain.nz")]);
+    assert!(stderr.contains("N0102"), "got:\n{stderr}");
+    assert_eq!(code, 1);
+
+    // `nazm check` never reaches the evaluator, and parsing recurses just as deep.
+    let (_, stderr, code) = nazm(&["check", &example("bad/nesting_too_deep.nz")]);
+    assert!(stderr.contains("N0102"), "got:\n{stderr}");
+    assert_eq!(code, 1);
+
+    // 15,000 nested calls is past what a fixed reservation held: measured at about
+    // 10,000 before the stack was sized from the budget.
+    let (_, stderr, code) = nazm(&[
+        "run",
+        &example("bad/deep_recursion.nz"),
+        "--max-depth",
+        "15000",
+    ]);
+    assert!(stderr.contains("N0403"), "got:\n{stderr}");
+    assert_eq!(code, 2, "a runtime failure, not a crash");
+}
+
+#[test]
+fn a_depth_budget_the_stack_could_not_back_is_refused() {
+    // Not a safety boundary — the reservation grows with the budget — but a number no
+    // machine would grant is a crash waiting for the right program, so it is refused with
+    // the figure rather than accepted and discovered later.
+    let (_, stderr, code) = nazm(&["run", &example("max.nz"), "--max-depth", "99999999"]);
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("GiB of stack"),
+        "should say what it would cost, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn one_mistake_produces_one_diagnostic() {
+    // Each of these files contains a single mistake. Reporting a second, derived error —
+    // "`f` is not a function" because its body failed to parse — would make an agent fix
+    // something that was never wrong. Counted through `--json`, where each diagnostic is
+    // exactly one line.
+    for file in [
+        "bad/bare_return.nz",
+        "bad/return_type_mismatch.nz",
+        "bad/undefined_variable.nz",
+        "bad/unsupported_construct.nz",
+    ] {
+        let (_, stderr, _) = nazm(&["run", &example(file), "--json"]);
+        let diagnostics: Vec<&str> = stderr.lines().filter(|l| l.starts_with('{')).collect();
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "{file} should report one diagnostic, got:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn recursion_runs_and_runaway_recursion_reports() {
+    let (stdout, _, code) = nazm(&["run", &example("search.nz")]);
+    assert_eq!(stdout.trim(), "1723", "17 * 23 = 391");
+    assert_eq!(code, 0);
+
+    // The iteration budget does not bound recursion: without its own guard this would
+    // abort the process with no diagnostic at all.
+    let (_, stderr, code) = nazm(&["run", &example("bad/runaway_recursion.nz")]);
+    assert!(stderr.contains("N0403"), "got:\n{stderr}");
+    assert_eq!(code, 2, "a runtime failure, not a type error");
+
+    // Mutual recursion counts against the same budget; per-function counting would let
+    // this pair run until the stack ran out.
+    let (_, stderr, code) = nazm(&["run", &example("bad/mutual_recursion.nz")]);
+    assert!(stderr.contains("N0403"), "got:\n{stderr}");
+    assert_eq!(code, 2);
+
+    // And the bound is adjustable, so a deliberately deep recursion is not walled off.
+    let (_, stderr, _) = nazm(&[
+        "run",
+        &example("bad/runaway_recursion.nz"),
+        "--max-depth",
+        "16",
+    ]);
+    assert!(
+        stderr.contains("deeper than 16"),
+        "--max-depth should be honoured, got:\n{stderr}"
+    );
 }
 
 #[test]

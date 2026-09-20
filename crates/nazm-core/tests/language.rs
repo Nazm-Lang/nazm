@@ -43,6 +43,14 @@ fn errors(src: &str) -> Vec<nazm_diag::Code> {
 
 // --- the positive example ---------------------------------------------------------
 
+/// An iteration budget small enough that a runaway loop reports in test time.
+fn limits(max_iterations: u64) -> nazm_core::eval::Limits {
+    nazm_core::eval::Limits {
+        max_iterations,
+        ..Default::default()
+    }
+}
+
 #[test]
 fn a_function_call_and_a_conditional() {
     let src = r"
@@ -251,7 +259,7 @@ fn a_duplicate_function_points_at_the_first_definition() {
 #[test]
 fn absent_features_are_refused_by_name() {
     for (src, word) in [
-        ("fn main() -> Int { return 1 }", "return"),
+        ("fn main() -> Int { loop { 1 } }", "loop"),
         ("fn main() -> Int { for x in y { 1 } }", "for"),
         ("fn main() -> Int { match 1 { } }", "match"),
         ("fn main() -> Int { print(1) }", "print"),
@@ -473,7 +481,7 @@ fn a_loop_that_never_ends_reports_rather_than_hanging() {
     // program produces nothing at all, and a tool that hangs is worse than one that says
     // what happened.
     let src = "fn main() -> Int { let mut i = 0; while i >= 0 { i = i + 1; } i }";
-    match nazm_core::run_with_limit(src, 1000) {
+    match nazm_core::run_with_limits(src, limits(1000)) {
         Outcome::RuntimeFailed(d) => assert_eq!(d.code, codes::ITERATION_LIMIT),
         other => panic!("expected the iteration limit, got {other:?}"),
     }
@@ -482,7 +490,7 @@ fn a_loop_that_never_ends_reports_rather_than_hanging() {
 #[test]
 fn a_terminating_loop_is_unaffected_by_the_guard() {
     let src = "fn main() -> Int { let mut i = 0; while i < 10 { i = i + 1; } i }";
-    match nazm_core::run_with_limit(src, 1000) {
+    match nazm_core::run_with_limits(src, limits(1000)) {
         Outcome::Value(v) => assert_eq!(v, Value::Int(10)),
         other => panic!("expected 10, got {other:?}"),
     }
@@ -690,4 +698,651 @@ fn a_statement_if_gets_its_own_scope() {
     // condition happened to be true.
     let src = "fn main() -> Int { if true { let hidden = 1; } hidden }";
     assert_eq!(sole_error(src), codes::UNDEFINED_VARIABLE);
+}
+
+// ---------------------------------------------------------------------------
+// v0.3 — `return`
+//
+// The table below is the one the design review asked for. Each row is a rule that
+// distinguishes `return` from a tail expression; a language that gets any of them wrong
+// is not one an agent can reason about locally.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_return_value_must_match_the_declared_return_type() {
+    let src = r#"
+        fn f(n: Int) -> Int {
+            if n > 0 {
+                return "positive";
+            }
+            0
+        }
+        fn main() -> Int { f(1) }
+    "#;
+    assert_eq!(sole_error(src), codes::TYPE_MISMATCH);
+}
+
+#[test]
+fn return_leaves_the_function_not_merely_the_loop() {
+    // The distinction `break` does not make. A `return` inside nested loops inside an
+    // `if` must skip everything after them, including the outer loop's remaining work.
+    let src = r"
+        fn find(limit: Int) -> Int {
+            let mut i = 0;
+            while i < limit {
+                let mut j = 0;
+                while j < limit {
+                    if i * j == 12 {
+                        return i * 100 + j;
+                    }
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+            -1
+        }
+        fn main() -> Int { find(10) }
+    ";
+    // 2 * 6, reached before 3 * 4: the first hit wins, so the loops really did stop.
+    assert_eq!(value(src), Value::Int(206));
+}
+
+#[test]
+fn return_in_a_callee_does_not_return_from_its_caller() {
+    // The bug this pins is a `Flow::Return` escaping one call frame into the next. The
+    // caller must see a value and keep going.
+    let src = r"
+        fn early() -> Int {
+            return 1;
+        }
+        fn main() -> Int {
+            let a = early();
+            let b = early();
+            a + b + early()
+        }
+    ";
+    assert_eq!(value(src), Value::Int(3));
+}
+
+#[test]
+fn a_body_where_every_branch_returns_needs_no_tail_expression() {
+    // Demanding one would mean writing an expression after code that cannot reach it.
+    let src = r"
+        fn sign(n: Int) -> Int {
+            if n > 0 {
+                return 1;
+            } else {
+                return 0 - 1;
+            }
+        }
+        fn main() -> Int { sign(5) + sign(0 - 5) }
+    ";
+    assert_eq!(value(src), Value::Int(0));
+}
+
+#[test]
+fn when_only_one_branch_returns_the_other_must_still_produce_the_value() {
+    let src = r"
+        fn f(n: Int) -> Int {
+            if n > 0 {
+                return 1;
+            }
+        }
+        fn main() -> Int { f(1) }
+    ";
+    assert_eq!(sole_error(src), codes::TYPE_MISMATCH);
+}
+
+#[test]
+fn one_branch_returning_and_the_other_yielding_a_value_is_accepted() {
+    // The companion to the case above: `Diverges` on one side must take the other side's
+    // type rather than forcing a mismatch.
+    let src = r"
+        fn f(n: Int) -> Int {
+            if n > 0 {
+                return 1;
+            }
+            2
+        }
+        fn main() -> Int { f(1) * 10 + f(0) }
+    ";
+    assert_eq!(value(src), Value::Int(12));
+}
+
+#[test]
+fn a_branch_that_returns_takes_the_other_branchs_type() {
+    // Inside an `if`/`else` used as a value: one side leaves the function, so the other
+    // side alone decides what the `if` produces. Treating the two as "different branch
+    // types" would reject the exact shape `return` exists for.
+    let src = r"
+        fn f(n: Int) -> Int {
+            if n > 0 {
+                return 1;
+            } else {
+                2
+            }
+        }
+        fn main() -> Int { f(1) * 10 + f(0) }
+    ";
+    assert_eq!(value(src), Value::Int(12));
+}
+
+#[test]
+fn a_statement_after_an_unconditional_return_is_unreachable() {
+    // Same policy as `break` and `continue`: refused, not warned about. A statement that
+    // cannot run is a mistake about control flow, and reporting it is the whole point.
+    let src = r"
+        fn f() -> Int {
+            return 1;
+            let x = 2;
+            x
+        }
+        fn main() -> Int { f() }
+    ";
+    assert_eq!(sole_error(src), codes::UNREACHABLE_STATEMENT);
+}
+
+#[test]
+fn a_bare_return_is_refused_until_valueless_returns_are_defined() {
+    // Nazm has no unit value to give it, so accepting `return;` would mean inventing one
+    // silently. Refusing by name keeps the decision open and visible.
+    let src = r"
+        fn f() -> Int {
+            return;
+        }
+        fn main() -> Int { f() }
+    ";
+    assert_eq!(sole_error(src), codes::UNSUPPORTED_CONSTRUCT);
+}
+
+#[test]
+fn the_tail_expression_still_returns() {
+    // `return` is an addition, not a replacement.
+    let src = r"
+        fn f() -> Int { 7 }
+        fn main() -> Int { f() }
+    ";
+    assert_eq!(value(src), Value::Int(7));
+}
+
+#[test]
+fn return_is_not_an_expression() {
+    // `let x = return 1;` would need a type for something that never produces a value.
+    let src = r"
+        fn f() -> Int {
+            let x = return 1;
+            x
+        }
+        fn main() -> Int { f() }
+    ";
+    assert!(
+        !errors(src).is_empty(),
+        "`return` in value position must fail"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Call depth
+//
+// The iteration budget bounds loops and nothing else. Recursion needs its own guard, or
+// the process dies by stack overflow with no diagnostic — the one failure mode a tool
+// cannot explain to anyone.
+// ---------------------------------------------------------------------------
+
+// Unbounded recursion is tested from `nazm-cli/tests/cli.rs`, not here. If the guard were
+// ever removed, those programs would abort the process — and an in-process test cannot
+// survive to report that. Run as a subprocess, the abort is just a child exit the test
+// reads. The cases below stay in-process because each one stops well inside the stack
+// whether the guard fires or not.
+
+#[test]
+fn the_default_depth_is_reached_before_the_stack_is() {
+    // The claim `DEFAULT_MAX_DEPTH` rests on, tested rather than asserted: recursing to
+    // the bound on `EVAL_STACK_BYTES` must produce a diagnostic. If a future construct
+    // makes each level dear enough to exhaust the stack first, this test aborts the
+    // process — which is exactly the report we want, and far better than a user finding
+    // out the same way.
+    let depth = nazm_core::eval::DEFAULT_MAX_DEPTH;
+    let src = format!(
+        r"
+        fn down(n: Int) -> Int {{
+            if n == 0 {{ 0 }} else {{ down(n - 1) }}
+        }}
+        fn main() -> Int {{ down({}) }}
+    ",
+        depth + 1
+    );
+    match run(&src) {
+        Outcome::RuntimeFailed(d) => assert_eq!(d.code, codes::CALL_DEPTH_LIMIT),
+        other => panic!("expected the call-depth limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_smaller_depth_budget_is_honoured() {
+    // Deep enough to exceed a 16-call budget, shallow enough that removing the guard
+    // entirely would return a value rather than exhaust the stack — so this reports the
+    // guard's absence instead of dying of it.
+    let src = r"
+        fn down(n: Int) -> Int {
+            if n == 0 { 0 } else { down(n - 1) }
+        }
+        fn main() -> Int { down(100) }
+    ";
+    let budget = nazm_core::eval::Limits {
+        max_depth: 16,
+        ..Default::default()
+    };
+    match nazm_core::run_with_limits(src, budget) {
+        Outcome::RuntimeFailed(d) => assert_eq!(d.code, codes::CALL_DEPTH_LIMIT),
+        other => panic!("expected the call-depth limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn mutual_recursion_counts_against_the_same_budget() {
+    // Counting frames per function rather than overall would miss this entirely.
+    let src = r"
+        fn ping(n: Int) -> Int { if n == 0 { 0 } else { pong(n - 1) } }
+        fn pong(n: Int) -> Int { if n == 0 { 0 } else { ping(n - 1) } }
+        fn main() -> Int { ping(100) }
+    ";
+    let budget = nazm_core::eval::Limits {
+        max_depth: 16,
+        ..Default::default()
+    };
+    match nazm_core::run_with_limits(src, budget) {
+        Outcome::RuntimeFailed(d) => assert_eq!(d.code, codes::CALL_DEPTH_LIMIT),
+        other => panic!("expected the call-depth limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn recursion_within_the_budget_is_unaffected() {
+    // A guard that refused legitimate recursion would be worse than none: it would push
+    // people to write loops where recursion is the clearer statement.
+    let src = r"
+        fn sum_to(n: Int) -> Int {
+            if n == 0 { 0 } else { n + sum_to(n - 1) }
+        }
+        fn main() -> Int { sum_to(100) }
+    ";
+    assert_eq!(value(src), Value::Int(5050));
+}
+
+#[test]
+fn depth_is_released_when_a_call_returns() {
+    // Many sequential calls are not deep ones. Failing to decrement on the way out would
+    // make a long `main` hit the limit for no reason.
+    let src = r"
+        fn one() -> Int { 1 }
+        fn main() -> Int {
+            let mut total = 0;
+            let mut i = 0;
+            while i < 5000 {
+                total = total + one();
+                i = i + 1;
+            }
+            total
+        }
+    ";
+    assert_eq!(value(src), Value::Int(5000));
+}
+
+// ---------------------------------------------------------------------------
+// Integer boundaries
+//
+// Unary negation made these writable; it did not make them correct. `docs/spec.md` says
+// overflow traps identically in every build, and the two's-complement asymmetry is where
+// that promise is easiest to break.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_smallest_int_can_be_written() {
+    // Its magnitude is one greater than the largest `Int`, so the sign has to fold into
+    // the literal. Lexing the digits alone and negating afterwards would overflow, and a
+    // language whose smallest value is unwritable has an arbitrary hole in its range.
+    assert_eq!(
+        value("fn main() -> Int { -9223372036854775808 }"),
+        Value::Int(i64::MIN)
+    );
+}
+
+#[test]
+fn the_largest_int_can_be_written() {
+    assert_eq!(
+        value("fn main() -> Int { 9223372036854775807 }"),
+        Value::Int(i64::MAX)
+    );
+}
+
+#[test]
+fn a_literal_past_the_largest_int_is_refused() {
+    assert_eq!(
+        sole_error("fn main() -> Int { 9223372036854775808 }"),
+        codes::INTEGER_TOO_LARGE
+    );
+}
+
+#[test]
+fn a_negative_literal_past_the_smallest_int_is_refused() {
+    // One past `i64::MIN`. The fold must check the magnitude, not assume any digit string
+    // following `-` fits.
+    assert_eq!(
+        sole_error("fn main() -> Int { -9223372036854775809 }"),
+        codes::INTEGER_TOO_LARGE
+    );
+}
+
+#[test]
+fn negating_the_smallest_int_traps() {
+    // `-i64::MIN` has no representation. In Rust this wraps in release and panics in
+    // debug; the spec says Nazm must do the same thing in every build, and trapping is
+    // that thing.
+    let src = r"
+        fn main() -> Int {
+            let smallest = -9223372036854775808;
+            0 - smallest
+        }
+    ";
+    assert_eq!(sole_error(src), codes::INTEGER_OVERFLOW);
+}
+
+#[test]
+fn unary_negation_of_the_smallest_int_traps_too() {
+    // The same value reached through the prefix operator rather than subtraction. These
+    // are different code paths and only one of them was exercised above.
+    let src = r"
+        fn negate(n: Int) -> Int { -n }
+        fn main() -> Int { negate(-9223372036854775808) }
+    ";
+    assert_eq!(sole_error(src), codes::INTEGER_OVERFLOW);
+}
+
+#[test]
+fn dividing_the_smallest_int_by_minus_one_traps() {
+    // The quotient is one past `i64::MAX`. On x86 this faults in hardware, so a checked
+    // division is the only way it reports rather than killing the process.
+    let src = r"
+        fn main() -> Int {
+            let smallest = -9223372036854775808;
+            smallest / (0 - 1)
+        }
+    ";
+    assert_eq!(sole_error(src), codes::INTEGER_OVERFLOW);
+}
+
+#[test]
+fn the_remainder_of_the_smallest_int_by_minus_one_is_zero() {
+    // Mathematically zero, and zero is representable — but the hardware instruction that
+    // computes it faults, and Rust's `checked_rem` reports `None`. Nazm answers 0, so
+    // that `%` has one failure case (a zero divisor) rather than two.
+    let src = r"
+        fn main() -> Int {
+            let smallest = -9223372036854775808;
+            smallest % (0 - 1)
+        }
+    ";
+    assert_eq!(value(src), Value::Int(0));
+}
+
+// ---------------------------------------------------------------------------
+// Stack safety for the paths that are not call depth
+//
+// Deeply nested expressions and blocks recurse through the parser, the checker, the
+// evaluator and the destructor of the tree, without adding a single call frame. The
+// call-depth budget does not see them at all.
+// ---------------------------------------------------------------------------
+
+/// `fn main() -> Int { <depth> nested blocks around 1 }` — the costliest shape.
+fn deeply_nested(depth: usize) -> String {
+    format!(
+        "fn main() -> Int {{ {}1{} }}",
+        "{ ".repeat(depth),
+        " }".repeat(depth)
+    )
+}
+
+#[test]
+fn a_deeply_nested_program_runs_end_to_end() {
+    // Parse, check, evaluate and drop, all on the interpreter's stack. Nothing here
+    // increases call depth, so `--max-depth` would never have caught it.
+    assert_eq!(value(&deeply_nested(200)), Value::Int(1));
+}
+
+#[test]
+fn a_long_flat_function_is_not_deep_nesting() {
+    // One statement after another is not nesting. A counter that went up on the way in
+    // and not back down on the way out would refuse this at the 512th `let`, which is an
+    // ordinary length for generated code.
+    let body: String = (0..1000).map(|i| format!("let v{i} = {i};\n")).collect();
+    let src = format!("fn main() -> Int {{\n{body}v999\n}}");
+    assert_eq!(value(&src), Value::Int(999));
+}
+
+#[test]
+fn nesting_past_the_parser_limit_reports_rather_than_crashing() {
+    assert_eq!(
+        sole_error(&deeply_nested(nazm_syntax::MAX_NESTING + 1)),
+        codes::NESTING_TOO_DEEP
+    );
+}
+
+// A raised depth budget being given the stack to match, and absurd nesting being
+// refused, are both tested from `nazm-cli/tests/cli.rs`. Take either guarantee away and
+// those programs abort the process — which an in-process test cannot survive to report.
+// The cases that stay here all finish well inside the stack either way.
+
+#[test]
+fn a_raised_budget_still_runs_what_fits_inside_it() {
+    // The companion: the budget is raised and the program stays within it, so it must
+    // produce its value rather than trip a limit the stack was resized to accommodate.
+    // The recursion is kept well inside the base reservation so that this test reports a
+    // wrong answer rather than aborting when the sizing is what has broken.
+    let src = r"
+        fn sum_to(n: Int) -> Int {
+            if n == 0 { 0 } else { n + sum_to(n - 1) }
+        }
+        fn main() -> Int { sum_to(1000) }
+    ";
+    let raised = nazm_core::eval::Limits {
+        max_depth: 5_000,
+        ..Default::default()
+    };
+    match nazm_core::run_with_limits(src, raised) {
+        Outcome::Value(v) => assert_eq!(v, Value::Int(500_500)),
+        other => panic!("expected a value, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A function whose body did not parse
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_function_with_no_body_is_never_run_as_an_empty_one() {
+    // Keeping the signature must not turn a body that failed to parse into a body that
+    // does nothing. Driving the interpreter directly is the only way to reach this: the
+    // normal path refuses to evaluate a program that reported errors.
+    let src = "fn f() -> Int { return; }\nfn main() -> Int { f() }";
+    let (program, errors) = nazm_syntax::parse_source(src);
+    assert!(!errors.is_empty(), "the body should have failed to parse");
+    assert!(
+        program.functions.iter().any(|f| f.name == "f"),
+        "the signature should survive"
+    );
+    assert!(
+        program
+            .functions
+            .iter()
+            .find(|f| f.name == "f")
+            .is_some_and(|f| f.body.is_none()),
+        "and the body should be absent, not empty"
+    );
+
+    match nazm_core::eval::Interpreter::new(&program).run_main() {
+        Err(e) => assert_eq!(e.diagnostic.code, codes::UNSUPPORTED_CONSTRUCT),
+        Ok(v) => panic!("a function with no body must not run, got {v}"),
+    }
+}
+
+#[test]
+fn a_body_that_failed_to_parse_is_not_type_checked() {
+    // Nothing is said about statements that were never built. A "must produce an Int"
+    // error here would be a claim about the parser's guess, not about the program — and
+    // it would be the second error for one mistake.
+    let src = "fn f() -> Int { return; }\nfn main() -> Int { f() }";
+    assert_eq!(sole_error(src), codes::UNSUPPORTED_CONSTRUCT);
+}
+
+// ---------------------------------------------------------------------------
+// `return` from inside an expression
+//
+// `return` is a statement, but a block is an expression — so a `return` can sit inside
+// anything used as a value. The checker allows it (a diverging branch takes the other
+// branch's type), which means the evaluator has to as well.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn return_works_from_a_let_initializer() {
+    let src = r"
+        fn f(n: Int) -> Int {
+            let x = if n > 0 { return 1; } else { 2 };
+            x + 10
+        }
+        fn main() -> Int { f(1) * 100 + f(0) }
+    ";
+    assert_eq!(value(src), Value::Int(112));
+}
+
+#[test]
+fn return_works_from_a_binary_operand() {
+    // And the left-to-right rule still holds: a flow raised on the left leaves before
+    // the right operand is evaluated at all.
+    let src = r"
+        fn f(n: Int) -> Int { 1 + if n > 0 { return 5; } else { 2 } }
+        fn main() -> Int { f(1) * 100 + f(0) }
+    ";
+    assert_eq!(value(src), Value::Int(503));
+}
+
+#[test]
+fn return_works_from_a_call_argument() {
+    let src = r"
+        fn g(n: Int) -> Int { n }
+        fn f(n: Int) -> Int { g(if n > 0 { return 7; } else { 2 }) }
+        fn main() -> Int { f(1) * 100 + f(0) }
+    ";
+    assert_eq!(value(src), Value::Int(702));
+}
+
+#[test]
+fn return_works_from_a_condition() {
+    // A condition is an expression like any other.
+    let src = r"
+        fn f(n: Int) -> Int {
+            if (if n > 0 { return 3; } else { false }) { 1 } else { 2 }
+        }
+        fn main() -> Int { f(1) * 100 + f(0) }
+    ";
+    assert_eq!(value(src), Value::Int(302));
+}
+
+#[test]
+fn return_works_from_a_loop_condition() {
+    let src = r"
+        fn f(n: Int) -> Int {
+            let mut i = 0;
+            while (if n > 0 { return 4; } else { i < 3 }) {
+                i = i + 1;
+            }
+            i
+        }
+        fn main() -> Int { f(1) * 100 + f(0) }
+    ";
+    assert_eq!(value(src), Value::Int(403));
+}
+
+#[test]
+fn return_works_from_an_assigned_value() {
+    let src = r"
+        fn f(n: Int) -> Int {
+            let mut x = 0;
+            x = if n > 0 { return 6; } else { 9 };
+            x
+        }
+        fn main() -> Int { f(1) * 100 + f(0) }
+    ";
+    assert_eq!(value(src), Value::Int(609));
+}
+
+#[test]
+fn a_nested_return_wins_over_the_one_it_is_inside() {
+    // `return (if c { return 1; } else { 2 });` — the inner one leaves first, so the
+    // outer never gets a value to return.
+    let src = r"
+        fn f(n: Int) -> Int {
+            return if n > 0 { return 1; } else { 2 };
+        }
+        fn main() -> Int { f(1) * 100 + f(0) }
+    ";
+    assert_eq!(value(src), Value::Int(102));
+}
+
+#[test]
+fn break_works_from_inside_an_expression_too() {
+    // The same mechanism, and the case that would have been missed by fixing `return`
+    // alone: `break` inside a value position leaves the loop rather than erroring.
+    let src = r"
+        fn main() -> Int {
+            let mut total = 0;
+            let mut i = 0;
+            while i < 10 {
+                total = total + if i == 3 { break; } else { i };
+                i = i + 1;
+            }
+            total
+        }
+    ";
+    // 0 + 1 + 2, then the fourth iteration leaves before adding anything.
+    assert_eq!(value(src), Value::Int(3));
+}
+
+// ---------------------------------------------------------------------------
+// Long binary chains
+//
+// `1 + 1 + 1` is `((1 + 1) + 1)`: the parse loop does not recurse, but the tree it
+// builds nests one level per operator, and every pass over it does.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_long_binary_chain_is_counted_as_the_nesting_it_is() {
+    // Four times the limit. The chain that could only abort — 100,000 terms — is in the
+    // CLI suite, for the same reason the deepest trees are.
+    let chain = vec!["1"; nazm_syntax::MAX_NESTING * 4].join(" + ");
+    assert_eq!(
+        sole_error(&format!("fn main() -> Int {{ {chain} }}")),
+        codes::NESTING_TOO_DEEP
+    );
+}
+
+#[test]
+fn a_chain_within_the_limit_still_evaluates() {
+    let chain = vec!["1"; 400].join(" + ");
+    assert_eq!(
+        value(&format!("fn main() -> Int {{ {chain} }}")),
+        Value::Int(400)
+    );
+}
+
+#[test]
+fn chains_in_sequence_are_not_cumulative() {
+    // Each statement's tree is walked on its own, so a budget that never came back down
+    // between them would refuse an ordinary function.
+    let chain = vec!["1"; 400].join(" + ");
+    let body: String = (0..20).map(|i| format!("let v{i} = {chain};\n")).collect();
+    assert_eq!(
+        value(&format!("fn main() -> Int {{\n{body}v19\n}}")),
+        Value::Int(400)
+    );
 }
