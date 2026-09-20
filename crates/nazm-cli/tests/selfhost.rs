@@ -991,6 +991,14 @@ fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_in
     // satisfied by a bug both share.
     let cases: &[(&str, &str)] = &[
         ("1 + 2 * 3 - 4", "3"),
+        // Locals: one `alloca` per binding in the entry block, then loads and stores.
+        ("let a = 10; let mut b = 32; b = b + a; b * 2", "84"),
+        ("let mut x = 1; x = x * 3; x = x * 3; x = x * 3; x", "27"),
+        ("let a = 1; let b = 2; let c = 3; a + b * c", "7"),
+        // A binding's initialiser sees the *outer* binding of the same name.
+        ("let x = 1; let y = x + 10; y", "11"),
+        // An expression statement is evaluated and dropped.
+        ("1 + 1; let a = 4; a; a * 2", "8"),
         ("(1 + 2) * (3 - 4)", "-3"),
         ("100 / 7", "14"),
         ("100 % 7", "2"),
@@ -1084,6 +1092,14 @@ fn the_nazm_compiler_keeps_the_specified_failure_behaviour() {
             "N0400",
             "this multiplication overflows `Int`",
         ),
+        // Through a local, so the failure is on a loaded value rather than a constant
+        // the optimiser could fold away.
+        ("let z = 0; let a = 5; a / z", "N0401", "division by zero"),
+        (
+            "let a = 9223372036854775807; a + 1",
+            "N0400",
+            "this addition overflows `Int`",
+        ),
         (
             "-(-9223372036854775808)",
             "N0400",
@@ -1141,7 +1157,6 @@ fn the_nazm_compiler_refuses_what_it_cannot_emit_and_writes_nothing() {
 
     for (src, expected) in [
         // Outside this increment's coverage: a backend limitation, reported as `N0101`.
-        ("fn main() -> Int { let x = 1; x }\n", "N0101"),
         ("fn main() -> Bool { true }\n", "N0101"),
         ("fn f() -> Int { 1 }\nfn main() -> Int { f() }\n", "N0101"),
         // A program that does not check is a *check* failure, reported with the
