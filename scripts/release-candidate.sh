@@ -203,14 +203,17 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
     printf '\n'
     printf 'Neither binary is portable off %s. The sources are; see docs/bootstrap.md.\n' "$(uname -sm)"
     printf '\n'
-    printf 'Archive entry metadata is normalised: the tar is written with --sort=name,\n'
-    printf '--owner=0 --group=0 --numeric-owner and --mtime=@0, and the gzip stream carries\n'
-    printf 'no timestamp. That makes entry order and metadata stable across runs. It does\n'
-    printf 'NOT make the archive bit-reproducible, and this one is not: the bootstrap record\n'
-    printf 'and this file both embed the run date above, so two runs differ by construction.\n'
-    printf 'The packaged executables have not been tested for bit-reproducibility either.\n'
-    printf 'What is verified is that the contents match MANIFEST.txt, and that C2 and C3 are\n'
-    printf 'byte-identical to each other within this run.\n'
+    # `%s` rather than a bare format string: one of these lines begins with `--`, and
+    # dash's printf reads that as an option and refuses. Caught by the release gate.
+    printf '%s\n' \
+        'Archive entry metadata is normalised: the tar is written with --sort=name,' \
+        '--owner=0 --group=0 --numeric-owner and --mtime=@0, and the gzip stream carries' \
+        'no timestamp. That makes entry order and metadata stable across runs. It does' \
+        'NOT make the archive bit-reproducible, and this one is not: the bootstrap record' \
+        'and this file both embed the run date above, so two runs differ by construction.' \
+        'The packaged executables have not been tested for bit-reproducibility either.' \
+        'What is verified is that the contents match MANIFEST.txt, and that C2 and C3 are' \
+        'byte-identical to each other within this run.'
 } > "$out/PROVENANCE.txt"
 
 {
