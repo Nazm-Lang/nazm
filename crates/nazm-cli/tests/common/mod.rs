@@ -71,27 +71,49 @@ const ADDRESS_SPACE_KB: u64 = 512 * 1024;
 ///
 /// # What this bounds, and what it does not
 ///
-/// `ulimit -v` sets `RLIMIT_AS`, which bounds **virtual address space**, not resident
-/// memory. A program that maps a great deal and touches little will be refused even
-/// though its footprint is small — which is why the value is generous rather than tight.
-/// It is the right tool here anyway, because the failure being guarded against is
-/// unbounded `malloc`, and that grows the address space.
+/// `ulimit -v` sets `RLIMIT_AS`, which is **per-process virtual address space**. Two
+/// things follow, and both matter:
 ///
-/// **It is effective on Linux and not on Darwin**, where `RLIMIT_AS` is an alias of
-/// `RLIMIT_RSS` and `setrlimit(2)` documents it as advisory. That is why it is a second
-/// line rather than the first: the container is the ceiling that actually holds. The
-/// `2>/dev/null` and the unconditional `exec` keep the wrapper harmless where the limit
-/// is not enforced.
+/// - It is *virtual*, not resident. A process that maps a great deal and touches little
+///   is refused even though its footprint is small, which is why the value is generous
+///   rather than tight. It is still the right instrument here, because the failure being
+///   guarded against is unbounded `malloc`, and that grows the address space.
+/// - It is *per process*, **not an aggregate over descendants**. Each child inherits the
+///   same limit and gets its own allowance, so `n` children can hold `n` times this
+///   figure between them. This bounds one runaway; it does not bound a fleet. The
+///   container's `--memory` remains the only aggregate ceiling, and nothing here is a
+///   substitute for it.
+///
+/// Threads are covered, since they share one address space with the process that spawned
+/// them.
+///
+/// **Enforcement differs by platform, so the wrapper does too.** On Linux the limit is
+/// real, and failing to establish it is treated as a failure: the wrapper exits 97 rather
+/// than running the program unbounded, because silently proceeding is how a guard becomes
+/// decoration. On Darwin `RLIMIT_AS` is an alias of `RLIMIT_RSS` and `setrlimit(2)`
+/// documents it as advisory, so the attempt is best-effort there and its failure is not
+/// an error.
 ///
 /// A shell wrapper rather than `pre_exec`, because the workspace sets
-/// `unsafe_code = "forbid"` and `pre_exec` is unsafe. The limit is inherited by every
-/// descendant, threads included, since they share the address space.
+/// `unsafe_code = "forbid"` and `pre_exec` is unsafe.
 pub(crate) fn bounded_exe(exe: &std::path::Path) -> std::process::Command {
+    let kb = ADDRESS_SPACE_KB;
+    let script = format!(
+        r#"if [ "$(uname -s)" = Linux ]; then
+    ulimit -v {kb} || {{ printf 'bounded_exe: cannot set RLIMIT_AS
+' >&2; exit 97; }}
+    got=$(ulimit -v)
+    if [ "$got" != {kb} ]; then
+        printf 'bounded_exe: RLIMIT_AS reads %s, expected {kb}
+' "$got" >&2
+        exit 97
+    fi
+else
+    ulimit -v {kb} 2>/dev/null || true
+fi
+exec "$0" "$@""#
+    );
     let mut c = std::process::Command::new("sh");
-    c.arg("-c")
-        .arg(format!(
-            "ulimit -v {ADDRESS_SPACE_KB} 2>/dev/null; exec \"$0\" \"$@\""
-        ))
-        .arg(exe);
+    c.arg("-c").arg(script).arg(exe);
     c
 }

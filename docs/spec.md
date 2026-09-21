@@ -549,23 +549,47 @@ fn worker(jobs: Chan, results: Chan) -> Int {
     0
 }
 
+fn feeder(jobs: Chan) -> Int {
+    let mut i = 0;
+    while i < 10 {
+        chan_send(jobs, i);
+        i = i + 1;
+    }
+    chan_close(jobs);
+    0
+}
+
 fn main() -> Int {
     let jobs = chan_new(4);
     let results = chan_new(4);
-    scope {
-        spawn worker(jobs, results);
-        spawn worker(jobs, results);
-        let mut i = 0;
-        while i < 10 { chan_send(jobs, i); i = i + 1; }
-        chan_close(jobs);
-    }
-    chan_close(results);
     let buf = ints_new();
     let mut total = 0;
-    while chan_recv(results, buf) { total = total + ints_pop(buf); }
+    scope {
+        spawn feeder(jobs);
+        spawn worker(jobs, results);
+        spawn worker(jobs, results);
+        let mut got = 0;
+        while got < 10 {
+            chan_recv(results, buf);
+            total = total + ints_pop(buf);
+            got = got + 1;
+        }
+    }
+    chan_close(results);
     total
 }
 ```
+
+This is `examples/worker-pool.nz`, and a test runs it under both implementations and
+checks it prints 90 — the sum of 0..9 doubled.
+
+Its shape is the point. With a **bounded** channel, production and consumption have to
+progress at the same time. An earlier version of this example had the parent send all ten
+jobs and only then receive, which deadlocks: the workers fill the four-slot results
+channel, block in `chan_send`, stop taking jobs, the jobs channel fills behind them, and
+the parent blocks sending — with nothing left running to drain anything. Widening the
+buffers only moves the job number at which it happens. Feeding is therefore a task of its
+own, and the parent drains while the workers run.
 
 #### Scopes and tasks
 

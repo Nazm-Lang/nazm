@@ -4063,3 +4063,49 @@ fn imports_resolve_relative_to_the_importing_file_not_the_working_directory() {
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "42");
 }
+
+/// `examples/worker-pool.nz` is the spec's concurrency example, and it terminates with 90.
+///
+/// It is here rather than in the interpreted-examples list because that list runs
+/// `.output()` with no deadline, and a concurrency example that deadlocks would hang the
+/// suite rather than fail it — which is exactly what the previous version of this example
+/// did. Every run below is bounded.
+///
+/// The first assertion is that `docs/spec.md` still shows this file. A specification whose
+/// example is not the program anybody runs is how the old one came to deadlock unnoticed:
+/// nothing extracted it, so nothing executed it.
+#[test]
+fn the_spec_worker_pool_example_terminates_and_answers_ninety() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let src = std::fs::read_to_string(root.join("examples/worker-pool.nz"))
+        .expect("examples/worker-pool.nz");
+
+    let spec = std::fs::read_to_string(root.join("docs/spec.md")).expect("docs/spec.md");
+    const FENCE: &str = "```nazm\nfn worker(jobs: Chan, results: Chan) -> Int {";
+    let at = spec
+        .find(FENCE)
+        .expect("docs/spec.md no longer shows the worker-pool example");
+    let after = &spec[at + "```nazm\n".len()..];
+    let block = &after[..after.find("```").expect("unclosed fence")];
+    assert_eq!(
+        block.trim_end(),
+        src.trim_end(),
+        "docs/spec.md and examples/worker-pool.nz have drifted. The spec is meant to show \
+         the program that is actually run."
+    );
+
+    let ran = interpret(&src);
+    assert_eq!(ran.code, Some(0), "interpreted: {}", ran.stderr);
+    assert_eq!(ran.stdout.trim(), "90", "interpreted");
+
+    for opt in [0_u8, 2] {
+        let built =
+            build_at(&src, opt).unwrap_or_else(|r| panic!("-O{opt} did not compile: {}", r.stderr));
+        let ran = run_exe(&built);
+        assert_eq!(ran.code, Some(0), "-O{opt}: {}", ran.stderr);
+        assert_eq!(ran.stdout.trim(), "90", "-O{opt}");
+    }
+}
