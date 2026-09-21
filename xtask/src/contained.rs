@@ -737,6 +737,10 @@ mod tests {
             manifest: "/out/EXPORTS".to_owned(),
             dest: dest.to_path_buf(),
             allowed: allowed.iter().map(|s| (*s).to_owned()).collect(),
+            // The fixtures below declare five bytes and ship two megabytes, so the budget
+            // has to sit between the two for the oversized case to be the thing under
+            // test rather than the budget itself.
+            max_bytes: 1024 * 1024,
         }
     }
 
