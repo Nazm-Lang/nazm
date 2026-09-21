@@ -17,6 +17,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod common;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -109,7 +110,7 @@ fn agrees(what: &str, src: &str, expected: &str) {
             built.stderr
         );
 
-        let ran = run_bounded(&mut Command::new(&exe)).unwrap_or_else(|| {
+        let ran = run_bounded(&mut common::bounded_exe(&exe)).unwrap_or_else(|| {
             panic!(
                 "{what}: the -O{opt} executable did not finish within {DEADLINE:?}. A \
                  timeout is a failure, not a result — this is what a deadlock or a lost \
@@ -497,7 +498,7 @@ fn a_task_that_fails_ends_the_whole_program() {
     .expect("build did not finish");
     assert_eq!(built.code, Some(0), "build failed: {}", built.stderr);
 
-    let ran = run_bounded(&mut Command::new(&exe)).expect("the executable did not finish");
+    let ran = run_bounded(&mut common::bounded_exe(&exe)).expect("the executable did not finish");
     assert_eq!(ran.code, Some(2), "a failing task must end the program");
     assert!(
         ran.stderr.contains("N0402") || ran.stderr.contains("zero"),
