@@ -18,7 +18,8 @@ pub use types::Type;
 /// crate. The double underscore marks it as plumbing rather than interface.
 pub mod __syntax {
     pub use nazm_syntax::{
-        format, lex, parse_source, Block, Expr, Function, Program, Stmt, TokenKind,
+        format, lex, lex_in, parse_file, parse_map, parse_source, Block, Expr, Function, Program,
+        Stmt, TokenKind,
     };
 }
 
@@ -44,6 +45,13 @@ pub fn run(source: &str) -> Outcome {
     run_with_limits(source, eval::Limits::default())
 }
 
+/// The name a single-file convenience gives its one file.
+///
+/// The `&str` entry points below exist for callers that genuinely have one file — tests,
+/// mostly. Everything with a real program behind it goes through a [`SourceMap`] built by
+/// the loader, because that is the only form that knows what a span belongs to.
+const ONE_FILE: &str = "<input>";
+
 /// As [`run`], with explicit budgets.
 ///
 /// The budgets are the interpreter's, not the language's — see `docs/spec.md`. They exist
@@ -60,12 +68,22 @@ pub fn run_with_limits(source: &str, limits: eval::Limits) -> Outcome {
 /// and compiled — a native `argv[0]` is a path nobody should depend on.
 #[must_use]
 pub fn run_with(source: &str, limits: eval::Limits, args: Vec<String>) -> Outcome {
+    run_map(
+        &nazm_span::SourceMap::single(ONE_FILE, source),
+        limits,
+        args,
+    )
+}
+
+/// As [`run_with`], over every file of a compilation.
+#[must_use]
+pub fn run_map(map: &nazm_span::SourceMap, limits: eval::Limits, args: Vec<String>) -> Outcome {
     // The whole pipeline on a stack the interpreter controls, sized from the budget it is
     // about to enforce. Every pass here recurses: the parser with the shape of the tree,
     // the checker and the evaluator with it again, and the drop at the end once more.
     // Honouring a 512-call bound on a caller's 2 MiB thread would be a guarantee we
     // cannot keep, and so would parsing a deeply nested expression there.
-    match eval::on_interpreter_stack(limits.max_depth, || pipeline(source, limits, args)) {
+    match eval::on_interpreter_stack(limits.max_depth, || pipeline(map, limits, args)) {
         Ok(outcome) => outcome,
         // The machine would not give us a thread. Nothing to do with the program, and
         // saying so beats blaming the code that was about to run. The span points at the
@@ -73,7 +91,7 @@ pub fn run_with(source: &str, limits: eval::Limits, args: Vec<String>) -> Outcom
         Err(e) => Outcome::RuntimeFailed(
             nazm_diag::Diagnostic::error(
                 nazm_diag::codes::INTERPRETER_UNAVAILABLE,
-                nazm_span::Span::new(0, 0),
+                nazm_span::Span::synthetic(),
                 format!("could not start the evaluator: {e}"),
             )
             .help(
@@ -85,8 +103,8 @@ pub fn run_with(source: &str, limits: eval::Limits, args: Vec<String>) -> Outcom
 }
 
 /// Parse, check, and evaluate. Always called on an interpreter-owned stack.
-fn pipeline(source: &str, limits: eval::Limits, args: Vec<String>) -> Outcome {
-    let (program, mut diagnostics) = nazm_syntax::parse_source(source);
+fn pipeline(map: &nazm_span::SourceMap, limits: eval::Limits, args: Vec<String>) -> Outcome {
+    let (program, mut diagnostics) = nazm_syntax::parse_map(map);
     let parse_failed = !diagnostics.is_empty();
     let (_signatures, check_errors) = check(&program);
 
@@ -119,10 +137,16 @@ fn pipeline(source: &str, limits: eval::Limits, args: Vec<String>) -> Outcome {
 /// with the shape of the tree, and neither has anything to do with call depth.
 #[must_use]
 pub fn check_source(source: &str) -> Vec<nazm_diag::Diagnostic> {
+    check_map(&nazm_span::SourceMap::single(ONE_FILE, source))
+}
+
+/// As [`check_source`], over every file of a compilation.
+#[must_use]
+pub fn check_map(map: &nazm_span::SourceMap) -> Vec<nazm_diag::Diagnostic> {
     // `()` as the result, so the tree is built, walked and **dropped** inside the closure.
     // Returning it would move a recursive structure onto whatever stack the caller
     // happens to have, which is the thing this function exists to avoid.
-    match on_checked(source, |_| Ok::<(), Vec<nazm_diag::Diagnostic>>(())) {
+    match on_checked_map(map, |_| Ok::<(), Vec<nazm_diag::Diagnostic>>(())) {
         Ok(()) => Vec::new(),
         Err(d) => d,
     }
@@ -154,8 +178,24 @@ where
     T: Send,
     F: FnOnce(&__syntax::Program) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
 {
+    on_checked_map(&nazm_span::SourceMap::single(ONE_FILE, source), f)
+}
+
+/// As [`on_checked`], over every file of a compilation.
+///
+/// # Errors
+///
+/// The parse and check diagnostics if there are any, otherwise whatever `f` returns.
+pub fn on_checked_map<T, F>(
+    map: &nazm_span::SourceMap,
+    f: F,
+) -> Result<T, Vec<nazm_diag::Diagnostic>>
+where
+    T: Send,
+    F: FnOnce(&__syntax::Program) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
+{
     let run = || {
-        let (program, mut diagnostics) = nazm_syntax::parse_source(source);
+        let (program, mut diagnostics) = nazm_syntax::parse_map(map);
         let parse_failed = !diagnostics.is_empty();
         let (_, check_errors) = check(&program);
         // A function that failed to parse was never registered, so "this program has no
@@ -175,7 +215,7 @@ where
     eval::on_interpreter_stack(0, run).unwrap_or_else(|e| {
         Err(vec![nazm_diag::Diagnostic::error(
             nazm_diag::codes::INTERPRETER_UNAVAILABLE,
-            nazm_span::Span::new(0, 0),
+            nazm_span::Span::synthetic(),
             format!("could not start the checker: {e}"),
         )])
     })

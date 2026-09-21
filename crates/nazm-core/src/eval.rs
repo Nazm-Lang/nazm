@@ -493,7 +493,7 @@ impl Interpreter {
             .ok_or_else(|| RuntimeError {
                 diagnostic: Box::new(Diagnostic::error(
                     codes::MISSING_MAIN,
-                    nazm_span::Span::new(0, 0),
+                    nazm_span::Span::synthetic(),
                     "this program has no `main` function",
                 )),
             })?;
@@ -1055,7 +1055,7 @@ impl Interpreter {
                         diagnostic: Box::new(
                             Diagnostic::error(
                                 codes::INTERPRETER_UNAVAILABLE,
-                                nazm_span::Span::new(0, 0),
+                                nazm_span::Span::synthetic(),
                                 format!("a task was started for `{name}`, which is not there"),
                             )
                             .help("this is a bug in the interpreter"),
@@ -1106,7 +1106,7 @@ impl Interpreter {
                     diagnostic: Box::new(
                         Diagnostic::error(
                             codes::INTERPRETER_UNAVAILABLE,
-                            nazm_span::Span::new(0, 0),
+                            nazm_span::Span::synthetic(),
                             "a task ended abnormally",
                         )
                         .help("this is a bug in the interpreter"),

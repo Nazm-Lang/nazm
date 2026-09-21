@@ -9,7 +9,7 @@
 //! repair loop into a single step. Codes are therefore part of the contract — renaming
 //! one is a breaking change, and they are never reused.
 
-use nazm_span::{SourceFile, Span};
+use nazm_span::{SourceMap, Span};
 use serde::{Deserialize, Serialize};
 
 /// A stable diagnostic code. The number never changes meaning and is never reused.
@@ -306,32 +306,64 @@ impl Diagnostic {
     /// of the shape it is in.
     ///
     /// See `docs/diagnostics.md` for the schema and what may change inside a version.
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+    pub fn to_json(&self, map: &SourceMap) -> Result<String, serde_json::Error> {
         serde_json::to_string(&Report {
             schema: SCHEMA.to_owned(),
-            diagnostic: self.clone(),
+            diagnostic: self.rebased(map),
         })
+    }
+
+    /// This diagnostic with every span rebased to the offsets the schema publishes.
+    ///
+    /// The one place the internal (file, local offset) representation is converted to the
+    /// external one. Keeping it to a single function is what stops the two drifting: a new
+    /// span added anywhere in a `Diagnostic` is rebased here or it is not published at all.
+    #[must_use]
+    fn rebased(&self, map: &SourceMap) -> Self {
+        let label = |l: &Label| Label {
+            span: map.rebased(l.span),
+            message: l.message.clone(),
+        };
+        Self {
+            code: self.code.clone(),
+            severity: self.severity,
+            message: self.message.clone(),
+            primary: label(&self.primary),
+            secondary: self.secondary.iter().map(label).collect(),
+            help: self.help.clone(),
+            fixes: self
+                .fixes
+                .iter()
+                .map(|f| Fix {
+                    span: map.rebased(f.span),
+                    replacement: f.replacement.clone(),
+                    description: f.description.clone(),
+                    applicability: f.applicability,
+                    precondition: f.precondition.clone(),
+                })
+                .collect(),
+        }
     }
 
     /// The human-readable form: message, location, source line, and a caret.
     #[must_use]
-    pub fn render(&self, file: &SourceFile) -> String {
+    pub fn render(&self, map: &SourceMap) -> String {
         use std::fmt::Write as _;
         let mut out = String::new();
-        let at = file.line_col(self.primary.span.start);
+        let at = map.line_col(self.primary.span);
 
         let _ = writeln!(out, "error[{}]: {}", self.code, self.message);
-        // `name_at`, not `name`: a merged multi-file buffer must name the file a reader
-        // would open, and for a single-file one the two are the same.
+        // The span says which file it is in, so this is a lookup rather than the binary
+        // search over a merged buffer it used to be.
         let _ = writeln!(
             out,
             "  --> {}:{}:{}",
-            file.name_at(self.primary.span.start),
+            map.name(self.primary.span.file),
             at.line,
             at.column
         );
 
-        let line = file.line_text(self.primary.span.start);
+        let line = map.line_text(self.primary.span);
         let gutter = at.line.to_string();
         let pad = " ".repeat(gutter.len());
 
@@ -352,16 +384,17 @@ impl Diagnostic {
         );
 
         for s in &self.secondary {
-            let sat = file.line_col(s.span.start);
+            let sat = map.line_col(s.span);
             // A secondary in *another* file names it. Without this, "declared here" in a
             // multi-file program gives a line number with no file to look it up in —
-            // and silently means the wrong file's line.
-            let here = file.name_at(self.primary.span.start);
-            let there = file.name_at(s.span.start);
+            // and silently means the wrong file's line. Comparing `FileId`s rather than
+            // names also settles the case two files share a basename.
+            let here = self.primary.span.file;
+            let there = s.span.file;
             let where_ = if here == there {
                 format!("{}:{}", sat.line, sat.column)
             } else {
-                format!("{there}:{}:{}", sat.line, sat.column)
+                format!("{}:{}:{}", map.name(there), sat.line, sat.column)
             };
             let _ = writeln!(out, "{pad} = at {where_}: {}", s.message);
         }
@@ -400,23 +433,27 @@ impl Diagnostic {
 )]
 mod tests {
     use super::*;
+    use nazm_span::{FileId, SourceMap};
 
     #[test]
     fn a_diagnostic_round_trips_as_json() {
         // The machine-readable form is the contract; the rendering is a view of it.
         let d = Diagnostic::error(
             codes::UNDEFINED_VARIABLE,
-            Span::new(4, 5),
+            Span::new(FileId::ROOT, 4, 5),
             "`x` is not defined",
         )
         .help("declare it with `let x = ...;` first")
         .fix_with_review(
-            Span::new(4, 5),
+            Span::new(FileId::ROOT, 4, 5),
             "y",
             "did you mean `y`?",
             "`y` is the name that was meant",
         );
-        let json = d.to_json().unwrap();
+        // A one-file map: local and published offsets coincide, which is what makes the
+        // round trip below an identity rather than a rebase.
+        let map = SourceMap::single("x.nz", "fn main() -> Int { x }");
+        let json = d.to_json(&map).unwrap();
         assert!(json.contains("N0200"), "{json}");
         // The version travels with the object, and the object still reads back as a
         // plain `Diagnostic`: a consumer that does not care about the envelope is not
@@ -437,16 +474,29 @@ mod tests {
         // The difference between a fix and a suggestion is the whole of what makes an
         // automatic repair tool trustworthy, so it is visible in the terminal too and
         // not only in the JSON.
-        let file = SourceFile::new("x.nz", "fn main() -> Int { 1 }");
-        let d = Diagnostic::error(codes::UNDEFINED_VARIABLE, Span::new(19, 20), "no")
-            .fix_with_review(Span::new(19, 20), "2", "use `2`", "two was meant");
-        let out = d.render(&file);
+        let map = SourceMap::single("x.nz", "fn main() -> Int { 1 }");
+        let d = Diagnostic::error(
+            codes::UNDEFINED_VARIABLE,
+            Span::new(FileId::ROOT, 19, 20),
+            "no",
+        )
+        .fix_with_review(
+            Span::new(FileId::ROOT, 19, 20),
+            "2",
+            "use `2`",
+            "two was meant",
+        );
+        let out = d.render(&map);
         assert!(out.contains("suggestion: use `2`"), "{out}");
         assert!(out.contains("right when: two was meant"), "{out}");
 
-        let d = Diagnostic::error(codes::UNDEFINED_VARIABLE, Span::new(19, 20), "no")
-            .fix_automatically(Span::new(19, 20), "2", "use `2`", "always");
-        let out = d.render(&file);
+        let d = Diagnostic::error(
+            codes::UNDEFINED_VARIABLE,
+            Span::new(FileId::ROOT, 19, 20),
+            "no",
+        )
+        .fix_automatically(Span::new(FileId::ROOT, 19, 20), "2", "use `2`", "always");
+        let out = d.render(&map);
         assert!(out.contains("fix: use `2`"), "{out}");
         assert!(
             !out.contains("right when"),
@@ -456,14 +506,14 @@ mod tests {
 
     #[test]
     fn rendering_points_at_the_offending_text() {
-        let file = SourceFile::new("x.nz", "fn main() -> Int {\n  qux\n}");
-        let at = u32::try_from(file.text().find("qux").unwrap()).unwrap();
+        let map = SourceMap::single("x.nz", "fn main() -> Int {\n  qux\n}");
+        let at = u32::try_from(map.text(FileId::ROOT).find("qux").unwrap()).unwrap();
         let d = Diagnostic::error(
             codes::UNDEFINED_VARIABLE,
-            Span::new(at, at + 3),
+            Span::new(FileId::ROOT, at, at + 3),
             "`qux` is not defined",
         );
-        let out = d.render(&file);
+        let out = d.render(&map);
 
         assert!(out.contains("error[N0200]"), "{out}");
         assert!(out.contains("x.nz:2:3"), "{out}");

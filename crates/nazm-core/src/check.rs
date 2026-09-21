@@ -166,7 +166,7 @@ pub fn check(program: &Program) -> (HashMap<String, Signature>, Vec<Diagnostic>)
             Signature {
                 params: i.params().to_vec(),
                 ret: i.ret(),
-                name_span: Span::new(0, 0),
+                name_span: Span::synthetic(),
             },
         );
     }
@@ -180,7 +180,7 @@ pub fn check(program: &Program) -> (HashMap<String, Signature>, Vec<Diagnostic>)
         c.errors.push(
             Diagnostic::error(
                 codes::MISSING_MAIN,
-                Span::new(0, 0),
+                Span::synthetic(),
                 "this program has no `main` function",
             )
             .help("`nazm run` evaluates `fn main() -> Int` and prints its value"),
@@ -632,7 +632,7 @@ impl Checker {
                 )
                 .help("add `;` to discard it, or assign it to something")
                 .fix_with_review(
-                    nazm_span::Span::new(tail.span().end, tail.span().end),
+                    nazm_span::Span::new(tail.span().file, tail.span().end, tail.span().end),
                     ";",
                     "discard the value",
                     "the value was meant to be discarded rather than used — assigning \
