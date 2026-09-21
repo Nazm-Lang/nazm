@@ -443,7 +443,7 @@ impl Interpreter {
             .functions
             .get("main")
             .copied()
-            .map(|i| &program.functions[i])
+            .and_then(|i| program.functions.get(i))
             .ok_or_else(|| RuntimeError {
                 diagnostic: Box::new(Diagnostic::error(
                     codes::MISSING_MAIN,
@@ -812,7 +812,7 @@ impl Interpreter {
                 )
             }
             (Intrinsic::ChanNew, [Value::Int(capacity)]) => {
-                let Ok(capacity) = usize::try_from(*capacity).map(|c| c.max(0)) else {
+                let Ok(capacity) = usize::try_from(*capacity) else {
                     return Err(out_of_bounds(
                         "a channel needs a capacity of at least 1",
                         format!("asked for a capacity of {capacity}"),
@@ -826,11 +826,12 @@ impl Interpreter {
                 }
                 Ok(Value::Chan(Arc::new(Channel::new(capacity))))
             }
-            (Intrinsic::ChanSend, [Value::Chan(c), Value::Int(value)]) => c
-                .send(*value)
-                .map_or_else(|| Err(bug("a channel that could not be locked")), |sent| {
-                    Ok(Value::Bool(sent))
-                }),
+            (Intrinsic::ChanSend, [Value::Chan(c), Value::Int(value)]) => {
+                c.send(*value).map_or_else(
+                    || Err(bug("a channel that could not be locked")),
+                    |sent| Ok(Value::Bool(sent)),
+                )
+            }
             (Intrinsic::ChanRecv, [Value::Chan(c), Value::Ints(out)]) => {
                 let Some(taken) = c.recv() else {
                     return Err(bug("a channel that could not be locked"));
@@ -846,11 +847,10 @@ impl Interpreter {
                     None => Ok(Value::Bool(false)),
                 }
             }
-            (Intrinsic::ChanClose, [Value::Chan(c)]) => c
-                .close()
-                .map_or_else(|| Err(bug("a channel that could not be locked")), |()| {
-                    Ok(Value::Int(0))
-                }),
+            (Intrinsic::ChanClose, [Value::Chan(c)]) => c.close().map_or_else(
+                || Err(bug("a channel that could not be locked")),
+                |()| Ok(Value::Int(0)),
+            ),
             (Intrinsic::StrJoin, [Value::Strs(parts), Value::Str(sep)]) => {
                 let Some(parts) = seq(parts) else {
                     return Err(bug("a sequence that could not be read"));
@@ -1001,7 +1001,21 @@ impl Interpreter {
                     // command line, and a task is not a program.
                     args: Vec::new(),
                 };
-                let f = &program.functions[index];
+                // The index was taken from the table built over this program, so it is
+                // always in range. Reported rather than indexed, because a panic in a
+                // task loses every other task's diagnostic along with its own.
+                let Some(f) = program.functions.get(index) else {
+                    return Err(RuntimeError {
+                        diagnostic: Box::new(
+                            Diagnostic::error(
+                                codes::INTERPRETER_UNAVAILABLE,
+                                nazm_span::Span::new(0, 0),
+                                format!("a task was started for `{name}`, which is not there"),
+                            )
+                            .help("this is a bug in the interpreter"),
+                        ),
+                    });
+                };
                 let mut env: Env = vec![HashMap::new()];
                 if let Some(frame) = env.last_mut() {
                     for (p, v) in f.params.iter().zip(args) {
@@ -1211,7 +1225,7 @@ impl Interpreter {
                     .functions
                     .get(callee)
                     .copied()
-                    .map(|i| &program.functions[i])
+                    .and_then(|i| program.functions.get(i))
                     .ok_or_else(|| RuntimeError {
                         diagnostic: Box::new(Diagnostic::error(
                             codes::UNDEFINED_FUNCTION,
