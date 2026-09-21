@@ -103,6 +103,7 @@ What those cover, grouped by the question each group answers:
 | Formatter (`nazm-syntax/tests/format.rs`) | 11 | token preservation, idempotence, comment preservation, over every source in the tree |
 | Grammar (`nazm-syntax/tests/grammar.rs`) | 3 | every lexer token written down, every rule reachable, every example parsed by the real parser |
 | Repair workflow (`nazm-cli/tests/workflow.rs`) | 10 | `nazm fix`, `nazm fmt`, `nazm test` and `scripts/repair.sh` end to end |
+| Coverage of the guarantees themselves (`codes.rs`, `builtins.rs`, `docs.rs`) | 6 | every diagnostic code asserted or named unreachable; every built-in exercised where an answer is asserted; the README's command table, the published schemas and the verified target all checked against the build |
 
 The bootstrap: **C2 and C3 byte-identical** in IR and executable, with 5 conformance
 cases agreeing across C2, C3 and the interpreter. `compiler/bootstrap.sh` writes the
