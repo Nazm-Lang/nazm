@@ -237,14 +237,24 @@ fn unwind(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
 // If this thread has failed, leave; otherwise carry on in a fresh block.
 fn check_failed(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
     let flag = take_number(next);
-    let uw = take_label(next);
     let ok = take_label(next);
     add_line(out, str_concat(str_concat("  ", v(flag)), " = load i1, ptr @nz.failed"));
-    add_line(out, str_concat(str_concat("  br i1 ", v(flag)),
-            str_concat(str_concat(", label %b", int_to_str(uw)),
-            str_concat(", label %b", int_to_str(ok)))));
-    open_block(out, current, live, str_concat("b", int_to_str(uw)));
-    unwind(out, next, current, live);
+    // With nothing open to join, the failure goes straight to the function's exit rather
+    // than through a block whose only instruction forwards to it. This is emitted after
+    // every call, so the block it saves is worth more than it looks: at `-O0` clang's
+    // time tracks the block count, and this is the common case by far.
+    if ints_len(live) == 2 {
+        ints_set(live, 1, 1);
+        add_line(out, str_concat(str_concat("  br i1 ", v(flag)),
+                str_concat(", label %nz.unwind, label %b", int_to_str(ok))));
+    } else {
+        let uw = take_label(next);
+        add_line(out, str_concat(str_concat("  br i1 ", v(flag)),
+                str_concat(str_concat(", label %b", int_to_str(uw)),
+                str_concat(", label %b", int_to_str(ok)))));
+        open_block(out, current, live, str_concat("b", int_to_str(uw)));
+        unwind(out, next, current, live);
+    }
     open_block(out, current, live, str_concat("b", int_to_str(ok)));
     0
 }

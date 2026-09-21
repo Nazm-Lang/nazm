@@ -29,6 +29,21 @@ done
 say() { printf '\n=== %s\n' "$*"; }
 fail() { printf 'release: %s\n' "$*" >&2; exit 1; }
 
+# `shasum` on macOS, `sha256sum` on GNU userland. Resolved once rather than at each call,
+# and a missing digest tool is a failure: a manifest without digests is a list of names.
+if command -v shasum >/dev/null 2>&1; then
+    sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+elif command -v sha256sum >/dev/null 2>&1; then
+    sha256() { sha256sum "$1" | cut -d' ' -f1; }
+else
+    fail "neither shasum nor sha256sum is available; the manifest would have no digests"
+fi
+
+# Where build products go. The checkout may be mounted read-only — it is inside the
+# contained runner, which is the only place the heavy gates below are allowed to run — so
+# the candidate is assembled under the target directory, wherever that is.
+target=${CARGO_TARGET_DIR:-"$root/target"}
+
 # A candidate has to be attributable to a commit, or the manifest's commit line is a
 # guess about which of the working tree's states was built.
 dirty=$(git status --porcelain 2>/dev/null || true)
@@ -59,16 +74,24 @@ sh compiler/bootstrap.sh
 
 if [ "$skip_bench" = no ]; then
     say "benchmarks against the recorded baseline"
-    cargo run -q -p xtask -- bench --runs 5 --check
+    # The benchmark reads its baseline and writes its record in the same directory, and
+    # the checkout is read-only wherever the heavy gates are allowed to run. So it is
+    # pointed at a writable copy: the baselines go in, the record comes out, and the
+    # source tree is neither written to nor needed for the comparison.
+    bench_dir="$target/release-bench"
+    rm -rf "$bench_dir"
+    mkdir -p "$bench_dir"
+    cp bench/baseline*.json "$bench_dir/" 2>/dev/null || true
+    NAZM_BENCH_DIR="$bench_dir" cargo run -q -p xtask -- bench --runs 5 --check
 fi
 
 # --- assemble -----------------------------------------------------------------------
-out="$root/target/release-candidate"
+out="$target/release-candidate"
 rm -rf "$out"
 mkdir -p "$out/bin" "$out/docs" "$out/schema" "$out/examples" "$out/scripts" \
          "$out/compiler/conformance" "$out/bench/programs" "$out/bench/reference"
 
-cp target/release/nazm "$out/bin/"
+cp "$target/release/nazm" "$out/bin/"
 cp README.md LICENSE* "$out/" 2>/dev/null || cp README.md "$out/"
 cp docs/*.md docs/*.ebnf "$out/docs/"
 cp schema/*.json "$out/schema/"
@@ -84,10 +107,15 @@ cp bench/programs/* "$out/bench/programs/"
 # docs/performance.md can be re-measured rather than taken on faith.
 cp bench/reference/* "$out/bench/reference/"
 
-cp bench/baseline.json "$out/docs/performance-baseline.json"
-cp target/bootstrap/record.txt "$out/docs/bootstrap-record.txt"
+# Every recorded baseline, not just one: the tool refuses to compare across platforms, so
+# a candidate carrying only the machine it happened to be built on would leave the other
+# unverifiable. Named after their files so a reader can tell which is which.
+for b in bench/baseline*.json; do
+    [ -e "$b" ] || continue
+    cp "$b" "$out/docs/performance-$(basename "$b")"
+done
+cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
 
-digest() { shasum -a 256 "$1" | cut -d' ' -f1; }
 
 {
     printf 'nazm release candidate\n\n'
@@ -98,7 +126,7 @@ digest() { shasum -a 256 "$1" | cut -d' ' -f1; }
     printf 'rustc:       %s\n' "$(rustc --version)"
     printf 'clang:       %s\n' "$(clang --version | head -1)"
     printf 'version:     %s\n' "$("$out/bin/nazm" --version 2>/dev/null || echo unknown)"
-    printf 'binary-sha:  %s\n' "$(digest "$out/bin/nazm")"
+    printf 'binary-sha:  %s\n' "$(sha256 "$out/bin/nazm")"
     printf '\n'
     printf 'This is an EXPERIMENTAL candidate built and verified on one machine.\n'
     printf 'It has been checked on %s and nowhere else; other targets are\n' "$(uname -sm)"
@@ -124,9 +152,31 @@ digest() { shasum -a 256 "$1" | cut -d' ' -f1; }
 
 # Every file, with its digest, so the candidate can be checked rather than trusted.
 (cd "$out" && find . -type f ! -name MANIFEST.txt | sort | while read -r f; do
-    printf '  %s  %s\n' "$(shasum -a 256 "$f" | cut -d' ' -f1)" "${f#./}"
+    printf '  %s  %s\n' "$(sha256 "$f")" "${f#./}"
 done) >> "$out/MANIFEST.txt"
 
+
+# --- validate -----------------------------------------------------------------------
+#
+# Read the manifest back and check every digest against the file it names. A manifest is
+# a claim about an artefact; unverified, it is a claim about the script that wrote it.
+# This also catches the case that matters most — a file copied in but never listed —
+# because the count is compared both ways.
+say "validating the candidate against its own manifest"
+listed=0
+while read -r want name; do
+    [ -n "${name:-}" ] || continue
+    [ -f "$out/$name" ] || fail "MANIFEST.txt lists $name, which is not in the candidate"
+    got=$(sha256 "$out/$name")
+    [ "$got" = "$want" ] || fail "$name does not match its digest: manifest $want, file $got"
+    listed=$((listed + 1))
+done <<EOT
+$(sed -n 's/^  \([0-9a-f]\{64\}\)  \(.*\)$/\1 \2/p' "$out/MANIFEST.txt")
+EOT
+present=$(cd "$out" && find . -type f ! -name MANIFEST.txt | wc -l | tr -d ' ')
+[ "$listed" -eq "$present" ] \
+    || fail "the candidate holds $present files and the manifest lists $listed"
+say "manifest verified: $listed files, every digest matching"
 say "release candidate assembled"
 cat "$out/MANIFEST.txt"
 printf '\nat: %s\n' "$out"
