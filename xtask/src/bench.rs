@@ -49,6 +49,12 @@ pub(crate) enum Mode {
     Check,
 }
 
+/// A named way of invoking the compiler, and the command that does it.
+///
+/// A type alias because the tuple is unreadable inline, which clippy is right about:
+/// `(&'static str, Box<dyn Fn() -> Command>)` at a `let` tells a reader nothing.
+type Stage = (&'static str, Box<dyn Fn() -> Command>);
+
 /// One timed thing.
 #[derive(Debug)]
 struct Measurement {
@@ -71,9 +77,8 @@ impl Measurement {
         ms.sort_by(f64::total_cmp);
         // The lower of the two middles for an even count, rather than their mean: an
         // average of two timings is a number that was never observed.
-        ms.get(ms.len().saturating_sub(1) / 2)
-            .copied()
-            .unwrap_or(0.0)
+        let middle = ms.len().saturating_sub(1).wrapping_div(2);
+        ms.get(middle).copied().unwrap_or(0.0)
     }
 
     fn key(&self) -> String {
@@ -166,7 +171,7 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
         let exe = scratch.join(&name);
         let source = path.display().to_string();
 
-        let stages: Vec<(&'static str, Box<dyn Fn() -> Command>)> = vec![
+        let stages: Vec<Stage> = vec![
             ("check", {
                 let (n, s) = (nazm.clone(), source.clone());
                 Box::new(move || {
@@ -210,7 +215,7 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
         ];
 
         for (stage, build) in stages {
-            match measure(&name, stage, runs, || build()) {
+            match measure(&name, stage, runs, build) {
                 Ok(m) => measurements.push(m),
                 Err(e) => {
                     eprintln!("bench: {name}/{stage} failed: {e}");
