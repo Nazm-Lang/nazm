@@ -89,21 +89,22 @@ These are properties of the release, not a backlog.
 
 ## Results
 
-`cargo test --workspace` on a clean offline rebuild: **506 passed, 0 failed, 6 ignored.**
-What those cover, grouped by the question each group answers:
+`cargo test --workspace`: **522 passed, 0 failed, 6 ignored.** What they cover, grouped
+by the question each group answers:
 
 | | count | what it establishes |
 | --- | ---: | --- |
-| Language semantics (`nazm-core/tests/language.rs`) | 110 | each rule in `docs/spec.md` that a refactor could quietly reverse |
+| Language semantics (`nazm-core/tests/language.rs`) | 114 | each rule in `docs/spec.md` that a refactor could quietly reverse |
 | Native end-to-end (`nazm-cli/tests/build.rs`) | 126 | every case compiled at `-O0` **and** `-O2`, and compared against the interpreter |
 | Self-hosting differentials (`nazm-cli/tests/selfhost.rs`) | 15 | the Nazm lexer, parser and checker against the Rust ones over every `.nz` in the tree, and the full bootstrap chain |
 | Concurrency, interpreted (`nazm-core/tests/concurrency.rs`) | 15 | joins, capture, cancellation, cleanup, contention — every one with a deadline |
 | Concurrency, native (`nazm-cli/tests/concurrent.rs`) | 11 | the same programs compiled, at `-O0` and `-O2`, against a written expectation *and* the interpreter |
 | Machine interface (`nazm-cli/tests/schemas.rs`) | 5 | real command output validated against `schema/*.json` |
 | Formatter (`nazm-syntax/tests/format.rs`) | 11 | token preservation, idempotence, comment preservation, over every source in the tree |
-| Grammar (`nazm-syntax/tests/grammar.rs`) | 3 | every lexer token written down, every rule reachable, every example parsed by the real parser |
+| Grammar (`nazm-syntax/tests/grammar.rs`) | 4 | every lexer token written down, every rule reachable, every example parsed by the real parser |
 | Repair workflow (`nazm-cli/tests/workflow.rs`) | 10 | `nazm fix`, `nazm fmt`, `nazm test` and `scripts/repair.sh` end to end |
-| Coverage of the guarantees themselves (`codes.rs`, `builtins.rs`, `docs.rs`) | 6 | every diagnostic code asserted or named unreachable; every built-in exercised where an answer is asserted; the README's command table, the published schemas and the verified target all checked against the build |
+| Coverage of the guarantees themselves (`codes.rs`, `builtins.rs`, `docs.rs`, `counts.rs`) | 8 | every diagnostic code asserted or named unreachable; every built-in exercised where an answer is asserted; every example run by a test; the README's command table, the published schemas and the verified target checked against the build; and this table's own rows required to sum to the total above |
+| The rest | 203 | unit tests across the six crates, the CLI's own behaviour, and the benchmark harness — which is not part of this goal |
 
 The bootstrap: **C2 and C3 byte-identical** in IR and executable, with 5 conformance
 cases agreeing across C2, C3 and the interpreter. `compiler/bootstrap.sh` writes the

@@ -319,6 +319,15 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
         Err(e) => eprintln!("bench: skipping the self-compile benchmark: {e}"),
     }
 
+    // One external reference, where the toolchain is present.
+    //
+    // §12 asks for a justified external reference where locally available, and one is
+    // the right number: `bench/reference/sieve.c` and `sieve.py` are the Nazm sieve
+    // statement for statement, not the way a C or Python programmer would write it,
+    // because a different algorithm would measure the algorithm. Absent toolchains are
+    // recorded as absent rather than skipped silently.
+    measurements.extend(references(&root, &nazm, &scratch, runs));
+
     // Peak memory, once per command rather than repeatedly: it varies far less than
     // time does, and `docs/NAZM_AUTONOMOUS_GOAL.md` §12 asks for it separately from
     // speed because they are separate questions.
@@ -371,6 +380,87 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
         }
         Mode::Check => compare(&root, &measurements),
     }
+}
+
+/// Time the external references, where the toolchain for one is installed.
+///
+/// Each must produce the same answer as the Nazm program it mirrors, checked against the
+/// same `.expected` file — a reference that computes something else is not a reference.
+fn references(root: &Path, nazm: &Path, scratch: &Path, runs: usize) -> Vec<Measurement> {
+    let mut out = Vec::new();
+    let dir = root.join("bench/reference");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return out;
+    };
+    let mut sources: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    sources.sort();
+
+    for source in sources {
+        let Some(name) = source.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let expected = root.join("bench/programs").join(format!("{name}.expected"));
+        let Ok(expected) = std::fs::read_to_string(&expected) else {
+            eprintln!("bench: {name} has no Nazm counterpart to be a reference to");
+            continue;
+        };
+        let expected = expected.trim().to_owned();
+        let _ = nazm;
+
+        let (stage, mut command): (&'static str, Box<dyn Fn() -> Command>) = match source
+            .extension()
+            .and_then(|e| e.to_str())
+        {
+            Some("c") => {
+                let exe = scratch.join(format!("{name}.c.out"));
+                let built = Command::new("clang")
+                    .arg("-O2")
+                    .arg("-o")
+                    .arg(&exe)
+                    .arg(&source)
+                    .output();
+                match built {
+                    Ok(o) if o.status.success() => {
+                        ("reference-c", Box::new(move || Command::new(&exe)))
+                    }
+                    _ => {
+                        println!("bench: clang is unavailable; the C reference was not measured");
+                        continue;
+                    }
+                }
+            }
+            Some("py") => {
+                if Command::new("python3").arg("--version").output().is_err() {
+                    println!("bench: python3 is unavailable; that reference was not measured");
+                    continue;
+                }
+                let s = source.clone();
+                (
+                    "reference-python",
+                    Box::new(move || {
+                        let mut c = Command::new("python3");
+                        c.arg(&s);
+                        c
+                    }),
+                )
+            }
+            _ => continue,
+        };
+
+        let got = output(&mut command());
+        if got != expected {
+            eprintln!(
+                "bench: the {stage} for {name} produced {got:?}, expected {expected:?} — \
+                 it is not computing the same thing and was not measured"
+            );
+            continue;
+        }
+        match measure(&name, stage, runs, &mut *command) {
+            Ok(m) => out.push(m),
+            Err(e) => eprintln!("bench: {name}/{stage} failed: {e}"),
+        }
+    }
+    out
 }
 
 /// Every program must produce its recorded answer, interpreted and compiled.
