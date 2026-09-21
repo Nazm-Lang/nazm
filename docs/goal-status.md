@@ -69,8 +69,9 @@ strictly: **passed** / **skipped** / **refused** / **failed** / **unexecuted**.
 | `cargo fmt --all -- --check` | **passed** |
 | `cargo lint` | **passed** |
 | `cargo xtask check` | **passed** — 6/6 gates (layering, codegen reach, emission reach, unsafe policy, doc claims, guide from grammar) |
-| `cargo xtask bench --check` | **unexecuted** at the time of writing — see the platform note below |
-| mutation catalogue | **unexecuted** |
+| `contained bench --save` | **passed** — recorded `bench/baseline-linux-aarch64.json`; the Darwin `baseline.json` untouched |
+| `contained bench` (check) | **passed** — nothing slower than the Linux baseline by more than 25% and 5 ms |
+| mutation catalogue (3 targeted) | **in progress** — contained, against a disposable copy |
 
 ### Both emitters now number temporaries sequentially
 
@@ -85,13 +86,25 @@ compiler, and the C2/C3 fixpoint is undisturbed. This closes the open item recor
 earlier as "one module on one version pair" — the cause is now identified and removed
 rather than merely observed.
 
-### Benchmarks: a real platform conflict, not yet resolved
+### Benchmarks: resolved, one baseline per host
 
-`bench/baseline.json` was recorded on **aarch64-apple-darwin**. The contract requires
-heavy benchmarks to run contained, and the contained runner is **Linux**. Checking Linux
-timings against a macOS baseline would manufacture regressions that mean nothing, and
-`--save` cannot write to the read-only `/src` mount in any case. A separate per-platform
-baseline is needed. Recorded as **blocked on a decision**, not silently skipped.
+The conflict was real — `bench/baseline.json` is **aarch64-apple-darwin** and the runner
+is Linux — but the tool already refused to compare across hosts on its own. So the fix
+was arrangement, not policy: whichever host owns the legacy name keeps it, and every
+other host gets `bench/baseline-<host>.json`. Nothing was migrated and the Darwin numbers
+are untouched.
+
+`contained bench` mounts the source read-write, alone among the workloads, because its
+product is a file in the tree. That is a filesystem choice; the resource bounds are
+identical either way.
+
+**Peak memory is measured again, and exactly.** Every row had read "not measured" since
+the move into the container: `peak_rss` shelled out to `/usr/bin/time -l`, the BSD
+spelling, and the slim image shipped no `time` at all. It now prefers GNU `time -v`
+(getrusage, exact even for a program that exits immediately) with `/proc/<pid>/status`
+as a fallback. A first attempt using only `/proc` produced rows of 8 KB and 16 KB —
+the poll losing a race with a short program, not a measurement — so the fallback now
+refuses anything under a megabyte. All 14 rows populated, 1.2-6.2 MB.
 
 ## HALT — resource incident, 2026-09-21 (read before running anything)
 
