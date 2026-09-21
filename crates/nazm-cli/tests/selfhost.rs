@@ -1019,36 +1019,109 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
 /// Its own copy rather than one shared with `tests/build.rs`: each integration test is a
 /// separate binary, and a compiled program that does not terminate would otherwise hang
 /// the suite rather than fail it.
+/// What the parent will buffer from one stream before it refuses.
+///
+/// Generous on purpose — the largest IR any test here produces is a few hundred
+/// kilobytes — because this is not a budget. It is a refusal to reproduce the
+/// 2026-09-21 accumulation bug one level up: `wait_with_output` buffers without limit,
+/// and an unbounded stage writing into a pipe is exactly the shape that got us here.
+const OUTPUT_CAP: usize = 64 * 1024 * 1024;
+
+/// Runs `cmd` under a wall-clock deadline, draining both pipes while it runs. `None`
+/// means the deadline passed first.
+///
+/// # Both pipes are drained on their own threads, and that is not a nicety
+///
+/// A child that writes more than the pipe buffer — 64 KiB on Linux — blocks until
+/// something reads. A parent that waits for exit *first* and collects afterwards
+/// therefore deadlocks, and then reports it as a hang, which is a wrong diagnosis of its
+/// own bug. Every compiler stage here writes its output to stdout, so for this suite that
+/// is the ordinary case rather than the pathological one.
+///
+/// # Cleanup
+///
+/// On the deadline the child is killed and reaped, and both readers are joined — the
+/// kill closes the pipes, so they end. A test that leaves a stage running is a test that
+/// competes with the next one, which is how ten of them were running at once on
+/// 2026-09-21.
 fn run_bounded(
     cmd: &mut Command,
     limit: std::time::Duration,
 ) -> Option<(Option<i32>, String, String)> {
+    use std::io::Read;
     use std::process::Stdio;
+
+    fn drain(mut r: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf: Vec<u8> = Vec::new();
+            let mut chunk = [0_u8; 8192];
+            while let Ok(n) = r.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                let room = OUTPUT_CAP.saturating_sub(buf.len());
+                assert!(
+                    room > 0,
+                    "run_bounded: a child wrote more than {OUTPUT_CAP} bytes to one \
+                     stream. Refusing to buffer it: that is the accumulation bug this \
+                     suite exists to catch, not something to grow a Vec for."
+                );
+                buf.extend_from_slice(chunk.get(..n.min(room)).unwrap_or_default());
+            }
+            buf
+        })
+    }
+
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn");
+    let out = drain(child.stdout.take().expect("stdout pipe"));
+    let err = drain(child.stderr.take().expect("stderr pipe"));
+
     let start = std::time::Instant::now();
-    loop {
+    let finished = loop {
         match child.try_wait().expect("try_wait") {
-            Some(status) => {
-                let out = child.wait_with_output().expect("collect");
-                return Some((
-                    status.code(),
-                    String::from_utf8_lossy(&out.stdout).into_owned(),
-                    String::from_utf8_lossy(&out.stderr).into_owned(),
-                ));
-            }
+            Some(status) => break Some(status),
             None if start.elapsed() >= limit => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                break None;
             }
             None => std::thread::sleep(std::time::Duration::from_millis(5)),
         }
-    }
+    };
+    // Joined either way, so nothing is left reading a pipe after the test moves on.
+    let stdout = String::from_utf8_lossy(&out.join().expect("stdout reader")).into_owned();
+    let stderr = String::from_utf8_lossy(&err.join().expect("stderr reader")).into_owned();
+    Some((finished?.code(), stdout, stderr))
+}
+
+/// How long any one stage invocation in this file gets.
+const STAGE_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Runs a **generated** compiler stage — `nzemit` and friends, compiled from `compiler/*.nz`
+/// — under the same ceiling every other generated executable here runs under.
+///
+/// `Command::output()` gives neither an address-space ceiling nor a deadline. The
+/// compiled *programs* in this file have always gone through `bounded_exe`; the stage
+/// that compiles them had not, which is backwards: `nzemit` is one of the ten processes
+/// that were running when the machine went down, and it is the one whose input is
+/// attacker-shaped in the sense that matters here — whatever a test happens to write.
+///
+/// The Rust `nazm` binary and `clang` are deliberately *not* routed through this. They
+/// are trusted build tools in the same class as `cargo`, not artefacts of the thing under
+/// test.
+fn run_stage(exe: &Path, arg: &Path) -> (Option<i32>, String, String) {
+    run_bounded(common::bounded_exe(exe).arg(arg), STAGE_LIMIT).unwrap_or_else(|| {
+        panic!(
+            "{} did not finish within {STAGE_LIMIT:?} on {}",
+            exe.display(),
+            arg.display()
+        )
+    })
 }
 
 fn build_emitter(dir: &Path) -> PathBuf {
@@ -1137,18 +1210,10 @@ fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_in
         let file = dir.path().join("case.nz");
         std::fs::write(&file, &src).expect("write");
 
-        let ir = Command::new(&emitter)
-            .arg(&file)
-            .output()
-            .expect("run emitter");
-        assert_eq!(
-            ir.status.code(),
-            Some(0),
-            "the Nazm compiler refused {expr:?}: {}",
-            String::from_utf8_lossy(&ir.stderr)
-        );
+        let (rc, ir, ir_err) = run_stage(&emitter, &file);
+        assert_eq!(rc, Some(0), "the Nazm compiler refused {expr:?}: {ir_err}");
         let ll = dir.path().join("case.ll");
-        std::fs::write(&ll, &ir.stdout).expect("write IR");
+        std::fs::write(&ll, &ir).expect("write IR");
 
         let exe = dir.path().join("case");
         let built = Command::new("clang")
@@ -1159,9 +1224,8 @@ fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_in
             .expect("run clang");
         assert!(
             built.status.success(),
-            "clang rejected IR from the Nazm compiler for {expr:?}: {}\n{}",
-            String::from_utf8_lossy(&built.stderr),
-            String::from_utf8_lossy(&ir.stdout)
+            "clang rejected IR from the Nazm compiler for {expr:?}: {}\n{ir}",
+            String::from_utf8_lossy(&built.stderr)
         );
 
         let (code, stdout, _) = run_bounded(
@@ -1215,14 +1279,9 @@ fn the_nazm_compiler_handles_several_functions_and_calls() {
     for (src, expected) in programs {
         let file = dir.path().join("case.nz");
         std::fs::write(&file, src).expect("write");
-        let ir = Command::new(&emitter).arg(&file).output().expect("run");
-        assert_eq!(
-            ir.status.code(),
-            Some(0),
-            "the Nazm compiler refused a program: {}",
-            String::from_utf8_lossy(&ir.stderr)
-        );
-        let text = String::from_utf8_lossy(&ir.stdout).into_owned();
+        let (rc, ir, ir_err) = run_stage(&emitter, &file);
+        assert_eq!(rc, Some(0), "the Nazm compiler refused a program: {ir_err}");
+        let text = &ir;
         // Symbols are generated from the index, never from the source name: a Nazm
         // identifier would need escaping rules to be safe in an LLVM identifier, and the
         // escaping is the bug.
@@ -1233,7 +1292,7 @@ fn the_nazm_compiler_handles_several_functions_and_calls() {
         );
 
         let ll = dir.path().join("case.ll");
-        std::fs::write(&ll, &ir.stdout).expect("write");
+        std::fs::write(&ll, &ir).expect("write");
         let exe = dir.path().join("case");
         let built = Command::new("clang")
             .args(["-Wno-override-module", "-o"])
@@ -1317,10 +1376,10 @@ fn the_nazm_compiler_keeps_the_specified_failure_behaviour() {
         let src = format!("fn main() -> Int {{ {expr} }}\n");
         let file = dir.path().join("case.nz");
         std::fs::write(&file, &src).expect("write");
-        let ir = Command::new(&emitter).arg(&file).output().expect("run");
-        assert_eq!(ir.status.code(), Some(0), "{expr:?}");
+        let (rc, ir, _) = run_stage(&emitter, &file);
+        assert_eq!(rc, Some(0), "{expr:?}");
         let ll = dir.path().join("case.ll");
-        std::fs::write(&ll, &ir.stdout).expect("write");
+        std::fs::write(&ll, &ir).expect("write");
         let exe = dir.path().join("case");
         assert!(Command::new("clang")
             .args(["-Wno-override-module", "-o"])
@@ -1347,8 +1406,7 @@ fn the_nazm_compiler_keeps_the_specified_failure_behaviour() {
 
         // The IR never uses `nsw`, which would let the optimiser delete the very branch
         // meant to catch the overflow.
-        let text = String::from_utf8_lossy(&ir.stdout);
-        assert!(!text.contains("nsw"), "{expr:?}: emitted `nsw`:\n{text}");
+        assert!(!ir.contains("nsw"), "{expr:?}: emitted `nsw`:\n{ir}");
     }
 }
 
@@ -1372,17 +1430,13 @@ fn the_nazm_compiler_refuses_what_it_cannot_emit_and_writes_nothing() {
     ] {
         let file = dir.path().join("bad.nz");
         std::fs::write(&file, src).expect("write");
-        let out = Command::new(&emitter).arg(&file).output().expect("run");
-        assert_eq!(out.status.code(), Some(1), "{src:?} should be refused");
-        let stderr = String::from_utf8_lossy(&out.stderr);
+        let (rc, ir, err) = run_stage(&emitter, &file);
+        assert_eq!(rc, Some(1), "{src:?} should be refused");
         assert!(
-            stderr.contains(expected),
-            "{src:?}: expected {expected}: {stderr}"
+            err.contains(expected),
+            "{src:?}: expected {expected}: {err}"
         );
-        assert!(
-            out.stdout.is_empty(),
-            "{src:?}: emitted IR for a refused program"
-        );
+        assert!(ir.is_empty(), "{src:?}: emitted IR for a refused program");
     }
 }
 
@@ -1477,18 +1531,14 @@ fn the_nazm_written_compiler_resolves_its_own_imports() {
     )
     .expect("prog");
 
-    let ir = Command::new(&emitter)
-        .arg(&prog)
-        .output()
-        .expect("run emitter");
+    let (rc, ir, ir_err) = run_stage(&emitter, &prog);
     assert_eq!(
-        ir.status.code(),
+        rc,
         Some(0),
-        "the Nazm compiler could not resolve the imports: {}",
-        String::from_utf8_lossy(&ir.stderr)
+        "the Nazm compiler could not resolve the imports: {ir_err}"
     );
     let ll = root.join("prog.ll");
-    std::fs::write(&ll, &ir.stdout).expect("write IR");
+    std::fs::write(&ll, &ir).expect("write IR");
 
     let exe = root.join("prog");
     let built = Command::new("clang")
@@ -1556,17 +1606,9 @@ fn the_nazm_written_compiler_refuses_an_import_it_cannot_find() {
     let prog = dir.path().join("bad.nz");
     std::fs::write(&prog, "use \"nowhere.nz\";\nfn main() -> Int { 0 }\n").expect("write");
 
-    let out = Command::new(&emitter)
-        .arg(&prog)
-        .output()
-        .expect("run emitter");
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "a missing import must fail, got {:?}",
-        out.status.code()
-    );
-    let said = String::from_utf8_lossy(&out.stderr);
+    let (rc, _, err) = run_stage(&emitter, &prog);
+    assert_eq!(rc, Some(2), "a missing import must fail, got {rc:?}");
+    let said = err;
     assert!(
         said.contains("cannot find"),
         "it must name what it could not find, got {said:?}"
@@ -1606,18 +1648,14 @@ fn the_nazm_written_compiler_compiles_concurrency() {
         let file = dir.path().join("case.nz");
         std::fs::write(&file, src).expect("write");
 
-        let ir = Command::new(&emitter)
-            .arg(&file)
-            .output()
-            .expect("run emitter");
+        let (rc, ir, ir_err) = run_stage(&emitter, &file);
         assert_eq!(
-            ir.status.code(),
+            rc,
             Some(0),
-            "{what}: the Nazm compiler refused it: {}",
-            String::from_utf8_lossy(&ir.stderr)
+            "{what}: the Nazm compiler refused it: {ir_err}"
         );
         let ll = dir.path().join("case.ll");
-        std::fs::write(&ll, &ir.stdout).expect("write IR");
+        std::fs::write(&ll, &ir).expect("write IR");
         let exe = dir.path().join("case");
         let built = Command::new("clang")
             .args(["-Wno-override-module", "-pthread", "-o"])
@@ -1724,15 +1762,10 @@ fn a_program_from_the_nazm_compiler_joins_its_scope_before_reporting() {
     for (what, src, code) in cases {
         let file = dir.path().join("fail.nz");
         std::fs::write(&file, src).expect("write");
-        let ir = Command::new(&emitter).arg(&file).output().expect("emit");
-        assert_eq!(
-            ir.status.code(),
-            Some(0),
-            "{what}: {}",
-            String::from_utf8_lossy(&ir.stderr)
-        );
+        let (emitted, ir, ir_err) = run_stage(&emitter, &file);
+        assert_eq!(emitted, Some(0), "{what}: {ir_err}");
         let ll = dir.path().join("fail.ll");
-        std::fs::write(&ll, &ir.stdout).expect("write IR");
+        std::fs::write(&ll, &ir).expect("write IR");
         let exe = dir.path().join("fail");
         let built = Command::new("clang")
             .args(["-Wno-override-module", "-pthread", "-o"])
@@ -1773,11 +1806,12 @@ fn a_program_from_the_nazm_compiler_joins_its_scope_before_reporting() {
 /// program `nazm build` rejects outright. Recorded then as "unguarded"; this is the test
 /// that says it is not any more.
 ///
-/// Five shapes, because the condition has more than one spelling: a function calling
-/// itself, two functions calling each other, a cycle that only exists across two files,
-/// a cycle that goes through a `spawn` (a task is an edge like any other — a thread does
-/// not bound the stack), and one acyclic program that must keep compiling. The last is
-/// the one that fails if a cycle check is written too eagerly.
+/// Six shapes, because the condition has more than one spelling: a function calling
+/// itself, a recursive function nothing calls, two functions calling each other, a cycle
+/// that only exists across two files, a cycle that goes through a `spawn` (a task is an
+/// edge like any other — a thread does not bound the stack), and one acyclic program that
+/// must keep compiling. The second is what makes "every declared function" a claim rather
+/// than a phrase; the last is the one that fails if a cycle check is written too eagerly.
 #[test]
 fn the_nazm_written_compiler_refuses_recursion_as_the_reference_does() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1800,6 +1834,18 @@ fn the_nazm_written_compiler_refuses_recursion_as_the_reference_does() {
             root:            "fn fact(n: Int) -> Int {\n    if n <= 1 { 1 } else { n * fact(n - 1) }\n}\nfn main() -> Int { fact(5) }\n",
             extra: &[],
             phrase: "a call to `fact` from inside itself",
+        },
+        Cycle {
+            // The one that distinguishes "every declared function" from "every function
+            // `main` can reach". `unused` is dead code; refusing it anyway is the whole
+            // point, because the alternative introduces a reachability rule into the
+            // language as a side effect of a backend limit — deleting a call elsewhere
+            // would silently change whether this is diagnosed.
+            what: "a recursive function nothing calls",
+            root: "fn unused(n: Int) -> Int {\n    if n <= 0 { 0 } else { unused(n - 1) }\n}\n\
+                   fn main() -> Int { 42 }\n",
+            extra: &[],
+            phrase: "a call to `unused` from inside itself",
         },
         Cycle {
             what: "two functions calling each other",
@@ -1859,23 +1905,19 @@ fn the_nazm_written_compiler_refuses_recursion_as_the_reference_does() {
             "{what}: the reference's wording moved: {reference_err}"
         );
 
-        let ours = Command::new(&emitter)
-            .arg(&case)
-            .output()
-            .expect("run emitter");
-        let ours_err = String::from_utf8_lossy(&ours.stderr).into_owned();
+        let (ours_rc, ours_ir, ours_err) = run_stage(&emitter, &case);
         assert_eq!(
-            ours.status.code(),
+            ours_rc,
             Some(1),
             "{what}: the Nazm-written compiler did not refuse it. stdout was {} bytes of \
              IR, which is the whole bug: it used to emit native recursion here.",
-            ours.stdout.len()
+            ours_ir.len()
         );
         assert!(
-            ours.stdout.is_empty(),
+            ours_ir.is_empty(),
             "{what}: it refused but still wrote {} bytes of IR to stdout. A refusal that \
              arrives after the output is one nobody can act on.",
-            ours.stdout.len()
+            ours_ir.len()
         );
         assert!(
             ours_err.contains("N0101") && ours_err.contains(phrase),
@@ -1909,18 +1951,10 @@ fn the_nazm_written_compiler_refuses_recursion_as_the_reference_does() {
     )
     .expect("write");
 
-    let ir = Command::new(&emitter)
-        .arg(&ok)
-        .output()
-        .expect("run emitter");
-    assert_eq!(
-        ir.status.code(),
-        Some(0),
-        "the acyclic program was refused: {}",
-        String::from_utf8_lossy(&ir.stderr)
-    );
+    let (rc, ir, ir_err) = run_stage(&emitter, &ok);
+    assert_eq!(rc, Some(0), "the acyclic program was refused: {ir_err}");
     let ll = dir.path().join("acyclic.ll");
-    std::fs::write(&ll, &ir.stdout).expect("write IR");
+    std::fs::write(&ll, &ir).expect("write IR");
     let exe = dir.path().join("acyclic");
     let built = Command::new("clang")
         .args(["-Wno-override-module", "-o"])
