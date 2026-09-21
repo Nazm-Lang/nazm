@@ -294,6 +294,25 @@ is never set on the host; `NAZM_ALLOW_UNCONTAINED=1` is never used.
    `mutate` still resolves `target/` from its `root` parameter, which is correct for its
    throwaway trees but means a contained run needs a writable copy, not the read-only
    mount.
+
+   **`the-loop-reuses-its-first-condition` is caught** (2026-09-21), established by a
+   focused run rather than the whole catalogue: green baseline (the test passes in the
+   539-test contained suite), injection verified by counting sites — `br label %{head}`
+   2 → 1 with `%{body_label}` at `emit.rs:712`, the back edge, not the entry branch at
+   `:691` — mutant compiled, and `the_condition_is_reevaluated_on_every_iteration` failed
+   with *"-O0: the loop did not terminate within 10s"*. Container removed, `survivors=0`,
+   this tree untouched. 30.5s in total.
+
+   **The whole-catalogue run before it timed out** at its 3600 s deadline without reaching
+   injection: its entire output was `running 1 of the catalogue`, `oom_killed=false`,
+   `survivors=0`, cleanup verified. Recorded as **incomplete, not as a result** — a
+   timeout is neither a caught mutant nor a surviving one. What consumed the hour is
+   **not established**. It is not a cold build cache, which was the first guess and is
+   wrong: measured, the disposable copy inherits nothing (`/work/mut/target` empty) and a
+   cold `cargo build -p nazm-cli` there is 30 crates in about 15 s, because the dependency
+   set is small. The same suite runs contained in 57.9 s against the image's warm
+   `/work/target`. Diagnosing the difference is open work, and no full run should be
+   restarted until it is understood.
 4. **`scripts/release-candidate.sh`**, contained. It calls `compiler/bootstrap.sh`, which
    now refuses without a ceiling, so the script only works through the runner.
 5. Fold the numbers into `docs/delivery.md` and close Section 13.
