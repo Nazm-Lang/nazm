@@ -89,8 +89,8 @@ These are properties of the release, not a backlog.
 
 ## Results
 
-`cargo test --workspace`: **524 passed, 0 failed, 6 ignored**, run through
-`cargo xtask contained` on Linux. What they cover, grouped by the question each group
+`cargo test --workspace`, run through `cargo xtask contained` on Linux:
+**524 passed, 0 failed, 6 ignored.** What they cover, grouped by the question each group
 answers:
 
 | | count | what it establishes |
@@ -104,7 +104,7 @@ answers:
 | Formatter (`nazm-syntax/tests/format.rs`) | 11 | token preservation, idempotence, comment preservation, over every source in the tree |
 | Grammar (`nazm-syntax/tests/grammar.rs`) | 4 | every lexer token written down, every rule reachable, every example parsed by the real parser |
 | Repair workflow (`nazm-cli/tests/workflow.rs`) | 10 | `nazm fix`, `nazm fmt`, `nazm test` and `scripts/repair.sh` end to end |
-| Coverage of the guarantees themselves (`codes.rs`, `builtins.rs`, `docs.rs`, `counts.rs`) | 8 | every diagnostic code asserted or named unreachable; every built-in exercised where an answer is asserted; every example run by a test; the README's command table, the published schemas and the verified target checked against the build; and this table's own rows required to sum to the total above |
+| Coverage of the guarantees themselves (`codes.rs`, `builtins.rs`, `docs.rs`, `counts.rs`, `resource_regression.rs`) | 10 | every diagnostic code asserted or named unreachable; every built-in exercised where an answer is asserted; every example run by a test; the README's command table, the published schemas and the verified target checked against the build; and this table's own rows required to sum to the total above; and the stage drivers required to assemble their output in one allocation, measured under a ceiling |
 | The rest | 203 | unit tests across the six crates, the CLI's own behaviour, and the benchmark harness — which is not part of this goal |
 
 The bootstrap: **C2 and C3 byte-identical** in IR and executable, with 5 conformance
