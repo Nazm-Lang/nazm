@@ -894,7 +894,7 @@ fn runtime() -> Str {
 fn refuse(message: Str, at: Str) -> Int {
     eprint(str_concat(str_concat("nazm: error[N0101]: ", message),
             str_concat(str_concat(" at ", at), nl())));
-    eprint(str_concat("nazm: this emitter compiles `fn main() -> Int { EXPRESSION }` over integer arithmetic; everything else still runs under `nazm run`", nl()));
+    eprint(str_concat("nazm: this backend compiles the bootstrap subset; what it refuses still runs under `nazm run`", nl()));
     exit_with(1);
     0
 }
@@ -1031,6 +1031,149 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
                 str_concat(" %p", int_to_str(p))),
                 str_concat(", ptr %slot", int_to_str(slot))));
         p = p + 1;
+    }
+    0
+}
+
+// --- recursion ------------------------------------------------------------------------
+//
+// The refusal `nazm-lir::lower::report_cycles` makes, made here for the same reason and
+// with the same code: this backend emits one native call per call and has no plan for the
+// stack a recursive one needs, so it refuses rather than emitting something it cannot
+// bound. `nazm run` still runs recursive programs, with a bounded call depth. This is not
+// a language rule — `nazm check` accepts recursion, and the specification allows it.
+//
+// Every *declared* function, not only the reachable ones. Checking reachability would
+// mean that deleting a call somewhere else could change whether a function is diagnosed:
+// a language-visible rule arriving as a side effect of a backend limitation.
+//
+// Direct and mutual recursion are one condition found one way, and a cycle that passes
+// through a `spawn` is the same condition again: a task is an edge like any other, and
+// going through a thread does not bound the stack.
+//
+// One difference from the reference, and it is a reporting difference rather than a
+// contract one: this refuses at the first cycle it finds, where the reference collects
+// one diagnostic per function. The set of programs refused is the same.
+fn refuse_recursion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent: Ints,
+        fnames: Strs, bnames: Strs) -> Int {
+    // Which function each `fn` node is. `collect_signatures` walks the arena in the same
+    // order, so a function's position here is the index `fnames` gave it.
+    let fnof = ints_new();
+    let mut k = 0;
+    while k < ints_len(nk) {
+        ints_push(fnof, 0 - 1);
+        k = k + 1;
+    }
+    let mut seen = 0;
+    k = 0;
+    while k < ints_len(nk) {
+        if ints_get(nk, k) == n_fn() {
+            ints_set(fnof, k, seen);
+            seen = seen + 1;
+        }
+        k = k + 1;
+    }
+
+    // One edge per call to a user function, carrying the call's own offset so the refusal
+    // points at the call rather than at the function.
+    let efrom = ints_new();
+    let eto = ints_new();
+    let eat = ints_new();
+    k = 0;
+    while k < ints_len(nk) {
+        let mut calls = false;
+        if ints_get(nk, k) == n_call() { calls = true; }
+        if ints_get(nk, k) == n_spawn() { calls = true; }
+        if calls {
+            let name = strs_get(ntx, k);
+            // A built-in is not an edge. `check_call` also resolves built-ins first, so a
+            // user function sharing a built-in name is never the callee and never an edge
+            // either; the two agree deliberately rather than by accident.
+            if builtin_index(bnames, name) < 0 {
+                let to = builtin_index(fnames, name);
+                if to >= 0 {
+                    // The function this call sits in, found by walking parents with a
+                    // loop. A compiler about to refuse recursion should not need it to
+                    // say so.
+                    let mut up = k;
+                    let mut from = 0 - 1;
+                    while up >= 0 {
+                        if ints_get(nk, up) == n_fn() {
+                            from = ints_get(fnof, up);
+                            up = 0 - 1;
+                        } else {
+                            up = ints_get(parent, up);
+                        }
+                    }
+                    if from >= 0 {
+                        ints_push(efrom, from);
+                        ints_push(eto, to);
+                        ints_push(eat, ints_get(nst, k));
+                    }
+                }
+            }
+        }
+        k = k + 1;
+    }
+
+    // Depth-first search with an explicit stack: 0 unvisited, 1 on the current path,
+    // 2 finished. An edge to a function already on the path closes a cycle.
+    let mark = ints_new();
+    let mut i = 0;
+    while i < strs_len(fnames) {
+        ints_push(mark, 0);
+        i = i + 1;
+    }
+    let stack = ints_new();
+    let cursor = ints_new();
+    let mut root = 0;
+    while root < strs_len(fnames) {
+        if ints_get(mark, root) == 0 {
+            ints_push(stack, root);
+            ints_push(cursor, 0);
+            ints_set(mark, root, 1);
+            while ints_len(stack) > 0 {
+                let top = ints_len(stack) - 1;
+                let node = ints_get(stack, top);
+                // The next edge out of `node`: one flat edge list, scanned forward from
+                // where this frame left off. The graph is small, and three arrays read
+                // more plainly than a bucketed one.
+                let mut e = ints_get(cursor, top);
+                let mut at = 0 - 1;
+                while e < ints_len(efrom) {
+                    if ints_get(efrom, e) == node {
+                        at = e;
+                        e = ints_len(efrom);
+                    } else {
+                        e = e + 1;
+                    }
+                }
+                if at < 0 {
+                    ints_set(mark, node, 2);
+                    ints_pop(stack);
+                    ints_pop(cursor);
+                } else {
+                    ints_set(cursor, top, at + 1);
+                    let to = ints_get(eto, at);
+                    let m = ints_get(mark, to);
+                    if m == 1 {
+                        let name = strs_get(fnames, to);
+                        let mut what = str_concat(str_concat("a call cycle through `", name), "`");
+                        if to == node {
+                            what = str_concat(str_concat("a call to `", name), "` from inside itself");
+                        }
+                        refuse(str_concat(what, " is not in this backend's subset yet"),
+                                position(src, path, ints_get(eat, at)));
+                    }
+                    if m == 0 {
+                        ints_push(stack, to);
+                        ints_push(cursor, 0);
+                        ints_set(mark, to, 1);
+                    }
+                }
+            }
+        }
+        root = root + 1;
     }
     0
 }
@@ -1542,6 +1685,9 @@ fn main() -> Int {
     let childno = ints_new();
     let substart = ints_new();
     build_relations(nk, nar, kids, kid_first, parent, childno, substart);
+    // Before a single instruction is written: a refusal that arrived after the IR was on
+    // stdout would be a refusal nobody could act on.
+    refuse_recursion(src, path, nk, nst, ntx, parent, fnames, bnames);
     emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype,
             parent, childno, substart, kids, kid_first, fnames, fret, body, msgs, blobs, tasks);
 
