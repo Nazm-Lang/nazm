@@ -26,6 +26,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod common;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -135,7 +136,7 @@ fn run_exe(b: &Built) -> Ran {
 /// Run a built executable with an explicit deadline, and say plainly whether it finished.
 fn run_exe_within(b: &Built, limit: Duration) -> Option<Ran> {
     let _ = &b.dir;
-    run_bounded(&mut Command::new(&b.exe), limit)
+    run_bounded(&mut common::bounded_exe(&b.exe), limit)
 }
 
 fn interpret(body: &str) -> Ran {
@@ -1102,7 +1103,7 @@ fn deep_syntax_produces_exactly_the_expected_outcome() {
     );
     assert_ok(&built, "`nazm build` on a 511-term chain");
     assert!(exe.exists(), "the accepted program produced no executable");
-    let ran = Command::new(&exe).output().expect("run");
+    let ran = common::bounded_exe(&exe).output().expect("run");
     assert_eq!(ran.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "511");
 
@@ -3701,7 +3702,7 @@ fn expect_same_run(src: &str, args: &[&str], stdout: &str, stderr: &str, code: i
             "-O{opt}: {}",
             String::from_utf8_lossy(&built.stderr)
         );
-        let mut cmd = Command::new(&exe);
+        let mut cmd = common::bounded_exe(&exe);
         cmd.args(args);
         let ran = run_bounded(&mut cmd, DEADLINE).expect("the compiled program hung");
         assert_eq!(ran.code, Some(code), "-O{opt}: {ran:?}");
@@ -3766,7 +3767,7 @@ fn an_argument_past_the_end_fails_at_its_own_position() {
         .expect("build")
         .status
         .success());
-    let ran = run_bounded(&mut Command::new(&exe), DEADLINE).expect("hung");
+    let ran = run_bounded(&mut common::bounded_exe(&exe), DEADLINE).expect("hung");
     assert_eq!(ran.code, Some(2), "{ran:?}");
     assert!(ran.stderr.contains("N0405"), "{}", ran.stderr);
     assert!(
@@ -3948,7 +3949,7 @@ fn a_program_can_span_several_files_and_a_diamond_loads_once() {
     assert_eq!(interp.stdout.trim(), "2007");
 
     let exe = build_root(dir.path(), &root).expect("build");
-    let ran = run_bounded(&mut Command::new(&exe), DEADLINE).expect("hung");
+    let ran = run_bounded(&mut common::bounded_exe(&exe), DEADLINE).expect("hung");
     assert_eq!(ran.code, Some(0), "{ran:?}");
     assert_eq!(ran.stdout.trim(), "2007", "the compiled program disagrees");
 }
@@ -3966,7 +3967,7 @@ fn an_import_cycle_terminates_and_is_not_an_error() {
     assert_eq!(interp.stdout.trim(), "42");
     let exe = build_root(dir.path(), &root).expect("build");
     assert_eq!(
-        run_bounded(&mut Command::new(&exe), DEADLINE)
+        run_bounded(&mut common::bounded_exe(&exe), DEADLINE)
             .expect("hung")
             .stdout
             .trim(),
