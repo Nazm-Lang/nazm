@@ -26,19 +26,23 @@ fn main() -> Int {
     let texts = strs_new();
     lex(src, kinds, starts, ends, texts);
 
-    let mut out = "";
+    // One allocation for the whole output. `str_concat` in a loop is quadratic in time
+    // *and* memory, and with nothing ever freed that is what exhausted memory on large
+    // inputs — the same measurement that made `str_join` a built-in (see `emit.nz`).
+    let nl = str_from_byte(10);
+    let out = strs_new();
     let mut i = 0;
     while i < ints_len(kinds) {
-        out = str_concat(out, int_to_str(ints_get(kinds, i)));
-        out = str_concat(out, " ");
-        out = str_concat(out, int_to_str(ints_get(starts, i)));
-        out = str_concat(out, " ");
-        out = str_concat(out, int_to_str(ints_get(ends, i)));
-        out = str_concat(out, str_from_byte(10));
+        strs_push(out, int_to_str(ints_get(kinds, i)));
+        strs_push(out, " ");
+        strs_push(out, int_to_str(ints_get(starts, i)));
+        strs_push(out, " ");
+        strs_push(out, int_to_str(ints_get(ends, i)));
+        strs_push(out, nl);
         i = i + 1;
     }
-    out = str_concat(out, "EOF");
-    out = str_concat(out, str_from_byte(10));
-    print(out);
+    strs_push(out, "EOF");
+    strs_push(out, nl);
+    print(str_join(out, ""));
     ints_len(kinds)
 }

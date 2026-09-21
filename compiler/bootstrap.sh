@@ -29,6 +29,29 @@ sources="lex.nz parse.nz analyse.nz emit.nz"
 say() { printf '%s\n' "$*"; }
 fail() { printf 'bootstrap: %s\n' "$*" >&2; exit 1; }
 
+# Every stage below is a compiler written in Nazm, run natively with no ceiling. On
+# 2026-09-21 that shape panicked the machine three times: the drivers accumulated their
+# output by copying, and macOS cannot cap a child's memory (`RLIMIT_AS` is an alias of
+# `RLIMIT_RSS`, and `setrlimit(2)` documents it as advisory). So the ceiling has to come
+# from outside the process, and refusing has to be explicit rather than silent.
+if [ "${NAZM_CONTAINED:-}" != "1" ] && [ "${NAZM_ALLOW_UNCONTAINED:-}" != "1" ]; then
+    fail "refusing to bootstrap with no resource ceiling.
+
+  This script runs compiler stages written in Nazm. A stage that allocates without
+  bound reaches the machine rather than the process on this host.
+
+  Run it inside the bounded environment, one workload at a time, and set
+  NAZM_CONTAINED=1 only where a real ceiling applies (a container with --memory and
+  --memory-swap set equal, or a cgroup that enforces one):
+
+      NAZM_CONTAINED=1 $0 ${1:+\"$1\"}
+
+  To override deliberately and accept the risk, set NAZM_ALLOW_UNCONTAINED=1."
+fi
+if [ "${NAZM_ALLOW_UNCONTAINED:-}" = "1" ]; then
+    printf 'bootstrap: warning: NAZM_ALLOW_UNCONTAINED=1 — no memory ceiling. This is the configuration that panicked the machine on 2026-09-21.\n' >&2
+fi
+
 [ -x "$nazm" ] || fail "build the Rust implementation first: cargo build -p nazm-cli"
 command -v clang >/dev/null 2>&1 || fail "clang is required to assemble the emitted IR"
 
