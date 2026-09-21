@@ -13,9 +13,68 @@ what was verified when it was written, not what is true now.
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
 | Current commit | `91ec4d6` |
-| Working tree | clean except this file |
+| Working tree | **modified**: the resource repair below is applied and unstaged |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
-| Disk | 13 GiB free of 460 GiB (**97 % full**) — `target/` alone is 3.7 GiB. Remove disposable copies promptly |
+| Disk | 50 GiB free of 460 GiB (88 % full) after reclaiming 33.5 GiB of `target/` on 2026-09-21 |
+
+## HALT — resource incident, 2026-09-21 (read before running anything)
+
+Three kernel panics (08:12:30, 08:26:49, 08:44:44), all
+`watchdog timeout: no checkins from watchdogd in ~93 seconds`, while
+`xtask -> cargo -> selfhost` ran nine stage binaries plus `nazmc` at once
+(`cargo test` uses one thread per core; `hw.ncpu = 10`).
+
+**Cause, measured.** `lexer.nz`, `parser.nz` and `check.nz` accumulated their output with
+`out = str_concat(out, ..)` in a loop. Each concatenation allocates a new buffer and
+copies the whole accumulated string, and the generated runtime never frees, so retained
+bytes are **quadratic in output length**. `emit.nz` had already been migrated to
+`strs_push` + `str_join` for exactly this reason (see the note above `join`); the other
+three had not. Measured on `nzlex`, doubling the input quadrupled the peak.
+
+**Repaired.** All three now push parts and join once. Byte-for-byte identical output on
+24 stage/input combinations, identical exit codes, identical diagnostics on malformed
+input. Peaks below.
+
+| stage | input | before | after |
+| --- | --- | --- | --- |
+| `nzlex` | 21,490 B | 2,889 MB | **7.1 MB** |
+| `nzlex` | 43,690 B | OOM at 3 GiB | **7.4 MB** |
+| `nzlex` | 88,490 B | OOM at 3 GiB | **11.1 MB** |
+| `nzparse` | 21,490 B | 1,572 MB | **7.4 MB** |
+| `nzcheck` | 34,117 B (1,600 diagnostics) | 501 MB | **6.9 MB** |
+| `nzcheck` | 139,717 B (6,400 diagnostics) | OOM at 3 GiB | **11.1 MB** |
+
+Measurement conditions, identical before and after: binaries baked into the image, inputs
+on a read-only bind mount, one fresh container per run, no compilation or supervisor
+inside the measured container. `memory.peak` is therefore execution plus page cache for
+the input and output — **not** clang, scratch, or a supervisor.
+
+**Containment is now required, not optional.** `selfhost`'s four stage builders and
+`compiler/bootstrap.sh` refuse to run without `NAZM_CONTAINED=1`, because macOS cannot
+cap a child's memory: `RLIMIT_AS` is an alias of `RLIMIT_RSS` and `setrlimit(2)`
+documents it as advisory. `NAZM_ALLOW_UNCONTAINED=1` overrides, loudly. A bare
+`cargo test --test selfhost` now fails 12 tests at the gate and spawns nothing.
+
+**Still open — do not treat as closed.**
+
+- `nzemit` reached ~17 GB in the panic report, but `emit.nz` was already migrated and
+  **could not be reproduced**: it measures linear and modest (49 MB peak for 1.5 MB of
+  output; 7 MB on the one-line programs `selfhost` actually feeds it). Unexplained.
+- The panic's `processByPid.residentMemoryBytes` sums to 173.9 GB on a 32 GiB machine, so
+  it is not disjoint physical RAM and its exact meaning is unconfirmed. The near-uniform
+  ~16-17 GB across five different programs is as consistent with a measurement artefact
+  of the stalled state as with independent allocation.
+- The compiler workload is a **strong suspect** in the memory-pressure incident. Complete
+  kernel-panic causation remains **unproven**: a watchdog panic reports starvation, not
+  causation, and this is a beta kernel (macOS 27.2, build 26B5086k).
+- Clang 17 rejected one emitted module (`review/m1e/control.ll:44`: *instruction expected
+  to be numbered '%3'*) and clang 19 accepted it. That is one module on one pair of
+  versions — it does **not** establish a general minimum version, and the skipped
+  numbering is not proven to be the reason. Reproducer preserved; handle separately.
+- Quiet uptime since 08:44 is an observation, not proof of stability.
+
+Evidence: `~/nazm-incident-2026-09-21/` (panics, jetsam, 54 crash reports, before/after
+IR and sources, Gate A and root-cause write-ups).
 
 ## What is done, and what is not
 
@@ -59,7 +118,30 @@ what was verified when it was written, not what is true now.
 | Concurrency in the *Nazm* compiler | **deliberately absent** | outside the bootstrap subset, named as such in `compiler/analyse.nz` and guarded by a test. See `docs/bootstrap-design.md` |
 | Formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
 
-## Verified commands (against `91ec4d6`)
+## Cleared to run (against `7677ebb` + the unstaged repair, 2026-09-21)
+
+Serial, one workload at a time. Everything else stays paused.
+
+| Command | Status |
+| --- | --- |
+| `cargo build -p nazm-cli --jobs 1` | safe — 22 s |
+| `cargo test -p nazm-cli --test resource_regression --jobs 1 -- --test-threads 1` | 2 passed (Docker half self-skips) |
+| `NAZM_REQUIRE_DOCKER=1 NAZM_CLANG_IMAGE=nazm-probe:deb cargo test -p nazm-cli --test resource_regression --jobs 1 -- --test-threads 1` | 2 passed, bound measured in-container |
+| `cargo test -p nazm-cli --test cli --jobs 1 -- --test-threads 1` | 14 passed |
+| `cargo test -p nazm-cli --test docs --jobs 1 -- --test-threads 1` | 4 passed |
+| `cargo test -p nazm-cli --test schemas --jobs 1 -- --test-threads 1` | 5 passed |
+| `./target/debug/nazm build compiler/<stage>.nz --emit-ir -o <out>` | safe — emits IR, runs clang, executes nothing |
+
+**Refused by design** (gate fires, nothing spawns): `cargo test -p nazm-cli --test
+selfhost` and `sh compiler/bootstrap.sh`. The container image used above is built with:
+
+    docker build -t nazm-probe:deb - <<'EOF'
+    FROM debian:trixie-slim
+    RUN apt-get update && apt-get install -y --no-install-recommends clang \
+        && rm -rf /var/lib/apt/lists/*
+    EOF
+
+## Verified commands (against `91ec4d6`, before the incident)
 
 | Command | Result |
 | --- | --- |
@@ -99,14 +181,23 @@ mutated, and the command is for a tree that is.
 
 ## Current task
 
-**Final verification.** Milestones A–G are complete. What remains is confirming the
-integrated state: the clean offline rebuild on a fresh copy, and the release candidate
-with every gate passed.
+**Paused for the resource incident above.** Milestones A–G remain complete, but the
+autonomous goal loop, the uncontained selfhost suite, `compiler/bootstrap.sh`, fuzzing,
+the mutation catalogue and `xtask bench` stay stopped until the open items are closed.
+Final verification resumes only after that.
 
 ## Next exact action
 
-Milestones A–G are delivered. What is left is the closing verification, in this order,
-because each is cheaper than the next and a failure should cost the least it can:
+**First, close the incident** — in this order:
+
+1. Explain or bound `nzemit`'s reported growth, or record precisely why it cannot be
+   reproduced and what would settle it.
+2. Decide whether `NAZM_CONTAINED=1` should be satisfiable on this host at all, or only
+   inside the container.
+3. Handle the clang-17 module rejection as its own defect.
+
+Only then the closing verification below, each step cheaper than the next so a failure
+costs the least it can:
 
 1. **The targeted mutation re-check.** The full catalogue ran at `524cd24` and reported
    two entries as NOT INJECTED; both are repaired, and the ambiguous one split in two.

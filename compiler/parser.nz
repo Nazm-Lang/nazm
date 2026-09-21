@@ -35,21 +35,23 @@ fn main() -> Int {
 
     // `kind|arity|start|end|text`, one node per line, in the order they were appended —
     // which is post-order, which is the whole encoding.
-    let mut out = "";
+    // One allocation for the whole output; see the note in `lexer.nz`.
+    let nl = str_from_byte(10);
+    let out = strs_new();
     let mut i = 0;
     while i < ints_len(nk) {
-        out = str_concat(out, node_name(ints_get(nk, i)));
-        out = str_concat(out, "|");
-        out = str_concat(out, int_to_str(ints_get(nar, i)));
-        out = str_concat(out, "|");
-        out = str_concat(out, int_to_str(ints_get(nst, i)));
-        out = str_concat(out, "|");
-        out = str_concat(out, int_to_str(ints_get(nen, i)));
-        out = str_concat(out, "|");
-        out = str_concat(out, strs_get(ntx, i));
-        out = str_concat(out, str_from_byte(10));
+        strs_push(out, node_name(ints_get(nk, i)));
+        strs_push(out, "|");
+        strs_push(out, int_to_str(ints_get(nar, i)));
+        strs_push(out, "|");
+        strs_push(out, int_to_str(ints_get(nst, i)));
+        strs_push(out, "|");
+        strs_push(out, int_to_str(ints_get(nen, i)));
+        strs_push(out, "|");
+        strs_push(out, strs_get(ntx, i));
+        strs_push(out, nl);
         i = i + 1;
     }
-    print(out);
+    print(str_join(out, ""));
     ints_len(nk)
 }
