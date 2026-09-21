@@ -168,15 +168,15 @@ From a clean checkout on Darwin arm64, with `clang` available:
 
 ```sh
 cargo build --workspace
-cargo test  --workspace          # the whole suite
+cargo xtask contained tests          # the whole suite
 cargo lint                       # clippy, the same alias CI runs
 cargo xtask check                # architectural gates and the guide against the grammar
-sh compiler/bootstrap.sh         # C1 -> C2 -> C3, byte-identical
+cargo xtask contained bootstrap         # C1 -> C2 -> C3, byte-identical
 cargo xtask contained bench      # measurements; --check compares to this host's baseline
-sh scripts/release-candidate.sh  # every gate, then the local artefact
+cargo xtask contained run \'sh scripts/release-candidate.sh\'  # every gate, then the local artefact
 
 # Not in the default set, and each says why in its own output:
-cargo xtask mutate                       # one build and test run per catalogued defect
+cargo xtask contained mutate                       # one build and test run per catalogued defect
 cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
 NAZM_REQUIRE_DOCKER=1 cargo test --test docker_boundary -- --test-threads=1
 ```
