@@ -54,6 +54,14 @@ pub(crate) struct Bounds {
     pub(crate) fsize_bytes: u64,
     pub(crate) deadline: Duration,
     pub(crate) output_cap: usize,
+    /// Mount the checkout read-write.
+    ///
+    /// Off by default: a workload that cannot write its own source cannot corrupt it,
+    /// and running read-only is what surfaced how many tools assume a writable checkout.
+    /// This is a *filesystem* choice and changes none of the resource bounds — those are
+    /// what the contract requires, and they are identical either way. On only for the few
+    /// workloads whose purpose is to produce an artefact in the tree.
+    pub(crate) writable_source: bool,
 }
 
 impl Default for Bounds {
@@ -67,6 +75,7 @@ impl Default for Bounds {
             fsize_bytes: 512 * 1024 * 1024,
             deadline: Duration::from_secs(3600),
             output_cap: 4 * 1024 * 1024,
+            writable_source: false,
         }
     }
 }
@@ -204,10 +213,11 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
         .arg("--init")
         .args(["--log-driver", "none"])
         .arg("--mount")
-        .arg(format!(
-            "type=bind,source={},target=/src,readonly",
-            repo.display()
-        ))
+        .arg(if b.writable_source {
+            format!("type=bind,source={},target=/src", repo.display())
+        } else {
+            format!("type=bind,source={},target=/src,readonly", repo.display())
+        })
         // The only place a real ceiling applies, so the only place this is set.
         .args(["--env", "NAZM_CONTAINED=1"])
         .args(["--env", "CARGO_TARGET_DIR=/work/target"])

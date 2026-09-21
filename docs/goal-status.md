@@ -12,7 +12,7 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `a74bdba` (repair `011d7ff`, contract v1.1 `fc21968`) |
+| Current commit | `e2f75c9` (repair `011d7ff`, contract v1.1 `fc21968`, runner `a74bdba`) |
 | Working tree | the contained-runner work is in progress on top of `a74bdba` |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
 | Disk | 50 GiB free of 460 GiB (88 % full) after reclaiming 33.5 GiB of `target/` on 2026-09-21 |
@@ -56,6 +56,44 @@ the runner never collapses them: `Unavailable` is a refusal with an explanation,
 skip.
 
 ## Verified through the contained runner (2026-09-21)
+
+Everything below ran inside the ceiling, serially, one workload at a time. Words are used
+strictly: **passed** / **skipped** / **refused** / **failed** / **unexecuted**.
+
+| workload | result |
+| --- | --- |
+| `contained probe` | **passed** — 6/6 bounds real, 0 survivors |
+| `contained selfhost` | **passed** — 15/15, 0 survivors |
+| `contained bootstrap` | **passed** — `ir: identical`, `runnable-bytes-differing: 0`, 5 conformance cases |
+| `cargo test --locked --workspace --jobs 1 -- --test-threads 1` | **passed** — **524 passed, 0 failed, 6 ignored, 35 suites**, 0 survivors (previously recorded: 506) |
+| `cargo fmt --all -- --check` | **passed** |
+| `cargo lint` | **passed** |
+| `cargo xtask check` | **passed** — 6/6 gates (layering, codegen reach, emission reach, unsafe policy, doc claims, guide from grammar) |
+| `cargo xtask bench --check` | **unexecuted** at the time of writing — see the platform note below |
+| mutation catalogue | **unexecuted** |
+
+### Both emitters now number temporaries sequentially
+
+The Rust emitter and `compiler/emit.nz` each drew SSA temporaries and block labels from
+one counter. Labels are *named* (`b7:`, not `7:`) so LLVM never counts them, and every
+label left a hole: `%5` emitted where the implicit counter was still at 3. clang 19 and
+Apple clang 21 tolerate it; **clang 17 rejects it**.
+
+Fixed in both (`5cba009`, `e2f75c9`). Verified end to end: Alpine clang **17.0.6** now
+assembles both a single module and the **whole self-hosted compiler** emitted by the Nazm
+compiler, and the C2/C3 fixpoint is undisturbed. This closes the open item recorded
+earlier as "one module on one version pair" — the cause is now identified and removed
+rather than merely observed.
+
+### Benchmarks: a real platform conflict, not yet resolved
+
+`bench/baseline.json` was recorded on **aarch64-apple-darwin**. The contract requires
+heavy benchmarks to run contained, and the contained runner is **Linux**. Checking Linux
+timings against a macOS baseline would manufacture regressions that mean nothing, and
+`--save` cannot write to the read-only `/src` mount in any case. A separate per-platform
+baseline is needed. Recorded as **blocked on a decision**, not silently skipped.
+
+## (superseded) Verified through the contained runner (2026-09-21)
 
 Every line below was executed inside the ceiling, serially. Words are used strictly:
 **passed** / **skipped** / **refused** / **failed** / **unexecuted**.

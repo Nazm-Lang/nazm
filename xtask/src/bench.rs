@@ -54,6 +54,17 @@ pub(crate) fn root() -> PathBuf {
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
+/// Where cargo actually put its artefacts.
+///
+/// `$root/target` is only right when nobody redirected it. The contained runner mounts
+/// the checkout read-only and sets `CARGO_TARGET_DIR` elsewhere, both because the mount
+/// cannot be written and because the checkout's own `target/` holds
+/// aarch64-apple-darwin artefacts that must not be mixed with Linux ones. Resolving this
+/// by hand rather than by convention is what lets the same command work in both places.
+pub(crate) fn target_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), PathBuf::from)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     /// Measure and write `bench/record.json`.
@@ -88,6 +99,16 @@ struct Memory {
 }
 
 fn peak_rss(cmd: &mut Command) -> Option<u64> {
+    // GNU `time -v` first: it reads `getrusage`, so it is exact even for a process that
+    // exits immediately. Polling `/proc` cannot be — a short program can be gone before
+    // the first read, and reporting the low value caught on the way past would be a
+    // measurement that is quietly wrong. Missing is representable; wrong is not.
+    if let Some(kb) = peak_rss_gnu_time(cmd) {
+        return Some(kb * 1024);
+    }
+    if Path::new("/proc/self/status").exists() {
+        return peak_rss_proc(cmd);
+    }
     let mut wrapped = Command::new("/usr/bin/time");
     wrapped.arg("-l").arg(cmd.get_program());
     for a in cmd.get_args() {
@@ -98,6 +119,60 @@ fn peak_rss(cmd: &mut Command) -> Option<u64> {
     text.lines()
         .find(|l| l.contains("maximum resident set size"))
         .and_then(|l| l.split_whitespace().next()?.parse().ok())
+}
+
+/// Peak RSS in kilobytes from GNU `time -v`, which reports `getrusage(RUSAGE_CHILDREN)`.
+///
+/// `None` when GNU time is absent or its output does not carry the line — BSD `time`
+/// takes `-l` and would reject `-v`, and the slim Debian image ships neither until
+/// `procps`/`time` are installed.
+fn peak_rss_gnu_time(cmd: &mut Command) -> Option<u64> {
+    let mut wrapped = Command::new("/usr/bin/time");
+    wrapped.arg("-v").arg(cmd.get_program());
+    for a in cmd.get_args() {
+        wrapped.arg(a);
+    }
+    let out = wrapped.output().ok()?;
+    String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .find(|l| l.contains("Maximum resident set size"))
+        .and_then(|l| l.rsplit(' ').next()?.parse().ok())
+}
+
+/// Peak RSS on Linux, from `/proc/<pid>/status`. Last resort.
+///
+/// `/usr/bin/time -l` is the BSD spelling and the binary is absent from a slim Debian
+/// entirely, so every memory row read "not measured" the moment the benchmarks moved into
+/// the contained runner. `VmHWM` is the kernel's own high-water mark, so polling cannot
+/// under-report a peak that has already happened — it only has to be read before the
+/// process is reaped. Reported in bytes, as the Darwin path is.
+fn peak_rss_proc(cmd: &mut Command) -> Option<u64> {
+    let mut child = cmd
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let status = format!("/proc/{}/status", child.id());
+    let mut hwm_kb = 0u64;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(&status) {
+            if let Some(kb) = text
+                .lines()
+                .find(|l| l.starts_with("VmHWM:"))
+                .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+            {
+                hwm_kb = hwm_kb.max(kb);
+            }
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(2)),
+            Err(_) => break,
+        }
+    }
+    // A real process does not peak below a megabyte; anything smaller means the poll
+    // lost the race with a short program rather than measured it.
+    (hwm_kb >= 1024).then(|| hwm_kb * 1024)
 }
 
 /// One timed thing.
@@ -177,7 +252,7 @@ fn measure(
 
 pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
     let root = root();
-    let nazm = root.join("target/release/nazm");
+    let nazm = target_dir().join("release/nazm");
     if !nazm.exists() {
         eprintln!(
             "bench: {} is missing. Measure the release build, not the debug one:\n  \
@@ -549,8 +624,8 @@ fn compiler_source(root: &Path, scratch: &Path) -> Result<PathBuf, String> {
     Ok(out)
 }
 
-fn tempdir(root: &Path) -> Result<PathBuf, String> {
-    let dir = root.join("target/bench-scratch");
+fn tempdir(_root: &Path) -> Result<PathBuf, String> {
+    let dir = target_dir().join("bench-scratch");
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(dir)
 }
