@@ -45,6 +45,12 @@ pub enum Ty {
     Ints,
     /// The same, with 16-byte `{ ptr, i64 }` elements.
     Strs,
+    /// A bounded queue of `Int`, as a **pointer to a runtime header**.
+    ///
+    /// Reference semantics like a sequence, and for a stronger reason: a channel exists
+    /// to be shared between tasks, and every one of its operations is a
+    /// synchronisation point. See `docs/spec.md`, *Structured concurrency*.
+    Chan,
 }
 
 impl Ty {
@@ -77,7 +83,7 @@ impl Ty {
             Self::Int => "i64",
             Self::Bool => "i1",
             Self::Str => "{ ptr, i64 }",
-            Self::Ints | Self::Strs => "ptr",
+            Self::Ints | Self::Strs | Self::Chan => "ptr",
         }
     }
 
@@ -89,6 +95,7 @@ impl Ty {
             Self::Str => "Str",
             Self::Ints => "Ints",
             Self::Strs => "Strs",
+            Self::Chan => "Chan",
         }
     }
 }
@@ -241,6 +248,33 @@ pub enum Stmt {
     /// Start the innermost enclosing loop's next iteration, **re-evaluating its
     /// condition**. Not a jump to the body.
     Continue,
+    /// `scope { body }` — the body, and then a wait for every task started inside it.
+    ///
+    /// The wait is not a statement of its own, because it must happen on **every** way
+    /// out of the body: falling off the end, a `return`, a `break` or a `continue` that
+    /// leaves the scope. Making it part of this variant is what stops emission putting
+    /// it on only the first of those.
+    ///
+    /// `span` is carried because entering a scope allocates the list of tasks to join,
+    /// and an allocation that fails is reported where the `scope` is written.
+    Scope { body: Vec<Stmt>, span: Span },
+    /// `spawn f(args);` — start a task, to be joined by the enclosing [`Stmt::Scope`].
+    ///
+    /// The callee is a [`FuncId`], not an expression: the language has no function
+    /// values, so a task is always a named function.
+    ///
+    /// `span` is carried because starting a task can fail — the machine may refuse
+    /// another thread — and that failure is reported where the `spawn` is written.
+    Spawn {
+        callee: FuncId,
+        args: Vec<Expr>,
+        /// The callee's return type, carried for the same reason [`Expr::Call`] carries
+        /// it: emission needs it to write the call, and looking it up in the module
+        /// again would be a second answer to a settled question. The value itself is
+        /// discarded — a task's result travels through a channel or not at all.
+        ret: Ty,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -382,6 +416,10 @@ pub enum Builtin {
     Print,
     EPrint,
     ExitWith,
+    ChanNew,
+    ChanSend,
+    ChanRecv,
+    ChanClose,
 }
 
 impl Builtin {
@@ -415,6 +453,10 @@ impl Builtin {
             "print" => Some(Self::Print),
             "eprint" => Some(Self::EPrint),
             "exit_with" => Some(Self::ExitWith),
+            "chan_new" => Some(Self::ChanNew),
+            "chan_send" => Some(Self::ChanSend),
+            "chan_recv" => Some(Self::ChanRecv),
+            "chan_close" => Some(Self::ChanClose),
             _ => None,
         }
     }
@@ -449,6 +491,10 @@ impl Builtin {
             Self::Print => "print",
             Self::EPrint => "eprint",
             Self::ExitWith => "exit_with",
+            Self::ChanNew => "chan_new",
+            Self::ChanSend => "chan_send",
+            Self::ChanRecv => "chan_recv",
+            Self::ChanClose => "chan_close",
         }
     }
 
@@ -498,6 +544,12 @@ impl Builtin {
             Self::Arg | Self::ExitWith => &[Ty::Int],
             Self::ReadFile | Self::FileExists | Self::Print | Self::EPrint => &[Ty::Str],
             Self::WriteFile => &[Ty::Str, Ty::Str],
+            Self::ChanNew => &[Ty::Int],
+            Self::ChanSend => &[Ty::Chan, Ty::Int],
+            // The value is pushed onto the sequence rather than returned, so that the
+            // `Bool` can say whether there was one — the same shape the interpreter has.
+            Self::ChanRecv => &[Ty::Chan, Ty::Ints],
+            Self::ChanClose => &[Ty::Chan],
         }
     }
 
@@ -518,9 +570,11 @@ impl Builtin {
             Self::ArgsCount | Self::WriteFile | Self::Print | Self::EPrint | Self::ExitWith => {
                 Ty::Int
             }
-            Self::FileExists => Ty::Bool,
+            Self::FileExists | Self::ChanSend | Self::ChanRecv => Ty::Bool,
             Self::IntsNew => Ty::Ints,
             Self::StrsNew => Ty::Strs,
+            Self::ChanNew => Ty::Chan,
+            Self::ChanClose => Ty::Int,
         }
     }
 }
