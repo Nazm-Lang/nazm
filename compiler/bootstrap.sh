@@ -28,7 +28,7 @@ nazm=${NAZM:-"${CARGO_TARGET_DIR:-$root/target}/debug/nazm"}
 # Concatenated rather than imported because `use` resolution is the driver's job and the
 # compiler written in Nazm does not yet do it — a stated gap, not a trick: the same text
 # compiles either way, and a reader can check that by running `nazm check` on both.
-sources="lex.nz parse.nz analyse.nz emit.nz"
+sources="lex.nz module.nz parse.nz analyse.nz emit.nz"
 
 say() { printf '%s\n' "$*"; }
 # `shasum` on macOS, `sha256sum` on GNU userland. A digest line that silently vanished

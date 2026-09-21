@@ -10,8 +10,9 @@ a different one.
 Nazm is a small, specified language with two implementations that agree — a tree-walking
 interpreter and a native compiler through LLVM IR — **and a compiler for it written in
 Nazm that reproduces itself byte for byte** — over a stated bootstrap subset, which
-excludes concurrency and module resolution. It has structured concurrency, a canonical
-formatter, machine-applicable fixes under a versioned JSON schema, and measured
+excludes concurrency but does include modules: the Nazm-written compiler resolves `use`
+and builds a multi-file program on its own. The language has structured concurrency, a
+canonical formatter, machine-applicable fixes under a versioned JSON schema, and measured
 performance baselines with one profile-driven optimisation pass behind them.
 
 It is an experimental release. It has been verified on one target, it has no package
@@ -23,10 +24,10 @@ performance comparison of any kind.
 | Definition of done (§13) | State | Evidence |
 | --- | --- | --- |
 | Scalar control flow, including `return` and transfers inside values | done | `crates/nazm-cli/tests/build.rs`, every case at `-O0` and `-O2` against the interpreter |
-| A bootstrap subset with text, structured data, collections, memory behaviour, file I/O, errors and modules | done | `docs/bootstrap-design.md`; the subset is what `compiler/*.nz` is written in. `use` is in the subset but is resolved by the driver, not by the Nazm-written compiler — see *Known limitations* |
-| Compiler frontend and lowering/emission in Nazm, external dependencies documented | done **for the bootstrap subset** | `compiler/lex.nz`, `parse.nz`, `analyse.nz`, `emit.nz`; dependencies in `docs/bootstrap.md`. The subset excludes concurrency and module resolution, both under *Known limitations* |
+| A bootstrap subset with text, structured data, collections, memory behaviour, file I/O, errors and modules | done | `docs/bootstrap-design.md`; the subset is what `compiler/*.nz` is written in, and `use` is resolved by the Nazm-written compiler itself — `compiler/module.nz` |
+| Compiler frontend and lowering/emission in Nazm, external dependencies documented | done **for the bootstrap subset** | `compiler/lex.nz`, `parse.nz`, `analyse.nz`, `emit.nz`; dependencies in `docs/bootstrap.md`. The subset excludes concurrency, which is under *Known limitations*; module resolution is implemented in `compiler/module.nz` |
 | Native C1 → C2 → C3 bootstrap, conformance and reproducibility | done | `compiler/bootstrap.sh`; C2 and C3 byte-identical in IR and executable, 5 conformance cases |
-| Ordinary independent programs compile with the Nazm-written compiler | done **within the subset** | `crates/nazm-cli/tests/selfhost.rs`. A program using `scope`/`spawn`/`Chan`, or relying on `use` resolution, is refused by name rather than miscompiled |
+| Ordinary independent programs compile with the Nazm-written compiler | done **within the subset** | `crates/nazm-cli/tests/selfhost.rs`. A program using `scope`/`spawn`/`Chan` is refused by name rather than miscompiled; multi-file programs compile, imports and all |
 | Initial structured concurrency: transfer/capture rules, cancellation, cleanup | done | `docs/spec.md`; 17 interpreter tests and 12 native tests, all deadline-bounded. The compiled runtime does **not** join a scope before reporting a failure — see *Known limitations* |
 | Structured developer interfaces, grammar/guide, formatting, repair workflow | done | `docs/diagnostics.md`, `schema/`, `docs/grammar.ebnf`, `docs/guide.md`, `scripts/repair.sh` |
 | Performance baselines, a profiling/optimisation pass, no unsupported speed claims | done | `docs/performance.md`, `bench/baseline.json` (Darwin), `bench/baseline-linux-aarch64.json` |
@@ -91,8 +92,20 @@ These are properties of the release, not a backlog.
   test so it starts passing the day the runtime can honour it.
 - **The bootstrap compiler does not accept concurrency**, and refuses it by name rather
   than being silently unable to.
-- **`use` is resolved by the driver, not by the compiler written in Nazm.** The
-  bootstrap concatenates the four sources.
+- **The bootstrap concatenates its sources rather than importing them.** Not a gap in
+  the compiler — `compiler/module.nz` resolves `use` and the compiler written in Nazm
+  builds a multi-file program on its own (`selfhost.rs`,
+  `the_nazm_written_compiler_resolves_its_own_imports`). The bootstrap strips `use` lines
+  and concatenates deliberately, because every source is already in the one translation
+  unit and importing one would define its functions twice.
+- **Module resolution keys files by a textually normalised path, not a canonical one.**
+  `./x.nz`, `x.nz` and `a/../x.nz` are one file; two names that reach one file through a
+  symbolic link are two, and it would be read twice. The driver keys by the canonical
+  path instead, because it can — the emitted runtime has no `realpath`.
+- **`lexer.nz`, `parser.nz` and `check.nz` remain single-file stage probes.** They exist
+  to be compared token-for-token and node-for-node against the reference stages, so they
+  read exactly the file they are given. Resolution belongs to the compiler driver,
+  `emit.nz`, and that is where it is.
 - **No cross-language performance comparison.** `docs/performance.md` measures this
   implementation against itself and says nothing about C, Rust, Zig, Go or Python.
 - **The benchmark harness (`nazm-bench`) cannot produce a benchmark number.** Its
@@ -102,14 +115,14 @@ These are properties of the release, not a backlog.
 ## Results
 
 `cargo test --workspace`, run through `cargo xtask contained` on Linux:
-**539 passed, 0 failed, 7 ignored.** What they cover, grouped by the question each group
+**541 passed, 0 failed, 7 ignored.** What they cover, grouped by the question each group
 answers:
 
 | | count | what it establishes |
 | --- | ---: | --- |
 | Language semantics (`nazm-core/tests/language.rs`) | 114 | each rule in `docs/spec.md` that a refactor could quietly reverse |
 | Native end-to-end (`nazm-cli/tests/build.rs`) | 127 | every case compiled at `-O0` **and** `-O2`, and compared against the interpreter |
-| Self-hosting differentials (`nazm-cli/tests/selfhost.rs`) | 15 | the Nazm lexer, parser and checker against the Rust ones over every `.nz` in the tree, and the full bootstrap chain |
+| Self-hosting differentials (`nazm-cli/tests/selfhost.rs`) | 17 | the Nazm lexer, parser and checker against the Rust ones over every `.nz` in the tree, and the full bootstrap chain |
 | Concurrency, interpreted (`nazm-core/tests/concurrency.rs`) | 17 | joins, capture, cancellation, cleanup, contention — every one with a deadline |
 | Concurrency, native (`nazm-cli/tests/concurrent.rs`) | 12 | the same programs compiled, at `-O0` and `-O2`, against a written expectation *and* the interpreter. A thirteenth states the join-before-reporting contract that the compiled runtime does **not** yet honour, and is ignored with that reason rather than inverted — see *Known limitations* |
 | Machine interface (`nazm-cli/tests/schemas.rs`) | 5 | real command output validated against `schema/*.json` |

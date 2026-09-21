@@ -29,6 +29,7 @@
 // marker walk `compiler/check.nz` uses; it is not needed yet and is not written yet.
 
 use "analyse.nz";
+use "module.nz";
 
 // --- output assembly -------------------------------------------------------------
 
@@ -1194,7 +1195,11 @@ fn main() -> Int {
         eprint(str_concat(str_concat("cannot read ", path), nl()));
         exit_with(2);
     }
-    let src = read_file(path);
+    // The root and everything it imports, as one buffer. Resolved here rather than handed
+    // over pre-merged by the driver, so a multi-file program compiles with this compiler
+    // and nothing else — see `compiler/module.nz` for the order and for the one way it
+    // differs from `nazm-cli/src/load.rs`.
+    let src = load_program(path);
 
     let kinds = ints_new();
     let starts = ints_new();
