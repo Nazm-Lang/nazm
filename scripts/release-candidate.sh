@@ -158,14 +158,19 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
     printf 'nazm release candidate — provenance\n\n'
     printf 'source-commit:      %s\n' "$commit"
     printf 'source-tree-clean:  %s\n' "$([ -z "$dirty" ] && echo yes || echo 'no (--allow-dirty)')"
-    # The tree as built, independent of git: every tracked-by-this-package source, in a
-    # fixed order, digested together. A commit identifies a revision only if the working
-    # tree matches it, and this says what was on disk regardless.
-    printf 'source-tree-digest: %s\n' \
+    # Independent of git: the source *files* as they were on disk, in a fixed order,
+    # digested together. Named for what it covers and not "tree", because it is not one:
+    # Cargo.toml and every crate manifest, Cargo.lock, rust-toolchain.toml,
+    # docker/contained.Dockerfile, the mutation catalogue and every .expected fixture all
+    # fall outside it. It corroborates the commit for the sources; it cannot detect a
+    # changed dependency pin or a changed expectation.
+    printf 'source-digest:      %s\n' \
         "$(find compiler crates xtask docs schema examples scripts bench/programs -type f \
             \( -name '*.rs' -o -name '*.nz' -o -name '*.md' -o -name '*.json' -o -name '*.sh' -o -name '*.ebnf' \) \
             2>/dev/null | LC_ALL=C sort | while read -r f; do sha256 "$f"; done | \
             { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; } | cut -d' ' -f1)"
+    printf 'source-digest-scope: %s\n' \
+        '*.rs *.nz *.md *.json *.sh *.ebnf under compiler crates xtask docs schema examples scripts bench/programs'
     printf '\n'
     printf 'target:             %s\n' "$(uname -sm)"
     printf 'rustc:              %s\n' "$(rustc --version)"
@@ -197,6 +202,11 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
     printf '                                       Byte-identical to C3.\n'
     printf '\n'
     printf 'Neither binary is portable off %s. The sources are; see docs/bootstrap.md.\n' "$(uname -sm)"
+    printf '\n'
+    printf 'This archive is not claimed to be bit-reproducible. It was produced once, on this\n'
+    printf 'host, and rebuilding it has not been shown to yield the same bytes; the timestamps\n'
+    printf 'and the link step alone are enough to make that unsafe to assume. What is verified\n'
+    printf 'is that the contents match MANIFEST.txt, and that C2 and C3 are byte-identical.\n'
 } > "$out/PROVENANCE.txt"
 
 {

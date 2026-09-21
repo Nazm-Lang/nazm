@@ -65,7 +65,7 @@ strictly: **passed** / **skipped** / **refused** / **failed** / **unexecuted**.
 | `contained probe` | **passed** — 6/6 bounds real, 0 survivors |
 | `contained selfhost` | **passed** — 15/15, 0 survivors |
 | `contained bootstrap` | **passed** — `ir: identical`, `runnable-bytes-differing: 0`, 5 conformance cases |
-| `cargo test --locked --workspace --jobs 1 -- --test-threads 1` | **passed** — **524 passed, 0 failed, 6 ignored, 35 suites**, 0 survivors (previously recorded: 506) |
+| `cargo test --locked --workspace --jobs 1 -- --test-threads 1` | **passed** — **548 passed, 0 failed, 6 ignored, 35 suites**, 0 survivors at `c3fb078` (previously recorded: 524, and 506 before that) |
 | `cargo fmt --all -- --check` | **passed** |
 | `cargo lint` | **passed** |
 | `cargo xtask check` | **passed** — 6/6 gates (layering, codegen reach, emission reach, unsafe policy, doc claims, guide from grammar) |
@@ -272,50 +272,102 @@ re-run of the repairs uses `cargo xtask mutate --only NAME`.
 start again. Never run `mutate-recover` against this working tree — nothing here is
 mutated, and the command is for a tree that is.
 
-## Current task
+## Release — experimental candidate at `c3fb078` (2026-09-21)
 
-Execution prerequisites are met and the goal has resumed. Milestones A-G remain
-complete; the work since the incident has been re-establishing every claim **through the
-contained runner** rather than on the host, and fixing what that exposed.
+Milestone **G** is complete and the goal's Section 13 checklist is fully ticked. The
+release is **experimental**: one verified target, no package ecosystem, no visibility
+control, no native recursion, no cross-language performance claim.
 
-Still paused: nothing. `NAZM_CONTAINED=1` is set by the runner inside the container and
-is never set on the host; `NAZM_ALLOW_UNCONTAINED=1` is never used.
+| | |
+| --- | --- |
+| Tested commit | `c3fb0789bc8b0731bed083f90ab998816ecd8a09`, clean tree |
+| Path | `target/release-candidate/` — **under `target/`**, so gitignored and rebuildable, not a durable store. Copy it somewhere kept if it matters |
+| Archive | `nazm-release-candidate.tar.gz`, 932,147 bytes, SHA-256 `361347f63a36aaa2c9838c5685f2464f5ec985998e1f3a7af15e17ce45e357ed` |
+| `MANIFEST.txt` | 7,611 bytes, SHA-256 `a121c2c46ef5423229427f64844308a5d6973266d32d1b4c52d8c31f5b259171` |
+| `PROVENANCE.txt` | 2,447 bytes, SHA-256 `5d52da22c3b0dea8c670283e68a106fcb9a8e04ed0cd0cdf1446e15e82b0d773` |
+| Target | Linux aarch64, inside `nazm-contained:1.98.1` — rustc 1.98.1, Debian clang 19.1.7 |
+| Contents | 70 files: `bin/nazm` (the **Rust** implementation, which builds C1) and `bin/nazmc-selfhosted` (the **Nazm-written** compiler as C2, byte-identical to C3) — both Linux aarch64 ELF, neither portable off it — plus the bootstrap sources, `examples/`, `schema/`, `docs/`, both benchmark baselines, and the bootstrap record |
+| Bootstrap | `ir: identical`, C2 and C3 digests both `6bd29369…`, `runnable-bytes-differing: 0`, 5 conformance cases, 5 sources / 4,501 lines |
+| Suite | **548 passed, 0 failed, 6 ignored**, 35 suites, 0 survivors |
+| Verified twice | the runner checked the candidate against its own manifest before archiving; the archive was then extracted on the host and re-digested independently — 70 matching, 0 mismatched, 0 missing |
+
+**Test exclusions, stated rather than buried.**
+
+- **6 ignored**, all in `xtask/tests/lifecycle.rs`: they drive real mutation runs, nested
+  `cargo` builds, and deliberately competing processes. Run with
+  `cargo test -p xtask --test lifecycle -- --ignored --test-threads=1`.
+- **10 self-skipping**, `crates/nazm-bench/tests/docker_boundary.rs`: without
+  `NAZM_REQUIRE_DOCKER=1` they print `skipping:` and exercise nothing, while still
+  counting as passes in the 548.
+- The mutation catalogue is **not** in the gate set at all.
+
+**What the package establishes, and what it does not.**
+
+- `PROVENANCE.txt`'s source digest covers the source **files** — `.rs`, `.nz`, `.md`,
+  `.json`, `.sh`, `.ebnf` under `compiler crates xtask docs schema examples scripts
+  bench/programs`, 140 files. It is **not** a whole-tree digest: 69 tracked files fall
+  outside it, including `Cargo.toml` and every crate manifest, `Cargo.lock`,
+  `rust-toolchain.toml`, `.cargo/config.toml`, `docker/contained.Dockerfile`,
+  `xtask/mutations/mutations.toml`, and every `.expected` fixture. It corroborates the
+  commit for the sources; it cannot detect a changed dependency pin or a changed
+  expectation. The field in the shipped file is still labelled `source-tree-digest`;
+  the script has been corrected for the next candidate.
+- **Archive reproducibility is not established.** The archive was produced once, on one
+  host. Rebuilding it has not been shown to yield the same bytes and nothing normalises
+  timestamps or the link step. Byte-identity is established between **C2 and C3**, which
+  is a different claim.
+
+**Documentation committed after the tested commit.** `docs/delivery.md`,
+`docs/performance.md`, `docs/goal-status.md` and the provenance labelling in
+`scripts/release-candidate.sh` were changed **after** `c3fb078` and are therefore **not**
+in the package and **not** covered by its test run. Two checklist lines in
+`docs/delivery.md` and `docs/goal-status.md` had likewise moved between the first
+validated run and `c3fb078` — `git diff 023364d c3fb078` is exactly those two files, no
+code.
+
+## Remaining limitations
+
+Open, and none of them a blocker to the release as labelled:
+
+1. **`bench/baseline.json` (Darwin) is stale.** Two things changed under it — the failure
+   protocol's per-call check and the compiler benchmark's input moving from a four-file
+   concatenation to the real five-file source. Re-recording it means running generated
+   programs on the host, which the resource contract forbids, so it stays as it is and is
+   **not a valid comparison** until someone re-records it on a Darwin machine.
+   `bench/baseline-linux-aarch64.json` is current.
+2. **The whole-catalogue mutation run timed out unexplained.** It reached its 3600 s
+   deadline without ever reaching injection; its entire output was
+   `running 1 of the catalogue`, `oom_killed=false`, `survivors=0`, cleanup verified.
+   Recorded as **incomplete, not as a result**. The first guess — a cold build cache —
+   is measured and wrong: a cold `cargo build -p nazm-cli` in the disposable copy is 30
+   crates in about 15 s. **Do not restart a full run until the hour is understood.**
+   Kept strictly separate from the focused catch below, which stands on its own.
+3. **`the-loop-reuses-its-first-condition` is caught**, established by a focused run in
+   30.5 s: green baseline, injection verified by counting sites (`br label %{head}`
+   2 → 1 at `emit.rs:712`, the back edge), mutant compiled, and
+   `the_condition_is_reevaluated_on_every_iteration` failed on its 10 s deadline.
+   Container removed, `survivors=0`, this tree untouched.
+4. **Recursion in the Nazm compiler's output is unguarded** — the Rust backend refuses
+   recursion pending a stack contract; the Nazm one emits it. A real divergence.
+5. **The performance decomposition stops one level short.** The 2.00× measured across the
+   emitter revision is the revision's **overall** effect, not the isolated cost of the
+   failure check: three commits touched `emit.rs`/`ir.rs` between the compared builds.
+   `docs/performance.md` says so; isolating further is not started, and should not become
+   a broad optimisation project.
+6. **The kernel-panic causation remains unproven**, and the `nzemit` ~17 GB event is still
+   unreproduced. See the incident section above; nothing there changed.
 
 ## Next exact action
 
-1. **Re-run `contained bench`** once the image carrying GNU `time` finishes building, and
-   confirm every peak-memory row is populated and plausible. The `/proc` fallback is
-   deliberately refusing values under a megabyte after a first pass produced 8 KB and
-   16 KB rows, which was the poll losing a race rather than a measurement.
-2. **Record a Linux baseline** (`bench --save`) as a *separate* artefact from the Darwin
-   one. The tool already refuses to compare across platforms, so the two must coexist
-   rather than overwrite.
-3. **The mutation catalogue**, contained, against a disposable copy — never this tree.
-   `mutate` still resolves `target/` from its `root` parameter, which is correct for its
-   throwaway trees but means a contained run needs a writable copy, not the read-only
-   mount.
+**None outstanding — the release handoff is complete.** The candidate exists, its
+provenance is recorded and independently checked, and the limitations above are written
+down rather than implied.
 
-   **`the-loop-reuses-its-first-condition` is caught** (2026-09-21), established by a
-   focused run rather than the whole catalogue: green baseline (the test passes in the
-   539-test contained suite), injection verified by counting sites — `br label %{head}`
-   2 → 1 with `%{body_label}` at `emit.rs:712`, the back edge, not the entry branch at
-   `:691` — mutant compiled, and `the_condition_is_reevaluated_on_every_iteration` failed
-   with *"-O0: the loop did not terminate within 10s"*. Container removed, `survivors=0`,
-   this tree untouched. 30.5s in total.
-
-   **The whole-catalogue run before it timed out** at its 3600 s deadline without reaching
-   injection: its entire output was `running 1 of the catalogue`, `oom_killed=false`,
-   `survivors=0`, cleanup verified. Recorded as **incomplete, not as a result** — a
-   timeout is neither a caught mutant nor a surviving one. What consumed the hour is
-   **not established**. It is not a cold build cache, which was the first guess and is
-   wrong: measured, the disposable copy inherits nothing (`/work/mut/target` empty) and a
-   cold `cargo build -p nazm-cli` there is 30 crates in about 15 s, because the dependency
-   set is small. The same suite runs contained in 57.9 s against the image's warm
-   `/work/target`. Diagnosing the difference is open work, and no full run should be
-   restarted until it is understood.
-4. **`scripts/release-candidate.sh`**, contained. It calls `compiler/bootstrap.sh`, which
-   now refuses without a ceiling, so the script only works through the runner.
-5. Fold the numbers into `docs/delivery.md` and close Section 13.
+Before anything heavy resumes: containment is unchanged and non-negotiable.
+`NAZM_CONTAINED=1` is set by the runner **inside the container only**, never on the host;
+`NAZM_ALLOW_UNCONTAINED=1` is never used; workloads stay serial, one at a time, `--jobs 1`
+and `--test-threads 1`. Nothing is pushed, published or tagged — that is a person's
+decision.
 
 ## Unresolved decisions
 
@@ -349,4 +401,4 @@ is never set on the host; `NAZM_ALLOW_UNCONTAINED=1` is never used.
 - [x] Developer interfaces, grammar/guide, formatting, repair workflow — `7243447`; schemas in `schema/`, the grammar checked against the lexer and the parser, the guide generated from it, 27 tests across `schemas.rs`, `format.rs`, `grammar.rs` and `workflow.rs`
 - [x] Performance baselines, profiling/optimisation pass, no unsupported speed claims — `3bc0505`; `bench/baseline.json` and `docs/performance.md`, which states that nothing has been compared to another language
 - [x] Clean rebuild of the integrated state on a supported target — `git archive HEAD` into an empty tree, offline, 506 tests, every gate, byte-identical bootstrap
-- [x] Final local review/release package — produced and validated inside the contained runner: every gate passed (fmt, lint, `xtask check`, the whole suite, release build, the bootstrap chain, benchmarks against the re-recorded baseline), and the candidate was checked against its own manifest — 68 files, every digest matching, counts compared both ways so a file copied in but not listed fails
+- [x] Final local review/release package — produced and validated inside the contained runner at `c3fb078`: every gate passed (fmt, lint, `xtask check`, the whole suite, release build, the bootstrap chain, benchmarks against the re-recorded baseline), the candidate was checked against its own manifest — **70 files**, every digest matching, counts compared both ways so a file copied in but not listed fails — and it was then extracted and re-digested independently on the host. See **Release** below for the path, size, digests and the limits of what that establishes
