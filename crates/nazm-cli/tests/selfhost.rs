@@ -633,20 +633,6 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
     }
 }
 
-/// Whether a source uses a construct the bootstrap compiler deliberately does not accept.
-///
-/// Decided by **lexing**, not by a list of filenames: `scope` and `spawn` are reserved
-/// words in both lexers, so a new example that uses concurrency is classified correctly
-/// without anyone remembering to add it here. A list of names is the kind of thing that
-/// is right on the day it is written.
-///
-/// `docs/bootstrap-design.md` says which constructs these are and why they are left out.
-fn uses_concurrency(source: &str) -> bool {
-    use nazm_core::__syntax::TokenKind as T;
-    let (tokens, _) = nazm_core::__syntax::lex(source);
-    tokens.iter().any(|t| matches!(t.kind, T::Scope | T::Spawn))
-}
-
 #[test]
 fn the_nazm_parser_agrees_with_the_reference_on_every_source_in_the_tree() {
     // The real test of a parser: whole files, including its own source and the
@@ -827,6 +813,19 @@ fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
         // A parameter is not visible in another function.
         "fn a(p: Int) -> Int { p }\nfn m() -> Int { p }",
 
+        // --- concurrency ---------------------------------------------------------
+        // Clean: a `Chan` crosses into a task, which is the one handle that may.
+        "fn w(c: Chan) -> Int { let b = ints_new(); chan_recv(c, b); ints_pop(b) }\nfn m() -> Int { let c = chan_new(1); scope { spawn w(c); chan_send(c, 7); } 0 }",
+        "fn w() -> Int { 0 }\nfn m() -> Int { scope { } scope { spawn w(); spawn w(); } 0 }",
+        // A task needs a scope to join it (N0320).
+        "fn w() -> Int { 0 }\nfn m() -> Int { spawn w(); 0 }",
+        // A sequence is shared mutable storage with no synchronisation, so it may not
+        // cross into a task (N0321) — a channel may.
+        "fn w(xs: Ints) -> Int { ints_len(xs) }\nfn m() -> Int { let xs = ints_new(); scope { spawn w(xs); } 0 }",
+        "fn w(a: Strs) -> Int { strs_len(a) }\nfn m() -> Int { let a = strs_new(); scope { spawn w(a); } 0 }",
+        // The channel built-ins are typed: a `Chan` where an `Int` belongs is N0303.
+        "fn m() -> Int { let c = chan_new(1); chan_send(c, c); 0 }",
+
         // --- types ---------------------------------------------------------------
         // Clean, and exercising every type the language has.
         "fn m() -> Int { let a = ints_new(); ints_push(a, 1); ints_get(a, 0) }",
@@ -870,7 +869,15 @@ fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
                 .filter(|d| {
                     matches!(
                         d.code.as_str(),
-                        "N0200" | "N0201" | "N0300" | "N0301" | "N0303" | "N0304" | "N0310"
+                        "N0200"
+                            | "N0201"
+                            | "N0300"
+                            | "N0301"
+                            | "N0303"
+                            | "N0304"
+                            | "N0310"
+                            | "N0320"
+                            | "N0321"
                     )
                 })
                 .map(|d| {
@@ -925,12 +932,9 @@ fn the_nazm_checker_accepts_the_compiler_it_is_part_of() {
         // its imported names look undefined in isolation. Those files are checked as a
         // whole program by `nazm check`, which is what the assertion below uses.
         let source = std::fs::read_to_string(file).expect("read");
-        if uses_concurrency(&source) {
-            // The parser handles these now; the checker does not type `Chan` or know the
-            // `chan_*` built-ins yet, so there is nothing to compare. Narrowed from
-            // "outside the bootstrap subset" to what it actually is: a checker gap.
-            continue;
-        }
+        // Concurrency sources are no longer skipped: the Nazm checker types `Chan`, knows
+        // the four `chan_*` built-ins, and applies the two rules a task has —
+        // `spawn` needs a `scope` (N0320) and a sequence may not cross into one (N0321).
         let standalone = !source.contains("use \"");
         if standalone {
             assert!(
@@ -959,37 +963,19 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
             i.name()
         );
     }
-    // Every built-in must be named in that file, and the ones the bootstrap compiler
-    // deliberately does not lower must be named in its exclusion list rather than simply
-    // missing. The distinction is the whole point of the guard: a gap and a decision look
-    // identical from the outside, and only one of them is acceptable.
-    let excluded: Vec<&str> = source
-        .split("fn outside_bootstrap_subset")
-        .nth(1)
-        .and_then(|rest| rest.split("\n}").next())
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| l.split("name == \"").nth(1))
-        .filter_map(|l| l.split('"').next())
-        .collect();
-    assert_eq!(
-        excluded,
-        ["chan_new", "chan_send", "chan_recv", "chan_close"],
-        "the bootstrap subset's exclusions changed; `docs/bootstrap-design.md` says \
-         which built-ins are left out and why"
+    // There is no exclusion list any more. `chan_new`, `chan_send`, `chan_recv` and
+    // `chan_close` were named in one so that a deliberate omission could not be mistaken
+    // for a gap; the Nazm checker now types `Chan` and registers all four, so every
+    // built-in the front end has must be registered here — no exceptions to keep track
+    // of. If one is ever left out again it will fail below as "not registered".
+    assert!(
+        !source.contains("fn outside_bootstrap_subset"),
+        "the exclusion list is back; if a built-in is deliberately not lowered, this \
+         test needs to know which and why"
     );
-    for name in &excluded {
-        assert!(
-            nazm_core::Intrinsic::by_name(name).is_some(),
-            "`{name}` is excluded from the bootstrap subset but is not a built-in at all"
-        );
-    }
-    // And the arity the Nazm table records must match, since a wrong one turns a valid
-    // call into `N0303`. Checked by counting the non-`n` arguments on each line.
+    // The arity the Nazm table records must match, since a wrong one turns a valid call
+    // into `N0303`. Checked by counting the non-`n` arguments on each line.
     for i in nazm_core::Intrinsic::ALL {
-        if excluded.contains(&i.name()) {
-            continue;
-        }
         let line = source
             .lines()
             .find(|l| l.contains(&format!("\"{}\"", i.name())) && l.contains("add_builtin"))
