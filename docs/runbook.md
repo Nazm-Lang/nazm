@@ -119,6 +119,14 @@ stranded record makes the next run **refuse to start**, and repair is an operato
 
 2. **Repair.**
 
+   > Since the catalogue moved inside `cargo xtask contained mutate`, it runs against a
+   > disposable copy on the container's writable layer, never against the checkout. An
+   > interrupted contained run therefore leaves **nothing here to recover** — the copy
+   > dies with the container, and `git status` on this tree stays clean. What follows
+   > applies to a tree that was mutated directly, which is the uncontained path the
+   > contract now forbids; it is kept because a tree mutated before that rule still needs
+   > repairing.
+
    ```sh
    cargo xtask mutate-recover --confirm-no-writers
    ```
@@ -135,7 +143,7 @@ stranded record makes the next run **refuse to start**, and repair is an operato
 3. **Re-run.**
 
    ```sh
-   cargo xtask mutate
+   cargo xtask contained mutate
    ```
 
 ### If recovery refuses

@@ -36,7 +36,7 @@ arithmetic
 $ ./arithmetic          # no interpreter, no nazm process
 -54
 
-$ sh compiler/bootstrap.sh   # the compiler written in Nazm, compiling itself
+$ cargo xtask contained bootstrap   # the compiler written in Nazm, compiling itself
 bootstrap complete: C2 and C3 are byte-identical, 5 conformance cases agree
 ```
 
@@ -235,7 +235,7 @@ independent acceptance tests and specified static checks."**
 
 ```sh
 cargo build --workspace
-cargo test  --workspace
+cargo xtask contained tests
 cargo lint              # clippy; CI runs this same alias, so they cannot drift
 cargo xtask check       # architectural gates, and the guide against the grammar
 cargo xtask guide       # rewrite docs/guide.md from docs/grammar.ebnf
@@ -246,7 +246,7 @@ cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
 
 # Each catalogued defect is injected and must be caught. One full build and test run
 # per entry, so `--only NAME` selects a subset by substring.
-cargo xtask mutate
+cargo xtask contained mutate
 ```
 
 The toolchain is pinned to 1.98.1 in `rust-toolchain.toml`. That pin is load-bearing:

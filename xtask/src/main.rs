@@ -621,6 +621,26 @@ fn run_contained(args: &[String]) -> ExitCode {
                 shell("sh compiler/bootstrap.sh /work/bootstrap"),
             )
         }
+        Some("tests") => (
+            "tests",
+            shell("cargo test --locked --workspace --jobs 1 -- --test-threads 1"),
+        ),
+        Some("mutate") => {
+            // The catalogue edits sources, so it needs a tree of its own. `/src` is
+            // read-only and stays that way; the copy is disposable and lives on the
+            // capped writable layer. `.git` is excluded because nothing here reads it.
+            bounds.deadline = Duration::from_secs(3000);
+            let only: String = args.iter().skip(1).map(|a| format!(" {a}")).collect();
+            (
+                "mutate",
+                shell(&format!(
+                    "rm -rf /work/mut && mkdir -p /work/mut \
+                     && tar -C /src -cf - --exclude=./target --exclude=./.git . | tar -C /work/mut -xf - \
+                     && cd /work/mut && export CARGO_TARGET_DIR=/work/mut/target \
+                     && cargo run -q -p xtask -- mutate{only}"
+                )),
+            )
+        }
         Some("bench") => {
             // Results are produced in bounded container storage and exported by name.
             // The checkout stays read-only: a writable bind mount would put every write
@@ -671,7 +691,7 @@ fn run_contained(args: &[String]) -> ExitCode {
         }
         other => {
             eprintln!(
-                "contained: unknown workload {:?}\n  probe | selfhost | bootstrap | bench | run <command>",
+                "contained: unknown workload {:?}\n  probe | tests | selfhost | bootstrap | bench | mutate | run <command>",
                 other.unwrap_or("<none>")
             );
             return ExitCode::FAILURE;
