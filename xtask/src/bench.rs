@@ -61,6 +61,17 @@ pub(crate) fn root() -> PathBuf {
 /// cannot be written and because the checkout's own `target/` holds
 /// aarch64-apple-darwin artefacts that must not be mixed with Linux ones. Resolving this
 /// by hand rather than by convention is what lets the same command work in both places.
+/// Where the record and the baseline are written.
+///
+/// `$root/bench` unless `NAZM_BENCH_DIR` says otherwise. The contained runner points it
+/// at bounded container storage, because the alternative — mounting the checkout
+/// read-write so the results can land in it — puts every write on the host filesystem,
+/// where `--storage-opt` does not reach. A quota on the container's writable layer bounds
+/// nothing that goes through a writable bind mount.
+pub(crate) fn bench_dir(root: &Path) -> PathBuf {
+    std::env::var_os("NAZM_BENCH_DIR").map_or_else(|| root.join("bench"), PathBuf::from)
+}
+
 pub(crate) fn target_dir() -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root().join("target"), PathBuf::from)
 }
@@ -431,7 +442,7 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
     print!("{}", render_table(&measurements));
     print!("{}", render_memory(&memory));
 
-    let record = root.join("bench/record.json");
+    let record = bench_dir(&root).join("record.json");
     if let Err(e) = std::fs::write(&record, &json) {
         eprintln!("bench: cannot write {}: {e}", record.display());
         return ExitCode::FAILURE;
@@ -781,7 +792,7 @@ fn quote(s: &str) -> String {
 /// `bench/baseline-<host>.json`.
 fn baseline_path(root: &Path) -> PathBuf {
     let host = shell("uname", &["-sm"]);
-    let legacy = root.join("bench/baseline.json");
+    let legacy = bench_dir(root).join("baseline.json");
     match std::fs::read_to_string(&legacy) {
         Ok(text) if field(&text, "host") == host => legacy,
         _ => {
@@ -795,7 +806,7 @@ fn baseline_path(root: &Path) -> PathBuf {
                     }
                 })
                 .collect();
-            root.join(format!("bench/baseline-{slug}.json"))
+            bench_dir(root).join(format!("baseline-{slug}.json"))
         }
     }
 }
