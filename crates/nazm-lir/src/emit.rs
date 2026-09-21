@@ -47,7 +47,7 @@ use std::fmt::Write as _;
 
 use nazm_span::{SourceMap, Span};
 
-use crate::ir::{ArithOp, Block, Builtin, Expr, FuncId, Function, Module, Stmt, Ty};
+use crate::ir::{ArithOp, Block, Builtin, Expr, FuncId, Function, Lowering as _, Module, Stmt, Ty};
 
 /// What this emitter has been verified against, recorded so a reader does not have to
 /// infer portability from silence.
@@ -1298,7 +1298,7 @@ impl Emitter<'_> {
                 );
                 return Val::Of {
                     value: h,
-                    ty: op.ret(),
+                    ty: op.lowered_ret(),
                 };
             }
             Builtin::IntsLen | Builtin::StrsLen => {
