@@ -476,6 +476,31 @@ fn compare(root: &Path, measurements: &[Measurement]) -> ExitCode {
         }
     }
 
+    // A benchmark in the baseline that this run did not produce. Deleting a program is
+    // a legitimate thing to do; doing it and having the comparison quietly cover one
+    // fewer thing is not, and silence looks the same either way.
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("{\"program\": \"") else {
+            continue;
+        };
+        let Some((program, rest)) = rest.split_once('"') else {
+            continue;
+        };
+        let Some(stage) = rest
+            .split("\"stage\": \"")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+        else {
+            continue;
+        };
+        if !measurements
+            .iter()
+            .any(|m| m.program == program && m.stage == stage)
+        {
+            println!("bench: {program}/{stage} is in the baseline and was not measured");
+        }
+    }
+
     for i in &improvements {
         println!("faster: {i}");
     }
