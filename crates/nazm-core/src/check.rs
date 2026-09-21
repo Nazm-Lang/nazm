@@ -14,8 +14,8 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Return, Spawn, Stmt, While};
 
-use crate::intrinsic::Intrinsic;
-use crate::types::Type;
+use nazm_syntax::intrinsic::Intrinsic;
+use nazm_syntax::types::Type;
 
 #[derive(Debug, Clone)]
 pub struct Signature {
