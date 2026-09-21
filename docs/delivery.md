@@ -25,9 +25,9 @@ performance comparison of any kind.
 | --- | --- | --- |
 | Scalar control flow, including `return` and transfers inside values | done | `crates/nazm-cli/tests/build.rs`, every case at `-O0` and `-O2` against the interpreter |
 | A bootstrap subset with text, structured data, collections, memory behaviour, file I/O, errors and modules | done | `docs/bootstrap-design.md`; the subset is what `compiler/*.nz` is written in, and `use` is resolved by the Nazm-written compiler itself — `compiler/module.nz` |
-| Compiler frontend and lowering/emission in Nazm, external dependencies documented | done **for the bootstrap subset** | `compiler/lex.nz`, `parse.nz`, `analyse.nz`, `emit.nz`; dependencies in `docs/bootstrap.md`. The subset excludes concurrency, which is under *Known limitations*; module resolution is implemented in `compiler/module.nz` |
+| Compiler frontend and lowering/emission in Nazm, external dependencies documented | done **for the bootstrap subset** | `compiler/lex.nz`, `parse.nz`, `analyse.nz`, `emit.nz`; dependencies in `docs/bootstrap.md`. The subset excludes concurrency *emission*, which is under *Known limitations*; module resolution is implemented in `compiler/module.nz` |
 | Native C1 → C2 → C3 bootstrap, conformance and reproducibility | done | `compiler/bootstrap.sh`; C2 and C3 byte-identical in IR and executable, 5 conformance cases |
-| Ordinary independent programs compile with the Nazm-written compiler | done **within the subset** | `crates/nazm-cli/tests/selfhost.rs`. A program using `scope`/`spawn`/`Chan` is refused by name rather than miscompiled; multi-file programs compile, imports and all |
+| Ordinary independent programs compile with the Nazm-written compiler | done **within the subset** | `crates/nazm-cli/tests/selfhost.rs`. A program using `scope`/`spawn`/`Chan` parses and checks but is refused at emission, by name rather than miscompiled; multi-file programs compile, imports and all |
 | Initial structured concurrency: transfer/capture rules, cancellation, cleanup | done | `docs/spec.md`; 17 interpreter tests and 12 native tests, all deadline-bounded. The compiled runtime does **not** join a scope before reporting a failure — see *Known limitations* |
 | Structured developer interfaces, grammar/guide, formatting, repair workflow | done | `docs/diagnostics.md`, `schema/`, `docs/grammar.ebnf`, `docs/guide.md`, `scripts/repair.sh` |
 | Performance baselines, a profiling/optimisation pass, no unsupported speed claims | done | `docs/performance.md`, `bench/baseline.json` (Darwin), `bench/baseline-linux-aarch64.json` |
@@ -90,8 +90,15 @@ These are properties of the release, not a backlog.
   process; the emitted code has no unwinding mechanism and `@nz.fail` is `noreturn` from
   arbitrary call depth. `nazm-cli/tests/concurrent.rs` carries the contract as an ignored
   test so it starts passing the day the runtime can honour it.
-- **The bootstrap compiler does not accept concurrency**, and refuses it by name rather
-  than being silently unable to.
+- **The bootstrap compiler reads and checks concurrency but cannot yet emit it.** The
+  Nazm-written parser produces the same `scope` and `spawn` trees as the reference, and
+  the Nazm-written checker types `Chan`, knows the four `chan_*` built-ins and enforces
+  both task rules (`N0320`, `N0321`) with the reference's codes and spans. Lowering is
+  what is missing: `compiler/emit.nz` refuses `scope` and `spawn` by name, at their own
+  position, and writes no IR at all rather than something that would link. What it needs
+  is the task and channel runtime — `@nz.spawn`, `@nz.scope_join`, and the mutex,
+  condition variable and ring buffer behind `Chan` — which `crates/nazm-lir/src/emit.rs`
+  has and this one does not.
 - **The bootstrap concatenates its sources rather than importing them.** Not a gap in
   the compiler — `compiler/module.nz` resolves `use` and the compiler written in Nazm
   builds a multi-file program on its own (`selfhost.rs`,
