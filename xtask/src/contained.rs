@@ -54,14 +54,15 @@ pub(crate) struct Bounds {
     pub(crate) fsize_bytes: u64,
     pub(crate) deadline: Duration,
     pub(crate) output_cap: usize,
-    /// Mount the checkout read-write.
+    /// Files to copy out when the container finishes, as (path inside, path on the host).
     ///
-    /// Off by default: a workload that cannot write its own source cannot corrupt it,
-    /// and running read-only is what surfaced how many tools assume a writable checkout.
-    /// This is a *filesystem* choice and changes none of the resource bounds — those are
-    /// what the contract requires, and they are identical either way. On only for the few
-    /// workloads whose purpose is to produce an artefact in the tree.
-    pub(crate) writable_source: bool,
+    /// The checkout is **always** mounted read-only. Mounting it read-write so a workload
+    /// could write results into the tree would put those writes on the host filesystem,
+    /// where `--storage-opt` does not reach — a quota on the container's writable layer
+    /// bounds nothing that passes through a bind mount. Results go to bounded container
+    /// storage instead, and only the named artefacts are exported, each size-checked
+    /// inside the container before anything leaves it.
+    pub(crate) exports: Vec<(String, std::path::PathBuf)>,
 }
 
 impl Default for Bounds {
@@ -75,7 +76,7 @@ impl Default for Bounds {
             fsize_bytes: 512 * 1024 * 1024,
             deadline: Duration::from_secs(3600),
             output_cap: 4 * 1024 * 1024,
-            writable_source: false,
+            exports: Vec::new(),
         }
     }
 }
@@ -194,7 +195,13 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
 
     let container = format!("nazm-{name}-{}", std::process::id());
     let mut cmd = Command::new("docker");
-    cmd.args(["run", "--rm", "--name", &container])
+    // `--rm` only when nothing has to be copied out: a removed container has no files.
+    if b.exports.is_empty() {
+        cmd.arg("run").arg("--rm");
+    } else {
+        cmd.arg("run");
+    }
+    cmd.args(["--name", &container])
         .args(["--memory", &format!("{}m", b.memory_mb)])
         // Equal to --memory: a cap that can be exceeded by swapping is not a cap.
         .args(["--memory-swap", &format!("{}m", b.memory_mb)])
@@ -213,11 +220,10 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
         .arg("--init")
         .args(["--log-driver", "none"])
         .arg("--mount")
-        .arg(if b.writable_source {
-            format!("type=bind,source={},target=/src", repo.display())
-        } else {
-            format!("type=bind,source={},target=/src,readonly", repo.display())
-        })
+        .arg(format!(
+            "type=bind,source={},target=/src,readonly",
+            repo.display()
+        ))
         // The only place a real ceiling applies, so the only place this is set.
         .args(["--env", "NAZM_CONTAINED=1"])
         .args(["--env", "CARGO_TARGET_DIR=/work/target"])
@@ -281,6 +287,24 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
         .unwrap_or(false);
+    for (inside, host) in &b.exports {
+        let copied = Command::new("docker")
+            .arg("cp")
+            .arg(format!("{container}:{inside}"))
+            .arg(host)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if copied {
+            let size = std::fs::metadata(host).map(|m| m.len()).unwrap_or(0);
+            eprintln!(
+                "contained: exported {inside} -> {} ({size} bytes)",
+                host.display()
+            );
+        } else {
+            eprintln!("contained: nothing to export at {inside}");
+        }
+    }
     let _ = Command::new("docker")
         .args(["rm", "-f", &container])
         .output();

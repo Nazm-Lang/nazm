@@ -577,6 +577,24 @@ fn run_mutations(only: &[String]) -> Result<(), Vec<String>> {
 /// `cargo xtask contained <workload>` — the only sanctioned way to run a generated
 /// compiler stage, the selfhost suite, the bootstrap, fuzzing, the mutation catalogue or
 /// a heavy benchmark. See `contained.rs` for why an environment variable is not enough.
+/// This host's baseline slug, matching `bench::baseline_path`'s naming.
+fn host_slug() -> String {
+    let out = std::process::Command::new("uname").args(["-sm"]).output();
+    let host = out
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_default();
+    host.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
 fn run_contained(args: &[String]) -> ExitCode {
     use contained::{Bounds, Outcome};
     use std::time::Duration;
@@ -604,10 +622,26 @@ fn run_contained(args: &[String]) -> ExitCode {
             )
         }
         Some("bench") => {
-            // The one workload whose product is a file in the tree: `bench/record.json`,
-            // and `bench/baseline-<host>.json` when saving.
-            bounds.writable_source = true;
+            // Results are produced in bounded container storage and exported by name.
+            // The checkout stays read-only: a writable bind mount would put every write
+            // on the host filesystem, which `--storage-opt` does not bound.
             bounds.deadline = Duration::from_secs(2400);
+            let host_bench = repo.join("bench");
+            let slug = host_slug();
+            bounds.exports = vec![
+                (
+                    "/work/benchout/record.json".to_owned(),
+                    host_bench.join("record.json"),
+                ),
+                (
+                    format!("/work/benchout/baseline-{slug}.json"),
+                    host_bench.join(format!("baseline-{slug}.json")),
+                ),
+                (
+                    "/work/benchout/baseline.json".to_owned(),
+                    host_bench.join("baseline.json"),
+                ),
+            ];
             let mode = if args.iter().any(|a| a == "--save") {
                 "--save"
             } else {
@@ -616,8 +650,14 @@ fn run_contained(args: &[String]) -> ExitCode {
             (
                 "bench",
                 shell(&format!(
-                    "cargo build --release --locked -p nazm-cli --jobs 1 >/dev/null \
-                     && cargo run -q -p xtask -- bench --runs 5 {mode}"
+                    "mkdir -p /work/benchout \
+                     && cp /src/bench/*.json /work/benchout/ 2>/dev/null; \
+                     export NAZM_BENCH_DIR=/work/benchout; \
+                     cargo build --release --locked -p nazm-cli --jobs 1 >/dev/null \
+                     && cargo run -q -p xtask -- bench --runs 5 {mode} \
+                     && if find /work/benchout -name '*.json' -size +1M | grep -q .; then \
+                          echo 'bench: an artefact exceeded 1 MiB; refusing to export' >&2; exit 3; \
+                        fi"
                 )),
             )
         }
@@ -698,7 +738,7 @@ fn contained_probe(repo: &std::path::Path) -> ExitCode {
         fsize_bytes: 4 * 1024 * 1024,
         deadline: Duration::from_secs(20),
         output_cap: 256 * 1024,
-        writable_source: false,
+        exports: Vec::new(),
     };
 
     // (name, argv, expected outcome, what it proves)
