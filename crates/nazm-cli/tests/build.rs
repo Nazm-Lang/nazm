@@ -1103,9 +1103,10 @@ fn deep_syntax_produces_exactly_the_expected_outcome() {
     );
     assert_ok(&built, "`nazm build` on a 511-term chain");
     assert!(exe.exists(), "the accepted program produced no executable");
-    let ran = common::bounded_exe(&exe).output().expect("run");
-    assert_eq!(ran.status.code(), Some(0));
-    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "511");
+    let ran = run_bounded(&mut common::bounded_exe(&exe), DEADLINE)
+        .expect("the 511-term chain did not terminate within the deadline");
+    assert_eq!(ran.code, Some(0));
+    assert_eq!(ran.stdout.trim(), "511");
 
     // Over the limit: refused, with the nesting diagnostic and nothing else.
     for cmd in ["check", "build"] {
