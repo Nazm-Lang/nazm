@@ -257,7 +257,7 @@ fn a_lexing_error_is_located_and_stops_the_program() {
     ] {
         let file = dir.path().join("bad.nz");
         std::fs::write(&file, source).expect("write");
-        let out = Command::new(&exe).arg(&file).output().expect("run");
+        let out = common::bounded_exe(&exe).arg(&file).output().expect("run");
         assert_eq!(out.status.code(), Some(1), "{source:?}");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(stderr.contains(code), "{source:?}: {stderr}");
@@ -585,7 +585,7 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
     for source in sources {
         let file = dir.path().join("case.nz");
         std::fs::write(&file, source).expect("write");
-        let out = Command::new(&exe).arg(&file).output().expect("run");
+        let out = common::bounded_exe(&exe).arg(&file).output().expect("run");
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -652,7 +652,7 @@ fn the_nazm_parser_agrees_with_the_reference_on_every_source_in_the_tree() {
         assert!(errors.is_empty(), "{}: {errors:#?}", file.display());
         let theirs = dump_program(&program);
 
-        let out = Command::new(&exe).arg(file).output().expect("run");
+        let out = common::bounded_exe(&exe).arg(file).output().expect("run");
         if outside_the_bootstrap_subset(&source) {
             // A refusal, and a located one. A bootstrap parser that quietly produced
             // *some* tree for a construct it does not handle would agree with nothing
@@ -729,7 +729,7 @@ fn the_nazm_parser_refuses_what_it_cannot_parse_yet_by_name() {
     ] {
         let file = dir.path().join("bad.nz");
         std::fs::write(&file, source).expect("write");
-        let out = Command::new(&exe).arg(&file).output().expect("run");
+        let out = common::bounded_exe(&exe).arg(&file).output().expect("run");
         assert_eq!(out.status.code(), Some(1), "{source:?} should be refused");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
@@ -852,7 +852,7 @@ fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
     for source in sources {
         let file = dir.path().join("case.nz");
         std::fs::write(&file, source).expect("write");
-        let out = Command::new(&exe).arg(&file).output().expect("run");
+        let out = common::bounded_exe(&exe).arg(&file).output().expect("run");
         let ours = sorted_diagnostics(&String::from_utf8_lossy(&out.stdout));
 
         let theirs: Vec<(String, u32, u32)> = {
@@ -910,7 +910,7 @@ fn the_nazm_checker_accepts_the_compiler_it_is_part_of() {
     assert!(files.len() >= 5, "only {} sources", files.len());
 
     for file in &files {
-        let out = Command::new(&exe).arg(file).output().expect("run");
+        let out = common::bounded_exe(&exe).arg(file).output().expect("run");
         let ours = sorted_diagnostics(&String::from_utf8_lossy(&out.stdout));
         // A file that `use`s another is resolved by the driver, not by this checker, so
         // its imported names look undefined in isolation. Those files are checked as a
@@ -1168,9 +1168,11 @@ fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_in
             String::from_utf8_lossy(&ir.stdout)
         );
 
-        let (code, stdout, _) =
-            run_bounded(&mut Command::new(&exe), std::time::Duration::from_secs(30))
-                .expect("the compiled program hung");
+        let (code, stdout, _) = run_bounded(
+            &mut common::bounded_exe(&exe),
+            std::time::Duration::from_secs(30),
+        )
+        .expect("the compiled program hung");
         assert_eq!(code, Some(0), "{expr:?}: {stdout}");
         assert_eq!(stdout.trim(), *expected, "{expr:?}");
 
@@ -1248,8 +1250,11 @@ fn the_nazm_compiler_handles_several_functions_and_calls() {
             "clang rejected the IR: {}\n{text}",
             String::from_utf8_lossy(&built.stderr)
         );
-        let (code, stdout, _) =
-            run_bounded(&mut Command::new(&exe), std::time::Duration::from_secs(30)).expect("hung");
+        let (code, stdout, _) = run_bounded(
+            &mut common::bounded_exe(&exe),
+            std::time::Duration::from_secs(30),
+        )
+        .expect("hung");
         assert_eq!(code, Some(0));
         assert_eq!(stdout.trim(), *expected);
 
@@ -1330,8 +1335,11 @@ fn the_nazm_compiler_keeps_the_specified_failure_behaviour() {
             .status
             .success());
 
-        let (status, stdout, stderr) =
-            run_bounded(&mut Command::new(&exe), std::time::Duration::from_secs(30)).expect("hung");
+        let (status, stdout, stderr) = run_bounded(
+            &mut common::bounded_exe(&exe),
+            std::time::Duration::from_secs(30),
+        )
+        .expect("hung");
         assert_eq!(status, Some(2), "{expr:?}: a runtime failure must exit 2");
         assert!(stderr.contains(code), "{expr:?}: {stderr}");
         assert!(stderr.contains(message), "{expr:?}: {stderr}");

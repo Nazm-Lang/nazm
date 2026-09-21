@@ -55,3 +55,43 @@ pub(crate) fn require_containment(stage: &str) {
          To override deliberately and accept the risk, set {WAIVER}=1."
     );
 }
+
+/// The address-space ceiling a generated program runs under, in kilobytes: 512 MiB.
+///
+/// Chosen against measurement, not taste. The largest legitimate program in the tree
+/// peaks at 4.4 MB resident, the self-hosted compiler stages at about 36 MB, and each
+/// pthread a concurrency test spawns reserves roughly 8 MB of address space for its
+/// stack. 512 MiB clears all of that by two orders of magnitude while sitting well below
+/// the container's own 4 GiB ceiling — so a runaway dies as a *test failure*, attributed
+/// to the test that caused it, instead of taking the whole run down with an
+/// infrastructure OOM.
+const ADDRESS_SPACE_KB: u64 = 512 * 1024;
+
+/// A `Command` that runs `exe` under that ceiling.
+///
+/// # What this bounds, and what it does not
+///
+/// `ulimit -v` sets `RLIMIT_AS`, which bounds **virtual address space**, not resident
+/// memory. A program that maps a great deal and touches little will be refused even
+/// though its footprint is small — which is why the value is generous rather than tight.
+/// It is the right tool here anyway, because the failure being guarded against is
+/// unbounded `malloc`, and that grows the address space.
+///
+/// **It is effective on Linux and not on Darwin**, where `RLIMIT_AS` is an alias of
+/// `RLIMIT_RSS` and `setrlimit(2)` documents it as advisory. That is why it is a second
+/// line rather than the first: the container is the ceiling that actually holds. The
+/// `2>/dev/null` and the unconditional `exec` keep the wrapper harmless where the limit
+/// is not enforced.
+///
+/// A shell wrapper rather than `pre_exec`, because the workspace sets
+/// `unsafe_code = "forbid"` and `pre_exec` is unsafe. The limit is inherited by every
+/// descendant, threads included, since they share the address space.
+pub(crate) fn bounded_exe(exe: &std::path::Path) -> std::process::Command {
+    let mut c = std::process::Command::new("sh");
+    c.arg("-c")
+        .arg(format!(
+            "ulimit -v {ADDRESS_SPACE_KB} 2>/dev/null; exec \"$0\" \"$@\""
+        ))
+        .arg(exe);
+    c
+}
