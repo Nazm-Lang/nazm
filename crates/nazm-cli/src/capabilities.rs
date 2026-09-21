@@ -61,7 +61,7 @@ struct ConstructRow {
 
 /// Constructs, which no table holds.
 ///
-/// Each row is a claim, and `crates/nazm-cli/tests/capabilities.rs` checks the ones that
+/// Each row is a claim, and `crates/nazm-cli/tests/schemas.rs` checks the ones that
 /// can be checked by compiling a program that uses the construct and seeing whether the
 /// answer matches. A row that says `compiled: false` must be *refused*, not merely
 /// absent — that is the same distinction the bootstrap subset draws.

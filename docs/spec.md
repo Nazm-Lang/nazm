@@ -337,8 +337,10 @@ compiled program has no iteration budget and no call-depth budget: a loop whose 
 never becomes false runs until something kills it, with no `N0402`. This is stated here so
 that the difference is part of the record rather than a discovery. The two implementations
 agree on what a *terminating* program produces; they do not agree on what a runaway one
-does, and no test claims otherwise. Recursion is refused outright by that backend for the
-related reason — see `docs/roadmap.md`, *Recursion: pending a native execution contract*.
+does, and no test claims otherwise. Recursion is refused outright by **both** compilers for
+the related reason — `nazm build` since the native path existed, and the compiler written
+in Nazm since 2026-09-21, when a measured divergence between them was closed. See
+`docs/roadmap.md`, *Recursion: pending a native execution contract*.
 
 ### Strings are bytes, and what that commits to
 
@@ -750,13 +752,21 @@ were never built would be claims about the parser's guess, not about the program
 
 ### Not in v0.3, and unsupported rather than half-present
 
-Valueless `return`, labelled break, `for`, `loop`, mutable parameters, effects, I/O,
-generics, user-defined types, modules, string concatenation, floating point. A program using any of them is
-rejected by name rather than misparsed into something else.
+Valueless `return`, labelled break, `for`, `loop`, mutable parameters, effects, generics,
+user-defined types, floating point. A program using any of them is rejected by name rather
+than misparsed into something else.
 
-`nazm run` prints the value of `main`. There is deliberately no `print`: output is an
-effect, effects are the design's central mechanism, and a builtin that bypassed the effect
-system before it exists would be the wrong shape to unpick later.
+**Corrected 2026-09-21.** This list also named **I/O, modules and string concatenation**,
+and the paragraph below it said there was deliberately no `print` — while all three are
+specified two to four hundred lines earlier in this same file. `print` and `eprint` exist;
+see *What the outside-world built-ins do*, *A file is a module*, and `str_concat`. The
+reasoning that was true, and still is, is that output is an effect **the language does not
+track**; what shipped is ambient authority, labelled as a limitation rather than designed.
+The original paragraph, unedited:
+
+> `nazm run` prints the value of `main`. There is deliberately no `print`: output is an
+> effect, effects are the design's central mechanism, and a builtin that bypassed the
+> effect system before it exists would be the wrong shape to unpick later.
 
 ## Open — later phases must settle these
 
@@ -817,8 +827,11 @@ Required before `nazm test --backend=all` means anything:
 - The surface syntax itself, which is the **largest lever against the training-data risk**
   and is nearly free to change now and effectively unchangeable later. Novelty is a budget:
   spend it only where it buys semantics unobtainable otherwise.
-- A machine-readable grammar (needed as a spec artifact regardless of whether
-  grammar-constrained decoding is ever used).
+- ~~A machine-readable grammar~~ — **delivered.** `docs/grammar.ebnf`, checked against the
+  real lexer and parser by `crates/nazm-syntax/tests/grammar.rs`, with `docs/guide.md`
+  generated from it. Struck through rather than deleted, because the reason it was wanted
+  — a spec artefact regardless of whether grammar-constrained decoding is ever used — is
+  why it is maintained.
 - A cheatsheet under ~3k tokens, to be injected by `nazm init`.
 
 ## Non-goals for the current interpreter milestone
@@ -829,8 +842,15 @@ macros · comptime beyond constant folding · general effect handlers · whole-p
 layout selection · a package manager · a module system beyond files
 
 **Self-hosting was on this list and has been moved off it.** It is now a stated long-term
-objective — see [`direction.md`](direction.md) — and it remains outside this milestone,
-which is a different thing from being a non-goal. The staged path is
-[`roadmap.md`](roadmap.md) M3, and it is deliberately preceded by M2: the language has no
+objective — see [`direction.md`](direction.md) — and the staged path was
+[`roadmap.md`](roadmap.md) M3.
+
+**Achieved 2026-09-21.** The sentence that closed this section — *"the language has no
 collections, no user-defined types, no pattern matching, no string concatenation and no
-I/O, so a compiler cannot be written in it yet at all.
+I/O, so a compiler cannot be written in it yet at all"* — was true when written and is now
+false in four of five clauses. Collections, string concatenation, modules and I/O exist,
+and the compiler written in Nazm reaches a C2 ≡ C3 fixpoint. User-defined types and pattern
+matching are still absent; the compiler was written around them with parallel `Ints`/`Strs`
+arrays rather than waiting. The heading above — *"the current interpreter milestone"* — no
+longer describes the project either. What this list still correctly records is what that
+milestone chose not to do.

@@ -1,0 +1,224 @@
+# Research register
+
+**Status: hypotheses, kept apart from commitments. Nothing here is a plan, a roadmap entry
+or a capability, and nothing here may be cited as evidence for one.**
+
+`direction.md:72-84` separates implemented behaviour, accepted design, open questions and
+research proposals, and notes that the last is *"speculative, and not entitled to be
+described as a plan"*. That distinction survived the first era in one place — automatic
+layout selection, which `architecture.md` §4 labels a proposed research direction pending a
+literature review that has not been done — and nowhere else. This document gives the rest of
+them the same treatment.
+
+**Every item carries a falsifier.** An item without a result that would invalidate it is
+not a hypothesis; it is a preference, and it belongs in `architecture.md` as a design
+decision or nowhere.
+
+The spine of the open-question set is `docs/spec.md` *Open* and `docs/performance.md`'s
+ranked headroom, both of which state their questions better than a summary would. Those are
+referenced, not restated.
+
+---
+
+## R1 · Mutable value semantics is ergonomic enough to be the surface model
+
+**Hypothesis** · A surface model of read-only projection, exclusive mutation, and
+consumption/move gives ordinary programs memory safety without a lifetime annotation the
+programmer writes, while a full region and borrow calculus is retained *inside* the IR so
+the architecture is not trapped if the surface proves insufficient. `architecture.md` §5
+states the design and names the hedge.
+
+**Required prerequisite** · A typed core IR to carry places and regions; `docs/spec.md`
+*Open* lists the four questions that must be answered first, of which copy elision is the
+sharp one — MVS is unusable if what the compiler guarantees, versus what it merely usually
+does, is folklore.
+
+**Evidence needed** · The self-hosting compiler rewritten against the surface model without
+an escape hatch, and peak RSS bounded by live data rather than total allocation.
+
+**Invalidating result** · A common pattern in the existing `compiler/*.nz` sources that
+cannot be expressed without exposing regions in the surface syntax. One would be enough;
+the compiler is the honest test case because it was written before the model existed.
+
+**Status: RESEARCH.** Nothing implemented — no ownership machinery exists in any language
+crate.
+
+---
+
+## R2 · Content-addressed semantic IR pays for itself
+
+**Hypothesis** · Normalising each top-level definition after type checking — names erased
+to de Bruijn indices, dependencies replaced by their hashes — and keying compilation
+results on the resulting Merkle DAG makes incremental compilation and cross-machine caching
+correct by construction. `architecture.md` §3 carries the design and the cache-key
+correctness conditions.
+
+**Required prerequisite** · A compilation unit. Today there is none:
+`crates/nazm-cli/src/load.rs` concatenates every reachable file into one buffer and a span
+has no file identity, so there is nothing of definition granularity to hash.
+
+**Evidence needed** · A measured rebuild saving on a real edit, against the cache key
+covering compiler identity, schema version, transitive dependency hashes, target and CPU
+features, optimisation flags and ABI.
+
+**Invalidating result** · The key must cover so much that hits are rare in practice, or an
+omission produces a silent miscompile in testing. `architecture.md` already names the
+second as the failure mode: anything omitted from the key is a silent miscompile waiting to
+happen.
+
+**Status: RESEARCH.**
+
+---
+
+## R3 · Definition-hash equality is useful to an agent
+
+**Hypothesis** · When an agent rewrites a function and the normalised Core hash is
+unchanged, the compiler can tell it the edit produced an identical definition — detecting
+one class of no-op edit and shortening a class of agent loop. `architecture.md` §3 states
+both the idea's origin (Unison) and the contribution claimed here, which is the
+agent-facing use rather than the hashing.
+
+**Required prerequisite** · R2.
+
+**Evidence needed** · A measured reduction in wasted agent effort, under the protocol in
+`docs/evaluation.md` — whose thresholds `direction.md` forbids relaxing — rather than an
+anecdote.
+
+**Invalidating result** · No-op edits turn out to be rare, or agents do not act differently
+when told. Note the honest scope already recorded: this detects normalised-Core
+alpha-equivalence, **not** all behaviour-preserving rewrites, so a result showing agents
+need the general case would invalidate the usefulness without touching the mechanism.
+
+**Status: RESEARCH.**
+
+---
+
+## R4 · Automatic data-layout selection is sound and worth it
+
+**Hypothesis** · Keeping field access symbolic through the IR — `project(place, field_id)`,
+with offsets appearing only at the lowest level — lets the compiler choose layouts the
+programmer did not, and wins enough to justify the constraint. `architecture.md` §4 is the
+design and §7 records the Phase 1 deliverable.
+
+**Required prerequisite** · User-defined types, which do not exist. And the literature
+review, which `architecture.md` §4 has called outstanding since it was written — **this
+project is not entitled to claim the idea is novel until it is done.**
+
+**Evidence needed** · The eligibility predicate stated, behaviour settled under address
+identity, escaping references, FFI, serialisation, atomics and separate compilation, and a
+measured win on a benchmark that is not chosen to flatter it.
+
+**Invalidating result** · The eligibility predicate excludes everything interesting, or the
+literature shows the win is already available without the constraint.
+
+**Status: RESEARCH.** The architectural commitment that preserves the option — offsets only
+at the lowest level — is already honoured and is the hardest thing here to reverse, so
+keeping it costs nothing today and buys the experiment later.
+
+---
+
+## R5 · An M:N scheduler with growable stacks beats one OS thread per task
+
+**Hypothesis** · Green tasks over a work-stealing scheduler with growable stacks and an
+event reactor give task density and latency that one OS thread per task cannot, without
+`async`/`await` colouring the language.
+
+**Required prerequisite** · `nazm-rt`, which needs the workspace `unsafe_code = "forbid"`
+to narrow to a per-crate allowance, which needs the memory model. Also a settled answer to
+preemption — cooperative at back-edges and calls, or signal-based — which `docs/spec.md`
+lists as open.
+
+**Evidence needed** · Spawn-to-first-instruction latency, context-switch cost, and task
+memory as **RSS, not virtual reservation, with page size recorded**, against a named
+implementation.
+
+**Invalidating result** · No measured advantage at the task counts real programs reach.
+The precedent is set and should be followed: `architecture.md` withdrew the "1M live tasks
+under 2GB" target as arithmetically unsupported rather than keeping it as aspiration.
+
+**Status: RESEARCH.** The shipped model — one POSIX thread per task, a mutex/condvar ring
+per channel — is the semantic baseline and stays so until this is measured. Ownership
+prevents data races; **that is not deadlock freedom** and must never be reported as such.
+
+---
+
+## R6 · Provenance and information flow can be checked at a usable approximation
+
+**Hypothesis** · A lattice-valued qualifier on types, propagated position-sensitively,
+catches real leaks at a false-positive rate programmers tolerate. `architecture.md` §5
+states the design, keeps it a separate concern from effects and capabilities even where
+machinery is shared, and records that calling it *"nearly free once effects exist"* was
+overclaiming.
+
+**Required prerequisite** · Effects, and a MIR that tracks places.
+
+**Evidence needed** · The chosen approximation stated **with what it misses**, and a
+corpus where it finds real leaks without drowning the user. Full non-interference is
+usually unusable in practice; the claim has to be about the approximation, not the ideal.
+
+**Invalidating result** · Implicit flows force either an unusable false-positive rate or an
+approximation that misses the leaks people actually have.
+
+**Status: RESEARCH.** Every sub-question — implicit flows, sanitizers, aliasing through a
+projection, declassification, the FFI boundary — is open in `docs/spec.md`.
+
+---
+
+## R7 · Heterogeneous CPU/GPU/accelerator execution belongs in Nazm
+
+**Hypothesis** · There is a version of accelerator support that fits a small semantic
+kernel rather than bolting a second language onto the first.
+
+**Required prerequisite** · A reason to believe it, which does not currently exist.
+`architecture.md` §1 says MLIR should be revisited *only if* Nazm pivots toward
+tensor/accelerator codegen, and `roadmap.md` places tensors, GPUs, model providers and
+distributed execution out of scope and not planned.
+
+**Evidence needed** · A workload the project actually has, that a CPU backend cannot serve.
+
+**Invalidating result** · The honest default. This item exists to be **declined explicitly
+rather than drift in through the phrase "AI-native"**, which law 6 defines as
+machine-consumable compiler interfaces and not as an argument for syntax or for hardware.
+
+**Status: RESEARCH, and presumed no.**
+
+---
+
+## R8 · Critical-system verification techniques are reachable from this architecture
+
+**Hypothesis** · Specified-rather-than-inherited arithmetic, refuse-by-name, and a
+restriction-profile model are the right foundations for a subset amenable to formal
+argument, and the distance to one is smaller than starting over.
+
+**Required prerequisite** · Nearly everything: a memory model, effects, contracts, a
+bounded-stack story, and a toolchain qualification argument that the bootstrap explicitly
+does **not** supply — `docs/bootstrap.md` puts compiler trustworthiness on the list of
+things a reproducible fixpoint does not establish.
+
+**Evidence needed** · A proof obligation discharged on a real Nazm program, and an
+assessment against a named standard by someone qualified to make it.
+
+**Invalidating result** · A semantic decision made for ergonomics that turns out to be
+irreconcilable with the subset — which is the reason this item is worth tracking now rather
+than later, since such a decision is cheap to avoid and expensive to undo.
+
+**Status: RESEARCH.** See the warning paragraph in
+[`domain-profiles.md`](domain-profiles.md) under Critical; it applies to every sentence
+here.
+
+---
+
+## Where the rest of the open questions live
+
+| Subject | Where |
+| --- | --- |
+| Copy semantics, closure capture, copy elision, region assignment | `docs/spec.md` *Open* → Memory and values |
+| **Is divergence an effect?** — blocks dropping an unused pure call | `docs/spec.md` *Open* → Effects |
+| Allocation failure, panic, evaluation order, handler lowering | `docs/spec.md` *Open* → Effects |
+| Cancellation semantics, preemption, captured globals under transfer | `docs/spec.md` *Open* → Concurrency |
+| Layout eligibility and its interaction with identity, FFI, atomics | `docs/spec.md` *Open* → Layout selection |
+| What must be settled before `nazm test --backend=all` means anything | `docs/spec.md` *Open* → Backend semantics |
+| Surface syntax, and novelty as a budget | `docs/spec.md` *Open* → Syntax |
+| Where the performance headroom is, ranked with confidence labels | `docs/performance.md` |
+| Authority: ambient today, capability parameter as the growth path | `docs/goal-status.md` |
+| Visibility: private-by-default is a known future break | `docs/goal-status.md` |

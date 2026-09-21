@@ -32,7 +32,7 @@ performance comparison of any kind.
 | Structured developer interfaces, grammar/guide, formatting, repair workflow | done | `docs/diagnostics.md`, `schema/`, `docs/grammar.ebnf`, `docs/guide.md`, `scripts/repair.sh` |
 | Performance baselines, a profiling/optimisation pass, no unsupported speed claims | done | `docs/performance.md`, `bench/baseline-linux-aarch64.json` (current); `bench/baseline.json` (Darwin) is **stale** — see `docs/performance.md` |
 | A clean rebuild of the integrated final state on a supported target | done | a fresh copy, `--offline`, full suite — see *Reproducing this* |
-| A final local review/release package | done | `scripts/release-candidate.sh`, run contained at `c3fb078`: every gate passed and the candidate was verified against its own manifest — **70 files**, every digest matching — then extracted and re-digested independently on the host. The script validates what it assembled rather than trusting it, and compares file counts both ways so a file copied in but not listed fails |
+| A final local review/release package | done | `scripts/release-candidate.sh`, run contained at `4fb1554`: every gate passed and the candidate was verified against its own manifest — **70 files**, every digest matching — then extracted and re-digested independently on the host. The script validates what it assembled rather than trusting it, and compares file counts both ways so a file copied in but not listed fails |
 
 ## What is verified, and what that means
 
@@ -93,8 +93,12 @@ These are properties of the release, not a backlog.
   to be compared token-for-token and node-for-node against the reference stages, so they
   read exactly the file they are given. Resolution belongs to the compiler driver,
   `emit.nz`, and that is where it is.
-- **No cross-language performance comparison.** `docs/performance.md` measures this
-  implementation against itself and says nothing about C, Rust, Zig, Go or Python.
+- **Almost no cross-language performance comparison.** `docs/performance.md` measures this
+  implementation against itself, plus **one program** — a sieve — against `clang` and
+  `python3` on one host. Nothing has been measured against Rust, Zig or Go, and one program
+  is not a language comparison. (This entry read "No cross-language performance comparison"
+  until 2026-09-21; the references were added at `87e1a47` and the disclaimer outlived
+  them.)
 - **The benchmark harness (`nazm-bench`) cannot produce a benchmark number.** Its
   agent drivers, provider adapter and task corpus are unwritten, and `run` is disabled.
   It is unrelated to the language work above; see `README.md`.
@@ -102,7 +106,9 @@ These are properties of the release, not a backlog.
 ## Results
 
 `cargo test --workspace`, run through `cargo xtask contained` on Linux:
-**549 passed, 0 failed, 6 ignored.** What they cover, grouped by the question each group
+**557 passed, 0 failed, 6 ignored.** Across 35 suites.
+*(549 at the tested release commit `4fb1554`; the eight added since are the `xtask` unit
+tests behind the capability-matrix gate, and they touch no compiled behaviour.)* What they cover, grouped by the question each group
 answers:
 
 | | count | what it establishes |
@@ -117,7 +123,7 @@ answers:
 | Grammar (`nazm-syntax/tests/grammar.rs`) | 4 | every lexer token written down, every rule reachable, every example parsed by the real parser |
 | Repair workflow (`nazm-cli/tests/workflow.rs`) | 10 | `nazm fix`, `nazm fmt`, `nazm test` and `scripts/repair.sh` end to end |
 | Coverage of the guarantees themselves (`codes.rs`, `builtins.rs`, `docs.rs`, `counts.rs`, `resource_regression.rs`) | 10 | every diagnostic code asserted or named unreachable; every built-in exercised where an answer is asserted; every example run by a test; the README's command table, the published schemas and the verified target checked against the build; and this table's own rows required to sum to the total above; and the stage drivers required to assemble their output in one allocation, measured under a ceiling |
-| The rest | 214 | unit tests across the six crates, the CLI's own behaviour, and the benchmark harness — which is not part of this goal |
+| The rest | 222 | unit tests across the six crates, the CLI's own behaviour, the benchmark harness — which is not part of this goal — and `xtask`'s own gates, including the eight that keep `docs/capability-matrix.md` citing files that exist |
 
 The bootstrap: **C2 and C3 byte-identical** in IR and executable, with 5 conformance
 cases agreeing across C2, C3 and the interpreter. `compiler/bootstrap.sh` writes the
@@ -133,8 +139,9 @@ requires the suite to catch it. Run at final integration against `524cd24`, whic
 integrated state minus `nazm test` — an addition that touches none of the code the
 catalogue mutates.
 
-**48 caught, 0 survived, 0 unusable.** Every catalogued defect that could be injected
-was detected by the suite.
+**48 caught, 0 survived, 0 unusable**, against a catalogue that held 50 entries at the
+time and holds **51** now. Every catalogued defect that could be injected was detected by
+the suite.
 
 **Two were not injected**, and both were already known: the run confirmed, in the
 runner's own words, what checking the catalogue against the tree had found an hour
@@ -152,7 +159,7 @@ value forms of `if` are different code paths. `cargo xtask mutate --only NAME` e
 the repairs could be verified without re-running fifty.
 
 A caught mutation establishes that the suite detects **that** defect, and nothing
-broader. Fifty entries is fifty facts, not a coverage percentage.
+broader. Fifty-one entries is fifty-one facts, not a coverage percentage.
 
 ## Skipped and conditional coverage
 
@@ -171,8 +178,9 @@ passing one is the most misleading thing a suite can contain.
 | | |
 | --- | --- |
 | Repository | local only; no remote is configured, which is not a blocker to anything here |
-| Integrated commit | **`c3fb0789bc8b0731bed083f90ab998816ecd8a09`** — what the packaged candidate was built and tested at. `scripts/release-candidate.sh` records it in `PROVENANCE.txt` and refuses to assemble a candidate whose revision it cannot establish |
-| Remaining diff | none at that commit. Documentation committed *after* it — this file, `docs/performance.md`, `docs/goal-status.md` and the provenance labelling in `scripts/release-candidate.sh` — is **not** in the package and was **not** covered by its test run |
+| Integrated commit | **`4fb15542dfbf9af0bf34c42fe52783637b3daed4`** — what the packaged candidate was built and tested at. `scripts/release-candidate.sh` records it in `PROVENANCE.txt` and refuses to assemble a candidate whose revision it cannot establish |
+| Superseded candidate | `c3fb0789bc8b0731bed083f90ab998816ecd8a09`, retained unchanged. Its `bin/nazmc-selfhosted` **accepts recursion**, the divergence closed at `f0f9fc4` — it is the artefact tested at that revision, not a fallback |
+| Remaining diff | none at `4fb1554`. **Corrected 2026-09-21:** this row previously named `c3fb078` and described everything committed after it as documentation. That was wrong, and it is the same mischaracterisation `f0f9fc4` was written to correct: of the four commits between, `f0f9fc4` changed `compiler/emit.nz`, `ea6fc06` changed `crates/nazm-cli/tests/selfhost.rs`, and `4fb1554` changed `scripts/release-candidate.sh`. Only `3de05c9`, after the tested commit, is documentation alone |
 | Source digest | `PROVENANCE.txt` carries one over the source *files* (`.rs`, `.nz`, `.md`, `.json`, `.sh`, `.ebnf` under seven roots — 140 files). It is **not** a whole-tree digest: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, the Dockerfile, the mutation catalogue and every `.expected` fixture sit outside it |
 
 ## Reproducing this
@@ -224,7 +232,9 @@ baseline, the bootstrap record, a `MANIFEST.txt` with a SHA-256 of every file, a
 nothing that has not passed every gate, and it does not tag, push or publish — that is a
 decision for a person.
 
-The candidate built at `c3fb078`:
+The candidate built at `4fb1554` is described in `docs/goal-status.md` with its path,
+size and digests. The **superseded** candidate built at `c3fb078`, retained beside it and
+unchanged:
 
 | | |
 | --- | --- |

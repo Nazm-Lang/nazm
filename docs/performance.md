@@ -2,8 +2,16 @@
 
 **Status: the first measurements exist, and are below.** They cover this implementation
 against itself — interpreter against native, and one optimisation pass against its own
-baseline. They say **nothing** about C, Rust, Zig, Go or Python: no cross-language
-comparison has been run, and the claims in the second half of this file remain targets.
+baseline — and, **on one program only**, against `clang` and `python3`.
+
+**Corrected 2026-09-21.** This paragraph said the measurements *"say nothing about C, Rust,
+Zig, Go or Python: no cross-language comparison has been run"*. That stopped being true
+when `bench/reference/sieve.c` and `bench/reference/sieve.py` were added and `xtask bench`
+began timing them — refusing to time a reference whose answer differs from the Nazm
+program's. What is accurate now: **one program, one host, one C compiler**, recorded in
+`bench/baseline-linux-aarch64.json` as the `reference-c` stage. Nothing has been measured
+against Rust, Zig or Go, and one sieve is not a language comparison. The claims in the
+second half of this file remain targets.
 
 This file exists so that claims are written down *before* benchmarks are chosen, which
 is the only order in which a benchmark can falsify anything.
@@ -13,7 +21,9 @@ is the only order in which a benchmark can falsify anything.
 ## The measurements
 
 `cargo xtask bench` times six programs in `bench/programs/` plus the compiler's own
-source, through five stages each. Seven runs after one discarded warm-up; the median is
+source, through five stages each — six where an external reference exists (`reference-c`,
+`reference-python`), and a seventh program, `floor.nz`, exists to measure the process floor
+rather than the language. Seven runs after one discarded warm-up; the median is
 reported, and one baseline file per host holds the full record.
 
 | | |
@@ -174,7 +184,7 @@ misread:
 | | check | build `-O0` | build `-O2` |
 | --- | ---: | ---: | ---: |
 | Any one benchmark program | 2.8 – 4.4 ms | 59 – 62 ms | 65 – 78 ms |
-| The compiler's own 3 500 lines | 8.2 ms | 198.6 ms | — |
+| The compiler's own source (3 500 lines then; **4,647** now, so this row is not comparable to a current run) | 8.2 ms | 198.6 ms | — |
 
 **Nazm's own front end is not what a `nazm build` waits for.** Checking the whole
 self-hosting compiler takes 8 ms; building a four-line program takes 60. The difference

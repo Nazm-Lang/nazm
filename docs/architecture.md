@@ -1,8 +1,17 @@
 # Architecture
 
-**Status: design record, not an implemented system.** Nothing below §7 exists in code.
-This documents decisions made before writing the compiler, and the reasoning that would
-otherwise be lost. Where a decision rests on a claim that has not been checked, it says so.
+**Status: design record. Partly implemented — see below.** This documents decisions made
+before writing the compiler, and the reasoning that would otherwise be lost. Where a
+decision rests on a claim that has not been checked, it says so.
+
+**Corrected 2026-09-21.** This line read "Nothing below §7 exists in code", and that was
+the single most-copied false sentence in the repository — the workspace router and three
+other documents paraphrased it. What is now implemented: one IR crate (§2 level 7 by name,
+though not by definition — see §7), the LLVM-text backend (§2 level 8), a task and channel
+runtime emitted into every compiled program, and the differential-testing discipline of §6.
+What remains design: §2 levels 2-6, §4 entirely, and every part of §5 except the reduced
+concurrency model. [`capability-matrix.md`](capability-matrix.md) is the authority on which
+is which, area by area, with evidence.
 
 ---
 
@@ -283,9 +292,15 @@ Crates are created when their responsibility exists.
 
 **Corrected 2026-09-20.** This section read "Phase 2 is `nazm-bench` and `xtask` only —
 there is no compiler yet, deliberately", and that is no longer the case: the Phase 4
-front-end crates exist and a `.nz` program executes. What has *not* changed is that
-everything from `nazm-hir` downward is still design — no IR, no backend, no runtime. See
-[`roadmap.md`](roadmap.md) for the order the rest is now planned in.
+front-end crates exist and a `.nz` program executes.
+
+**Corrected again 2026-09-21.** The sentence that followed — "everything from `nazm-hir`
+downward is still design" — has itself rotted, which is worth leaving visible: a correction
+is not permanent either. `nazm-lir` exists, the backend exists, and a runtime is emitted
+into every compiled program. What is still design is everything *between* the AST and
+`nazm-lir`: `nazm-hir`, `nazm-ty`, `nazm-db`, `nazm-mir`, `nazm-mono`. See
+[`roadmap.md`](roadmap.md) for ordering and [`capability-matrix.md`](capability-matrix.md)
+for what each one's absence currently costs.
 
 | Phase | Crates | State |
 | --- | --- | --- |
@@ -293,9 +308,12 @@ everything from `nazm-hir` downward is still design — no IR, no backend, no ru
 | 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-core` · `nazm-cli` | **exists** (as an interpreter; `nazm-core` is checker + evaluator, not the Core IR below) |
 | 4 | `nazm-hir` · `nazm-ty` · `nazm-mcp` | planned |
 | 6 | `nazm-db` · `nazm-mir` · `nazm-lsp` | planned |
-| 7 | `nazm-lir` · `nazm-codegen-clif` · `nazm-link` · `nazm-driver` · `nazm-test` | planned |
+| 7 | **`nazm-lir`** | **exists** — named for this level, but a structured typed tree over numbered slots rather than SSA over a CFG of places. See the note below |
+| 7 | `nazm-codegen-clif` · `nazm-link` · `nazm-driver` | planned |
+| 7 | `nazm-test` | **exists as a subcommand**, `nazm test`, not as a crate |
 | 8 | `nazm-rt` | planned |
-| 9 | `nazm-mono` · `nazm-codegen-llvm` | planned |
+| 9 | `nazm-mono` | planned — and nothing is polymorphic, so there is nothing to monomorphise yet |
+| 9 | `nazm-codegen-llvm` | **exists inside `nazm-lir`**, as LLVM IR emitted in text |
 | 10 | `nazm-pkg` · `nazm-std-build` | planned |
 
 One deliberate departure from this table is already recorded: [`roadmap.md`](roadmap.md)
@@ -303,8 +321,20 @@ M1 brings `nazm-lir` and `nazm-codegen-llvm` forward, and does **not** create th
 between them and the AST. Five empty pass-through crates would match the diagram and carry
 no information.
 
-Roles, in dependency order: `span` (files, byte spans, `FileId`, interned identifiers —
-depends on nothing) · `diag` (stable error codes, fixits, JSON schema, renderer) · `syntax`
+**A name is not a level.** `nazm-lir` is named for level 7 and owns a real responsibility —
+it records which operations can fail and where the source said so, which the AST does not
+carry. Its *form* is not what the table above describes: `While`, `If` and `Scope` nest,
+locals are slot indices, and nothing is in SSA form. Reading the crate list as a progress
+bar against this diagram is what produced four contradictory status claims in September
+2026. The rule that replaced it is in
+[`master-architecture.md`](master-architecture.md) §3: **an IR level earns its existence by
+owning a semantic responsibility no existing level owns**, and matching the diagram is not
+such a reason.
+
+Roles, in dependency order: `span` (files, byte spans, interned identifiers — depends on
+nothing; the `FileId` this list used to promise **does not exist**, and
+`crates/nazm-cli/src/load.rs` merges every reachable file into one buffer instead, which is
+what currently blocks separate and incremental compilation) · `diag` (stable error codes, fixits, JSON schema, renderer) · `syntax`
 (lexer, parser, CST, typed AST, canonical formatter, CST-preserving edits) · `hir` (`DefId`
 graph, modules, name resolution) · `ty` (types, effect rows, provenance, inference) · `core`
 (Core IR, normalisation, Merkle hashing, reference interpreter) · `db` (salsa queries +
