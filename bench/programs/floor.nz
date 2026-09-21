@@ -1,0 +1,8 @@
+// The floor: a program that does nothing.
+//
+// Every other number here is measured as wall time of a whole process, so every other
+// number includes whatever it costs to start one. This measures that cost alone, so a
+// reader can subtract it rather than mistake it for work — `calls` at 4.8 ms is about
+// 1.9 ms of work on top of this.
+
+fn main() -> Int { 0 }
