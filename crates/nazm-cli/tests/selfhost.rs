@@ -257,9 +257,8 @@ fn a_lexing_error_is_located_and_stops_the_program() {
     ] {
         let file = dir.path().join("bad.nz");
         std::fs::write(&file, source).expect("write");
-        let out = common::bounded_exe(&exe).arg(&file).output().expect("run");
-        assert_eq!(out.status.code(), Some(1), "{source:?}");
-        let stderr = String::from_utf8_lossy(&out.stderr);
+        let (status, _, stderr) = run_stage(&exe, &file);
+        assert_eq!(status, Some(1), "{source:?}");
         assert!(stderr.contains(code), "{source:?}: {stderr}");
         assert!(
             stderr.contains(&format!("at {offset}")),
@@ -609,16 +608,14 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
     for source in sources {
         let file = dir.path().join("case.nz");
         std::fs::write(&file, source).expect("write");
-        let out = common::bounded_exe(&exe).arg(&file).output().expect("run");
+        let (status, text, stderr) = run_stage(&exe, &file);
         assert_eq!(
-            out.status.code(),
+            status,
             Some(0),
-            "the Nazm parser failed on {source:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
+            "the Nazm parser failed on {source:?}: {stderr}"
         );
         // The driver prints the node count as `main`'s value; the dump is everything
         // before it.
-        let text = String::from_utf8(out.stdout).expect("ASCII output");
         let ours: String = text
             .lines()
             .filter(|l| l.contains('|'))
@@ -666,15 +663,13 @@ fn the_nazm_parser_agrees_with_the_reference_on_every_source_in_the_tree() {
         // Nazm parser handles them, and `examples/worker-pool.nz` is compared tree for
         // tree like every other file. The checker is a separate question — see
         // `the_nazm_checker_agrees_with_the_reference_on_names_and_types`.
-        let out = common::bounded_exe(&exe).arg(file).output().expect("run");
+        let (status, text, stderr) = run_stage(&exe, file);
         assert_eq!(
-            out.status.code(),
+            status,
             Some(0),
-            "the Nazm parser failed on {}: {}",
-            file.display(),
-            String::from_utf8_lossy(&out.stderr)
+            "the Nazm parser failed on {}: {stderr}",
+            file.display()
         );
-        let text = String::from_utf8(out.stdout).expect("ASCII output");
         let ours: String = text
             .lines()
             .filter(|l| l.contains('|'))
@@ -724,9 +719,8 @@ fn the_nazm_parser_refuses_what_it_cannot_parse_yet_by_name() {
     ] {
         let file = dir.path().join("bad.nz");
         std::fs::write(&file, source).expect("write");
-        let out = common::bounded_exe(&exe).arg(&file).output().expect("run");
-        assert_eq!(out.status.code(), Some(1), "{source:?} should be refused");
-        let stderr = String::from_utf8_lossy(&out.stderr);
+        let (status, _, stderr) = run_stage(&exe, &file);
+        assert_eq!(status, Some(1), "{source:?} should be refused");
         assert!(
             stderr.contains(expected),
             "{source:?}: expected {expected:?}, got {stderr}"
@@ -860,8 +854,8 @@ fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
     for source in sources {
         let file = dir.path().join("case.nz");
         std::fs::write(&file, source).expect("write");
-        let out = common::bounded_exe(&exe).arg(&file).output().expect("run");
-        let ours = sorted_diagnostics(&String::from_utf8_lossy(&out.stdout));
+        let (status, stdout, _) = run_stage(&exe, &file);
+        let ours = sorted_diagnostics(&stdout);
 
         let theirs: Vec<(String, u32, u32)> = {
             let mut v: Vec<(String, u32, u32)> = nazm_core::check_source(source)
@@ -895,7 +889,7 @@ fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
         assert_eq!(ours, theirs, "checking differs for {source:?}");
         // Exit status is part of the interface, not decoration.
         assert_eq!(
-            out.status.code(),
+            status,
             Some(i32::from(!theirs.is_empty())),
             "wrong exit status for {source:?}"
         );
@@ -926,8 +920,8 @@ fn the_nazm_checker_accepts_the_compiler_it_is_part_of() {
     assert!(files.len() >= 5, "only {} sources", files.len());
 
     for file in &files {
-        let out = common::bounded_exe(&exe).arg(file).output().expect("run");
-        let ours = sorted_diagnostics(&String::from_utf8_lossy(&out.stdout));
+        let (_, stdout, _) = run_stage(&exe, file);
+        let ours = sorted_diagnostics(&stdout);
         // A file that `use`s another is resolved by the driver, not by this checker, so
         // its imported names look undefined in isolation. Those files are checked as a
         // whole program by `nazm check`, which is what the assertion below uses.
