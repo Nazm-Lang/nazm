@@ -105,13 +105,21 @@ with every gate passed.
 
 ## Next exact action
 
-1. **The clean rebuild**, on a fresh copy of the tree with an empty `target/`, offline:
-   `cargo build --workspace --offline`, `cargo test --workspace --offline`,
-   `cargo xtask check`. Remove the copy immediately afterwards — the disk is at 98%.
-2. **`sh scripts/release-candidate.sh`**, which runs every gate cheapest-first and then
-   assembles `target/release-candidate/` with a manifest of digests. A failing gate
-   stops it; that is the point.
-3. Record both in `docs/delivery.md` and here.
+Milestones A–G are delivered. What is left is the closing verification, in this order,
+because each is cheaper than the next and a failure should cost the least it can:
+
+1. **The targeted mutation re-check.** The full catalogue ran at `524cd24` and reported
+   two entries as NOT INJECTED; both are repaired, and the ambiguous one split in two.
+   Verify the three with `cargo xtask mutate --only the-loop-reuses --only
+   conditional-selects-the-wrong-branch` **in a disposable copy**, never here.
+2. **`cargo run -p xtask -- bench --runs 7 --save`**, to record a baseline that includes
+   the process floor and peak memory.
+3. **`sh scripts/release-candidate.sh`**, which runs every gate and assembles the
+   artefact with a manifest of digests.
+4. Fold the numbers into `docs/delivery.md` and close this ledger.
+
+Already done and not to be repeated: the clean offline rebuild from `git archive HEAD`
+(8.9 s, 506 passed, every gate, byte-identical bootstrap), and the full catalogue run.
 
 ## Unresolved decisions
 

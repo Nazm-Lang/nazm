@@ -65,13 +65,22 @@ fi
 # --- assemble -----------------------------------------------------------------------
 out="$root/target/release-candidate"
 rm -rf "$out"
-mkdir -p "$out/bin" "$out/docs" "$out/schema" "$out/examples"
+mkdir -p "$out/bin" "$out/docs" "$out/schema" "$out/examples" "$out/scripts" \
+         "$out/compiler/conformance" "$out/bench/programs"
 
 cp target/release/nazm "$out/bin/"
 cp README.md LICENSE* "$out/" 2>/dev/null || cp README.md "$out/"
 cp docs/*.md docs/*.ebnf "$out/docs/"
 cp schema/*.json "$out/schema/"
 cp examples/*.nz "$out/examples/"
+
+# The bootstrap's own inputs. A candidate that claims a byte-identical C2 and C3 and
+# does not carry the source they were built from is asking to be taken on trust.
+cp compiler/*.nz compiler/bootstrap.sh "$out/compiler/"
+cp compiler/conformance/* "$out/compiler/conformance/"
+cp scripts/*.sh "$out/scripts/"
+cp bench/programs/* "$out/bench/programs/"
+
 cp bench/baseline.json "$out/docs/performance-baseline.json"
 cp target/bootstrap/record.txt "$out/docs/bootstrap-record.txt"
 
@@ -92,6 +101,11 @@ digest() { shasum -a 256 "$1" | cut -d' ' -f1; }
     printf 'It has been checked on %s and nowhere else; other targets are\n' "$(uname -sm)"
     printf 'unverified rather than unsupported. See docs/performance.md for what has\n'
     printf 'been measured, and README.md for what is not built.\n'
+    printf '\n'
+    printf 'contains: the binary, the documentation, the JSON schemas, the examples,\n'
+    printf 'the compiler written in Nazm with its bootstrap script and conformance\n'
+    printf 'corpus, the benchmark programs, and the scripts the documentation names.\n'
+    printf 'Not the Rust source: this repository is that, and the commit above names it.\n'
     printf '\n'
     printf 'gates passed:\n'
     printf '  cargo fmt --all -- --check\n'
