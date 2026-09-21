@@ -20,7 +20,8 @@ fn main() -> Int {
 
 `nazm run` evaluates `main` and prints its value. `nazm build` compiles the same program
 to a native executable that prints the same value. `nazm check` type-checks without
-running anything.
+running anything, and `nazm test` runs a directory of programs against recorded outputs
+— interpreted and compiled, requiring both to agree.
 
 ## The shape of the language, in six sentences
 

@@ -10,6 +10,7 @@ against them — so these documents are tested rather than described.
 | `nazm.diagnostic/1` | `nazm check --json`, `nazm run --json`, `nazm build --json` | stderr | one object per line |
 | `nazm.fix/1` | `nazm fix --json` | stdout | one object per line |
 | `nazm.capabilities/1` | `nazm capabilities --json` | stdout | one object |
+| `nazm.test/1` | `nazm test --json` | stdout | one object per case |
 
 Every object carries its own `schema` field. Not a header: the output is a stream of
 lines and a consumer may read, log or replay any single one of them, and a version that
@@ -87,6 +88,28 @@ Constructs are the exception and say so. Whether `scope` or recursion compiles i
 by code, not by a table, so each of those rows carries an `evidence` field naming the
 test file or the document that establishes it. A row claiming `compiled: false` means the
 construct is **refused by name** — never silently missing, and never approximated.
+
+## Running a corpus
+
+`nazm test PATH…` runs every `NAME.nz` that has a `NAME.expected` beside it, under
+`nazm run` **and** as a `nazm build` executable, and requires both to produce the
+recorded output. That convention is not new — `compiler/bootstrap.sh` has compared the
+conformance corpus that way since the bootstrap existed; the command makes it available
+to anything that is not the bootstrap script.
+
+The comparison is **stdout and stderr combined, trimmed**: a program's diagnostic is as
+much of its behaviour as its value, and a trailing newline is a property of `printf`.
+A `.nz` file with no `.expected` beside it is not a test case, and the number of them is
+reported rather than passed over — a silently skipped file is how a renamed test stops
+running and nobody notices.
+
+**A case whose program *fails* cannot match both legs**, and that is a real difference
+rather than an oversight. `nazm run` renders a failure with the source line, a caret and
+a help line; a compiled program writes one line — `nazm: error[N0401]: … at file:line:col`
+— because the executable carries the message and the position and not the source. Both
+name the same code and the same place, which is the part that is specified. A corpus
+case that is meant to fail should therefore test one leg, with `--interpret-only`, or
+assert on the code rather than the rendering.
 
 ## The exit statuses
 

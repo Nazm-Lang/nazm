@@ -217,6 +217,62 @@ fn fix_writes_nothing_without_apply() {
 }
 
 #[test]
+fn a_corpus_runs_interpreted_and_compiled_and_both_must_agree() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let at = |name: &str, body: &str, expected: &str| {
+        std::fs::write(dir.path().join(format!("{name}.nz")), body).expect("write");
+        std::fs::write(dir.path().join(format!("{name}.expected")), expected).expect("write");
+    };
+    at("good", "fn main() -> Int { 7 }\n", "7\n");
+    at("bad", "fn main() -> Int { 8 }\n", "7\n");
+    // A `.nz` with no `.expected`: not a case, and reported as skipped rather than
+    // passed over.
+    std::fs::write(dir.path().join("helper.nz"), "fn main() -> Int { 1 }\n").expect("write");
+
+    let out = Command::new(NAZM)
+        .arg("test")
+        .arg(dir.path())
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a failing case must fail the run"
+    );
+    assert!(stdout.contains("ok    good"), "{stdout}");
+    assert!(stdout.contains("FAIL  bad"), "{stdout}");
+    assert!(stderr.contains("helper.nz has no `.expected`"), "{stderr}");
+    assert!(stderr.contains("1 of 2 passed"), "{stderr}");
+    drop(dir);
+}
+
+#[test]
+fn the_conformance_corpus_passes_under_nazm_test() {
+    // The same five cases `compiler/bootstrap.sh` compares, through the command rather
+    // than through the script — so the convention has one implementation a person can
+    // run and one the bootstrap runs, and they are checked against the same files.
+    let out = Command::new(NAZM)
+        .arg("test")
+        .arg(repo_root().join("compiler/conformance"))
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("5 of 5 passed"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn every_tree_source_is_already_formatted() {
     // The formatter is only useful if the tree is what it produces; otherwise
     // `--check` is a gate nobody can pass and everybody turns off.
