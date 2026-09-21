@@ -9,7 +9,8 @@ a different one.
 
 Nazm is a small, specified language with two implementations that agree — a tree-walking
 interpreter and a native compiler through LLVM IR — **and a compiler for it written in
-Nazm that reproduces itself byte for byte**. It has structured concurrency, a canonical
+Nazm that reproduces itself byte for byte** — over a stated bootstrap subset, which
+excludes concurrency and module resolution. It has structured concurrency, a canonical
 formatter, machine-applicable fixes under a versioned JSON schema, and measured
 performance baselines with one profile-driven optimisation pass behind them.
 
@@ -22,10 +23,10 @@ performance comparison of any kind.
 | Definition of done (§13) | State | Evidence |
 | --- | --- | --- |
 | Scalar control flow, including `return` and transfers inside values | done | `crates/nazm-cli/tests/build.rs`, every case at `-O0` and `-O2` against the interpreter |
-| A bootstrap subset with text, structured data, collections, memory behaviour, file I/O, errors and modules | done | `docs/bootstrap-design.md`; the subset is what `compiler/*.nz` is written in |
-| Compiler frontend and lowering/emission in Nazm, external dependencies documented | done | `compiler/lex.nz`, `parse.nz`, `analyse.nz`, `emit.nz`; dependencies in `docs/bootstrap.md` |
+| A bootstrap subset with text, structured data, collections, memory behaviour, file I/O, errors and modules | done | `docs/bootstrap-design.md`; the subset is what `compiler/*.nz` is written in. `use` is in the subset but is resolved by the driver, not by the Nazm-written compiler — see *Known limitations* |
+| Compiler frontend and lowering/emission in Nazm, external dependencies documented | done **for the bootstrap subset** | `compiler/lex.nz`, `parse.nz`, `analyse.nz`, `emit.nz`; dependencies in `docs/bootstrap.md`. The subset excludes concurrency and module resolution, both under *Known limitations* |
 | Native C1 → C2 → C3 bootstrap, conformance and reproducibility | done | `compiler/bootstrap.sh`; C2 and C3 byte-identical in IR and executable, 5 conformance cases |
-| Ordinary independent programs compile with the Nazm-written compiler | done | `crates/nazm-cli/tests/selfhost.rs` |
+| Ordinary independent programs compile with the Nazm-written compiler | done **within the subset** | `crates/nazm-cli/tests/selfhost.rs`. A program using `scope`/`spawn`/`Chan`, or relying on `use` resolution, is refused by name rather than miscompiled |
 | Initial structured concurrency: transfer/capture rules, cancellation, cleanup | done | `docs/spec.md`; 15 interpreter tests and 11 native tests, all deadline-bounded |
 | Structured developer interfaces, grammar/guide, formatting, repair workflow | done | `docs/diagnostics.md`, `schema/`, `docs/grammar.ebnf`, `docs/guide.md`, `scripts/repair.sh` |
 | Performance baselines, a profiling/optimisation pass, no unsupported speed claims | done | `docs/performance.md`, `bench/baseline.json` (Darwin), `bench/baseline-linux-aarch64.json` |

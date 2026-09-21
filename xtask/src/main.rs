@@ -577,24 +577,6 @@ fn run_mutations(only: &[String]) -> Result<(), Vec<String>> {
 /// `cargo xtask contained <workload>` — the only sanctioned way to run a generated
 /// compiler stage, the selfhost suite, the bootstrap, fuzzing, the mutation catalogue or
 /// a heavy benchmark. See `contained.rs` for why an environment variable is not enough.
-/// This host's baseline slug, matching `bench::baseline_path`'s naming.
-fn host_slug() -> String {
-    let out = std::process::Command::new("uname").args(["-sm"]).output();
-    let host = out
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-        .unwrap_or_default();
-    host.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
 fn run_contained(args: &[String]) -> ExitCode {
     use contained::{Bounds, Outcome};
     use std::time::Duration;
@@ -646,26 +628,21 @@ fn run_contained(args: &[String]) -> ExitCode {
             // The checkout stays read-only: a writable bind mount would put every write
             // on the host filesystem, which `--storage-opt` does not bound.
             bounds.deadline = Duration::from_secs(2400);
-            let host_bench = repo.join("bench");
-            let slug = host_slug();
-            bounds.exports = vec![
-                (
-                    "/work/benchout/record.json".to_owned(),
-                    host_bench.join("record.json"),
-                ),
-                (
-                    format!("/work/benchout/baseline-{slug}.json"),
-                    host_bench.join(format!("baseline-{slug}.json")),
-                ),
-                (
-                    "/work/benchout/baseline.json".to_owned(),
-                    host_bench.join("baseline.json"),
-                ),
-            ];
-            let mode = if args.iter().any(|a| a == "--save") {
-                "--save"
+            bounds.export_manifest =
+                Some(("/work/benchout/EXPORTS".to_owned(), repo.join("bench")));
+            let saving = args.iter().any(|a| a == "--save");
+            let mode = if saving { "--save" } else { "--check" };
+            // The slug is computed from the machine that ran the benchmarks, not from
+            // this one. A Linux run must name `baseline-linux-aarch64.json` even though
+            // the host calling it is Darwin.
+            //
+            // On a check run the manifest lists only the record, so an ordinary check
+            // cannot write a baseline at all. The seeded `baseline.json` is never listed:
+            // it is another platform's file, copied in only so the comparison can read it.
+            let manifest = if saving {
+                r#"slug=$(uname -sm | tr 'A-Z ' 'a-z-' | tr -c 'a-z0-9-' '-' | sed 's/-*$//');                    : > /work/benchout/EXPORTS;                    for f in record.json baseline-$slug.json; do                      [ -f /work/benchout/$f ] && echo "$f $(wc -c < /work/benchout/$f)" >> /work/benchout/EXPORTS;                    done"#
             } else {
-                "--check"
+                r#": > /work/benchout/EXPORTS;                    [ -f /work/benchout/record.json ] && echo "record.json $(wc -c < /work/benchout/record.json)" >> /work/benchout/EXPORTS"#
             };
             (
                 "bench",
@@ -677,7 +654,8 @@ fn run_contained(args: &[String]) -> ExitCode {
                      && cargo run -q -p xtask -- bench --runs 5 {mode} \
                      && if find /work/benchout -name '*.json' -size +1M | grep -q .; then \
                           echo 'bench: an artefact exceeded 1 MiB; refusing to export' >&2; exit 3; \
-                        fi"
+                        fi \
+                     && {manifest}"
                 )),
             )
         }
@@ -758,6 +736,7 @@ fn contained_probe(repo: &std::path::Path) -> ExitCode {
         fsize_bytes: 4 * 1024 * 1024,
         deadline: Duration::from_secs(20),
         output_cap: 256 * 1024,
+        export_manifest: None,
         exports: Vec::new(),
     };
 

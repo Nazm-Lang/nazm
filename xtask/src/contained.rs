@@ -54,6 +54,17 @@ pub(crate) struct Bounds {
     pub(crate) fsize_bytes: u64,
     pub(crate) deadline: Duration,
     pub(crate) output_cap: usize,
+    /// A manifest the workload writes naming exactly what it produced, and where each
+    /// artefact should land on the host.
+    ///
+    /// Named rather than listed in advance, because the host cannot know what the
+    /// *measured environment* produced: a benchmark run on Linux writes
+    /// `baseline-linux-aarch64.json`, and deriving that name from the host's own `uname`
+    /// would be deriving it from the wrong machine. The workload knows; the host asks.
+    ///
+    /// Format: one `name size` pair per line, sizes in bytes, names with no path
+    /// separators. The runner validates both before copying anything.
+    pub(crate) export_manifest: Option<(String, std::path::PathBuf)>,
     /// Files to copy out when the container finishes, as (path inside, path on the host).
     ///
     /// The checkout is **always** mounted read-only. Mounting it read-write so a workload
@@ -76,6 +87,7 @@ impl Default for Bounds {
             fsize_bytes: 512 * 1024 * 1024,
             deadline: Duration::from_secs(3600),
             output_cap: 4 * 1024 * 1024,
+            export_manifest: None,
             exports: Vec::new(),
         }
     }
@@ -196,7 +208,7 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
     let container = format!("nazm-{name}-{}", std::process::id());
     let mut cmd = Command::new("docker");
     // `--rm` only when nothing has to be copied out: a removed container has no files.
-    if b.exports.is_empty() {
+    if b.exports.is_empty() && b.export_manifest.is_none() {
         cmd.arg("run").arg("--rm");
     } else {
         cmd.arg("run");
@@ -287,6 +299,9 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
         .unwrap_or(false);
+    if let Some((manifest_path, dest_dir)) = &b.export_manifest {
+        export_by_manifest(&container, manifest_path, dest_dir);
+    }
     for (inside, host) in &b.exports {
         let copied = Command::new("docker")
             .arg("cp")
@@ -349,4 +364,69 @@ pub(crate) fn survivors() -> usize {
                 .count()
         })
         .unwrap_or(0)
+}
+
+/// Copies out exactly what the workload's manifest names, and nothing else.
+///
+/// Every name is checked before a byte moves: no path separators, no `..`, a recognised
+/// shape, and a size the workload already declared. The workload refuses to finish if an
+/// artefact is oversized, so this is the second of two checks rather than the only one.
+fn export_by_manifest(container: &str, manifest: &str, dest_dir: &std::path::Path) {
+    /// Generous for a JSON record, and far below anything that could fill a disk.
+    const MAX_BYTES: u64 = 1024 * 1024;
+
+    let tmp = std::env::temp_dir().join(format!("nazm-manifest-{container}"));
+    let got = Command::new("docker")
+        .arg("cp")
+        .arg(format!("{container}:{manifest}"))
+        .arg(&tmp)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !got {
+        eprintln!("contained: no export manifest at {manifest}; nothing exported");
+        return;
+    }
+    let text = std::fs::read_to_string(&tmp).unwrap_or_default();
+    let _ = std::fs::remove_file(&tmp);
+
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(name), Some(size)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let Ok(size) = size.parse::<u64>() else {
+            eprintln!("contained: export {name}: unreadable size, refused");
+            continue;
+        };
+        if name.contains('/') || name.contains("..") {
+            eprintln!("contained: export {name}: path separators are refused");
+            continue;
+        }
+        if size > MAX_BYTES {
+            eprintln!("contained: export {name}: {size} bytes exceeds {MAX_BYTES}, refused");
+            continue;
+        }
+        let dir = std::path::Path::new(manifest)
+            .parent()
+            .unwrap_or(std::path::Path::new("/"));
+        let host = dest_dir.join(name);
+        let copied = Command::new("docker")
+            .arg("cp")
+            .arg(format!("{container}:{}/{name}", dir.display()))
+            .arg(&host)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !copied {
+            eprintln!("contained: export {name}: the file the manifest named is missing");
+            continue;
+        }
+        let landed = std::fs::metadata(&host).map(|m| m.len()).unwrap_or(0);
+        if landed != size {
+            eprintln!("contained: export {name}: landed {landed} bytes, manifest said {size}");
+        } else {
+            eprintln!("contained: exported {name} ({landed} bytes)");
+        }
+    }
 }
