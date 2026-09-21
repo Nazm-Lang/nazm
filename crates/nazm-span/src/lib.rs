@@ -1,32 +1,143 @@
-//! Source text, byte spans, and the line/column resolution diagnostics need.
+//! Source identity, byte spans, and the line/column resolution diagnostics need.
 //!
 //! Depends on nothing. Every later layer reports positions through this, so a span that
 //! travels from the lexer to a type error means the same thing at both ends.
 //!
-//! Spans are **byte offsets**, not char indices. Byte offsets are what the lexer produces
-//! and what slicing needs; converting to a human-facing line and column happens once, at
-//! the point of rendering, where the cost is paid per diagnostic rather than per token.
+//! # Spans name their file
+//!
+//! A [`Span`] is a [`FileId`] and a **file-local** byte range. That is the whole point of
+//! this crate: a semantic consumer never has to ask which file an offset fell in, because
+//! the span already says. Before 2026-09-21 a multi-file program was concatenated into one
+//! anonymous buffer and the file was recovered by binary-searching the offset — which
+//! worked, and made separate compilation impossible, because nothing could be parsed
+//! without first knowing where it sat in a merged string.
+//!
+//! Offsets are **bytes**, not char indices: bytes are what the lexer produces and what
+//! slicing needs. Converting to a human-facing line and column happens once, at rendering.
 
 use serde::{Deserialize, Serialize};
 
-/// A half-open byte range `[start, end)` into one source file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// Which source a span belongs to.
+///
+/// # Session-local, and deliberately so
+///
+/// A `FileId` is an index into one [`SourceMap`], valid for **one compilation in one
+/// process**. It is not stable across runs, not derived from content, and not a name a
+/// build system or a cache may key on. Two runs over the same tree may number files
+/// differently and both are correct.
+///
+/// Anything needing identity that survives a process — incremental compilation, caching,
+/// telling an agent that an edit produced the same definition — needs a different thing
+/// that does not exist yet. See `docs/research-register.md` R2 and R3. Conflating the two
+/// is the mistake this comment exists to prevent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct FileId(u32);
+
+impl FileId {
+    /// The file a compilation started from. Imports are numbered after it, in load order.
+    pub const ROOT: Self = Self(0);
+
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The id a file takes from its position in load order.
+    ///
+    /// For the loader, which knows a file's position before the [`SourceMap`] exists — it
+    /// has to tag the spans it produces while reading a file's imports with the id that
+    /// file is about to receive. Minting one for a position the map does not have yields
+    /// an id whose lookups return empty, never a panic.
+    #[must_use]
+    pub fn from_index(i: usize) -> Self {
+        Self(u32::try_from(i).unwrap_or(u32::MAX))
+    }
+}
+
+/// A half-open byte range `[start, end)` **within one file**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Span {
+    pub file: FileId,
     pub start: u32,
     pub end: u32,
 }
 
+/// The published shape of a span: `{ start, end }`, and **no file**.
+///
+/// `nazm.diagnostic/1` has always been exactly this, and `docs/diagnostics.md` promises
+/// the shape will not change inside a version. Source identity became internal on
+/// 2026-09-21; that is an improvement to the compiler, not a reason to move every existing
+/// consumer's offsets, so `file` is dropped here and the offsets are rebased to the
+/// concatenation the schema documents. See [`SourceMap::global`].
+#[derive(Serialize, Deserialize)]
+#[serde(rename = "Span")]
+struct WireSpan {
+    start: u32,
+    end: u32,
+}
+
+impl Serialize for Span {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        WireSpan {
+            start: self.start,
+            end: self.end,
+        }
+        .serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for Span {
+    /// A span read back from the wire has **no file identity**, because the wire does not
+    /// carry one. It deserialises against [`FileId::ROOT`], which is right for the
+    /// single-file case and is a placeholder otherwise. Round-tripping a multi-file
+    /// diagnostic through JSON and expecting the file back is not something the schema
+    /// supports, and this is the one place that could quietly pretend otherwise.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let w = WireSpan::deserialize(d)?;
+        Ok(Self {
+            file: FileId::ROOT,
+            start: w.start,
+            end: w.end,
+        })
+    }
+}
+
 impl Span {
     #[must_use]
-    pub const fn new(start: u32, end: u32) -> Self {
-        Self { start, end }
+    pub const fn new(file: FileId, start: u32, end: u32) -> Self {
+        Self { file, start, end }
+    }
+
+    /// A position for a diagnostic that is **about no particular byte** — a built-in's
+    /// signature, or "this program has no `main`".
+    ///
+    /// It names the root file at offset zero, which is what the old two-argument
+    /// `Span::new(0, 0)` meant at these call sites. Given a name so that a reader can tell
+    /// it apart from a span that genuinely points at the first byte of the root file, and
+    /// so that the sites needing it are greppable when something better exists.
+    #[must_use]
+    pub const fn synthetic() -> Self {
+        Self {
+            file: FileId::ROOT,
+            start: 0,
+            end: 0,
+        }
     }
 
     /// A span covering both, and everything between. Used to give a compound expression a
     /// position that covers its whole text rather than just its operator.
+    ///
+    /// Joining spans from **different files** keeps `self`'s file and range. That case is
+    /// a bug in the caller — an expression does not straddle two files — and silently
+    /// producing a range that covers most of an unrelated file would hide it behind a
+    /// plausible-looking caret. Keeping the left operand fails locally instead.
     #[must_use]
     pub fn join(self, other: Self) -> Self {
+        if self.file != other.file {
+            return self;
+        }
         Self {
+            file: self.file,
             start: self.start.min(other.start),
             end: self.end.max(other.end),
         }
@@ -50,198 +161,197 @@ pub struct LineCol {
     pub column: u32,
 }
 
-/// One file merged into a [`SourceFile`] buffer.
+/// One source file: its name, its text, and where its lines begin.
 #[derive(Debug, Clone)]
-struct Segment {
-    name: String,
-    /// Where this file's text begins in the combined buffer.
-    start: u32,
-    /// Index into `line_starts` of this file's first line, so a line number can be
-    /// reported relative to the file a reader is looking at rather than to the buffer.
-    first_line: usize,
-}
-
-/// The source of one compilation, with its line starts precomputed.
-///
-/// # Why one buffer rather than a list of files
-///
-/// A [`Span`] is a pair of byte offsets and carries no file identity, and giving it one
-/// would touch every diagnostic, every AST node and every test in the workspace. So a
-/// multi-file program is **concatenated into one buffer** and the buffer remembers where
-/// each file began: spans stay globally unique and comparable, and rendering asks which
-/// segment an offset falls in. A single-file program is the same structure with one
-/// segment, so there is one code path rather than two.
-#[derive(Debug, Clone)]
-pub struct SourceFile {
+struct Entry {
     name: String,
     text: String,
-    /// Byte offset of each line's first character. Always starts with 0.
+    /// Byte offset of each line's first character, **file-local**. Always starts with 0.
     line_starts: Vec<u32>,
-    /// In load order, never empty. `start` is non-decreasing.
-    segments: Vec<Segment>,
+    /// Where this file would begin in the concatenation of every file in load order.
+    ///
+    /// Carried for one reason: the machine-readable diagnostic schema has always emitted
+    /// offsets into that concatenation, and `docs/diagnostics.md` promises not to change
+    /// the shape inside a version. It is a **wire compatibility** detail, used by
+    /// [`SourceMap::global`] and nowhere else, and no semantic pass may read it.
+    global_start: u32,
 }
 
-impl SourceFile {
+/// Every source of one compilation, addressed by [`FileId`].
+#[derive(Debug, Clone)]
+pub struct SourceMap {
+    files: Vec<Entry>,
+}
+
+impl SourceMap {
+    /// A one-file compilation.
     #[must_use]
-    pub fn new(name: impl Into<String>, text: impl Into<String>) -> Self {
-        let text = text.into();
-        let mut line_starts = vec![0u32];
-        for (i, b) in text.bytes().enumerate() {
-            if b == b'\n' {
-                // Saturating rather than panicking: a source file over 4GB is not a case
-                // worth a crash, and the worst outcome is a misplaced caret.
-                line_starts.push(u32::try_from(i + 1).unwrap_or(u32::MAX));
-            }
-        }
-        let name = name.into();
-        Self {
-            segments: vec![Segment {
-                name: name.clone(),
-                start: 0,
-                first_line: 0,
-            }],
-            name,
-            text,
-            line_starts,
-        }
+    pub fn single(name: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::from_parts(vec![(name.into(), text.into())])
     }
 
-    /// Several files as one buffer, in load order.
+    /// Several files, in load order. The first is the root.
     ///
-    /// Each part is given a trailing newline if it lacks one, so a file that does not end
-    /// in one cannot join its last line to the next file's first.
+    /// Each part is given a trailing newline if it lacks one — preserved from the merged
+    /// buffer this replaced, where it stopped a file that did not end in a newline from
+    /// joining its last line to the next file's first. It still matters, because
+    /// [`SourceMap::global`] has to reproduce those offsets exactly.
     #[must_use]
     pub fn from_parts(parts: Vec<(String, String)>) -> Self {
-        let root = parts.first().map_or_else(String::new, |(n, _)| n.clone());
-        let mut text = String::new();
-        let mut line_starts = vec![0u32];
-        let mut segments = Vec::new();
+        let mut files = Vec::with_capacity(parts.len().max(1));
+        let mut global = 0u32;
         for (name, part) in parts {
-            segments.push(Segment {
-                name,
-                start: u32::try_from(text.len()).unwrap_or(u32::MAX),
-                first_line: line_starts.len() - 1,
-            });
-            let from = text.len();
-            text.push_str(&part);
-            if !part.ends_with('\n') {
+            let mut text = part;
+            if !text.ends_with('\n') {
                 text.push('\n');
             }
-            // Only the bytes just appended, so building an N-file buffer stays linear
-            // rather than rescanning everything once per file.
-            for (i, b) in text.bytes().enumerate().skip(from) {
+            let mut line_starts = vec![0u32];
+            for (i, b) in text.bytes().enumerate() {
                 if b == b'\n' {
+                    // Saturating rather than panicking: a source file over 4GB is not a
+                    // case worth a crash, and the worst outcome is a misplaced caret.
                     line_starts.push(u32::try_from(i + 1).unwrap_or(u32::MAX));
                 }
             }
+            let len = u32::try_from(text.len()).unwrap_or(u32::MAX);
+            files.push(Entry {
+                name,
+                text,
+                line_starts,
+                global_start: global,
+            });
+            global = global.saturating_add(len);
         }
-        if segments.is_empty() {
-            segments.push(Segment {
-                name: root.clone(),
-                start: 0,
-                first_line: 0,
+        if files.is_empty() {
+            files.push(Entry {
+                name: String::new(),
+                text: String::new(),
+                line_starts: vec![0],
+                global_start: 0,
             });
         }
-        Self {
-            name: root,
-            text,
-            line_starts,
-            segments,
-        }
+        Self { files }
     }
 
-    /// The name of the file an offset falls in.
-    ///
-    /// For a single-file buffer this is always [`SourceFile::name`]; for a merged one it
-    /// is the file a reader would open to find that byte.
+    /// The file a compilation started from.
     #[must_use]
-    pub fn name_at(&self, offset: u32) -> &str {
-        self.segment_at(offset)
-            .map_or(self.name.as_str(), |s| s.name.as_str())
+    pub const fn root(&self) -> FileId {
+        FileId::ROOT
     }
 
-    /// The file an offset falls in, and the offset **within that file**.
-    ///
-    /// What a tool applying an edit needs. A span in a merged buffer names a byte in one
-    /// of several files; writing at the merged offset would edit whichever file happens
-    /// to be first, at a position that means nothing.
+    /// Every file, in load order.
+    pub fn ids(&self) -> impl Iterator<Item = FileId> + use<> {
+        (0..u32::try_from(self.files.len()).unwrap_or(u32::MAX)).map(FileId)
+    }
+
     #[must_use]
-    pub fn locate(&self, offset: u32) -> (&str, u32) {
-        self.segment_at(offset)
-            .map_or((self.name.as_str(), offset), |s| {
-                (s.name.as_str(), offset.saturating_sub(s.start))
-            })
+    pub fn len(&self) -> usize {
+        self.files.len()
     }
 
-    /// Every file in this buffer, in load order.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
+    fn entry(&self, file: FileId) -> Option<&Entry> {
+        self.files.get(file.index())
+    }
+
+    /// The name a reader would open.
+    #[must_use]
+    pub fn name(&self, file: FileId) -> &str {
+        self.entry(file).map_or("", |e| e.name.as_str())
+    }
+
+    /// The text of one file.
+    #[must_use]
+    pub fn text(&self, file: FileId) -> &str {
+        self.entry(file).map_or("", |e| e.text.as_str())
+    }
+
+    /// Every file's name, in load order.
     #[must_use]
     pub fn file_names(&self) -> Vec<&str> {
-        self.segments.iter().map(|s| s.name.as_str()).collect()
-    }
-
-    fn segment_at(&self, offset: u32) -> Option<&Segment> {
-        match self.segments.binary_search_by_key(&offset, |s| s.start) {
-            Ok(i) => self.segments.get(i),
-            Err(i) => self.segments.get(i.saturating_sub(1)),
-        }
-    }
-
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    #[must_use]
-    pub fn text(&self) -> &str {
-        &self.text
+        self.files.iter().map(|e| e.name.as_str()).collect()
     }
 
     /// The text a span covers, or `None` if it does not lie on a character boundary.
     #[must_use]
     pub fn slice(&self, span: Span) -> Option<&str> {
-        self.text.get(span.start as usize..span.end as usize)
+        self.entry(span.file)?
+            .text
+            .get(span.start as usize..span.end as usize)
     }
 
-    /// Resolve a byte offset to a 1-based line and column.
+    /// The offsets this span would have had in a concatenation of every file.
+    ///
+    /// **Wire compatibility only.** `nazm.diagnostic/1` has always published offsets into
+    /// that concatenation, so they are reproduced here rather than changed under existing
+    /// consumers. Nothing semantic may use this; `docs/diagnostics.md` records the promise
+    /// and what a future schema version would do instead.
+    #[must_use]
+    pub fn global(&self, span: Span) -> (u32, u32) {
+        let base = self.entry(span.file).map_or(0, |e| e.global_start);
+        (
+            base.saturating_add(span.start),
+            base.saturating_add(span.end),
+        )
+    }
+
+    /// The same span with its offsets rebased into the concatenation.
+    ///
+    /// Used only when writing the published diagnostic shape; see [`WireSpan`].
+    #[must_use]
+    pub fn rebased(&self, span: Span) -> Span {
+        let (start, end) = self.global(span);
+        Span {
+            file: span.file,
+            start,
+            end,
+        }
+    }
+
+    /// Resolve a span's start to a 1-based line and column **within its file**.
     ///
     /// Column counts **characters**, not bytes, so a caret under a line containing
     /// non-ASCII text lands where a reader expects it rather than several columns right.
     #[must_use]
-    pub fn line_col(&self, offset: u32) -> LineCol {
-        let line_idx = match self.line_starts.binary_search(&offset) {
+    pub fn line_col(&self, span: Span) -> LineCol {
+        let Some(e) = self.entry(span.file) else {
+            return LineCol { line: 1, column: 1 };
+        };
+        let line_idx = match e.line_starts.binary_search(&span.start) {
             Ok(i) => i,
             Err(i) => i.saturating_sub(1),
         };
-        let line_start = self.line_starts.get(line_idx).copied().unwrap_or(0);
-        let prefix = self
+        let line_start = e.line_starts.get(line_idx).copied().unwrap_or(0);
+        let prefix = e
             .text
-            .get(line_start as usize..offset as usize)
+            .get(line_start as usize..span.start as usize)
             .unwrap_or("");
-        // Relative to the file the offset is in, not to the combined buffer: a reader
-        // has the file open, not the concatenation.
-        let first = self.segment_at(offset).map_or(0, |s| s.first_line);
         LineCol {
-            line: u32::try_from(line_idx.saturating_sub(first) + 1).unwrap_or(u32::MAX),
+            line: u32::try_from(line_idx + 1).unwrap_or(u32::MAX),
             column: u32::try_from(prefix.chars().count() + 1).unwrap_or(u32::MAX),
         }
     }
 
-    /// The full text of the line containing `offset`, without its newline.
+    /// The full text of the line containing the span's start, without its newline.
     #[must_use]
-    pub fn line_text(&self, offset: u32) -> &str {
-        let line_idx = match self.line_starts.binary_search(&offset) {
+    pub fn line_text(&self, span: Span) -> &str {
+        let Some(e) = self.entry(span.file) else {
+            return "";
+        };
+        let line_idx = match e.line_starts.binary_search(&span.start) {
             Ok(i) => i,
             Err(i) => i.saturating_sub(1),
         };
-        let start = self.line_starts.get(line_idx).copied().unwrap_or(0) as usize;
-        let end = self
+        let start = e.line_starts.get(line_idx).copied().unwrap_or(0) as usize;
+        let end = e
             .line_starts
             .get(line_idx + 1)
-            .map_or(self.text.len(), |e| *e as usize);
-        self.text
-            .get(start..end)
-            .unwrap_or("")
-            .trim_end_matches('\n')
+            .map_or(e.text.len(), |x| *x as usize);
+        e.text.get(start..end).unwrap_or("").trim_end_matches('\n')
     }
 }
 
@@ -255,99 +365,161 @@ impl SourceFile {
 mod tests {
     use super::*;
 
+    fn one(text: &str) -> (SourceMap, FileId) {
+        let m = SourceMap::single("x.nz", text);
+        let root = m.root();
+        (m, root)
+    }
+
+    fn at(f: FileId, start: u32, end: u32) -> Span {
+        Span::new(f, start, end)
+    }
+
     #[test]
     fn the_first_character_is_line_one_column_one() {
-        let f = SourceFile::new("x.nz", "fn main() -> Int { 1 }");
-        assert_eq!(f.line_col(0), LineCol { line: 1, column: 1 });
+        let (m, f) = one("fn main() -> Int { 1 }");
+        assert_eq!(m.line_col(at(f, 0, 0)), LineCol { line: 1, column: 1 });
     }
 
     #[test]
     fn positions_resolve_across_lines() {
-        let f = SourceFile::new("x.nz", "one\ntwo\nthree");
-        assert_eq!(f.line_col(4), LineCol { line: 2, column: 1 });
-        assert_eq!(f.line_col(6), LineCol { line: 2, column: 3 });
-        assert_eq!(f.line_col(8), LineCol { line: 3, column: 1 });
+        let (m, f) = one("one\ntwo\nthree");
+        assert_eq!(m.line_col(at(f, 4, 4)), LineCol { line: 2, column: 1 });
+        assert_eq!(m.line_col(at(f, 6, 6)), LineCol { line: 2, column: 3 });
+        assert_eq!(m.line_col(at(f, 8, 8)), LineCol { line: 3, column: 1 });
     }
 
     #[test]
     fn columns_count_characters_not_bytes() {
         // A caret placed by byte offset would land four columns right of the `x`.
-        let f = SourceFile::new("x.nz", "let نظم = x;");
-        let x_at = u32::try_from(f.text().find('x').unwrap()).unwrap();
-        let col = f.line_col(x_at).column;
-        let char_index = f.text().chars().position(|c| c == 'x').unwrap();
-        let expected = u32::try_from(char_index + 1).unwrap();
-        assert_eq!(col, expected);
+        let (m, f) = one("let نظم = x;");
+        let x_at = u32::try_from(m.text(f).find('x').unwrap()).unwrap();
+        let col = m.line_col(at(f, x_at, x_at)).column;
+        let char_index = m.text(f).chars().position(|c| c == 'x').unwrap();
+        assert_eq!(col, u32::try_from(char_index + 1).unwrap());
     }
 
     #[test]
     fn a_span_joins_to_cover_both() {
-        let a = Span::new(4, 6);
-        let b = Span::new(10, 12);
-        assert_eq!(a.join(b), Span::new(4, 12));
-        assert_eq!(b.join(a), Span::new(4, 12));
+        let f = FileId::ROOT;
+        let a = at(f, 4, 6);
+        let b = at(f, 10, 12);
+        assert_eq!(a.join(b), at(f, 4, 12));
+        assert_eq!(b.join(a), at(f, 4, 12));
+    }
+
+    #[test]
+    fn joining_across_files_keeps_the_left_span_rather_than_inventing_a_range() {
+        // An expression does not straddle two files, so this is a caller bug. Covering
+        // "from here in a.nz to there in b.nz" would render a caret over an unrelated
+        // file and look plausible; keeping the left operand does not.
+        let m = SourceMap::from_parts(vec![
+            ("a.nz".to_owned(), "aaaa".to_owned()),
+            ("b.nz".to_owned(), "bbbb".to_owned()),
+        ]);
+        let mut it = m.ids();
+        let a = it.next().unwrap();
+        let b = it.next().unwrap();
+        assert_eq!(at(a, 1, 2).join(at(b, 0, 4)), at(a, 1, 2));
     }
 
     #[test]
     fn line_text_returns_the_whole_line_without_its_newline() {
-        let f = SourceFile::new("x.nz", "alpha\nbeta\ngamma");
-        assert_eq!(f.line_text(6), "beta");
-        assert_eq!(f.line_text(0), "alpha");
-        assert_eq!(f.line_text(11), "gamma");
+        let (m, f) = one("alpha\nbeta\ngamma");
+        assert_eq!(m.line_text(at(f, 6, 6)), "beta");
+        assert_eq!(m.line_text(at(f, 0, 0)), "alpha");
+        assert_eq!(m.line_text(at(f, 11, 11)), "gamma");
     }
 
     #[test]
     fn slicing_a_span_returns_its_text() {
-        let f = SourceFile::new("x.nz", "fn main");
-        assert_eq!(f.slice(Span::new(3, 7)), Some("main"));
+        let (m, f) = one("fn main");
+        assert_eq!(m.slice(at(f, 3, 7)), Some("main"));
     }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-mod multi_file {
-    use super::*;
 
     #[test]
-    fn a_merged_buffer_reports_the_file_and_the_line_within_it() {
-        let f = SourceFile::from_parts(vec![
-            ("a.nz".to_owned(), "one\ntwo\n".to_owned()),
-            ("b.nz".to_owned(), "three\nfour".to_owned()),
+    fn every_file_has_its_own_identity_and_its_own_offsets() {
+        // The case the merged buffer could not express: two files whose text is
+        // identical. Under concatenation these were told apart only by where they
+        // happened to land; here they are different files and say so.
+        let m = SourceMap::from_parts(vec![
+            ("a.nz".to_owned(), "fn f() -> Int { 1 }\n".to_owned()),
+            ("b.nz".to_owned(), "fn f() -> Int { 1 }\n".to_owned()),
         ]);
-        // a.nz occupies 0..8, b.nz 8..
-        assert_eq!(f.name_at(0), "a.nz");
-        assert_eq!(f.name_at(7), "a.nz");
-        assert_eq!(f.name_at(8), "b.nz");
-        assert_eq!(f.name_at(20), "b.nz");
-
-        // Lines are counted within the file a reader would open, not across the buffer.
-        assert_eq!(f.line_col(0), LineCol { line: 1, column: 1 });
-        assert_eq!(f.line_col(4), LineCol { line: 2, column: 1 });
-        assert_eq!(f.line_col(8), LineCol { line: 1, column: 1 });
-        assert_eq!(f.line_col(14), LineCol { line: 2, column: 1 });
-
-        assert_eq!(f.line_text(8), "three");
-        assert_eq!(f.line_text(14), "four");
-        assert_eq!(f.file_names(), vec!["a.nz", "b.nz"]);
+        let mut it = m.ids();
+        let a = it.next().unwrap();
+        let b = it.next().unwrap();
+        assert_ne!(a, b);
+        assert_eq!(m.name(a), "a.nz");
+        assert_eq!(m.name(b), "b.nz");
+        // Same local offsets, same text, different files.
+        assert_eq!(m.slice(at(a, 3, 4)), Some("f"));
+        assert_eq!(m.slice(at(b, 3, 4)), Some("f"));
+        assert_eq!(m.line_col(at(a, 3, 4)), m.line_col(at(b, 3, 4)));
     }
 
     #[test]
-    fn a_part_without_a_trailing_newline_does_not_join_the_next_file() {
-        let f = SourceFile::from_parts(vec![
+    fn line_numbers_are_local_to_the_file() {
+        // Under the merged buffer this needed a per-segment `first_line` correction.
+        // Now it is what counting lines in the file gives, with nothing to subtract.
+        let m = SourceMap::from_parts(vec![
+            ("a.nz".to_owned(), "1\n2\n3\n".to_owned()),
+            ("b.nz".to_owned(), "x\ny\n".to_owned()),
+        ]);
+        let b = m.ids().nth(1).unwrap();
+        assert_eq!(m.line_col(at(b, 2, 3)), LineCol { line: 2, column: 1 });
+    }
+
+    #[test]
+    fn global_offsets_reproduce_the_old_merged_buffer() {
+        // The wire contract: `nazm.diagnostic/1` publishes offsets into the
+        // concatenation of every file in load order, including the newline appended to a
+        // file that lacks one. Changing those numbers would break consumers silently, so
+        // they are reproduced rather than reinterpreted.
+        let m = SourceMap::from_parts(vec![
+            ("a.nz".to_owned(), "abc".to_owned()), // no trailing newline: one is added
+            ("b.nz".to_owned(), "de\n".to_owned()),
+        ]);
+        let mut it = m.ids();
+        let a = it.next().unwrap();
+        let b = it.next().unwrap();
+        assert_eq!(m.global(at(a, 0, 3)), (0, 3));
+        // "abc\n" is four bytes, so b starts at 4.
+        assert_eq!(m.global(at(b, 0, 2)), (4, 6));
+    }
+
+    #[test]
+    fn a_file_without_a_trailing_newline_still_ends_its_own_last_line() {
+        // Carried over from the merged-buffer era, where a file not ending in a newline
+        // would have joined its last line to the next file's first. Files are separate
+        // now so that cannot happen — but `from_parts` still appends the newline, because
+        // `global` has to reproduce the offsets the schema publishes, and this pins both
+        // halves: the line is whole, and the next file starts one byte later than its
+        // text alone would suggest.
+        let m = SourceMap::from_parts(vec![
             ("a.nz".to_owned(), "let x = 1;".to_owned()),
             ("b.nz".to_owned(), "let y = 2;".to_owned()),
         ]);
-        assert_eq!(f.line_text(0), "let x = 1;");
-        assert_eq!(f.line_text(11), "let y = 2;");
-        assert_eq!(f.name_at(11), "b.nz");
+        let mut it = m.ids();
+        let a = it.next().unwrap();
+        let b = it.next().unwrap();
+        assert_eq!(m.line_text(at(a, 0, 0)), "let x = 1;");
+        assert_eq!(m.line_text(at(b, 0, 0)), "let y = 2;");
+        assert_eq!(m.name(b), "b.nz");
+        assert_eq!(m.line_col(at(b, 0, 0)), LineCol { line: 1, column: 1 });
+        assert_eq!(m.global(at(b, 0, 0)), (11, 11));
     }
 
     #[test]
-    fn a_single_file_is_the_same_structure_with_one_segment() {
-        let f = SourceFile::new("only.nz", "a\nb\n");
-        assert_eq!(f.name_at(0), "only.nz");
-        assert_eq!(f.name_at(3), "only.nz");
-        assert_eq!(f.file_names(), vec!["only.nz"]);
-        assert_eq!(f.line_col(2), LineCol { line: 2, column: 1 });
+    fn a_file_id_is_an_index_into_its_own_map_and_nothing_else() {
+        // Stated as a test because the comment on `FileId` is a promise about scope:
+        // session-local, positional, not content-derived. Load order decides it.
+        let m = SourceMap::from_parts(vec![
+            ("first.nz".to_owned(), "a".to_owned()),
+            ("second.nz".to_owned(), "b".to_owned()),
+        ]);
+        assert_eq!(m.root(), FileId::ROOT);
+        assert_eq!(m.name(FileId::ROOT), "first.nz");
+        assert_eq!(m.ids().count(), 2);
     }
 }

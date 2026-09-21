@@ -6,7 +6,7 @@
 //! saves whoever hits it from guessing whether they mistyped something.
 
 use nazm_diag::{codes, Diagnostic};
-use nazm_span::Span;
+use nazm_span::{FileId, Span};
 
 use crate::ast::{
     Assign, BinOp, Block, Expr, Function, Import, Let, Param, Program, Return, Scope, Spawn, Stmt,
@@ -47,6 +47,8 @@ const SUPPORTED: &str = concat!(
 
 #[derive(Debug)]
 pub struct Parser<'a> {
+    /// The file being read, for spans invented where no token exists.
+    file: FileId,
     tokens: &'a [Token],
     pos: usize,
     errors: Vec<Diagnostic>,
@@ -61,7 +63,17 @@ pub struct Parser<'a> {
 /// Parse a whole program. Returns whatever was understood plus every error found.
 #[must_use]
 pub fn parse(tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
+    parse_in(FileId::ROOT, tokens)
+}
+
+/// [`parse`], told which file it is reading.
+///
+/// The file is needed only for the spans the parser invents where there is no token to
+/// point at — an unexpected end of input, or an insertion point after the last
+/// expression. Every other span comes from a token and already names its file.
+pub fn parse_in(file: FileId, tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
     let mut p = Parser {
+        file,
         tokens,
         pos: 0,
         errors: Vec::new(),
@@ -203,7 +215,7 @@ impl<'a> Parser<'a> {
     fn peek_span(&self) -> Span {
         self.tokens
             .get(self.pos)
-            .map_or_else(|| Span::new(0, 0), |t| t.span)
+            .map_or_else(|| Span::new(self.file, 0, 0), |t| t.span)
     }
 
     fn at(&self, kind: &TokenKind) -> bool {
@@ -551,7 +563,7 @@ impl<'a> Parser<'a> {
                     )
                     .help("an expression with no `;` after it is the block's value, so it must be last")
                     .fix_with_review(
-                        Span::new(e.span().end, e.span().end),
+                        Span::new(e.span().file, e.span().end, e.span().end),
                         ";",
                         "discard the value",
                         "the value was meant to be discarded rather than returned — if \

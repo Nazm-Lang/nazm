@@ -26,7 +26,7 @@ pub(crate) fn run(files: &[PathBuf], check: bool) -> ExitCode {
             Err(diagnostics) => {
                 // The file's own text, so the caret lands in the file the reader named
                 // rather than in a buffer assembled from several.
-                let file = nazm_span::SourceFile::new(path.display().to_string(), original);
+                let file = nazm_span::SourceMap::single(path.display().to_string(), original);
                 crate::emit(&diagnostics, &file, false);
                 failed = true;
                 continue;

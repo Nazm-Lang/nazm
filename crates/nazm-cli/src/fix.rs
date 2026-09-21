@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use nazm_diag::{Applicability, Diagnostic};
-use nazm_span::SourceFile;
+use nazm_span::SourceMap;
 
 use crate::{exit, load};
 
@@ -57,12 +57,12 @@ struct Edit {
 }
 
 pub(crate) fn run(path: &Path, apply: bool, json: bool) -> ExitCode {
-    let Some(file) = loaded(path, json) else {
+    let Some(map) = loaded(path, json) else {
         return ExitCode::from(exit::NO_SUCH_FILE);
     };
 
-    let diagnostics = nazm_core::check_source(file.text());
-    let mut edits = collect(&diagnostics, &file);
+    let diagnostics = nazm_core::check_map(&map);
+    let mut edits = collect(&diagnostics, &map);
 
     if apply {
         write_back(&mut edits);
@@ -75,7 +75,7 @@ pub(crate) fn run(path: &Path, apply: bool, json: bool) -> ExitCode {
     // number of edits made would be a guess about what the checker will say next.
     let remaining = match apply {
         true => match loaded(path, json) {
-            Some(again) => nazm_core::check_source(again.text()),
+            Some(again) => nazm_core::check_map(&again),
             None => return ExitCode::from(exit::NO_SUCH_FILE),
         },
         false => diagnostics,
@@ -92,7 +92,7 @@ pub(crate) fn run(path: &Path, apply: bool, json: bool) -> ExitCode {
     }
 }
 
-fn loaded(path: &Path, json: bool) -> Option<SourceFile> {
+fn loaded(path: &Path, json: bool) -> Option<SourceMap> {
     match load::load(path) {
         Ok(f) => Some(f),
         Err((partial, diagnostics)) => {
@@ -103,22 +103,25 @@ fn loaded(path: &Path, json: bool) -> Option<SourceFile> {
 }
 
 /// Every fix in every diagnostic, resolved to the file it edits.
-fn collect(diagnostics: &[Diagnostic], file: &SourceFile) -> Vec<Edit> {
+/// Turn each fix into an edit against a real file.
+///
+/// # What a `Span` carrying its file removed from here
+///
+/// This used to call `SourceFile::locate` twice — a binary search over a merged buffer to
+/// recover which file an offset fell in and what the offset was inside it — and then
+/// compare the two names, because a span whose ends landed in different files would have
+/// been written to whichever one came first, at a position that meant nothing.
+///
+/// A [`nazm_span::Span`] now *has* one file. The search is a field access, the offsets are
+/// already file-local, and the straddling case is not a check that passes but a state that
+/// cannot be constructed.
+fn collect(diagnostics: &[Diagnostic], map: &SourceMap) -> Vec<Edit> {
     let mut edits = Vec::new();
     for d in diagnostics {
         for f in &d.fixes {
-            let (name, start) = file.locate(f.span.start);
-            let (end_name, end) = file.locate(f.span.end);
-            // A span that begins in one file and ends in another cannot be an edit to
-            // either. It should be impossible — a span comes from one file's tokens —
-            // and it is checked rather than assumed, because the failure would be a
-            // silent write to the wrong place.
-            let spans_two_files = name != end_name;
-            let expected = file
-                .text()
-                .get(f.span.start as usize..f.span.end as usize)
-                .unwrap_or_default()
-                .to_owned();
+            let name = map.name(f.span.file);
+            let (start, end) = (f.span.start, f.span.end);
+            let expected = map.slice(f.span).unwrap_or_default().to_owned();
             edits.push(Edit {
                 schema: SCHEMA,
                 code: d.code.to_string(),
@@ -131,10 +134,9 @@ fn collect(diagnostics: &[Diagnostic], file: &SourceFile) -> Vec<Edit> {
                 precondition: f.precondition.clone(),
                 expected,
                 applied: false,
-                skipped: match (spans_two_files, f.applicability) {
-                    (true, _) => Some("the edit crosses a file boundary"),
-                    (false, Applicability::NeedsReview) => Some("it needs review"),
-                    (false, Applicability::Automatic) => None,
+                skipped: match f.applicability {
+                    Applicability::NeedsReview => Some("it needs review"),
+                    Applicability::Automatic => None,
                 },
             });
         }
