@@ -70,6 +70,36 @@ pub(crate) enum Mode {
 /// `(&'static str, Box<dyn Fn() -> Command>)` at a `let` tells a reader nothing.
 type Stage = (&'static str, Box<dyn Fn() -> Command>);
 
+/// Peak resident memory for one command, in bytes.
+///
+/// `/usr/bin/time -l` rather than anything in-process: measuring a *child's* peak needs
+/// `getrusage(RUSAGE_CHILDREN)`, which this workspace cannot reach without `unsafe`, and
+/// the lint is `forbid` for better reasons than this.
+///
+/// **Platform-specific, and recorded as such.** On Darwin the field is in bytes; on a
+/// platform where `time -l` means something else, the number is whatever that platform
+/// reports, and the record says which host it was taken on. `None` when the line was not
+/// found — missing is representable, and a peak of zero is not a measurement.
+#[derive(Debug)]
+struct Memory {
+    program: String,
+    stage: &'static str,
+    peak_bytes: Option<u64>,
+}
+
+fn peak_rss(cmd: &mut Command) -> Option<u64> {
+    let mut wrapped = Command::new("/usr/bin/time");
+    wrapped.arg("-l").arg(cmd.get_program());
+    for a in cmd.get_args() {
+        wrapped.arg(a);
+    }
+    let out = wrapped.output().ok()?;
+    let text = String::from_utf8_lossy(&out.stderr);
+    text.lines()
+        .find(|l| l.contains("maximum resident set size"))
+        .and_then(|l| l.split_whitespace().next()?.parse().ok())
+}
+
 /// One timed thing.
 #[derive(Debug)]
 struct Measurement {
@@ -277,8 +307,33 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
         Err(e) => eprintln!("bench: skipping the self-compile benchmark: {e}"),
     }
 
-    let json = render_json(&root, runs, &measurements);
+    // Peak memory, once per command rather than repeatedly: it varies far less than
+    // time does, and `docs/NAZM_AUTONOMOUS_GOAL.md` §12 asks for it separately from
+    // speed because they are separate questions.
+    let mut memory = Vec::new();
+    for path in &programs {
+        let name = path
+            .file_stem()
+            .map_or_else(|| "?".to_owned(), |s| s.to_string_lossy().into_owned());
+        let exe = scratch.join(&name);
+        let source = path.display().to_string();
+        let mut interpret = Command::new(&nazm);
+        interpret.args(["run", &source]);
+        memory.push(Memory {
+            program: name.clone(),
+            stage: "interpret",
+            peak_bytes: peak_rss(&mut interpret),
+        });
+        memory.push(Memory {
+            program: name,
+            stage: "native-O2",
+            peak_bytes: peak_rss(&mut Command::new(&exe)),
+        });
+    }
+
+    let json = render_json(&root, runs, &measurements, &memory);
     print!("{}", render_table(&measurements));
+    print!("{}", render_memory(&memory));
 
     let record = root.join("bench/record.json");
     if let Err(e) = std::fs::write(&record, &json) {
@@ -359,7 +414,34 @@ fn render_table(measurements: &[Measurement]) -> String {
     out
 }
 
-fn render_json(root: &Path, runs: usize, measurements: &[Measurement]) -> String {
+fn render_memory(memory: &[Memory]) -> String {
+    let mut out = String::new();
+    let width = memory
+        .iter()
+        .map(|m| m.program.len() + m.stage.len() + 1)
+        .max()
+        .unwrap_or(20);
+    let _ = writeln!(out, "\n  {:<width$}  {:>12}", "peak memory", "bytes");
+    for m in memory {
+        let key = format!("{}/{}", m.program, m.stage);
+        match m.peak_bytes {
+            Some(b) => {
+                let _ = writeln!(out, "  {key:<width$}  {b:>12}");
+            }
+            None => {
+                let _ = writeln!(out, "  {key:<width$}  {:>12}", "not measured");
+            }
+        }
+    }
+    out
+}
+
+fn render_json(
+    root: &Path,
+    runs: usize,
+    measurements: &[Measurement],
+    memory: &[Memory],
+) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{{");
     let _ = writeln!(out, "  \"schema\": \"{SCHEMA}\",");
@@ -410,6 +492,26 @@ fn render_json(root: &Path, runs: usize, measurements: &[Measurement]) -> String
             quote(m.stage),
             m.min(),
             m.median()
+        );
+    }
+    let _ = writeln!(out, "  ],");
+    // `null` rather than 0 for a peak that could not be read: a measurement that did not
+    // happen and one that came out at zero are different facts.
+    let _ = writeln!(
+        out,
+        "  \"peak_memory_source\": \"/usr/bin/time -l, bytes on Darwin\","
+    );
+    let _ = writeln!(out, "  \"peak_memory\": [");
+    for (i, m) in memory.iter().enumerate() {
+        let comma = if i + 1 == memory.len() { "" } else { "," };
+        let bytes = m
+            .peak_bytes
+            .map_or_else(|| "null".to_owned(), |b| b.to_string());
+        let _ = writeln!(
+            out,
+            "    {{\"program\": {}, \"stage\": {}, \"peak_bytes\": {bytes}}}{comma}",
+            quote(&m.program),
+            quote(m.stage)
         );
     }
     let _ = writeln!(out, "  ]");
