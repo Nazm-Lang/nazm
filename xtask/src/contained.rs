@@ -534,6 +534,10 @@ pub(crate) fn image_platform_slug() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    // The same allowance the integration tests carry: a fixture that cannot be built is a
+    // broken test, and panicking says so at the line it happened.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
     use std::path::PathBuf;
 
@@ -563,9 +567,18 @@ mod tests {
     /// Leaves a *stopped* container whose `/out` holds whatever `script` created.
     fn fixture(name: &str, script: &str) -> String {
         let container = format!("nazm-exporttest-{name}-{}", std::process::id());
-        let _ = Command::new("docker").args(["rm", "-f", &container]).output();
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &container])
+            .output();
         let out = Command::new("docker")
-            .args(["run", "--name", &container, "--network", "none", FIXTURE_IMAGE])
+            .args([
+                "run",
+                "--name",
+                &container,
+                "--network",
+                "none",
+                FIXTURE_IMAGE,
+            ])
             .args(["sh", "-c", &format!("mkdir -p /out && {script}")])
             .output()
             .expect("docker run");
@@ -609,7 +622,10 @@ mod tests {
         let r = export_validated(&c, &policy(&dest, &["record.json"]));
         drop_fixture(&c);
         assert!(r.is_ok(), "{r:?}");
-        assert_eq!(std::fs::read_to_string(dest.join("record.json")).unwrap(), "hello");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("record.json")).unwrap(),
+            "hello"
+        );
     }
 
     #[test]
@@ -699,7 +715,10 @@ mod tests {
         if !docker_or_skip() {
             return;
         }
-        let c = fixture("empty", "printf 'hello' > /out/record.json && : > /out/EXPORTS");
+        let c = fixture(
+            "empty",
+            "printf 'hello' > /out/record.json && : > /out/EXPORTS",
+        );
         let dest = scratch("empty");
         let r = export_validated(&c, &policy(&dest, &["record.json"]));
         drop_fixture(&c);
