@@ -13,7 +13,7 @@ use std::thread::JoinHandle;
 use nazm_diag::{codes, Diagnostic};
 use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, While};
 
-use crate::intrinsic::Intrinsic;
+use nazm_syntax::intrinsic::Intrinsic;
 
 /// A runtime value.
 ///

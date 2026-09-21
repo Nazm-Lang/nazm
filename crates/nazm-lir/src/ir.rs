@@ -124,6 +124,24 @@ impl Ty {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FuncId(pub usize);
 
+impl Ty {
+    /// The backend's representation of a front-end [`Type`](nazm_syntax::Type).
+    ///
+    /// One-to-one today, and written as a total match rather than a default arm so that
+    /// adding a type to the language is a compile error here instead of a silent `Int`.
+    #[must_use]
+    pub const fn of(t: nazm_syntax::Type) -> Self {
+        match t {
+            nazm_syntax::Type::Int => Self::Int,
+            nazm_syntax::Type::Bool => Self::Bool,
+            nazm_syntax::Type::Str => Self::Str,
+            nazm_syntax::Type::Ints => Self::Ints,
+            nazm_syntax::Type::Strs => Self::Strs,
+            nazm_syntax::Type::Chan => Self::Chan,
+        }
+    }
+}
+
 impl FuncId {
     /// The LLVM symbol for this function.
     ///
@@ -378,7 +396,7 @@ impl Expr {
             Self::Int(_) | Self::Neg { .. } | Self::Arith { .. } => Some(Ty::Int),
             Self::Bool(_) | Self::Compare { .. } => Some(Ty::Bool),
             Self::Str(_) => Some(Ty::Str),
-            Self::Builtin { op, .. } => Some(op.ret()),
+            Self::Builtin { op, .. } => Some(op.lowered_ret()),
             Self::Load { ty, .. } => Some(*ty),
             Self::Call { ret, .. } => Some(*ret),
             Self::If { ty, .. } => *ty,
@@ -404,196 +422,70 @@ pub fn fits(e: &Expr, want: Ty) -> bool {
 /// built-ins compile natively is a coverage question with the same answer shape as the
 /// rest of the subset, and a front-end built-in missing here must produce a backend
 /// limitation diagnostic rather than a miscompile. A test in `nazm-cli`, which sees both
-/// crates, requires every front-end built-in to be either lowered or refused by name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Builtin {
-    StrLen,
-    StrByte,
-    StrSlice,
-    StrConcat,
-    IntToStr,
-    StrFromByte,
-    IntsNew,
-    IntsLen,
-    IntsGet,
-    IntsSet,
-    IntsPush,
-    StrsNew,
-    StrsLen,
-    StrsGet,
-    StrsSet,
-    StrsPush,
-    IntsPop,
-    StrsPop,
-    StrJoin,
-    ArgsCount,
-    Arg,
-    ReadFile,
-    WriteFile,
-    FileExists,
-    Print,
-    EPrint,
-    ExitWith,
-    ChanNew,
-    ChanSend,
-    ChanRecv,
-    ChanClose,
+/// A built-in, as the backend sees it.
+///
+/// **The same type the front end resolves**, aliased rather than transcribed. Until
+/// 2026-09-21 this crate declared its own 31-variant enum with its own `by_name` and
+/// `name` tables, and a test in `nazm-cli` — the only crate that can see both — kept the
+/// two in agreement. Two inventories agreeing because a test says so is not one
+/// inventory; a built-in added to one and forgotten in the other was a test failure
+/// rather than a compile error, and only because someone had written that test.
+///
+/// Identity, name and signature are `nazm_syntax::Intrinsic`'s. What stays here is how a
+/// built-in is *emitted*, which is genuinely backend-specific — see [`Lowering`].
+pub use nazm_syntax::Intrinsic as Builtin;
+
+/// What lowering needs to know about a built-in, over and above its identity.
+///
+/// An extension trait rather than inherent methods, because the type belongs to
+/// `nazm-syntax` now. The split is the point: **the front end owns what a built-in *is* —
+/// its name, its identity, its signature in language types — and the backend owns what it
+/// *becomes*.**
+///
+/// The names differ from [`Intrinsic`](nazm_syntax::Intrinsic)'s deliberately.
+/// `Intrinsic::params` answers in `Type` and `lowered_params` answers in [`Ty`]; had both
+/// been called `params`, Rust would have silently preferred the inherent one and the
+/// mismatch would have surfaced as a type error somewhere else entirely.
+pub trait Lowering {
+    /// The sequence type this built-in operates on, if it is a sequence operation.
+    fn sequence(self) -> Option<Ty>;
+    /// Parameter types, in the backend's representation.
+    ///
+    /// Checked against the lowered arguments the same way a call's are. The front end has
+    /// already established both, so a mismatch here is a *lowering* bug rather than a
+    /// program error — and a wrongly typed argument produces a module clang rejects for a
+    /// reason that names none of this.
+    fn lowered_params(self) -> Vec<Ty>;
+    /// Return type, in the backend's representation.
+    fn lowered_ret(self) -> Ty;
 }
 
-impl Builtin {
-    #[must_use]
-    pub fn by_name(name: &str) -> Option<Self> {
-        match name {
-            "str_len" => Some(Self::StrLen),
-            "str_byte" => Some(Self::StrByte),
-            "str_slice" => Some(Self::StrSlice),
-            "str_concat" => Some(Self::StrConcat),
-            "int_to_str" => Some(Self::IntToStr),
-            "str_from_byte" => Some(Self::StrFromByte),
-            "ints_new" => Some(Self::IntsNew),
-            "ints_len" => Some(Self::IntsLen),
-            "ints_get" => Some(Self::IntsGet),
-            "ints_set" => Some(Self::IntsSet),
-            "ints_push" => Some(Self::IntsPush),
-            "strs_new" => Some(Self::StrsNew),
-            "strs_len" => Some(Self::StrsLen),
-            "strs_get" => Some(Self::StrsGet),
-            "strs_set" => Some(Self::StrsSet),
-            "strs_push" => Some(Self::StrsPush),
-            "ints_pop" => Some(Self::IntsPop),
-            "strs_pop" => Some(Self::StrsPop),
-            "str_join" => Some(Self::StrJoin),
-            "args_count" => Some(Self::ArgsCount),
-            "arg" => Some(Self::Arg),
-            "read_file" => Some(Self::ReadFile),
-            "write_file" => Some(Self::WriteFile),
-            "file_exists" => Some(Self::FileExists),
-            "print" => Some(Self::Print),
-            "eprint" => Some(Self::EPrint),
-            "exit_with" => Some(Self::ExitWith),
-            "chan_new" => Some(Self::ChanNew),
-            "chan_send" => Some(Self::ChanSend),
-            "chan_recv" => Some(Self::ChanRecv),
-            "chan_close" => Some(Self::ChanClose),
-            _ => None,
+impl Lowering for Builtin {
+    fn sequence(self) -> Option<Ty> {
+        use nazm_syntax::Type;
+        // Derived from the front end's own signature rather than listed again: a sequence
+        // operation is one whose first parameter is a sequence, and for `ints_new` and
+        // `strs_new` — which take nothing — the return type is the only evidence.
+        match nazm_syntax::Intrinsic::params(self).first() {
+            Some(Type::Ints) => Some(Ty::Ints),
+            Some(Type::Strs) => Some(Ty::Strs),
+            _ => match nazm_syntax::Intrinsic::ret(self) {
+                Type::Ints => Some(Ty::Ints),
+                Type::Strs => Some(Ty::Strs),
+                _ => None,
+            },
         }
     }
 
-    #[must_use]
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::StrLen => "str_len",
-            Self::StrByte => "str_byte",
-            Self::StrSlice => "str_slice",
-            Self::StrConcat => "str_concat",
-            Self::IntToStr => "int_to_str",
-            Self::StrFromByte => "str_from_byte",
-            Self::IntsNew => "ints_new",
-            Self::IntsLen => "ints_len",
-            Self::IntsGet => "ints_get",
-            Self::IntsSet => "ints_set",
-            Self::IntsPush => "ints_push",
-            Self::StrsNew => "strs_new",
-            Self::StrsLen => "strs_len",
-            Self::StrsGet => "strs_get",
-            Self::StrsSet => "strs_set",
-            Self::StrsPush => "strs_push",
-            Self::IntsPop => "ints_pop",
-            Self::StrsPop => "strs_pop",
-            Self::StrJoin => "str_join",
-            Self::ArgsCount => "args_count",
-            Self::Arg => "arg",
-            Self::ReadFile => "read_file",
-            Self::WriteFile => "write_file",
-            Self::FileExists => "file_exists",
-            Self::Print => "print",
-            Self::EPrint => "eprint",
-            Self::ExitWith => "exit_with",
-            Self::ChanNew => "chan_new",
-            Self::ChanSend => "chan_send",
-            Self::ChanRecv => "chan_recv",
-            Self::ChanClose => "chan_close",
-        }
+    fn lowered_params(self) -> Vec<Ty> {
+        nazm_syntax::Intrinsic::params(self)
+            .iter()
+            .map(|t| Ty::of(*t))
+            .collect()
     }
 
-    /// The sequence type this operates on, for the ones that operate on a sequence.
-    #[must_use]
-    pub fn sequence(self) -> Option<Ty> {
-        match self {
-            Self::IntsNew
-            | Self::IntsLen
-            | Self::IntsGet
-            | Self::IntsSet
-            | Self::IntsPush
-            | Self::IntsPop => Some(Ty::Ints),
-            Self::StrsNew
-            | Self::StrsLen
-            | Self::StrsGet
-            | Self::StrsSet
-            | Self::StrsPush
-            | Self::StrsPop => Some(Ty::Strs),
-            _ => None,
-        }
-    }
-
-    /// Checked against the lowered arguments, the same way a call's are. The front end
-    /// has already established both, so this catches a *lowering* bug rather than a
-    /// program error — and a wrongly typed argument here is a module clang rejects for
-    /// a reason that names none of this.
-    #[must_use]
-    pub fn params(self) -> &'static [Ty] {
-        match self {
-            Self::StrLen => &[Ty::Str],
-            Self::StrByte => &[Ty::Str, Ty::Int],
-            Self::StrSlice => &[Ty::Str, Ty::Int, Ty::Int],
-            Self::StrConcat => &[Ty::Str, Ty::Str],
-            Self::IntToStr | Self::StrFromByte => &[Ty::Int],
-            Self::IntsNew | Self::StrsNew => &[],
-            Self::IntsLen | Self::IntsPop => &[Ty::Ints],
-            Self::StrsLen | Self::StrsPop => &[Ty::Strs],
-            Self::IntsGet => &[Ty::Ints, Ty::Int],
-            Self::StrsGet => &[Ty::Strs, Ty::Int],
-            Self::IntsSet => &[Ty::Ints, Ty::Int, Ty::Int],
-            Self::StrsSet => &[Ty::Strs, Ty::Int, Ty::Str],
-            Self::IntsPush => &[Ty::Ints, Ty::Int],
-            Self::StrsPush => &[Ty::Strs, Ty::Str],
-            Self::StrJoin => &[Ty::Strs, Ty::Str],
-            Self::ArgsCount => &[],
-            Self::Arg | Self::ExitWith => &[Ty::Int],
-            Self::ReadFile | Self::FileExists | Self::Print | Self::EPrint => &[Ty::Str],
-            Self::WriteFile => &[Ty::Str, Ty::Str],
-            Self::ChanNew => &[Ty::Int],
-            Self::ChanSend => &[Ty::Chan, Ty::Int],
-            // The value is pushed onto the sequence rather than returned, so that the
-            // `Bool` can say whether there was one — the same shape the interpreter has.
-            Self::ChanRecv => &[Ty::Chan, Ty::Ints],
-            Self::ChanClose => &[Ty::Chan],
-        }
-    }
-
-    #[must_use]
-    pub fn ret(self) -> Ty {
-        match self {
-            Self::StrLen | Self::StrByte => Ty::Int,
-            Self::StrSlice | Self::StrConcat | Self::IntToStr | Self::StrFromByte => Ty::Str,
-            Self::IntsLen
-            | Self::StrsLen
-            | Self::IntsGet
-            | Self::IntsSet
-            | Self::IntsPush
-            | Self::IntsPop
-            | Self::StrsSet
-            | Self::StrsPush => Ty::Int,
-            Self::StrsGet | Self::StrsPop | Self::StrJoin | Self::Arg | Self::ReadFile => Ty::Str,
-            Self::ArgsCount | Self::WriteFile | Self::Print | Self::EPrint | Self::ExitWith => {
-                Ty::Int
-            }
-            Self::FileExists | Self::ChanSend | Self::ChanRecv => Ty::Bool,
-            Self::IntsNew => Ty::Ints,
-            Self::StrsNew => Ty::Strs,
-            Self::ChanNew => Ty::Chan,
-            Self::ChanClose => Ty::Int,
-        }
+    fn lowered_ret(self) -> Ty {
+        Ty::of(nazm_syntax::Intrinsic::ret(self))
     }
 }
 

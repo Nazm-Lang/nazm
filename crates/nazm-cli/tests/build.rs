@@ -3387,14 +3387,28 @@ fn every_string_bound_fails_at_its_own_position() {
     );
 }
 
+/// The front end's built-in type and the backend's are **the same type**.
+///
+/// Proved by the compiler rather than by comparison: this function takes one and returns
+/// the other with no conversion, which only builds if they are one type. A test that
+/// looped over both inventories checking they agreed is what used to stand here, and it
+/// could only ever say that the two tables *currently* matched — a second inventory
+/// written under another name would have passed it.
+///
+/// If someone reintroduces a backend-local built-in enum, this stops compiling.
+#[allow(dead_code)]
+fn the_backend_and_the_front_end_name_one_inventory(
+    b: nazm_lir::ir::Builtin,
+) -> nazm_core::Intrinsic {
+    b
+}
+
 #[test]
 fn every_front_end_builtin_is_lowered_or_refused_by_name() {
-    // `nazm-lir` keeps its own table of the built-ins it can lower, because it may not
-    // depend on `nazm-core` and because backend coverage is its own statement. The risk
-    // that creates is drift: a built-in the front end gains and the backend never hears
-    // about. This test is the guard — it sees both crates, and requires every front-end
-    // built-in to either compile or be refused **by its own name**, never to fail some
-    // other way.
+    // Backend *coverage* is still its own statement, and still worth asserting: sharing
+    // an inventory says the two agree on what a built-in is, not that the backend can
+    // emit every one. Each must therefore either compile or be refused **by its own
+    // name**, never fail some other way.
     for i in nazm_core::Intrinsic::ALL {
         let args: Vec<&str> = i
             .params()
@@ -3440,8 +3454,7 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
             stderr.contains(&format!("the built-in `{}`", i.name())),
-            "`{}` neither compiles nor is refused by name — the backend's built-in table \
-             has drifted from the front end's: {stderr}",
+            "`{}` neither compiles nor is refused by name: {stderr}",
             i.name()
         );
     }

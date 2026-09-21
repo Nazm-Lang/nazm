@@ -54,7 +54,8 @@ use nazm_syntax::{
 use std::collections::HashMap;
 
 use crate::ir::{
-    fits, ArithOp, Block, Builtin, CmpOp, Expr, FuncId, Function, Local, Module, Stmt, Ty,
+    fits, ArithOp, Block, Builtin, CmpOp, Expr, FuncId, Function, Local, Lowering as _, Module,
+    Stmt, Ty,
 };
 
 /// What the subset is, in one sentence, for every refusal to point at.
@@ -1124,8 +1125,8 @@ fn lower_builtin(
     span: Span,
 ) -> Option<Expr> {
     let args: Vec<Expr> = lowered.into_iter().collect::<Option<_>>()?;
-    let params = op.params();
-    if args.len() != params.len() || !args.iter().zip(params).all(|(a, want)| fits(a, *want)) {
+    let params = op.lowered_params();
+    if args.len() != params.len() || !args.iter().zip(params).all(|(a, want)| fits(a, want)) {
         ctx.errors.push(
             Diagnostic::error(
                 codes::UNSUPPORTED_CONSTRUCT,

@@ -6,13 +6,13 @@
 
 pub mod check;
 pub mod eval;
-pub mod intrinsic;
-pub mod types;
 
 pub use check::{check, Signature};
 pub use eval::{Interpreter, RuntimeError, Value};
-pub use intrinsic::Intrinsic;
-pub use types::Type;
+// `Type` and `Intrinsic` moved down to `nazm-syntax` on 2026-09-21, so the backend can
+// see them without depending on the interpreter. Re-exported here because they are still
+// what a caller of this crate means by a type and a built-in.
+pub use nazm_syntax::{Intrinsic, Type};
 
 /// Re-exported so the CLI can parse without taking its own dependency on the syntax
 /// crate. The double underscore marks it as plumbing rather than interface.
