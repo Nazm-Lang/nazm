@@ -2257,10 +2257,32 @@ fn many_iterations_with_body_locals_allocate_once_in_the_entry_block() {
         "one slot per binding, no more and no fewer:\n{ir}"
     );
 
-    // The loop really does go round: a back edge into the condition block exists.
+    // The loop really does go round: some branch targets a block that is already open
+    // above it. Phrased as the property rather than as a literal label, because the
+    // label's number is an emitter detail — it changed once when block labels stopped
+    // sharing a counter with SSA temporaries, and a test that pins it fails for a reason
+    // that has nothing to do with control flow.
+    let mut seen: Vec<&str> = Vec::new();
+    let mut back_edge = None;
+    for line in ir.lines() {
+        let trimmed = line.trim();
+        if let Some(label) = trimmed.strip_suffix(':') {
+            if !label.contains(char::is_whitespace) {
+                seen.push(label);
+                continue;
+            }
+        }
+        if let Some(target) = trimmed.strip_prefix("br label %") {
+            let target = target.split_whitespace().next().unwrap_or(target);
+            if seen.contains(&target) {
+                back_edge = Some(target.to_owned());
+                break;
+            }
+        }
+    }
     assert!(
-        ir.contains("br label %b2"),
-        "no back edge to the condition block:\n{ir}"
+        back_edge.is_some(),
+        "no back edge: every `br label` goes forward, so the loop cannot repeat:\n{ir}"
     );
 
     // 20000 iterations of `(i % 7) + 1`.
