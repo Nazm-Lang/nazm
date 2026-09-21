@@ -129,46 +129,6 @@ done
 cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
 
 
-{
-    printf 'nazm release candidate\n\n'
-    printf 'date-utc:    %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf 'commit:      %s\n' "$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-    printf 'tree-clean:  %s\n' "$([ -z "$dirty" ] && echo yes || echo 'no (--allow-dirty)')"
-    printf 'host:        %s\n' "$(uname -sm)"
-    printf 'rustc:       %s\n' "$(rustc --version)"
-    printf 'clang:       %s\n' "$(clang --version | head -1)"
-    printf 'version:     %s\n' "$("$out/bin/nazm" --version 2>/dev/null || echo unknown)"
-    printf 'binary-sha:  %s\n' "$(sha256 "$out/bin/nazm")"
-    printf '\n'
-    printf 'This is an EXPERIMENTAL candidate built and verified on one machine.\n'
-    printf 'It has been checked on %s and nowhere else; other targets are\n' "$(uname -sm)"
-    printf 'unverified rather than unsupported. See docs/performance.md for what has\n'
-    printf 'been measured, and README.md for what is not built.\n'
-    printf '\n'
-    printf 'contains: the binary, the documentation, the JSON schemas, the examples,\n'
-    printf 'the compiler written in Nazm with its bootstrap script and conformance\n'
-    printf 'corpus, the benchmark programs, and the scripts the documentation names.\n'
-    printf 'Not the Rust source: this repository is that, and the commit above names it.\n'
-    printf '\n'
-    printf 'gates passed:\n'
-    printf '  cargo fmt --all -- --check\n'
-    printf '  nazm fmt --check (every .nz in the tree)\n'
-    printf '  cargo lint\n'
-    printf '  cargo xtask check\n'
-    printf '  cargo test --workspace\n'
-    printf '  compiler/bootstrap.sh (C1 -> C2 -> C3, byte-identical)\n'
-    [ "$skip_bench" = no ] && printf '  cargo xtask bench --check\n'
-    printf '\n'
-    printf 'contents:\n'
-} > "$out/MANIFEST.txt"
-
-# Every file, with its digest, so the candidate can be checked rather than trusted.
-(cd "$out" && find . -type f ! -name MANIFEST.txt | sort | while read -r f; do
-    printf '  %s  %s\n' "$(sha256 "$f")" "${f#./}"
-done) >> "$out/MANIFEST.txt"
-
-
-
 # --- provenance ---------------------------------------------------------------------
 #
 # Everything needed to say what this candidate is and what was actually checked against
@@ -219,6 +179,47 @@ done) >> "$out/MANIFEST.txt"
     printf '\n'
     printf 'Neither binary is portable off %s. The sources are; see docs/bootstrap.md.\n' "$(uname -sm)"
 } > "$out/PROVENANCE.txt"
+
+{
+    printf 'nazm release candidate\n\n'
+    printf 'date-utc:    %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'commit:      %s\n' "$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    printf 'tree-clean:  %s\n' "$([ -z "$dirty" ] && echo yes || echo 'no (--allow-dirty)')"
+    printf 'host:        %s\n' "$(uname -sm)"
+    printf 'rustc:       %s\n' "$(rustc --version)"
+    printf 'clang:       %s\n' "$(clang --version | head -1)"
+    printf 'version:     %s\n' "$("$out/bin/nazm" --version 2>/dev/null || echo unknown)"
+    printf 'binary-sha:  %s\n' "$(sha256 "$out/bin/nazm")"
+    printf '\n'
+    printf 'This is an EXPERIMENTAL candidate built and verified on one machine.\n'
+    printf 'It has been checked on %s and nowhere else; other targets are\n' "$(uname -sm)"
+    printf 'unverified rather than unsupported. See docs/performance.md for what has\n'
+    printf 'been measured, and README.md for what is not built.\n'
+    printf '\n'
+    printf 'contains: the binary, the documentation, the JSON schemas, the examples,\n'
+    printf 'the compiler written in Nazm with its bootstrap script and conformance\n'
+    printf 'corpus, the benchmark programs, and the scripts the documentation names.\n'
+    printf 'Not the Rust source: this repository is that, and the commit above names it.\n'
+    printf '\n'
+    printf 'gates passed:\n'
+    printf '  cargo fmt --all -- --check\n'
+    printf '  nazm fmt --check (every .nz in the tree)\n'
+    printf '  cargo lint\n'
+    printf '  cargo xtask check\n'
+    printf '  cargo test --workspace\n'
+    printf '  compiler/bootstrap.sh (C1 -> C2 -> C3, byte-identical)\n'
+    [ "$skip_bench" = no ] && printf '  cargo xtask bench --check\n'
+    printf '\n'
+    printf 'contents:\n'
+} > "$out/MANIFEST.txt"
+
+# Every file, with its digest, so the candidate can be checked rather than trusted.
+(cd "$out" && find . -type f ! -name MANIFEST.txt | sort | while read -r f; do
+    printf '  %s  %s\n' "$(sha256 "$f")" "${f#./}"
+done) >> "$out/MANIFEST.txt"
+
+
+
 # --- validate -----------------------------------------------------------------------
 #
 # Read the manifest back and check every digest against the file it names. A manifest is
