@@ -580,12 +580,12 @@ statement form and the value form are separate code paths and each deserves its 
 fact.
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """        let else_label = format!("b{}", self.fresh());
+find = """        let else_label = format!("b{}", self.fresh_label());
         let _ = writeln!(
             self.out,
             "  br i1 %{c}, label %{then_label}, label %{else_label}"
         );"""
-replace = """        let else_label = format!("b{}", self.fresh());
+replace = """        let else_label = format!("b{}", self.fresh_label());
         let _ = writeln!(
             self.out,
             "  br i1 %{c}, label %{else_label}, label %{then_label}"
@@ -600,12 +600,12 @@ produces. Caught by outcome rather than by anything about the IR being malformed
 `phi` is well-formed either way.
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """        let join_label = format!("b{}", self.fresh());
+find = """        let join_label = format!("b{}", self.fresh_label());
         let _ = writeln!(
             self.out,
             "  br i1 %{c}, label %{then_label}, label %{else_label}"
         );"""
-replace = """        let join_label = format!("b{}", self.fresh());
+replace = """        let join_label = format!("b{}", self.fresh_label());
         let _ = writeln!(
             self.out,
             "  br i1 %{c}, label %{else_label}, label %{then_label}"
