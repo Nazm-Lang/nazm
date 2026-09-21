@@ -203,7 +203,53 @@ impl From<Diagnostic> for RuntimeError {
     }
 }
 
-type Env = Vec<HashMap<String, Value>>;
+/// One lexical scope's bindings: a short association list, not a map.
+///
+/// # Why not a `HashMap`
+///
+/// It was one. `cargo xtask bench` on `bench/programs/arith.nz` — a loop doing nothing
+/// but arithmetic on five locals — spent **29% of the interpreter's time** hashing
+/// variable names and comparing them: 43 samples in `RandomState::hash_one::<String>`,
+/// 23 in SipHash's `write`, and 15 in `memcmp`, out of 277 on the evaluation thread.
+///
+/// A frame holds a handful of bindings, and the checker refuses two of one name in the
+/// same scope, so a linear scan compares a few short strings and hashes nothing. The
+/// measurement is recorded in `docs/performance.md`; the point of repeating it here is
+/// that the obvious refactor back to a map would undo a measured result, and whoever
+/// proposes it should have to argue with a number rather than with a preference.
+#[derive(Debug, Default)]
+struct Frame {
+    slots: Vec<(String, Value)>,
+}
+
+impl Frame {
+    fn get(&self, name: &str) -> Option<&Value> {
+        self.slots.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+    }
+
+    fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
+        self.slots
+            .iter_mut()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v)
+    }
+
+    /// Bind a name, replacing any existing binding of it.
+    ///
+    /// Replacing rather than appending keeps this exactly what the `HashMap` did. Two
+    /// `let`s of one name in one scope is refused by the checker, so the case is
+    /// unreachable — and a second entry shadowing the first would be a silent
+    /// difference in behaviour if it ever became reachable, which is the kind found
+    /// years later.
+    fn insert(&mut self, name: String, value: Value) {
+        match self.get_mut(&name) {
+            Some(slot) => *slot = value,
+            None => self.slots.push((name, value)),
+        }
+    }
+}
+
+type Env = Vec<Frame>;
 
 /// How a statement finished.
 ///
@@ -451,7 +497,7 @@ impl Interpreter {
                     "this program has no `main` function",
                 )),
             })?;
-        let mut env: Env = vec![HashMap::new()];
+        let mut env: Env = vec![Frame::default()];
         self.call_body(Self::body_of(main)?, &mut env, "main")
     }
 
@@ -487,7 +533,7 @@ impl Interpreter {
 
     /// Run a block in its own scope.
     fn block(&mut self, b: &Block, env: &mut Env) -> Result<Flow, RuntimeError> {
-        env.push(HashMap::new());
+        env.push(Frame::default());
         let out = self.block_inner(b, env);
         env.pop();
         out
@@ -1016,7 +1062,7 @@ impl Interpreter {
                         ),
                     });
                 };
-                let mut env: Env = vec![HashMap::new()];
+                let mut env: Env = vec![Frame::default()];
                 if let Some(frame) = env.last_mut() {
                     for (p, v) in f.params.iter().zip(args) {
                         frame.insert(p.name.clone(), v);
@@ -1256,7 +1302,7 @@ impl Interpreter {
 
                 // A fresh environment: a function sees its parameters and nothing from
                 // the caller. Lexical scope, not dynamic.
-                let mut call_env: Env = vec![HashMap::new()];
+                let mut call_env: Env = vec![Frame::default()];
                 if let Some(frame) = call_env.last_mut() {
                     for (p, v) in f.params.iter().zip(values) {
                         frame.insert(p.name.clone(), v);
