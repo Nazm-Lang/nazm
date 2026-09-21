@@ -1,6 +1,14 @@
 # Roadmap: native compilation, then self-hosting
 
-**Status: M1a is implemented; M1b onward, M2 and M3 are plan.** The direction this serves
+**Status: M1, M2 and M3 are complete (2026-09-21). This document is now the record of the
+order they were done in, and remains the ordering authority for what comes next.**
+
+**Corrected 2026-09-21.** This line read *"M1a is implemented; M1b onward, M2 and M3 are
+plan"*, and contradicted its own body by four hundred lines — the M1f status section below
+has said "implemented" for some time. What exists today, with evidence, is
+[`capability-matrix.md`](capability-matrix.md); the invariants the next era must preserve
+are [`master-architecture.md`](master-architecture.md). The per-increment subset tables
+below are kept as the build log they are. The direction this serves
 is recorded in [`direction.md`](direction.md); the design it must stay consistent with is
 [`architecture.md`](architecture.md); the semantics it must preserve are in
 [`spec.md`](spec.md).
@@ -19,9 +27,9 @@ Established by inspection and execution on 2026-09-20, not by document:
 | | |
 | --- | --- |
 | `nazm run` | **Interpreted.** `source → tokens → AST → check → tree-walking eval`. The whole language below |
-| `nazm build` | **Native, for arithmetic only (M1a).** `source → tokens → AST → check → LIR → LLVM IR text → clang → executable` |
+| `nazm build` | **Native, for the whole bootstrap subset.** (This row read "arithmetic only (M1a)" until 2026-09-21.) `source → tokens → AST → check → LIR → LLVM IR text → clang → executable` |
 | Language | Functions, recursion, `let`/`let mut`, assignment, `while` + `break`/`continue`, `return`, `if`/`else`, arithmetic and comparison over `Int`, `Bool`, `Str` |
-| Absent | Collections, user-defined types, pattern matching, string concatenation, modules, I/O, generics, concurrency, floats |
+| Absent | User-defined types, pattern matching, generics, floats. (Collections, string concatenation, modules, I/O and concurrency were on this list until 2026-09-21 and are now implemented.) |
 | Toolchain | Rust 1.98.1 pinned, host `aarch64-apple-darwin`; Apple clang 21.0.0; `cranelift` is **not** a dependency |
 
 The two commands cover different amounts of the language, deliberately: `nazm build`
@@ -39,6 +47,10 @@ execute everything. A program `nazm build` refuses is not a wrong program.
 > **M1 as a whole is not complete**: there are still no user functions, no loops, no
 > mutation, and no `Str`. See *M1b subset* below for the accepted/rejected table and
 > *M1a/M1b status* at the end of this section.
+>
+> **Superseded 2026-09-21.** M1 completed through M1f; functions, loops, mutation and `Str`
+> are all native. The callout is left standing as the record of where the increment
+> actually stopped when it was written.
 
 ### Objective
 
@@ -56,7 +68,7 @@ Everything in front of the AST, unchanged:
 | Checker, `Completion::{Value,Unit,Diverges}` | `crates/nazm-core/src/check.rs` |
 | Diagnostics, stable codes, `--json` | `crates/nazm-diag` |
 | **The interpreter, as the differential oracle** | `crates/nazm-core/src/eval.rs` |
-| **The 98-case behavioural suite, as the conformance corpus** | `crates/nazm-core/tests/language.rs` |
+| **The behavioural suite, as the conformance corpus** — 98 cases when this was written, 114 today | `crates/nazm-core/tests/language.rs` |
 
 The interpreter is not replaced and not deprecated. It becomes the reference that the
 backend is tested against, which is the role `architecture.md` §1 already assigns to a
@@ -738,6 +750,12 @@ Narrow, and deliberately not the general effect system.
 
 **I/O requires an unforgeable capability value, passed explicitly.**
 
+> **Not adopted.** This design was written here as the plan of record and then **not
+> taken**: I/O shipped as ambient authority, labelled as a limitation in `spec.md` and
+> recorded in `goal-status.md` as a deliberate open decision. `main(io: IO)` is *not*
+> chosen. The sketch below is kept because it is still the most likely growth path and the
+> reasoning under it is unchanged — but it describes an option, not the implementation.
+
 ```nazm
 fn main(io: IO) -> Int {
     let text = read_file(io, "input.nz");
@@ -884,11 +902,18 @@ the Rust interpreter is M3.0 and must be reported as M3.0.**
 
 ---
 
-## Concurrency track (separate, and not now)
+## Concurrency track (separate; C-1 to C-3 done, C-4 onward still not now)
 
 Runs alongside, intersecting the compiler roadmap in exactly two places. **No scheduler is
 to be started now**, and a compiler does not need one — a single-threaded compiler is a
 perfectly good compiler.
+
+**Updated 2026-09-21.** The heading read "(separate, and not now)". Stages C-1 to C-3 are
+done — the open questions were specified in `spec.md` before anything was built, and
+`scope`/`spawn`/`Chan` now run interpreted, compiled, and through the compiler written in
+Nazm. **C-4 and C-5 are untouched and the "not now" still applies to them**: there is no
+`nazm-rt`, `unsafe_code` is still `forbid` workspace-wide, and no scheduler measurement
+exists. What shipped is one POSIX thread per task and nothing more.
 
 | Stage | Content | Depends on |
 | --- | --- | --- |
@@ -917,9 +942,11 @@ built.**
 | Stable structured diagnostics: error codes, spans, `--json`, machine-applicable fixits | **Implemented** (`nazm-diag`, `--json`) |
 | One mistake, one error — a broken body does not delete the function | **Implemented** (`ast.rs` `Function::body: Option<Block>`) |
 | Predictable semantics: specified evaluation order, trapping overflow, no truthiness, refuse-by-name | **Implemented** (`spec.md` *Settled*) |
-| **Safe source edits**: a lossless CST and a canonical formatter with no degrees of freedom to churn over | **Absent.** Needs `cstree`; the current parser produces a plain AST |
+| **A canonical formatter** with no degrees of freedom to churn over | **Implemented** (`nazm fmt`; token-preserving, idempotent and comment-preserving, asserted over every `.nz` in the tree) |
+| **Safe source edits**: a lossless CST | **Absent.** Needs `cstree`; the current parser produces a plain AST |
 | **Reproducible checks**: the same input gives the same diagnostics, orderable and diffable | Partly — needs the determinism work M3 requires anyway |
-| A cheatsheet under ~3k tokens, and a machine-readable grammar | **Absent** (`spec.md` *Open*) |
+| A machine-readable grammar | **Implemented** (`docs/grammar.ebnf`, checked against the real lexer and parser; `docs/guide.md` is generated from it) |
+| A cheatsheet under ~3k tokens | **Absent** (`spec.md` *Open*) |
 
 **(b) Libraries for writing AI applications in Nazm — out of scope.** Not until there is a
 standard library and an I/O story, which is M2 at the earliest.
@@ -936,10 +963,17 @@ on semantics, it earns it; "AI-native" is not an argument for syntax.
 ## Ordering summary
 
 ```
-M1  native vertical slice        ← next; no language change
-M2  facilities for a compiler    ← the long one; row 1 is the real decision
-M3  bootstrap                    ← C1 → C2 → C3, byte equality only where earned
+M1  native vertical slice        ← done 2026-09-20
+M2  facilities for a compiler    ← done; rows 1, 3 and 4 were bypassed, not delivered
+M3  bootstrap                    ← done 2026-09-21; C2 ≡ C3 in IR and executable
 ```
 
-with the concurrency track joining at M2 row 1, and the AI-native track's one open item
-(lossless CST + canonical formatter) schedulable any time after M1.
+**Rows 1, 3 and 4 of M2 were bypassed rather than delivered**, and that matters for what
+comes next: the compiler was written with parallel `Ints`/`Strs` arrays instead of value
+semantics, records and generics. Those three remain undesigned-in-practice, and the
+ordering authority for the next era is [`master-architecture.md`](master-architecture.md)
+§3 — an IR level or a language feature earns its place by owning a responsibility nothing
+else owns, not by appearing in a diagram.
+
+The AI-native track's open item is now the lossless CST alone; the canonical formatter
+shipped.
