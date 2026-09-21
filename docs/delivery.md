@@ -28,7 +28,7 @@ performance comparison of any kind.
 | Ordinary independent programs compile with the Nazm-written compiler | done | `crates/nazm-cli/tests/selfhost.rs` |
 | Initial structured concurrency: transfer/capture rules, cancellation, cleanup | done | `docs/spec.md`; 15 interpreter tests and 11 native tests, all deadline-bounded |
 | Structured developer interfaces, grammar/guide, formatting, repair workflow | done | `docs/diagnostics.md`, `schema/`, `docs/grammar.ebnf`, `docs/guide.md`, `scripts/repair.sh` |
-| Performance baselines, a profiling/optimisation pass, no unsupported speed claims | done | `docs/performance.md`, `bench/baseline.json` |
+| Performance baselines, a profiling/optimisation pass, no unsupported speed claims | done | `docs/performance.md`, `bench/baseline.json` (Darwin), `bench/baseline-linux-aarch64.json` |
 | A clean rebuild of the integrated final state on a supported target | done | a fresh copy, `--offline`, full suite — see *Reproducing this* |
 | A final local review/release package | done | `scripts/release-candidate.sh`, this document |
 
@@ -49,7 +49,7 @@ Six different kinds of evidence are involved, and they are not interchangeable.
 
 | | |
 | --- | --- |
-| Verified target | `aarch64-apple-darwin` (Darwin arm64). Other targets are **unverified rather than unsupported** |
+| Verified targets | `aarch64-apple-darwin` (Darwin arm64) and `aarch64-unknown-linux-gnu` (Linux aarch64, inside the contained runner). Other targets remain **unverified rather than unsupported** |
 | Toolchain | rustc 1.98.1, pinned in `rust-toolchain.toml`. Workspace MSRV floor 1.85; `xtask` declares 1.89 for itself |
 | External at build time | `clang`, to assemble the emitted LLVM IR and link |
 | External at run time | libc — `malloc`, `realloc`, `write`, `exit`, stdio, and pthreads for concurrency |
@@ -89,8 +89,9 @@ These are properties of the release, not a backlog.
 
 ## Results
 
-`cargo test --workspace`: **522 passed, 0 failed, 6 ignored.** What they cover, grouped
-by the question each group answers:
+`cargo test --workspace`: **524 passed, 0 failed, 6 ignored**, run through
+`cargo xtask contained` on Linux. What they cover, grouped by the question each group
+answers:
 
 | | count | what it establishes |
 | --- | ---: | --- |
@@ -171,7 +172,7 @@ cargo test  --workspace          # the whole suite
 cargo lint                       # clippy, the same alias CI runs
 cargo xtask check                # architectural gates and the guide against the grammar
 sh compiler/bootstrap.sh         # C1 -> C2 -> C3, byte-identical
-cargo run -p xtask -- bench      # measurements; --check compares to bench/baseline.json
+cargo xtask contained bench      # measurements; --check compares to this host's baseline
 sh scripts/release-candidate.sh  # every gate, then the local artefact
 
 # Not in the default set, and each says why in its own output:
