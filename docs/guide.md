@@ -310,8 +310,32 @@ fn main() -> Int { 1 + 2 * 3 }
 comparison = sum , { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) , sum } ;
 ```
 
+Each operator gets an example. Listing six and demonstrating one would be a grammar
+that is right about the alternatives and silent about five of them, which the
+examples exist to prevent.
+
 ```nazm
 fn main() -> Int { if 1 < 2 { 1 } else { 0 } }
+```
+
+```nazm
+fn main() -> Int { if 1 == 1 { 1 } else { 0 } }
+```
+
+```nazm
+fn main() -> Int { if 1 != 2 { 1 } else { 0 } }
+```
+
+```nazm
+fn main() -> Int { if 1 <= 2 { 1 } else { 0 } }
+```
+
+```nazm
+fn main() -> Int { if 2 > 1 { 1 } else { 0 } }
+```
+
+```nazm
+fn main() -> Int { if 2 >= 2 { 1 } else { 0 } }
 ```
 
 ### `sum`
@@ -352,6 +376,18 @@ primary = INTEGER | STRING | "true" | "false" | IDENT | call | if_expression | "
 
 ```nazm
 fn main() -> Int { (1 + 2) * 3 }
+```
+
+```nazm
+fn main() -> Int { if true { 1 } else { 0 } }
+```
+
+```nazm
+fn main() -> Int { if false { 1 } else { 0 } }
+```
+
+```nazm
+fn main() -> Int { str_len("a name") }
 ```
 
 ### `call`
