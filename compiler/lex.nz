@@ -260,4 +260,3 @@ fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int {
     }
     ints_len(kinds)
 }
-

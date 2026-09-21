@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.capabilities-1.json",
+  "title": "nazm.capabilities/1",
+  "description": "What one build of the compiler supports, from `nazm capabilities --json`. One object on stdout, read from the compiler's own tables.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "version", "native_target", "types", "builtins", "constructs"],
+  "properties": {
+    "schema": { "const": "nazm.capabilities/1" },
+    "version": { "type": "string", "description": "The compiler's version, so a report can be attributed to a build." },
+    "native_target": { "type": "string", "description": "What `nazm build` has been verified against, verbatim from the emitter." },
+    "types": { "type": "array", "items": { "type": "string" } },
+    "builtins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "params", "returns", "interpreted", "compiled"],
+        "properties": {
+          "name": { "type": "string" },
+          "params": { "type": "array", "items": { "type": "string" } },
+          "returns": { "type": "string" },
+          "interpreted": { "type": "boolean", "description": "Whether `nazm run` has it." },
+          "compiled": { "type": "boolean", "description": "Whether `nazm build` lowers it. A built-in the front end has and the backend does not is refused by name, never approximated." }
+        }
+      }
+    },
+    "constructs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "interpreted", "compiled", "evidence"],
+        "properties": {
+          "name": { "type": "string" },
+          "interpreted": { "type": "boolean" },
+          "compiled": { "type": "boolean" },
+          "evidence": { "type": "string", "description": "What establishes the row: a test file, or the document stating the limitation." }
+        }
+      }
+    }
+  }
+}

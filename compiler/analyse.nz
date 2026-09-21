@@ -41,7 +41,7 @@ use "parse.nz";
 // scan emit the branch and the label at the boundary between two children, and knowing
 // where a subtree begins lets it open a loop's header before the condition is reached.
 fn build_relations(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints,
-                   parent: Ints, childno: Ints, substart: Ints) -> Int {
+        parent: Ints, childno: Ints, substart: Ints) -> Int {
     let mut k = 0;
     while k < ints_len(nk) {
         ints_push(parent, 0 - 1);
@@ -143,7 +143,7 @@ fn before_colon(s: Str) -> Str {
 }
 
 fn report(dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs,
-          code: Str, from: Int, to: Int, message: Str) -> Int {
+        code: Str, from: Int, to: Int, message: Str) -> Int {
     strs_push(dcode, code);
     ints_push(dstart, from);
     ints_push(dend, to);
@@ -285,7 +285,7 @@ fn builtin_index(bnames: Strs, want: Str) -> Int {
 }
 
 fn add_builtin(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
-               name: Str, ret: Int, p1: Int, p2: Int, p3: Int) -> Int {
+        name: Str, ret: Int, p1: Int, p2: Int, p3: Int) -> Int {
     strs_push(bnames, name);
     ints_push(bret, ret);
     ints_push(bfirst, ints_len(bparams));
@@ -348,7 +348,7 @@ fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints)
 // `nazm-lir::lower` uses, for the same reason.
 
 fn collect_signatures(nk: Ints, nar: Ints, ntx: Strs, kids: Ints, kid_first: Ints,
-                      fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints) -> Int {
+        fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints) -> Int {
     let mut k = 0;
     while k < ints_len(nk) {
         if ints_get(nk, k) == n_fn() {
@@ -375,18 +375,18 @@ fn collect_signatures(nk: Ints, nar: Ints, ntx: Strs, kids: Ints, kid_first: Int
 // --- checking -------------------------------------------------------------------------
 
 fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, nslot: Ints,
-             ntype: Ints,
-             kids: Ints, kid_first: Ints, root: Int,
-             fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
-             bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
-             dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        ntype: Ints,
+        kids: Ints, kid_first: Ints, root: Int,
+        fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
+        bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
+        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
     let work = ints_new();
     let marks = ints_new();
     let names = strs_new();
     let ntypes = ints_new();
     let nmut = ints_new();
     let nslotof = ints_new();
-    let ts = ints_new();          // the type stack: one entry per finished child
+    let ts = ints_new(); // the type stack: one entry per finished child
     // One entry per node, so the emitter can index it directly. `-1` is "no slot".
     while ints_len(nslot) < ints_len(nk) { ints_push(nslot, 0 - 1); }
     // The type each node produces, recorded for the emitter: `t_unknown` means the node
@@ -429,7 +429,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                 // operands instead.
                 let op_at = ints_get(naux, k);
                 ints_push(ts, check_binary(text, l, r, op_at, op_at + str_len(text),
-                                           dcode, dstart, dend, dmsg));
+                        dcode, dstart, dend, dmsg));
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
@@ -439,8 +439,8 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                     // The `-` itself: a negation's span runs to its operand's end, and
                     // the reference reports at the operator.
                     report(dcode, dstart, dend, dmsg, "N0304", from, from + 1,
-                           str_concat(str_concat("`-` applies to `Int`, but this is `",
-                                                 type_name(t)), "`"));
+                            str_concat(str_concat("`-` applies to `Int`, but this is `",
+                            type_name(t)), "`"));
                 }
                 ints_push(ts, t_int());
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
@@ -448,10 +448,10 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
             }
             if kind == n_call() {
                 ints_push(ts, check_call(text, arity, ts, from, to,
-                                         kids, first, nst, nen,
-                                         fnames, fret, ffirst, fcount, fparams,
-                                         bnames, bret, bfirst, bcount, bparams,
-                                         dcode, dstart, dend, dmsg));
+                        kids, first, nst, nen,
+                        fnames, fret, ffirst, fcount, fparams,
+                        bnames, bret, bfirst, bcount, bparams,
+                        dcode, dstart, dend, dmsg));
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
@@ -466,9 +466,9 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                     // The condition's own span, which is the first child's.
                     let c = ints_get(kids, first);
                     report(dcode, dstart, dend, dmsg, "N0301",
-                           ints_get(nst, c), ints_get(nen, c),
-                           str_concat(str_concat("an `if` condition must be `Bool`, but this is `",
-                                                 type_name(cond_t)), "`"));
+                            ints_get(nst, c), ints_get(nen, c),
+                            str_concat(str_concat("an `if` condition must be `Bool`, but this is `",
+                            type_name(cond_t)), "`"));
                 }
                 if arity == 3 {
                     ints_push(ts, then_t);
@@ -504,7 +504,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                 ints_set(counter, 0, slot + 1);
                 ints_set(nslot, k, slot);
                 bind(names, ntypes, nmut, nslotof, before_colon(text),
-                     t, str_to_int_flag(after_colon(text)), slot);
+                        t, str_to_int_flag(after_colon(text)), slot);
                 ints_push(ts, t_unknown());
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
@@ -516,28 +516,28 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                     // The name, not the whole statement: an assignment begins with its
                     // target, and the name is as long as the text the node carries.
                     report(dcode, dstart, dend, dmsg, "N0310", from, from + str_len(text),
-                           str_concat(str_concat("`", text), "` is not mutable"));
+                            str_concat(str_concat("`", text), "` is not mutable"));
                 }
                 ints_set(nslot, k, lookup_slot(names, nslotof, text));
                 if agrees(t, want) == false {
                     let value = ints_get(kids, first);
                     report(dcode, dstart, dend, dmsg, "N0300",
-                           ints_get(nst, value), ints_get(nen, value),
-                           str_concat(str_concat("`", text), "` has a different type"));
+                            ints_get(nst, value), ints_get(nen, value),
+                            str_concat(str_concat("`", text), "` has a different type"));
                 }
                 ints_push(ts, t_unknown());
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_while() {
-                ints_pop(ts);                     // the body block
+                ints_pop(ts); // the body block
                 let cond_t = ints_pop(ts);
                 if agrees(cond_t, t_bool()) == false {
                     let c = ints_get(kids, first);
                     report(dcode, dstart, dend, dmsg, "N0301",
-                           ints_get(nst, c), ints_get(nen, c),
-                           str_concat(str_concat("a `while` condition must be `Bool`, but this is `",
-                                                 type_name(cond_t)), "`"));
+                            ints_get(nst, c), ints_get(nen, c),
+                            str_concat(str_concat("a `while` condition must be `Bool`, but this is `",
+                            type_name(cond_t)), "`"));
                 }
                 ints_push(ts, t_unknown());
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
@@ -607,8 +607,8 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
         if kind == n_var() {
             if scope_has(names, text) == false {
                 report(dcode, dstart, dend, dmsg, "N0200", ints_get(nst, entry),
-                       ints_get(nen, entry),
-                       str_concat(str_concat("`", text), "` is not defined"));
+                        ints_get(nen, entry),
+                        str_concat(str_concat("`", text), "` is not defined"));
                 ints_push(ts, t_unknown());
             } else {
                 ints_set(nslot, entry, lookup_slot(names, nslotof, text));
@@ -624,7 +624,7 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
             ints_set(counter, 0, slot + 1);
             ints_set(nslot, entry, slot);
             bind(names, ntypes, nmut, nslotof, before_colon(text),
-                 type_of_name(after_colon(text)), 0, slot);
+                    type_of_name(after_colon(text)), 0, slot);
             ints_push(ts, t_unknown());
             continue;
         }
@@ -674,7 +674,7 @@ fn is_ordering(op: Str) -> Bool {
 }
 
 fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int,
-                dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
     let mut ok = true;
     if is_comparison(op) {
         if is_ordering(op) {
@@ -691,8 +691,8 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int,
         }
         if ok == false {
             report(dcode, dstart, dend, dmsg, "N0304", from, to,
-                   str_concat(str_concat(str_concat("`", op), "` cannot compare `"),
-                              str_concat(type_name(l), "`")));
+                    str_concat(str_concat(str_concat("`", op), "` cannot compare `"),
+                    str_concat(type_name(l), "`")));
             return t_bool();
         }
         return t_bool();
@@ -703,17 +703,17 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int,
     if agrees(r, t_int()) == false { ok = false; }
     if ok == false {
         report(dcode, dstart, dend, dmsg, "N0304", from, to,
-               str_concat(str_concat(str_concat("`", op), "` does not apply to `"),
-                          str_concat(type_name(l), "`")));
+                str_concat(str_concat(str_concat("`", op), "` does not apply to `"),
+                str_concat(type_name(l), "`")));
     }
     t_int()
 }
 
 fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
-              kids: Ints, first: Int, nst: Ints, nen: Ints,
-              fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
-              bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
-              dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        kids: Ints, first: Int, nst: Ints, nen: Ints,
+        fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
+        bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
+        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
     // The arguments' types are the top `argc` entries, oldest first. Taken off here and
     // compared in order.
     let got = ints_new();
@@ -750,18 +750,18 @@ fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
             // correctly — the difference between the language and its bootstrap
             // compiler is the fact they need.
             report(dcode, dstart, dend, dmsg, "N0201", from, from + str_len(name),
-                   str_concat(str_concat("`", name),
-                              "` is outside the bootstrap subset this compiler accepts"));
+                    str_concat(str_concat("`", name),
+                    "` is outside the bootstrap subset this compiler accepts"));
             return t_unknown();
         }
         report(dcode, dstart, dend, dmsg, "N0201", from, from + str_len(name),
-               str_concat(str_concat("`", name), "` is not a function"));
+                str_concat(str_concat("`", name), "` is not a function"));
         return t_unknown();
     }
 
     if want_count != argc {
         report(dcode, dstart, dend, dmsg, "N0303", from, to,
-               str_concat(str_concat("`", name), "` was given the wrong number of arguments"));
+                str_concat(str_concat("`", name), "` was given the wrong number of arguments"));
         return ret;
     }
 
@@ -774,10 +774,10 @@ fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
             // The argument's own span: the reference points at the value, not the call.
             let node = ints_get(kids, first + a);
             report(dcode, dstart, dend, dmsg, "N0300",
-                   ints_get(nst, node), ints_get(nen, node),
-                   str_concat(str_concat(str_concat("argument ", int_to_str(a + 1)),
-                                         str_concat(" of `", name)),
-                              "` has the wrong type"));
+                    ints_get(nst, node), ints_get(nen, node),
+                    str_concat(str_concat(str_concat("argument ", int_to_str(a + 1)),
+                    str_concat(" of `", name)),
+                    "` has the wrong type"));
         }
         a = a + 1;
     }

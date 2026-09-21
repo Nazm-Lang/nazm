@@ -27,6 +27,33 @@ pub enum Type {
 }
 
 impl Type {
+    /// Every type, in the order a reader should meet them.
+    ///
+    /// The single list: [`Type::from_name`] and [`Type::all_names`] are both checked
+    /// against it by a test, and `nazm capabilities` reports from it. A type added to
+    /// the enum and not to this list is a type the tooling cannot see.
+    pub const ALL: &'static [Self] = &[
+        Self::Int,
+        Self::Bool,
+        Self::Str,
+        Self::Ints,
+        Self::Strs,
+        Self::Chan,
+    ];
+
+    /// The written name, which is also how it is spelled in source.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Int => "Int",
+            Self::Bool => "Bool",
+            Self::Str => "Str",
+            Self::Ints => "Ints",
+            Self::Strs => "Strs",
+            Self::Chan => "Chan",
+        }
+    }
+
     /// Whether values of this type are handles to shared mutable storage.
     ///
     /// Load-bearing rather than descriptive: it is what stops `==` being offered on a
@@ -71,13 +98,38 @@ impl Type {
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Int => "Int",
-            Self::Bool => "Bool",
-            Self::Str => "Str",
-            Self::Ints => "Ints",
-            Self::Strs => "Strs",
-            Self::Chan => "Chan",
-        })
+        f.write_str(self.name())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Type;
+
+    #[test]
+    fn every_type_is_in_all_and_parses_from_its_own_name() {
+        // The list, the parser and the help text are three places one type has to be
+        // mentioned. This is what stops a fourth type being added to two of them.
+        for t in Type::ALL {
+            assert_eq!(
+                Type::from_name(t.name()),
+                Some(*t),
+                "`{}` is in ALL but does not parse from its own name",
+                t.name()
+            );
+            assert!(
+                Type::all_names().contains(t.name()),
+                "`{}` is in ALL but not in the help text",
+                t.name()
+            );
+        }
+        // Two backticks per name, so the help text names exactly as many types as
+        // there are. Counted as pairs rather than divided, because the count being odd
+        // would itself be a defect in the text and a division would hide it.
+        assert_eq!(
+            Type::all_names().matches('`').count(),
+            Type::ALL.len() * 2,
+            "the help text lists a different number of types than ALL has"
+        );
     }
 }

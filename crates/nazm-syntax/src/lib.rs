@@ -1,6 +1,7 @@
 //! Lexing and parsing for Nazm v0.1.
 
 pub mod ast;
+pub mod format;
 pub mod lexer;
 pub mod parser;
 
@@ -8,7 +9,8 @@ pub use ast::{
     Assign, BinOp, Block, Expr, Function, Import, Let, Param, Program, Return, Scope, Spawn, Stmt,
     TypeName, While,
 };
-pub use lexer::{lex, Token, TokenKind};
+pub use format::format;
+pub use lexer::{lex, lex_with_comments, Token, TokenKind};
 pub use parser::{parse, MAX_NESTING, PARSE_STACK_BYTES};
 
 /// Lex and parse in one step, collecting every diagnostic from both.
