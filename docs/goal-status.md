@@ -132,8 +132,15 @@ with every gate passed.
   has to be settled before this part of the language is called stable. It already bit
   once: `compiler/lex.nz` had to be split from `compiler/lexer.nz` because a library
   carrying a `main` collides with its importer's.
-- **`str_join` deferred.** Output assembly uses `str_concat` in a loop, which is O(n²).
-  Milestone G is where that gets measured rather than guessed at.
+- **`str_join`: settled, and no longer deferred.** Output assembly is an array plus one
+  join. It was not an optimisation chosen in advance — the compiler written in Nazm
+  exhausted memory assembling its own output with `str_concat` in a loop, which is
+  quadratic, and `str_join` is what made self-hosting possible at all.
+- **The next interpreter optimisation: known and not taken.** With variable lookup
+  fixed, the profile is the `eval` dispatch itself, which means resolving names to slot
+  indices during checking. A much larger change, and `docs/performance.md` records that
+  the reason to stop was one pass being what the contract asked for — not that there is
+  nothing left.
 
 ## Definition of done (Section 13)
 
