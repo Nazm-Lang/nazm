@@ -3139,9 +3139,13 @@ fn the_emitted_ir_for_a_return_heavy_function_is_well_formed() {
     let blocks = assert_control_flow_is_well_formed(&ir);
     assert!(blocks > 10, "only {blocks} blocks");
 
-    // Three `ret`s in `classify` plus one in `main` plus the wrapper's `ret i32`.
+    // Three `ret`s in `classify` plus one in `main` plus the wrapper's `ret i32`, and
+    // now one failure exit each in `classify` and `main` plus `@nz.fail`'s `ret void`.
+    // A failure leaves a function by an ordinary `ret` — the emitted code has no other
+    // way out of one — so a function that can fail has one more return site than it has
+    // `return`s. `@nz.report` is not counted: it ends in `unreachable` after `@exit`.
     let rets = ir.lines().filter(|l| l.trim().starts_with("ret ")).count();
-    assert_eq!(rets, 5, "expected one `ret` per return site:\n{ir}");
+    assert_eq!(rets, 8, "expected one `ret` per return site:\n{ir}");
     // The specific regression: a terminator written *after* a `ret`. Checked as that
     // adjacency rather than by looking for `unreachable` anywhere — the `@nz.fail`
     // helper ends in one legitimately, and an assertion that cannot tell the two apart

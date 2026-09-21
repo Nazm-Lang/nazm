@@ -87,6 +87,23 @@ impl Ty {
         }
     }
 
+    /// A value of this type to return from a function that is unwinding.
+    ///
+    /// It is never read. A failure on its way out still has to leave every function it
+    /// passes through by an ordinary `ret`, because the emitted code has no other way to
+    /// leave one, and `ret` needs an operand of the right type. Every caller checks the
+    /// failure flag before it looks at the result, so this stands in for a value that is
+    /// already known not to exist.
+    #[must_use]
+    pub fn unwind_value(self) -> &'static str {
+        match self {
+            Self::Int => "0",
+            Self::Bool => "false",
+            Self::Str => "zeroinitializer",
+            Self::Ints | Self::Strs | Self::Chan => "null",
+        }
+    }
+
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {

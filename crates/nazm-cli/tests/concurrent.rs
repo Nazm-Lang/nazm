@@ -515,38 +515,52 @@ fn a_task_that_fails_ends_the_whole_program() {
 }
 
 // ---------------------------------------------------------------------------
-// Does a failure wait for the scope's tasks?
+// A failure waits for the scope's tasks
 //
 // `docs/spec.md` promises the closing brace joins every task *including when the body
-// itself failed*, so a failure is reported once nothing is still running. Asserting the
-// diagnostic code cannot check that: a run that joined first and a run that exited on the
-// spot produce the same code and the same exit status. The difference is only visible in
-// whether the task's own effect happened, so these programs give the worker one — a line
-// on stdout — and coordinate deterministically rather than by sleeping.
+// itself failed*, so a failure is reported once nothing is still running. The diagnostic
+// code cannot check that: a run that joined first and a run that exited on the spot
+// produce the same code and the same exit status. The difference is only visible in
+// whether the task's own effect happened.
 //
-// The worker cannot print until the body has sent to `go`, and the body fails immediately
-// after sending. Under the promised semantics the marker is therefore *always* printed:
-// the program cannot exit before the worker returns. Under an implementation that exits
-// where it failed, the worker is still counting and the marker is lost.
+// # Why the ordering is deterministic
+//
+// An earlier version of these programs gave the worker a long counting loop and relied on
+// it still being inside it when the failure happened. That is not ordering, it is a race
+// that usually goes one way — a slower machine, a busier one, or a different optimisation
+// level could finish the loop first and the test would pass on a runtime that had not
+// joined anything.
+//
+// These use the channels instead. The worker announces itself on `started` and then
+// blocks on `go`; the body cannot reach its failure until it has *received* that
+// announcement, so the worker is provably running, and it cannot finish until the body
+// sends `go`, so it is provably unfinished. Both facts are enforced by `chan_recv`
+// blocking, not by how fast anything runs.
 // ---------------------------------------------------------------------------
 
-/// The body overflows while a worker it just released is still working.
-const BODY_FAILS: &str = r#"
-fn worker(go: Chan) -> Int {
+/// The worker half every program below shares.
+const WORKER: &str = r#"
+fn worker(started: Chan, go: Chan) -> Int {
     let buf = ints_new();
+    chan_send(started, 1);
     chan_recv(go, buf);
     ints_pop(buf);
-    let mut acc = 0;
-    let mut i = 0;
-    while i < 200000 { acc = acc + i; i = i + 1; }
     print("worker finished");
-    acc
+    0
 }
+"#;
+
+/// The body overflows while a worker it has just released is still running.
+const BODY_FAILS: &str = r#"
 fn main() -> Int {
+    let started = chan_new(1);
     let go = chan_new(1);
+    let buf = ints_new();
     let mut top = 1;
     scope {
-        spawn worker(go);
+        spawn worker(started, go);
+        chan_recv(started, buf);
+        ints_pop(buf);
         chan_send(go, 1);
         let mut n = 0;
         while n < 64 { top = top + top; n = n + 1; }
@@ -555,29 +569,23 @@ fn main() -> Int {
 }
 "#;
 
-/// One task divides by zero while a sibling is still working.
+/// A sibling task divides by zero while the worker is still running.
 const TASK_FAILS: &str = r#"
 fn bad(dead: Chan) -> Int {
     let buf = ints_new();
     chan_recv(dead, buf);
     1 / ints_pop(buf)
 }
-fn worker(go: Chan) -> Int {
-    let buf = ints_new();
-    chan_recv(go, buf);
-    ints_pop(buf);
-    let mut acc = 0;
-    let mut i = 0;
-    while i < 200000 { acc = acc + i; i = i + 1; }
-    print("worker finished");
-    acc
-}
 fn main() -> Int {
-    let dead = chan_new(1);
+    let started = chan_new(1);
     let go = chan_new(1);
+    let dead = chan_new(1);
+    let buf = ints_new();
     scope {
+        spawn worker(started, go);
         spawn bad(dead);
-        spawn worker(go);
+        chan_recv(started, buf);
+        ints_pop(buf);
         chan_send(go, 1);
         chan_send(dead, 0);
     }
@@ -585,74 +593,208 @@ fn main() -> Int {
 }
 "#;
 
+/// The failure is two calls below the scope's body, so it has to travel out through both
+/// before the join can happen.
+const HELPER_FAILS: &str = r#"
+fn divide(a: Int, b: Int) -> Int { a / b }
+fn deeper(a: Int, b: Int) -> Int { divide(a, b) + 1 }
+fn main() -> Int {
+    let started = chan_new(1);
+    let go = chan_new(1);
+    let buf = ints_new();
+    let mut r = 0;
+    scope {
+        spawn worker(started, go);
+        chan_recv(started, buf);
+        ints_pop(buf);
+        chan_send(go, 1);
+        r = deeper(1, 0);
+    }
+    r
+}
+"#;
+
 const MARKER: &str = "worker finished";
 
-#[test]
-fn a_failing_scope_joins_its_tasks_before_reporting_interpreted() {
-    for (what, src, code) in [
-        ("body fails", BODY_FAILS, "N0400"),
-        ("task fails", TASK_FAILS, "N0401"),
-    ] {
-        let (_dir, path) = write_program(src);
-        let ran = run_bounded(Command::new(NAZM).args(["run", path.to_str().unwrap()]))
-            .unwrap_or_else(|| panic!("{what}: `nazm run` did not finish"));
-        assert_eq!(ran.code, Some(2), "{what}: {}", ran.stderr);
+/// One program, run three ways, all three required to agree.
+fn failure_joins(what: &str, src: &str, code: &str, markers: &[&str]) {
+    let (dir, path) = write_program(src);
+
+    let mut runs: Vec<(String, Ran)> = Vec::new();
+    runs.push((
+        "interpreted".to_owned(),
+        run_bounded(Command::new(NAZM).args(["run", path.to_str().unwrap()]))
+            .unwrap_or_else(|| panic!("{what}: `nazm run` did not finish")),
+    ));
+    for opt in ["0", "2"] {
+        let exe = dir.path().join(format!("prog{opt}"));
+        let built = run_bounded(
+            Command::new(NAZM)
+                .args(["build", path.to_str().unwrap()])
+                .arg("-o")
+                .arg(&exe)
+                .arg("--opt-level")
+                .arg(opt),
+        )
+        .unwrap_or_else(|| panic!("{what}: -O{opt} build did not finish"));
+        assert_eq!(built.code, Some(0), "{what}: -O{opt}: {}", built.stderr);
+        runs.push((
+            format!("-O{opt}"),
+            run_bounded(&mut common::bounded_exe(&exe))
+                .unwrap_or_else(|| panic!("{what}: the -O{opt} executable did not finish")),
+        ));
+    }
+
+    for (how, ran) in &runs {
+        assert_eq!(ran.code, Some(2), "{what} ({how}): {}", ran.stderr);
         assert!(
             ran.stderr.contains(code),
-            "{what}: expected {code}, got {}",
+            "{what} ({how}): expected {code}, got {}",
             ran.stderr
         );
-        assert!(
-            ran.stdout.contains(MARKER),
-            "{what}: the scope reported before its task finished — {MARKER:?} is missing \
-             from stdout, which is what a failure that did not join looks like. stdout: {:?}",
-            ran.stdout
-        );
-    }
-}
-
-/// The same contract, compiled. **Currently false**, and measured rather than assumed:
-/// at `-O0` and `-O2` both programs exit 2 with the right diagnostic and print nothing,
-/// because `@nz.fail` writes the message and calls `@exit` on whichever thread failed
-/// (`crates/nazm-lir/src/emit.rs`, `@nz.fail`). `@nz.scope_join` does join every task,
-/// but a failure never reaches it.
-///
-/// Ignored rather than deleted or inverted: inverting it would make the divergence look
-/// like the specification, and deleting it would lose the only executable statement of
-/// what the native runtime still owes. Closing it needs a way for a failure to leave a
-/// task without leaving the process — see *Known limitations* in `docs/delivery.md`.
-#[test]
-#[ignore = "known divergence: native @nz.fail exits the process where it failed instead of \
-            joining the scope; see docs/spec.md, Error propagation"]
-fn a_failing_scope_joins_its_tasks_before_reporting_natively() {
-    for (what, src, code) in [
-        ("body fails", BODY_FAILS, "N0400"),
-        ("task fails", TASK_FAILS, "N0401"),
-    ] {
-        let (dir, path) = write_program(src);
-        for opt in ["0", "2"] {
-            let exe = dir.path().join(format!("prog{opt}"));
-            let built = run_bounded(
-                Command::new(NAZM)
-                    .args(["build", path.to_str().unwrap()])
-                    .arg("-o")
-                    .arg(&exe)
-                    .arg("--opt-level")
-                    .arg(opt),
-            )
-            .unwrap_or_else(|| panic!("{what}: -O{opt} build did not finish"));
-            assert_eq!(built.code, Some(0), "{what}: -O{opt}: {}", built.stderr);
-
-            let ran = run_bounded(&mut common::bounded_exe(&exe))
-                .unwrap_or_else(|| panic!("{what}: the -O{opt} executable did not finish"));
-            assert_eq!(ran.code, Some(2), "{what} -O{opt}: {}", ran.stderr);
-            assert!(ran.stderr.contains(code), "{what} -O{opt}: {}", ran.stderr);
+        for marker in markers {
             assert!(
-                ran.stdout.contains(MARKER),
-                "{what} -O{opt}: the process exited where it failed instead of joining \
-                 the scope. stdout: {:?}",
+                ran.stdout.contains(marker),
+                "{what} ({how}): {marker:?} is missing from stdout, which is what a \
+                 failure that did not join its scope looks like — the task was ended \
+                 where it stood instead of being waited for. stdout: {:?}",
                 ran.stdout
             );
         }
     }
+}
+
+#[test]
+fn a_failing_body_joins_its_tasks_before_reporting() {
+    failure_joins(
+        "body fails",
+        &format!("{WORKER}{BODY_FAILS}"),
+        "N0400",
+        &[MARKER],
+    );
+}
+
+#[test]
+fn a_failing_task_lets_its_siblings_finish_before_reporting() {
+    failure_joins(
+        "task fails",
+        &format!("{WORKER}{TASK_FAILS}"),
+        "N0401",
+        &[MARKER],
+    );
+}
+
+#[test]
+fn a_failure_below_the_body_still_joins_the_scope() {
+    failure_joins(
+        "helper fails",
+        &format!("{WORKER}{HELPER_FAILS}"),
+        "N0401",
+        &[MARKER],
+    );
+}
+
+#[test]
+fn nested_scopes_each_join_before_the_failure_is_reported() {
+    // Two scopes, a worker in each, and the failure in the inner body. Both workers must
+    // finish: the inner scope's join is reached on the way out, and the outer's after it.
+    let src = r#"
+fn worker(started: Chan, go: Chan, which: Int) -> Int {
+    let buf = ints_new();
+    chan_send(started, 1);
+    chan_recv(go, buf);
+    ints_pop(buf);
+    if which == 1 { print("inner finished"); } else { print("outer finished"); }
+    0
+}
+fn main() -> Int {
+    let os = chan_new(1);
+    let og = chan_new(1);
+    let is = chan_new(1);
+    let ig = chan_new(1);
+    let buf = ints_new();
+    let mut top = 1;
+    scope {
+        spawn worker(os, og, 2);
+        chan_recv(os, buf);
+        ints_pop(buf);
+        chan_send(og, 1);
+        scope {
+            spawn worker(is, ig, 1);
+            chan_recv(is, buf);
+            ints_pop(buf);
+            chan_send(ig, 1);
+            let mut n = 0;
+            while n < 64 { top = top + top; n = n + 1; }
+        }
+    }
+    top
+}
+"#;
+    failure_joins(
+        "nested scopes",
+        src,
+        "N0400",
+        &["inner finished", "outer finished"],
+    );
+}
+
+#[test]
+fn when_both_the_body_and_a_task_fail_the_bodys_failure_is_reported() {
+    // The task's failure strictly *precedes* the body's: the body does not begin
+    // overflowing until it has received `done`, which the task sends immediately before
+    // dividing by zero. So this cannot pass by reporting whichever happened first —
+    // `docs/spec.md` says the body's is the cause and the task's the consequence.
+    let src = r#"
+fn bad(dead: Chan, done: Chan) -> Int {
+    let buf = ints_new();
+    chan_recv(dead, buf);
+    let z = ints_pop(buf);
+    chan_send(done, 1);
+    1 / z
+}
+fn main() -> Int {
+    let dead = chan_new(1);
+    let done = chan_new(1);
+    let buf = ints_new();
+    let mut top = 1;
+    scope {
+        spawn bad(dead, done);
+        chan_send(dead, 0);
+        chan_recv(done, buf);
+        ints_pop(buf);
+        let mut n = 0;
+        while n < 64 { top = top + top; n = n + 1; }
+    }
+    top
+}
+"#;
+    failure_joins("both fail", src, "N0400", &[]);
+}
+
+#[test]
+fn a_scope_that_joins_cleanly_still_produces_its_value() {
+    // The other half: nothing above may be achieved by reporting a failure that is not
+    // there. An uninitialised slot in a task's argument block would do exactly that.
+    agrees(
+        "clean scope",
+        r"
+fn w(c: Chan) -> Int { chan_send(c, 5); 0 }
+fn main() -> Int {
+    let c = chan_new(2);
+    let buf = ints_new();
+    let mut t = 0;
+    scope {
+        spawn w(c);
+        spawn w(c);
+        chan_recv(c, buf);
+        t = t + ints_pop(buf);
+        chan_recv(c, buf);
+        t = t + ints_pop(buf);
+    }
+    t
+}
+",
+        "10",
+    );
 }
