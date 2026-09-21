@@ -12,7 +12,7 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `e2f75c9` (repair `011d7ff`, contract v1.1 `fc21968`, runner `a74bdba`) |
+| Current commit | `6ec965d` (repair `011d7ff`, contract v1.1 `fc21968`, runner `a74bdba`) |
 | Working tree | the contained-runner work is in progress on top of `a74bdba` |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
 | Disk | 50 GiB free of 460 GiB (88 % full) after reclaiming 33.5 GiB of `target/` on 2026-09-21 |
@@ -92,63 +92,6 @@ heavy benchmarks to run contained, and the contained runner is **Linux**. Checki
 timings against a macOS baseline would manufacture regressions that mean nothing, and
 `--save` cannot write to the read-only `/src` mount in any case. A separate per-platform
 baseline is needed. Recorded as **blocked on a decision**, not silently skipped.
-
-## (superseded) Verified through the contained runner (2026-09-21)
-
-Every line below was executed inside the ceiling, serially. Words are used strictly:
-**passed** / **skipped** / **refused** / **failed** / **unexecuted**.
-
-| workload | result |
-| --- | --- |
-| `contained probe` | **passed** — 6/6 bounds real, 0 survivors |
-| `contained selfhost` | **passed** — 15/15 in 14.9 s, 0 survivors, nothing OOM-killed |
-| `contained bootstrap` | **passed** — 3.5 s, `ir: identical`, `runnable-bytes-differing: 0`, 5 conformance cases |
-| `contained run 'cargo test --locked --workspace --jobs 1 -- --test-threads 1'` | **failed** — 27 suites passed, 1 failed (4 xtask lock tests); cause is the image, see below |
-
-### C0 → C1 → C2 → C3 now demonstrated on a second platform
-
-The bootstrap record, produced inside the container:
-
-    host: Linux aarch64        rustc 1.98.1        clang 19.1.7
-    source digest: 6359b0f8c8f6d26fdebe31db1dc98099da9a38f15093eb8ae7584497f3aa2552
-    source lines: 3561
-    ir: identical
-    executables: byte-identical once the linker UUID is removed
-    c2-digest == c3-digest == a28b8b345d4faddd1c5ac9ff6e1c7a654086e5d9fc86647229fe8424838a7a8c
-    runnable-bytes-differing: 0
-    conformance-cases: 5
-
-Previously this had only been checked on aarch64-apple-darwin. Three portability
-assumptions had to be fixed first: the Mach-O-only `-Wl,-no_uuid`, `shasum` versus
-`sha256sum`, and a hardcoded `$root/target/debug/nazm` that under the read-only source
-mount is the host's Mach-O binary ("Exec format error" is not a bootstrap failure).
-
-### The one failure is the image, not the code
-
-`xtask`'s four mutation-lock tests fail in the container because `rust:1.98.1-slim-trixie`
-ships no `procps`, so `ps` is missing and `process_exists` correctly reports `Unknown`.
-The same four **passed** on the host, where `ps` exists. `procps` added to the image;
-rebuild in progress. Recorded because "failed in the container" and "broken" are not the
-same claim.
-
-### nzemit: NOT REPRODUCED
-
-Required by §2.1.4. Peak is per-process `VmHWM`, execution only — not clang, not scratch.
-
-| binary | produced by | input | peak RSS | output | elapsed |
-| --- | --- | --- | --- | --- | --- |
-| C1 | **C0, the Rust implementation** | S.nz 162,099 B | 35.8 MB | 1,420,791 B | — |
-| C2 | **C1, the compiler written in Nazm** | S.nz 162,099 B | 35.8 MB | 1,420,791 B | — |
-| C1 | Rust | 5,290 B | 4.8 MB | 101,799 B | 6 ms |
-| C1 | Rust | 21,490 B | 14.0 MB | 387,999 B | 74 ms |
-| C1 | Rust | 88,490 B | 50.4 MB | 1,547,001 B | 932 ms |
-| C1 | Rust | 162,099 B (S.nz) | 35.6 MB | 1,420,791 B | 1,590 ms |
-
-Provenance changes peak by 0.2 %. Peak tracks **output** size, not input — S.nz has 1.8x
-the input of the 88,490-byte case but emits less IR and uses less memory. Linear, no
-quadratic term. The ~17 GB attributed to `nzemit` in the panic report is **not explained**
-and is not written up as resolved. Full record:
-`~/nazm-incident-2026-09-21/nzemit-investigation.md`.
 
 ## HALT — resource incident, 2026-09-21 (read before running anything)
 
@@ -251,29 +194,6 @@ IR and sources, Gate A and root-cause write-ups).
 | Concurrency in the *Nazm* compiler | **deliberately absent** | outside the bootstrap subset, named as such in `compiler/analyse.nz` and guarded by a test. See `docs/bootstrap-design.md` |
 | Formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
 
-## Cleared to run (against `011d7ff`, 2026-09-21)
-
-Serial, one workload at a time. Everything else stays paused.
-
-| Command | Status |
-| --- | --- |
-| `cargo build -p nazm-cli --jobs 1` | safe — 22 s |
-| `cargo test -p nazm-cli --test resource_regression --jobs 1 -- --test-threads 1` | 2 passed (Docker half self-skips) |
-| `NAZM_REQUIRE_DOCKER=1 NAZM_CLANG_IMAGE=nazm-probe:deb cargo test -p nazm-cli --test resource_regression --jobs 1 -- --test-threads 1` | 2 passed, bound measured in-container |
-| `cargo test -p nazm-cli --test cli --jobs 1 -- --test-threads 1` | 14 passed |
-| `cargo test -p nazm-cli --test docs --jobs 1 -- --test-threads 1` | 4 passed |
-| `cargo test -p nazm-cli --test schemas --jobs 1 -- --test-threads 1` | 5 passed |
-| `./target/debug/nazm build compiler/<stage>.nz --emit-ir -o <out>` | safe — emits IR, runs clang, executes nothing |
-
-**Refused by design** (gate fires, nothing spawns): `cargo test -p nazm-cli --test
-selfhost` and `sh compiler/bootstrap.sh`. The container image used above is built with:
-
-    docker build -t nazm-probe:deb - <<'EOF'
-    FROM debian:trixie-slim
-    RUN apt-get update && apt-get install -y --no-install-recommends clang \
-        && rm -rf /var/lib/apt/lists/*
-    EOF
-
 ## Verified commands (against `91ec4d6`, before the incident)
 
 | Command | Result |
@@ -314,38 +234,31 @@ mutated, and the command is for a tree that is.
 
 ## Current task
 
-**Paused for the resource incident above.** Milestones A–G remain complete, but the
-autonomous goal loop, the uncontained selfhost suite, `compiler/bootstrap.sh`, fuzzing,
-the mutation catalogue and `xtask bench` stay stopped until the open items are closed.
-Final verification resumes only after that.
+Execution prerequisites are met and the goal has resumed. Milestones A-G remain
+complete; the work since the incident has been re-establishing every claim **through the
+contained runner** rather than on the host, and fixing what that exposed.
+
+Still paused: nothing. `NAZM_CONTAINED=1` is set by the runner inside the container and
+is never set on the host; `NAZM_ALLOW_UNCONTAINED=1` is never used.
 
 ## Next exact action
 
-**First, close the incident** — in this order:
+1. **Re-run `contained bench`** once the image carrying GNU `time` finishes building, and
+   confirm every peak-memory row is populated and plausible. The `/proc` fallback is
+   deliberately refusing values under a megabyte after a first pass produced 8 KB and
+   16 KB rows, which was the poll losing a race rather than a measurement.
+2. **Record a Linux baseline** (`bench --save`) as a *separate* artefact from the Darwin
+   one. The tool already refuses to compare across platforms, so the two must coexist
+   rather than overwrite.
+3. **The mutation catalogue**, contained, against a disposable copy — never this tree.
+   `mutate` still resolves `target/` from its `root` parameter, which is correct for its
+   throwaway trees but means a contained run needs a writable copy, not the read-only
+   mount.
+4. **`scripts/release-candidate.sh`**, contained. It calls `compiler/bootstrap.sh`, which
+   now refuses without a ceiling, so the script only works through the runner.
+5. Fold the numbers into `docs/delivery.md` and close Section 13.
 
-1. Explain or bound `nzemit`'s reported growth, or record precisely why it cannot be
-   reproduced and what would settle it.
-2. Decide whether `NAZM_CONTAINED=1` should be satisfiable on this host at all, or only
-   inside the container.
-3. Handle the clang-17 module rejection as its own defect.
-
-Only then the closing verification below, each step cheaper than the next so a failure
-costs the least it can:
-
-1. **The targeted mutation re-check.** The full catalogue ran at `524cd24` and reported
-   two entries as NOT INJECTED; both are repaired, and the ambiguous one split in two.
-   Verify the three with `cargo xtask mutate --only the-loop-reuses --only
-   conditional-selects-the-wrong-branch` **in a disposable copy**, never here.
-2. **`cargo run -p xtask -- bench --runs 7 --save`**, to record a baseline that includes
-   the process floor and peak memory.
-3. **`sh scripts/release-candidate.sh`**, which runs every gate and assembles the
-   artefact with a manifest of digests.
-4. Fold the numbers into `docs/delivery.md` and close this ledger.
-
-Already done and not to be repeated: the clean offline rebuild from `git archive HEAD`
-(8.9 s, 506 passed, every gate, byte-identical bootstrap), and the full catalogue run.
-
-## Unresolved decisions
+## Unresolved decisions## Unresolved decisions
 
 - **Recursion: settled.** Iterative algorithms with explicit `Ints` work stacks. Native
   recursion stays refused pending measured stack availability and frame size.
