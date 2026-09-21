@@ -381,6 +381,67 @@ fn a_failing_task_does_not_stop_the_others_being_joined() {
     assert_eq!(sole_error("failure joins", src), codes::DIVISION_BY_ZERO);
 }
 
+#[test]
+fn a_scope_whose_body_fails_reports_the_bodys_own_failure() {
+    // The body overflows while a task is running, and the overflow is what comes out.
+    //
+    // This does **not** establish that the scope joined first: a run that joined and a run
+    // that exited where it failed produce the same code and the same exit status, so the
+    // code alone cannot tell them apart. That needs an observable effect from the task,
+    // which needs a subprocess to observe stdout — it lives in
+    // `nazm-cli/tests/concurrent.rs`, where the interpreter and both optimisation levels
+    // are run the same way.
+    let src = r"
+        fn drain(c: Chan) -> Int {
+            let buf = ints_new();
+            while chan_recv(c, buf) { ints_pop(buf); }
+            0
+        }
+        fn main() -> Int {
+            let work = chan_new(1);
+            let mut top = 1;
+            scope {
+                spawn drain(work);
+                let mut i = 0;
+                while i < 20 { chan_send(work, i); i = i + 1; }
+                chan_close(work);
+                let mut n = 0;
+                while n < 64 { top = top + top; n = n + 1; }
+            }
+            top
+        }
+    ";
+    assert_eq!(sole_error("body fails", src), codes::INTEGER_OVERFLOW);
+}
+
+#[test]
+fn when_both_the_body_and_a_task_fail_the_bodys_failure_is_the_one_reported() {
+    // Two different codes so the answer is legible: the task divides by zero (N0401),
+    // the body overflows (N0400). `docs/spec.md` says a task that failed because the body
+    // stopped feeding it is a consequence rather than a cause, so the body's failure wins.
+    // The order does not depend on which happened first — the scope joins, then reports
+    // the body's.
+    let src = r"
+        fn bad(c: Chan) -> Int {
+            let buf = ints_new();
+            chan_recv(c, buf);
+            1 / ints_pop(buf)
+        }
+        fn main() -> Int {
+            let c = chan_new(1);
+            let mut top = 1;
+            scope {
+                spawn bad(c);
+                chan_send(c, 0);
+                let mut n = 0;
+                while n < 64 { top = top + top; n = n + 1; }
+            }
+            top
+        }
+    ";
+    assert_eq!(sole_error("both fail", src), codes::INTEGER_OVERFLOW);
+}
+
 // ---------------------------------------------------------------------------
 // What the checker refuses, so that the interpreter never has to decide
 // ---------------------------------------------------------------------------
