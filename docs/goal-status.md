@@ -12,7 +12,7 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `82645f2` |
+| Current commit | `91ec4d6` |
 | Working tree | clean except this file |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
 | Disk | 13 GiB free of 460 GiB (**97 % full**) — `target/` alone is 3.7 GiB. Remove disposable copies promptly |
@@ -59,20 +59,24 @@ what was verified when it was written, not what is true now.
 | Concurrency in the *Nazm* compiler | **deliberately absent** | outside the bootstrap subset, named as such in `compiler/analyse.nz` and guarded by a test. See `docs/bootstrap-design.md` |
 | Formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
 
-## Verified commands (against `9bf4078`)
+## Verified commands (against `91ec4d6`)
 
 | Command | Result |
 | --- | --- |
-| `cargo test --workspace` | **452 passed, 0 failed, 6 ignored** |
+| `cargo test --workspace` | **506 passed, 0 failed, 6 ignored** |
 | — of which self-skipping | 10 `docker_boundary` tests exercise nothing without `NAZM_REQUIRE_DOCKER=1` |
 | — of which native end-to-end | 126 `nazm build` cases, each at `-O0` and `-O2` against the interpreter |
 | — of which self-hosting differentials | 15, including the full bootstrap chain |
+| — of which concurrency | 15 interpreted + 11 native, every one deadline-bounded |
+| — of which tooling | 4 schema, 11 formatter, 3 grammar, 8 repair-workflow |
 | `cargo test -p xtask --test lifecycle -- --ignored` | 6 passed (separate; not in the 443) |
 | `cargo lint` (the CI alias) | 0 diagnostics |
 | `cargo fmt --all -- --check` | clean |
-| `cargo xtask check` | 5/5 |
+| `cargo xtask check` | 6/6, including the guide against the grammar |
 | `cargo run -p nazm-bench -- selftest` | 19/19 |
-| **Clean rebuild from a fresh 2 MB copy** | builds in ~9 s, **`--offline` works**, 443 tests pass, `xtask check` 5/5 |
+| **Clean rebuild from a fresh copy** | `git archive HEAD` into an empty tree: **offline** build in 8.9 s, **506 passed / 0 failed / 6 ignored**, `xtask check` 6/6, `bootstrap.sh` byte-identical with 5 conformance cases |
+| `cargo xtask bench --check` | nothing slower than the baseline by more than 25% **and** 5 ms |
+| `compiler/bootstrap.sh` | C2 and C3 byte-identical in IR and executable |
 
 Mutation runs this session, each isolated against a disposable copy and each verified
 byte-identical on restore: `return-does-not-end-the-block-it-is-in` (caught, 5 tests).
@@ -123,5 +127,5 @@ with every gate passed.
 - [x] Structured concurrency: transfer/capture rules, cancellation, cleanup — specified in `docs/spec.md`, interpreted, and compiled; 26 tests, all deadline-bounded
 - [x] Developer interfaces, grammar/guide, formatting, repair workflow — `7243447`; schemas in `schema/`, the grammar checked against the lexer and the parser, the guide generated from it, 27 tests across `schemas.rs`, `format.rs`, `grammar.rs` and `workflow.rs`
 - [x] Performance baselines, profiling/optimisation pass, no unsupported speed claims — `3bc0505`; `bench/baseline.json` and `docs/performance.md`, which states that nothing has been compared to another language
-- [x] Clean rebuild of the integrated state on a supported target — fresh copy, offline, 443 tests
+- [x] Clean rebuild of the integrated state on a supported target — `git archive HEAD` into an empty tree, offline, 506 tests, every gate, byte-identical bootstrap
 - [ ] Final local review/release package — `scripts/release-candidate.sh` and `docs/delivery.md` exist; the run that produces the artefact is the remaining step
