@@ -607,6 +607,51 @@ fn run_contained(args: &[String]) -> ExitCode {
             "tests",
             shell("cargo test --locked --workspace --jobs 1 -- --test-threads 1"),
         ),
+        // The release candidate: every gate, then the candidate archived and handed out.
+        //
+        // It has to be exported, because `/work` is the container's writable layer and
+        // goes with the container — a candidate assembled there and merely reported on is
+        // a candidate nobody has. The archive is deterministic in the ways that are free
+        // to make so (sorted entries, fixed owner and mtime), so two runs of the same
+        // revision produce the same bytes.
+        Some("release") => {
+            bounds.deadline = Duration::from_secs(2400);
+            let dest = repo.join("target").join("release-candidate");
+            bounds.export = Some(contained::ExportPolicy {
+                manifest: "/work/rc/EXPORTS".to_owned(),
+                dest: dest.clone(),
+                allowed: vec![
+                    "nazm-release-candidate.tar.gz".to_owned(),
+                    "MANIFEST.txt".to_owned(),
+                    "PROVENANCE.txt".to_owned(),
+                ],
+                // The archive carries a release binary and the whole documentation set.
+                // 64 MiB is generous for that and still far below the writable layer's
+                // own cap, so a runaway cannot reach the host through this path.
+                max_bytes: 64 * 1024 * 1024,
+            });
+            if let Err(e) = std::fs::create_dir_all(&dest) {
+                eprintln!("contained: cannot prepare {}: {e}", dest.display());
+                return ExitCode::FAILURE;
+            }
+            (
+                "release",
+                shell(
+                    "sh scripts/release-candidate.sh \
+                     && mkdir -p /work/rc \
+                     && cp /work/target/release-candidate/MANIFEST.txt /work/rc/ \
+                     && cp /work/target/release-candidate/PROVENANCE.txt /work/rc/ \
+                     && tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 \
+                            -czf /work/rc/nazm-release-candidate.tar.gz \
+                            -C /work/target/release-candidate . \
+                     && cd /work/rc \
+                     && for f in nazm-release-candidate.tar.gz MANIFEST.txt PROVENANCE.txt; do \
+                            printf '%s %s\\n' \"$f\" \"$(wc -c < $f | tr -d ' ')\"; \
+                        done > EXPORTS \
+                     && cat EXPORTS",
+                ),
+            )
+        }
         Some("mutate") => {
             // The catalogue edits sources, so it needs a tree of its own. `/src` is
             // read-only and stays that way; the copy is disposable and lives on the
@@ -649,6 +694,10 @@ fn run_contained(args: &[String]) -> ExitCode {
                 manifest: "/work/benchout/EXPORTS".to_owned(),
                 dest: repo.join("bench"),
                 allowed,
+                // A record is one JSON object per measurement — a few kilobytes. A
+                // megabyte is already far more than it can legitimately be, and far below
+                // anything that could fill a disk.
+                max_bytes: 1024 * 1024,
             });
             // The slug is computed from the machine that ran the benchmarks, not from
             // this one. A Linux run must name `baseline-linux-aarch64.json` even though

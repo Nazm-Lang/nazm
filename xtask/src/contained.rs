@@ -118,6 +118,14 @@ pub(crate) struct ExportPolicy {
     /// for and the platform it independently measured — never from the manifest, which is
     /// the workload's own output.
     pub(crate) allowed: Vec<String>,
+    /// The most any one artefact of this policy may be, in bytes.
+    ///
+    /// Stated per policy rather than as one constant, because the budgets are genuinely
+    /// different and a single number would have to be the largest of them: a benchmark
+    /// record is a few kilobytes and a release archive is tens of megabytes, and giving
+    /// the record the archive's allowance would mean it could fill a disk unnoticed.
+    /// Each caller writes down what its own artefact can legitimately be.
+    pub(crate) max_bytes: u64,
 }
 
 pub(crate) struct Report {
@@ -365,8 +373,6 @@ pub(crate) fn survivors() -> usize {
 fn export_validated(container: &str, policy: &ExportPolicy) -> Result<(), String> {
     /// A manifest is a handful of short lines. Anything larger is not one.
     const MANIFEST_MAX: u64 = 4096;
-    /// Generous for a JSON record and far below anything that could fill a disk.
-    const ARTEFACT_MAX: u64 = 1024 * 1024;
 
     // Quiescence: a running container is still writing, and copying from one is copying
     // from a moving target.
@@ -419,9 +425,10 @@ fn export_validated(container: &str, policy: &ExportPolicy) -> Result<(), String
             let declared: u64 = size
                 .parse()
                 .map_err(|_| format!("{name}: unreadable size {size:?}"))?;
-            if declared > ARTEFACT_MAX {
+            if declared > policy.max_bytes {
                 return Err(format!(
-                    "{name}: declared {declared} bytes, over {ARTEFACT_MAX}"
+                    "{name}: declared {declared} bytes, over this policy's {} budget",
+                    policy.max_bytes
                 ));
             }
 
