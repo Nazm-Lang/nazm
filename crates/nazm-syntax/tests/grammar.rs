@@ -260,6 +260,52 @@ fn every_rule_is_defined_and_reachable() {
 }
 
 #[test]
+fn the_examples_between_them_use_every_token() {
+    // One example per rule is the weaker requirement, and a rule like `statement` has
+    // nine alternatives. Requiring the examples to *collectively* use every token the
+    // language has is what makes an undemonstrated alternative visible: each statement
+    // form and each operator has a token nothing else would produce.
+    use nazm_syntax::TokenKind;
+
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    for rule in rules().values() {
+        for example in &rule.examples {
+            let (tokens, errors) = nazm_syntax::lex(example);
+            assert!(errors.is_empty(), "{example:?}: {errors:#?}");
+            for t in tokens {
+                if t.kind == TokenKind::Eof {
+                    continue;
+                }
+                used.insert(match &t.kind {
+                    TokenKind::Int(_) => "INTEGER".to_owned(),
+                    TokenKind::Str(_) => "STRING".to_owned(),
+                    TokenKind::Ident(_) => "IDENT".to_owned(),
+                    other => other.written().unwrap_or("?").to_owned(),
+                });
+            }
+        }
+    }
+
+    let mut missing = Vec::new();
+    for kind in TokenKind::ALL {
+        let want = match kind {
+            TokenKind::Int(_) => "INTEGER".to_owned(),
+            TokenKind::Str(_) => "STRING".to_owned(),
+            TokenKind::Ident(_) => "IDENT".to_owned(),
+            other => other.written().unwrap_or("?").to_owned(),
+        };
+        if !used.contains(&want) {
+            missing.push(want);
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "no @example in docs/grammar.ebnf uses these tokens, so the grammar describes \
+         forms nothing demonstrates: {missing:?}"
+    );
+}
+
+#[test]
 fn every_example_in_the_grammar_parses() {
     let rules = rules();
     let mut checked = 0usize;
