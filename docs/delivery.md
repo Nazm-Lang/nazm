@@ -159,7 +159,7 @@ passing one is the most misleading thing a suite can contain.
 | | |
 | --- | --- |
 | Repository | local only; no remote is configured, which is not a blocker to anything here |
-| Integrated commit | the tip of `master` at delivery; `scripts/release-candidate.sh` records it in `MANIFEST.txt` and refuses to run on a dirty tree without `--allow-dirty` |
+| Integrated commit | the tip of `main` at delivery; `scripts/release-candidate.sh` records it in `MANIFEST.txt` and refuses to run on a dirty tree without `--allow-dirty` |
 | Remaining diff | none. The candidate is assembled only from a clean tree unless that flag is passed, and the manifest says which |
 
 ## Reproducing this
