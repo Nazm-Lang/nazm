@@ -66,7 +66,7 @@ fi
 out="$root/target/release-candidate"
 rm -rf "$out"
 mkdir -p "$out/bin" "$out/docs" "$out/schema" "$out/examples" "$out/scripts" \
-         "$out/compiler/conformance" "$out/bench/programs"
+         "$out/compiler/conformance" "$out/bench/programs" "$out/bench/reference"
 
 cp target/release/nazm "$out/bin/"
 cp README.md LICENSE* "$out/" 2>/dev/null || cp README.md "$out/"
@@ -80,6 +80,9 @@ cp compiler/*.nz compiler/bootstrap.sh "$out/compiler/"
 cp compiler/conformance/* "$out/compiler/conformance/"
 cp scripts/*.sh "$out/scripts/"
 cp bench/programs/* "$out/bench/programs/"
+# The external reference programs, so the one cross-language number in
+# docs/performance.md can be re-measured rather than taken on faith.
+cp bench/reference/* "$out/bench/reference/"
 
 cp bench/baseline.json "$out/docs/performance-baseline.json"
 cp target/bootstrap/record.txt "$out/docs/bootstrap-record.txt"
