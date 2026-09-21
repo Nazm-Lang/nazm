@@ -65,6 +65,7 @@ struct Emitter {
     /// Next SSA value number. LLVM requires unnamed values to be numbered consecutively
     /// within a function, so this also numbers blocks to keep them distinct.
     next: u32,
+    next_label: u32,
     /// The block instructions are currently being appended to — the predecessor a `phi`
     /// must name. See the module documentation.
     current: String,
@@ -184,6 +185,21 @@ impl Emitter {
     fn fresh(&mut self) -> u32 {
         let n = self.next;
         self.next += 1;
+        n
+    }
+
+    /// Block labels come from their own counter.
+    ///
+    /// They used to share `fresh()` with SSA temporaries, and because the labels are
+    /// *named* (`b7:`, not `7:`) LLVM never counts them — so every label left a hole in
+    /// the value sequence, and the function emitted `%5` where the implicit counter was
+    /// still at 3. LLVM 19 and Apple clang 21 tolerate that; clang 17 rejects it outright
+    /// with "instruction expected to be numbered '%3'". Sequential is the portable form,
+    /// and the two counters cannot collide because one only ever prints after `%` and the
+    /// other only ever after `b`.
+    fn fresh_label(&mut self) -> u32 {
+        let n = self.next_label;
+        self.next_label += 1;
         n
     }
 
@@ -340,8 +356,8 @@ impl Emitter {
 
     fn guard(&mut self, cond: u32, failure: &Failure, span_offset: u32) {
         let (sym, len) = self.failure_text(failure, span_offset);
-        let fail = self.fresh();
-        let cont = self.fresh();
+        let fail = self.fresh_label();
+        let cont = self.fresh_label();
         let _ = writeln!(self.out, "  br i1 %{cond}, label %b{fail}, label %b{cont}");
         self.open(&format!("b{fail}"));
         let _ = writeln!(self.out, "  call void @nz.fail(ptr {sym}, i64 {len})");
@@ -666,9 +682,9 @@ impl Emitter {
     /// the back edge is written **only if the body's path still falls through** — a body
     /// ending in `break` or `continue` has its terminator already.
     fn while_loop(&mut self, cond: &Expr, body: &[Stmt]) -> Reach {
-        let head = format!("b{}", self.fresh());
-        let body_label = format!("b{}", self.fresh());
-        let exit = format!("b{}", self.fresh());
+        let head = format!("b{}", self.fresh_label());
+        let body_label = format!("b{}", self.fresh_label());
+        let exit = format!("b{}", self.fresh_label());
 
         // The block before the loop needs a terminator: control does not fall into a
         // label in LLVM.
@@ -719,8 +735,8 @@ impl Emitter {
             Val::Of { value, .. } => value,
             Val::Transferred => return Reach::Transferred,
         };
-        let then_label = format!("b{}", self.fresh());
-        let cont = format!("b{}", self.fresh());
+        let then_label = format!("b{}", self.fresh_label());
+        let cont = format!("b{}", self.fresh_label());
 
         let Some(else_body) = else_body else {
             let _ = writeln!(self.out, "  br i1 %{c}, label %{then_label}, label %{cont}");
@@ -732,7 +748,7 @@ impl Emitter {
             return Reach::FallsThrough;
         };
 
-        let else_label = format!("b{}", self.fresh());
+        let else_label = format!("b{}", self.fresh_label());
         let _ = writeln!(
             self.out,
             "  br i1 %{c}, label %{then_label}, label %{else_label}"
@@ -1419,8 +1435,8 @@ impl Emitter {
         let same_len = self.fresh();
         let _ = writeln!(self.out, "  %{same_len} = icmp eq i64 %{la}, %{lb}");
 
-        let compare = format!("b{}", self.fresh());
-        let join = format!("b{}", self.fresh());
+        let compare = format!("b{}", self.fresh_label());
+        let join = format!("b{}", self.fresh_label());
         let short = self.current.clone();
         let _ = writeln!(
             self.out,
@@ -1468,9 +1484,9 @@ impl Emitter {
     /// the caller is told control left.
     fn conditional(&mut self, cond: &Expr, then_b: &Block, else_b: &Block) -> Val {
         let c = operand!(self.expr(cond));
-        let then_label = format!("b{}", self.fresh());
-        let else_label = format!("b{}", self.fresh());
-        let join_label = format!("b{}", self.fresh());
+        let then_label = format!("b{}", self.fresh_label());
+        let else_label = format!("b{}", self.fresh_label());
+        let join_label = format!("b{}", self.fresh_label());
         let _ = writeln!(
             self.out,
             "  br i1 %{c}, label %{then_label}, label %{else_label}"
@@ -1603,9 +1619,9 @@ impl Emitter {
         );
 
         let special = self.min_over_minus_one(a, b);
-        let is_zero = format!("b{}", self.fresh());
-        let compute = format!("b{}", self.fresh());
-        let join = format!("b{}", self.fresh());
+        let is_zero = format!("b{}", self.fresh_label());
+        let compute = format!("b{}", self.fresh_label());
+        let join = format!("b{}", self.fresh_label());
         let _ = writeln!(
             self.out,
             "  br i1 %{special}, label %{is_zero}, label %{compute}"
@@ -1656,6 +1672,7 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
     let mut e = Emitter {
         out: String::new(),
         next: 0,
+        next_label: 0,
         current: "entry".to_owned(),
         strings: Vec::new(),
         blobs: Vec::new(),
