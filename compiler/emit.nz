@@ -70,6 +70,7 @@ fn llvm_type(t: Int) -> Str {
     if t == t_str() { return "{ ptr, i64 }"; }
     if t == t_ints() { return "ptr"; }
     if t == t_strs() { return "ptr"; }
+    if t == t_chan() { return "ptr"; }
     "void"
 }
 
@@ -245,6 +246,137 @@ fn check_failed(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
     open_block(out, current, live, str_concat("b", int_to_str(uw)));
     unwind(out, next, current, live);
     open_block(out, current, live, str_concat("b", int_to_str(ok)));
+    0
+}
+
+// `spawn f(args);` — pack the arguments, start the thread, record it for the join.
+//
+// # Why the arguments are copied to the heap
+//
+// The task outlives this stack frame by construction, so it cannot be handed a pointer
+// into it. One allocation per spawn carries the whole argument list. Its first eight bytes
+// are the thread handle, so the list the scope joins holds one pointer per task and needs
+// no second allocation; the next sixteen are where this task leaves its diagnostic if it
+// fails, which the join reads after `pthread_join` — a happens-before edge, so no lock.
+fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, tasks: Strs,
+        vals: Ints, nar: Ints, ntype: Ints, kids: Ints, kid_first: Ints, fnames: Strs,
+        fret: Ints, k: Int, callee: Str, at: Str) -> Int {
+    let argc = ints_get(nar, k);
+    // Popped in reverse, then read back in source order.
+    let args = ints_new();
+    let mut a = 0;
+    while a < argc { ints_push(args, ints_pop(vals)); a = a + 1; }
+
+    // The handle at 0, the diagnostic at 8 and 16, then each argument at its own offset.
+    // `Str` is sixteen bytes and everything else eight, which keeps every offset a
+    // multiple of eight and so correctly aligned for whatever is stored there.
+    let offs = ints_new();
+    let mut size = 24;
+    let mut i = 0;
+    while i < argc {
+        let t = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
+        ints_push(offs, size);
+        if t == t_str() { size = size + 16; } else { size = size + 8; }
+        i = i + 1;
+    }
+
+    let blk = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(blk)),
+            str_concat(" = call ptr @malloc(i64 ", str_concat(int_to_str(size), ")"))));
+    let bad = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(bad)),
+            str_concat(" = icmp eq ptr ", str_concat(v(blk), ", null"))));
+    guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+
+    // `malloc` does not zero, and the join reads this slot for every task including the
+    // ones that succeeded. Left as the allocator found it, a program that never failed
+    // would report.
+    let ep = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(ep)),
+            str_concat(" = getelementptr i8, ptr ", str_concat(v(blk), ", i64 8"))));
+    add_line(out, str_concat(str_concat("  store ptr null, ptr ", v(ep)), ""));
+    let lp = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(lp)),
+            str_concat(" = getelementptr i8, ptr ", str_concat(v(blk), ", i64 16"))));
+    add_line(out, str_concat(str_concat("  store i64 0, ptr ", v(lp)), ""));
+
+    i = 0;
+    while i < argc {
+        let t = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
+        let slot = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(slot)),
+                str_concat(str_concat(" = getelementptr i8, ptr ", v(blk)),
+                str_concat(", i64 ", int_to_str(ints_get(offs, i))))));
+        add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(t)),
+                str_concat(" ", v(ints_get(args, argc - 1 - i)))),
+                str_concat(", ptr ", v(slot))));
+        i = i + 1;
+    }
+
+    // One trampoline per spawn site rather than per callee: two spawns of the same
+    // function share one only if their argument types match, and generating per site makes
+    // that true without having to check it.
+    let name = str_concat("@nz.task", int_to_str(strs_len(tasks)));
+    let t = strs_new();
+    strs_push(t, str_concat(str_concat("define internal ptr ", name), "(ptr %a) {"));
+    strs_push(t, "entry:");
+    let mut passed = "";
+    i = 0;
+    while i < argc {
+        let ty = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
+        strs_push(t, str_concat(str_concat("  %p", int_to_str(i)),
+                str_concat(" = getelementptr i8, ptr %a, i64 ",
+                int_to_str(ints_get(offs, i)))));
+        strs_push(t, str_concat(str_concat(str_concat("  %v", int_to_str(i)), " = load "),
+                str_concat(str_concat(llvm_type(ty), ", ptr %p"), int_to_str(i))));
+        if i > 0 { passed = str_concat(passed, ", "); }
+        passed = str_concat(passed, str_concat(str_concat(llvm_type(ty), " %v"), int_to_str(i)));
+        i = i + 1;
+    }
+    // The task's return value is discarded, which the specification says outright: results
+    // travel through channels, so there is one mechanism rather than two.
+    // The *callee's* return type, not the `spawn`'s: a `spawn` produces nothing, so its
+    // own node type is unknown and would emit `void` for a function that returns `Int`.
+    let mut cret = t_int();
+    let mut fi = 0;
+    while fi < strs_len(fnames) {
+        if strs_get(fnames, fi) == callee { cret = ints_get(fret, fi); }
+        fi = fi + 1;
+    }
+    strs_push(t, str_concat(str_concat(str_concat("  %r = call ", llvm_type(cret)),
+            str_concat(" ", symbol(fnames, callee))),
+            str_concat(str_concat("(", passed), ")")));
+    // A failure ends the task, not the process. The diagnostic is left here for the
+    // scope's join to find, so it is reported by the thread that owns the scope once every
+    // sibling has finished.
+    strs_push(t, "  %failed = load i1, ptr @nz.failed");
+    strs_push(t, "  br i1 %failed, label %publish, label %finished");
+    strs_push(t, "publish:");
+    strs_push(t, "  %em = load ptr, ptr @nz.errmsg");
+    strs_push(t, "  %el = load i64, ptr @nz.errlen");
+    strs_push(t, "  %emp = getelementptr i8, ptr %a, i64 8");
+    strs_push(t, "  store ptr %em, ptr %emp");
+    strs_push(t, "  %elp = getelementptr i8, ptr %a, i64 16");
+    strs_push(t, "  store i64 %el, ptr %elp");
+    strs_push(t, "  br label %finished");
+    strs_push(t, "finished:");
+    strs_push(t, "  ret ptr null");
+    strs_push(t, "}");
+    strs_push(tasks, str_concat(str_join(t, nl()), nl()));
+
+    let tids = ints_get(live, ints_len(live) - 1);
+    let rc = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(rc)),
+            str_concat(str_concat(" = call i32 @nz.spawn(ptr ", v(tids)),
+            str_concat(str_concat(", ptr ", name), str_concat(str_concat(", ptr ", v(blk)), ")")))));
+    let oom = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(oom)),
+            str_concat(" = icmp eq i32 ", str_concat(v(rc), ", -1"))));
+    guard(out, msgs, next, current, live, oom, "N0406", "out of memory", at);
+    let nostart = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(nostart)),
+            str_concat(" = icmp sgt i32 ", str_concat(v(rc), ", 0"))));
+    guard(out, msgs, next, current, live, nostart, "N0404", "this task could not be started", at);
     0
 }
 
@@ -896,7 +1028,7 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
 fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
         naux: Ints, nslot: Ints, ntype: Ints,
         parent: Ints, childno: Ints, substart: Ints, kids: Ints, kid_first: Ints,
-        fnames: Strs, out: Strs, msgs: Strs, blobs: Strs) -> Int {
+        fnames: Strs, fret: Ints, out: Strs, msgs: Strs, blobs: Strs, tasks: Strs) -> Int {
     let next = ints_new();
     ints_push(next, 0);
     // Slot 1 is the block-label counter, separate from slot 0 because the labels are
@@ -926,9 +1058,12 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
     // Where the loop header of each `while` must be opened: before its condition's
     // subtree begins, because `continue` and the back edge both target it.
     let head_at = ints_new();
+    // Where a scope's task list has to be allocated: at the first node of its body.
+    let scope_at = ints_new();
     let mut h = 0;
     while h < ints_len(nk) {
         ints_push(head_at, 0 - 1);
+        ints_push(scope_at, 0 - 1);
         h = h + 1;
     }
     h = 0;
@@ -936,6 +1071,10 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         if ints_get(nk, h) == n_while() {
             let cond = ints_get(kids, ints_get(kid_first, h));
             ints_set(head_at, ints_get(substart, cond), h);
+        }
+        if ints_get(nk, h) == n_scope() {
+            let body = ints_get(kids, ints_get(kid_first, h));
+            ints_set(scope_at, ints_get(substart, body), h);
         }
         h = h + 1;
     }
@@ -976,226 +1115,259 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             open_block(out, current, live, blk("h", w));
         }
 
-        if kind == n_param() {
-            // Handled by `open_function`, which stored it before the body began.
+        // A scope's task list is allocated before its body, so every `spawn` inside has
+        // somewhere to record itself and the join afterwards has something to read. The
+        // list is an ordinary sequence header — a task handle is pointer-sized, and a
+        // growable array of them is what `@nz.arr_new` already provides. A scope inside a
+        // loop allocates a fresh one each time round, because the statement is reached
+        // each time round.
+        if ints_get(scope_at, k) >= 0 {
+            let sc = ints_get(scope_at, k);
+            let tl = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(tl)), " = call ptr @nz.arr_new()"));
+            let nomem = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(nomem)),
+                    str_concat(" = icmp eq ptr ", str_concat(v(tl), ", null"))));
+            guard(out, msgs, next, current, live, nomem, "N0406", "out of memory",
+                    position(src, path, ints_get(nst, sc)));
+            // Innermost last: `unwind` reads back from the end, and a `spawn` records into
+            // whichever is on top.
+            ints_push(live, tl);
+        }
+
+        if kind == n_scope() {
+            // The closing brace: wait for every task, take on the first failure any of
+            // them had, and only then decide whether this program carries on.
+            let closed = ints_pop(live);
+            emit_join(out, next, current, live, closed);
+            check_failed(out, next, current, live);
         } else {
-            if kind == n_call() {
-                let argc = ints_get(nar, k);
-                let args = ints_new();
-                let mut a = 0;
-                while a < argc { ints_push(args, ints_pop(vals)); a = a + 1; }
-                // A built-in is instructions, not a call: `emit_builtin` returns -1 when
-                // the name is not one, which is how a built-in is told from a user function
-                // without a second name table.
-                let ordered = ints_new();
-                let mut o = argc - 1;
-                while o >= 0 { ints_push(ordered, ints_get(args, o)); o = o - 1; }
-                let built = emit_builtin(text, ordered, out, msgs, next, current, live,
-                        position(src, path, from));
-                if built >= 0 {
-                    ints_push(vals, built);
-                } else {
-                    let mut list = "";
-                    a = argc - 1;
-                    while a >= 0 {
-                        if a < argc - 1 { list = str_concat(list, ", "); }
-                        let at = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + (argc - 1 - a)));
-                        list = str_concat(list, str_concat(str_concat(llvm_type(at), " "),
-                                v(ints_get(args, a))));
-                        a = a - 1;
-                    }
-                    let n = take_number(next);
-                    add_line(out, str_concat(str_concat("  ", v(n)),
-                            str_concat(str_concat(str_concat(" = call ", llvm_type(ints_get(ntype, k))),
-                            str_concat(" ", symbol(fnames, text))),
-                            str_concat(str_concat("(", list), ")"))));
-                    // A callee that failed has already left by its own exit and handed
-                    // back a stand-in. Noticed here, so the failure keeps travelling
-                    // outward instead of this function carrying on with a value that was
-                    // never produced — which would run statements, print, and could loop
-                    // forever on it.
-                    check_failed(out, next, current, live);
-                    ints_push(vals, n);
-                }
+            if kind == n_spawn() {
+                emit_spawn(out, msgs, next, current, live, tasks, vals, nar, ntype,
+                        kids, kid_first, fnames, fret, k, text, position(src, path, from));
             } else {
-                if kind == n_str() {
-                    // A literal is known entirely at compile time, so it is a constant pair
-                    // loaded in one instruction rather than assembled from `undef`.
-                    let idx = message_index(blobs, text);
-                    let n = take_number(next);
-                    add_line(out, str_concat(str_concat("  ", v(n)),
-                            str_concat(" = load { ptr, i64 }, ptr @.sv",
-                            int_to_str(idx))));
-                    ints_push(vals, n);
+                if kind == n_param() {
+                    // Handled by `open_function`, which stored it before the body began.
                 } else {
-                    if kind == n_bool() {
-                        let n = take_number(next);
-                        add_line(out, str_concat(str_concat("  ", v(n)),
-                                str_concat(" = or i1 ", str_concat(text, ", false"))));
-                        ints_push(vals, n);
-                    } else {
-                        if kind == n_block() {
-                            // Structure only: a block's value, if it has one, is its tail's and is
-                            // already on the stack.
+                    if kind == n_call() {
+                        let argc = ints_get(nar, k);
+                        let args = ints_new();
+                        let mut a = 0;
+                        while a < argc { ints_push(args, ints_pop(vals)); a = a + 1; }
+                        // A built-in is instructions, not a call: `emit_builtin` returns -1 when
+                        // the name is not one, which is how a built-in is told from a user function
+                        // without a second name table.
+                        let ordered = ints_new();
+                        let mut o = argc - 1;
+                        while o >= 0 { ints_push(ordered, ints_get(args, o)); o = o - 1; }
+                        let built = emit_builtin(text, ordered, out, msgs, next, current, live,
+                                position(src, path, from));
+                        if built >= 0 {
+                            ints_push(vals, built);
                         } else {
-                            if kind == n_while() {
-                                // Structure only: the header, the body and the exit are opened at the
-                                // boundaries between its children.
+                            let mut list = "";
+                            a = argc - 1;
+                            while a >= 0 {
+                                if a < argc - 1 { list = str_concat(list, ", "); }
+                                let at = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + (argc - 1 - a)));
+                                list = str_concat(list, str_concat(str_concat(llvm_type(at), " "),
+                                        v(ints_get(args, a))));
+                                a = a - 1;
+                            }
+                            let n = take_number(next);
+                            add_line(out, str_concat(str_concat("  ", v(n)),
+                                    str_concat(str_concat(str_concat(" = call ", llvm_type(ints_get(ntype, k))),
+                                    str_concat(" ", symbol(fnames, text))),
+                                    str_concat(str_concat("(", list), ")"))));
+                            // A callee that failed has already left by its own exit and handed
+                            // back a stand-in. Noticed here, so the failure keeps travelling
+                            // outward instead of this function carrying on with a value that was
+                            // never produced — which would run statements, print, and could loop
+                            // forever on it.
+                            check_failed(out, next, current, live);
+                            ints_push(vals, n);
+                        }
+                    } else {
+                        if kind == n_str() {
+                            // A literal is known entirely at compile time, so it is a constant pair
+                            // loaded in one instruction rather than assembled from `undef`.
+                            let idx = message_index(blobs, text);
+                            let n = take_number(next);
+                            add_line(out, str_concat(str_concat("  ", v(n)),
+                                    str_concat(" = load { ptr, i64 }, ptr @.sv",
+                                    int_to_str(idx))));
+                            ints_push(vals, n);
+                        } else {
+                            if kind == n_bool() {
+                                let n = take_number(next);
+                                add_line(out, str_concat(str_concat("  ", v(n)),
+                                        str_concat(" = or i1 ", str_concat(text, ", false"))));
+                                ints_push(vals, n);
                             } else {
-                                if kind == n_if() {
-                                    if ints_get(ntype, k) != 0 {
-                                        // Only the branches that produced a value contribute an incoming, and
-                                        // each names the block emission *ended* in rather than the label the
-                                        // branch was opened with.
-                                        let b = strs_pop(phi_blk);
-                                        let bv = ints_pop(phi_val);
-                                        let a = strs_pop(phi_blk);
-                                        let av = ints_pop(phi_val);
-                                        let n = take_number(next);
-                                        add_line(out, str_concat(str_concat("  ", v(n)),
-                                                str_concat(str_concat(str_concat(" = phi ", llvm_type(ints_get(ntype, k))),
-                                                str_concat(" [ ", v(av))),
-                                                str_concat(str_concat(", %", a),
-                                                str_concat(str_concat(" ], [ ", v(bv)),
-                                                str_concat(str_concat(", %", b), " ]"))))));
-                                        ints_push(vals, n);
-                                    }
+                                if kind == n_block() {
+                                    // Structure only: a block's value, if it has one, is its tail's and is
+                                    // already on the stack.
                                 } else {
-                                    if kind == n_break() {
-                                        let w = enclosing_loop(nk, parent, childno, k);
-                                        if w < 0 { refuse("a `break` with no loop to leave", position(src, path, from)); }
-                                        branch(out, live, blk("x", w));
+                                    if kind == n_while() {
+                                        // Structure only: the header, the body and the exit are opened at the
+                                        // boundaries between its children.
                                     } else {
-                                        if kind == n_continue() {
-                                            let w = enclosing_loop(nk, parent, childno, k);
-                                            if w < 0 { refuse("a `continue` with no loop to repeat", position(src, path, from)); }
-                                            // The header, never the body: `continue` re-evaluates the condition.
-                                            branch(out, live, blk("h", w));
+                                        if kind == n_if() {
+                                            if ints_get(ntype, k) != 0 {
+                                                // Only the branches that produced a value contribute an incoming, and
+                                                // each names the block emission *ended* in rather than the label the
+                                                // branch was opened with.
+                                                let b = strs_pop(phi_blk);
+                                                let bv = ints_pop(phi_val);
+                                                let a = strs_pop(phi_blk);
+                                                let av = ints_pop(phi_val);
+                                                let n = take_number(next);
+                                                add_line(out, str_concat(str_concat("  ", v(n)),
+                                                        str_concat(str_concat(str_concat(" = phi ", llvm_type(ints_get(ntype, k))),
+                                                        str_concat(" [ ", v(av))),
+                                                        str_concat(str_concat(", %", a),
+                                                        str_concat(str_concat(" ], [ ", v(bv)),
+                                                        str_concat(str_concat(", %", b), " ]"))))));
+                                                ints_push(vals, n);
+                                            }
                                         } else {
-                                            if kind == n_return() {
-                                                let value = ints_pop(vals);
-                                                let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                add_line(out, str_concat(str_concat("  ret ", llvm_type(vt)), str_concat(" ", v(value))));
-                                                ints_set(live, 0, 0);
+                                            if kind == n_break() {
+                                                let w = enclosing_loop(nk, parent, childno, k);
+                                                if w < 0 { refuse("a `break` with no loop to leave", position(src, path, from)); }
+                                                branch(out, live, blk("x", w));
                                             } else {
-                                                if kind == n_var() {
-                                                    let n = take_number(next);
-                                                    add_line(out, str_concat(str_concat("  ", v(n)),
-                                                            str_concat(str_concat(" = load ", llvm_type(ints_get(ntype, k))),
-                                                            str_concat(", ptr %slot", int_to_str(ints_get(nslot, k))))));
-                                                    ints_push(vals, n);
+                                                if kind == n_continue() {
+                                                    let w = enclosing_loop(nk, parent, childno, k);
+                                                    if w < 0 { refuse("a `continue` with no loop to repeat", position(src, path, from)); }
+                                                    // The header, never the body: `continue` re-evaluates the condition.
+                                                    branch(out, live, blk("h", w));
                                                 } else {
-                                                    if kind == n_let() {
-                                                        // The value is already on the stack: its subtree came first.
+                                                    if kind == n_return() {
                                                         let value = ints_pop(vals);
                                                         let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                        add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
-                                                                str_concat(" ", v(value))),
-                                                                str_concat(", ptr %slot", int_to_str(ints_get(nslot, k)))));
+                                                        add_line(out, str_concat(str_concat("  ret ", llvm_type(vt)), str_concat(" ", v(value))));
+                                                        ints_set(live, 0, 0);
                                                     } else {
-                                                        if kind == n_assign() {
-                                                            // The same store. A declaration and a reassignment differ in the source and
-                                                            // not once the slot is known, so there is one code path rather than two.
-                                                            let value = ints_pop(vals);
-                                                            let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                            add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
-                                                                    str_concat(" ", v(value))),
-                                                                    str_concat(", ptr %slot", int_to_str(ints_get(nslot, k)))));
+                                                        if kind == n_var() {
+                                                            let n = take_number(next);
+                                                            add_line(out, str_concat(str_concat("  ", v(n)),
+                                                                    str_concat(str_concat(" = load ", llvm_type(ints_get(ntype, k))),
+                                                                    str_concat(", ptr %slot", int_to_str(ints_get(nslot, k))))));
+                                                            ints_push(vals, n);
                                                         } else {
-                                                            if kind == n_exprstmt() {
-                                                                // Evaluated for its effects; the value is dropped, exactly as `nazm run`
-                                                                // drops it. **Only if there was one**: a statement-position `if` produces
-                                                                // nothing, and popping for it would take someone else's value.
-                                                                if ints_get(ntype, ints_get(kids, ints_get(kid_first, k))) != 0 {
-                                                                    ints_pop(vals);
-                                                                }
+                                                            if kind == n_let() {
+                                                                // The value is already on the stack: its subtree came first.
+                                                                let value = ints_pop(vals);
+                                                                let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+                                                                add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
+                                                                        str_concat(" ", v(value))),
+                                                                        str_concat(", ptr %slot", int_to_str(ints_get(nslot, k)))));
                                                             } else {
-                                                                if kind == n_int() {
-                                                                    let n = take_number(next);
-                                                                    // Through an `add` rather than inline, so every expression has a value
-                                                                    // number and there is one shape to reason about. `-O2` folds it.
-                                                                    add_line(out, str_concat(str_concat("  ", v(n)),
-                                                                            str_concat(" = add i64 ", str_concat(text, ", 0"))));
-                                                                    ints_push(vals, n);
+                                                                if kind == n_assign() {
+                                                                    // The same store. A declaration and a reassignment differ in the source and
+                                                                    // not once the slot is known, so there is one code path rather than two.
+                                                                    let value = ints_pop(vals);
+                                                                    let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+                                                                    add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
+                                                                            str_concat(" ", v(value))),
+                                                                            str_concat(", ptr %slot", int_to_str(ints_get(nslot, k)))));
                                                                 } else {
-                                                                    if kind == n_bin() {
-                                                                        let b = ints_pop(vals);
-                                                                        let a = ints_pop(vals);
-                                                                        let at = position(src, path, ints_get(naux, k));
-                                                                        // The operand type, not the result's: `==` always produces `Bool`, and
-                                                                        // what it compares decides how.
-                                                                        let ot = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                                        let r = if ot == t_str() {
-                                                                            string_equality(out, current, live, next, a, b, text == "!=")
-                                                                        } else {
-                                                                            emit_binary(out, msgs, next, current, live, text, a, b, at, ot)
+                                                                    if kind == n_exprstmt() {
+                                                                        // Evaluated for its effects; the value is dropped, exactly as `nazm run`
+                                                                        // drops it. **Only if there was one**: a statement-position `if` produces
+                                                                        // nothing, and popping for it would take someone else's value.
+                                                                        if ints_get(ntype, ints_get(kids, ints_get(kid_first, k))) != 0 {
+                                                                            ints_pop(vals);
                                                                         }
-                                                                        ;
-                                                                        if r < 0 { refuse(str_concat(str_concat("the operator `", text), "`"), at); }
-                                                                        ints_push(vals, r);
                                                                     } else {
-                                                                        if kind == n_neg() {
-                                                                            let a = ints_pop(vals);
-                                                                            let zero = take_number(next);
-                                                                            add_line(out, str_concat(str_concat("  ", v(zero)), " = add i64 0, 0"));
-                                                                            let at = position(src, path, from);
-                                                                            // The only negation without a representable result is `-Int::MIN`.
-                                                                            let r = checked(out, msgs, next, current, live, "ssub", "negation", zero, a, at);
-                                                                            ints_push(vals, r);
+                                                                        if kind == n_int() {
+                                                                            let n = take_number(next);
+                                                                            // Through an `add` rather than inline, so every expression has a value
+                                                                            // number and there is one shape to reason about. `-O2` folds it.
+                                                                            add_line(out, str_concat(str_concat("  ", v(n)),
+                                                                                    str_concat(" = add i64 ", str_concat(text, ", 0"))));
+                                                                            ints_push(vals, n);
                                                                         } else {
-                                                                            if kind == n_block() {
-                                                                                if text != "tail" {
-                                                                                    refuse("a body with no result expression",
-                                                                                            position(src, path, from));
-                                                                                }
-                                                                            } else {
-                                                                                if kind == n_fn() {
-                                                                                    if llvm_type(type_of_name(after_colon(text))) == "void" {
-                                                                                        refuse(str_concat(str_concat("a function returning `",
-                                                                                                after_colon(text)), "`"),
-                                                                                                position(src, path, from));
-                                                                                    }
-                                                                                    // The platform wrapper prints an `Int`, so `main` must
-                                                                                    // produce one. What a `Str` result would mean for a process
-                                                                                    // is a decision nobody has made.
-                                                                                    if before_colon(text) == "main" {
-                                                                                        if after_colon(text) != "Int" {
-                                                                                            refuse("a `main` that does not return `Int`",
-                                                                                                    position(src, path, from));
-                                                                                        }
-                                                                                    }
-                                                                                    // A body whose every path returned has nothing to fall off
-                                                                                    // the end with and needs no terminator of its own — the
-                                                                                    // `ret` is already there.
-                                                                                    if ints_get(live, 0) == 1 {
-                                                                                        if ints_len(vals) != 1 {
-                                                                                            refuse("a body that produces no value",
-                                                                                                    position(src, path, from));
-                                                                                        }
-                                                                                        add_line(out, str_concat(str_concat("  ret ",
-                                                                                                llvm_type(type_of_name(after_colon(text)))),
-                                                                                                str_concat(" ", v(ints_pop(vals)))));
-                                                                                    }
-                                                                                    // The one exit every failure in this function leaves by,
-                                                                                    // written only if something branched to it.
-                                                                                    if ints_get(live, 1) == 1 {
-                                                                                        let rt = type_of_name(after_colon(text));
-                                                                                        add_line(out, "nz.unwind:");
-                                                                                        add_line(out, str_concat(str_concat("  ret ",
-                                                                                                llvm_type(rt)),
-                                                                                                str_concat(" ", unwind_value(rt))));
-                                                                                        ints_set(live, 1, 0);
-                                                                                    }
-                                                                                    add_line(out, "}");
-                                                                                    ints_set(live, 0, 0);
-                                                                                    // Values never cross a function boundary. A body that
-                                                                                    // returned on every path can leave some behind, and the
-                                                                                    // next function would inherit them.
-                                                                                    while ints_len(vals) > 0 { ints_pop(vals); }
+                                                                            if kind == n_bin() {
+                                                                                let b = ints_pop(vals);
+                                                                                let a = ints_pop(vals);
+                                                                                let at = position(src, path, ints_get(naux, k));
+                                                                                // The operand type, not the result's: `==` always produces `Bool`, and
+                                                                                // what it compares decides how.
+                                                                                let ot = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+                                                                                let r = if ot == t_str() {
+                                                                                    string_equality(out, current, live, next, a, b, text == "!=")
                                                                                 } else {
-                                                                                    if kind != n_program() {
-                                                                                        refuse(str_concat(str_concat("`", node_name(kind)), "`"),
-                                                                                                position(src, path, from));
+                                                                                    emit_binary(out, msgs, next, current, live, text, a, b, at, ot)
+                                                                                }
+                                                                                ;
+                                                                                if r < 0 { refuse(str_concat(str_concat("the operator `", text), "`"), at); }
+                                                                                ints_push(vals, r);
+                                                                            } else {
+                                                                                if kind == n_neg() {
+                                                                                    let a = ints_pop(vals);
+                                                                                    let zero = take_number(next);
+                                                                                    add_line(out, str_concat(str_concat("  ", v(zero)), " = add i64 0, 0"));
+                                                                                    let at = position(src, path, from);
+                                                                                    // The only negation without a representable result is `-Int::MIN`.
+                                                                                    let r = checked(out, msgs, next, current, live, "ssub", "negation", zero, a, at);
+                                                                                    ints_push(vals, r);
+                                                                                } else {
+                                                                                    if kind == n_block() {
+                                                                                        if text != "tail" {
+                                                                                            refuse("a body with no result expression",
+                                                                                                    position(src, path, from));
+                                                                                        }
+                                                                                    } else {
+                                                                                        if kind == n_fn() {
+                                                                                            if llvm_type(type_of_name(after_colon(text))) == "void" {
+                                                                                                refuse(str_concat(str_concat("a function returning `",
+                                                                                                        after_colon(text)), "`"),
+                                                                                                        position(src, path, from));
+                                                                                            }
+                                                                                            // The platform wrapper prints an `Int`, so `main` must
+                                                                                            // produce one. What a `Str` result would mean for a process
+                                                                                            // is a decision nobody has made.
+                                                                                            if before_colon(text) == "main" {
+                                                                                                if after_colon(text) != "Int" {
+                                                                                                    refuse("a `main` that does not return `Int`",
+                                                                                                            position(src, path, from));
+                                                                                                }
+                                                                                            }
+                                                                                            // A body whose every path returned has nothing to fall off
+                                                                                            // the end with and needs no terminator of its own — the
+                                                                                            // `ret` is already there.
+                                                                                            if ints_get(live, 0) == 1 {
+                                                                                                if ints_len(vals) != 1 {
+                                                                                                    refuse("a body that produces no value",
+                                                                                                            position(src, path, from));
+                                                                                                }
+                                                                                                add_line(out, str_concat(str_concat("  ret ",
+                                                                                                        llvm_type(type_of_name(after_colon(text)))),
+                                                                                                        str_concat(" ", v(ints_pop(vals)))));
+                                                                                            }
+                                                                                            // The one exit every failure in this function leaves by,
+                                                                                            // written only if something branched to it.
+                                                                                            if ints_get(live, 1) == 1 {
+                                                                                                let rt = type_of_name(after_colon(text));
+                                                                                                add_line(out, "nz.unwind:");
+                                                                                                add_line(out, str_concat(str_concat("  ret ",
+                                                                                                        llvm_type(rt)),
+                                                                                                        str_concat(" ", unwind_value(rt))));
+                                                                                                ints_set(live, 1, 0);
+                                                                                            }
+                                                                                            add_line(out, "}");
+                                                                                            ints_set(live, 0, 0);
+                                                                                            // Values never cross a function boundary. A body that
+                                                                                            // returned on every path can leave some behind, and the
+                                                                                            // next function would inherit them.
+                                                                                            while ints_len(vals) > 0 { ints_pop(vals); }
+                                                                                        } else {
+                                                                                            if kind != n_program() {
+                                                                                                refuse(str_concat(str_concat("`", node_name(kind)), "`"),
+                                                                                                        position(src, path, from));
+                                                                                            }
+                                                                                        }
                                                                                     }
                                                                                 }
                                                                             }
@@ -1353,12 +1525,15 @@ fn main() -> Int {
     let body = strs_new();
     let msgs = strs_new();
     let blobs = strs_new();
+    // One trampoline per `spawn` site, accumulated while the body is emitted and appended
+    // after it. Its length is also how the runtime knows whether any of this is reached.
+    let tasks = strs_new();
     let parent = ints_new();
     let childno = ints_new();
     let substart = ints_new();
     build_relations(nk, nar, kids, kid_first, parent, childno, substart);
     emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype,
-            parent, childno, substart, kids, kid_first, fnames, body, msgs, blobs);
+            parent, childno, substart, kids, kid_first, fnames, fret, body, msgs, blobs, tasks);
 
     // The header comes last because interning the messages is what discovers them.
     let head = strs_new();
@@ -1370,6 +1545,18 @@ fn main() -> Int {
     add_line(head, "declare i32 @printf(ptr noundef, ...)");
     add_line(head, "declare i64 @write(i32, ptr, i64)");
     add_line(head, "declare void @exit(i32) noreturn");
+    // pthreads, declared only when a task or a channel reached them. A program with no
+    // `spawn` in it neither declares them nor needs to be linked against them.
+    if strs_len(tasks) > 0 {
+        add_line(head, "declare i32 @pthread_create(ptr, ptr, ptr, ptr)");
+        add_line(head, "declare i32 @pthread_join(ptr, ptr)");
+        add_line(head, "declare i32 @pthread_mutex_init(ptr, ptr)");
+        add_line(head, "declare i32 @pthread_mutex_lock(ptr)");
+        add_line(head, "declare i32 @pthread_mutex_unlock(ptr)");
+        add_line(head, "declare i32 @pthread_cond_init(ptr, ptr)");
+        add_line(head, "declare i32 @pthread_cond_wait(ptr, ptr)");
+        add_line(head, "declare i32 @pthread_cond_broadcast(ptr)");
+    }
     add_line(head, "declare i32 @memcmp(ptr, ptr, i64)");
     add_line(head, "declare i32 @snprintf(ptr noundef, i64, ptr noundef, ...)");
     add_line(head, "declare ptr @malloc(i64)");
@@ -1480,7 +1667,14 @@ fn main() -> Int {
     add_line(tail, "  ret i32 0");
     add_line(tail, "}");
 
-    print(str_concat(str_concat(str_concat(join(head), runtime()), join(body)), join(tail)));
+    // The task and channel runtime is emitted only when a `spawn` reached it, so an
+    // ordinary program carries none of it and its IR is unchanged.
+    let mut rt = runtime();
+    if strs_len(tasks) > 0 {
+        rt = str_concat(rt, str_concat(task_runtime(), channel_runtime()));
+    }
+    print(str_concat(str_concat(str_concat(join(head), rt),
+            str_concat(join(body), join(tasks))), join(tail)));
     // `exit_with`, not a return: the platform wrapper prints `main`'s value, and this
     // program's standard output *is* the LLVM module. A stray integer at the end of it
     // is a module clang rejects.

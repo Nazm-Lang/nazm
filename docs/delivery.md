@@ -10,7 +10,7 @@ a different one.
 Nazm is a small, specified language with two implementations that agree — a tree-walking
 interpreter and a native compiler through LLVM IR — **and a compiler for it written in
 Nazm that reproduces itself byte for byte** — over a stated bootstrap subset, which
-excludes concurrency but does include modules: the Nazm-written compiler resolves `use`
+covers concurrency and modules: the Nazm-written compiler resolves `use`
 and builds a multi-file program on its own. The language has structured concurrency, a
 canonical formatter, machine-applicable fixes under a versioned JSON schema, and measured
 performance baselines with one profile-driven optimisation pass behind them.
@@ -25,9 +25,9 @@ performance comparison of any kind.
 | --- | --- | --- |
 | Scalar control flow, including `return` and transfers inside values | done | `crates/nazm-cli/tests/build.rs`, every case at `-O0` and `-O2` against the interpreter |
 | A bootstrap subset with text, structured data, collections, memory behaviour, file I/O, errors and modules | done | `docs/bootstrap-design.md`; the subset is what `compiler/*.nz` is written in, and `use` is resolved by the Nazm-written compiler itself — `compiler/module.nz` |
-| Compiler frontend and lowering/emission in Nazm, external dependencies documented | done **for the bootstrap subset** | `compiler/lex.nz`, `parse.nz`, `analyse.nz`, `emit.nz`; dependencies in `docs/bootstrap.md`. The subset excludes concurrency *emission*, which is under *Known limitations*; module resolution is implemented in `compiler/module.nz` |
+| Compiler frontend and lowering/emission in Nazm, external dependencies documented | done **for the bootstrap subset** | `compiler/lex.nz`, `parse.nz`, `analyse.nz`, `emit.nz`; dependencies in `docs/bootstrap.md`. Concurrency and module resolution are both implemented — `compiler/module.nz`, and the task and channel runtime in `compiler/emit.nz` |
 | Native C1 → C2 → C3 bootstrap, conformance and reproducibility | done | `compiler/bootstrap.sh`; C2 and C3 byte-identical in IR and executable, 5 conformance cases |
-| Ordinary independent programs compile with the Nazm-written compiler | done **within the subset** | `crates/nazm-cli/tests/selfhost.rs`. A program using `scope`/`spawn`/`Chan` parses and checks but is refused at emission, by name rather than miscompiled; multi-file programs compile, imports and all |
+| Ordinary independent programs compile with the Nazm-written compiler | done **within the subset** | `crates/nazm-cli/tests/selfhost.rs`. Concurrent and multi-file programs both compile with it, imports and all |
 | Initial structured concurrency: transfer/capture rules, cancellation, cleanup | done | `docs/spec.md`; 17 interpreter tests and 17 native tests, all deadline-bounded. Both implementations join a scope before reporting a failure, verified at `-O0` and `-O2` against the interpreter for a failing body, a failing task, a failure below the body, nested scopes, and body-over-task precedence |
 | Structured developer interfaces, grammar/guide, formatting, repair workflow | done | `docs/diagnostics.md`, `schema/`, `docs/grammar.ebnf`, `docs/guide.md`, `scripts/repair.sh` |
 | Performance baselines, a profiling/optimisation pass, no unsupported speed claims | done | `docs/performance.md`, `bench/baseline.json` (Darwin), `bench/baseline-linux-aarch64.json` |
@@ -79,15 +79,6 @@ These are properties of the release, not a backlog.
   fairness, no cancellation beyond closing a channel, and no deadlock freedom. At
   roughly 4.5 µs per channel hand-off it is suited to coarse-grained work and not to
   fine-grained message passing.
-- **The bootstrap compiler reads and checks concurrency but cannot yet emit it.** The
-  Nazm-written parser produces the same `scope` and `spawn` trees as the reference, and
-  the Nazm-written checker types `Chan`, knows the four `chan_*` built-ins and enforces
-  both task rules (`N0320`, `N0321`) with the reference's codes and spans. Lowering is
-  what is missing: `compiler/emit.nz` refuses `scope` and `spawn` by name, at their own
-  position, and writes no IR at all rather than something that would link. What it needs
-  is the task and channel runtime — `@nz.spawn`, `@nz.scope_join`, and the mutex,
-  condition variable and ring buffer behind `Chan` — which `crates/nazm-lir/src/emit.rs`
-  has and this one does not.
 - **The bootstrap concatenates its sources rather than importing them.** Not a gap in
   the compiler — `compiler/module.nz` resolves `use` and the compiler written in Nazm
   builds a multi-file program on its own (`selfhost.rs`,
@@ -111,14 +102,14 @@ These are properties of the release, not a backlog.
 ## Results
 
 `cargo test --workspace`, run through `cargo xtask contained` on Linux:
-**546 passed, 0 failed, 6 ignored.** What they cover, grouped by the question each group
+**548 passed, 0 failed, 6 ignored.** What they cover, grouped by the question each group
 answers:
 
 | | count | what it establishes |
 | --- | ---: | --- |
 | Language semantics (`nazm-core/tests/language.rs`) | 114 | each rule in `docs/spec.md` that a refactor could quietly reverse |
 | Native end-to-end (`nazm-cli/tests/build.rs`) | 127 | every case compiled at `-O0` **and** `-O2`, and compared against the interpreter |
-| Self-hosting differentials (`nazm-cli/tests/selfhost.rs`) | 17 | the Nazm lexer, parser and checker against the Rust ones over every `.nz` in the tree, and the full bootstrap chain |
+| Self-hosting differentials (`nazm-cli/tests/selfhost.rs`) | 19 | the Nazm lexer, parser and checker against the Rust ones over every `.nz` in the tree, the full bootstrap chain, its own module resolution, and concurrency compiled by it end to end |
 | Concurrency, interpreted (`nazm-core/tests/concurrency.rs`) | 17 | joins, capture, cancellation, cleanup, contention — every one with a deadline |
 | Concurrency, native (`nazm-cli/tests/concurrent.rs`) | 17 | the same programs compiled, at `-O0` and `-O2`, against a written expectation *and* the interpreter. Six of them establish that a failure joins its scope before it is reported, by giving a task an observable effect and ordering it with channel handshakes rather than by how fast anything runs |
 | Machine interface (`nazm-cli/tests/schemas.rs`) | 5 | real command output validated against `schema/*.json` |
