@@ -29,6 +29,14 @@ pub struct Signature {
 struct Binding {
     ty: Type,
     mutable: bool,
+    /// Where the name was written in the declaration, when there is a declaration to
+    /// edit. `None` for a parameter.
+    ///
+    /// Carried only so that the "not mutable" diagnostic can offer an edit at the
+    /// **`let`**. The obvious span — the name in the failing assignment — produces
+    /// `mut x = 2;`, which is not a statement in this language: a fix that emits
+    /// something that does not parse is worse than no fix, because a tool applies it.
+    declared_at: Option<Span>,
 }
 
 /// Lexical scopes. Innermost last.
@@ -59,9 +67,16 @@ impl Scopes {
         self.frames.last().is_some_and(|f| f.contains_key(name))
     }
 
-    fn define(&mut self, name: &str, ty: Type, mutable: bool) {
+    fn define(&mut self, name: &str, ty: Type, mutable: bool, declared_at: Option<Span>) {
         if let Some(f) = self.frames.last_mut() {
-            f.insert(name.to_owned(), Binding { ty, mutable });
+            f.insert(
+                name.to_owned(),
+                Binding {
+                    ty,
+                    mutable,
+                    declared_at,
+                },
+            );
         }
     }
 }
@@ -254,7 +269,9 @@ impl Checker {
             // Parameters are never mutable. A mutable parameter is a local copy, which
             // reads as an out-parameter to anyone who has not checked the calling
             // convention; `let mut` in the body says the same thing unambiguously.
-            self.scopes.define(&p.name, ty, false);
+            // No declaration span: `mut` on a parameter is `N0311`, so there is no
+            // edit at the declaration that would make this assignment legal.
+            self.scopes.define(&p.name, ty, false, None);
         }
 
         let declared = self.resolve_type(&f.return_type.name, f.return_type.span);
@@ -372,7 +389,8 @@ impl Checker {
                         ),
                     );
                 }
-                self.scopes.define(&l.name, ty, l.mutable);
+                self.scopes
+                    .define(&l.name, ty, l.mutable, Some(l.name_span));
                 false
             }
             Stmt::Assign(a) => {
@@ -544,19 +562,31 @@ impl Checker {
         };
 
         if !binding.mutable {
-            self.errors.push(
-                Diagnostic::error(
-                    codes::ASSIGN_TO_IMMUTABLE,
-                    a.name_span,
-                    format!("`{}` is not mutable", a.name),
-                )
-                .help("bindings are immutable unless written `let mut`")
-                .fix(
-                    a.name_span,
-                    format!("mut {}", a.name),
-                    "make the binding mutable",
-                ),
+            let d = Diagnostic::error(
+                codes::ASSIGN_TO_IMMUTABLE,
+                a.name_span,
+                format!("`{}` is not mutable", a.name),
             );
+            // The edit belongs at the `let`, not here. A parameter has no `let` to edit
+            // — `mut` on one is refused — so it gets the other repair as prose instead
+            // of an edit that would not compile.
+            self.errors.push(match binding.declared_at {
+                Some(at) => d
+                    .help("bindings are immutable unless written `let mut`")
+                    .secondary(at, "declared here")
+                    .fix_automatically(
+                        at,
+                        format!("mut {}", a.name),
+                        "make the binding mutable",
+                        "`mut` is the only thing making this assignment illegal, and \
+                         adding it to a declaration changes nothing else about the \
+                         program",
+                    ),
+                None => d.help(
+                    "this is a parameter, and parameters are never mutable. Bind a \
+                     local from it instead: `let mut n = n;`",
+                ),
+            });
         }
 
         // Checked against the binding's type, so a reassignment cannot change it. A
@@ -601,10 +631,13 @@ impl Checker {
                     format!("a loop body has no value, but this produces `{t}`"),
                 )
                 .help("add `;` to discard it, or assign it to something")
-                .fix(
+                .fix_with_review(
                     nazm_span::Span::new(tail.span().end, tail.span().end),
                     ";",
                     "discard the value",
+                    "the value was meant to be discarded rather than used — assigning \
+                     it to something is the other repair, and this cannot tell which \
+                     was meant",
                 ),
             );
         }

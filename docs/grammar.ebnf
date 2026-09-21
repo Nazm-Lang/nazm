@@ -1,0 +1,126 @@
+(* The Nazm grammar.
+ *
+ * This file is an artefact, not a description: `crates/nazm-syntax/tests/grammar.rs`
+ * reads it and checks three things against the real implementation.
+ *
+ *   1. Every terminal written here is a real token, and every token the lexer has is
+ *      written here. A keyword added to the lexer and not to the grammar fails the test.
+ *   2. Every nonterminal referenced is defined, and every nonterminal defined is
+ *      reachable from `program`. A rule nobody uses is a rule nobody maintains.
+ *   3. Every rule carries at least one `@example`, and every example is fed to the real
+ *      parser and must parse with no diagnostics. A grammar whose examples the parser
+ *      rejects is describing a language that does not exist.
+ *
+ * What the test does *not* do is prove the parser accepts exactly this language. That
+ * would need a generated parser, and this one is written by hand — deliberately, for the
+ * diagnostics. So: the terminals are exact, the examples are executable, and the
+ * structure is a claim checked by review. `docs/guide.md` is generated from this file.
+ *
+ * Notation: `=` defines, `|` alternates, `{ x }` is zero or more, `[ x ]` is optional,
+ * `( )` groups, quoted text is a terminal, UPPERCASE is a token class.
+ *)
+
+(* @example fn main() -> Int { 0 } *)
+(* @example use "other.nz"; fn main() -> Int { 0 } *)
+program = { use_item } , { function } ;
+
+(* @example use "lib/helpers.nz"; fn main() -> Int { 0 } *)
+use_item = "use" , STRING , ";" ;
+
+(* @example fn main() -> Int { 0 } *)
+(* @example fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) } *)
+function = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block ;
+
+(* @example fn f(a: Int, b: Str) -> Int { str_len(b) + a } fn main() -> Int { f(1, "x") } *)
+parameters = parameter , { "," , parameter } ;
+
+(* @example fn f(n: Int) -> Int { n } fn main() -> Int { f(1) } *)
+parameter = IDENT , ":" , type ;
+
+(* A name, and only a name. Which names are types — `Int`, `Bool`, `Str`, `Ints`,
+ * `Strs`, `Chan` — is a *checking* question, not a grammatical one: the parser accepts
+ * any identifier here and the checker reports `N0305` for one that is not a type. A
+ * grammar that listed them would be claiming the parser rejects `fn f(x: Widget)`,
+ * which it does not — it parses it and then says what is wrong with it, which is how
+ * one mistake stays one error.
+ *)
+(* @example fn f(c: Chan) -> Int { 0 } fn main() -> Int { f(chan_new(1)) } *)
+type = IDENT ;
+
+(* @example fn main() -> Int { let a = 1; a } *)
+(* @example fn main() -> Int { 1 } *)
+block = "{" , { statement } , [ expression ] , "}" ;
+
+(* @example fn main() -> Int { let a = 1; a } *)
+statement = let_statement
+          | assignment
+          | while_statement
+          | return_statement
+          | break_statement
+          | continue_statement
+          | scope_statement
+          | spawn_statement
+          | expression_statement ;
+
+(* @example fn main() -> Int { let a = 1; a } *)
+(* @example fn main() -> Int { let mut a = 1; a = 2; a } *)
+let_statement = "let" , [ "mut" ] , IDENT , "=" , expression , ";" ;
+
+(* @example fn main() -> Int { let mut a = 1; a = 2; a } *)
+assignment = IDENT , "=" , expression , ";" ;
+
+(* @example fn main() -> Int { let mut i = 0; while i < 3 { i = i + 1; } i } *)
+while_statement = "while" , expression , block ;
+
+(* @example fn f() -> Int { return 1; } fn main() -> Int { f() } *)
+return_statement = "return" , expression , ";" ;
+
+(* @example fn main() -> Int { let mut i = 0; while true { break; } i } *)
+break_statement = "break" , ";" ;
+
+(* @example fn main() -> Int { let mut i = 0; while i < 3 { i = i + 1; continue; } i } *)
+continue_statement = "continue" , ";" ;
+
+(* @example fn w(c: Chan) -> Int { 0 } fn main() -> Int { let c = chan_new(1); scope { spawn w(c); } 0 } *)
+scope_statement = "scope" , block ;
+
+(* @example fn w(c: Chan, n: Int) -> Int { 0 } fn main() -> Int { let c = chan_new(1); scope { spawn w(c, 1); } 0 } *)
+spawn_statement = "spawn" , IDENT , "(" , [ arguments ] , ")" , ";" ;
+
+(* @example fn main() -> Int { print("hi"); 0 } *)
+expression_statement = expression , ";" ;
+
+(* @example fn main() -> Int { 1 + 2 * 3 } *)
+expression = comparison ;
+
+(* @example fn main() -> Int { if 1 < 2 { 1 } else { 0 } } *)
+comparison = sum , { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) , sum } ;
+
+(* @example fn main() -> Int { 1 + 2 - 3 } *)
+sum = product , { ( "+" | "-" ) , product } ;
+
+(* @example fn main() -> Int { 2 * 3 / 4 % 5 } *)
+product = unary , { ( "*" | "/" | "%" ) , unary } ;
+
+(* @example fn main() -> Int { -1 } *)
+unary = [ "-" ] , primary ;
+
+(* @example fn main() -> Int { (1 + 2) * 3 } *)
+primary = INTEGER
+        | STRING
+        | "true"
+        | "false"
+        | IDENT
+        | call
+        | if_expression
+        | "(" , expression , ")" ;
+
+(* @example fn main() -> Int { str_len("abc") } *)
+call = IDENT , "(" , [ arguments ] , ")" ;
+
+(* @example fn main() -> Int { ints_set(ints_new(), 0, 1) } *)
+arguments = expression , { "," , expression } ;
+
+(* @example fn main() -> Int { if true { 1 } else { 2 } } *)
+(* @example fn main() -> Int { let mut n = 0; if true { n = 1; } n } *)
+if_expression = "if" , expression , block , [ "else" , ( block | if_expression ) ] ;

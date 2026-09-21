@@ -227,7 +227,8 @@ independent acceptance tests and specified static checks."**
 cargo build --workspace
 cargo test  --workspace
 cargo lint              # clippy; CI runs this same alias, so they cannot drift
-cargo xtask check       # architectural gates
+cargo xtask check       # architectural gates, and the guide against the grammar
+cargo xtask guide       # rewrite docs/guide.md from docs/grammar.ebnf
 
 # Not in the default set: these drive nested cargo builds and kill real process
 # groups, and `cargo xtask mutate` would otherwise pay their cost 44 times over.
@@ -240,24 +241,44 @@ have built the eventual backend. The workspace's declared MSRV floor is 1.85; `x
 declares 1.89 for itself, because it uses std's file locking and a development tool has no
 business raising the floor for the crates that ship.
 
+## The commands
+
+| | |
+| --- | --- |
+| `nazm run FILE` | Check and evaluate, printing the value of `main` |
+| `nazm check FILE` | Check without evaluating |
+| `nazm build FILE` | Compile to a native executable |
+| `nazm fmt FILE…` | Lay files out canonically. `--check` writes nothing and fails if any would change |
+| `nazm fix FILE` | Apply the repairs the compiler already knows about. Nothing is written without `--apply`, and only fixes marked `automatic` are ever applied |
+| `nazm capabilities` | What this build supports, read from the compiler's own tables |
+
+`--json` on any of them emits machine-readable output under a **named, versioned
+schema**; the schemas are in [`schema/`](schema) and the compatibility rules are in
+[`docs/diagnostics.md`](docs/diagnostics.md). `scripts/repair.sh` is the whole repair
+loop as one command: apply every automatic fix until a pass changes nothing, lay the
+result out, and report what is left as JSON.
+
 ## What is not built yet
 
 Almost everything. Specifically:
 
-- **The language is an interpreter with one narrow native path.** Lexer, parser, type
-  checker and tree-walking evaluator, plus `nazm build` for `Int`/`Bool` expressions and
-  value-position `if` — no functions, loops, mutation or `Str`. One
-  IR level (`nazm-lir`), one backend (LLVM IR as text → `clang`), one verified target
-  (`aarch64-apple-darwin`); other targets are **unverified rather than unsupported**.
-  Nothing here says anything yet about the performance claims: `-O0` is the default, no
-  optimisation work has been done, and no measurement has been taken. The executable language is
-  **v0.3**; `docs/spec.md` keeps its sections versioned, so a *Settled for v0.1* entry
-  records what v0.1 decided rather than what is true now. Everything under *Open* is
-  undecided.
-- **No concurrency at all.** Not a partial implementation — nothing. `docs/spec.md` §6
-  settles the structured-concurrency borrow region as a *design*, and `docs/roadmap.md`
-  puts the specification work before any runtime. There is no scheduler and none is being
-  written.
+- **The language is an interpreter and a native path over the same subset.** Lexer,
+  parser, type checker and tree-walking evaluator; `nazm build` compiles everything in
+  the list above. One IR level (`nazm-lir`), one backend (LLVM IR as text → `clang`),
+  one verified target (`aarch64-apple-darwin`); other targets are **unverified rather
+  than unsupported**. Run `nazm capabilities` for what this build actually has, read
+  from the compiler's own tables rather than from this paragraph. Nothing here says
+  anything yet about the performance claims: `-O0` is the default, no optimisation work
+  has been done, and no measurement has been taken. `docs/spec.md` keeps its sections
+  versioned, so a *Settled for v0.1* entry records what v0.1 decided rather than what is
+  true now. Everything under *Open* is undecided.
+- **Concurrency is an initial model, and only that.** `scope`, `spawn` and a bounded
+  `Chan` of `Int`, specified in `docs/spec.md` before being implemented, running
+  interpreted and compiled. **One operating-system thread per task and nothing more**:
+  no M:N scheduling, no work stealing, no task density, no fairness, no deadlock
+  freedom, and no cancellation beyond closing a channel. The compiler written in Nazm
+  does not accept it — concurrency is outside the bootstrap subset, and says so by
+  name.
 - **The harness is partial.** Real, tested, and mutation-checked (`cargo xtask mutate`,
   44 runnable catalogued defects, all caught **as of `8d67a7d`** — plus two defects
   documented in `mutations.toml` as *uncovered*, which a passing run says nothing about):

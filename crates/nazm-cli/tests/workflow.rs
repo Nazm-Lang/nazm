@@ -1,0 +1,205 @@
+//! The repair workflow, end to end: broken file in, working file out.
+//!
+//! `scripts/repair.sh` is the whole loop — apply every automatic fix until a pass
+//! changes nothing, lay the result out, report what is left — and the reason it is a
+//! script rather than a paragraph in a README is that a workflow nobody runs is a
+//! workflow nobody has checked. These tests run it.
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+fn write(body: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("prog.nz");
+    std::fs::write(&src, body).expect("write");
+    (dir, src)
+}
+
+/// Run the repair script over one file, returning `(exit status, stdout, the new text)`.
+fn repair(path: &Path) -> (Option<i32>, String, String) {
+    let out = Command::new("sh")
+        .arg(repo_root().join("scripts/repair.sh"))
+        .arg(path)
+        .env("NAZM", NAZM)
+        .output()
+        .expect("run repair.sh");
+    let text = std::fs::read_to_string(path).expect("read back");
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        text,
+    )
+}
+
+fn run(path: &Path) -> (Option<i32>, String) {
+    let out = Command::new(NAZM)
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .expect("run");
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).trim().to_owned(),
+    )
+}
+
+#[test]
+fn a_broken_program_is_repaired_and_runs() {
+    // Two mistakes of the same kind in one file, both automatically fixable, and the
+    // file is badly laid out on top. One invocation, and it compiles and runs.
+    let (dir, path) = write("fn main()->Int{\nlet x=1;\nx=2;\nlet y=3;\ny=4;\nx+y}\n");
+    let (code, _, text) = repair(&path);
+    assert_eq!(code, Some(0), "repair left errors behind:\n{text}");
+    assert_eq!(
+        text,
+        "fn main() -> Int {\n    let mut x = 1;\n    x = 2;\n    let mut y = 3;\n    y = 4;\n    x + y\n}\n",
+        "got:\n{text}"
+    );
+    assert_eq!(run(&path), (Some(0), "6".to_owned()));
+    drop(dir);
+}
+
+#[test]
+fn a_repair_that_reveals_another_error_still_finishes() {
+    // The reason the script loops. Whether one round is enough depends on the order
+    // the checker reports things in, which is not something a workflow should depend on.
+    let (dir, path) = write(
+        "fn main() -> Int {\n    let a = 1;\n    a = 2;\n    let b = a;\n    b = 3;\n    a + b\n}\n",
+    );
+    let (code, _, text) = repair(&path);
+    assert_eq!(code, Some(0), "not fully repaired:\n{text}");
+    assert!(text.contains("let mut a = 1;"), "{text}");
+    assert!(text.contains("let mut b = a;"), "{text}");
+    drop(dir);
+}
+
+#[test]
+fn what_needs_review_is_reported_and_not_applied() {
+    // A missing `;` has a fix, and it is `needs_review`: adding one discards a value
+    // that may have been meant as the block's. The workflow must leave it, and must say
+    // so rather than silently doing nothing.
+    let (dir, path) = write(
+        "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; i }\n    i\n}\n",
+    );
+    let (code, out, text) = repair(&path);
+    assert_eq!(code, Some(1), "an unrepairable file must report:\n{text}");
+    assert!(
+        out.contains("\"code\":\"N0300\"") || out.contains("N0300"),
+        "the remaining diagnostic should be reported as JSON: {out}"
+    );
+
+    let listed = Command::new(NAZM)
+        .args(["fix", "--json", path.to_str().unwrap()])
+        .output()
+        .expect("run");
+    let listed = String::from_utf8_lossy(&listed.stdout);
+    assert!(
+        listed.contains("\"applicability\":\"needs_review\""),
+        "the suggestion should still be offered: {listed}"
+    );
+    assert!(
+        listed.contains("\"applied\":false"),
+        "and must not have been applied: {listed}"
+    );
+    drop(dir);
+}
+
+#[test]
+fn a_file_that_does_not_lex_is_reported_rather_than_rewritten() {
+    let (dir, path) = write("fn main() -> Int { \"unterminated }\n");
+    let before = std::fs::read_to_string(&path).expect("read");
+    let (code, _, after) = repair(&path);
+    assert_eq!(code, Some(1));
+    assert_eq!(before, after, "nothing should have been written");
+    drop(dir);
+}
+
+#[test]
+fn fmt_check_passes_on_what_fmt_produces() {
+    let (dir, path) = write("fn main()->Int{let a=1;a}");
+    let check = |expect: Option<i32>| {
+        let out = Command::new(NAZM)
+            .args(["fmt", "--check", path.to_str().unwrap()])
+            .output()
+            .expect("run");
+        assert_eq!(
+            out.status.code(),
+            expect,
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    check(Some(1));
+    let out = Command::new(NAZM)
+        .args(["fmt", path.to_str().unwrap()])
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(0));
+    check(Some(0));
+    drop(dir);
+}
+
+#[test]
+fn fix_writes_nothing_without_apply() {
+    let (dir, path) = write("fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n");
+    let before = std::fs::read_to_string(&path).expect("read");
+    let out = Command::new(NAZM)
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .expect("run");
+    assert_eq!(out.status.code(), Some(1), "the file still has an error");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("would apply"),
+        "it should say what it would do"
+    );
+    assert_eq!(
+        before,
+        std::fs::read_to_string(&path).expect("read"),
+        "the default must not write"
+    );
+    drop(dir);
+}
+
+#[test]
+fn every_tree_source_is_already_formatted() {
+    // The formatter is only useful if the tree is what it produces; otherwise
+    // `--check` is a gate nobody can pass and everybody turns off.
+    let root = repo_root();
+    let mut files = Vec::new();
+    for folder in ["compiler", "examples"] {
+        if let Ok(entries) = std::fs::read_dir(root.join(folder)) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().is_some_and(|e| e == "nz") {
+                    files.push(p);
+                }
+            }
+        }
+    }
+    files.sort();
+    assert!(files.len() >= 5, "only {} sources", files.len());
+
+    let out = Command::new(NAZM)
+        .arg("fmt")
+        .arg("--check")
+        .args(&files)
+        .output()
+        .expect("run");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "these are not canonically laid out; run `nazm fmt` on them:\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}

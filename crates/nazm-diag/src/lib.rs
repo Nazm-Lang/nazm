@@ -128,11 +128,49 @@ pub enum Severity {
     Error,
 }
 
+/// The identifier every emitted diagnostic object carries in its `schema` field.
+///
+/// `name/major`. The major number changes only when a consumer written against the
+/// previous one would be **wrong** — a field removed or renamed, or one whose meaning
+/// changed. Adding a field, adding a diagnostic code, and adding a variant to an
+/// existing enum are all compatible changes, because a consumer is required to ignore
+/// what it does not recognise. `docs/diagnostics.md` states the rule in full and is the
+/// document a tool author reads.
+pub const SCHEMA: &str = "nazm.diagnostic/1";
+
+/// One diagnostic as it goes over the wire: the diagnostic, and the shape it is in.
+///
+/// The version travels with **every object** rather than in a header, because the output
+/// is one JSON object per line and a consumer may read any single line of it — a header
+/// would be a version that half the readers never see.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Report {
+    pub schema: String,
+    #[serde(flatten)]
+    pub diagnostic: Diagnostic,
+}
+
 /// A span with something to say about it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Label {
     pub span: Span,
     pub message: String,
+}
+
+/// Whether an edit may be applied without a person looking at it.
+///
+/// Two values, because there are two genuinely different situations and collapsing them
+/// is what makes an automatic repair tool untrustworthy. A tool that applies everything
+/// eventually applies a guess; a tool that applies nothing is a linter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Applicability {
+    /// Correct whenever the diagnostic is correct, and changes nothing else. A tool may
+    /// apply it unattended.
+    Automatic,
+    /// Resolves the diagnostic, and may not be what was meant. The `precondition` says
+    /// when it is the right edit; a tool presents it rather than applying it.
+    NeedsReview,
 }
 
 /// An edit that would resolve the diagnostic.
@@ -144,6 +182,14 @@ pub struct Fix {
     pub span: Span,
     pub replacement: String,
     pub description: String,
+    pub applicability: Applicability,
+    /// When this edit is the right one, in one sentence.
+    ///
+    /// **Always present**, including on an [`Applicability::Automatic`] fix, where it
+    /// states the reason the edit is unconditional. A fix with no precondition written
+    /// down is a fix whose author did not ask when it could be wrong, and this field
+    /// existing is what forces the question at every site.
+    pub precondition: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,24 +247,70 @@ impl Diagnostic {
         self
     }
 
+    /// An edit a tool may apply unattended. `why` says what makes it unconditional.
     #[must_use]
-    pub fn fix(
+    pub fn fix_automatically(
+        self,
+        span: Span,
+        replacement: impl Into<String>,
+        description: impl Into<String>,
+        why: impl Into<String>,
+    ) -> Self {
+        self.with_fix(
+            span,
+            replacement,
+            description,
+            Applicability::Automatic,
+            why,
+        )
+    }
+
+    /// An edit that resolves the diagnostic but may not be what was meant. `when` says
+    /// the condition under which it is right.
+    #[must_use]
+    pub fn fix_with_review(
+        self,
+        span: Span,
+        replacement: impl Into<String>,
+        description: impl Into<String>,
+        when: impl Into<String>,
+    ) -> Self {
+        self.with_fix(
+            span,
+            replacement,
+            description,
+            Applicability::NeedsReview,
+            when,
+        )
+    }
+
+    fn with_fix(
         mut self,
         span: Span,
         replacement: impl Into<String>,
         description: impl Into<String>,
+        applicability: Applicability,
+        precondition: impl Into<String>,
     ) -> Self {
         self.fixes.push(Fix {
             span,
             replacement: replacement.into(),
             description: description.into(),
+            applicability,
+            precondition: precondition.into(),
         });
         self
     }
 
-    /// The machine-readable form. One JSON object per diagnostic.
+    /// The machine-readable form. One JSON object per diagnostic, carrying the version
+    /// of the shape it is in.
+    ///
+    /// See `docs/diagnostics.md` for the schema and what may change inside a version.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(self)
+        serde_json::to_string(&Report {
+            schema: SCHEMA.to_owned(),
+            diagnostic: self.clone(),
+        })
     }
 
     /// The human-readable form: message, location, source line, and a caret.
@@ -277,7 +369,23 @@ impl Diagnostic {
             let _ = writeln!(out, "{pad} = help: {h}");
         }
         for f in &self.fixes {
-            let _ = writeln!(out, "{pad} = fix: {} -> `{}`", f.description, f.replacement);
+            // An automatic fix and one needing review get different words, because a
+            // reader deciding whether to run `nazm fix --apply` is deciding exactly
+            // that. The precondition is printed only for the one where it is a question
+            // being asked of them; the JSON carries it either way.
+            match f.applicability {
+                Applicability::Automatic => {
+                    let _ = writeln!(out, "{pad} = fix: {} -> `{}`", f.description, f.replacement);
+                }
+                Applicability::NeedsReview => {
+                    let _ = writeln!(
+                        out,
+                        "{pad} = suggestion: {} -> `{}`",
+                        f.description, f.replacement
+                    );
+                    let _ = writeln!(out, "{pad}   right when: {}", f.precondition);
+                }
+            }
         }
         out
     }
@@ -302,10 +410,48 @@ mod tests {
             "`x` is not defined",
         )
         .help("declare it with `let x = ...;` first")
-        .fix(Span::new(4, 5), "y", "did you mean `y`?");
+        .fix_with_review(
+            Span::new(4, 5),
+            "y",
+            "did you mean `y`?",
+            "`y` is the name that was meant",
+        );
         let json = d.to_json().unwrap();
         assert!(json.contains("N0200"), "{json}");
+        // The version travels with the object, and the object still reads back as a
+        // plain `Diagnostic`: a consumer that does not care about the envelope is not
+        // made to parse one.
+        assert!(json.contains(SCHEMA), "{json}");
         assert_eq!(serde_json::from_str::<Diagnostic>(&json).unwrap(), d);
+        assert_eq!(
+            serde_json::from_str::<Report>(&json).unwrap(),
+            Report {
+                schema: SCHEMA.to_owned(),
+                diagnostic: d
+            }
+        );
+    }
+
+    #[test]
+    fn a_suggestion_is_rendered_with_the_condition_it_rests_on() {
+        // The difference between a fix and a suggestion is the whole of what makes an
+        // automatic repair tool trustworthy, so it is visible in the terminal too and
+        // not only in the JSON.
+        let file = SourceFile::new("x.nz", "fn main() -> Int { 1 }");
+        let d = Diagnostic::error(codes::UNDEFINED_VARIABLE, Span::new(19, 20), "no")
+            .fix_with_review(Span::new(19, 20), "2", "use `2`", "two was meant");
+        let out = d.render(&file);
+        assert!(out.contains("suggestion: use `2`"), "{out}");
+        assert!(out.contains("right when: two was meant"), "{out}");
+
+        let d = Diagnostic::error(codes::UNDEFINED_VARIABLE, Span::new(19, 20), "no")
+            .fix_automatically(Span::new(19, 20), "2", "use `2`", "always");
+        let out = d.render(&file);
+        assert!(out.contains("fix: use `2`"), "{out}");
+        assert!(
+            !out.contains("right when"),
+            "an automatic fix asks the reader nothing: {out}"
+        );
     }
 
     #[test]

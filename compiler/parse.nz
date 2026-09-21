@@ -204,9 +204,9 @@ fn die(message: Str, offset: Int) -> Int {
 // negation from the `-` to its operand's end, and a parenthesised expression keeps its
 // own span rather than the brackets'.
 fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
-              nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
-              ops: Ints, opat: Ints, cname: Strs, cargs: Ints, vs: Ints, ve: Ints,
-              status: Ints, resuming: Bool, base: Int, naux: Ints) -> Int {
+        nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
+        ops: Ints, opat: Ints, cname: Strs, cargs: Ints, vs: Ints, ve: Ints,
+        status: Ints, resuming: Bool, base: Int, naux: Ints) -> Int {
     // `base` is how deep the operator stack was when *this* expression started. The
     // stacks are shared — an `if` suspends one expression while the expressions inside
     // its blocks are parsed — so every reduction stops here rather than at the bottom.
@@ -220,114 +220,114 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
         if skip_primary {
             skip_primary = false;
         } else {
-        // --- prefix: any run of unary minus -----------------------------------------
-        while kind_at(kinds, i) == k_minus() {
-            // `-` immediately before an out-of-range literal is not a negation of it:
-            // the two fold into one literal, which is the only way `Int::MIN` can be
-            // written. Left for the primary section, which is where literals are made.
-            if kind_at(kinds, i + 1) == k_int() {
-                if int_too_large(text_at(texts, i + 1)) { break; }
-            }
-            ints_push(ops, sent_unary());
-            ints_push(opat, start_at(starts, i));
-            i = i + 1;
-        }
-
-        // --- a primary ---------------------------------------------------------------
-        let t = kind_at(kinds, i);
-        let mut done_primary = false;
-
-        if t == k_minus() {
-            // Only reachable from the fold above: `-` and an out-of-range literal are
-            // one node, spanning both.
-            let text = text_at(texts, i + 1);
-            if text != "9223372036854775808" {
-                die("this integer does not fit in `Int`", start_at(starts, i));
-            }
-            emit(nk, nar, nst, nen, ntx, n_int(), 0, start_at(starts, i),
-                 end_at(ends, i + 1), str_concat("-", text));
-            ints_push(vs, start_at(starts, i));
-            ints_push(ve, end_at(ends, i + 1));
-            i = i + 2;
-            done_primary = true;
-        }
-        if t == k_int() {
-            if int_too_large(text_at(texts, i)) {
-                die("this integer does not fit in `Int`", start_at(starts, i));
-            }
-            emit(nk, nar, nst, nen, ntx, n_int(), 0, start_at(starts, i), end_at(ends, i), text_at(texts, i));
-            ints_push(vs, start_at(starts, i));
-            ints_push(ve, end_at(ends, i));
-            i = i + 1;
-            done_primary = true;
-        }
-        if t == k_true() {
-            emit(nk, nar, nst, nen, ntx, n_bool(), 0, start_at(starts, i), end_at(ends, i), "true");
-            ints_push(vs, start_at(starts, i));
-            ints_push(ve, end_at(ends, i));
-            i = i + 1;
-            done_primary = true;
-        }
-        if t == k_false() {
-            emit(nk, nar, nst, nen, ntx, n_bool(), 0, start_at(starts, i), end_at(ends, i), "false");
-            ints_push(vs, start_at(starts, i));
-            ints_push(ve, end_at(ends, i));
-            i = i + 1;
-            done_primary = true;
-        }
-        if t == k_str() {
-            emit(nk, nar, nst, nen, ntx, n_str(), 0, start_at(starts, i), end_at(ends, i), text_at(texts, i));
-            ints_push(vs, start_at(starts, i));
-            ints_push(ve, end_at(ends, i));
-            i = i + 1;
-            done_primary = true;
-        }
-        if t == k_lparen() {
-            // A sentinel, not a frame: nesting is depth on this stack.
-            ints_push(ops, sent_paren());
-            ints_push(opat, start_at(starts, i));
-            i = i + 1;
-            continue;
-        }
-        if t == k_if() {
-            // The condition is an ordinary expression; the sentinel is what tells the
-            // `{` after it that this is an `if` rather than the end of a statement.
-            ints_push(ops, sent_if());
-            ints_push(opat, start_at(starts, i));
-            i = i + 1;
-            continue;
-        }
-        if t == k_ident() {
-            if kind_at(kinds, i + 1) == k_lparen() {
-                let name = text_at(texts, i);
-                let at = start_at(starts, i);
-                i = i + 2;
-                if kind_at(kinds, i) == k_rparen() {
-                    // No arguments: the call is complete without ever opening a frame.
-                    emit(nk, nar, nst, nen, ntx, n_call(), 0, at, end_at(ends, i), name);
-                    ints_push(vs, at);
-                    ints_push(ve, end_at(ends, i));
-                    i = i + 1;
-                    done_primary = true;
-                } else {
-                    ints_push(ops, sent_call());
-                    ints_push(opat, at);
-                    strs_push(cname, name);
-                    ints_push(cargs, 0);
-                    continue;
+            // --- prefix: any run of unary minus -----------------------------------------
+            while kind_at(kinds, i) == k_minus() {
+                // `-` immediately before an out-of-range literal is not a negation of it:
+                // the two fold into one literal, which is the only way `Int::MIN` can be
+                // written. Left for the primary section, which is where literals are made.
+                if kind_at(kinds, i + 1) == k_int() {
+                    if int_too_large(text_at(texts, i + 1)) { break; }
                 }
-            } else {
-                emit(nk, nar, nst, nen, ntx, n_var(), 0, start_at(starts, i), end_at(ends, i), text_at(texts, i));
+                ints_push(ops, sent_unary());
+                ints_push(opat, start_at(starts, i));
+                i = i + 1;
+            }
+
+            // --- a primary ---------------------------------------------------------------
+            let t = kind_at(kinds, i);
+            let mut done_primary = false;
+
+            if t == k_minus() {
+                // Only reachable from the fold above: `-` and an out-of-range literal are
+                // one node, spanning both.
+                let text = text_at(texts, i + 1);
+                if text != "9223372036854775808" {
+                    die("this integer does not fit in `Int`", start_at(starts, i));
+                }
+                emit(nk, nar, nst, nen, ntx, n_int(), 0, start_at(starts, i),
+                        end_at(ends, i + 1), str_concat("-", text));
+                ints_push(vs, start_at(starts, i));
+                ints_push(ve, end_at(ends, i + 1));
+                i = i + 2;
+                done_primary = true;
+            }
+            if t == k_int() {
+                if int_too_large(text_at(texts, i)) {
+                    die("this integer does not fit in `Int`", start_at(starts, i));
+                }
+                emit(nk, nar, nst, nen, ntx, n_int(), 0, start_at(starts, i), end_at(ends, i), text_at(texts, i));
                 ints_push(vs, start_at(starts, i));
                 ints_push(ve, end_at(ends, i));
                 i = i + 1;
                 done_primary = true;
             }
-        }
+            if t == k_true() {
+                emit(nk, nar, nst, nen, ntx, n_bool(), 0, start_at(starts, i), end_at(ends, i), "true");
+                ints_push(vs, start_at(starts, i));
+                ints_push(ve, end_at(ends, i));
+                i = i + 1;
+                done_primary = true;
+            }
+            if t == k_false() {
+                emit(nk, nar, nst, nen, ntx, n_bool(), 0, start_at(starts, i), end_at(ends, i), "false");
+                ints_push(vs, start_at(starts, i));
+                ints_push(ve, end_at(ends, i));
+                i = i + 1;
+                done_primary = true;
+            }
+            if t == k_str() {
+                emit(nk, nar, nst, nen, ntx, n_str(), 0, start_at(starts, i), end_at(ends, i), text_at(texts, i));
+                ints_push(vs, start_at(starts, i));
+                ints_push(ve, end_at(ends, i));
+                i = i + 1;
+                done_primary = true;
+            }
+            if t == k_lparen() {
+                // A sentinel, not a frame: nesting is depth on this stack.
+                ints_push(ops, sent_paren());
+                ints_push(opat, start_at(starts, i));
+                i = i + 1;
+                continue;
+            }
+            if t == k_if() {
+                // The condition is an ordinary expression; the sentinel is what tells the
+                // `{` after it that this is an `if` rather than the end of a statement.
+                ints_push(ops, sent_if());
+                ints_push(opat, start_at(starts, i));
+                i = i + 1;
+                continue;
+            }
+            if t == k_ident() {
+                if kind_at(kinds, i + 1) == k_lparen() {
+                    let name = text_at(texts, i);
+                    let at = start_at(starts, i);
+                    i = i + 2;
+                    if kind_at(kinds, i) == k_rparen() {
+                        // No arguments: the call is complete without ever opening a frame.
+                        emit(nk, nar, nst, nen, ntx, n_call(), 0, at, end_at(ends, i), name);
+                        ints_push(vs, at);
+                        ints_push(ve, end_at(ends, i));
+                        i = i + 1;
+                        done_primary = true;
+                    } else {
+                        ints_push(ops, sent_call());
+                        ints_push(opat, at);
+                        strs_push(cname, name);
+                        ints_push(cargs, 0);
+                        continue;
+                    }
+                } else {
+                    emit(nk, nar, nst, nen, ntx, n_var(), 0, start_at(starts, i), end_at(ends, i), text_at(texts, i));
+                    ints_push(vs, start_at(starts, i));
+                    ints_push(ve, end_at(ends, i));
+                    i = i + 1;
+                    done_primary = true;
+                }
+            }
 
-        if done_primary == false {
-            die("expected an expression", start_at(starts, i));
-        }
+            if done_primary == false {
+                die("expected an expression", start_at(starts, i));
+            }
         }
 
         // --- everything after an operand ---------------------------------------------
@@ -541,7 +541,7 @@ fn pend_while() -> Int { 4 }
 fn pend_stmt() -> Int { 5 }
 
 fn push_frame(fk: Ints, fstart: Ints, fcount: Ints, ftail: Ints, faux: Ints, fparams: Ints,
-              ftext: Strs, kind: Int, start: Int, aux: Int, params: Int, text: Str) -> Int {
+        ftext: Strs, kind: Int, start: Int, aux: Int, params: Int, text: Str) -> Int {
     ints_push(fk, kind);
     ints_push(fstart, start);
     ints_push(fcount, 0);
@@ -570,8 +570,8 @@ fn resumable(pk: Ints, pdepth: Ints, fk: Ints) -> Bool {
 }
 
 fn finish_if(ops: Ints, opat: Ints, vs: Ints, ve: Ints,
-             nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
-             arity: Int, close: Int) -> Int {
+        nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
+        arity: Int, close: Int) -> Int {
     let at = ints_get(opat, ints_len(opat) - 1);
     pop_op(ops, opat);
     pop_val(vs, ve);
@@ -582,7 +582,7 @@ fn finish_if(ops: Ints, opat: Ints, vs: Ints, ve: Ints,
 }
 
 fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
-                 nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints) -> Int {
+        nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints) -> Int {
     let fk = ints_new();
     let fstart = ints_new();
     let fcount = ints_new();
@@ -621,8 +621,8 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         // --- an expression is in progress -------------------------------------------
         if resumable(pk, pdepth, fk) {
             i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx,
-                           ops, opat, cname, cargs, vs, ve, status, resuming,
-                           ints_get(pbase, ints_len(pbase) - 1), naux);
+                    ops, opat, cname, cargs, vs, ve, status, resuming,
+                    ints_get(pbase, ints_len(pbase) - 1), naux);
             resuming = false;
             if ints_get(status, 0) == 1 {
                 // Suspended at an `if`'s `{`: the condition is done and the block is
@@ -630,7 +630,7 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 let brace = start_at(starts, i);
                 i = i + 1;
                 push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
-                           frame_if_then(), brace, 0, 0, "");
+                        frame_if_then(), brace, 0, 0, "");
                 continue;
             }
             // The expression finished. Complete whatever it was for.
@@ -647,7 +647,7 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 let brace = start_at(starts, i);
                 i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a loop body");
                 push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
-                           frame_while(), brace, at, 0, "");
+                        frame_while(), brace, at, 0, "");
                 continue;
             }
             if what == pend_stmt() {
@@ -722,7 +722,7 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 let pend = end_at(ends, i);
                 i = i + 1;
                 emit(nk, nar, nst, nen, ntx, n_param(), 0, pstart, pend,
-                     str_concat(str_concat(pname, ":"), ptype));
+                        str_concat(str_concat(pname, ":"), ptype));
                 params = params + 1;
                 if kind_at(kinds, i) == k_comma() { i = i + 1; }
             }
@@ -736,8 +736,8 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             let brace = start_at(starts, i);
             i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the body");
             push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
-                       frame_body(), brace, fn_start, params,
-                       str_concat(str_concat(name, ":"), ret));
+                    frame_body(), brace, fn_start, params,
+                    str_concat(str_concat(name, ":"), ret));
             continue;
         }
 
@@ -762,7 +762,8 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             ints_pop(fparams);
             strs_pop(ftext);
             emit(nk, nar, nst, nen, ntx, n_block(), count + tail, start, close,
-                 if tail == 1 { "tail" } else { "" });
+                    if tail == 1 { "tail" } else { "" }
+            );
             if kind == frame_if_then() {
                 // `else` or not decides the arity, and the `if`'s span runs to whichever
                 // block closed last.
@@ -770,9 +771,9 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                     i = i + 1;
                     let brace2 = start_at(starts, i);
                     i = expect(kinds, starts, i, k_lbrace(),
-                               "expected `{` after `else`");
+                            "expected `{` after `else`");
                     push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
-                               frame_if_else(), brace2, 0, 0, "");
+                            frame_if_else(), brace2, 0, 0, "");
                     continue;
                 }
                 finish_if(ops, opat, vs, ve, nk, nar, nst, nen, ntx, 2, close);
@@ -798,7 +799,7 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
 
         if top(ftail) == 1 {
             die("this block already produced its value; nothing can follow it",
-                start_at(starts, i));
+                    start_at(starts, i));
         }
 
         if t == k_let() {
@@ -828,7 +829,7 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 ints_push(pk, pend_assign());
                 ints_push(pdepth, ints_len(fk));
                 ints_push(pbase, ints_len(ops));
-            ints_push(pbase, ints_len(ops));
+                ints_push(pbase, ints_len(ops));
                 ints_push(pstart, stmt_start);
                 strs_push(ptext, name);
                 continue;
@@ -900,4 +901,3 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
     pad_aux(naux, nk);
     functions
 }
-

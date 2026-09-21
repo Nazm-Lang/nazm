@@ -1,0 +1,14 @@
+// Checked arithmetic in a tight loop.
+//
+// Every `+` and `*` here is an overflow-checked intrinsic and a branch, never `nsw`
+// (`docs/spec.md`). This is the program that says what that costs.
+
+fn main() -> Int {
+    let mut i = 0;
+    let mut acc = 0;
+    while i < 3000000 {
+        acc = acc + i % 7 * 3 - i % 5;
+        i = i + 1;
+    }
+    acc
+}

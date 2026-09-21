@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.diagnostic-1.json",
+  "title": "nazm.diagnostic/1",
+  "description": "One diagnostic from `nazm check`, `nazm run` or `nazm build --json`. Output is one object per line on stderr.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "code", "severity", "message", "primary", "secondary", "help", "fixes"],
+  "properties": {
+    "schema": {
+      "const": "nazm.diagnostic/1",
+      "description": "The shape this object is in. Present on every object, not in a header: a consumer may read any single line."
+    },
+    "code": {
+      "type": "string",
+      "pattern": "^N[0-9]{4}$",
+      "description": "Stable. A code never changes meaning and is never reused, so matching on one is the supported way to recognise a diagnostic."
+    },
+    "severity": { "enum": ["error"] },
+    "message": {
+      "type": "string",
+      "description": "One sentence, without a trailing full stop. Prose: match on `code`, not on this."
+    },
+    "primary": {
+      "$ref": "#/$defs/label",
+      "description": "The span the diagnostic is about. Always present."
+    },
+    "secondary": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/label" },
+      "description": "Spans that explain it — a previous definition, a conflicting branch."
+    },
+    "help": {
+      "type": ["string", "null"],
+      "description": "Why, or what to do. Prose, and optional — `null` when there is none."
+    },
+    "fixes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fix" },
+      "description": "Edits that would resolve it. Empty when none is known."
+    }
+  },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0, "description": "Byte offset, inclusive." },
+        "end": { "type": "integer", "minimum": 0, "description": "Byte offset, exclusive. Equal to `start` for an insertion point." }
+      }
+    },
+    "label": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["span", "message"],
+      "properties": {
+        "span": { "$ref": "#/$defs/span" },
+        "message": { "type": "string" }
+      }
+    },
+    "fix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["span", "replacement", "description", "applicability", "precondition"],
+      "properties": {
+        "span": { "$ref": "#/$defs/span" },
+        "replacement": {
+          "type": "string",
+          "description": "The text to put in place of `span`. Empty means delete."
+        },
+        "description": { "type": "string", "description": "What the edit does, for a person." },
+        "applicability": {
+          "enum": ["automatic", "needs_review"],
+          "description": "`automatic`: correct whenever the diagnostic is; a tool may apply it unattended. `needs_review`: resolves the diagnostic and may not be what was meant."
+        },
+        "precondition": {
+          "type": "string",
+          "description": "When this edit is the right one. Present on every fix, including automatic ones, where it states what makes the edit unconditional."
+        }
+      }
+    }
+  }
+}

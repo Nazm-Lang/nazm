@@ -160,6 +160,19 @@ impl SourceFile {
             .map_or(self.name.as_str(), |s| s.name.as_str())
     }
 
+    /// The file an offset falls in, and the offset **within that file**.
+    ///
+    /// What a tool applying an edit needs. A span in a merged buffer names a byte in one
+    /// of several files; writing at the merged offset would edit whichever file happens
+    /// to be first, at a position that means nothing.
+    #[must_use]
+    pub fn locate(&self, offset: u32) -> (&str, u32) {
+        self.segment_at(offset)
+            .map_or((self.name.as_str(), offset), |s| {
+                (s.name.as_str(), offset.saturating_sub(s.start))
+            })
+    }
+
     /// Every file in this buffer, in load order.
     #[must_use]
     pub fn file_names(&self) -> Vec<&str> {
