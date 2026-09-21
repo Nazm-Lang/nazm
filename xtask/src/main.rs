@@ -628,10 +628,28 @@ fn run_contained(args: &[String]) -> ExitCode {
             // The checkout stays read-only: a writable bind mount would put every write
             // on the host filesystem, which `--storage-opt` does not bound.
             bounds.deadline = Duration::from_secs(2400);
-            bounds.export_manifest =
-                Some(("/work/benchout/EXPORTS".to_owned(), repo.join("bench")));
             let saving = args.iter().any(|a| a == "--save");
             let mode = if saving { "--save" } else { "--check" };
+            // The supervisor decides the permitted names, from the mode it was asked for
+            // and the platform it measures itself — never from the manifest, which is the
+            // workload's own output. A check may export the record and nothing else, so
+            // an ordinary check cannot write a baseline at all.
+            let slug = match contained::image_platform_slug() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("contained: cannot establish the image's platform: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut allowed = vec!["record.json".to_owned()];
+            if saving {
+                allowed.push(format!("baseline-{slug}.json"));
+            }
+            bounds.export = Some(contained::ExportPolicy {
+                manifest: "/work/benchout/EXPORTS".to_owned(),
+                dest: repo.join("bench"),
+                allowed,
+            });
             // The slug is computed from the machine that ran the benchmarks, not from
             // this one. A Linux run must name `baseline-linux-aarch64.json` even though
             // the host calling it is Darwin.
@@ -736,8 +754,7 @@ fn contained_probe(repo: &std::path::Path) -> ExitCode {
         fsize_bytes: 4 * 1024 * 1024,
         deadline: Duration::from_secs(20),
         output_cap: 256 * 1024,
-        export_manifest: None,
-        exports: Vec::new(),
+        export: None,
     };
 
     // (name, argv, expected outcome, what it proves)
