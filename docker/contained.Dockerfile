@@ -23,4 +23,20 @@ RUN apt-get update \
 # Cargo writes here, never into the read-only source mount. The host's `target/` holds
 # aarch64-apple-darwin artefacts and must not be mixed with Linux ones.
 ENV CARGO_TARGET_DIR=/work/target
+# On the writable layer, which `--storage-opt size` caps.
+RUN mkdir -p /work/target /work/cargo /work/bootstrap
 WORKDIR /src
+
+# Warm the toolchain components and the build cache into the image.
+#
+# The copy lands at /src, the same path the live source is later mounted at. Cargo's
+# fingerprints record absolute paths, so warming at any other path would invalidate every
+# one of them and the cache would be dead weight. At run time the read-only bind mount
+# covers this copy; only what actually changed is rebuilt.
+#
+# Without this the registry and the three rust-toolchain components are fetched on every
+# run, inside the deadline, over the network.
+COPY . /src
+RUN cargo fetch --locked \
+ && cargo build --locked --tests --jobs 1 \
+ && cargo build --locked -p xtask --jobs 1
