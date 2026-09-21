@@ -1400,6 +1400,11 @@ impl Emitter {
                     arg(0),
                     arg(1)
                 );
+                // The helper reports a failed allocation by recording it and returning
+                // `false`, which is otherwise how it says the channel is closed and
+                // drained. Without this check `while chan_recv(c, buf)` would read an
+                // allocation failure as an orderly end and carry on.
+                self.check_failed();
                 return Val::Of {
                     value: ok,
                     ty: Ty::Bool,
