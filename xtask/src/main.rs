@@ -5,6 +5,7 @@
 //! the project makes about its own structure that no linter can see.
 
 mod bench;
+mod contained;
 mod guide;
 mod metadata;
 mod mutate;
@@ -88,6 +89,10 @@ fn main() -> ExitCode {
         // so they are not mistaken for an interface.
         Some("mutate-run") => mutate_run(&mut args),
         Some("mutate-hold") => mutate_hold(&mut args),
+        Some("contained") => {
+            let rest: Vec<String> = args.collect();
+            run_contained(&rest)
+        }
         Some("help" | "--help" | "-h") | None => {
             help();
             ExitCode::SUCCESS
@@ -567,4 +572,197 @@ fn run_mutations(only: &[String]) -> Result<(), Vec<String>> {
     };
     let catalogue = root.join("xtask/mutations/mutations.toml");
     mutate::run_all(root, &catalogue, only)
+}
+
+/// `cargo xtask contained <workload>` — the only sanctioned way to run a generated
+/// compiler stage, the selfhost suite, the bootstrap, fuzzing, the mutation catalogue or
+/// a heavy benchmark. See `contained.rs` for why an environment variable is not enough.
+fn run_contained(args: &[String]) -> ExitCode {
+    use contained::{Bounds, Outcome};
+    use std::time::Duration;
+
+    let repo = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("contained: cannot resolve the repository root: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut bounds = Bounds::default();
+
+    let (name, argv): (&str, Vec<String>) = match args.first().map(String::as_str) {
+        Some("probe") => return contained_probe(&repo),
+        Some("selfhost") => (
+            "selfhost",
+            shell("cargo test --locked -p nazm-cli --test selfhost --jobs 1 -- --test-threads 1"),
+        ),
+        Some("bootstrap") => {
+            bounds.deadline = Duration::from_secs(1800);
+            (
+                "bootstrap",
+                shell("sh compiler/bootstrap.sh /work/bootstrap"),
+            )
+        }
+        Some("run") => {
+            let cmd = args.get(1..).unwrap_or_default().join(" ");
+            if cmd.trim().is_empty() {
+                eprintln!("contained: `run` needs a command");
+                return ExitCode::FAILURE;
+            }
+            ("run", shell(&cmd))
+        }
+        other => {
+            eprintln!(
+                "contained: unknown workload {:?}\n  probe | selfhost | bootstrap | run <command>",
+                other.unwrap_or("<none>")
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let borrowed: Vec<&str> = argv.iter().map(String::as_str).collect();
+    eprintln!(
+        "contained: {name} — {} MiB memory (swap equal), {:.1} CPU, {} pids, {} GiB disk, {} s deadline",
+        bounds.memory_mb,
+        f64::from(bounds.milli_cpus) / 1000.0,
+        bounds.pids,
+        bounds.storage_gb,
+        bounds.deadline.as_secs()
+    );
+    let r = contained::run(&repo, name, &borrowed, &bounds);
+    print!("{}", r.stdout);
+    eprint!("{}", r.stderr);
+    eprintln!(
+        "\ncontained: {name} {} in {:.1}s — stdout {} B, stderr {} B, oom_killed={}, survivors={}",
+        r.outcome.word(),
+        r.elapsed.as_secs_f64(),
+        r.stdout_bytes,
+        r.stderr_bytes,
+        r.oom_killed,
+        contained::survivors()
+    );
+    match r.outcome {
+        Outcome::Passed => ExitCode::SUCCESS,
+        Outcome::Unavailable(why) => {
+            // Explicit refusal. A silent skip would report green on no evidence.
+            eprintln!("contained: REFUSED — containment is unavailable: {why}");
+            ExitCode::FAILURE
+        }
+        other => {
+            eprintln!("contained: {name} did not pass ({})", other.word());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn shell(cmd: &str) -> Vec<String> {
+    vec![
+        "sh".to_owned(),
+        "-lc".to_owned(),
+        format!("cd /src && {cmd}"),
+    ]
+}
+
+/// Verifies that each limit is real on this daemon before anything depends on it. Every
+/// probe's own maximum is small, so it stays safe even if enforcement silently fails.
+fn contained_probe(repo: &std::path::Path) -> ExitCode {
+    use contained::{Bounds, Outcome};
+    use std::time::Duration;
+
+    let tight = Bounds {
+        memory_mb: 256,
+        milli_cpus: 1000,
+        pids: 64,
+        storage_gb: 1,
+        scratch_mb: 16,
+        fsize_bytes: 4 * 1024 * 1024,
+        deadline: Duration::from_secs(20),
+        output_cap: 256 * 1024,
+    };
+
+    // (name, argv, expected outcome, what it proves)
+    let cases: Vec<(&str, Vec<String>, Outcome, &str)> = vec![
+        (
+            "limits-visible",
+            shell("cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max /sys/fs/cgroup/pids.max"),
+            Outcome::Passed,
+            "the cgroup reports the caps that were asked for",
+        ),
+        (
+            "memory",
+            // Allocates in chunks and memsets every one. A shell pipeline would only
+            // stream through small buffers and prove nothing; reserving address space
+            // without touching it would prove nothing either. 400 MiB against a 256 MiB
+            // cap is small enough to stay safe on the host even if enforcement fails.
+            shell(
+                "printf '%s' '#include <stdlib.h>\n#include <string.h>\n#include <stdio.h>\nint main(void){for(long i=0;i<50;i++){char*p=malloc(8L<<20);if(!p){printf(\"MALLOC_FAILED %ld\\n\",i);return 3;}memset(p,(int)(i&0xff),8L<<20);}printf(\"COMPLETED\\n\");return 0;}' > /scratch/m.c && clang -O0 -o /scratch/m /scratch/m.c && /scratch/m",
+            ),
+            Outcome::MemoryLimit,
+            "allocation past the cap is refused, not merely reclaimed",
+        ),
+        (
+            "deadline",
+            shell("sleep 120"),
+            Outcome::Timeout,
+            "a workload outliving its deadline is killed at the container",
+        ),
+        (
+            "output",
+            shell("i=0; while [ $i -lt 400 ]; do head -c 65536 /dev/zero | tr '\\0' 'x'; i=$((i+1)); done"),
+            Outcome::OutputOverflow,
+            "a flood is drained and capped, not buffered",
+        ),
+        (
+            "scratch",
+            shell("dd if=/dev/zero of=/scratch/f bs=1M count=64 2>&1 | tail -1; test ! -s /scratch/f || test $(stat -c%s /scratch/f) -lt 67108864"),
+            Outcome::Passed,
+            "the tmpfs refuses to grow past its size",
+        ),
+        (
+            "descendant",
+            shell("(sleep 120 &) ; echo detached; sleep 120"),
+            Outcome::Timeout,
+            "a detached grandchild dies with the container",
+        ),
+    ];
+
+    let mut failures = 0;
+    println!("contained probe — verifying each bound is real before anything relies on it\n");
+    for (name, argv, want, proves) in cases {
+        let borrowed: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let r = contained::run(repo, &format!("probe-{name}"), &borrowed, &tight);
+        if let Outcome::Unavailable(why) = &r.outcome {
+            eprintln!("REFUSED — containment is unavailable: {why}");
+            return ExitCode::FAILURE;
+        }
+        let ok = r.outcome == want;
+        if !ok {
+            failures += 1;
+        }
+        println!(
+            "  {:<11} {:<16} expected {:<16} {:.1}s  {}",
+            if ok { "ok" } else { "MISMATCH" },
+            name,
+            want.word(),
+            r.elapsed.as_secs_f64(),
+            proves
+        );
+        if !ok {
+            println!(
+                "      got {} (stdout {} B, stderr {} B)",
+                r.outcome.word(),
+                r.stdout_bytes,
+                r.stderr_bytes
+            );
+        }
+    }
+    let left = contained::survivors();
+    println!("\n  survivors after all probes: {left}");
+    if failures == 0 && left == 0 {
+        println!("  containment verified on this daemon");
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("  containment NOT verified: {failures} mismatched, {left} survivors");
+        ExitCode::FAILURE
+    }
 }
