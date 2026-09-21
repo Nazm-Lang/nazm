@@ -1572,3 +1572,194 @@ fn the_nazm_written_compiler_refuses_an_import_it_cannot_find() {
         "it must name what it could not find, got {said:?}"
     );
 }
+
+/// The compiler written in Nazm compiles a concurrent program.
+///
+/// It could parse and check one before this; it could not lower one. The programs below
+/// go all the way through *it* — not the reference — and are compared against the
+/// reference's answer for the same source.
+#[test]
+fn the_nazm_written_compiler_compiles_concurrency() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    let root = repo_root();
+
+    let pool = std::fs::read_to_string(root.join("examples/worker-pool.nz")).expect("read");
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "two tasks and a channel",
+            "fn w(c: Chan) -> Int { chan_send(c, 5); 0 }\n\
+             fn main() -> Int {\n\
+             let c = chan_new(2);\n\
+             let buf = ints_new();\n\
+             let mut t = 0;\n\
+             scope { spawn w(c); spawn w(c); chan_recv(c, buf); t = t + ints_pop(buf); \
+             chan_recv(c, buf); t = t + ints_pop(buf); }\n\
+             t\n\
+             }\n",
+            "10",
+        ),
+        ("the specification's worker pool", &pool, "90"),
+    ];
+
+    for (what, src, expected) in cases {
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, src).expect("write");
+
+        let ir = Command::new(&emitter)
+            .arg(&file)
+            .output()
+            .expect("run emitter");
+        assert_eq!(
+            ir.status.code(),
+            Some(0),
+            "{what}: the Nazm compiler refused it: {}",
+            String::from_utf8_lossy(&ir.stderr)
+        );
+        let ll = dir.path().join("case.ll");
+        std::fs::write(&ll, &ir.stdout).expect("write IR");
+        let exe = dir.path().join("case");
+        let built = Command::new("clang")
+            .args(["-Wno-override-module", "-pthread", "-o"])
+            .arg(&exe)
+            .arg(&ll)
+            .output()
+            .expect("run clang");
+        assert!(
+            built.status.success(),
+            "{what}: clang rejected the IR: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+
+        let (code, stdout, _) = run_bounded(
+            &mut common::bounded_exe(&exe),
+            std::time::Duration::from_secs(60),
+        )
+        .unwrap_or_else(|| panic!("{what}: the compiled program hung"));
+        assert_eq!(code, Some(0), "{what}: {stdout}");
+        assert_eq!(stdout.trim(), *expected, "{what}");
+
+        let interp = Command::new(NAZM)
+            .args(["run", file.to_str().unwrap()])
+            .output()
+            .expect("run");
+        assert_eq!(
+            String::from_utf8_lossy(&interp.stdout).trim(),
+            *expected,
+            "{what}: the interpreter disagrees"
+        );
+    }
+}
+
+/// And its programs report a failure the way the specification says: at the closing brace,
+/// after the scope's tasks have been joined.
+///
+/// The worker is ordered by channel rather than by a delay — it announces itself on
+/// `started` and blocks on `go`, so it is provably running and provably unfinished when
+/// the failure happens.
+#[test]
+fn a_program_from_the_nazm_compiler_joins_its_scope_before_reporting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+
+    const WORKER: &str = "fn worker(started: Chan, go: Chan) -> Int {\n\
+         let buf = ints_new();\n\
+         chan_send(started, 1);\n\
+         chan_recv(go, buf);\n\
+         ints_pop(buf);\n\
+         print(\"worker finished\");\n\
+         0\n\
+         }\n";
+
+    let cases: &[(&str, String, &str)] = &[
+        (
+            "the body fails",
+            format!(
+                "{WORKER}fn main() -> Int {{\n\
+                 let started = chan_new(1);\n\
+                 let go = chan_new(1);\n\
+                 let buf = ints_new();\n\
+                 let mut top = 1;\n\
+                 scope {{\n\
+                 spawn worker(started, go);\n\
+                 chan_recv(started, buf);\n\
+                 ints_pop(buf);\n\
+                 chan_send(go, 1);\n\
+                 let mut n = 0;\n\
+                 while n < 64 {{ top = top + top; n = n + 1; }}\n\
+                 }}\n\
+                 top\n\
+                 }}\n"
+            ),
+            "N0400",
+        ),
+        (
+            "a task fails",
+            format!(
+                "{WORKER}fn bad(dead: Chan) -> Int {{\n\
+                 let buf = ints_new();\n\
+                 chan_recv(dead, buf);\n\
+                 1 / ints_pop(buf)\n\
+                 }}\n\
+                 fn main() -> Int {{\n\
+                 let started = chan_new(1);\n\
+                 let go = chan_new(1);\n\
+                 let dead = chan_new(1);\n\
+                 let buf = ints_new();\n\
+                 scope {{\n\
+                 spawn worker(started, go);\n\
+                 spawn bad(dead);\n\
+                 chan_recv(started, buf);\n\
+                 ints_pop(buf);\n\
+                 chan_send(go, 1);\n\
+                 chan_send(dead, 0);\n\
+                 }}\n\
+                 0\n\
+                 }}\n"
+            ),
+            "N0401",
+        ),
+    ];
+
+    for (what, src, code) in cases {
+        let file = dir.path().join("fail.nz");
+        std::fs::write(&file, src).expect("write");
+        let ir = Command::new(&emitter).arg(&file).output().expect("emit");
+        assert_eq!(
+            ir.status.code(),
+            Some(0),
+            "{what}: {}",
+            String::from_utf8_lossy(&ir.stderr)
+        );
+        let ll = dir.path().join("fail.ll");
+        std::fs::write(&ll, &ir.stdout).expect("write IR");
+        let exe = dir.path().join("fail");
+        let built = Command::new("clang")
+            .args(["-Wno-override-module", "-pthread", "-o"])
+            .arg(&exe)
+            .arg(&ll)
+            .output()
+            .expect("clang");
+        assert!(
+            built.status.success(),
+            "{what}: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+
+        let (rc, stdout, stderr) = run_bounded(
+            &mut common::bounded_exe(&exe),
+            std::time::Duration::from_secs(60),
+        )
+        .unwrap_or_else(|| panic!("{what}: hung"));
+        assert_eq!(rc, Some(2), "{what}: {stderr}");
+        assert!(
+            stderr.contains(code),
+            "{what}: expected {code}, got {stderr}"
+        );
+        assert!(
+            stdout.contains("worker finished"),
+            "{what}: the scope reported before its task finished — the marker is missing \
+             from stdout, which is what a failure that did not join looks like: {stdout:?}"
+        );
+    }
+}
