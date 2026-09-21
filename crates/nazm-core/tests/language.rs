@@ -1663,3 +1663,34 @@ fn an_expression_may_be_a_statement() {
     );
     assert_eq!(value("fn main() -> Int { 1 + 1; 3 }").to_string(), "3");
 }
+
+// ---------------------------------------------------------------------------
+// Codes that were reachable and unasserted
+//
+// A diagnostic code is part of the machine interface — `docs/diagnostics.md` says a code
+// never changes meaning and is never reused, which makes each one a promise. Checking
+// which codes any test actually asserts found four that none did. Two of them are
+// provoked by four lines of Nazm, so they are asserted here; the other two need the
+// machine to run out of something, and `crates/nazm-cli/tests/codes.rs` records them as
+// unprovokable by name rather than leaving the gap silent.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_syntax_error_reports_n0100_and_says_what_it_wanted() {
+    let found = errors("fn main() -> Int { let = 1; 0 }");
+    assert!(
+        found.contains(&codes::UNEXPECTED_TOKEN),
+        "expected N0100 among {found:?}"
+    );
+}
+
+#[test]
+fn a_file_that_cannot_be_read_reports_n0407() {
+    // The path is one no tree contains, and the failure is the language's, not the
+    // harness's: `read_file` is an ordinary built-in and this is what it does when the
+    // outside world says no.
+    assert_eq!(
+        sole_error(r#"fn main() -> Int { str_len(read_file("/no/such/file/at/all.txt")) }"#),
+        codes::IO_FAILED
+    );
+}

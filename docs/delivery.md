@@ -130,6 +130,7 @@ passing one is the most misleading thing a suite can contain.
 
 | | |
 | --- | --- |
+| Two diagnostic codes, `N0404` and `N0406` | asserted by no test, and **named as unprovokable** in `crates/nazm-cli/tests/codes.rs` with the reason: one needs the machine to run out of threads, the other out of memory. That test requires every other code to be asserted somewhere, so the list is the only way out and it costs a sentence that has to be true |
 | 6 ignored tests in `cargo test --workspace` | `xtask` lifecycle tests. They spawn nested cargo builds and kill real process groups, so they run separately: `cargo test -p xtask --test lifecycle -- --ignored --test-threads=1` |
 | 10 `docker_boundary` tests | exercise nothing without `NAZM_REQUIRE_DOCKER=1`. They belong to the benchmark harness, not the language |
 | The mutation catalogue | `cargo xtask mutate` is not in the default gate set: it injects defects into a copy and costs a full build per entry |
