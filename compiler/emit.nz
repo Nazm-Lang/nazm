@@ -179,9 +179,22 @@ fn guard(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
     open_block(out, current, live, str_concat("b", int_to_str(fail)));
     add_line(out, str_concat(str_concat("  call void @nz.fail(ptr @.m", int_to_str(idx)),
             str_concat(", i64 ", str_concat(int_to_str(str_len(text) + 1), ")"))));
-    add_line(out, "  unreachable");
+    // `@nz.fail` records and returns; it does not end the process. The failure leaves
+    // this function by its own exit, so that a `scope` further out can join its tasks
+    // before anything is reported — see `docs/spec.md`, *Error propagation*.
+    ints_set(live, 1, 1);
+    add_line(out, "  br label %nz.unwind");
     open_block(out, current, live, str_concat("b", int_to_str(cont)));
     cont
+}
+
+// The value a function hands back while a failure is travelling through it. Never read:
+// every caller tests the failure flag before it looks at the result.
+fn unwind_value(t: Int) -> Str {
+    if t == t_int() { return "0"; }
+    if t == t_bool() { return "false"; }
+    if t == t_str() { return "zeroinitializer"; }
+    "null"
 }
 
 fn take_number(next: Ints) -> Int {
@@ -869,9 +882,16 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
 
     let current = strs_new();
     strs_push(current, "entry");
-    // Whether the current block can still take instructions.
+    // The state of the block being written, in the one array already threaded to every
+    // emitter that opens or closes one — which is why the failure protocol lives here
+    // rather than in eleven more parameters.
+    //
+    //   0  whether the current block can still take instructions
+    //   1  whether anything in this function has branched to `%nz.unwind`, so the block
+    //      is written only when something reaches it
     let live = ints_new();
     ints_push(live, 1);
+    ints_push(live, 0);
     // One entry per `if`, holding the value and predecessor its branches contributed.
     let phi_val = ints_new();
     let phi_blk = strs_new();
@@ -929,6 +949,23 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                             str_concat(str_concat(str_concat(" = call ", llvm_type(ints_get(ntype, k))),
                             str_concat(" ", symbol(fnames, text))),
                             str_concat(str_concat("(", list), ")"))));
+                    // A callee that failed has already left by its own exit and handed
+                    // back a stand-in. Noticed here, so the failure keeps travelling
+                    // outward instead of this function carrying on with a value that was
+                    // never produced — which would run statements, print, and could loop
+                    // forever on it.
+                    let flag = take_number(next);
+                    let uw = take_label(next);
+                    let ok = take_label(next);
+                    add_line(out, str_concat(str_concat("  ", v(flag)),
+                            " = load i1, ptr @nz.failed"));
+                    add_line(out, str_concat(str_concat("  br i1 ", v(flag)),
+                            str_concat(str_concat(", label %b", int_to_str(uw)),
+                            str_concat(", label %b", int_to_str(ok)))));
+                    open_block(out, current, live, str_concat("b", int_to_str(uw)));
+                    ints_set(live, 1, 1);
+                    add_line(out, "  br label %nz.unwind");
+                    open_block(out, current, live, str_concat("b", int_to_str(ok)));
                     ints_push(vals, n);
                 }
             } else {
@@ -1089,6 +1126,16 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                         add_line(out, str_concat(str_concat("  ret ",
                                                                                                 llvm_type(type_of_name(after_colon(text)))),
                                                                                                 str_concat(" ", v(ints_pop(vals)))));
+                                                                                    }
+                                                                                    // The one exit every failure in this function leaves by,
+                                                                                    // written only if something branched to it.
+                                                                                    if ints_get(live, 1) == 1 {
+                                                                                        let rt = type_of_name(after_colon(text));
+                                                                                        add_line(out, "nz.unwind:");
+                                                                                        add_line(out, str_concat(str_concat("  ret ",
+                                                                                                llvm_type(rt)),
+                                                                                                str_concat(" ", unwind_value(rt))));
+                                                                                        ints_set(live, 1, 0);
                                                                                     }
                                                                                     add_line(out, "}");
                                                                                     ints_set(live, 0, 0);
@@ -1328,7 +1375,32 @@ fn main() -> Int {
                 str_concat(str_concat(bs(), "00"), dq()))));
         m = m + 1;
     }
-    add_line(head, "define internal void @nz.fail(ptr %m, i64 %n) noreturn {");
+    // Records and returns. A failure inside a `scope` is reported at the closing brace,
+    // after every task has been joined, so the thread that fails has to be able to walk
+    // back out to that brace — writing the message and exiting here would end the process
+    // wherever the failure happened. Thread-local, because two tasks may fail at once and
+    // neither may see the other's; first failure per thread wins, so one caused by
+    // carrying on with the stand-in value of another cannot displace it.
+    add_line(head, "@nz.failed = internal thread_local global i1 false");
+    add_line(head, "@nz.errmsg = internal thread_local global ptr null");
+    add_line(head, "@nz.errlen = internal thread_local global i64 0");
+    add_line(head, "define internal void @nz.fail(ptr %m, i64 %n) {");
+    add_line(head, "entry:");
+    add_line(head, "  %had = load i1, ptr @nz.failed");
+    add_line(head, "  br i1 %had, label %done, label %record");
+    add_line(head, "record:");
+    add_line(head, "  store i1 true, ptr @nz.failed");
+    add_line(head, "  store ptr %m, ptr @nz.errmsg");
+    add_line(head, "  store i64 %n, ptr @nz.errlen");
+    add_line(head, "  br label %done");
+    add_line(head, "done:");
+    add_line(head, "  ret void");
+    add_line(head, "}");
+    // The one place a diagnostic is written and the process ends.
+    add_line(head, "define internal void @nz.report() noreturn {");
+    add_line(head, "entry:");
+    add_line(head, "  %m = load ptr, ptr @nz.errmsg");
+    add_line(head, "  %n = load i64, ptr @nz.errlen");
     add_line(head, "  %w = call i64 @write(i32 2, ptr %m, i64 %n)");
     add_line(head, "  call void @exit(i32 2)");
     add_line(head, "  unreachable");
@@ -1347,6 +1419,14 @@ fn main() -> Int {
     add_line(tail, "  store i64 %an, ptr @nz.argc");
     add_line(tail, "  store ptr %argv, ptr @nz.argv");
     add_line(tail, str_concat("  %r = call i64 ", str_concat(symbol(fnames, "main"), "()")));
+    // The one place a diagnostic is written. By the time control is here every scope
+    // `main` opened has been joined, so nothing is still running when the process ends.
+    add_line(tail, "  %failed = load i1, ptr @nz.failed");
+    add_line(tail, "  br i1 %failed, label %nz.reported, label %nz.finished");
+    add_line(tail, "nz.reported:");
+    add_line(tail, "  call void @nz.report()");
+    add_line(tail, "  unreachable");
+    add_line(tail, "nz.finished:");
     add_line(tail, "  %p = call i32 (ptr, ...) @printf(ptr @.fmt, i64 %r)");
     add_line(tail, "  ret i32 0");
     add_line(tail, "}");
