@@ -248,6 +248,7 @@ business raising the floor for the crates that ship.
 | `nazm run FILE` | Check and evaluate, printing the value of `main` |
 | `nazm check FILE` | Check without evaluating |
 | `nazm build FILE` | Compile to a native executable |
+| `nazm test PATH…` | Run every `NAME.nz` with a `NAME.expected` beside it, interpreted **and** compiled |
 | `nazm fmt FILE…` | Lay files out canonically. `--check` writes nothing and fails if any would change |
 | `nazm fix FILE` | Apply the repairs the compiler already knows about. Nothing is written without `--apply`, and only fixes marked `automatic` are ever applied |
 | `nazm capabilities` | What this build supports, read from the compiler's own tables |

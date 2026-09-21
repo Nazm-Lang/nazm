@@ -282,6 +282,27 @@ fn the_capability_inventory_matches_the_published_schema() {
 }
 
 #[test]
+fn every_test_case_matches_the_published_schema() {
+    let corpus = repo_root().join("compiler/conformance");
+    let out = Command::new(NAZM)
+        .args(["test", "--json"])
+        .arg(&corpus)
+        .output()
+        .expect("run");
+    let objects = lines(&String::from_utf8_lossy(&out.stdout));
+    assert!(objects.len() >= 5, "expected the conformance corpus");
+    check_against("nazm.test-1.json", &objects);
+    assert!(
+        objects
+            .iter()
+            .all(|o| o.get("passed") == Some(&Value::Bool(true))),
+        "the conformance corpus should pass: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
 fn the_schema_identifier_is_the_one_the_compiler_emits() {
     // The constant in `nazm-diag` and the `const` in the schema document are two places
     // one string is written. This is what stops them being two strings.
