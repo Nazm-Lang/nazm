@@ -19,6 +19,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -35,6 +37,7 @@ fn repo_root() -> PathBuf {
 
 /// Build `compiler/lexer.nz` once, natively, and return the executable.
 fn build_lexer(dir: &Path) -> PathBuf {
+    common::require_containment("lexer.nz");
     let source = repo_root().join("compiler/lexer.nz");
     assert!(source.exists(), "{} is missing", source.display());
     let exe = dir.join("nzlex");
@@ -490,6 +493,7 @@ fn the_dump_format_round_trips_the_shapes_it_will_be_used_on() {
 
 /// Build `compiler/parser.nz` natively and return the executable.
 fn build_parser(dir: &Path) -> PathBuf {
+    common::require_containment("parser.nz");
     let source = repo_root().join("compiler/parser.nz");
     assert!(source.exists(), "{} is missing", source.display());
     let exe = dir.join("nzparse");
@@ -738,6 +742,7 @@ fn the_nazm_parser_refuses_what_it_cannot_parse_yet_by_name() {
 
 /// Build `compiler/check.nz` natively and return the executable.
 fn build_checker(dir: &Path) -> PathBuf {
+    common::require_containment("check.nz");
     let source = repo_root().join("compiler/check.nz");
     assert!(source.exists(), "{} is missing", source.display());
     let exe = dir.join("nzcheck");
@@ -1051,6 +1056,7 @@ fn run_bounded(
 }
 
 fn build_emitter(dir: &Path) -> PathBuf {
+    common::require_containment("emit.nz");
     let source = repo_root().join("compiler/emit.nz");
     assert!(source.exists(), "{} is missing", source.display());
     let exe = dir.join("nzemit");

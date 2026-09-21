@@ -66,20 +66,22 @@ fn main() -> Int {
             bnames, bret, bfirst, bcount, bparams,
             dcode, dstart, dend, dmsg);
 
-    let mut out = "";
+    // One allocation for the whole output; see the note in `lexer.nz`.
+    let nl = str_from_byte(10);
+    let out = strs_new();
     let mut d = 0;
     while d < strs_len(dcode) {
-        out = str_concat(out, strs_get(dcode, d));
-        out = str_concat(out, "|");
-        out = str_concat(out, int_to_str(ints_get(dstart, d)));
-        out = str_concat(out, "|");
-        out = str_concat(out, int_to_str(ints_get(dend, d)));
-        out = str_concat(out, "|");
-        out = str_concat(out, strs_get(dmsg, d));
-        out = str_concat(out, str_from_byte(10));
+        strs_push(out, strs_get(dcode, d));
+        strs_push(out, "|");
+        strs_push(out, int_to_str(ints_get(dstart, d)));
+        strs_push(out, "|");
+        strs_push(out, int_to_str(ints_get(dend, d)));
+        strs_push(out, "|");
+        strs_push(out, strs_get(dmsg, d));
+        strs_push(out, nl);
         d = d + 1;
     }
-    print(out);
+    print(str_join(out, ""));
     if strs_len(dcode) > 0 { exit_with(1); }
     0
 }
