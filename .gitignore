@@ -18,3 +18,7 @@
 
 # The bootstrap writes here.
 /target/bootstrap/
+
+# The benchmark runner writes this per run; the baseline beside it is committed.
+/bench/record.json
+/target/bench-scratch/
