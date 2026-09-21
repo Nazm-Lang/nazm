@@ -258,6 +258,17 @@ schema**; the schemas are in [`schema/`](schema) and the compatibility rules are
 loop as one command: apply every automatic fix until a pass changes nothing, lay the
 result out, and report what is left as JSON.
 
+## The documents
+
+| | |
+| --- | --- |
+| [`docs/delivery.md`](docs/delivery.md) | **Start here.** What was built, what verifies it, what it does not establish, and how to reproduce all of it |
+| [`docs/guide.md`](docs/guide.md) | The language, for someone writing a program in it. Its syntax section is generated from the grammar |
+| [`docs/spec.md`](docs/spec.md) | What each construct means, and the decision behind it |
+| [`docs/diagnostics.md`](docs/diagnostics.md) | The machine interface: schemas, fixes, capabilities, exit statuses |
+| [`docs/bootstrap.md`](docs/bootstrap.md) | What the self-hosting claim does and does not establish |
+| [`docs/performance.md`](docs/performance.md) | What has been measured, and the noise floor under it |
+
 ## What is not built yet
 
 Almost everything. Specifically:
