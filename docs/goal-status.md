@@ -84,8 +84,26 @@ The full 50-entry catalogue has **not** been run since `8d67a7d`.
 
 ## Active processes and temporary resources
 
-None. Disposable copies live under `/tmp/claude-501/` and are removed after use. No
-mutation lock is held (`target/.nazm-mutation-lock.v2` absent).
+**A mutation run is in flight**, and it is the only thing outstanding.
+
+| | |
+| --- | --- |
+| Where | a disposable copy: `…/scratchpad/freshcopy`, made with `git archive HEAD` at `524cd24` |
+| Command | `cargo run -q -p xtask --offline -- mutate` |
+| Log | `/tmp/mutate.log` |
+| Lock | held by that copy's runner, at `…/freshcopy/target/.nazm-mutation-lock.v2`. **The working tree's own lock is not held** |
+
+It mutates **the copy**, never this tree. Each entry needs a full workspace build and
+test run, so 50 entries is hours rather than minutes.
+
+**If it was interrupted:** the copy is disposable — delete it and start again. Do not
+run `mutate-recover` against this working tree; nothing here was mutated. If the copy is
+kept, `xtask mutate` in it will refuse to start while a backup file is stranded, which
+is the intended behaviour and says what to do.
+
+`524cd24` is one commit behind the tree: `fba6e25` added `nazm test`, which is additive
+and touches none of the code the catalogue mutates. The results are attributed to
+`524cd24` in `docs/delivery.md` for that reason.
 
 ## Current task
 
