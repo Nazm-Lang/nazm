@@ -60,8 +60,8 @@ pub(crate) fn run(
     //
     // A program that does not type-check is not a question about the backend's coverage,
     // so those diagnostics are reported first and lowering never runs.
-    let ir = match nazm_core::on_checked_map(&map, |program| {
-        nazm_lir::lower(program)
+    let ir = match nazm_core::on_checked_map(&map, |program, resolution| {
+        nazm_lir::lower(program, resolution)
             .map(|module| nazm_lir::emit_llvm(&module, &input.display().to_string(), &map))
             .map_err(|e| e.diagnostics)
     }) {

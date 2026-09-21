@@ -5,6 +5,7 @@ pub mod format;
 pub mod intrinsic;
 pub mod lexer;
 pub mod parser;
+pub mod resolve;
 pub mod types;
 
 pub use ast::{
@@ -15,6 +16,7 @@ pub use format::format;
 pub use intrinsic::Intrinsic;
 pub use lexer::{lex, lex_in, lex_with_comments, lex_with_comments_in, Token, TokenKind};
 pub use parser::{parse, parse_in, MAX_NESTING, PARSE_STACK_BYTES};
+pub use resolve::{Callee, FnDef, FnId, LocalDef, Resolution};
 pub use types::Type;
 
 /// Lex and parse in one step, collecting every diagnostic from both.

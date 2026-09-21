@@ -15,6 +15,7 @@ use nazm_span::Span;
 use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Return, Spawn, Stmt, While};
 
 use nazm_syntax::intrinsic::Intrinsic;
+use nazm_syntax::resolve::{Callee, FnDef, FnId, LocalDef, Resolution};
 use nazm_syntax::types::Type;
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,12 @@ pub struct Signature {
 struct Binding {
     ty: Type,
     mutable: bool,
+    /// Where this binding lives in its function's storage.
+    ///
+    /// Assigned here, once, and read by **both** consumers. The backend used to allocate
+    /// its own slots on a second walk; it now reads these, which is the whole point of
+    /// `nazm_syntax::Resolution`.
+    slot: u32,
     /// Where the name was written in the declaration, when there is a declaration to
     /// edit. `None` for a parameter.
     ///
@@ -67,7 +74,14 @@ impl Scopes {
         self.frames.last().is_some_and(|f| f.contains_key(name))
     }
 
-    fn define(&mut self, name: &str, ty: Type, mutable: bool, declared_at: Option<Span>) {
+    fn define(
+        &mut self,
+        name: &str,
+        ty: Type,
+        mutable: bool,
+        declared_at: Option<Span>,
+        slot: u32,
+    ) {
         if let Some(f) = self.frames.last_mut() {
             f.insert(
                 name.to_owned(),
@@ -75,6 +89,7 @@ impl Scopes {
                     ty,
                     mutable,
                     declared_at,
+                    slot,
                 },
             );
         }
@@ -126,6 +141,10 @@ impl Completion {
 
 #[derive(Debug)]
 pub struct Checker {
+    /// What resolution decided, and the single answer both consumers read.
+    res: Resolution,
+    /// The function whose body is being checked, for slot allocation.
+    current: Option<FnId>,
     functions: HashMap<String, Signature>,
     scopes: Scopes,
     errors: Vec<Diagnostic>,
@@ -147,9 +166,11 @@ pub struct Checker {
 
 /// Check a program. Returns the signatures and every diagnostic found.
 #[must_use]
-pub fn check(program: &Program) -> (HashMap<String, Signature>, Vec<Diagnostic>) {
+pub fn check(program: &Program) -> (Resolution, Vec<Diagnostic>) {
     let mut c = Checker {
         functions: HashMap::new(),
+        res: Resolution::default(),
+        current: None,
         scopes: Scopes::default(),
         errors: Vec::new(),
         return_type: None,
@@ -191,10 +212,46 @@ pub fn check(program: &Program) -> (HashMap<String, Signature>, Vec<Diagnostic>)
         c.check_function(f);
     }
 
-    (c.functions, c.errors)
+    (c.res, c.errors)
 }
 
 impl Checker {
+    /// Give a binding its slot in the current function's storage.
+    ///
+    /// **Parameters first, in order, then body bindings as they are declared, and never
+    /// reused** — including for a name that shadows another. That ordering is a contract
+    /// the backend relies on to store incoming arguments without a separate notion of what
+    /// a parameter is, and it lives here now because this is where bindings are made.
+    fn allocate(&mut self, name: &str, ty: Type, mutable: bool) -> u32 {
+        let Some(id) = self.current else {
+            return 0;
+        };
+        self.res
+            .bind(
+                id,
+                LocalDef {
+                    name: name.to_owned(),
+                    ty,
+                    mutable,
+                },
+            )
+            .unwrap_or(0)
+    }
+
+    /// Record what a call resolved to, and answer the same question for the caller.
+    ///
+    /// **Built-ins are resolved before user functions.** A user definition of a built-in's
+    /// name is refused at declaration, so the two sets are disjoint and the order states
+    /// intent rather than breaking a tie. Written once here because it is a language rule;
+    /// the evaluator and the backend used to each apply their own copy of it.
+    fn resolve_callee(&mut self, name: &str, at: Span) -> Option<Callee> {
+        let callee = Intrinsic::by_name(name)
+            .map(Callee::Builtin)
+            .or_else(|| self.res.function_id(name).map(Callee::Function))?;
+        self.res.record_call(at, callee);
+        Some(callee)
+    }
+
     fn resolve_type(&mut self, name: &str, span: Span) -> Type {
         match Type::from_name(name) {
             Some(t) => t,
@@ -211,7 +268,7 @@ impl Checker {
     }
 
     fn collect_signature(&mut self, f: &Function) {
-        let params = f
+        let params: Vec<Type> = f
             .params
             .iter()
             .map(|p| self.resolve_type(&p.ty.name, p.ty.span))
@@ -245,6 +302,15 @@ impl Checker {
             );
             return;
         }
+        // The same declaration, in the artefact the backend will read. Declared here and
+        // not in a second pass, so the two cannot disagree about which functions exist.
+        self.res.declare(FnDef {
+            name: f.name.clone(),
+            params: params.clone(),
+            ret,
+            name_span: f.name_span,
+            locals: Vec::new(),
+        });
         self.functions.insert(
             f.name.clone(),
             Signature {
@@ -256,6 +322,9 @@ impl Checker {
     }
 
     fn check_function(&mut self, f: &Function) {
+        // Slot allocation starts fresh per function: a caller's local and a callee's
+        // local with the same spelling are different storage, not the same.
+        self.current = self.res.function_id(&f.name);
         self.scopes.push();
         for p in &f.params {
             let ty = self.resolve_type(&p.ty.name, p.ty.span);
@@ -271,7 +340,8 @@ impl Checker {
             // convention; `let mut` in the body says the same thing unambiguously.
             // No declaration span: `mut` on a parameter is `N0311`, so there is no
             // edit at the declaration that would make this assignment legal.
-            self.scopes.define(&p.name, ty, false, None);
+            let slot = self.allocate(&p.name, ty, false);
+            self.scopes.define(&p.name, ty, false, None, slot);
         }
 
         let declared = self.resolve_type(&f.return_type.name, f.return_type.span);
@@ -389,8 +459,13 @@ impl Checker {
                         ),
                     );
                 }
+                let slot = self.allocate(&l.name, ty, l.mutable);
+                // The declaration site resolves to the binding it introduces, so the
+                // backend can find the slot for a `let` the same way it finds one for a
+                // mention.
+                self.res.record_var(l.name_span, slot);
                 self.scopes
-                    .define(&l.name, ty, l.mutable, Some(l.name_span));
+                    .define(&l.name, ty, l.mutable, Some(l.name_span), slot);
                 false
             }
             Stmt::Assign(a) => {
@@ -462,6 +537,7 @@ impl Checker {
             );
         }
 
+        self.resolve_callee(&s.callee, s.callee_span);
         let Some(sig) = self.functions.get(&s.callee).cloned() else {
             self.errors.push(Diagnostic::error(
                 codes::UNDEFINED_FUNCTION,
@@ -560,6 +636,8 @@ impl Checker {
             self.check_expr(&a.value, None);
             return;
         };
+
+        self.res.record_var(a.name_span, binding.slot);
 
         if !binding.mutable {
             let d = Diagnostic::error(
@@ -691,7 +769,12 @@ impl Checker {
             Expr::Str { .. } => Completion::Value(Type::Str),
 
             Expr::Var { name, span } => match self.scopes.lookup(name) {
-                Some(b) => Completion::Value(b.ty),
+                Some(b) => {
+                    // Which binding this mention refers to, recorded where the question
+                    // was answered. The backend reads this instead of walking scopes again.
+                    self.res.record_var(*span, b.slot);
+                    Completion::Value(b.ty)
+                }
                 None => {
                     let mut d = Diagnostic::error(
                         codes::UNDEFINED_VARIABLE,
@@ -748,6 +831,7 @@ impl Checker {
                 args,
                 span,
             } => {
+                self.resolve_callee(callee, *callee_span);
                 let Some(sig) = self.functions.get(callee).cloned() else {
                     self.errors.push(Diagnostic::error(
                         codes::UNDEFINED_FUNCTION,
