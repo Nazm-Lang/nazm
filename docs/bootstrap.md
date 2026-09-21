@@ -53,11 +53,16 @@ fail would be worse.
   the Nazm compiler itself.
 - **It is one target.** aarch64-apple-darwin with Apple clang. Nothing here says what
   another target would do.
-- **S is concatenated, not imported.** The compiler written in Nazm does not resolve
-  `use` — that is the driver's job in the Rust implementation and is not yet ported. The
-  script concatenates the four files and strips their `use` lines. The same text compiles
-  either way, and `nazm check` accepts both, but a reader should know the compiler is not
-  yet reading a multi-file program the way `nazm build` does.
+- **The source is imported, not concatenated.** Every stage compiles `compiler/emit.nz`
+  and resolves its `use` lines itself, with the resolver written in Nazm
+  (`compiler/module.nz`). What is bootstrapped is the compiler as it is written. The
+  script used to strip the `use` lines and paste the files together, which worked but
+  meant the chain never exercised the thing it was meant to prove; the record now lists
+  each source with its own digest, since there is no merged file to take one of.
+- **Module resolution keys files by a textually normalised path, not a canonical one.**
+  `./x.nz`, `x.nz` and `a/../x.nz` are one file; two names that reach one file through a
+  symbolic link are two, and it would be read twice. The Rust driver keys by the canonical
+  path instead, because it can — the emitted runtime has no `realpath`.
 - **The Rust implementation is still required**, to build C1 and to run `nazm check`
   inside the script. `docs/NAZM_AUTONOMOUS_GOAL.md` §8 keeps it deliberately: it is the
   bootstrap toolchain and the semantic oracle, and deleting it after the first successful

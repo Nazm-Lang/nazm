@@ -25,10 +25,14 @@ nazm=${NAZM:-"${CARGO_TARGET_DIR:-$root/target}/debug/nazm"}
 
 # S: the compiler's source, as one translation unit.
 #
-# Concatenated rather than imported because `use` resolution is the driver's job and the
-# compiler written in Nazm does not yet do it — a stated gap, not a trick: the same text
-# compiles either way, and a reader can check that by running `nazm check` on both.
-sources="lex.nz module.nz parse.nz analyse.nz emit.nz"
+# The chain compiles `compiler/emit.nz` itself, imports and all. Every stage resolves
+# `use` with the resolver written in Nazm (`compiler/module.nz`), so what is bootstrapped
+# is the compiler as it is written rather than a concatenation of it.
+#
+# The list below is for the record only — the digest and line count of each source that
+# ends up in the unit. Nothing reads it to decide what to compile.
+root_source="emit.nz"
+sources="emit.nz analyse.nz module.nz parse.nz lex.nz"
 
 say() { printf '%s\n' "$*"; }
 # `shasum` on macOS, `sha256sum` on GNU userland. A digest line that silently vanished
@@ -112,35 +116,38 @@ link() {
     || fail "$(basename "$stage") normalised assembly failed"
 }
 
-cat_sources() {
-  for f in $sources; do
-    # `use` lines are dropped: every source is in this one unit already, and an import
-    # of a file that is also concatenated would define its functions twice.
-    grep -v '^use "' "$root/compiler/$f"
-  done
-}
+S="$root/compiler/$root_source"
 
-cat_sources > "$out/S.nz"
-say "source digest: $(sha256 "$out/S.nz")" >> "$out/record.txt"
-say "source lines: $(wc -l < "$out/S.nz" | tr -d ' ')" >> "$out/record.txt"
+# One line per source the resolver will pull in, so the record still says exactly what was
+# compiled. Each digest is of the file as it sits on disk: there is no merged file to take
+# one of, because nothing merges them ahead of time any more.
+total_lines=0
+for f in $sources; do
+  n=$(wc -l < "$root/compiler/$f" | tr -d ' ')
+  say "source: $f $(sha256 "$root/compiler/$f") $n lines" >> "$out/record.txt"
+  total_lines=$((total_lines + n))
+done
+say "source lines: $total_lines" >> "$out/record.txt"
 
-# The same source must also pass the reference front end, so a bootstrap cannot succeed
-# on a program the language does not accept.
-"$nazm" check "$out/S.nz" >/dev/null || fail "S does not check"
+# A **reference** check, by the Rust front end, and not part of the chain. Nothing
+# downstream depends on it; it is here so a bootstrap cannot succeed on a program the
+# language does not accept. Stages 2 and 3 resolve and check for themselves, with the
+# compiler written in Nazm.
+"$nazm" check "$S" >/dev/null || fail "the compiler source does not check under the reference front end"
 
 # --- stage 1: Rust builds C1 --------------------------------------------------------
-say "stage 1: the Rust implementation compiles S into C1"
-"$nazm" build "$out/S.nz" -o "$out/stage1/nazmc" >/dev/null || fail "stage 1 failed"
+say "stage 1: the Rust implementation compiles the compiler source into C1"
+"$nazm" build "$S" -o "$out/stage1/nazmc" >/dev/null || fail "stage 1 failed"
 [ -x "$out/stage1/nazmc" ] || fail "stage 1 produced no executable"
 
 # --- stage 2: C1 builds C2 ----------------------------------------------------------
-say "stage 2: C1 compiles S into C2"
-"$out/stage1/nazmc" "$out/S.nz" > "$out/stage2/nazmc.ll" || fail "stage 2 emission failed"
+say "stage 2: C1 compiles it into C2, resolving the imports itself"
+"$out/stage1/nazmc" "$S" > "$out/stage2/nazmc.ll" || fail "stage 2 emission failed"
 link "$out/stage2"
 
 # --- stage 3: C2 builds C3 ----------------------------------------------------------
-say "stage 3: C2 compiles S into C3"
-"$out/stage2/nazmc" "$out/S.nz" > "$out/stage3/nazmc.ll" || fail "stage 3 emission failed"
+say "stage 3: C2 compiles it into C3, resolving the imports itself"
+"$out/stage2/nazmc" "$S" > "$out/stage3/nazmc.ll" || fail "stage 3 emission failed"
 link "$out/stage3"
 
 # --- the fixpoint -------------------------------------------------------------------

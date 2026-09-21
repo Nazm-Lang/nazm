@@ -26,7 +26,7 @@ performance comparison of any kind.
 | Scalar control flow, including `return` and transfers inside values | done | `crates/nazm-cli/tests/build.rs`, every case at `-O0` and `-O2` against the interpreter |
 | A bootstrap subset with text, structured data, collections, memory behaviour, file I/O, errors and modules | done | `docs/bootstrap-design.md`; the subset is what `compiler/*.nz` is written in, and `use` is resolved by the Nazm-written compiler itself — `compiler/module.nz` |
 | Compiler frontend and lowering/emission in Nazm, external dependencies documented | done **for the bootstrap subset** | `compiler/lex.nz`, `parse.nz`, `analyse.nz`, `emit.nz`; dependencies in `docs/bootstrap.md`. Concurrency and module resolution are both implemented — `compiler/module.nz`, and the task and channel runtime in `compiler/emit.nz` |
-| Native C1 → C2 → C3 bootstrap, conformance and reproducibility | done | `compiler/bootstrap.sh`; C2 and C3 byte-identical in IR and executable, 5 conformance cases |
+| Native C1 → C2 → C3 bootstrap, conformance and reproducibility | done | `compiler/bootstrap.sh`; C2 and C3 byte-identical in IR and executable, 5 conformance cases. Every stage compiles `compiler/emit.nz` itself and resolves its `use` lines with `compiler/module.nz`, so what is bootstrapped is the compiler as written rather than a concatenation of it |
 | Ordinary independent programs compile with the Nazm-written compiler | done **within the subset** | `crates/nazm-cli/tests/selfhost.rs`. Concurrent and multi-file programs both compile with it, imports and all |
 | Initial structured concurrency: transfer/capture rules, cancellation, cleanup | done | `docs/spec.md`; 17 interpreter tests and 17 native tests, all deadline-bounded. Both implementations join a scope before reporting a failure, verified at `-O0` and `-O2` against the interpreter for a failing body, a failing task, a failure below the body, nested scopes, and body-over-task precedence |
 | Structured developer interfaces, grammar/guide, formatting, repair workflow | done | `docs/diagnostics.md`, `schema/`, `docs/grammar.ebnf`, `docs/guide.md`, `scripts/repair.sh` |
@@ -79,12 +79,6 @@ These are properties of the release, not a backlog.
   fairness, no cancellation beyond closing a channel, and no deadlock freedom. At
   roughly 4.5 µs per channel hand-off it is suited to coarse-grained work and not to
   fine-grained message passing.
-- **The bootstrap concatenates its sources rather than importing them.** Not a gap in
-  the compiler — `compiler/module.nz` resolves `use` and the compiler written in Nazm
-  builds a multi-file program on its own (`selfhost.rs`,
-  `the_nazm_written_compiler_resolves_its_own_imports`). The bootstrap strips `use` lines
-  and concatenates deliberately, because every source is already in the one translation
-  unit and importing one would define its functions twice.
 - **Module resolution keys files by a textually normalised path, not a canonical one.**
   `./x.nz`, `x.nz` and `a/../x.nz` are one file; two names that reach one file through a
   symbolic link are two, and it would be read twice. The driver keys by the canonical
