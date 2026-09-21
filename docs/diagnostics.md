@@ -52,7 +52,16 @@ the file — not characters, not UTF-16 units, not lines. `start == end` is an i
 point rather than an empty range.
 
 For a program assembled from several files with `use`, a diagnostic's offsets are into
-the merged buffer, because that is the text the compiler checked. `nazm fix --json`
+the concatenation of every file in load order.
+
+**This did not change when source identity became internal (N1, 2026-09-21.)** The compiler
+now carries a real file with every span and offsets that are local to it, and the human
+rendering names the file directly rather than searching for it. The published shape is
+deliberately unmoved: `nazm.diagnostic/1` has always reported concatenation offsets with no
+`file` field, and improving the compiler's internals is not a reason to move every existing
+consumer's numbers. `SourceMap::global` rebases on the way out, in one place, and a test
+pins it. A future schema version could publish `{ file, start, end }` directly; that is a
+version decision, not a side effect. `nazm fix --json`
 resolves them: its `file`, `start` and `end` name a real file and an offset inside it,
 which is what an editing tool needs.
 

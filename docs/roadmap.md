@@ -59,73 +59,48 @@ its existence by owning a semantic responsibility no existing layer owns.** Matc
 aspirational IR diagram is not such a reason. By that test the next step is not the next box
 in the diagram — it is the one place where a responsibility is currently owned *twice*.
 
-### N1 — Source identity, and one resolution result
+### N1 — Source identity, and one resolution result · **complete, 2026-09-21**
 
-**The problem, from the tree rather than from the diagram.**
+**Done, in four slices** (`0045ed9`, `26a52bd`, `ea016c3`):
 
-Name and signature resolution happens twice, independently:
+| | |
+| --- | --- |
+| **N1A** | `Span` is `{ file, start, end }` with file-local offsets; `SourceMap` replaces the merged buffer; each file is parsed on its own text. The published diagnostic shape is unchanged |
+| **N1C** | One built-in inventory. `nazm-lir`'s 31-variant enum and its `by_name`/`name` tables are gone; `Builtin` is `nazm_syntax::Intrinsic`. `Type` and `Intrinsic` moved to `nazm-syntax` so the backend can see them without reaching the interpreter |
+| **N1B** | `nazm_core::check` produces a `nazm_syntax::Resolution`; the backend reads it. Deleted from `nazm-lir`: `resolve`, `bind`, `scoped`, the scope stack, the name-keyed signature table, the declared-names set, `native_ty`, and the built-in-first rule at the call and spawn sites |
+| **N1D** | A `cargo xtask check` rule fails if `nazm-lir` declares a name-keyed table; eleven tests run resolution-sensitive programs both ways and require one answer |
 
-- `crates/nazm-core/src/check.rs` resolves names and returns
-  `(HashMap<String, Signature>, Vec<Diagnostic>)`.
-- `crates/nazm-core/src/lib.rs:160` then **discards that map** — `let (_, check_errors) =
-  check(&program);` — and hands the bare AST to the backend.
-- `crates/nazm-lir/src/lower.rs` rebuilds it: its own `sigs: HashMap<String, Sig>`, its own
-  `resolve`, its own slot allocation.
+**The acceptance test was met:** one of the two resolvers no longer exists.
+`crates/nazm-lir/src` declares no symbol table keyed by a name and performs no name lookup.
 
-And the two built-in tables are transcribed separately — `Intrinsic::ALL` in
-`crates/nazm-core/src/intrinsic.rs` and `Builtin` in `crates/nazm-lir/src/ir.rs`, 31 entries
-each, kept in agreement **by a test rather than by construction.**
+**No new crate.** The shared vocabulary went into `nazm-syntax`, which both consumers
+already depend on; the resolver did not move, the duplicate was deleted. `architecture.md`
+§7.1 records why a `nazm-hir` holding a copy of the checker's answer would have been the
+pass-through the ordering rule exists to prevent.
 
-Separately, a span has no file identity. `nazm_span::Span` is `{ start: u32, end: u32 }`,
-there is no `FileId` type, and `crates/nazm-cli/src/load.rs` concatenates every reachable
-file into one buffer, recovering the filename from the offset. That is sound for a
-whole-program compiler and it is the hard stop under separate compilation, incremental
-compilation, content-addressed definitions and any language server.
+**What N1 deliberately did not do:** no HIR, no Core IR, no MIR — a resolution is not an IR
+— no ownership, effects, capabilities, generics, visibility, separate or incremental
+compilation, and no content-addressed identity. Every id it produces is session-local.
 
-**The shape of the answer:**
+### N2 — What a compilation unit is
 
-```text
-source files
-    ↓
-real source identity (a file a span can name)
-    ↓
-one name/signature resolution result
-    ├── the checker/evaluator consumes it
-    └── lowering/backend consumes it
-```
+**The next dependency, and not started.** Every file is now parsed separately and still
+**checked together** into one `Program`. Until there is a unit that can be checked on its
+own, separate compilation, incremental compilation and a language server all remain out of
+reach, and a definition has no identity that survives a process.
 
-**The questions to answer before writing any of it** — a crate is not created to match a
-diagram, and this milestone fails if it adds a pass-through:
-
-1. Does the artefact belong in an existing crate? `xtask/src/rules.rs` forbids
-   `nazm-lir → nazm-core`, so a shared artefact lands in `nazm-syntax`, or in a new crate
-   both depend on. That constraint is the reason the duplication exists, so it is the first
-   thing to settle rather than the last.
-2. Would a new crate own a real semantic responsibility, or would it only hold a struct?
-3. What exact representation does the resolution result need — enough for the evaluator's
-   environment *and* the lowerer's slots, without becoming a second AST?
-4. What is the stable identity of a definition, and does it survive an unrelated edit
-   elsewhere in the file?
-5. How do built-ins enter the same resolution model **without a third table**? One table,
-   two consumers, is the point; two tables plus a resolver is worse than today.
-6. How does a span retain file identity without touching every diagnostic, every syntax
-   node and every test? The merged-buffer design was chosen precisely to avoid that cost,
-   so the replacement has to state what it pays.
-7. Which existing tests prove behaviour is unchanged? The 114 language tests, the 127
-   two-oracle native tests and the 20 selfhost differentials are the floor.
-8. **Which duplicate resolver disappears?** If the answer is "neither, but now they share a
-   type", the milestone has not been done.
-
-**Acceptance:** one resolver, one built-in table, a span that names its file — and the
-selfhost differentials and two-oracle suite unchanged. **Not started.** Nothing here
-authorises ownership, effects, capabilities, generics, user-defined types, a second
-backend, a scheduler or a package manager.
+The decisions, all open in `spec.md` under *Source identity and definition identity*: what
+a compilation unit is; what a definition's stable identity is and what changes it; and
+whether built-ins are definitions. **Visibility is entangled with all three** — while every
+top-level function is visible to every importer, "which unit owns this name" has no answer
+— and `spec.md` already records private-by-default as a known future break. That break
+should be settled deliberately rather than discovered while building units.
 
 ### After N1, in dependency order
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| Separate compilation units | N1 | there is no unit until a span knows its file |
+| Separate compilation units | N1 ✓ | a span now knows its file; N2 decides what a unit *is* |
 | Incremental / content-addressed compilation | units | nothing of definition granularity to hash — `research-register.md` R2 |
 | A language server | units + a lossless CST | it would re-implement the semantic engine otherwise |
 | Ownership / the surface memory model | — | the largest open design question; `research-register.md` R1 |

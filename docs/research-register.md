@@ -54,9 +54,13 @@ results on the resulting Merkle DAG makes incremental compilation and cross-mach
 correct by construction. `architecture.md` §3 carries the design and the cache-key
 correctness conditions.
 
-**Required prerequisite** · A compilation unit. Today there is none:
-`crates/nazm-cli/src/load.rs` concatenates every reachable file into one buffer and a span
-has no file identity, so there is nothing of definition granularity to hash.
+**Required prerequisite** · A compilation unit. **Partly unblocked by N1, and not
+mistakenly so.** A span now names its file and a `Resolution` addresses definitions
+individually, so there *is* definition granularity to hash — but every id it produces is
+**session-local**: an index into one compilation in one process, not derived from content
+and explicitly not a cache key. The prerequisite that remains is a unit that can be checked
+on its own and an identity that survives a process; `roadmap.md` N2 owns the first,
+`spec.md` *Open* the second.
 
 **Evidence needed** · A measured rebuild saving on a real edit, against the cache key
 covering compiler identity, schema version, transitive dependency hashes, target and CPU
@@ -79,7 +83,8 @@ one class of no-op edit and shortening a class of agent loop. `architecture.md` 
 both the idea's origin (Unison) and the contribution claimed here, which is the
 agent-facing use rather than the hashing.
 
-**Required prerequisite** · R2.
+**Required prerequisite** · R2. N1 changed nothing here: it produced no content-derived
+identity, and `nazm_syntax::FnId` must not be read as one.
 
 **Evidence needed** · A measured reduction in wasted agent effort, under the protocol in
 `docs/research/evaluation.md` — whose thresholds are frozen and may not be relaxed — rather than an

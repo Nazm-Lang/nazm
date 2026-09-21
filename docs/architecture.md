@@ -348,30 +348,40 @@ channels, reactor, allocator — the one crate allowed `unsafe`) · `std-build` 
 allowance for `nazm-rt` and the FFI crates when those exist — stack switching and allocators
 cannot be written without it. `xtask` enforces that the allowance stays narrow.
 
-## 7.1 The next boundary, and the test it has to pass
+## 7.1 Where source identity and resolution live — settled by N1, 2026-09-21
 
-*Added 2026-09-21.* §7's table lists crates by the level they would occupy. That is the
-wrong question to ask next, and `master-architecture.md` §3 says why: **a layer earns its
-existence by owning a semantic responsibility no existing layer owns.** The table would put
-`nazm-hir` next because it is the next row. The tree gives a better reason.
+§7's table lists crates by the level they would occupy. That was the wrong question to ask
+next, and `master-architecture.md` §3 says why: **a layer earns its existence by owning a
+semantic responsibility no existing layer owns.** The table would have put `nazm-hir` next
+because it is the next row. The tree gave a better reason: name and signature resolution
+was performed *twice* — once in `nazm_core::check`, whose answer `nazm-core/src/lib.rs`
+discarded, and again in `nazm-lir/src/lower.rs`, which rebuilt an equivalent scope stack,
+slot allocator and name-keyed signature table because `xtask/src/rules.rs` forbids the
+backend depending on the interpreter's crate.
 
-**Name and signature resolution is currently performed twice.** `nazm_core::check` resolves
-and returns a signature map; `nazm-core/src/lib.rs` discards it; `nazm-lir/src/lower.rs`
-rebuilds it with its own `sigs` map, its own `resolve`, and its own slot allocation. The
-built-in table is transcribed twice as well — `Intrinsic::ALL` and `ir::Builtin`, 31 entries
-each, kept in agreement by a test rather than by construction. That is one responsibility
-with two implementations, and it is the first thing since M1 that would *remove* code.
+**No new crate was created.** The shared vocabulary went to `nazm-syntax`, which both
+consumers already depend on:
 
-**The constraint that produced it** is `xtask/src/rules.rs`: `nazm-lir` may not depend on
-`nazm-core`. The backend was given its own resolver because it could not use the checker's.
-So the design question is not "which level is next" but **where a shared resolution artefact
-lives** — in `nazm-syntax`, which both already depend on, or in a new crate they both
-depend on. That choice is the milestone's first decision, not its last.
+| What | Where it lives now | Why there |
+| --- | --- | --- |
+| `FileId`, `Span { file, start, end }`, `SourceMap` | `nazm-span` | it already owned positions; a span naming its file is the same responsibility done properly |
+| `Type`, `Intrinsic` | `nazm-syntax` | the language's types and built-in signatures are surface vocabulary, and the backend needs them without reaching the interpreter |
+| `Resolution` — definitions, signatures, call targets, slots | `nazm-syntax` | the one type both consumers read; the **algorithm** stays in `nazm_core::check`, which produces it while checking |
 
-The test a new crate has to pass: **after it exists, one of the two resolvers is gone.** If
-both remain and merely share a type, the layer is a pass-through and matching the diagram
-was the only thing it achieved. `roadmap.md` N1 carries the eight questions that have to be
-answered before any of it is written.
+That last row is the part worth stating plainly, because it is where a new crate would have
+been easy to justify and wrong. `Resolution` is a **value**, not a pass. The resolver did
+not move; the second one was deleted. A `nazm-hir` crate holding a copy of the checker's
+answer would have been the pass-through this section was written to prevent — and the
+acceptance test for such a crate, *after it exists, one of the two resolvers is gone*, is
+met here without one.
+
+**A resolution is not an IR.** It holds no expressions and no control flow. Levels 2–6 of
+§2 remain absent, and `capability-matrix.md` areas 8 and 9 stay MISSING.
+
+What N1 did **not** settle: there is still no compilation unit — every file is parsed
+separately but checked together — and every id in a `Resolution` is session-local, so it is
+not a cache key and not a definition identity that survives a process. `spec.md` *Open*
+carries both, and `research-register.md` R2 and R3 depend on them.
 
 ## 8. Toolchain, and one real incompatibility
 
