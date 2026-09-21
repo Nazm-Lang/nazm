@@ -61,9 +61,13 @@ mod exit {
     about = "The Nazm programming language.",
     long_about = "Nazm v0.3: an executable subset — functions, `let` and `let mut`, \
                   `if`/`else`, `while` with `break` and `continue`, `return`, recursion, \
-                  and arithmetic and comparison over Int, Bool and Str. No collections, \
-                  user-defined types, effects or I/O yet; programs using them are refused \
-                  by name rather than misparsed. See docs/spec.md.",
+                  arithmetic and comparison over Int, Bool and Str, the Ints and Strs \
+                  sequences, modules, file and output built-ins, and structured \
+                  concurrency (scope, spawn, Chan). No user-defined types, pattern \
+                  matching, generics, effects or floats yet; programs using them are \
+                  refused by name rather than misparsed. `nazm build` compiles a narrower \
+                  subset than `nazm run` — notably it refuses recursion. Run `nazm \
+                  capabilities` for this build's own answer. See docs/spec.md.",
     version
 )]
 struct Cli {

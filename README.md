@@ -10,11 +10,11 @@ writes most code, languages should be redesigned to save tokens. The evidence sa
 otherwise. What the evidence *does* show is that agents waste enormous effort fighting
 compilers and churning over code that already works — and that is attackable.
 
-So this repository contains two things. **The language** — today an interpreter, not a
-compiler, which is why nothing here speaks to the performance claims yet. And **an
-agent-cost harness** built to measure specific claims about it honestly, including the
-uncomfortable one: that better tooling on an existing language might capture much of the
-benefit.
+So this repository contains two things. **The language** — an interpreter and a native
+compiler over an overlapping subset, which since 2026-09-21 compiles itself to a fixpoint.
+And **an agent-cost harness** built to measure specific claims about it honestly, including
+the uncomfortable one: that better tooling on an existing language might capture much of
+the benefit.
 
 The language is the primary track. That was decided on 2026-09-20 and recorded in
 [`docs/direction.md`](docs/direction.md); what comes next, in dependency order, is
@@ -41,8 +41,10 @@ bootstrap complete: C2 and C3 are byte-identical, 5 conformance cases agree
 ```
 
 `compiler/*.nz` is a compiler for Nazm **written in Nazm** — lexer, parser, checker and
-LLVM emission, about 3 500 lines, every component differentially verified against the
-Rust implementation rather than merely run. It compiles itself to a fixpoint;
+LLVM emission. The bootstrap source is five files and **4,647 lines**; `compiler/*.nz` is
+4,839 across eight, the difference being three thin command-line drivers that exist only
+because the language has no visibility yet. Every component is differentially verified
+against the Rust implementation rather than merely run. It compiles itself to a fixpoint;
 [`docs/bootstrap.md`](docs/bootstrap.md) says what that does and does not establish,
 and the answer is narrower than it sounds.
 
@@ -86,11 +88,14 @@ fn first_pair_with_product(target: Int, limit: Int) -> Int {
 }
 ```
 
-An executable subset — functions, recursion, `let` and `let mut`, assignment, `while` with
-`break` and `continue`, `return`, `if`/`else`, and arithmetic and comparison over `Int`,
-`Bool` and `Str` — lexed, parsed, type-checked and evaluated. No collections, user-defined
-types, effects or I/O yet, and a program using them is **refused by name** rather than
-misparsed into something else.
+An executable subset — functions, `let` and `let mut`, assignment, `while` with `break`
+and `continue`, `return`, `if`/`else`, arithmetic and comparison over `Int`, `Bool` and
+`Str`, the `Ints` and `Strs` sequences, file and output built-ins, modules, and structured
+concurrency — lexed, parsed, type-checked and evaluated. **Recursion runs here and is
+refused by `nazm build`**; that asymmetry is the one place the two paths disagree, and it
+is reported by name. Still absent: user-defined types, pattern matching, generics, effects
+and floats. A program using one of those is **refused by name** rather than misparsed into
+something else.
 
 The semantics it commits to are in [`docs/spec.md`](docs/spec.md): overflow traps
 identically in every build, division by zero is an error, bindings are immutable unless
@@ -201,18 +206,25 @@ The answer to "does this need a new compiler design?" is **new front end, new IR
 middle end, reused back end**. Code generation is decades of work with no novelty available
 in it.
 
-**What comes next**, in dependency order and no further:
+**The design it was built toward, and where that stands.** M1, M2 and M3 below are all
+complete as of 2026-09-21; the table is kept as the record of the order they were done in.
+What exists now, area by area with evidence, is
+[`docs/capability-matrix.md`](docs/capability-matrix.md):
 
 | | |
 | --- | --- |
-| **M1** | A native vertical slice. The existing lexer, parser, checker and diagnostics, one new typed IR, LLVM IR emitted as text and assembled by `clang`, one target. A compiled program runs with no interpreter, and is differentially compared against the interpreter on the existing 98-case corpus |
+| **M1** | A native vertical slice. The existing lexer, parser, checker and diagnostics, one new typed IR, LLVM IR emitted as text and assembled by `clang`, one target. A compiled program runs with no interpreter, and is differentially compared against the interpreter on the existing 98-case corpus (114 cases today) |
 | **M2** | The facilities a compiler actually needs — value/copy/move and cleanup first, then strings, tagged unions, collections, arena-indexed recursive structures, modules, and a narrow capability-based I/O contract |
 | **M3** | The bootstrap: `Rust → C1`, `C1 → C2`, `C2 → C3`, with byte equality asserted only where determinism has been established |
 
-Self-hosting is the long-term objective and it is **M3, not next**. Nazm today has no
-collections, no user-defined types, no pattern matching, no string concatenation and no
-I/O, so a compiler cannot be written in it in any form. The Rust implementation is retained
-as the bootstrap seed and the differential oracle.
+**Superseded 2026-09-21.** This paragraph read: *"Self-hosting is the long-term objective
+and it is M3, not next. Nazm today has no collections, no user-defined types, no pattern
+matching, no string concatenation and no I/O, so a compiler cannot be written in it in any
+form."* Four of those five are now false — collections, string concatenation, modules and
+I/O all exist — and the compiler has been written in it. Only user-defined types and
+pattern matching remain absent, and the compiler was written around them with parallel
+`Ints`/`Strs` arrays rather than waiting for them. The Rust implementation is still
+retained as the bootstrap seed and the differential oracle, which has not changed.
 
 ## What this does not establish
 
@@ -278,6 +290,11 @@ result out, and report what is left as JSON.
 | | |
 | --- | --- |
 | [`docs/delivery.md`](docs/delivery.md) | **Start here.** What was built, what verifies it, what it does not establish, and how to reproduce all of it |
+| [`docs/capability-matrix.md`](docs/capability-matrix.md) | **What exists, area by area, with evidence.** The answer to "is X implemented?" — and the only status table with a gate under it |
+| [`docs/master-architecture.md`](docs/master-architecture.md) | The durable constitution: the invariants, how a claim may be stated, and one language with many profiles |
+| [`docs/architecture.md`](docs/architecture.md) | The design record: why this compiler design, the IR levels, the type system, the toolchain choices |
+| [`docs/domain-profiles.md`](docs/domain-profiles.md) | General, Systems, Embedded, Critical, Cybersecurity, AI/HPC — restrictions and missing prerequisites |
+| [`docs/research-register.md`](docs/research-register.md) | Hypotheses, each with what would invalidate it. Not plans |
 | [`docs/guide.md`](docs/guide.md) | The language, for someone writing a program in it. Its syntax section is generated from the grammar |
 | [`docs/spec.md`](docs/spec.md) | What each construct means, and the decision behind it |
 | [`docs/diagnostics.md`](docs/diagnostics.md) | The machine interface: schemas, fixes, capabilities, exit statuses |
@@ -288,25 +305,33 @@ result out, and report what is left as JSON.
 
 Almost everything. Specifically:
 
-- **The language is an interpreter and a native path over the same subset.** Lexer,
-  parser, type checker and tree-walking evaluator; `nazm build` compiles everything in
-  the list above. One IR level (`nazm-lir`), one backend (LLVM IR as text → `clang`),
-  one verified target (`aarch64-apple-darwin`); other targets are **unverified rather
-  than unsupported**. Run `nazm capabilities` for what this build actually has, read
-  from the compiler's own tables rather than from this paragraph. Nothing here says
-  anything yet about the performance claims: `-O0` is the default, no optimisation work
-  has been done, and no measurement has been taken. `docs/spec.md` keeps its sections
+- **The language is an interpreter and a native path over *overlapping* subsets** —
+  not the same one: recursion runs interpreted and is refused natively. Lexer, parser,
+  type checker and tree-walking evaluator; `nazm build` compiles everything in the list
+  above. One IR level (`nazm-lir`), one backend (LLVM IR as text → `clang`), two verified
+  targets (`aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`, the latter inside the
+  contained runner); other targets are **unverified rather than unsupported**, and there
+  is no cross-compilation at all. Run `nazm capabilities` for what this build actually has,
+  read from the compiler's own tables rather than from this paragraph. `-O0` is still the
+  default. Measurements now exist — one profile-driven optimisation pass and two recorded
+  baselines, of which only the Linux one is current — and
+  [`docs/performance.md`](docs/performance.md) states what they do and do not support.
+  `docs/spec.md` keeps its sections
   versioned, so a *Settled for v0.1* entry records what v0.1 decided rather than what is
   true now. Everything under *Open* is undecided.
 - **Concurrency is an initial model, and only that.** `scope`, `spawn` and a bounded
   `Chan` of `Int`, specified in `docs/spec.md` before being implemented, running
   interpreted and compiled. **One operating-system thread per task and nothing more**:
   no M:N scheduling, no work stealing, no task density, no fairness, no deadlock
-  freedom, and no cancellation beyond closing a channel. The compiler written in Nazm
-  does not accept it — concurrency is outside the bootstrap subset, and says so by
-  name.
+  freedom, and no cancellation beyond closing a channel. **Superseded 2026-09-21:** this
+  entry used to end *"The compiler written in Nazm does not accept it — concurrency is
+  outside the bootstrap subset, and says so by name."* It does accept it. The Nazm-written
+  compiler parses, checks and lowers `scope`, `spawn` and `Chan`, emitting the same task
+  and channel runtime, and the exclusion list that enforced the old statement is now
+  asserted by test to be **absent**.
 - **The harness is partial.** Real, tested, and mutation-checked (`cargo xtask mutate`,
-  44 runnable catalogued defects, all caught **as of `8d67a7d`** — plus two defects
+  **51** catalogued defects, 48 caught with 0 survivors and 2 not injected **as of
+  `524cd24`** — plus two defects
   documented in `mutations.toml` as *uncovered*, which a passing run says nothing about):
   the accounting and comparison path (`nazm-bench selftest`, 19 cases), per-attempt
   workspace management, the submission freeze, and the independent acceptance runner.
@@ -340,12 +365,16 @@ Almost everything. Specifically:
   recorded, and it is not binding before then. Registration is bound by git ancestry plus a
   runner preflight record; neither is an independent timestamp, so third-party-verifiable
   chronology would need an external registration event.
-- **The spec is a list of open questions**, not a specification — see
-  [`docs/spec.md`](docs/spec.md). Notably unsettled: whether divergence is an effect, which
-  determines whether an unused pure call may be dropped at all.
-- **No performance numbers.** [`docs/performance.md`](docs/performance.md) contains claims
-  to be tested, and deliberately no targets, because there are no baselines to set them
-  against.
+- **The spec is part specification, part list of open questions** — see
+  [`docs/spec.md`](docs/spec.md). Its *Settled* strata are real and versioned; its *Open*
+  section is the register of what is not. Notably unsettled: whether divergence is an
+  effect, which determines whether an unused pure call may be dropped at all.
+- **No performance targets**, and the numbers that exist are narrow.
+  [`docs/performance.md`](docs/performance.md) carries one optimisation pass measured
+  against its own baseline, an interpreter-against-native comparison, and a single external
+  reference (`clang` and `python3` on one program). There are still no targets, because a
+  target set from one program on one host would be a number pretending to be a goal. The
+  Darwin baseline is **stale and not a valid comparison**; the Linux one is current.
 - **No literature review** on automatic layout selection, so this project is not entitled
   to claim the idea is novel. Phase 1 deliverable.
 

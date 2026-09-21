@@ -1,16 +1,22 @@
 # Nazm — an AI-native programming language.
 #
+# Constitution: docs/master-architecture.md · What exists: docs/capability-matrix.md
 # Direction: docs/direction.md · Roadmap: docs/roadmap.md
 # Design record: docs/architecture.md · Spec: docs/spec.md
 # Evaluation protocol (draft, not pre-registered): docs/evaluation.md
 #
-# Two tracks in one workspace. The language — span, diag, syntax, core, cli — is
-# an interpreter: lexer, parser, checker, tree-walking evaluator, no IR and no
-# backend. Alongside it, nazm-bench, an agent-cost harness that now measures
-# specific claims rather than gating the project's existence (docs/direction.md).
+# Two tracks in one workspace. The language — span, diag, syntax, core, lir, cli — is an
+# interpreter and a native compiler: lexer, parser, checker, tree-walking evaluator, one
+# IR level (nazm-lir) and one backend (LLVM IR as text, assembled by clang). Alongside it,
+# nazm-bench, an agent-cost harness that now measures specific claims rather than gating
+# the project's existence (docs/direction.md).
 #
-# This header previously read "there is deliberately no compiler here yet". That
-# stopped being true on 2026-09-20, when a .nz program first executed.
+# Corrected twice, and both are left visible because a header is where a stale claim does
+# the most damage. It read "there is deliberately no compiler here yet" until 2026-09-20,
+# when a .nz program first executed. It then read that the language had "no IR and no
+# backend" until 2026-09-21 — by which time nazm-lir was a workspace member listed eight
+# lines below, and the compiler had compiled itself. `cargo xtask check` now fails on that
+# sentence rather than waiting for a reader to notice it.
 
 [workspace]
 resolver = "2"

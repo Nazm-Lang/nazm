@@ -316,6 +316,13 @@ Prepare a local experimental release candidate with source, bootstrap instructio
 
 ## 13. Definition of done
 
+> **All ten items were satisfied on 2026-09-21.** The boxes below are deliberately left
+> unticked: this file is the **contract**, and a contract is not a progress tracker. The
+> ticks, each with the commit and the evidence behind it, are in
+> [`goal-status.md`](goal-status.md) under *Definition of done (Section 13)*. Anyone
+> reading the empty boxes here and concluding the goal is unfinished is reading the right
+> document for the wrong question.
+
 Declare this goal complete only when all items below are satisfied:
 
 - [ ] Current scalar control-flow coverage is verified, including return and transfers inside values.

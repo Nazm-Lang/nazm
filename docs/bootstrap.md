@@ -17,9 +17,9 @@ script.
 
 | | |
 | --- | --- |
-| Host | aarch64-apple-darwin (Darwin arm64) |
-| Toolchain | rustc 1.98.1 (pinned), Apple clang 21.0.0 |
-| S | `compiler/{lex,parse,analyse,emit}.nz`, 3524 lines |
+| Host | **Linux aarch64**, inside `nazm-contained:1.98.1` — the configuration of record since containment became mandatory. Darwin arm64 remains *a* verified configuration, historically |
+| Toolchain | rustc 1.98.1 (pinned); Debian clang 19.1.7 in the container, Apple clang 21.0.0 on Darwin |
+| S | `compiler/{lex,parse,analyse,module,emit}.nz`, **4,647 lines** (this row read four files and 3524 lines until 2026-09-21; `module.nz` joined when the compiler began resolving its own `use` lines) |
 | **C2 vs C3, emitted IR** | **byte-identical** |
 | **C2 vs C3, executables** | **byte-identical**, including the runnable form |
 | Conformance | 5 cases, each agreeing across C2, C3 **and the interpreter** |
@@ -75,8 +75,18 @@ fail would be worse.
 ## Reproducing it
 
 ```sh
-cargo build -p nazm-cli      # the Rust bootstrap
-./compiler/bootstrap.sh      # writes target/bootstrap/
+cargo xtask contained bootstrap      # builds the image if needed, writes the record
+```
+
+**Corrected 2026-09-21.** This block used to read `cargo build -p nazm-cli` followed by
+`./compiler/bootstrap.sh`, and that second command now **refuses to run**: the script
+requires an external memory ceiling, because a stage written in Nazm allocates without
+bound and reaches the machine rather than the process. Setting `NAZM_CONTAINED=1` on the
+host to satisfy it would be exactly the mistake the refusal exists to prevent — the
+variable is a declaration, not a boundary, and only the contained runner is entitled to set
+it. To read the record afterwards:
+
+```sh
 cat target/bootstrap/record.txt
 ```
 

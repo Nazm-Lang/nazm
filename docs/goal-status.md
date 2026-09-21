@@ -12,10 +12,10 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | Branch | `main` (renamed from `master`; no remote configured, local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `6ec965d` (repair `011d7ff`, contract v1.1 `fc21968`, runner `a74bdba`) |
-| Working tree | the contained-runner work is in progress on top of `a74bdba` |
-| Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
-| Disk | 50 GiB free of 460 GiB (88 % full) after reclaiming 33.5 GiB of `target/` on 2026-09-21 |
+| Tested release commit | **`4fb15542dfbf9af0bf34c42fe52783637b3daed4`** — what the retained candidate was built and tested at |
+| Working tree | clean. *(This row said "the contained-runner work is in progress on top of `a74bdba`", and the row above it named `6ec965d` as current, for roughly twenty commits. A file that calls itself the resume point is the worst place in the repository for a stale line, so both are now stated against a commit rather than a mood.)* |
+| Platform verified | aarch64-apple-darwin (Darwin arm64) and aarch64-unknown-linux-gnu (inside `nazm-contained:1.98.1`); rustc 1.98.1 pinned |
+| Disk | 50 GiB free of 460 GiB (88 % full) after reclaiming 33.5 GiB of `target/` on 2026-09-21. Re-measure before trusting |
 
 ## Execution prerequisite: the contained runner
 
@@ -63,7 +63,7 @@ strictly: **passed** / **skipped** / **refused** / **failed** / **unexecuted**.
 | workload | result |
 | --- | --- |
 | `contained probe` | **passed** — 6/6 bounds real, 0 survivors |
-| `contained selfhost` | **passed** — 15/15, 0 survivors |
+| `contained selfhost` | **passed** — 20/20 at `4fb1554`, 0 survivors (15/15 when this row was written) |
 | `contained bootstrap` | **passed** — `ir: identical`, `runnable-bytes-differing: 0`, 5 conformance cases |
 | `cargo test --locked --workspace --jobs 1 -- --test-threads 1` | **passed** — **548 passed, 0 failed, 6 ignored, 35 suites**, 0 survivors at `c3fb078` (previously recorded: 524, and 506 before that) |
 | `cargo fmt --all -- --check` | **passed** |
@@ -206,33 +206,24 @@ IR and sources, Gate A and root-cause write-ups).
 
 ## Capability matrix
 
-**verified** = executed evidence against the current commit. **planned** = nothing exists.
+**Moved 2026-09-21 to [`capability-matrix.md`](capability-matrix.md)**, which covers all 33
+architectural areas with evidence, limitations, the next dependency and an acceptance
+condition for each, and is gated by `cargo xtask check` so a row citing a file that does
+not exist fails the build.
 
-| Capability | Status | Evidence |
-| --- | --- | --- |
-| Lexer, parser, checker, interpreter | verified | 110 language tests |
-| Structured diagnostics, codes, `--json` | verified | `nazm-diag`; per-file names in merged buffers |
-| Native `Int`/`Bool`, checked arithmetic, comparisons | verified | `-O0`/`-O2` against the interpreter |
-| Native value/statement `if`, `while`, `break`, `continue`, `return`, `let mut`, assignment | verified | commits `60709be`, `ac39f7b` |
-| Native non-recursive direct calls | verified | `4326100` |
-| Native `Str` as bytes + 7 built-ins | verified | `6d722c1`, `23ee970` |
-| Native `Ints`/`Strs` sequences + 12 built-ins | verified | `30c7b12`, `9e9a5be` |
-| Native arguments, files, output, exit | verified | `23ee970`; **ambient authority, enforced nowhere** |
-| Modules: `use`, relative resolution, diamonds, cycles | verified | `053ed22`; **no visibility control** |
-| Tokeniser written in Nazm | verified | `compiler/lex.nz` + `lexer.nz`; agrees with `nazm_syntax::lex` token- and span-wise over every `.nz` in the tree |
-| Parser written in Nazm | **verified** | `compiler/parser.nz`; the **whole grammar**. Same tree as the reference over 50 hand-written sources **and over its own source and the tokeniser's** — 2000+ nodes, node- and span-identical. Only a bare block used as an expression is refused |
-| Name resolution in Nazm | **verified** | `compiler/check.nz`; same `(code, span)` as `nazm_core::check` for `N0200`/`N0201` over 15 sources, and accepts every standalone `.nz` in the tree |
-| Tree traversal in Nazm without recursion | **verified** | child index from the post-order arena, then a pre-order walk from a marker-carrying work stack |
-| Type checking in Nazm | **verified** | `compiler/analyse.nz`; same `(code, span)` as `nazm_core::check` for `N0300`/`N0301`/`N0303`/`N0304`/`N0310` over 35 sources |
-| **LLVM emission in Nazm** | **verified for the whole bootstrap language** | `compiler/emit.nz`: arithmetic with every specified failure, locals, control flow, transfers, functions, calls, `Str`, sequences and all 27 built-ins |
-| **Self-hosting** | **verified** | `compiler/bootstrap.sh`: C2 and C3 byte-identical in IR *and* executable; 5 conformance cases agree across C2, C3 and the interpreter |
-| `use` resolution in the Nazm compiler | **done** | `compiler/module.nz`; every bootstrap stage resolves its own imports, and the concatenation workaround is gone |
-| Recursion in the Nazm compiler's output | **refused, as the reference does** | `refuse_recursion` in `compiler/emit.nz`: the same `N0101`, over every declared function, for direct recursion, mutual recursion, a cycle that exists only across files, and a cycle through a `spawn`. Was a real divergence — measured, then closed. See *Recursion* below |
-| Native recursion | blocked by design | pending measured stack availability and frame size. **Not needed**: the compiler is iterative |
-| **Structured concurrency, interpreted** | **verified** | `scope`, `spawn`, bounded `Chan`; 17 tests in `nazm-core/tests/concurrency.rs`, **every one with a deadline** so a hang fails by name |
-| **Structured concurrency, native** | **verified** | one POSIX thread per task, a mutex/condvar ring per channel; 17 tests in `nazm-cli/tests/concurrent.rs` at `-O0` **and** `-O2`, each against a written expectation *and* the interpreter, including that a failure joins its scope before it is reported |
-| Concurrency in the *Nazm* compiler | **done** | parsed, checked (`N0320`, `N0321` with the reference's codes and spans) and lowered — the task and channel runtime in `compiler/emit.nz`. Verified through that compiler: the worker pool answers 90, and a failing body or task joins the scope before reporting |
-| Formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
+The table that stood here is not reproduced, for a reason worth recording: it had drifted
+into contradicting this same file. Its last row read *"Formatter, grammar artefact, fix
+application, benchmarks | planned | nothing exists"* — thirty lines below the entry marking
+milestone F complete on the strength of a formatter, a grammar artefact and a fix
+mechanism, and milestone G complete on the strength of benchmarks. Two tables in one
+document disagreeing is what a matrix without a gate under it decays into.
+
+For construct-level support — whether a given built-in or statement runs interpreted,
+compiles natively, or is refused — ask the compiler instead:
+
+```sh
+cargo run -p nazm-cli --bin nazm -- capabilities --json
+```
 
 ## Verified commands (against `91ec4d6`, before the incident)
 
@@ -255,7 +246,7 @@ IR and sources, Gate A and root-cause write-ups).
 
 Mutation runs this session, each isolated against a disposable copy and each verified
 byte-identical on restore: `return-does-not-end-the-block-it-is-in` (caught, 5 tests).
-The full 50-entry catalogue has **not** been run since `8d67a7d`.
+The full 51-entry catalogue has **not** been run since `8d67a7d`.
 
 ## Active processes and temporary resources
 
@@ -451,12 +442,17 @@ Open, and none of them a blocker to the release as labelled:
    2 → 1 at `emit.rs:712`, the back edge), mutant compiled, and
    `the_condition_is_reevaluated_on_every_iteration` failed on its 10 s deadline.
    Container removed, `survivors=0`, this tree untouched.
-4. **Six stage invocations still have no deadline.** The lexer, parser and checker stages
-   in `crates/nazm-cli/tests/selfhost.rs` run under `bounded_exe`, so the memory ceiling
-   — the part that matters for the 2026-09-21 incident — is in place, but they use
-   `.output()` rather than `run_bounded`, so a hung stage there would hang the suite
-   rather than fail by name. Mechanical to close; deliberately not done inside a release
-   run.
+4. **Closed 2026-09-21.** This read *"Six stage invocations still have no deadline"* — the
+   lexer, parser and checker stages in `crates/nazm-cli/tests/selfhost.rs` had the memory
+   ceiling but used `.output()`, so a hung stage would have hung the suite rather than
+   failed by name. All six now go through `run_stage`, which composes `bounded_exe` with
+   `run_bounded`: both pipes drained on their own threads, a 64 MiB cap per stream that
+   asserts rather than grows, and kill-and-reap on a 120 s deadline. A workspace sweep
+   found one further generated program run without a deadline —
+   `crates/nazm-cli/tests/build.rs`, the 511-term chain — and it is closed the same way.
+   What is deliberately **not** routed through the ceiling: the Rust `nazm` binary,
+   `clang` and `sh`, which are build tools in the same class as `cargo`, not artefacts of
+   the thing under test.
 5. **The performance decomposition stops one level short.** The 2.00× measured across the
    emitter revision is the revision's **overall** effect, not the isolated cost of the
    failure check: three commits touched `emit.rs`/`ir.rs` between the compared builds.
@@ -467,7 +463,34 @@ Open, and none of them a blocker to the release as labelled:
 
 ## Next exact action
 
-**None outstanding.** The recursion divergence is closed with the reference's own
+**The architectural baseline is written; the next engineering phase is identified and not
+started.**
+
+The baseline is [`master-architecture.md`](master-architecture.md) (the constitution),
+[`capability-matrix.md`](capability-matrix.md) (33 areas with evidence, gated by
+`cargo xtask check`), [`domain-profiles.md`](domain-profiles.md) and
+[`research-register.md`](research-register.md). Stale prose across nine documents,
+`Cargo.toml` and four source files was corrected in place; nothing was erased, and the
+superseded sentences are quoted where they stood.
+
+**Next milestone: settle the semantic constitution, then open exactly one new boundary.**
+The boundary is already identifiable from the tree rather than from the diagram. Name
+resolution happens **twice**, independently — `crates/nazm-core/src/check.rs` and
+`crates/nazm-lir/src/lower.rs` — against two separately transcribed built-in tables of 31
+entries each, kept in agreement by a test rather than by construction. That is one semantic
+responsibility with two implementations, which is the criterion in
+`master-architecture.md` §3 for a level that earns its existence.
+
+**First implementation slice:** one resolution result, two consumers — a resolved-name and
+signature artefact produced once and consumed by both the evaluator and the lowerer.
+`xtask/src/rules.rs` forbids `nazm-lir` depending on `nazm-core`, so it lands in
+`nazm-syntax` or in a new crate both depend on; deciding which is the first design
+question, and giving a span a real file identity is its natural companion — that absence is
+what currently blocks separate compilation, incrementality and any language server.
+
+**Not started, and deliberately.** No language feature, no refactor, no new crate.
+
+**Previously here:** *"None outstanding."* The recursion divergence is closed with the reference's own
 contract, every generated stage in the selfhost suite runs under the ceiling, and a
 candidate built and tested at `4fb1554` is retained at `~/nazm-release-4fb1554/` with the
 `c3fb078` one kept beside it, unchanged.

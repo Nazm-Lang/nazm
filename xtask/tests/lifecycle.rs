@@ -20,7 +20,7 @@
 //! # Why they are `#[ignore]`d
 //!
 //! Each one drives several nested `cargo` invocations. `cargo xtask mutate` runs
-//! `cargo test --workspace` once per catalogued defect — 44 of them — so leaving these in
+//! `cargo test --workspace` once per catalogued defect — 51 of them — so leaving these in
 //! the default set would add their cost to every iteration. Run them explicitly:
 //!
 //! ```sh

@@ -1,8 +1,17 @@
 # Decision record: language development is the primary track
 
-**Date:** 2026-09-20 · **Status:** accepted · **Supersedes:** the framing in
-`docs/evaluation.md` §1 under which the three-arm experiment decided whether the language
-would exist at all.
+**Date:** 2026-09-20 · **Status:** accepted, and still in force · **Supersedes:** the
+framing in `docs/evaluation.md` §1 under which the three-arm experiment decided whether the
+language would exist at all.
+
+> **Read as of its date.** This is a decision record, not a status page, and it is not
+> edited when the world moves — its value is what was true and decided on 2026-09-20. Two
+> paragraphs below have since been overtaken by events: *Self-hosting* calls it "explicitly
+> outside the current interpreter milestone" and lists five things the language lacked, of
+> which four now exist. The decisions themselves stand — the language is the primary track,
+> the evaluation thresholds are unaltered, the Rust implementation is retained, and the
+> four-kinds-of-statement table is still the vocabulary this project reasons in.
+> [`capability-matrix.md`](capability-matrix.md) is where current truth lives.
 
 ---
 

@@ -1,0 +1,613 @@
+# Capability matrix
+
+**Status: source-backed against `4fb15542dfbf9af0bf34c42fe52783637b3daed4`, the commit the
+retained candidate was built and tested at. HEAD differs from it by `docs/goal-status.md`
+alone, so every source claim below is a claim about the tested tree.**
+
+This is one table serving two purposes. The directive asked for a capability matrix and a
+gap map; they are the same information at the same granularity, so the five fields of a
+gap map are the columns of the matrix and there is one document instead of two.
+
+**Vocabulary:** VERIFIED · PARTIAL · DESIGNED · RESEARCH · BLOCKED · MISSING, defined in
+[`master-architecture.md`](master-architecture.md) §1. A VERIFIED row cites a path; a
+`cargo xtask check` rule fails if it does not, or if a cited path stops existing.
+
+**What this document does not cover.** Construct-level support — whether `while` or
+`spawn` or a given built-in runs interpreted, compiles natively, or is refused — is
+answered by the compiler itself:
+
+```sh
+cargo run -p nazm-cli --bin nazm -- capabilities --json
+```
+
+That output is read from the compiler's own dispatch tables (`crates/nazm-cli/src/capabilities.rs`),
+so it cannot drift from the implementation the way a written table can. Ask it, not this
+file. The schema is `schema/nazm.capabilities-1.json`.
+
+---
+
+## Summary
+
+| # | Area | Status |
+| --- | --- | --- |
+| 1 | Syntax, parser, CST | PARTIAL |
+| 2 | Name resolution and modules | PARTIAL |
+| 3 | Type system | PARTIAL |
+| 4 | Ownership and resource semantics | MISSING |
+| 5 | Effects | MISSING |
+| 6 | Capabilities (language) | MISSING |
+| 7 | Provenance and information flow (language) | MISSING |
+| 8 | Core IR | MISSING |
+| 9 | MIR | MISSING |
+| 10 | LIR and the backend contract | PARTIAL |
+| 11 | LLVM backend | VERIFIED |
+| 12 | Cranelift backend | DESIGNED |
+| 13 | Runtime | PARTIAL |
+| 14 | Structured concurrency | VERIFIED |
+| 15 | Advanced scheduler | RESEARCH |
+| 16 | Standard library | MISSING |
+| 17 | FFI and ABI | MISSING |
+| 18 | Embedded support | MISSING |
+| 19 | Critical profile | DESIGNED |
+| 20 | Cybersecurity profile | DESIGNED |
+| 21 | AI/HPC | RESEARCH |
+| 22 | Diagnostics | VERIFIED |
+| 23 | Formatter | VERIFIED |
+| 24 | Machine-applicable fixes | PARTIAL |
+| 25 | LSP and MCP | MISSING |
+| 26 | Package and build tooling | PARTIAL |
+| 27 | Debugger and profiler | MISSING |
+| 28 | Performance measurement | PARTIAL |
+| 29 | Differential testing | VERIFIED |
+| 30 | Mutation testing and fuzzing | PARTIAL / MISSING |
+| 31 | Bootstrap | VERIFIED |
+| 32 | Reproducibility and provenance | PARTIAL |
+| 33 | Platform and target matrix | PARTIAL |
+
+Seven VERIFIED, eleven PARTIAL, three DESIGNED, two RESEARCH, ten MISSING. The shape is
+worth reading directly: **everything verified is either a front-end capability, a tooling
+interface, or an evidence mechanism.** Nothing in the semantic core — ownership, effects,
+capabilities, provenance — exists at all, and that is the accurate summary of where the
+project stands after the first era.
+
+---
+
+## Front end
+
+### 1. Syntax, parser, CST — PARTIAL
+
+**Evidence** · Hand-written lexer and recursive-descent/Pratt parser,
+`crates/nazm-syntax/src/lexer.rs` and `crates/nazm-syntax/src/parser.rs`. The grammar is a
+tested artefact, not prose: `crates/nazm-syntax/tests/grammar.rs` requires every lexer
+token to appear in `docs/grammar.ebnf`, every nonterminal to be reachable from `program`,
+and every `(* @example *)` in it to parse with zero diagnostics. `docs/guide.md`'s syntax
+section is generated from the same file by `xtask/src/guide.rs`.
+
+**Limitation** · There is **no CST**. `crates/nazm-syntax/src/ast.rs` is a plain owned
+AST; comments are returned as a parallel span list consumed only by the formatter, and
+never reach the tree. Error recovery is one strategy at one granularity — skip to the next
+`fn` — so a malformed statement loses its whole function body. Parse nesting is bounded at
+512 with a 24 MiB parse stack.
+
+**Next dependency** · A lossless green tree (`cstree` is the recorded choice,
+`architecture.md:344`), which is also what safe structured edits and any language server
+need.
+
+**Accepted when** · A round trip through the tree preserves every byte including trivia,
+and the parser produces a usable tree for a file with an error in the middle of a function.
+
+### 2. Name resolution and modules — PARTIAL
+
+**Evidence** · Lexical scoping with shadowing rules and a separate function namespace,
+`crates/nazm-core/src/check.rs`. `use "relative/path.nz";` resolved by the driver,
+`crates/nazm-cli/src/load.rs` — canonical-path keyed, read-once, depth-first, cycles
+terminate rather than erroring. A second resolver written in Nazm, `compiler/module.nz`,
+serves the bootstrap stages. Codes `N0200`–`N0205` in `crates/nazm-diag/src/lib.rs`.
+
+**Limitation** · Three, and each is load-bearing. **No visibility** — every top-level
+function is visible to every importer, which already forced `compiler/lex.nz` to be split
+from `compiler/lexer.nz` so a library would not collide with its importer's `main`.
+**Resolution happens twice**, in `crates/nazm-core/src/check.rs` and again in
+`crates/nazm-lir/src/lower.rs`. **There is no compilation unit**: every reachable file is
+concatenated into one buffer, so a span has no file identity and `nazm-span` has no
+`FileId` despite `architecture.md:307` crediting it with one.
+
+**Next dependency** · A single resolution artefact both the evaluator and the lowerer
+consume, and a span that knows its file.
+
+**Accepted when** · Deleting one of the two resolvers changes no behaviour, and a
+diagnostic's file identity survives without an offset lookup.
+
+### 3. Type system — PARTIAL
+
+**Evidence** · Six types, closed, `crates/nazm-core/src/types.rs`: `Int`, `Bool`, `Str`,
+`Ints`, `Strs`, `Chan`. Local inference for `let`; parameters and returns always written.
+Completion analysis decides whether a block produces a value, which is what lets one `if`
+serve both statement and value position. Codes `N0300`–`N0314`. 114 behavioural tests in
+`crates/nazm-core/tests/language.rs`.
+
+**Limitation** · No generics, no traits, no user-defined types, no pattern matching, no
+closures or function values, no unit type, no `Option`, no `Never`. Eight keywords are
+reserved and refused by name rather than silently absent
+(`crates/nazm-syntax/src/parser.rs`). This is law 12 working as intended, not an oversight
+— but it means the type system has never been asked the questions that make type systems
+hard.
+
+**Next dependency** · Nothing forces the order. `docs/roadmap.md` M2 rows 3 and 4 hold the
+design for records/variants and generics; both were **bypassed** rather than delivered —
+the compiler was written with parallel `Ints`/`Strs` arrays instead.
+
+**Accepted when** · Chosen by the milestone that needs it, not by completeness.
+
+---
+
+## Semantic core
+
+### 4. Ownership and resource semantics — MISSING
+
+**Evidence of absence** · No ownership, borrow, move, region or lifetime machinery exists
+in any language crate. The source says so: `crates/nazm-core/src/eval.rs` — *"This is
+emphatically **not** a claim of ownership safety. Nothing prevents aliasing, nothing tracks
+lifetimes, and nothing is ever freed."* Sequences are shared, mutable and never freed
+(`docs/spec.md`). `==` on a sequence is refused (`N0304`) because it would have to mean
+identity or contents and the language chose neither.
+
+**Limitation** · Compiled programs allocate and never release: `@free` appears **zero**
+times in `crates/nazm-lir/src/emit.rs` and zero times in `compiler/emit.nz`, against 11
+`@malloc` and 2 `@realloc` sites in each. This is the defect behind the 2026-09-21
+resource incident and the reason `compiler/bootstrap.sh` refuses to run without an
+external memory ceiling. `str_join` was added to allocate *less*
+(`crates/nazm-core/src/intrinsic.rs`); nothing reclaims.
+
+**Next dependency** · The surface model decision — mutable value semantics against the
+full region calculus `architecture.md` §5 hedges with. It is the largest open design
+question in the project.
+
+**Accepted when** · A compiled program's peak RSS is bounded by live data rather than by
+total allocation, demonstrated on the self-hosting compiler compiling itself.
+
+### 5. Effects — MISSING
+
+**Evidence of absence** · No effect row, annotation, inference or purity analysis. The
+only occurrences of the word in the language crates are the English phrase "evaluated for
+its effects" and `crates/nazm-lir/src/lib.rs`'s statement that there are *"no effects to
+track"* — given as a reason there is one IR level rather than eight.
+
+**Limitation** · The blocking question is open and named: **is divergence an effect?**
+Without an answer, "drop an unused pure call" is unsound, so the optimiser cannot be given
+that transformation at all. `docs/spec.md` *Open* carries it, along with whether allocation
+failure and panic are effects.
+
+**Next dependency** · A typed core IR to carry a row on a function type.
+
+**Accepted when** · A function's row is inferred, checked, and a compile-fail test shows an
+effectful call refused where a pure one is accepted.
+
+### 6. Capabilities, as a language feature — MISSING
+
+**Evidence of absence** · Authority is **ambient and labelled as such** in the source:
+`crates/nazm-core/src/intrinsic.rs` — *"These are callable from anywhere, and nothing in
+the language restricts which functions may reach the file system or the process arguments.
+That is a real limitation, not a design."*
+
+**Do not confuse this with `nazm capabilities`.** `schema/nazm.capabilities-1.json` is a
+*toolchain descriptor* — what one build of the compiler supports. It is unrelated to
+object capabilities or capability-safety, and it is VERIFIED under area 22.
+
+**Limitation** · `docs/roadmap.md` M2 presents `fn main(io: IO)` as the plan of record;
+that design was **not** adopted, and `docs/goal-status.md` records it as deliberately not
+chosen. The roadmap prose is corrected but the decision stays open.
+
+**Next dependency** · Effects, or an independent capability-parameter design — the two are
+separable and `architecture.md` §5 insists they stay separate concerns.
+
+**Accepted when** · A function without the authority cannot reach the filesystem, and the
+refusal is a compile error with a span.
+
+### 7. Provenance and information flow, as a language feature — MISSING
+
+**Evidence of absence** · No labels, lattice, sanitizers or declassification anywhere in
+the language crates. `architecture.md` §5 designs a lattice-valued qualifier
+(`Untrusted`, `Secret`, `PII`) and records that an earlier draft calling provenance
+*"nearly free once effects exist"* was overclaiming.
+
+**Limitation** · Every question that makes information flow usable is open in
+`docs/spec.md`: implicit flows, sanitizer declaration, label propagation through a
+projection, declassification authority, and what label a value from C carries.
+
+**Next dependency** · Effects and a MIR that tracks places.
+
+**Accepted when** · A `Secret` reaching an output is refused, with a stated and documented
+approximation of what the analysis misses.
+
+---
+
+## IR and backend
+
+### 8. Core IR — MISSING · ### 9. MIR — MISSING
+
+**Evidence of absence** · Neither exists; no HIR either. `crates/nazm-lir/src/lib.rs`
+states the reason directly: the levels in between *"exist to carry information M1a has
+none of"* — no generics to monomorphise, no traits to lower, no regions to infer, no
+effects to track. Monomorphisation is absent and cannot be otherwise, since nothing is
+polymorphic.
+
+**Limitation** · Not the absence of the levels — that is correct restraint — but that one
+semantic responsibility is already duplicated across the gap (area 2).
+
+**Next dependency** · A responsibility no existing level owns. By the tree's own evidence
+that is single name resolution, not the diagram's ordering.
+
+**Accepted when** · Introducing the level **removes** code rather than adding a
+pass-through.
+
+### 10. LIR and the backend contract — PARTIAL
+
+**Evidence** · `crates/nazm-lir/src/ir.rs` and `crates/nazm-lir/src/lower.rs`. The
+distinguishing information it carries over the AST is which operations can fail and where
+the source said so; every fallible node carries a span. Signatures are lowered before
+bodies, so forward references resolve without a second walk, and all refusals are
+collected rather than the first. Layering is gated: `xtask/src/rules.rs` forbids
+`nazm-lir` depending on `nazm-core`.
+
+**Limitation** · It is not level 7 as `architecture.md` §2 defines it — a structured typed
+tree over numbered slots, not SSA over a CFG of places. No optimisation, inlining or
+constant folding happens here. The forbidden dependency on `nazm-core` is what forces the
+duplicate built-in table.
+
+**Next dependency** · Only whatever a second backend or a real optimisation pass demands.
+
+**Accepted when** · A second consumer exists that the contract serves unchanged.
+
+### 11. LLVM backend — VERIFIED
+
+**Evidence** · `crates/nazm-lir/src/emit.rs` emits LLVM IR as text; `crates/nazm-cli/src/build.rs`
+hands it to `clang`. No LLVM is linked, so there is no build-time LLVM dependency. 127
+end-to-end tests in `crates/nazm-cli/tests/build.rs`, each at `-O0` **and** `-O2`, against
+a written expectation and against the interpreter.
+
+**Limitation** · The arithmetic contract is the load-bearing part and is deliberately
+conservative: `nsw` is not used, because it would promise overflow cannot happen and
+license an optimiser to delete the trap. No debug info is emitted and `clang` is invoked
+without `-g`, so a compiled program cannot be debugged symbolically.
+
+**Next dependency** · None for correctness.
+
+**Accepted when** · Already met for the current subset.
+
+### 12. Cranelift backend — DESIGNED
+
+**Evidence** · `architecture.md` §1 and `direction.md` — one component doing four jobs
+(JIT, comptime evaluator, REPL, hot reload), and an explicit ordering decision that it
+comes after, not instead. `xtask/src/main.rs` gates against a codegen dependency appearing
+unannounced.
+
+**Limitation** · None of the four jobs exists. A second backend now would be a second set
+of semantics bugs to keep in agreement for no present benefit.
+
+**Next dependency** · One of the four jobs becoming real.
+
+**Accepted when** · `nazm test --backend=all` means something — which first requires
+`docs/spec.md`'s backend-semantics questions to be settled.
+
+---
+
+## Runtime and concurrency
+
+### 13. Runtime — PARTIAL
+
+**Evidence** · There is no runtime crate; the runtime is LLVM IR generated into each
+program, emitted lazily only when reached — `crates/nazm-lir/src/emit.rs` carries the
+join, I/O, sequence, task and channel runtimes, and `compiler/emit.nz` mirrors them. The
+external surface is 18 libc/pthread symbols plus three overflow intrinsics and `memcpy`.
+
+**Limitation** · No deallocation (area 4). No `nazm-rt` crate, so no scheduler, no
+allocator, no reactor.
+
+**Next dependency** · The memory model.
+
+**Accepted when** · `nazm-rt` exists with a narrow `unsafe` allowance that `xtask check`
+enforces, per `architecture.md` §7.
+
+### 14. Structured concurrency — VERIFIED
+
+**Evidence** · Specified in `docs/spec.md` before implementation, then interpreted
+(`crates/nazm-core/src/eval.rs`, 18 tests in `crates/nazm-core/tests/concurrency.rs`), then
+compiled (17 tests in `crates/nazm-cli/tests/concurrent.rs` at `-O0` and `-O2`, each
+against a written expectation *and* the interpreter), **then compiled by the compiler
+written in Nazm** — `compiler/emit.nz` carries the task and channel runtime. Every test
+carries a deadline, so a hang fails by name. Static rules are real: `N0320` for `spawn`
+outside a `scope`, `N0321` for a sequence crossing into a task.
+
+**Limitation** · One OS thread per task and nothing more. No M:N, no work stealing, no
+fairness, no task density, no timeouts, and **no cancellation beyond closing a channel**.
+`Chan` carries `Int` only. Ownership prevents data races; **that is not deadlock freedom**
+and is not claimed as such (`architecture.md` §5).
+
+**Next dependency** · None for the current model; area 15 for anything beyond it.
+
+**Accepted when** · Met for the model as specified.
+
+### 15. Advanced scheduler — RESEARCH
+
+**Evidence** · `architecture.md` §5 and `roadmap.md`'s C-4/C-5 rows: M:N tasks, work
+stealing, growable stacks, an event reactor, blocking-FFI handoff.
+
+**Limitation** · None of it exists and none of it is measured. `architecture.md` records
+that the "1M live tasks under 2GB" target was **withdrawn** as arithmetically unsupported —
+the right precedent for anything proposed here.
+
+**Next dependency** · `nazm-rt`, which needs the `unsafe` allowance, which needs the memory
+model.
+
+**Accepted when** · Spawn-to-first-instruction latency, context-switch cost and task memory
+as **RSS, not virtual reservation, with page size recorded**, measured against a named
+implementation.
+
+---
+
+## Libraries and interop
+
+### 16. Standard library — MISSING
+
+**Evidence of absence** · No `.nz` library, no prelude. Thirty-one compiler built-ins in
+one table, `crates/nazm-core/src/intrinsic.rs`, mirrored by the backend in
+`crates/nazm-lir/src/ir.rs`. Every built-in the front end has, the backend lowers — there
+is no coverage gap today, and a test enforces that.
+
+**Limitation** · The table is the library. Names live in the ordinary function namespace
+and cannot be redefined. There are no string escapes, so `str_from_byte` is the only way to
+write a newline.
+
+**Next dependency** · User-defined types, or the library stays a table.
+
+**Accepted when** · A `.nz` library ships, is versioned, and is not special-cased by the
+compiler.
+
+### 17. FFI and ABI — MISSING
+
+**Evidence of absence** · No `extern`, no ABI annotation, no such token in
+`crates/nazm-syntax/src/lexer.rs`. The 18 libc symbols are emitted *by* the compiler to
+implement built-ins; a user program cannot declare or call anything else. `docs/spec.md`
+lists the FFI boundary under *Open*, so it is not designed either.
+
+**Limitation** · Total. This is the single largest gap between the language and any
+systems, embedded or cybersecurity use.
+
+**Next dependency** · A settled ABI and layout story, which `docs/bootstrap-design.md`
+deliberately left unfrozen.
+
+**Accepted when** · A C function is declared and called, with the safety boundary stated
+and the provenance question (what label a returned value carries) answered.
+
+---
+
+## Domain profiles
+
+Areas 18–21 are covered in [`domain-profiles.md`](domain-profiles.md), which carries the
+restrictions and prerequisites for all six. Summarised here only so the matrix is complete.
+
+### 18. Embedded support — MISSING
+No cross-compilation, no target triple handling, no freestanding target, no `no_std`
+equivalent, no control over allocation. `crates/nazm-cli/src/build.rs` emits a module with
+no triple and lets `clang` supply the host's.
+
+### 19. Critical profile — DESIGNED
+An architectural intention only. **Nothing here is a statement about airworthiness,
+certification, or fitness for any safety-related use**, and the anticipation of the profile
+is not evidence for it.
+
+### 20. Cybersecurity profile — DESIGNED
+Requires areas 6 and 7, both MISSING. The one real ingredient present is
+refuse-by-name-with-a-span rather than silent degradation.
+
+### 21. AI/HPC — RESEARCH
+No tensors, no accelerators, no vectorisation work. `architecture.md` §1 says MLIR should
+be revisited *only if* Nazm pivots toward tensor codegen, and nothing proposes that pivot.
+
+---
+
+## Tooling
+
+### 22. Diagnostics — VERIFIED
+
+**Evidence** · `crates/nazm-diag/src/lib.rs` — 33 stable codes, byte-offset spans, a
+versioned JSON schema `schema/nazm.diagnostic-1.json` emitted per object. Conformance is
+tested against real binary output in `crates/nazm-cli/tests/schemas.rs`, and
+`crates/nazm-cli/tests/codes.rs` requires every declared code to be provoked by a test or
+listed as unprovokable with a written reason. The capability inventory
+(`crates/nazm-cli/src/capabilities.rs`) is read from the compiler's own tables, and
+`docs/diagnostics.md` states the compatibility contract.
+
+**Limitation** · Two codes are unprovokable by construction. Spans are offsets into a
+merged buffer, so file identity is recovered rather than carried (area 2).
+
+**Next dependency** · None.
+
+**Accepted when** · Met.
+
+### 23. Formatter — VERIFIED
+
+**Evidence** · `crates/nazm-syntax/src/format.rs`, token-driven so comments survive, with
+no options by design. `crates/nazm-syntax/tests/format.rs` asserts on every input that
+tokens are unchanged, that `format(format(x)) == format(x)`, that comments are identical,
+and that output ends in exactly one newline — applied to every `.nz` in the tree and to 15
+hand-written ugly inputs.
+
+**Limitation** · No reflow, no reordering, no insertion. Per file, not per merged program.
+Canonical in the sense of "one output", not yet in the sense of a lossless tree round trip.
+
+**Next dependency** · A CST, for edits rather than formatting.
+
+**Accepted when** · Met for formatting.
+
+### 24. Machine-applicable fixes — PARTIAL
+
+**Evidence** · `crates/nazm-cli/src/fix.rs`, schema `schema/nazm.fix-1.json`. Only
+`Automatic` fixes apply; nothing is written without `--apply`; edits apply right-to-left;
+overlaps are skipped; and a result that no longer parses is rolled back wholesale. Ten
+workflow tests in `crates/nazm-cli/tests/workflow.rs`.
+
+**Limitation** · Stale-edit protection exists but is **by expected-bytes comparison, not a
+file hash or document version**, and it is **untested** — none of its four skip paths is
+asserted anywhere. The named test for it exercises a different path.
+
+**Next dependency** · None; this is a test to write.
+
+**Accepted when** · Each of the four skip reasons has a test that reaches it.
+
+### 25. LSP and MCP — MISSING
+
+**Evidence of absence** · No crate, no dependency, no protocol code. `architecture.md`
+lists `nazm-lsp` and `nazm-mcp` as planned and records the intended libraries.
+
+**Next dependency** · A CST and incremental resolution — both area 1 and area 2.
+
+**Accepted when** · An adapter shares the compiler's semantic engine rather than
+re-implementing it.
+
+### 26. Package and build tooling — PARTIAL
+
+**Evidence** · Multi-file builds work through path-relative `use`, two independent
+implementations: `crates/nazm-cli/src/load.rs` and `compiler/module.nz`.
+
+**Limitation** · There is no project manifest, no dependency resolution, no lockfile and no
+registry. `nazm build` takes one root file. The two resolvers differ deliberately — the
+Nazm one normalises paths textually because the emitted runtime has no `realpath`, so a
+symlinked file is read twice there and once here.
+
+**Next dependency** · Compilation units (area 2).
+
+**Accepted when** · A project builds from a manifest and the two resolvers agree on
+identity.
+
+### 27. Debugger and profiler — MISSING
+
+**Evidence of absence** · No DWARF, no `!dbg` metadata, no `-g`; `--emit-ir` writing the
+`.ll` beside the executable is the only debugging affordance
+(`crates/nazm-cli/src/build.rs`). Source positions in compiled programs are baked in as
+string constants at compile time. No profiler integration exists.
+
+**Next dependency** · Line tables in the emitted module.
+
+**Accepted when** · A native backtrace names a `.nz` line.
+
+---
+
+## Evidence and infrastructure
+
+### 28. Performance measurement — PARTIAL
+
+**Evidence** · `xtask/src/bench.rs` times five stages per program plus the compiler's own
+source, with a correctness gate that refuses to time anything not producing its `.expected`
+output first. One discarded warm-up, then N runs, median compared. Peak RSS captured where
+readable. A regression must clear **both** 25% and 5 ms. External references are built and
+timed from `bench/reference/sieve.c` and `bench/reference/sieve.py`, and a reference whose
+answer differs from the Nazm program's is not timed.
+
+**Limitation** · `bench/baseline.json` (Darwin) is **stale** and not a valid comparison;
+re-recording it means running generated programs on the host, which the resource contract
+forbids. `bench/baseline-linux-aarch64.json` is current. Cross-host comparison is refused
+rather than attempted. Every measurement under ~15 ms is below the method's noise floor.
+
+**Next dependency** · A Darwin machine on which running generated programs is contained.
+
+**Accepted when** · Both baselines are current and recorded under containment.
+
+### 29. Differential testing — VERIFIED
+
+**Evidence** · Five independent mechanisms. `crates/nazm-cli/tests/build.rs` — two oracles
+per case, both opt levels. `crates/nazm-cli/tests/concurrent.rs` — the same for
+concurrency. `crates/nazm-cli/src/test.rs` — `nazm test` runs every case interpreted and
+native and requires agreement. `crates/nazm-cli/tests/selfhost.rs` — the Nazm-written
+lexer, parser and checker against the Rust ones, token-for-token and span-for-span, over
+every `.nz` in the tree including their own sources. `compiler/bootstrap.sh` — five
+conformance cases under C2, C3 and the interpreter.
+
+**Limitation** · The interpreter is the oracle, so a shared specification error is
+invisible to all five. `docs/spec.md` names what must be settled before
+`nazm test --backend=all` would mean anything.
+
+**Next dependency** · None.
+
+**Accepted when** · Met.
+
+### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
+
+**Evidence** · `xtask/mutations/mutations.toml` holds **51** catalogued defects;
+`xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
+requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
+distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
+distinction added after an incident that produced 19 false survivors. Lifecycle behaviour
+is tested in `xtask/tests/lifecycle.rs`.
+
+**Limitation** · The **whole-catalogue run timed out unexplained** at its 3600 s deadline
+without reaching injection, and is recorded as incomplete rather than as a result; the
+first hypothesis (a cold build cache) was measured and is wrong. It must not be restarted
+until the hour is understood. **Fuzzing does not exist** — no fuzz directory at the repository
+root, no targets, no corpus.
+
+**Next dependency** · For mutation, an explanation. For fuzzing, a decision to start.
+
+**Accepted when** · A full catalogue run completes with every verdict accounted for.
+
+### 31. Bootstrap — VERIFIED
+
+**Evidence** · `compiler/bootstrap.sh` runs C1 → C2 → C3 from one source and compares two
+things: the emitted IR byte for byte, and the linker-normalised executables byte for byte.
+Five conformance cases under `compiler/conformance/` must agree across C2, C3 and the
+interpreter. The script refuses to run without an external memory ceiling. `docs/bootstrap.md`
+states what this does and does not establish, and the answer is narrower than it sounds.
+
+**Limitation** · A fixpoint establishes self-consistency, not correctness — a compiler with
+a bug that reproduces itself reaches a fixpoint too.
+
+**Next dependency** · None.
+
+**Accepted when** · Met.
+
+### 32. Reproducibility and provenance — PARTIAL
+
+**Evidence** · `scripts/release-candidate.sh` runs every gate, writes `PROVENANCE.txt` and
+`MANIFEST.txt`, and validates the package against its own manifest with counts compared
+both ways so a file copied in but not listed fails.
+
+**Limitation** · Three claims, kept apart. Archive **entry metadata is normalised** — tar
+sorted with zeroed owner and mtime, gzip with no timestamp. Whole-archive
+**bit-reproducibility is not established and cannot be** while the provenance and bootstrap
+records embed their own run date. **C2 and C3 are byte-identical within one run** after the
+build-id is stripped. Separately, the source digest covers a **declared file set**, not the
+tree — it omits every Cargo manifest, `Cargo.lock`, `rust-toolchain.toml`,
+`docker/contained.Dockerfile`, the mutation catalogue and every `.expected` fixture, so it
+cannot detect a changed dependency pin.
+
+**Next dependency** · Moving the run date out of the digested set, if bit-reproducibility
+is wanted.
+
+**Accepted when** · Two runs at one commit produce identical archives, or the claim is
+permanently retired.
+
+### 33. Platform and target matrix — PARTIAL
+
+**Evidence** · Two verified targets: `aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`
+(the latter inside `docker/contained.Dockerfile`). The emitter states its own scope, and
+`crates/nazm-cli/tests/docs.rs` asserts the documented target and the emitter agree.
+
+**Limitation** · **No cross-compilation and no target handling** — `crates/nazm-cli/src/build.rs`
+has no `--target`, and the emitted module carries no triple, so `clang` supplies the host's.
+Other targets are unverified rather than unsupported.
+
+**BLOCKED, and it is a real finding** · `.github/workflows/ci.yml` runs
+`cargo test --workspace` and sets neither `NAZM_CONTAINED` nor `NAZM_ALLOW_UNCONTAINED`,
+while `crates/nazm-cli/tests/common/mod.rs` turns that into a panic for the four selfhost
+stage builders. The workflow was last changed before the containment gate existed, so by
+reading, those tests cannot pass in CI. CI also runs on `ubuntu-latest` x86_64, which is
+**neither** verified target. Two candidate fixes — run the selfhost stages through
+`cargo xtask contained`, or exclude them from the CI test step and say so — and choosing
+between them is outside this task.
+
+**Next dependency** · Deciding what CI is for: a gate on the verified targets, or a smoke
+test on a third.
+
+**Accepted when** · CI runs green on a stated target and the stated target is one the
+project verifies.

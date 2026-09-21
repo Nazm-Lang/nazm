@@ -117,17 +117,26 @@ since grown past it, the compiler must **say so by name** rather than fail some 
 way, because a gap and a decision look identical from the outside and only one of them is
 acceptable.
 
-| Left out | Where it is refused | Why |
+> **Superseded 2026-09-21. The table below is history, and the mechanism it names is now
+> required by test to be *absent*.** The compiler written in Nazm types `Chan`, registers
+> all four `chan_*` built-ins, applies both task rules, and emits the task and channel
+> runtime. `crates/nazm-cli/tests/selfhost.rs` asserts that `fn outside_bootstrap_subset`
+> no longer appears in `compiler/analyse.nz` — the exclusion list existed so that a
+> deliberate omission could not be mistaken for a gap, and once the omission ended the list
+> had to go with it. The reasoning above the table still holds and is the reason the
+> mechanism existed at all.
+
+| Left out *(historical — no longer true)* | Where it was refused | Why, at the time |
 | --- | --- | --- |
-| `chan_new`, `chan_send`, `chan_recv`, `chan_close` | `outside_bootstrap_subset` in `compiler/analyse.nz` | The compiler is single-threaded and uses no channel. `crates/nazm-cli/tests/selfhost.rs` requires this list to be exactly these four, so adding a built-in and forgetting the compiler is a test failure rather than a surprise |
+| `chan_new`, `chan_send`, `chan_recv`, `chan_close` | `outside_bootstrap_subset` in `compiler/analyse.nz` | The compiler is single-threaded and uses no channel. `crates/nazm-cli/tests/selfhost.rs` required this list to be exactly these four, so adding a built-in and forgetting the compiler was a test failure rather than a surprise |
 | `scope`, `spawn` | `compiler/parse.nz`, as unexpected tokens | Both are reserved words in `compiler/lex.nz` even so, because the two lexers must agree on every input — a word that is a keyword to one and an identifier to the other is a divergence the differential test would have to excuse |
 
-The *Rust* backend compiles all of these. The split is between the language and its
-bootstrap compiler, not between the language and native code.
+The *Rust* backend compiles all of these. The split was between the language and its
+bootstrap compiler, not between the language and native code — and it has since closed.
 
 ## What this design does *not* settle
 
-- Concurrency (Milestone E) shares none of this and is designed separately.
+- Concurrency (Milestone E) shares none of this and is designed separately. *(It is now compiled by this compiler; see the note above.)*
 - The public ABI and value layout stay unfrozen. `Str` and arrays are compiler-internal
   representations for now, and no program can observe their layout.
 - Whether the self-hosted compiler eventually uses records and pattern matching is a
