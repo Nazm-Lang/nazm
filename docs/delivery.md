@@ -30,9 +30,9 @@ performance comparison of any kind.
 | Ordinary independent programs compile with the Nazm-written compiler | done **within the subset** | `crates/nazm-cli/tests/selfhost.rs`. Concurrent and multi-file programs both compile with it, imports and all |
 | Initial structured concurrency: transfer/capture rules, cancellation, cleanup | done | `docs/spec.md`; 17 interpreter tests and 17 native tests, all deadline-bounded. Both implementations join a scope before reporting a failure, verified at `-O0` and `-O2` against the interpreter for a failing body, a failing task, a failure below the body, nested scopes, and body-over-task precedence |
 | Structured developer interfaces, grammar/guide, formatting, repair workflow | done | `docs/diagnostics.md`, `schema/`, `docs/grammar.ebnf`, `docs/guide.md`, `scripts/repair.sh` |
-| Performance baselines, a profiling/optimisation pass, no unsupported speed claims | done | `docs/performance.md`, `bench/baseline.json` (Darwin), `bench/baseline-linux-aarch64.json` |
+| Performance baselines, a profiling/optimisation pass, no unsupported speed claims | done | `docs/performance.md`, `bench/baseline-linux-aarch64.json` (current); `bench/baseline.json` (Darwin) is **stale** — see `docs/performance.md` |
 | A clean rebuild of the integrated final state on a supported target | done | a fresh copy, `--offline`, full suite — see *Reproducing this* |
-| A final local review/release package | done | `scripts/release-candidate.sh`, this document |
+| A final local review/release package | done | `scripts/release-candidate.sh`, run contained: every gate passed and the candidate was verified against its own manifest — 68 files, every digest matching. The script validates what it assembled rather than trusting it, and compares file counts both ways so a file copied in but not listed fails |
 
 ## What is verified, and what that means
 
