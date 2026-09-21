@@ -293,6 +293,13 @@ availability, measured frame requirements, and a decided answer to what a compil
 does when it exhausts the stack. It is *not* recorded as "remove the cycle detection and
 add a counter". No runtime crate and no stack-probing mechanism is added now.
 
+**Both backends now make that refusal.** Until 2026-09-21 only `nazm-lir::lower` did; the
+compiler written in Nazm emitted native recursion, which clang assembled and which ran.
+`refuse_recursion` in `compiler/emit.nz` mirrors `report_cycles` — same code, same scope
+(every declared function), same treatment of direct and mutual recursion as one condition,
+and a `spawn` counted as an edge. Nothing above changed: this closed a gap between the two
+implementations of the decision, it did not revise the decision.
+
 ### M1e subset — the accepted/rejected table
 
 Written before implementation. Anything refused **still runs under `nazm run`**.

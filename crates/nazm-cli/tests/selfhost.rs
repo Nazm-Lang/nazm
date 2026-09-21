@@ -1763,3 +1763,191 @@ fn a_program_from_the_nazm_compiler_joins_its_scope_before_reporting() {
         );
     }
 }
+
+/// The two backends refuse the same recursive programs.
+///
+/// `nazm-lir::lower::report_cycles` has always refused a call cycle: that backend emits
+/// one native call per call and has no plan for the stack a recursive one needs. The
+/// compiler written in Nazm did not, and the divergence was not theoretical — it compiled
+/// `fact` calling itself into IR that clang assembled and that ran, printing 120, for a
+/// program `nazm build` rejects outright. Recorded then as "unguarded"; this is the test
+/// that says it is not any more.
+///
+/// Five shapes, because the condition has more than one spelling: a function calling
+/// itself, two functions calling each other, a cycle that only exists across two files,
+/// a cycle that goes through a `spawn` (a task is an edge like any other — a thread does
+/// not bound the stack), and one acyclic program that must keep compiling. The last is
+/// the one that fails if a cycle check is written too eagerly.
+#[test]
+fn the_nazm_written_compiler_refuses_recursion_as_the_reference_does() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+
+    /// One refusable program. A struct rather than a tuple because the fourth field is
+    /// a list of files and the shape stopped reading as anything at a glance.
+    struct Cycle {
+        what: &'static str,
+        root: &'static str,
+        /// Files beside the root, written before the case runs and removed after.
+        extra: &'static [(&'static str, &'static str)],
+        /// The phrase both diagnostics must carry.
+        phrase: &'static str,
+    }
+
+    let refused: &[Cycle] = &[
+        Cycle {
+            what: "a function calling itself",
+            root:            "fn fact(n: Int) -> Int {\n    if n <= 1 { 1 } else { n * fact(n - 1) }\n}\nfn main() -> Int { fact(5) }\n",
+            extra: &[],
+            phrase: "a call to `fact` from inside itself",
+        },
+        Cycle {
+            what: "two functions calling each other",
+            root:            "fn is_even(n: Int) -> Int {\n    if n == 0 { 1 } else { is_odd(n - 1) }\n}\n\
+             fn is_odd(n: Int) -> Int {\n    if n == 0 { 0 } else { is_even(n - 1) }\n}\n\
+             fn main() -> Int { is_even(8) }\n",
+            extra: &[],
+            phrase: "a call cycle through `is_even`",
+        },
+        Cycle {
+            what: "a cycle through a spawned task",
+            root:            "fn w(n: Int) -> Int {\n    if n <= 0 { 0 } else { scope { spawn w(n - 1); } 0 }\n}\n\
+             fn main() -> Int { w(2) }\n",
+            extra: &[],
+            phrase: "a call to `w` from inside itself",
+        },
+        Cycle {
+            what: "a cycle that exists only across two files",
+            root:            "use \"cycle-b.nz\";\nfn ping(n: Int) -> Int {\n    if n == 0 { 7 } else { pong(n - 1) }\n}\n\
+             fn main() -> Int { ping(4) }\n",
+            extra: &[(
+                "cycle-b.nz",
+                "use \"cycle-a.nz\";\nfn pong(n: Int) -> Int {\n    if n == 0 { 9 } else { ping(n - 1) }\n}\n",
+            )],
+            phrase: "a call cycle through `ping`",
+        },
+    ];
+
+    for Cycle {
+        what,
+        root,
+        extra,
+        phrase,
+    } in refused
+    {
+        let case = dir.path().join("cycle-a.nz");
+        std::fs::write(&case, root).expect("write");
+        for (name, text) in extra.iter() {
+            std::fs::write(dir.path().join(name), text).expect("write");
+        }
+
+        // The reference first, so the test fails loudly if the contract it mirrors ever
+        // changes rather than quietly asserting the wrong thing about the other.
+        let reference = Command::new(NAZM)
+            .args(["build", case.to_str().unwrap()])
+            .arg("-o")
+            .arg(dir.path().join("cycle"))
+            .output()
+            .expect("run nazm build");
+        let reference_err = String::from_utf8_lossy(&reference.stderr).into_owned();
+        assert!(
+            !reference.status.success(),
+            "{what}: the reference backend accepted it, so there is no contract to mirror"
+        );
+        assert!(
+            reference_err.contains("N0101") && reference_err.contains(phrase),
+            "{what}: the reference's wording moved: {reference_err}"
+        );
+
+        let ours = Command::new(&emitter)
+            .arg(&case)
+            .output()
+            .expect("run emitter");
+        let ours_err = String::from_utf8_lossy(&ours.stderr).into_owned();
+        assert_eq!(
+            ours.status.code(),
+            Some(1),
+            "{what}: the Nazm-written compiler did not refuse it. stdout was {} bytes of \
+             IR, which is the whole bug: it used to emit native recursion here.",
+            ours.stdout.len()
+        );
+        assert!(
+            ours.stdout.is_empty(),
+            "{what}: it refused but still wrote {} bytes of IR to stdout. A refusal that \
+             arrives after the output is one nobody can act on.",
+            ours.stdout.len()
+        );
+        assert!(
+            ours_err.contains("N0101") && ours_err.contains(phrase),
+            "{what}: refused with the wrong diagnostic: {ours_err}"
+        );
+
+        // The interpreter is unmoved: this is a backend limit, not a language rule.
+        let interp = Command::new(NAZM)
+            .args(["run", case.to_str().unwrap()])
+            .output()
+            .expect("run");
+        assert!(
+            interp.status.success(),
+            "{what}: `nazm run` should still run it — the specification allows recursion: {}",
+            String::from_utf8_lossy(&interp.stderr)
+        );
+
+        for (name, _) in extra.iter() {
+            let _ = std::fs::remove_file(dir.path().join(name));
+        }
+    }
+
+    // And the case a too-eager check breaks: nested calls, no cycle anywhere.
+    let ok = dir.path().join("acyclic.nz");
+    std::fs::write(
+        &ok,
+        "fn max(a: Int, b: Int) -> Int {\n    if a > b { a } else { b }\n}\n\
+         fn clamp(value: Int, lo: Int, hi: Int) -> Int {\n    let lower = max(value, lo);\n\
+         \x20   if lower > hi { hi } else { lower }\n}\n\
+         fn main() -> Int { clamp(max(17, 25), 0, 100) }\n",
+    )
+    .expect("write");
+
+    let ir = Command::new(&emitter)
+        .arg(&ok)
+        .output()
+        .expect("run emitter");
+    assert_eq!(
+        ir.status.code(),
+        Some(0),
+        "the acyclic program was refused: {}",
+        String::from_utf8_lossy(&ir.stderr)
+    );
+    let ll = dir.path().join("acyclic.ll");
+    std::fs::write(&ll, &ir.stdout).expect("write IR");
+    let exe = dir.path().join("acyclic");
+    let built = Command::new("clang")
+        .args(["-Wno-override-module", "-o"])
+        .arg(&exe)
+        .arg(&ll)
+        .output()
+        .expect("run clang");
+    assert!(
+        built.status.success(),
+        "clang rejected the IR: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let (code, stdout, _) = run_bounded(
+        &mut common::bounded_exe(&exe),
+        std::time::Duration::from_secs(60),
+    )
+    .expect("the compiled program hung");
+    assert_eq!(code, Some(0), "{stdout}");
+    assert_eq!(stdout.trim(), "25");
+
+    let interp = Command::new(NAZM)
+        .args(["run", ok.to_str().unwrap()])
+        .output()
+        .expect("run");
+    assert_eq!(
+        String::from_utf8_lossy(&interp.stdout).trim(),
+        "25",
+        "the interpreter disagrees"
+    );
+}

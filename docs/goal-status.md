@@ -227,7 +227,7 @@ IR and sources, Gate A and root-cause write-ups).
 | **LLVM emission in Nazm** | **verified for the whole bootstrap language** | `compiler/emit.nz`: arithmetic with every specified failure, locals, control flow, transfers, functions, calls, `Str`, sequences and all 27 built-ins |
 | **Self-hosting** | **verified** | `compiler/bootstrap.sh`: C2 and C3 byte-identical in IR *and* executable; 5 conformance cases agree across C2, C3 and the interpreter |
 | `use` resolution in the Nazm compiler | **done** | `compiler/module.nz`; every bootstrap stage resolves its own imports, and the concatenation workaround is gone |
-| Recursion in the Nazm compiler's output | **unguarded** | the Rust backend refuses recursion pending a stack contract; the Nazm one emits it. A real divergence, recorded here |
+| Recursion in the Nazm compiler's output | **refused, as the reference does** | `refuse_recursion` in `compiler/emit.nz`: the same `N0101`, over every declared function, for direct recursion, mutual recursion, a cycle that exists only across files, and a cycle through a `spawn`. Was a real divergence — measured, then closed. See *Recursion* below |
 | Native recursion | blocked by design | pending measured stack availability and frame size. **Not needed**: the compiler is iterative |
 | **Structured concurrency, interpreted** | **verified** | `scope`, `spawn`, bounded `Chan`; 17 tests in `nazm-core/tests/concurrency.rs`, **every one with a deadline** so a hang fails by name |
 | **Structured concurrency, native** | **verified** | one POSIX thread per task, a mutex/condvar ring per channel; 17 tests in `nazm-cli/tests/concurrent.rs` at `-O0` **and** `-O2`, each against a written expectation *and* the interpreter, including that a failure joins its scope before it is reported |
@@ -281,14 +281,14 @@ control, no native recursion, no cross-language performance claim.
 | | |
 | --- | --- |
 | Tested commit | `c3fb0789bc8b0731bed083f90ab998816ecd8a09`, clean tree |
-| Path | `target/release-candidate/` — **under `target/`**, so gitignored and rebuildable, not a durable store. Copy it somewhere kept if it matters |
+| Path | `~/nazm-release-c3fb078/` — the retained copy, outside the build tree. The original is still at `target/release-candidate/`, which is gitignored and gets rewritten by the next release run. Both were verified against the digests below |
 | Archive | `nazm-release-candidate.tar.gz`, 932,147 bytes, SHA-256 `361347f63a36aaa2c9838c5685f2464f5ec985998e1f3a7af15e17ce45e357ed` |
 | `MANIFEST.txt` | 7,611 bytes, SHA-256 `a121c2c46ef5423229427f64844308a5d6973266d32d1b4c52d8c31f5b259171` |
 | `PROVENANCE.txt` | 2,447 bytes, SHA-256 `5d52da22c3b0dea8c670283e68a106fcb9a8e04ed0cd0cdf1446e15e82b0d773` |
 | Target | Linux aarch64, inside `nazm-contained:1.98.1` — rustc 1.98.1, Debian clang 19.1.7 |
 | Contents | 70 files: `bin/nazm` (the **Rust** implementation, which builds C1) and `bin/nazmc-selfhosted` (the **Nazm-written** compiler as C2, byte-identical to C3) — both Linux aarch64 ELF, neither portable off it — plus the bootstrap sources, `examples/`, `schema/`, `docs/`, both benchmark baselines, and the bootstrap record |
 | Bootstrap | `ir: identical`, C2 and C3 digests both `6bd29369…`, `runnable-bytes-differing: 0`, 5 conformance cases, 5 sources / 4,501 lines |
-| Suite | **548 passed, 0 failed, 6 ignored**, 35 suites, 0 survivors |
+| Suite | **548 passed, 0 failed, 6 ignored**, 35 suites, 0 survivors *at that commit*. The tree is now at 549 after the recursion test below |
 | Verified twice | the runner checked the candidate against its own manifest before archiving; the archive was then extracted on the host and re-digested independently — 70 matching, 0 mismatched, 0 missing |
 
 **Test exclusions, stated rather than buried.**
@@ -312,18 +312,79 @@ control, no native recursion, no cross-language performance claim.
   commit for the sources; it cannot detect a changed dependency pin or a changed
   expectation. The field in the shipped file is still labelled `source-tree-digest`;
   the script has been corrected for the next candidate.
-- **Archive reproducibility is not established.** The archive was produced once, on one
-  host. Rebuilding it has not been shown to yield the same bytes and nothing normalises
-  timestamps or the link step. Byte-identity is established between **C2 and C3**, which
-  is a different claim.
+- **Archive entry metadata is normalised; whole-archive reproducibility is not
+  established.** These are different claims and the earlier wording ran them together.
+  The tar is written `--sort=name --owner=0 --group=0 --numeric-owner --mtime=@0` and the
+  gzip stream carries no timestamp — verified on the archive itself: every entry reads
+  `Jan 1 1970`, uid/gid 0, gzip MTIME zero. But the archive is **not** bit-reproducible
+  and as the pipeline stands cannot be: `PROVENANCE.txt` and `docs/bootstrap-record.txt`
+  both embed the run's `date-utc:`, so two runs differ by construction. Neither packaged
+  executable has been tested for bit-reproducibility. Byte-identity is established between
+  **C2 and C3**, within one run and after the build-id is stripped — a third claim again.
 
-**Documentation committed after the tested commit.** `docs/delivery.md`,
-`docs/performance.md`, `docs/goal-status.md` and the provenance labelling in
-`scripts/release-candidate.sh` were changed **after** `c3fb078` and are therefore **not**
-in the package and **not** covered by its test run. Two checklist lines in
+**Committed after the tested commit.** `c6a4215` changed `docs/delivery.md`,
+`docs/performance.md`, `docs/goal-status.md` **and `scripts/release-candidate.sh`**. Its
+message calls it "documentation only", which is wrong: the script is executable code, it
+is what assembles and attributes the next candidate, and it was edited there — the
+provenance field was renamed, a scope line added and the reproducibility note rewritten.
+No test covered that edit at the time. `c6a4215` and everything after it are **not** in
+the package and **not** covered by its test run. Two checklist lines in
 `docs/delivery.md` and `docs/goal-status.md` had likewise moved between the first
 validated run and `c3fb078` — `git diff 023364d c3fb078` is exactly those two files, no
 code.
+
+## Recursion: a real divergence, measured and closed (2026-09-21)
+
+Recorded for months as "unguarded", which understated it. It was measured inside the
+runner before anything was changed, with the Rust backend and the Nazm-written compiler
+given the same five programs:
+
+| program | `nazm run` | `nazm build` (Rust) | self-hosted compiler, **before** |
+| --- | --- | --- | --- |
+| `fact` calling itself | 120 | refused `N0101` | **compiled, linked, ran, printed 120** |
+| `is_even`/`is_odd` | 1 | refused `N0101` | **compiled, linked, ran, printed 1** |
+| a cycle through `spawn` | 0 | refused `N0101` | **compiled, linked, ran** |
+| `ping`/`pong` across two files | 7 | refused `N0101` | **compiled, linked, ran, printed 7** |
+| acyclic `max`/`clamp` | 25 | 25 | 25 |
+
+So the self-hosted compiler did not merely lack a guard: it silently emitted native
+recursion that clang assembled and that ran, for programs `nazm build` rejects outright.
+
+**Fixed in `compiler/emit.nz`** by `refuse_recursion`, which mirrors
+`nazm-lir::lower::report_cycles` rather than inventing a policy: the same `N0101`, over
+**every declared function** and not only the reachable ones, with direct and mutual
+recursion treated as one condition found one way, and a `spawn` counted as an edge like
+any other. It runs after checking and **before** any instruction is written, because a
+refusal that arrives after the IR is on stdout is one nobody can act on. Iterative DFS
+with an explicit stack and a parent walk that loops — a compiler about to refuse recursion
+should not need recursion to say so.
+
+No native recursion, no depth counter, no new language rule: `nazm check` still accepts
+recursive programs and `nazm run` still runs them, because this is a backend limit and the
+specification allows recursion.
+
+One deliberate difference from the reference, and it is about reporting rather than the
+contract: this refuses at the first cycle it finds, where the reference collects one
+diagnostic per function. The set of programs refused is the same.
+
+**After the change**, all five cases agree: the four cycles are refused with the same code
+and the same phrasing (`a call to \`fact\` from inside itself`, `a call cycle through
+\`is_even\``, and so on), each writing **zero bytes** of IR, and the acyclic program still
+compiles, links, runs and prints 25.
+
+Evidence, all inside the bounded runner, nothing generated executed on the host:
+
+- `crates/nazm-cli/tests/selfhost.rs` —
+  `the_nazm_written_compiler_refuses_recursion_as_the_reference_does`, which asserts the
+  reference's refusal **first**, so the test fails loudly if the contract it mirrors moves.
+- `cargo test -p nazm-cli --test selfhost` — **20 passed, 0 failed**.
+- `compiler/bootstrap.sh` — `ir: identical`, C2 and C3 both
+  `a8a163040263a9d1857c97d88f2d9ee92073f7748443cf36aa92eaef59eee6db`,
+  `runnable-bytes-differing: 0`, **5 conformance cases**. The compiler's own source is
+  acyclic, which stage 1 had already proved by compiling it under a backend that refuses
+  cycles. 4,647 source lines, up from 4,501.
+- `cargo xtask check` — 6/6. `cargo test --locked --workspace` — **549 passed, 0 failed,
+  6 ignored**, 0 survivors.
 
 ## Remaining limitations
 
@@ -347,8 +408,12 @@ Open, and none of them a blocker to the release as labelled:
    2 → 1 at `emit.rs:712`, the back edge), mutant compiled, and
    `the_condition_is_reevaluated_on_every_iteration` failed on its 10 s deadline.
    Container removed, `survivors=0`, this tree untouched.
-4. **Recursion in the Nazm compiler's output is unguarded** — the Rust backend refuses
-   recursion pending a stack contract; the Nazm one emits it. A real divergence.
+4. **The retained package predates the recursion fix.** `~/nazm-release-c3fb078/` carries
+   the compiler as it stood at `c3fb078`, whose `bin/nazmc-selfhosted` still accepts
+   recursion. Nothing about the package changed; what changed is what is known about it.
+   A candidate built from the current tree would not have that defect, and building one is
+   a single contained run — it has deliberately not been done here, to keep the retained
+   artefact the one that was tested.
 5. **The performance decomposition stops one level short.** The 2.00× measured across the
    emitter revision is the revision's **overall** effect, not the isolated cost of the
    failure check: three commits touched `emit.rs`/`ir.rs` between the compared builds.
@@ -359,9 +424,13 @@ Open, and none of them a blocker to the release as labelled:
 
 ## Next exact action
 
-**None outstanding — the release handoff is complete.** The candidate exists, its
-provenance is recorded and independently checked, and the limitations above are written
-down rather than implied.
+**None outstanding.** The handoff is complete, the candidate is retained outside the build
+tree, and the recursion divergence is closed with the reference's own contract.
+
+The one open *choice*, deliberately not taken here: the retained package is the tested one
+and therefore carries the pre-fix compiler. Building a candidate from the current tree is a
+single contained run, and it would be labelled with its own commit rather than replacing
+`~/nazm-release-c3fb078/`.
 
 Before anything heavy resumes: containment is unchanged and non-negotiable.
 `NAZM_CONTAINED=1` is set by the runner **inside the container only**, never on the host;
