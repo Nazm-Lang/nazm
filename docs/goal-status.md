@@ -26,8 +26,8 @@ what was verified when it was written, not what is true now.
 | **C** — compiler in Nazm | **complete for the bootstrap subset**: lexer, parser, name resolution, type checking and LLVM emission, all in Nazm, all differentially verified |
 | **D** — C1→C2→C3 bootstrap | **complete**: `compiler/bootstrap.sh`; C2 and C3 byte-identical, 5 conformance cases agreeing with the interpreter. Caveats in `docs/bootstrap.md` |
 | **E** — structured concurrency | **complete**: specified first, then interpreted, then compiled. `scope`/`spawn`/`Chan` run natively as one POSIX thread per task |
-| **F** — AI-native developer experience | not started (structured diagnostics and `--json` predate this goal) |
-| **G** — performance and release integration | not started |
+| **F** — AI-native developer experience | **complete**: versioned schemas, a checked grammar artefact, a generated guide, a canonical formatter, fixes with preconditions, a capability inventory, and one scripted repair workflow |
+| **G** — performance and release integration | **complete**: a measurement suite, a recorded baseline, one profile-driven pass (2.07× on the interpreter's hot loop), and a local release candidate |
 
 ## Capability matrix
 
@@ -85,32 +85,19 @@ mutation lock is held (`target/.nazm-mutation-lock.v2` absent).
 
 ## Current task
 
-**Milestone F — AI-native developer experience.** Milestones A–E are complete. F and G
-remain.
+**Final verification.** Milestones A–G are complete. What remains is confirming the
+integrated state: the clean offline rebuild on a fresh copy, and the release candidate
+with every gate passed.
 
 ## Next exact action
 
-**Milestone F, the AI-native developer experience.** Structured diagnostics, codes and
-`--json` predate this goal and are not credit against it. What §11 asks for:
-
-1. A **versioned diagnostic JSON schema** with a compatibility statement, so a tool can
-   say which version it reads.
-2. A **grammar artefact** and a language guide generated from or checked against it — a
-   grammar that can drift from the parser is worse than none.
-3. A **canonical formatter**, with semantic-preservation and idempotence tests: format
-   twice, get the same bytes; format and run, get the same answer.
-4. **Machine-applicable fixes with stated preconditions** — a fix that is only usually
-   right must say so rather than be applied silently.
-5. A **capability-inventory command** reporting what this build actually supports, from
-   the same tables the compiler reads rather than from a hand-written list.
-6. **One scripted repair workflow**, end to end, that an agent could run unattended.
-
-Then **G**: a reproducible measurement suite, recorded baselines, one evidence-driven
-optimisation pass, and a local release candidate — with no speed claim that is not
-measured.
-
-§10 also requires the final bootstrap verification to include every compiler change made
-under this goal, so `compiler/bootstrap.sh` is re-run once F and G have landed as well.
+1. **The clean rebuild**, on a fresh copy of the tree with an empty `target/`, offline:
+   `cargo build --workspace --offline`, `cargo test --workspace --offline`,
+   `cargo xtask check`. Remove the copy immediately afterwards — the disk is at 98%.
+2. **`sh scripts/release-candidate.sh`**, which runs every gate cheapest-first and then
+   assembles `target/release-candidate/` with a manifest of digests. A failing gate
+   stops it; that is the point.
+3. Record both in `docs/delivery.md` and here.
 
 ## Unresolved decisions
 
@@ -134,7 +121,7 @@ under this goal, so `compiler/bootstrap.sh` is re-run once F and G have landed a
 - [x] C1 → C2 → C3 bootstrap with conformance and reproducibility — `82645f2`; byte-identical, caveats stated
 - [x] Ordinary independent programs compile with the Nazm-written compiler — 5 conformance cases plus ~40 end-to-end programs
 - [x] Structured concurrency: transfer/capture rules, cancellation, cleanup — specified in `docs/spec.md`, interpreted, and compiled; 26 tests, all deadline-bounded
-- [ ] Developer interfaces, grammar/guide, formatting, repair workflow
-- [ ] Performance baselines, profiling/optimisation pass, no unsupported speed claims
+- [x] Developer interfaces, grammar/guide, formatting, repair workflow — `7243447`; schemas in `schema/`, the grammar checked against the lexer and the parser, the guide generated from it, 27 tests across `schemas.rs`, `format.rs`, `grammar.rs` and `workflow.rs`
+- [x] Performance baselines, profiling/optimisation pass, no unsupported speed claims — `3bc0505`; `bench/baseline.json` and `docs/performance.md`, which states that nothing has been compared to another language
 - [x] Clean rebuild of the integrated state on a supported target — fresh copy, offline, 443 tests
-- [ ] Final local review/release package
+- [ ] Final local review/release package — `scripts/release-candidate.sh` and `docs/delivery.md` exist; the run that produces the artefact is the remaining step

@@ -42,6 +42,14 @@ struct Edit {
     description: String,
     applicability: Applicability,
     precondition: String,
+    /// The bytes this edit expects to replace, as the checker saw them.
+    ///
+    /// Not part of the wire format — it is how the edit is checked against the file, not
+    /// something a consumer needs. An edit is **stale** when the file on disk no longer
+    /// has these bytes there: somebody saved over it between the check and the write,
+    /// and applying a span computed against the old text would corrupt the new one.
+    #[serde(skip)]
+    expected: String,
     /// Whether this run wrote it. `false` for a dry run and for anything skipped.
     applied: bool,
     /// Why it was not applied, when it was not. `None` when it was.
@@ -106,6 +114,11 @@ fn collect(diagnostics: &[Diagnostic], file: &SourceFile) -> Vec<Edit> {
             // and it is checked rather than assumed, because the failure would be a
             // silent write to the wrong place.
             let spans_two_files = name != end_name;
+            let expected = file
+                .text()
+                .get(f.span.start as usize..f.span.end as usize)
+                .unwrap_or_default()
+                .to_owned();
             edits.push(Edit {
                 schema: SCHEMA,
                 code: d.code.to_string(),
@@ -116,6 +129,7 @@ fn collect(diagnostics: &[Diagnostic], file: &SourceFile) -> Vec<Edit> {
                 description: f.description.clone(),
                 applicability: f.applicability,
                 precondition: f.precondition.clone(),
+                expected,
                 applied: false,
                 skipped: match (spans_two_files, f.applicability) {
                     (true, _) => Some("the edit crosses a file boundary"),
@@ -181,6 +195,17 @@ fn write_back(edits: &mut [Edit]) {
             if to > text.len() || !text.is_char_boundary(from) || !text.is_char_boundary(to) {
                 if let Some(e) = edits.get_mut(i) {
                     e.skipped = Some("the span does not name a range of this file");
+                }
+                continue;
+            }
+            // The bytes must still be the ones the checker saw. Two things can break
+            // that: somebody saving the file between the check and this write, and a
+            // bug here that miscomputed an offset. Both produce the same corruption —
+            // a replacement in the wrong place — and neither is worth risking to save
+            // a comparison of a few bytes.
+            if text.get(from..to) != Some(e.expected.as_str()) {
+                if let Some(e) = edits.get_mut(i) {
+                    e.skipped = Some("the file changed since it was checked");
                 }
                 continue;
             }

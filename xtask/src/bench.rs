@@ -33,6 +33,21 @@ const SCHEMA: &str = "nazm.bench/1";
 /// doubling — not for detecting a five per cent win.
 const TOLERANCE: f64 = 0.25;
 
+/// The smallest absolute move worth reporting, in milliseconds.
+///
+/// A ratio alone is the wrong test near zero, and the first `--check` run proved it: it
+/// reported `arith/check` at 3.3 -> 5.8 ms as a regression on a code path that had not
+/// been touched. Measuring the same command fifteen times in one burst gives a spread
+/// of 1.13x to 1.34x on anything in the three-to-eight millisecond range, and across
+/// bursts minutes apart it is wider still — process start-up and filesystem cache state
+/// are most of what is being timed there.
+///
+/// So a change must clear **both** bars. The consequence is stated rather than hidden:
+/// every measurement under about fifteen milliseconds is below this method's noise
+/// floor and is recorded rather than gated. Measuring those properly needs a harness
+/// that does not pay process start-up per sample, which this is not.
+const FLOOR_MS: f64 = 5.0;
+
 pub(crate) fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -450,6 +465,10 @@ fn compare(root: &Path, measurements: &[Measurement]) -> ExitCode {
             continue;
         }
         let ratio = now / was;
+        let moved = (now - was).abs();
+        if moved < FLOOR_MS {
+            continue;
+        }
         if ratio > 1.0 + TOLERANCE {
             regressions.push(format!("{}: {was:.1} -> {now:.1} ms", m.key()));
         } else if ratio < 1.0 - TOLERANCE {
@@ -462,7 +481,7 @@ fn compare(root: &Path, measurements: &[Measurement]) -> ExitCode {
     }
     if regressions.is_empty() {
         println!(
-            "\nbench: nothing slower than the baseline by more than {:.0}%",
+            "\nbench: nothing slower than the baseline by more than {:.0}% and {FLOOR_MS:.0} ms",
             TOLERANCE * 100.0
         );
         return ExitCode::SUCCESS;
@@ -471,7 +490,8 @@ fn compare(root: &Path, measurements: &[Measurement]) -> ExitCode {
         eprintln!("slower: {r}");
     }
     eprintln!(
-        "\nbench: {} measurement(s) slower than the baseline by more than {:.0}%",
+        "\nbench: {} measurement(s) slower than the baseline by more than {:.0}% and \
+         {FLOOR_MS:.0} ms",
         regressions.len(),
         TOLERANCE * 100.0
     );

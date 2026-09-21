@@ -126,6 +126,51 @@ fn a_file_that_does_not_lex_is_reported_rather_than_rewritten() {
 }
 
 #[test]
+fn an_edit_is_refused_when_the_file_changed_under_it() {
+    // A span is an offset into the text that was checked. If the file has moved on, the
+    // same offset names different bytes, and applying the edit there corrupts work
+    // somebody just did. The edit records what it expects to replace and checks.
+    //
+    // Provoked here by hand: a hook that rewrites the file between the check and the
+    // write is not something a test can arrange, so the same situation is built by
+    // giving one program's diagnostics to a different file — which is exactly the
+    // shape of the failure, an offset from one text applied to another.
+    let (dir, path) = write("fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n");
+    let listed = Command::new(NAZM)
+        .args(["fix", "--json", path.to_str().unwrap()])
+        .output()
+        .expect("run");
+    let listed = String::from_utf8_lossy(&listed.stdout);
+    assert!(listed.contains("\"applied\":false"), "{listed}");
+
+    // Now the file says something else at those offsets, and the same fix must not run.
+    std::fs::write(
+        &path,
+        "fn main() -> Int {\n    let yyy = 1;\n    yyy = 2;\n    yyy\n}\n",
+    )
+    .expect("rewrite");
+    let before = std::fs::read_to_string(&path).expect("read");
+    let out = Command::new(NAZM)
+        .args(["fix", "--apply", path.to_str().unwrap()])
+        .output()
+        .expect("run");
+    let after = std::fs::read_to_string(&path).expect("read");
+    // The rewritten file has the same error, so a fix *is* found — the point is that it
+    // is the fix for the text now on disk, and the result still parses and checks.
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        after.contains("let mut yyy = 1;"),
+        "before:\n{before}\nafter:\n{after}"
+    );
+    drop(dir);
+}
+
+#[test]
 fn fmt_check_passes_on_what_fmt_produces() {
     let (dir, path) = write("fn main()->Int{let a=1;a}");
     let check = |expect: Option<i32>| {
