@@ -170,8 +170,8 @@ fn guard(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
         cond: Int, code: Str, message: Str, at: Str) -> Int {
     let text = failure_text(code, message, at);
     let idx = message_index(msgs, text);
-    let fail = take_number(next);
-    let cont = take_number(next);
+    let fail = take_label(next);
+    let cont = take_label(next);
     add_line(out, str_concat(str_concat("  br i1 ", v(cond)),
             str_concat(str_concat(", label %b", int_to_str(fail)),
             str_concat(", label %b", int_to_str(cont)))));
@@ -186,6 +186,12 @@ fn guard(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
 fn take_number(next: Ints) -> Int {
     let n = ints_get(next, 0);
     ints_set(next, 0, n + 1);
+    n
+}
+
+fn take_label(next: Ints) -> Int {
+    let n = ints_get(next, 1);
+    ints_set(next, 1, n + 1);
     n
 }
 
@@ -248,9 +254,9 @@ fn remainder(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, a: In
             str_concat(" = icmp eq i64 ", str_concat(v(b), ", 0"))));
     guard(out, msgs, next, current, live, zero, "N0401", "division by zero", at);
     let special = min_over_minus_one(out, next, a, b);
-    let is_zero = take_number(next);
-    let compute = take_number(next);
-    let after = take_number(next);
+    let is_zero = take_label(next);
+    let compute = take_label(next);
+    let after = take_label(next);
     add_line(out, str_concat(str_concat("  br i1 ", v(special)),
             str_concat(str_concat(", label %b", int_to_str(is_zero)),
             str_concat(", label %b", int_to_str(compute)))));
@@ -393,8 +399,8 @@ fn string_equality(out: Strs, current: Strs, live: Ints, next: Ints,
     add_line(out, str_concat(str_concat("  ", v(same)),
             str_concat(" = icmp eq i64 ", str_concat(v(la), str_concat(", ", v(lb))))));
 
-    let cmp = take_number(next);
-    let join = take_number(next);
+    let cmp = take_label(next);
+    let join = take_label(next);
     let short = strs_get(current, 0);
     add_line(out, str_concat(str_concat("  br i1 ", v(same)),
             str_concat(str_concat(", label %bc", int_to_str(cmp)),
@@ -818,6 +824,12 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         parent: Ints, childno: Ints, substart: Ints, kids: Ints, kid_first: Ints,
         fnames: Strs, out: Strs, msgs: Strs, blobs: Strs) -> Int {
     let next = ints_new();
+    ints_push(next, 0);
+    // Slot 1 is the block-label counter, separate from slot 0 because the labels are
+    // *named* — `b7:`, not `7:` — so LLVM never counts them. Drawing both from one
+    // counter left holes in the value sequence, and clang 17 rejects a function that
+    // emits `%5` where the implicit counter is still at 3. The two cannot collide: one
+    // only ever prints after `%`, the other after `b`.
     ints_push(next, 0);
     let vals = ints_new();
 
@@ -1514,7 +1526,7 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         // code after it — and that code has to land somewhere legal. A fresh block with
         // no predecessors is exactly that: unreachable, valid, and dropped by any
         // optimiser. The alternative, appending after `unreachable`, is invalid IR.
-        let after = take_number(next);
+        let after = take_label(next);
         open_block(out, current, live, str_concat("bu", int_to_str(after)));
         // A value is still owed to whatever contained the call; it is never read.
         return constant(out, next, "0");
