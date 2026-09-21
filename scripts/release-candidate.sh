@@ -91,7 +91,19 @@ rm -rf "$out"
 mkdir -p "$out/bin" "$out/docs" "$out/schema" "$out/examples" "$out/scripts" \
          "$out/compiler/conformance" "$out/bench/programs" "$out/bench/reference"
 
+# Two different executables, named so they cannot be mistaken for one another.
+#
+# `nazm` is the Rust implementation: the interpreter, the reference front end, and the
+# compiler that builds C1. `nazmc-selfhosted` is the compiler *written in Nazm* — stage 2
+# of the bootstrap, built by C1 from `compiler/emit.nz`, and byte-identical to stage 3.
+# A package carrying only the first would be claiming a self-hosted compiler and shipping
+# the thing that produced it.
 cp "$target/release/nazm" "$out/bin/"
+if [ -x "$target/bootstrap/stage2/nazmc" ]; then
+    cp "$target/bootstrap/stage2/nazmc" "$out/bin/nazmc-selfhosted"
+else
+    fail "the bootstrap produced no stage-2 compiler to package"
+fi
 cp README.md LICENSE* "$out/" 2>/dev/null || cp README.md "$out/"
 cp docs/*.md docs/*.ebnf "$out/docs/"
 cp schema/*.json "$out/schema/"
@@ -156,6 +168,57 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
 done) >> "$out/MANIFEST.txt"
 
 
+
+# --- provenance ---------------------------------------------------------------------
+#
+# Everything needed to say what this candidate is and what was actually checked against
+# it. Separate from MANIFEST.txt because the manifest describes the *contents* and this
+# describes the *build* — and because a reader asking "which revision is this, and did
+# the tests run against it?" should not have to infer the answer from a file list.
+{
+    printf 'nazm release candidate — provenance\n\n'
+    printf 'source-commit:      %s\n' "$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    printf 'source-tree-clean:  %s\n' "$([ -z "$dirty" ] && echo yes || echo 'no (--allow-dirty)')"
+    # The tree as built, independent of git: every tracked-by-this-package source, in a
+    # fixed order, digested together. A commit identifies a revision only if the working
+    # tree matches it, and this says what was on disk regardless.
+    printf 'source-tree-digest: %s\n' \
+        "$(find compiler crates xtask docs schema examples scripts bench/programs -type f \
+            \( -name '*.rs' -o -name '*.nz' -o -name '*.md' -o -name '*.json' -o -name '*.sh' -o -name '*.ebnf' \) \
+            2>/dev/null | LC_ALL=C sort | while read -r f; do sha256 "$f"; done | \
+            { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; } | cut -d' ' -f1)"
+    printf '\n'
+    printf 'target:             %s\n' "$(uname -sm)"
+    printf 'rustc:              %s\n' "$(rustc --version)"
+    printf 'clang:              %s\n' "$(clang --version | head -1)"
+    printf 'container-image:    %s\n' "${NAZM_IMAGE:-nazm-contained:1.98.1}"
+    printf 'contained:          %s\n' "${NAZM_CONTAINED:-0}"
+    printf '\n'
+    printf 'bootstrap:\n'
+    sed 's/^/  /' "$target/bootstrap/record.txt"
+    printf '\n'
+    printf 'verification (this run, this revision):\n'
+    printf '  cargo fmt --all -- --check           passed\n'
+    printf '  nazm fmt --check (every .nz)         passed\n'
+    printf '  cargo lint                           passed\n'
+    printf '  cargo xtask check                    passed\n'
+    printf '  cargo test --workspace               %s\n' "${suite_line:-passed}"
+    printf '  compiler/bootstrap.sh                passed, C2 and C3 byte-identical\n'
+    if [ "$skip_bench" = no ]; then
+        printf '  cargo xtask bench --check            passed\n'
+    else
+        printf '  cargo xtask bench --check            SKIPPED (--skip-bench)\n'
+    fi
+    printf '\n'
+    printf 'binaries:\n'
+    printf '  bin/nazm                             the Rust implementation, release build,\n'
+    printf '                                       for %s. This is what builds C1.\n' "$(uname -sm)"
+    printf '  bin/nazmc-selfhosted                 the compiler written in Nazm, as C2 —\n'
+    printf '                                       built by C1 from compiler/emit.nz, for %s.\n' "$(uname -sm)"
+    printf '                                       Byte-identical to C3.\n'
+    printf '\n'
+    printf 'Neither binary is portable off %s. The sources are; see docs/bootstrap.md.\n' "$(uname -sm)"
+} > "$out/PROVENANCE.txt"
 # --- validate -----------------------------------------------------------------------
 #
 # Read the manifest back and check every digest against the file it names. A manifest is
