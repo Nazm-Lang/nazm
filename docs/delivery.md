@@ -87,6 +87,42 @@ These are properties of the release, not a backlog.
   agent drivers, provider adapter and task corpus are unwritten, and `run` is disabled.
   It is unrelated to the language work above; see `README.md`.
 
+## Results
+
+`cargo test --workspace` on a clean offline rebuild: **506 passed, 0 failed, 6 ignored.**
+What those cover, grouped by the question each group answers:
+
+| | count | what it establishes |
+| --- | ---: | --- |
+| Language semantics (`nazm-core/tests/language.rs`) | 110 | each rule in `docs/spec.md` that a refactor could quietly reverse |
+| Native end-to-end (`nazm-cli/tests/build.rs`) | 126 | every case compiled at `-O0` **and** `-O2`, and compared against the interpreter |
+| Self-hosting differentials (`nazm-cli/tests/selfhost.rs`) | 15 | the Nazm lexer, parser and checker against the Rust ones over every `.nz` in the tree, and the full bootstrap chain |
+| Concurrency, interpreted (`nazm-core/tests/concurrency.rs`) | 15 | joins, capture, cancellation, cleanup, contention — every one with a deadline |
+| Concurrency, native (`nazm-cli/tests/concurrent.rs`) | 11 | the same programs compiled, at `-O0` and `-O2`, against a written expectation *and* the interpreter |
+| Machine interface (`nazm-cli/tests/schemas.rs`) | 5 | real command output validated against `schema/*.json` |
+| Formatter (`nazm-syntax/tests/format.rs`) | 11 | token preservation, idempotence, comment preservation, over every source in the tree |
+| Grammar (`nazm-syntax/tests/grammar.rs`) | 3 | every lexer token written down, every rule reachable, every example parsed by the real parser |
+| Repair workflow (`nazm-cli/tests/workflow.rs`) | 10 | `nazm fix`, `nazm fmt`, `nazm test` and `scripts/repair.sh` end to end |
+
+The bootstrap: **C2 and C3 byte-identical** in IR and executable, with 5 conformance
+cases agreeing across C2, C3 and the interpreter. `compiler/bootstrap.sh` writes the
+record, including the source digest and line count.
+
+Benchmarks: `docs/performance.md`, with the noise floor of the method stated alongside
+the numbers.
+
+### Mutation coverage
+
+`cargo xtask mutate` injects each catalogued defect into a **disposable copy** and
+requires the suite to catch it. Run at final integration against `524cd24`, which is the
+integrated state minus `nazm test` — an addition that touches none of the code the
+catalogue mutates.
+
+<!-- mutation-results -->
+
+A caught mutation establishes that the suite detects **that** defect, and nothing
+broader. Fifty entries is fifty facts, not a coverage percentage.
+
 ## Skipped and conditional coverage
 
 Reported rather than folded into a total, because a skipped test that looks like a
@@ -97,6 +133,14 @@ passing one is the most misleading thing a suite can contain.
 | 6 ignored tests in `cargo test --workspace` | `xtask` lifecycle tests. They spawn nested cargo builds and kill real process groups, so they run separately: `cargo test -p xtask --test lifecycle -- --ignored --test-threads=1` |
 | 10 `docker_boundary` tests | exercise nothing without `NAZM_REQUIRE_DOCKER=1`. They belong to the benchmark harness, not the language |
 | The mutation catalogue | `cargo xtask mutate` is not in the default gate set: it injects defects into a copy and costs a full build per entry |
+
+## The exact source state
+
+| | |
+| --- | --- |
+| Repository | local only; no remote is configured, which is not a blocker to anything here |
+| Integrated commit | the tip of `master` at delivery; `scripts/release-candidate.sh` records it in `MANIFEST.txt` and refuses to run on a dirty tree without `--allow-dirty` |
+| Remaining diff | none. The candidate is assembled only from a clean tree unless that flag is passed, and the manifest says which |
 
 ## Reproducing this
 
