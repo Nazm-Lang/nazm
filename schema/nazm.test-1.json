@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.test-1.json",
+  "title": "nazm.test/1",
+  "description": "One test case from `nazm test --json`. A case is `NAME.nz` beside `NAME.expected`; it runs interpreted and compiled, and both must produce the recorded output. One object per line on stdout.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "name", "file", "expected", "interpreted", "native", "passed"],
+  "properties": {
+    "schema": { "const": "nazm.test/1" },
+    "name": { "type": "string", "description": "The case's file stem." },
+    "file": { "type": "string" },
+    "expected": { "type": "string", "description": "The contents of the `.expected` file, trimmed." },
+    "interpreted": { "$ref": "#/$defs/outcome" },
+    "native": {
+      "description": "The compiled leg. `null` when `--interpret-only` was given.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["output", "matched"],
+      "properties": {
+        "output": { "type": "string" },
+        "matched": { "type": "boolean" }
+      }
+    },
+    "passed": { "type": "boolean", "description": "Every leg that ran matched." }
+  },
+  "$defs": {
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["output", "matched"],
+      "properties": {
+        "output": {
+          "type": "string",
+          "description": "Stdout and stderr combined and trimmed — a program's diagnostic is as much of its behaviour as its value."
+        },
+        "matched": { "type": "boolean" }
+      }
+    }
+  }
+}

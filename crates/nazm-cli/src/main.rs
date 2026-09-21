@@ -37,6 +37,7 @@ mod capabilities;
 mod fix;
 mod fmt;
 mod load;
+mod test;
 
 use clap::{Parser, Subcommand};
 use nazm_core::Outcome;
@@ -144,6 +145,23 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Run a corpus of programs against their recorded outputs.
+    ///
+    /// A case is `NAME.nz` beside `NAME.expected`, the convention
+    /// `compiler/bootstrap.sh` has used since the bootstrap existed. Each case runs
+    /// interpreted **and** compiled, and both must produce the recorded output.
+    Test {
+        /// Files or directories. A directory is scanned for `.nz` files, and any
+        /// without a `.expected` beside them are reported rather than ignored.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// One JSON object per case, on stdout. See `docs/diagnostics.md`.
+        #[arg(long)]
+        json: bool,
+        /// Skip the native leg. For a machine with no `clang`.
+        #[arg(long)]
+        interpret_only: bool,
+    },
     /// Report what this build of the compiler actually supports.
     ///
     /// Read from the compiler's own tables rather than from a written list, so it cannot
@@ -219,6 +237,11 @@ fn main() -> ExitCode {
         Command::Fix { file, apply, json } => return fix::run(&file, apply, json),
         Command::Capabilities { json } => return capabilities::run(json),
         Command::Fmt { files, check } => return fmt::run(&files, check),
+        Command::Test {
+            paths,
+            json,
+            interpret_only,
+        } => return test::run(&paths, json, interpret_only),
         _ => {}
     }
     let (path, json, limits) = match cli.command {
@@ -245,6 +268,7 @@ fn main() -> ExitCode {
         Command::Build { .. }
         | Command::Fix { .. }
         | Command::Fmt { .. }
+        | Command::Test { .. }
         | Command::Capabilities { .. } => {
             unreachable!("handled above")
         }
