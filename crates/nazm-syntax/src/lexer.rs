@@ -68,6 +68,103 @@ pub enum TokenKind {
 }
 
 impl TokenKind {
+    /// Every token the language has, one value per variant, with a placeholder payload
+    /// for the three that carry one.
+    ///
+    /// The single list. `docs/grammar.ebnf` is checked against it, so a keyword or
+    /// operator added to the lexer and not to the grammar is a test failure rather than
+    /// a grammar that quietly describes an older language. [`TokenKind::written`] is
+    /// what keeps the list honest: it is an exhaustive `match`, so a new variant does
+    /// not compile until someone has touched both.
+    pub const ALL: &'static [Self] = &[
+        Self::Int(0),
+        Self::Str(String::new()),
+        Self::Ident(String::new()),
+        Self::Fn,
+        Self::Let,
+        Self::If,
+        Self::Else,
+        Self::True,
+        Self::False,
+        Self::Mut,
+        Self::While,
+        Self::Break,
+        Self::Continue,
+        Self::Return,
+        Self::Use,
+        Self::Scope,
+        Self::Spawn,
+        Self::LParen,
+        Self::RParen,
+        Self::LBrace,
+        Self::RBrace,
+        Self::Comma,
+        Self::Colon,
+        Self::Semi,
+        Self::Arrow,
+        Self::Eq,
+        Self::Plus,
+        Self::Minus,
+        Self::Star,
+        Self::Slash,
+        Self::Percent,
+        Self::EqEq,
+        Self::NotEq,
+        Self::Lt,
+        Self::LtEq,
+        Self::Gt,
+        Self::GtEq,
+    ];
+
+    /// How this token is spelled in source, for the ones with a fixed spelling.
+    ///
+    /// `None` for the three that are a *class* rather than a word — an integer, a string
+    /// literal, a name — and for the two that are never written: `IntTooLarge`, which is
+    /// a diagnostic path, and `Eof`, which is a position.
+    ///
+    /// The `match` is exhaustive on purpose. Adding a token to the language stops this
+    /// compiling, which is the only reliable way to make the grammar artefact keep up.
+    #[must_use]
+    pub const fn written(&self) -> Option<&'static str> {
+        match self {
+            Self::Int(_) | Self::IntTooLarge(_) | Self::Str(_) | Self::Ident(_) | Self::Eof => None,
+            Self::Fn => Some("fn"),
+            Self::Let => Some("let"),
+            Self::If => Some("if"),
+            Self::Else => Some("else"),
+            Self::True => Some("true"),
+            Self::False => Some("false"),
+            Self::Mut => Some("mut"),
+            Self::While => Some("while"),
+            Self::Break => Some("break"),
+            Self::Continue => Some("continue"),
+            Self::Return => Some("return"),
+            Self::Use => Some("use"),
+            Self::Scope => Some("scope"),
+            Self::Spawn => Some("spawn"),
+            Self::LParen => Some("("),
+            Self::RParen => Some(")"),
+            Self::LBrace => Some("{"),
+            Self::RBrace => Some("}"),
+            Self::Comma => Some(","),
+            Self::Colon => Some(":"),
+            Self::Semi => Some(";"),
+            Self::Arrow => Some("->"),
+            Self::Eq => Some("="),
+            Self::Plus => Some("+"),
+            Self::Minus => Some("-"),
+            Self::Star => Some("*"),
+            Self::Slash => Some("/"),
+            Self::Percent => Some("%"),
+            Self::EqEq => Some("=="),
+            Self::NotEq => Some("!="),
+            Self::Lt => Some("<"),
+            Self::LtEq => Some("<="),
+            Self::Gt => Some(">"),
+            Self::GtEq => Some(">="),
+        }
+    }
+
     /// How the token is written, for use in "expected X, found Y" messages.
     #[must_use]
     pub fn describe(&self) -> String {
@@ -124,6 +221,19 @@ pub struct Token {
 /// Tokenise, collecting every error rather than stopping at the first.
 #[must_use]
 pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
+    let (tokens, errors, _) = lex_with_comments(text);
+    (tokens, errors)
+}
+
+/// Tokenise, and also report where the comments were.
+///
+/// A comment is not a token and the parser must never see one, so [`lex`] drops them.
+/// The formatter cannot: a formatter that deletes comments is not a formatter. Both go
+/// through this one scanner rather than the formatter having a second, nearly identical
+/// one — the two would agree about everything except `"// not a comment"` inside a
+/// string literal, which is exactly the case a second scanner gets wrong.
+#[must_use]
+pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>) {
     let bytes = text.as_bytes();
     // Checked access throughout. Every one of these reads is provably in bounds from the
     // surrounding loop condition, but "provably" is a property of today's code: the lint
@@ -133,6 +243,7 @@ pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
     let mut i = 0usize;
     let mut tokens = Vec::new();
     let mut errors = Vec::new();
+    let mut comments = Vec::new();
 
     let at = |i: usize| -> u32 { u32::try_from(i).unwrap_or(u32::MAX) };
 
@@ -151,6 +262,9 @@ pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
             while byte(i).is_some_and(|b| b != b'\n') {
                 i += 1;
             }
+            // Not including the newline: the comment is the text, and where the line
+            // ends is the formatter's decision rather than the comment's.
+            comments.push(Span::new(at(start), at(i)));
             continue;
         }
 
@@ -228,7 +342,13 @@ pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
                         Span::new(at(start), at(i)),
                         "this string has no closing quote",
                     )
-                    .fix(Span::new(at(i), at(i)), "\"", "close the string"),
+                    .fix_with_review(
+                        Span::new(at(i), at(i)),
+                        "\"",
+                        "close the string",
+                        "the string was meant to end at the end of this line, rather \
+                         than a quote being missing from somewhere earlier",
+                    ),
                 );
                 continue;
             }
@@ -307,7 +427,7 @@ pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
         kind: TokenKind::Eof,
         span: Span::new(at(bytes.len()), at(bytes.len())),
     });
-    (tokens, errors)
+    (tokens, errors, comments)
 }
 
 #[cfg(test)]

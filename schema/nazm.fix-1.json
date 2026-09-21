@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.fix-1.json",
+  "title": "nazm.fix/1",
+  "description": "One edit considered by `nazm fix --json`, resolved to a real file and offset. Output is one object per line on stdout.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "code", "file", "start", "end", "replacement", "description", "applicability", "precondition", "applied", "skipped"],
+  "properties": {
+    "schema": { "const": "nazm.fix/1" },
+    "code": { "type": "string", "pattern": "^N[0-9]{4}$", "description": "The diagnostic this edit came from." },
+    "file": { "type": "string", "description": "The file to write, as it was named when loaded. A merged multi-file program reports the file a reader would open." },
+    "start": { "type": "integer", "minimum": 0, "description": "Byte offset within that file, not within the merged buffer." },
+    "end": { "type": "integer", "minimum": 0 },
+    "replacement": { "type": "string" },
+    "description": { "type": "string" },
+    "applicability": { "enum": ["automatic", "needs_review"] },
+    "precondition": { "type": "string" },
+    "applied": { "type": "boolean", "description": "Whether this run wrote it. Always false without `--apply`." },
+    "skipped": { "type": ["string", "null"], "description": "Why it was not applied. `null` when it was applied, or when it would be." }
+  }
+}

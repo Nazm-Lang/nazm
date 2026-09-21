@@ -19,9 +19,15 @@ nazm-diag = { workspace = true }
 nazm-core = { workspace = true }
 nazm-lir = { workspace = true }
 clap = { workspace = true }
+# `nazm fix` and `nazm capabilities` emit machine-readable output under their own
+# versioned schemas, the same way diagnostics do.
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# `tests/schemas.rs` validates real command output against `schema/*.json`.
+nazm-diag = { workspace = true }
 # Each build case needs a throwaway directory for its source, its executable and, in two
 # cases, a stub toolchain on PATH.
 tempfile = { workspace = true }

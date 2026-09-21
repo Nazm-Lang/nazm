@@ -350,6 +350,7 @@ dependencies = [
  "nazm-diag",
  "nazm-lir",
  "nazm-span",
+ "serde",
  "serde_json",
  "tempfile",
 ]

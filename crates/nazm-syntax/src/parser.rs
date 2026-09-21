@@ -396,7 +396,13 @@ impl<'a> Parser<'a> {
                         "a mutable parameter is a local copy, which reads as an \
                          out-parameter. Bind one in the body instead: `let mut n = n;`",
                     )
-                    .fix(p_span, "", "remove `mut`"),
+                    .fix_automatically(
+                        p_span,
+                        "",
+                        "remove `mut`",
+                        "a parameter is immutable either way, so removing the word \
+                         changes nothing but whether the program is legal",
+                    ),
                 );
                 return None;
             }
@@ -544,7 +550,14 @@ impl<'a> Parser<'a> {
                         format!("expected `;` or `}}` after this expression, found {found}"),
                     )
                     .help("an expression with no `;` after it is the block's value, so it must be last")
-                    .fix(Span::new(e.span().end, e.span().end), ";", "discard the value"),
+                    .fix_with_review(
+                        Span::new(e.span().end, e.span().end),
+                        ";",
+                        "discard the value",
+                        "the value was meant to be discarded rather than returned — if \
+                         it was meant to be the block's value, the statements after it \
+                         are what should move",
+                    ),
                 );
                 return None;
             }

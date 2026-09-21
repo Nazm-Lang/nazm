@@ -4,6 +4,8 @@
 //! controls, not style checks: clippy and rustfmt cover style, and this covers the claims
 //! the project makes about its own structure that no linter can see.
 
+mod bench;
+mod guide;
 mod metadata;
 mod mutate;
 mod rules;
@@ -19,6 +21,34 @@ fn main() -> ExitCode {
         Some("check-emission") => report(&[("emission reach", check_emission_reach())]),
         Some("check-unsafe") => report(&[("unsafe policy", check_unsafe_policy())]),
         Some("check-docs") => report(&[("doc claims", check_doc_claims())]),
+        Some("check-guide") => report(&[("guide from grammar", guide::check())]),
+        Some("bench") => {
+            let rest: Vec<String> = args.collect();
+            let mode = if rest.iter().any(|a| a == "--save") {
+                bench::Mode::Save
+            } else if rest.iter().any(|a| a == "--check") {
+                bench::Mode::Check
+            } else {
+                bench::Mode::Record
+            };
+            let runs = rest
+                .iter()
+                .position(|a| a == "--runs")
+                .and_then(|i| rest.get(i + 1))
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(5);
+            bench::run(mode, runs)
+        }
+        Some("guide") => match guide::write() {
+            Ok(()) => {
+                println!("docs/guide.md rewritten from docs/grammar.ebnf");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
         Some("mutate") => report(&[("mutation coverage", run_mutations())]),
         // Documented, because it is now the *only* way to recover an interrupted run:
         // `mutate` refuses rather than repairing, since it cannot establish that the
@@ -53,6 +83,10 @@ fn help() {
            check-emission  only the backend crate emits IR or runs clang\n  \
            check-unsafe    the unsafe allowlist and the workspace lint agree\n  \
            check-docs      documented claims that must stay true\n  \
+           check-guide     docs/guide.md is what docs/grammar.ebnf produces\n  \
+           guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
+           bench           measure; --save records a baseline, --check compares to one,\n  \
+                           --runs N sets the repetitions (default 5)\n  \
            mutate          inject catalogued defects; each must be caught\n  \
            mutate-recover  repair a tree an interrupted mutation run left mutated;\n  \
                            needs --confirm-no-writers, and read what it prints first\n  \
@@ -67,6 +101,7 @@ fn run_checks() -> ExitCode {
         ("emission reach", check_emission_reach()),
         ("unsafe policy", check_unsafe_policy()),
         ("doc claims", check_doc_claims()),
+        ("guide from grammar", guide::check()),
     ])
 }
 

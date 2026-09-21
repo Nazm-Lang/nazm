@@ -33,6 +33,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod build;
+mod capabilities;
+mod fix;
+mod fmt;
 mod load;
 
 use clap::{Parser, Subcommand};
@@ -113,6 +116,43 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Apply the repairs the compiler already knows about.
+    ///
+    /// Only fixes marked `automatic` are applied; one marked `needs_review` is printed
+    /// with the condition under which it is right and left for a person. Nothing is
+    /// written without `--apply`.
+    Fix {
+        file: PathBuf,
+        /// Write the edits. Without this the command reports and changes nothing.
+        #[arg(long)]
+        apply: bool,
+        /// One JSON object per edit, on stdout. See `docs/diagnostics.md`.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Lay out source files canonically.
+    ///
+    /// One layout and no options: a formatter with settings has as many canonical forms
+    /// as it has settings. Per file, because layout is a property of a file and not of
+    /// the program a `use` assembles.
+    Fmt {
+        /// The files to format. A directory is not walked — name the files, or let a
+        /// shell glob do it, so nothing is rewritten that was not asked for.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Write nothing; list the files that would change and fail if there are any.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Report what this build of the compiler actually supports.
+    ///
+    /// Read from the compiler's own tables rather than from a written list, so it cannot
+    /// describe a version of itself that does not exist.
+    Capabilities {
+        /// One JSON object, on stdout. See `docs/diagnostics.md`.
+        #[arg(long)]
+        json: bool,
+    },
     /// Compile to a native executable.
     ///
     /// A narrow subset for now — see `docs/roadmap.md` M1a. Anything outside it is
@@ -175,6 +215,12 @@ fn main() -> ExitCode {
     {
         return build::run(&file, out.as_deref(), json, emit_ir, opt_level);
     }
+    match cli.command {
+        Command::Fix { file, apply, json } => return fix::run(&file, apply, json),
+        Command::Capabilities { json } => return capabilities::run(json),
+        Command::Fmt { files, check } => return fmt::run(&files, check),
+        _ => {}
+    }
     let (path, json, limits) = match cli.command {
         Command::Run {
             file,
@@ -194,9 +240,14 @@ fn main() -> ExitCode {
             )),
         ),
         Command::Check { file, json } => (file, json, None),
-        // Handled above; `main` keeps its original shape for the two commands whose
-        // behaviour this increment must not change.
-        Command::Build { .. } => unreachable!("handled above"),
+        // Handled above; `main` keeps its original shape for the commands whose
+        // behaviour these increments must not change.
+        Command::Build { .. }
+        | Command::Fix { .. }
+        | Command::Fmt { .. }
+        | Command::Capabilities { .. } => {
+            unreachable!("handled above")
+        }
     };
 
     // The root file and everything it imports, as one buffer. A program with no `use`
@@ -249,7 +300,7 @@ fn report_ok(text: &str, _extra: Option<&str>) -> ExitCode {
     ExitCode::from(exit::OK)
 }
 
-fn emit(diagnostics: &[nazm_diag::Diagnostic], file: &SourceFile, json: bool) {
+pub(crate) fn emit(diagnostics: &[nazm_diag::Diagnostic], file: &SourceFile, json: bool) {
     for d in diagnostics {
         if json {
             match d.to_json() {
