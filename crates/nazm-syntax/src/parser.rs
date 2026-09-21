@@ -9,8 +9,8 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 
 use crate::ast::{
-    Assign, BinOp, Block, Expr, Function, Import, Let, Param, Program, Return, Scope, Spawn,
-    Stmt, TypeName, While,
+    Assign, BinOp, Block, Expr, Function, Import, Let, Param, Program, Return, Scope, Spawn, Stmt,
+    TypeName, While,
 };
 use crate::lexer::{Token, TokenKind};
 
@@ -320,7 +320,10 @@ impl<'a> Parser<'a> {
                     Diagnostic::error(
                         codes::UNEXPECTED_TOKEN,
                         callee_span,
-                        format!("expected a function name after `spawn`, found {}", other.describe()),
+                        format!(
+                            "expected a function name after `spawn`, found {}",
+                            other.describe()
+                        ),
                     )
                     .help(
                         "a task runs a named function: `spawn worker(jobs);`. There are \

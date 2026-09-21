@@ -25,7 +25,7 @@ what was verified when it was written, not what is true now.
 | **B** — the bootstrap subset | **complete** (`053ed22`): B1 text, B2 sequences, B3 I/O, B4 modules, B5 strategy |
 | **C** — compiler in Nazm | **complete for the bootstrap subset**: lexer, parser, name resolution, type checking and LLVM emission, all in Nazm, all differentially verified |
 | **D** — C1→C2→C3 bootstrap | **complete**: `compiler/bootstrap.sh`; C2 and C3 byte-identical, 5 conformance cases agreeing with the interpreter. Caveats in `docs/bootstrap.md` |
-| **E** — structured concurrency | not started |
+| **E** — structured concurrency | **complete**: specified first, then interpreted, then compiled. `scope`/`spawn`/`Chan` run natively as one POSIX thread per task |
 | **F** — AI-native developer experience | not started (structured diagnostics and `--json` predate this goal) |
 | **G** — performance and release integration | not started |
 
@@ -54,7 +54,10 @@ what was verified when it was written, not what is true now.
 | `use` resolution in the Nazm compiler | **not done** | S is concatenated by the bootstrap script. Stated in `docs/bootstrap.md` |
 | Recursion in the Nazm compiler's output | **unguarded** | the Rust backend refuses recursion pending a stack contract; the Nazm one emits it. A real divergence, recorded here |
 | Native recursion | blocked by design | pending measured stack availability and frame size. **Not needed**: the compiler is iterative |
-| Concurrency, formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
+| **Structured concurrency, interpreted** | **verified** | `scope`, `spawn`, bounded `Chan`; 15 tests in `nazm-core/tests/concurrency.rs`, **every one with a deadline** so a hang fails by name |
+| **Structured concurrency, native** | **verified** | one POSIX thread per task, a mutex/condvar ring per channel; 11 tests in `nazm-cli/tests/concurrent.rs` at `-O0` **and** `-O2`, each against a written expectation *and* the interpreter |
+| Concurrency in the *Nazm* compiler | **deliberately absent** | outside the bootstrap subset, named as such in `compiler/analyse.nz` and guarded by a test. See `docs/bootstrap-design.md` |
+| Formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
 
 ## Verified commands (against `9bf4078`)
 
@@ -82,32 +85,32 @@ mutation lock is held (`target/.nazm-mutation-lock.v2` absent).
 
 ## Current task
 
-**Milestone E — initial structured concurrency.** Milestones A–D are complete. E, F and G
-remain, and none has been started.
+**Milestone F — AI-native developer experience.** Milestones A–E are complete. F and G
+remain.
 
 ## Next exact action
 
-**Milestone E, structured concurrency.** Nothing exists. The contract (§10) asks for one
-coherent initial model, not a general one:
+**Milestone F, the AI-native developer experience.** Structured diagnostics, codes and
+`--json` predate this goal and are not credit against it. What §11 asks for:
 
-1. **Specify before implementing**, in `docs/spec.md`: scoped task creation and joining
-   with defined result and error propagation; explicit cross-task capture rules that
-   reject illegal shared mutation — `Ints`/`Strs` are shared mutable handles, so the
-   rule has to say plainly what may cross a scope boundary; a bounded channel with
-   specified close behaviour; cooperative cancellation with named observation points; and
-   the lifetime of tasks and captured resources, with **no implicit detached work**.
-2. **A scoped OS-thread runtime is an acceptable first implementation** and must be
-   described as exactly that. No claim of M:N scheduling, green threads, work stealing or
-   task density until implemented and measured.
-3. Tests: cancellation, a failed task, joins, channel close, blocked send and receive,
-   nested scopes, resource cleanup. Compare **permitted outcomes and invariants**, not
-   scheduling traces. No claim of deadlock freedom follows from ownership checking.
-4. Then re-run `compiler/bootstrap.sh`, because §10 requires final bootstrap verification
-   to include every compiler change delivered under this goal.
+1. A **versioned diagnostic JSON schema** with a compatibility statement, so a tool can
+   say which version it reads.
+2. A **grammar artefact** and a language guide generated from or checked against it — a
+   grammar that can drift from the parser is worse than none.
+3. A **canonical formatter**, with semantic-preservation and idempotence tests: format
+   twice, get the same bytes; format and run, get the same answer.
+4. **Machine-applicable fixes with stated preconditions** — a fix that is only usually
+   right must say so rather than be applied silently.
+5. A **capability-inventory command** reporting what this build actually supports, from
+   the same tables the compiler reads rather than from a hand-written list.
+6. **One scripted repair workflow**, end to end, that an agent could run unattended.
 
-After E: **F** (grammar artefact, versioned diagnostic JSON schema, capability inventory,
-formatter, machine-applicable fixes, one scripted repair workflow) and **G** (measurement
-suite, baselines, one evidence-driven optimisation pass, release candidate).
+Then **G**: a reproducible measurement suite, recorded baselines, one evidence-driven
+optimisation pass, and a local release candidate — with no speed claim that is not
+measured.
+
+§10 also requires the final bootstrap verification to include every compiler change made
+under this goal, so `compiler/bootstrap.sh` is re-run once F and G have landed as well.
 
 ## Unresolved decisions
 
@@ -130,7 +133,7 @@ suite, baselines, one evidence-driven optimisation pass, release candidate).
 - [x] Compiler frontend and lowering/emission in Nazm — `82645f2`; external dependencies (`clang`, libc) documented in `docs/bootstrap.md`
 - [x] C1 → C2 → C3 bootstrap with conformance and reproducibility — `82645f2`; byte-identical, caveats stated
 - [x] Ordinary independent programs compile with the Nazm-written compiler — 5 conformance cases plus ~40 end-to-end programs
-- [ ] Structured concurrency: transfer/capture rules, cancellation, cleanup
+- [x] Structured concurrency: transfer/capture rules, cancellation, cleanup — specified in `docs/spec.md`, interpreted, and compiled; 26 tests, all deadline-bounded
 - [ ] Developer interfaces, grammar/guide, formatting, repair workflow
 - [ ] Performance baselines, profiling/optimisation pass, no unsupported speed claims
 - [x] Clean rebuild of the integrated state on a supported target — fresh copy, offline, 443 tests

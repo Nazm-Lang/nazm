@@ -47,7 +47,7 @@ use std::fmt::Write as _;
 
 use nazm_span::Span;
 
-use crate::ir::{ArithOp, Block, Builtin, Expr, Function, Module, Stmt, Ty};
+use crate::ir::{ArithOp, Block, Builtin, Expr, FuncId, Function, Module, Stmt, Ty};
 
 /// What this emitter has been verified against, recorded so a reader does not have to
 /// infer portability from silence.
@@ -84,6 +84,25 @@ struct Emitter {
     /// language's rule (`docs/roadmap.md`, *Where a loop target binds*). Cleared at every
     /// function boundary, so no target can leak from one function into another.
     loops: Vec<Targets>,
+    /// Open `scope` blocks, innermost last, each as the SSA value of its list of tasks.
+    ///
+    /// A list rather than a counter because the join has to be emitted on **every** way
+    /// out of a scope — falling off the end, and every `return`, `break` or `continue`
+    /// that leaves it — and each of those needs the right list.
+    ///
+    /// The allocation dominates the whole body, including any loop inside it, so naming
+    /// the SSA value directly is valid wherever a join has to be written.
+    scopes: Vec<u32>,
+    /// The task trampolines, accumulated while functions are emitted and appended after
+    /// them. One per `spawn` site: it unpacks that site's argument block and calls the
+    /// function with the types that site established.
+    tasks: String,
+    /// Whether `scope` and `spawn` are reached, and with them the thread helpers.
+    needs_tasks: bool,
+    /// How many trampolines have been generated, which is what names the next one.
+    task_count: usize,
+    /// Whether a channel is reached.
+    needs_channels: bool,
     /// Whether the I/O helpers and the argument globals are reached.
     needs_io: bool,
     /// Whether `str_join`'s helper is reached.
@@ -101,6 +120,13 @@ struct Emitter {
 struct Targets {
     head: String,
     exit: String,
+    /// How many scopes were open when this loop started.
+    ///
+    /// A `break` joins the scopes opened **inside** the loop and no others: the ones
+    /// around the loop are still running and are joined by their own closing braces.
+    /// Recording the depth here is what tells the two apart — the same shape the Nazm
+    /// parser's per-expression stack base has, for the same reason.
+    scope_depth: usize,
 }
 
 /// What emitting an expression produced.
@@ -298,13 +324,22 @@ impl Emitter {
     ///
     /// The failure block ends in `unreachable`, so it is never a predecessor of anything:
     /// a `phi` downstream cannot receive an incoming value from a path that terminated.
-    fn guard(&mut self, cond: u32, failure: &Failure, span_offset: u32) {
+    /// The exact bytes a failure prints, interned, as `(symbol, length)`.
+    ///
+    /// Split out of [`Self::guard`] because a runtime helper that can fail — the one
+    /// behind `chan_recv` — has to be *given* its message: it is one function serving
+    /// every call site, and the position in the text is the call site's, not its own.
+    fn failure_text(&mut self, failure: &Failure, span_offset: u32) -> (String, usize) {
         let (line, col) = self.position(span_offset);
         let text = format!(
             "nazm: error[{}]: {} at {}:{line}:{col}\n",
             failure.code, failure.message, self.file
         );
-        let (sym, len) = self.intern(&text);
+        self.intern(&text)
+    }
+
+    fn guard(&mut self, cond: u32, failure: &Failure, span_offset: u32) {
+        let (sym, len) = self.failure_text(failure, span_offset);
         let fail = self.fresh();
         let cont = self.fresh();
         let _ = writeln!(self.out, "  br i1 %{cond}, label %b{fail}, label %b{cont}");
@@ -370,13 +405,18 @@ impl Emitter {
                     then_body,
                     else_body,
                 } => self.statement_if(cond, then_body, else_body.as_deref()),
-                // Its own `ret`, not a branch to a shared exit. Nothing needs cleanup
-                // on the way out yet, so an epilogue block would be scaffolding for a
-                // requirement that does not exist. An operand that transfers instead
-                // wins outright — the `break` in `return if c { break; } else { 1 };`
-                // leaves the loop and no `ret` is written, matching `take!`.
+                // Its own `ret`, not a branch to a shared exit. An operand that
+                // transfers instead wins outright — the `break` in
+                // `return if c { break; } else { 1 };` leaves the loop and no `ret` is
+                // written, matching `take!`.
+                //
+                // The value is produced **before** the joins, and the joins before the
+                // `ret`: a `return` inside a `scope` still waits for that scope's tasks,
+                // which is the whole of what a scope promises. The order is the
+                // interpreter's — evaluate, join, then leave.
                 Stmt::Return(e) => {
                     if let Val::Of { value, ty } = self.expr(e) {
+                        self.join_through(0);
                         let _ = writeln!(self.out, "  ret {} %{value}", ty.llvm());
                     }
                     Reach::Transferred
@@ -389,6 +429,13 @@ impl Emitter {
                     self.transfer(|t| &t.head);
                     Reach::Transferred
                 }
+                Stmt::Scope { body, span } => self.scope(body, *span),
+                Stmt::Spawn {
+                    callee,
+                    args,
+                    ret,
+                    span,
+                } => self.spawn(*callee, args, *ret, *span),
             };
             if reach == Reach::Transferred {
                 return Reach::Transferred;
@@ -407,8 +454,188 @@ impl Emitter {
     fn transfer(&mut self, pick: impl Fn(&Targets) -> &String) {
         if let Some(target) = self.loops.last() {
             let label = pick(target).clone();
+            let depth = target.scope_depth;
+            // Only the scopes opened inside this loop. The ones around it are still
+            // running, and joining them here would wait for tasks the loop never started.
+            self.join_through(depth);
             let _ = writeln!(self.out, "  br label %{label}");
         }
+    }
+
+    /// Join every open scope from the innermost down to `depth`, innermost first.
+    ///
+    /// Innermost first because that is the nesting: an inner scope's tasks are contained
+    /// by the outer one, and waiting for the outer first would be waiting for a task that
+    /// has not been allowed to finish.
+    fn join_through(&mut self, depth: usize) {
+        for tids in self.scopes.clone().into_iter().skip(depth).rev() {
+            let _ = writeln!(self.out, "  call void @nz.scope_join(ptr %{tids})");
+        }
+    }
+
+    /// `scope { body }` — a list of tasks, the body, and the wait.
+    ///
+    /// The list is an ordinary sequence header, reused rather than reinvented: a task
+    /// handle is pointer-sized and a growable array of them is exactly what
+    /// `@nz.arr_new` already provides.
+    ///
+    /// A scope inside a loop allocates a fresh list each time round, because the
+    /// statement is reached each time round. Nothing is ever freed, here as everywhere
+    /// else (`docs/spec.md`).
+    fn scope(&mut self, body: &[Stmt], span: Span) -> Reach {
+        self.needs_sequences = true;
+        self.needs_tasks = true;
+        let tids = self.fresh();
+        let _ = writeln!(self.out, "  %{tids} = call ptr @nz.arr_new()");
+        let null = self.fresh();
+        let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{tids}, null");
+        self.guard(
+            null,
+            &Failure {
+                code: "N0406",
+                message: "out of memory".to_owned(),
+            },
+            span.start,
+        );
+
+        self.scopes.push(tids);
+        let reach = self.stmts(body);
+        self.scopes.pop();
+        // A body that transferred has already emitted its joins on the way out, at the
+        // point it left from — writing one here as well would append to a block that
+        // already has a terminator.
+        if reach == Reach::FallsThrough {
+            let _ = writeln!(self.out, "  call void @nz.scope_join(ptr %{tids})");
+        }
+        reach
+    }
+
+    /// `spawn f(args);` — pack the arguments, start the thread, record it for the join.
+    ///
+    /// # Why the arguments are copied to the heap
+    ///
+    /// The task outlives this stack frame by construction, so it cannot be handed a
+    /// pointer into it. One allocation per spawn carries the whole argument list, and its
+    /// first eight bytes are the thread handle — so the list the scope joins holds one
+    /// pointer per task and needs no second allocation.
+    fn spawn(&mut self, callee: FuncId, args: &[Expr], ret: Ty, span: Span) -> Reach {
+        self.needs_sequences = true;
+        self.needs_tasks = true;
+
+        let mut vals = Vec::new();
+        for a in args {
+            match self.expr(a) {
+                Val::Of { value, ty } => vals.push((value, ty)),
+                Val::Transferred => return Reach::Transferred,
+            }
+        }
+
+        // The handle first, then each argument at its own offset. `Str` is sixteen
+        // bytes; everything else is eight, which keeps every offset a multiple of eight
+        // and so correctly aligned for whatever is stored there.
+        let mut offsets = Vec::new();
+        let mut size = 8u64;
+        for (_, ty) in &vals {
+            offsets.push(size);
+            size += if *ty == Ty::Str { 16 } else { 8 };
+        }
+
+        let blk = self.fresh();
+        let _ = writeln!(self.out, "  %{blk} = call ptr @malloc(i64 {size})");
+        let null = self.fresh();
+        let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{blk}, null");
+        self.guard(
+            null,
+            &Failure {
+                code: "N0406",
+                message: "out of memory".to_owned(),
+            },
+            span.start,
+        );
+
+        for ((value, ty), offset) in vals.iter().zip(&offsets) {
+            let slot = self.fresh();
+            let _ = writeln!(
+                self.out,
+                "  %{slot} = getelementptr i8, ptr %{blk}, i64 {offset}"
+            );
+            let _ = writeln!(self.out, "  store {} %{value}, ptr %{slot}", ty.llvm());
+        }
+
+        let types: Vec<Ty> = vals.iter().map(|(_, t)| *t).collect();
+        let trampoline = self.trampoline(callee, ret, &types, &offsets);
+        let tids = self.scopes.last().copied().unwrap_or_default();
+        let rc = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{rc} = call i32 @nz.spawn(ptr %{tids}, ptr @{trampoline}, ptr %{blk})"
+        );
+        let oom = self.fresh();
+        let _ = writeln!(self.out, "  %{oom} = icmp eq i32 %{rc}, -1");
+        self.guard(
+            oom,
+            &Failure {
+                code: "N0406",
+                message: "out of memory".to_owned(),
+            },
+            span.start,
+        );
+        let bad = self.fresh();
+        let _ = writeln!(self.out, "  %{bad} = icmp sgt i32 %{rc}, 0");
+        self.guard(
+            bad,
+            &Failure {
+                code: "N0404",
+                // The interpreter's wording for the same failure: each task is an
+                // operating-system thread, and running out of them is a limit of the
+                // machine rather than anything about the program.
+                message: "this task could not be started".to_owned(),
+            },
+            span.start,
+        );
+        Reach::FallsThrough
+    }
+
+    /// The `void *(void *)` function a thread actually starts in.
+    ///
+    /// `pthread_create` takes one pointer, so every spawn site needs a small function
+    /// that unpacks its own argument block and calls the Nazm function with the types
+    /// that site established. One per site rather than one per callee: two spawns of the
+    /// same function are the same trampoline only if their argument types match, and
+    /// generating per site makes that true without having to check it.
+    fn trampoline(&mut self, callee: FuncId, ret: Ty, types: &[Ty], offsets: &[u64]) -> String {
+        let name = format!("nz.task{}", self.taskno());
+        let mut body = String::new();
+        let _ = writeln!(&mut body, "\ndefine internal ptr @{name}(ptr %a) {{");
+        let _ = writeln!(&mut body, "entry:");
+        let mut passed = Vec::new();
+        for (i, (ty, offset)) in types.iter().zip(offsets).enumerate() {
+            let _ = writeln!(
+                &mut body,
+                "  %p{i} = getelementptr i8, ptr %a, i64 {offset}"
+            );
+            let _ = writeln!(&mut body, "  %v{i} = load {}, ptr %p{i}", ty.llvm());
+            passed.push(format!("{} %v{i}", ty.llvm()));
+        }
+        // The task's return value is discarded, which `docs/spec.md` says outright:
+        // results travel through channels, so there is one mechanism rather than two.
+        let ret = ret.llvm();
+        let _ = writeln!(
+            &mut body,
+            "  %r = call {ret} {}({})",
+            callee.symbol(),
+            passed.join(", ")
+        );
+        let _ = writeln!(&mut body, "  ret ptr null");
+        let _ = writeln!(&mut body, "}}");
+        self.tasks.push_str(&body);
+        name
+    }
+
+    fn taskno(&mut self) -> usize {
+        let n = self.task_count;
+        self.task_count += 1;
+        n
     }
 
     /// `while`, as a condition block, a body block, a back edge and an exit block.
@@ -461,6 +688,7 @@ impl Emitter {
         self.loops.push(Targets {
             head: head.clone(),
             exit: exit.clone(),
+            scope_depth: self.scopes.len(),
         });
         let reach = self.stmts(body);
         self.loops.pop();
@@ -990,6 +1218,85 @@ impl Emitter {
                     ty: Ty::Str,
                 };
             }
+            // A channel is a pointer to a runtime header holding a bounded queue, a
+            // mutex and a condition variable. Every one of these four is a
+            // synchronisation point, which is why a `Chan` may cross into a task and a
+            // sequence may not (`docs/spec.md`, *Structured concurrency*).
+            Builtin::ChanNew => {
+                self.needs_channels = true;
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{bad} = icmp slt i64 %{}, 1", arg(0));
+                self.require(bad, "a channel needs a capacity of at least 1", span);
+                let c = self.fresh();
+                let _ = writeln!(self.out, "  %{c} = call ptr @nz.chan_new(i64 %{})", arg(0));
+                let null = self.fresh();
+                let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{c}, null");
+                self.guard(
+                    null,
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    span.start,
+                );
+                return Val::Of {
+                    value: c,
+                    ty: Ty::Chan,
+                };
+            }
+            Builtin::ChanSend => {
+                self.needs_channels = true;
+                let ok = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{ok} = call i1 @nz.chan_send(ptr %{}, i64 %{})",
+                    arg(0),
+                    arg(1)
+                );
+                return Val::Of {
+                    value: ok,
+                    ty: Ty::Bool,
+                };
+            }
+            // The received value is pushed onto the sequence by the helper rather than
+            // returned and pushed here, because the push happens only when there **was**
+            // a value and a call site cannot branch without a block of its own. The
+            // failure text is passed in: the helper is shared and the position is not.
+            Builtin::ChanRecv => {
+                self.needs_channels = true;
+                self.needs_sequences = true;
+                let (sym, len) = self.failure_text(
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    span.start,
+                );
+                let ok = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{ok} = call i1 @nz.chan_recv(ptr %{}, ptr %{}, ptr {sym}, i64 {len})",
+                    arg(0),
+                    arg(1)
+                );
+                return Val::Of {
+                    value: ok,
+                    ty: Ty::Bool,
+                };
+            }
+            Builtin::ChanClose => {
+                self.needs_channels = true;
+                let _ = writeln!(self.out, "  call void @nz.chan_close(ptr %{})", arg(0));
+                // The language has no unit type and `chan_close` is specified to produce
+                // `Int`. Zero, materialised rather than invented: a constant cannot be
+                // returned as an SSA value without an instruction to hold it.
+                let z = self.fresh();
+                let _ = writeln!(self.out, "  %{z} = add i64 0, 0");
+                return Val::Of {
+                    value: z,
+                    ty: Ty::Int,
+                };
+            }
             Builtin::IntsPop | Builtin::StrsPop => {
                 let seq = op.sequence().unwrap_or(Ty::Ints);
                 let elem = seq.element().unwrap_or(Ty::Int);
@@ -1356,6 +1663,11 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
         lines: line_starts,
         source_len: source.len(),
         loops: Vec::new(),
+        scopes: Vec::new(),
+        tasks: String::new(),
+        needs_tasks: false,
+        task_count: 0,
+        needs_channels: false,
         needs_sequences: false,
         needs_io: false,
         needs_join: false,
@@ -1389,6 +1701,13 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
     );
     let _ = writeln!(e.out, "  ret i32 0");
     let _ = writeln!(e.out, "}}");
+
+    // Both helper sets grow a sequence, so either one reaching means the sequence
+    // runtime is reached too. Deriving it here rather than at each use keeps the two
+    // facts from drifting apart.
+    if e.needs_tasks || e.needs_channels {
+        e.needs_sequences = true;
+    }
 
     let mut head = String::new();
     let _ = writeln!(head, "; Generated by nazm build. Do not edit.");
@@ -1446,6 +1765,26 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
     );
     let _ = writeln!(head, "declare i64 @write(i32, ptr, i64)");
     let _ = writeln!(head, "declare void @exit(i32) noreturn");
+    if e.needs_tasks {
+        for d in [
+            "declare i32 @pthread_create(ptr, ptr, ptr, ptr)",
+            "declare i32 @pthread_join(ptr, ptr)",
+        ] {
+            let _ = writeln!(head, "{d}");
+        }
+    }
+    if e.needs_channels {
+        for d in [
+            "declare i32 @pthread_mutex_init(ptr, ptr)",
+            "declare i32 @pthread_mutex_lock(ptr)",
+            "declare i32 @pthread_mutex_unlock(ptr)",
+            "declare i32 @pthread_cond_init(ptr, ptr)",
+            "declare i32 @pthread_cond_wait(ptr, ptr)",
+            "declare i32 @pthread_cond_broadcast(ptr)",
+        ] {
+            let _ = writeln!(head, "{d}");
+        }
+    }
     head.push('\n');
     // `%lld\n`: the full signed 64-bit value in decimal. Encoding the result in the exit
     // status instead would truncate it to 8 bits, which for a language whose `Int` is
@@ -1505,9 +1844,18 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
     if e.needs_join {
         head.push_str(JOIN_RUNTIME);
     }
+    if e.needs_tasks {
+        head.push_str(TASK_RUNTIME);
+    }
+    if e.needs_channels {
+        head.push_str(CHANNEL_RUNTIME);
+    }
     head.push('\n');
 
-    head + &e.out
+    // The trampolines last: they call the functions in `out`, and putting them after
+    // reads in the order a person would want them — the program, then the scaffolding
+    // that lets a thread enter it.
+    head + &e.out + &e.tasks
 }
 
 /// `str_join`, as generated LLVM.
@@ -1844,6 +2192,250 @@ fn escape(s: &str) -> String {
     }
     out
 }
+
+/// Starting a task, and waiting for one, as generated LLVM.
+///
+/// # The slot is reserved before the thread starts
+///
+/// `@nz.spawn` records the task **first** and undoes the record if `pthread_create`
+/// fails. A thread that started and could not be recorded would never be joined, and a
+/// scope that cannot join a task it started is not a scope — so the failure that must not
+/// happen is "started but untracked", and this is the order that makes it impossible.
+///
+/// # What is stored
+///
+/// One pointer per task: the argument block, whose first eight bytes `pthread_create`
+/// writes the thread handle into. The block is allocated by the spawn site anyway, so
+/// using its head as the handle's storage costs nothing and keeps the list to one
+/// allocation.
+///
+/// Returns `0` on success, `-1` when the list could not grow, and `1` when the thread
+/// could not be started. The call site turns those into `N0406` and `N0404`.
+const TASK_RUNTIME: &str = r"
+define internal i32 @nz.spawn(ptr %h, ptr %fn, ptr %blk) {
+entry:
+  %data = call ptr @nz.arr_grow(ptr %h, i64 8)
+  %oom = icmp eq ptr %data, null
+  br i1 %oom, label %nomem, label %record
+nomem:
+  ret i32 -1
+record:
+  %len = load i64, ptr %h
+  %slot = getelementptr i64, ptr %data, i64 %len
+  %raw = ptrtoint ptr %blk to i64
+  store i64 %raw, ptr %slot
+  %next = add i64 %len, 1
+  store i64 %next, ptr %h
+  %rc = call i32 @pthread_create(ptr %blk, ptr null, ptr %fn, ptr %blk)
+  %bad = icmp ne i32 %rc, 0
+  br i1 %bad, label %undo, label %ok
+undo:
+  store i64 %len, ptr %h
+  ret i32 1
+ok:
+  ret i32 0
+}
+
+define internal void @nz.scope_join(ptr %h) {
+entry:
+  ; The count is read once. Nothing can be added while this runs: the scope's body has
+  ; finished by every path that reaches here, and a task cannot spawn into its parent.
+  %n = load i64, ptr %h
+  %dp = getelementptr i8, ptr %h, i64 16
+  %data = load ptr, ptr %dp
+  br label %test
+test:
+  %i = phi i64 [ 0, %entry ], [ %next, %body ]
+  %more = icmp slt i64 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %ep = getelementptr i64, ptr %data, i64 %i
+  %raw = load i64, ptr %ep
+  %blk = inttoptr i64 %raw to ptr
+  %tid = load ptr, ptr %blk
+  %rc = call i32 @pthread_join(ptr %tid, ptr null)
+  %next = add i64 %i, 1
+  br label %test
+done:
+  ret void
+}
+";
+
+/// A bounded channel, as generated LLVM: one mutex, one condition variable, one ring.
+///
+/// The header is `{ i64 cap, i64 len, i64 head, i64 closed, ptr data, ptr mutex, ptr cond }`.
+///
+/// # One condition variable, broadcast every time
+///
+/// Senders and receivers wait on the same variable and every change wakes all of them.
+/// Not the fastest arrangement and the obviously correct one — `docs/spec.md` promises no
+/// fairness, and a signal-one scheme has to be right about *which* one, which is where
+/// the lost-wakeup bugs live. The interpreter's `Channel` is built the same way, so the
+/// two agree by construction rather than by testing.
+///
+/// # The waits are loops
+///
+/// `pthread_cond_wait` may return without the condition holding. Every wait here is
+/// inside a loop that re-reads the state, which is the only correct way to use one.
+const CHANNEL_RUNTIME: &str = r"
+define internal ptr @nz.chan_new(i64 %cap) {
+entry:
+  %c = call ptr @malloc(i64 56)
+  %bad = icmp eq ptr %c, null
+  br i1 %bad, label %fail, label %ring
+fail:
+  ret ptr null
+ring:
+  %bytes = mul i64 %cap, 8
+  %d = call ptr @malloc(i64 %bytes)
+  %badd = icmp eq ptr %d, null
+  br i1 %badd, label %fail, label %lock
+lock:
+  ; Sized generously on purpose: pthread_mutex_t and pthread_cond_t are opaque and
+  ; differently sized on every platform, and there is no header to ask from here.
+  ; Over-allocating is what makes this portable without a size to get wrong.
+  %m = call ptr @malloc(i64 128)
+  %badm = icmp eq ptr %m, null
+  br i1 %badm, label %fail, label %cond
+cond:
+  %v = call ptr @malloc(i64 128)
+  %badv = icmp eq ptr %v, null
+  br i1 %badv, label %fail, label %init
+init:
+  %mi = call i32 @pthread_mutex_init(ptr %m, ptr null)
+  %vi = call i32 @pthread_cond_init(ptr %v, ptr null)
+  store i64 %cap, ptr %c
+  %lenp = getelementptr i8, ptr %c, i64 8
+  store i64 0, ptr %lenp
+  %headp = getelementptr i8, ptr %c, i64 16
+  store i64 0, ptr %headp
+  %closedp = getelementptr i8, ptr %c, i64 24
+  store i64 0, ptr %closedp
+  %datap = getelementptr i8, ptr %c, i64 32
+  store ptr %d, ptr %datap
+  %mp = getelementptr i8, ptr %c, i64 40
+  store ptr %m, ptr %mp
+  %vp = getelementptr i8, ptr %c, i64 48
+  store ptr %v, ptr %vp
+  ret ptr %c
+}
+
+define internal i1 @nz.chan_send(ptr %c, i64 %v) {
+entry:
+  %mp = getelementptr i8, ptr %c, i64 40
+  %m = load ptr, ptr %mp
+  %vp = getelementptr i8, ptr %c, i64 48
+  %cv = load ptr, ptr %vp
+  %lenp = getelementptr i8, ptr %c, i64 8
+  %headp = getelementptr i8, ptr %c, i64 16
+  %closedp = getelementptr i8, ptr %c, i64 24
+  %datap = getelementptr i8, ptr %c, i64 32
+  %l = call i32 @pthread_mutex_lock(ptr %m)
+  br label %check
+check:
+  ; Closed is tested first and on every pass, so a channel closed while this sender
+  ; waited refuses rather than queueing into something nobody will drain.
+  %closed = load i64, ptr %closedp
+  %isclosed = icmp ne i64 %closed, 0
+  br i1 %isclosed, label %refuse, label %space
+space:
+  %len = load i64, ptr %lenp
+  %cap = load i64, ptr %c
+  %full = icmp sge i64 %len, %cap
+  br i1 %full, label %wait, label %store
+wait:
+  %w = call i32 @pthread_cond_wait(ptr %cv, ptr %m)
+  br label %check
+refuse:
+  %u1 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i1 false
+store:
+  %head = load i64, ptr %headp
+  %sum = add i64 %head, %len
+  %idx = urem i64 %sum, %cap
+  %data = load ptr, ptr %datap
+  %slot = getelementptr i64, ptr %data, i64 %idx
+  store i64 %v, ptr %slot
+  %n1 = add i64 %len, 1
+  store i64 %n1, ptr %lenp
+  %b = call i32 @pthread_cond_broadcast(ptr %cv)
+  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i1 true
+}
+
+define internal i1 @nz.chan_recv(ptr %c, ptr %seq, ptr %msg, i64 %mn) {
+entry:
+  %mp = getelementptr i8, ptr %c, i64 40
+  %m = load ptr, ptr %mp
+  %vp = getelementptr i8, ptr %c, i64 48
+  %cv = load ptr, ptr %vp
+  %lenp = getelementptr i8, ptr %c, i64 8
+  %headp = getelementptr i8, ptr %c, i64 16
+  %closedp = getelementptr i8, ptr %c, i64 24
+  %datap = getelementptr i8, ptr %c, i64 32
+  %l = call i32 @pthread_mutex_lock(ptr %m)
+  br label %check
+check:
+  ; A queued value wins over the close flag, which is what makes closing end a channel
+  ; rather than discard what is in it.
+  %len = load i64, ptr %lenp
+  %empty = icmp sle i64 %len, 0
+  br i1 %empty, label %maybe, label %take
+maybe:
+  %closed = load i64, ptr %closedp
+  %isclosed = icmp ne i64 %closed, 0
+  br i1 %isclosed, label %drained, label %wait
+wait:
+  %w = call i32 @pthread_cond_wait(ptr %cv, ptr %m)
+  br label %check
+drained:
+  %u1 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i1 false
+take:
+  %head = load i64, ptr %headp
+  %cap = load i64, ptr %c
+  %data = load ptr, ptr %datap
+  %slot = getelementptr i64, ptr %data, i64 %head
+  %val = load i64, ptr %slot
+  %h1 = add i64 %head, 1
+  %nh = urem i64 %h1, %cap
+  store i64 %nh, ptr %headp
+  %n1 = sub i64 %len, 1
+  store i64 %n1, ptr %lenp
+  %b = call i32 @pthread_cond_broadcast(ptr %cv)
+  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  ; The push happens after the unlock. Growing a sequence may call `realloc`, and holding
+  ; a channel's mutex across an allocation would make every other task on it wait for the
+  ; allocator.
+  %grown = call ptr @nz.arr_grow(ptr %seq, i64 8)
+  %oom = icmp eq ptr %grown, null
+  br i1 %oom, label %nomem, label %push
+nomem:
+  call void @nz.fail(ptr %msg, i64 %mn)
+  unreachable
+push:
+  %sn = load i64, ptr %seq
+  %sslot = getelementptr i64, ptr %grown, i64 %sn
+  store i64 %val, ptr %sslot
+  %sn1 = add i64 %sn, 1
+  store i64 %sn1, ptr %seq
+  ret i1 true
+}
+
+define internal void @nz.chan_close(ptr %c) {
+entry:
+  %mp = getelementptr i8, ptr %c, i64 40
+  %m = load ptr, ptr %mp
+  %vp = getelementptr i8, ptr %c, i64 48
+  %cv = load ptr, ptr %vp
+  %l = call i32 @pthread_mutex_lock(ptr %m)
+  %closedp = getelementptr i8, ptr %c, i64 24
+  store i64 1, ptr %closedp
+  %b = call i32 @pthread_cond_broadcast(ptr %cv)
+  %u = call i32 @pthread_mutex_unlock(ptr %m)
+  ret void
+}
+";
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

@@ -649,8 +649,14 @@ scope's closing brace.
 
 #### What this model does not promise
 
-**The runtime is one operating-system thread per task, and that is all it is.** Every one
-of the following is *not* claimed, because none of it is implemented:
+**The runtime is one operating-system thread per task, and that is all it is.** That is
+true of both implementations: `nazm run` uses a thread per task and a mutex and condition
+variable per channel, and `nazm build` emits `pthread_create`, `pthread_join` and the
+same mutex-and-condition-variable ring. The two are written the same way on purpose, so
+that they agree by construction rather than by testing — though they are tested against
+each other as well, at both optimisation levels.
+
+Every one of the following is *not* claimed, because none of it is implemented:
 
 - No M:N scheduling, no green threads, no work stealing, no task density. A program that
   spawns ten thousand tasks will try to create ten thousand OS threads.

@@ -640,6 +640,7 @@ fn run_and_check_are_unchanged_by_the_new_subcommand() {
         ("examples/sum.nz", "6074"),
         ("examples/primes.nz", "1060"),
         ("examples/search.nz", "1723"),
+        ("examples/pipeline.nz", "42925"),
     ] {
         let path = root.join(file);
         let out = Command::new(NAZM)

@@ -42,10 +42,11 @@ literals, `let` and `let mut` bindings, immutable parameters, assignment, `while
 `break` and `continue`, `return`, unary `-`, `+ - * / %`, the comparisons
 `== != < <= > >=`, `if` in **both statement and value position**, and non-recursive
 direct calls — plus `Str` as a byte sequence, the `Ints` and `Strs` growable sequences,
-and the outside-world built-ins (arguments, files, output, exit). `docs/roadmap.md`
-carries the conformance table. What is left outside — recursion, bare blocks used as
-expressions, records, modules, concurrency — is **refused by name** after ordinary
-checking, with no partial compilation, and still runs under `nazm run`. The arithmetic the specification
+and the outside-world built-ins (arguments, files, output, exit), and structured
+concurrency — `scope`, `spawn` and the bounded `Chan`, compiled to one POSIX thread per
+task. `docs/roadmap.md` carries the conformance table. What is left outside — recursion,
+bare blocks used as expressions, records, modules — is **refused by name** after
+ordinary checking, with no partial compilation, and still runs under `nazm run`. The arithmetic the specification
 promises is preserved rather than inherited from the hardware: overflow is a checked
 intrinsic and a branch (never `nsw`, which would let the optimiser delete the check),
 `Int::MIN / -1` fails, and `Int::MIN % -1` is `0`. See

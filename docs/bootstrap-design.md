@@ -110,6 +110,21 @@ intermediate strings, so string building uses an array plus one join rather than
 concatenation. A real allocator with reclamation is future work, and the interface here
 is chosen so that adding one does not change any program's meaning.
 
+## What the bootstrap compiler deliberately does not accept
+
+The compiler written in Nazm handles the subset above and no more. Where the language has
+since grown past it, the compiler must **say so by name** rather than fail some other
+way, because a gap and a decision look identical from the outside and only one of them is
+acceptable.
+
+| Left out | Where it is refused | Why |
+| --- | --- | --- |
+| `chan_new`, `chan_send`, `chan_recv`, `chan_close` | `outside_bootstrap_subset` in `compiler/analyse.nz` | The compiler is single-threaded and uses no channel. `crates/nazm-cli/tests/selfhost.rs` requires this list to be exactly these four, so adding a built-in and forgetting the compiler is a test failure rather than a surprise |
+| `scope`, `spawn` | `compiler/parse.nz`, as unexpected tokens | Both are reserved words in `compiler/lex.nz` even so, because the two lexers must agree on every input — a word that is a keyword to one and an identifier to the other is a divergence the differential test would have to excuse |
+
+The *Rust* backend compiles all of these. The split is between the language and its
+bootstrap compiler, not between the language and native code.
+
 ## What this design does *not* settle
 
 - Concurrency (Milestone E) shares none of this and is designed separately.

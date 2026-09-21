@@ -47,7 +47,8 @@
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 use nazm_syntax::{
-    BinOp as AstOp, Block as AstBlock, Expr as AstExpr, Function as AstFn, Program, Stmt as AstStmt,
+    BinOp as AstOp, Block as AstBlock, Expr as AstExpr, Function as AstFn, Program,
+    Spawn as AstSpawn, Stmt as AstStmt,
 };
 
 use std::collections::HashMap;
@@ -63,7 +64,8 @@ const SUBSET: &str = "`nazm build` currently compiles functions over `Int`, `Boo
                       `-`, the operators `+ - * / %`, the comparisons `== != < <= > >=`, \
                       parentheses, `if` in both statement and value position, the \
                       built-ins `str_len` `str_byte` `str_slice` `str_concat` \
-                      `int_to_str`, and non-recursive direct calls — with \
+                      `int_to_str`, non-recursive direct calls, and structured \
+                      concurrency (`scope`, `spawn` and `Chan`) — with \
                       `fn main() -> Int` as the entry point. Everything else still runs \
                       under `nazm run`";
 
@@ -318,6 +320,7 @@ fn native_ty(name: &str) -> Option<Ty> {
         "Str" => Some(Ty::Str),
         "Ints" => Some(Ty::Ints),
         "Strs" => Some(Ty::Strs),
+        "Chan" => Some(Ty::Chan),
         _ => None,
     }
 }
@@ -585,11 +588,25 @@ fn lower_stmts(ctx: &mut Ctx, statements: &[AstStmt]) -> (Vec<Stmt>, Ends) {
             }
             AstStmt::Assign(a) => stmts.extend(lower_assign(ctx, a)),
             AstStmt::While(w) => stmts.extend(lower_while(ctx, w)),
-            // Concurrency is frontend-only for now: `nazm run` executes it and
-            // `nazm build` refuses it by name, which is the same
-            // frontend-validity/backend-coverage split every other gap here uses.
-            AstStmt::Scope(sc) => ctx.unsupported(sc.span, "`scope`"),
-            AstStmt::Spawn(sp) => ctx.unsupported(sp.span, "`spawn`"),
+            AstStmt::Scope(sc) => {
+                // Its own scope in the language too: a binding made inside `scope { … }`
+                // does not outlive it, exactly as in any other block.
+                let (body, ends) = ctx.scoped(|ctx| lower_body(ctx, &sc.body));
+                stmts.push(Stmt::Scope {
+                    body,
+                    span: sc.span,
+                });
+                // A `scope` whose body always transfers transfers too — after the join,
+                // which emission is what arranges. Nothing after it can run.
+                if ends == Ends::Transfers {
+                    return (stmts, Ends::Transfers);
+                }
+            }
+            AstStmt::Spawn(sp) => {
+                if let Some(stmt) = lower_spawn(ctx, sp) {
+                    stmts.push(stmt);
+                }
+            }
             AstStmt::Return(r) => {
                 if let Some(stmt) = lower_return(ctx, r) {
                     stmts.push(stmt);
@@ -884,6 +901,91 @@ fn lower_expr(ctx: &mut Ctx, e: &AstExpr) -> Option<Expr> {
             None
         }
     }
+}
+
+/// `spawn f(args);`
+///
+/// Shaped like [`lower_call`] and deliberately not sharing its body: a spawn resolves a
+/// **name**, not an expression, produces no value, and can never be a built-in. Folding
+/// the two together would mean a call path carrying a "was this a spawn" flag through
+/// every branch of it.
+fn lower_spawn(ctx: &mut Ctx, sp: &AstSpawn) -> Option<Stmt> {
+    // Every argument, even when the callee turns out to be unusable, so a spawn with two
+    // bad arguments reports both.
+    let lowered: Vec<Option<Expr>> = sp.args.iter().map(|a| lower_expr(ctx, a)).collect();
+
+    if Builtin::by_name(&sp.callee).is_some() {
+        // The checker refuses this first. Saying it here too costs one line and means a
+        // lowering reached without the checker still reports rather than emitting a call
+        // to a symbol that does not exist.
+        ctx.unsupported(
+            sp.callee_span,
+            &format!(
+                "`spawn {}`, which is a built-in rather than a function",
+                sp.callee
+            ),
+        );
+        return None;
+    }
+
+    let Some(Sig { id, params, ret }) = ctx.sigs.get(&sp.callee) else {
+        ctx.unsupported(
+            sp.callee_span,
+            &format!(
+                "a task running `{}`, whose signature this backend refused",
+                sp.callee
+            ),
+        );
+        return None;
+    };
+    let (id, ret, params) = (*id, *ret, params.clone());
+
+    // A task is an edge in the call graph like any other. `fn f() { scope { spawn f(); } }`
+    // is recursion, and the fact that it goes through a thread does not make the stack
+    // depth bounded.
+    if let Some(edges) = ctx.calls.get_mut(ctx.current.0) {
+        edges.push((id, sp.callee_span));
+    }
+
+    let args: Vec<Expr> = lowered.into_iter().collect::<Option<_>>()?;
+    if args.len() != params.len() || !args.iter().zip(&params).all(|(a, want)| fits(a, *want)) {
+        ctx.errors.push(
+            Diagnostic::error(
+                codes::UNSUPPORTED_CONSTRUCT,
+                sp.callee_span,
+                format!(
+                    "`nazm build` lowered a task running `{}` with the wrong arguments",
+                    sp.callee
+                ),
+            )
+            .help("this is a bug in the compiler; `nazm run` still works"),
+        );
+        return None;
+    }
+    // The capture rule is the checker's (`N0321`): a sequence may not cross into a task.
+    // It is not re-decided here, and it is not silently relied on either — a `Ty::Ints`
+    // argument would produce a task sharing unsynchronised storage, so emission refuses
+    // one by name rather than lowering it.
+    if let Some(bad) = args.iter().find_map(|a| match a.ty() {
+        Some(t @ (Ty::Ints | Ty::Strs)) => Some(t),
+        _ => None,
+    }) {
+        ctx.unsupported(
+            sp.callee_span,
+            &format!(
+                "a task given a `{}`, which may not cross into one",
+                bad.name()
+            ),
+        );
+        return None;
+    }
+
+    Some(Stmt::Spawn {
+        callee: id,
+        args,
+        ret,
+        span: sp.span,
+    })
 }
 
 fn lower_binary(

@@ -605,6 +605,20 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
     }
 }
 
+/// Whether a source uses a construct the bootstrap compiler deliberately does not accept.
+///
+/// Decided by **lexing**, not by a list of filenames: `scope` and `spawn` are reserved
+/// words in both lexers, so a new example that uses concurrency is classified correctly
+/// without anyone remembering to add it here. A list of names is the kind of thing that
+/// is right on the day it is written.
+///
+/// `docs/bootstrap-design.md` says which constructs these are and why they are left out.
+fn outside_the_bootstrap_subset(source: &str) -> bool {
+    use nazm_core::__syntax::TokenKind as T;
+    let (tokens, _) = nazm_core::__syntax::lex(source);
+    tokens.iter().any(|t| matches!(t.kind, T::Scope | T::Spawn))
+}
+
 #[test]
 fn the_nazm_parser_agrees_with_the_reference_on_every_source_in_the_tree() {
     // The real test of a parser: whole files, including its own source and the
@@ -635,6 +649,25 @@ fn the_nazm_parser_agrees_with_the_reference_on_every_source_in_the_tree() {
         let theirs = dump_program(&program);
 
         let out = Command::new(&exe).arg(file).output().expect("run");
+        if outside_the_bootstrap_subset(&source) {
+            // A refusal, and a located one. A bootstrap parser that quietly produced
+            // *some* tree for a construct it does not handle would agree with nothing
+            // and be discovered much later — which is why this is asserted rather than
+            // skipped.
+            assert_eq!(
+                out.status.code(),
+                Some(1),
+                "{} is outside the bootstrap subset and should have been refused",
+                file.display()
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                stderr.contains("parse error at "),
+                "{}: the refusal should say where: {stderr}",
+                file.display()
+            );
+            continue;
+        }
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -878,6 +911,11 @@ fn the_nazm_checker_accepts_the_compiler_it_is_part_of() {
         // its imported names look undefined in isolation. Those files are checked as a
         // whole program by `nazm check`, which is what the assertion below uses.
         let source = std::fs::read_to_string(file).expect("read");
+        if outside_the_bootstrap_subset(&source) {
+            // Parsing fails before checking can begin, so there is nothing to compare.
+            // The refusal itself is asserted by the parser's own tree-wide test.
+            continue;
+        }
         let standalone = !source.contains("use \"");
         if standalone {
             assert!(
