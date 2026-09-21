@@ -1,6 +1,6 @@
 //! The delivery report's test counts add up to the suite's total.
 //!
-//! `docs/delivery.md` breaks 521 tests into groups. A table of numbers in prose drifts
+//! `docs/delivery.md` breaks the suite into groups. A table of numbers in prose drifts
 //! the moment anybody adds a test, and a reader has no way to tell — the numbers look
 //! exactly as authoritative either way. This does not check that each row is *right*
 //! (that needs running the suite, which is what is running this), but it does check
