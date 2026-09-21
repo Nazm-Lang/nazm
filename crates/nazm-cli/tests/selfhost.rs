@@ -567,6 +567,20 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
         "fn m() -> Int { if true { 1 } }",
         "fn m(x: Int) -> Int { if x > 0 { 1 } else { 0 - 1 } }",
         "fn m() -> Int { let x = if true { 1 } else { 2 }; x }",
+        // An expression suspended at an `if`'s block, where the block assigns, and then
+        // resumed. The Nazm parser keeps a stack of operator-stack floors, one per
+        // pending expression, and reads its top when it resumes — so a statement that
+        // pushes more floors than it pops leaves a stale one on top for exactly this
+        // shape. Nothing else in this list suspends an expression *across* an
+        // assignment.
+        "fn m() -> Int { let mut a = 0; let x = if true { a = 5; a } else { 3 }; x + a }",
+        "fn m() -> Int { let x = if true { let mut y = 1; y = 2; y } else { 3 }; x }",
+        "fn m(c: Bool) -> Int { let mut a = 1; let x = if c { a = a + 1; a } else { a = a * 2; a }; x + a }",
+        // The same shape with an operator already pending when the `if` suspends: the
+        // `+` sits on the operator stack *below* the `if`'s sentinel, so a floor that
+        // came back too high would leave it unpopped and reassociate the expression.
+        "fn m() -> Int { let mut a = 0; let x = 1 + if true { a = 5; a } else { 3 }; x + a }",
+        "fn m(c: Bool) -> Int { let mut a = 2; let x = 1 + 2 * if c { a = 3; a } else { 4 } - 5; x + a }",
         "fn m(s: Int) -> Int { s + if s > 0 { 1 } else { 0 } }",
         "fn m() -> Int { f(if true { 1 } else { 2 }) }",
         "fn m() -> Int { f(1, if true { 2 } else { 3 }, 4) }",
