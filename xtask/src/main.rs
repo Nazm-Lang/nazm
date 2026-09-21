@@ -604,15 +604,21 @@ fn run_contained(args: &[String]) -> ExitCode {
             )
         }
         Some("bench") => {
-            // The one workload whose product is a file in the tree: `bench/record.json`.
+            // The one workload whose product is a file in the tree: `bench/record.json`,
+            // and `bench/baseline-<host>.json` when saving.
             bounds.writable_source = true;
             bounds.deadline = Duration::from_secs(2400);
+            let mode = if args.iter().any(|a| a == "--save") {
+                "--save"
+            } else {
+                "--check"
+            };
             (
                 "bench",
-                shell(
+                shell(&format!(
                     "cargo build --release --locked -p nazm-cli --jobs 1 >/dev/null \
-                     && cargo run -q -p xtask -- bench --runs 5 --check",
-                ),
+                     && cargo run -q -p xtask -- bench --runs 5 {mode}"
+                )),
             )
         }
         Some("run") => {
