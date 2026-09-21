@@ -38,6 +38,11 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
+**Current suite: 577 passed, 0 failed, 6 ignored, across 37 suites**, run through
+`cargo xtask contained tests`. The frozen count at the tested release commit is in
+[`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
+
+
 | # | Area | Status |
 | --- | --- | --- |
 | 1 | Syntax, parser, CST | PARTIAL |
@@ -93,6 +98,10 @@ token to appear in `docs/grammar.ebnf`, every nonterminal to be reachable from `
 and every `(* @example *)` in it to parse with zero diagnostics. `docs/guide.md`'s syntax
 section is generated from the same file by `xtask/src/guide.rs`.
 
+*Since N1, each file is parsed on its own text through `nazm_syntax::parse_map`, so the
+parser no longer requires a concatenated buffer. That is a prerequisite for separate
+compilation, not separate compilation.*
+
 **Limitation** · There is **no CST**. `crates/nazm-syntax/src/ast.rs` is a plain owned
 AST; comments are returned as a parallel span list consumed only by the formatter, and
 never reach the tree. Error recovery is one strategy at one granularity — skip to the next
@@ -114,19 +123,29 @@ and the parser produces a usable tree for a file with an error in the middle of 
 terminate rather than erroring. A second resolver written in Nazm, `compiler/module.nz`,
 serves the bootstrap stages. Codes `N0200`–`N0205` in `crates/nazm-diag/src/lib.rs`.
 
-**Limitation** · Three, and each is load-bearing. **No visibility** — every top-level
-function is visible to every importer, which already forced `compiler/lex.nz` to be split
-from `compiler/lexer.nz` so a library would not collide with its importer's `main`.
-**Resolution happens twice**, in `crates/nazm-core/src/check.rs` and again in
-`crates/nazm-lir/src/lower.rs`. **There is no compilation unit**: every reachable file is
-concatenated into one buffer, so a span has no file identity and `nazm-span` has no
-`FileId` despite `architecture.md:307` crediting it with one.
+**Resolution is singular as of N1 (2026-09-21).** `nazm_core::check` produces a
+`nazm_syntax::Resolution` — function definitions, call targets, and the slot every name
+mention refers to — and both the evaluator and `crates/nazm-lir/src/lower.rs` read it. The
+backend's own scope stack, slot allocator and name-keyed signature table are deleted;
+`crates/nazm-lir/src` declares no symbol table keyed by a name, and a `cargo xtask check`
+rule fails if one reappears.
 
-**Next dependency** · A single resolution artefact both the evaluator and the lowerer
-consume, and a span that knows its file.
+**Source identity is real as of N1.** `nazm_span::Span` is `{ file, start, end }` with
+file-local offsets, and `crates/nazm-cli/src/load.rs` produces a `SourceMap` whose files
+are parsed separately. The merged buffer, and the binary search that recovered a file from
+an offset, are gone.
 
-**Accepted when** · Deleting one of the two resolvers changes no behaviour, and a
-diagnostic's file identity survives without an offset lookup.
+**Limitation** · **No visibility** — every top-level function is visible to every importer,
+which already forced `compiler/lex.nz` to be split from `compiler/lexer.nz` so a library
+would not collide with its importer's `main`. **There is still no compilation unit**: all
+files are parsed into one `Program` and checked together, so nothing can be checked
+independently. Every id in the resolution is **session-local** — an index, not a name a
+cache may key on.
+
+**Next dependency** · A compilation unit: a decision about what can be checked on its own,
+which is what separate and incremental compilation both need.
+
+**Accepted when** · Two files can be checked independently and their results combined.
 
 ### 3. Type system — PARTIAL
 
@@ -242,11 +261,16 @@ none of"* — no generics to monomorphise, no traits to lower, no regions to inf
 effects to track. Monomorphisation is absent and cannot be otherwise, since nothing is
 polymorphic.
 
-**Limitation** · Not the absence of the levels — that is correct restraint — but that one
-semantic responsibility is already duplicated across the gap (area 2).
+**Limitation** · Not the absence of the levels — that is correct restraint.
 
-**Next dependency** · A responsibility no existing level owns. By the tree's own evidence
-that is single name resolution, not the diagram's ordering.
+**Still MISSING after N1, and deliberately.** N1 produced a `Resolution`, and a resolution
+is **not an IR**: it holds no expressions and no control flow, only the answers to "what
+does this name refer to", keyed by where the name was written. Lowering still lowers from
+the AST. Nothing here moved, and reading the new type as an HIR would be exactly the
+progress-bar mistake `master-architecture.md` §3 warns about.
+
+**Next dependency** · A responsibility no existing level owns. The duplicated one is gone;
+the next candidate has to be argued for on its own evidence.
 
 **Accepted when** · Introducing the level **removes** code rather than adding a
 pass-through.
@@ -262,8 +286,11 @@ collected rather than the first. Layering is gated: `xtask/src/rules.rs` forbids
 
 **Limitation** · It is not level 7 as `architecture.md` §2 defines it — a structured typed
 tree over numbered slots, not SSA over a CFG of places. No optimisation, inlining or
-constant folding happens here. The forbidden dependency on `nazm-core` is what forces the
-duplicate built-in table.
+constant folding happens here.
+
+*The duplicate built-in table and the second resolver this row used to name were removed by
+N1; the forbidden dependency on `nazm-core` still holds, and is now satisfied by both
+crates depending on `nazm-syntax`, which owns the shared vocabulary.*
 
 **Next dependency** · Only whatever a second backend or a real optimisation pass demands.
 

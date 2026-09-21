@@ -818,9 +818,13 @@ answer, and they are semantic rather than merely structural, which is why they a
   and every reachable file is concatenated into one buffer, so the language has modules but
   no separately meaningful unit. Deciding this decides whether two files can ever be
   checked independently.
-- **What does a span identify?** A `Span` is a byte range into that one buffer and carries
-  no file. The filename is recovered from the offset. Whether file identity is part of a
-  span is a question about what a diagnostic *means*, not only about a struct.
+- ~~**What does a span identify?**~~ **Settled by N1, 2026-09-21: a span identifies a file
+  and a byte range within it.** `Span` is `{ file, start, end }`, offsets are file-local,
+  and the file is carried from the lexer rather than recovered from a merged offset. The
+  published diagnostic shape did not change — `nazm.diagnostic/1` still reports offsets
+  into the concatenation of all files, because `diagnostics.md` promises the shape will not
+  move inside a version. That a program's *meaning* is unaffected is why this was an
+  implementation change and not a language one.
 - **What is the stable identity of a definition, and what changes it?** An answer is a
   prerequisite for incremental compilation, for caching, and for telling an agent that an
   edit produced the same definition (`research-register.md` R2, R3). A name is not an
@@ -828,8 +832,9 @@ answer, and they are semantic rather than merely structural, which is why they a
 - **Do built-ins share that identity model?** They live in the ordinary function namespace
   and may not be redefined, but they are declared in a compiler table rather than in
   source. Whether they are definitions with identities, or something else the resolver
-  knows about, is undecided — and the answer determines whether the two existing built-in
-  tables can become one.
+  knows about, is **still undecided**. What N1 settled is narrower and separate: there is
+  now **one** built-in inventory rather than two, and resolution answers "built-in or user
+  function" once for every call site. Neither makes a built-in a definition.
 
 None of this changes what any current program means. It is listed here because the first
 answer that *does* change a meaning — visibility, most likely — has to be given
