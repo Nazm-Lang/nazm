@@ -226,12 +226,12 @@ IR and sources, Gate A and root-cause write-ups).
 | Type checking in Nazm | **verified** | `compiler/analyse.nz`; same `(code, span)` as `nazm_core::check` for `N0300`/`N0301`/`N0303`/`N0304`/`N0310` over 35 sources |
 | **LLVM emission in Nazm** | **verified for the whole bootstrap language** | `compiler/emit.nz`: arithmetic with every specified failure, locals, control flow, transfers, functions, calls, `Str`, sequences and all 27 built-ins |
 | **Self-hosting** | **verified** | `compiler/bootstrap.sh`: C2 and C3 byte-identical in IR *and* executable; 5 conformance cases agree across C2, C3 and the interpreter |
-| `use` resolution in the Nazm compiler | **not done** | S is concatenated by the bootstrap script. Stated in `docs/bootstrap.md` |
+| `use` resolution in the Nazm compiler | **done** | `compiler/module.nz`; every bootstrap stage resolves its own imports, and the concatenation workaround is gone |
 | Recursion in the Nazm compiler's output | **unguarded** | the Rust backend refuses recursion pending a stack contract; the Nazm one emits it. A real divergence, recorded here |
 | Native recursion | blocked by design | pending measured stack availability and frame size. **Not needed**: the compiler is iterative |
-| **Structured concurrency, interpreted** | **verified** | `scope`, `spawn`, bounded `Chan`; 15 tests in `nazm-core/tests/concurrency.rs`, **every one with a deadline** so a hang fails by name |
-| **Structured concurrency, native** | **verified** | one POSIX thread per task, a mutex/condvar ring per channel; 11 tests in `nazm-cli/tests/concurrent.rs` at `-O0` **and** `-O2`, each against a written expectation *and* the interpreter |
-| Concurrency in the *Nazm* compiler | **deliberately absent** | outside the bootstrap subset, named as such in `compiler/analyse.nz` and guarded by a test. See `docs/bootstrap-design.md` |
+| **Structured concurrency, interpreted** | **verified** | `scope`, `spawn`, bounded `Chan`; 17 tests in `nazm-core/tests/concurrency.rs`, **every one with a deadline** so a hang fails by name |
+| **Structured concurrency, native** | **verified** | one POSIX thread per task, a mutex/condvar ring per channel; 17 tests in `nazm-cli/tests/concurrent.rs` at `-O0` **and** `-O2`, each against a written expectation *and* the interpreter, including that a failure joins its scope before it is reported |
+| Concurrency in the *Nazm* compiler | **done** | parsed, checked (`N0320`, `N0321` with the reference's codes and spans) and lowered — the task and channel runtime in `compiler/emit.nz`. Verified through that compiler: the worker pool answers 90, and a failing body or task joins the scope before reporting |
 | Formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
 
 ## Verified commands (against `91ec4d6`, before the incident)
