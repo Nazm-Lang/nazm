@@ -80,6 +80,12 @@ pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool) -> ExitCo
     for (name, file, expected) in cases {
         results.push(one(&nazm, &dir, &name, &file, &expected, interpret_only));
     }
+    // The executables were only ever needed for the comparison above. Left behind they
+    // accumulate one directory per process id, which is a small mess that becomes a
+    // confusing one the first time somebody finds a stale binary there and wonders
+    // which run wrote it. A failure to remove is not worth reporting: the next run
+    // writes over it.
+    drop(std::fs::remove_dir_all(&dir));
 
     let failed = results.iter().filter(|c| !c.passed).count();
     report(&results, &without_expectation, failed, json);
@@ -123,8 +129,14 @@ fn gather(
     Ok(())
 }
 
+/// Somewhere to put the compiled executables, removed when the run ends.
+///
+/// Named by process id so two concurrent runs do not write over each other, and
+/// **created fresh**: a directory left by a previous run with the same id would hand
+/// this one a stale executable for a case that failed to build.
 fn tempdir() -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join(format!("nazm-test-{}", std::process::id()));
+    drop(std::fs::remove_dir_all(&dir));
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(dir)
 }
