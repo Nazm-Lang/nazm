@@ -119,7 +119,23 @@ requires the suite to catch it. Run at final integration against `524cd24`, whic
 integrated state minus `nazm test` — an addition that touches none of the code the
 catalogue mutates.
 
-<!-- mutation-results -->
+**48 caught, 0 survived, 0 unusable.** Every catalogued defect that could be injected
+was detected by the suite.
+
+**Two were not injected**, and both were already known: the run confirmed, in the
+runner's own words, what checking the catalogue against the tree had found an hour
+earlier.
+
+| | the runner said | why |
+| --- | --- | --- |
+| `the-conditional-selects-the-wrong-branch` | *pattern occurs 2 times; it must be unique* | its anchor was the `br i1` line alone, which appears in both `statement_if` and `conditional` |
+| `the-loop-reuses-its-first-condition` | *pattern not found* | its anchor predated `break` and `continue`, which made the back edge conditional |
+
+Neither is a survivor, and both are worse than one: a mutation that does not apply is a
+problem only if somebody reads the log, and reads as coverage if they do not. Both are
+repaired, and the ambiguous one is split into two entries, because the statement and
+value forms of `if` are different code paths. `cargo xtask mutate --only NAME` exists so
+the repairs could be verified without re-running fifty.
 
 A caught mutation establishes that the suite detects **that** defect, and nothing
 broader. Fifty entries is fifty facts, not a coverage percentage.
