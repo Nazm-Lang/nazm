@@ -27,6 +27,22 @@ reported, and `bench/baseline.json` holds the full record.
 --check` refuses to compare across hosts rather than producing a percentage that means
 nothing.
 
+### The regression threshold, and the noise floor under it
+
+A change counts as a regression when the median is **both more than 25% and more than
+5 ms slower** than the baseline. The absolute bar is not a way of being lenient; it is
+there because a ratio is the wrong test near zero, and the first `--check` run proved
+it by reporting `arith/check` at 3.3 → 5.8 ms as a regression on a code path nothing
+had touched. Timing the same command fifteen times in one burst gives a spread of 1.13×
+to 1.34× on anything in the three-to-eight millisecond range; across bursts minutes
+apart it is wider, because process start-up and filesystem cache state are most of what
+is being timed.
+
+The consequence, stated rather than left to be discovered: **every measurement under
+about fifteen milliseconds is below this method's noise floor**. Those numbers are
+recorded and not gated. Measuring them properly needs a harness that does not pay
+process start-up per sample, and this one does.
+
 ### Interpreter against native
 
 Median milliseconds, after the optimisation pass below.
