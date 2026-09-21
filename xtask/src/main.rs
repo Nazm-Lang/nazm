@@ -116,6 +116,7 @@ fn help() {
            check-unsafe    the unsafe allowlist and the workspace lint agree\n  \
            check-docs      documented claims that must stay true\n  \
            check-matrix    every VERIFIED row in the capability matrix cites a real path\n  \
+           check-resolver  the backend reads name resolution, it does not redo it\n  \
            check-guide     docs/guide.md is what docs/grammar.ebnf produces\n  \
            guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
            bench           measure; --save records a baseline, --check compares to one,\n  \
@@ -137,6 +138,7 @@ fn run_checks() -> ExitCode {
         ("unsafe policy", check_unsafe_policy()),
         ("doc claims", check_doc_claims()),
         ("capability matrix", check_capability_matrix()),
+        ("one resolver", check_single_resolver()),
         ("guide from grammar", guide::check()),
     ])
 }
@@ -579,6 +581,72 @@ fn check_capability_matrix() -> Result<(), Vec<String>> {
         problems.push(format!(
             "\"{heading}\" is VERIFIED but cites no repository path"
         ));
+    }
+
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
+/// The backend reads name resolution; it does not perform it.
+///
+/// # What this guards, and why a test could not
+///
+/// Until N1, `nazm-lir` resolved names itself — its own scope stack, its own slot
+/// allocator, its own name-keyed signature table — because `rules.rs` forbids it
+/// depending on `nazm-core` and the checker's answer was discarded before anyone could
+/// hand it over. Two implementations of one rule, kept in agreement by tests.
+///
+/// The answer is now passed to `lower` as a `&Resolution`. But passing it does not force
+/// reading it: someone could add a `HashMap<String, Sig>` back and rebuild the same tables
+/// under another name, and every existing test would still pass, because both resolvers
+/// would agree *on the day they were written*. That is exactly how the first duplication
+/// survived as long as it did.
+///
+/// So the property checked is structural and blunt: **the backend declares no symbol table
+/// keyed by a name.** Resolution is the only thing that turns a name into an identity, and
+/// it does not live here. String interning in the emitter uses `Vec`, so it is unaffected.
+///
+/// This is a textual check over one crate's sources, and it establishes exactly that: no
+/// declaration of that shape. It is not proof that no second resolver could ever be
+/// written — it is a tripwire across the path the last one took.
+fn check_single_resolver() -> Result<(), Vec<String>> {
+    let Some(root) = workspace_root() else {
+        return Err(vec!["could not locate workspace root".to_owned()]);
+    };
+    let dir = root.join("crates/nazm-lir/src");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) => return Err(vec![format!("could not read {}: {e}", dir.display())]),
+    };
+
+    let mut problems = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|x| x != "rs") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            problems.push(format!("could not read {}", path.display()));
+            continue;
+        };
+        let name = path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        for (n, line) in text.lines().enumerate() {
+            let flat = line.replace(' ', "");
+            // A map or set keyed by a source name is the shape a symbol table takes.
+            if flat.contains("HashMap<String,") || flat.contains("HashSet<String>") {
+                problems.push(format!(
+                    "crates/nazm-lir/src/{name}:{} declares a name-keyed table. The backend \
+                     reads `nazm_syntax::Resolution`; resolving names here is what N1 \
+                     removed, and two resolvers agree only until they do not.",
+                    n + 1
+                ));
+            }
+        }
     }
 
     if problems.is_empty() {

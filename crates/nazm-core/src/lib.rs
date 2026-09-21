@@ -9,6 +9,7 @@ pub mod eval;
 
 pub use check::{check, Signature};
 pub use eval::{Interpreter, RuntimeError, Value};
+pub use nazm_syntax::Resolution;
 // `Type` and `Intrinsic` moved down to `nazm-syntax` on 2026-09-21, so the backend can
 // see them without depending on the interpreter. Re-exported here because they are still
 // what a caller of this crate means by a type and a built-in.
@@ -106,7 +107,7 @@ pub fn run_map(map: &nazm_span::SourceMap, limits: eval::Limits, args: Vec<Strin
 fn pipeline(map: &nazm_span::SourceMap, limits: eval::Limits, args: Vec<String>) -> Outcome {
     let (program, mut diagnostics) = nazm_syntax::parse_map(map);
     let parse_failed = !diagnostics.is_empty();
-    let (_signatures, check_errors) = check(&program);
+    let (_resolution, check_errors) = check(&program);
 
     // A function that failed to parse was never registered, so "this program has no
     // `main`" would be reported for a file whose first line is `fn main`. True of the
@@ -146,7 +147,7 @@ pub fn check_map(map: &nazm_span::SourceMap) -> Vec<nazm_diag::Diagnostic> {
     // `()` as the result, so the tree is built, walked and **dropped** inside the closure.
     // Returning it would move a recursive structure onto whatever stack the caller
     // happens to have, which is the thing this function exists to avoid.
-    match on_checked_map(map, |_| Ok::<(), Vec<nazm_diag::Diagnostic>>(())) {
+    match on_checked_map(map, |_, _| Ok::<(), Vec<nazm_diag::Diagnostic>>(())) {
         Ok(()) => Vec::new(),
         Err(d) => d,
     }
@@ -176,7 +177,7 @@ pub fn check_map(map: &nazm_span::SourceMap) -> Vec<nazm_diag::Diagnostic> {
 pub fn on_checked<T, F>(source: &str, f: F) -> Result<T, Vec<nazm_diag::Diagnostic>>
 where
     T: Send,
-    F: FnOnce(&__syntax::Program) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
+    F: FnOnce(&__syntax::Program, &Resolution) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
 {
     on_checked_map(&nazm_span::SourceMap::single(ONE_FILE, source), f)
 }
@@ -192,12 +193,15 @@ pub fn on_checked_map<T, F>(
 ) -> Result<T, Vec<nazm_diag::Diagnostic>>
 where
     T: Send,
-    F: FnOnce(&__syntax::Program) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
+    F: FnOnce(&__syntax::Program, &Resolution) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
 {
     let run = || {
         let (program, mut diagnostics) = nazm_syntax::parse_map(map);
         let parse_failed = !diagnostics.is_empty();
-        let (_, check_errors) = check(&program);
+        // The resolution is **handed on** rather than discarded. Two call sites used to
+        // throw it away — `let (_, check_errors) = check(&program)` — and the backend then
+        // rebuilt an equivalent one, which is the duplication N1 exists to remove.
+        let (resolution, check_errors) = check(&program);
         // A function that failed to parse was never registered, so "this program has no
         // `main`" would be reported for a file whose first line is `fn main`.
         diagnostics.extend(
@@ -206,7 +210,7 @@ where
                 .filter(|d| !(parse_failed && d.code == nazm_diag::codes::MISSING_MAIN)),
         );
         if diagnostics.is_empty() {
-            f(&program)
+            f(&program, &resolution)
         } else {
             Err(diagnostics)
         }
