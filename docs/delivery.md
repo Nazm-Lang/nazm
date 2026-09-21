@@ -68,8 +68,14 @@ These are properties of the release, not a backlog.
   that `use`s it. Adding private-by-default later will break existing multi-file
   programs; it already forced `compiler/lex.nz` to be split from `compiler/lexer.nz`,
   because a library carrying a `main` collides with its importer's.
-- **No recursion in native code.** Refused by name, pending a stack contract. The
-  compiler written in Nazm is iterative throughout, which is why it compiles natively.
+- **No recursion in native code.** Refused by name (`N0101`), pending a stack contract —
+  by **both** backends now. Until 2026-09-21 only the Rust one refused it: the
+  Nazm-written compiler silently emitted native recursion that clang assembled and that
+  ran, for programs `nazm build` rejects. `compiler/emit.nz` now makes the same refusal
+  over every declared function, covering direct and mutual recursion, cycles that exist
+  only across files, and cycles through a `spawn`. `nazm run` still runs recursive
+  programs: this is a backend limit, not a language rule. The compiler written in Nazm is
+  iterative throughout, which is why it compiles natively.
 - **Ambient authority.** `read_file`, `write_file` and the rest are available to any
   function with no capability to pass. Labelled as such in `docs/spec.md`; a capability
   parameter is the growth path and `main(io: IO)` was considered and not chosen.
@@ -96,14 +102,14 @@ These are properties of the release, not a backlog.
 ## Results
 
 `cargo test --workspace`, run through `cargo xtask contained` on Linux:
-**548 passed, 0 failed, 6 ignored.** What they cover, grouped by the question each group
+**549 passed, 0 failed, 6 ignored.** What they cover, grouped by the question each group
 answers:
 
 | | count | what it establishes |
 | --- | ---: | --- |
 | Language semantics (`nazm-core/tests/language.rs`) | 114 | each rule in `docs/spec.md` that a refactor could quietly reverse |
 | Native end-to-end (`nazm-cli/tests/build.rs`) | 127 | every case compiled at `-O0` **and** `-O2`, and compared against the interpreter |
-| Self-hosting differentials (`nazm-cli/tests/selfhost.rs`) | 19 | the Nazm lexer, parser and checker against the Rust ones over every `.nz` in the tree, the full bootstrap chain, its own module resolution, and concurrency compiled by it end to end |
+| Self-hosting differentials (`nazm-cli/tests/selfhost.rs`) | 20 | the Nazm lexer, parser and checker against the Rust ones over every `.nz` in the tree, the full bootstrap chain, its own module resolution, concurrency compiled by it end to end, and its refusal of recursion matching the reference's |
 | Concurrency, interpreted (`nazm-core/tests/concurrency.rs`) | 17 | joins, capture, cancellation, cleanup, contention — every one with a deadline |
 | Concurrency, native (`nazm-cli/tests/concurrent.rs`) | 17 | the same programs compiled, at `-O0` and `-O2`, against a written expectation *and* the interpreter. Six of them establish that a failure joins its scope before it is reported, by giving a task an observable effect and ordering it with channel handshakes rather than by how fast anything runs |
 | Machine interface (`nazm-cli/tests/schemas.rs`) | 5 | real command output validated against `schema/*.json` |
@@ -227,8 +233,19 @@ The candidate built at `c3fb078`:
 | `MANIFEST.txt` | 7,611 bytes, SHA-256 `a121c2c46ef5423229427f64844308a5d6973266d32d1b4c52d8c31f5b259171` |
 | `PROVENANCE.txt` | 2,447 bytes, SHA-256 `5d52da22c3b0dea8c670283e68a106fcb9a8e04ed0cd0cdf1446e15e82b0d773` |
 
-**The archive is not claimed to be bit-reproducible.** It was produced once, on one host;
-building it again has not been shown to yield the same bytes, and nothing in the pipeline
-normalises timestamps or the link step. What *is* established is that its contents match
-`MANIFEST.txt` — checked inside the container and again after extraction on the host —
-and that C2 and C3 are byte-identical to each other.
+**Two different claims, and only one of them holds.**
+
+*Entry metadata is normalised.* The tar is written with `--sort=name --owner=0 --group=0
+--numeric-owner --mtime=@0`, and the gzip stream carries no timestamp of its own — checked
+on the archive itself: every entry reads `Jan 1 1970`, uid and gid 0, and the gzip header's
+MTIME field is zero. Entry order and metadata are therefore stable across runs.
+
+*Whole-archive reproducibility is not established* — and as the pipeline stands it cannot
+be, because two packaged files embed the run's wall clock: `PROVENANCE.txt` and
+`docs/bootstrap-record.txt` both carry `date-utc:`. Two runs differ by construction. Beyond
+that, neither packaged executable has been tested for bit-reproducibility; the bootstrap
+establishes only that C2 and C3 match *each other within one run*, and only after the
+linker's build-id is stripped, which the packaged binary keeps.
+
+What *is* established is that the contents match `MANIFEST.txt` — checked inside the
+container and again after extraction on the host.
