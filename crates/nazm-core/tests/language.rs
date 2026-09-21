@@ -1694,3 +1694,31 @@ fn a_file_that_cannot_be_read_reports_n0407() {
         codes::IO_FAILED
     );
 }
+
+#[test]
+fn popping_an_empty_sequence_reports_rather_than_inventing_a_value() {
+    // Both sequence types, because they are two code paths and the `Strs` one had no
+    // test of its own until the built-in coverage check asked which built-ins were
+    // never named in one.
+    assert_eq!(
+        sole_error("fn main() -> Int { let a = ints_new(); ints_pop(a) }"),
+        codes::INDEX_OUT_OF_BOUNDS
+    );
+    assert_eq!(
+        sole_error("fn main() -> Int { let a = strs_new(); str_len(strs_pop(a)) }"),
+        codes::INDEX_OUT_OF_BOUNDS
+    );
+}
+
+#[test]
+fn a_pop_returns_the_last_item_and_shortens_the_sequence() {
+    assert_eq!(
+        value(
+            "fn main() -> Int { let a = strs_new(); strs_push(a, \"ab\"); \
+             strs_push(a, \"cde\"); let last = strs_pop(a); \
+             str_len(last) * 10 + strs_len(a) }"
+        )
+        .to_string(),
+        "31"
+    );
+}
