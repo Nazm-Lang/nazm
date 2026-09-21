@@ -94,6 +94,9 @@ struct Emitter {
     /// The allocation dominates the whole body, including any loop inside it, so naming
     /// the SSA value directly is valid wherever a join has to be written.
     scopes: Vec<u32>,
+    /// Whether this function has anywhere that leaves for `%nz.unwind`, so the block is
+    /// written only when something branches to it. Reset per function.
+    used_unwind: bool,
     /// The task trampolines, accumulated while functions are emitted and appended after
     /// them. One per `spawn` site: it unpacks that site's argument block and calls the
     /// function with the types that site established.
@@ -361,7 +364,40 @@ impl Emitter {
         let _ = writeln!(self.out, "  br i1 %{cond}, label %b{fail}, label %b{cont}");
         self.open(&format!("b{fail}"));
         let _ = writeln!(self.out, "  call void @nz.fail(ptr {sym}, i64 {len})");
-        let _ = writeln!(self.out, "  unreachable");
+        self.unwind();
+        self.open(&format!("b{cont}"));
+    }
+
+    /// Leave for the failure exit, joining every scope still open on the way.
+    ///
+    /// This is the whole of "a failure is reported at the closing brace". A failure in a
+    /// scope's body walks out through that scope's join, so the tasks it started finish
+    /// before anything is reported; nested scopes join innermost first, which is the
+    /// nesting. Written at each site rather than at one shared block because how many
+    /// scopes are open is a property of where the failure happened.
+    fn unwind(&mut self) {
+        self.join_through(0);
+        self.used_unwind = true;
+        let _ = writeln!(self.out, "  br label %nz.unwind");
+    }
+
+    /// If this thread has failed, leave; otherwise carry on in a fresh block.
+    ///
+    /// Emitted after every call to a generated function. Without it a failure deep in a
+    /// callee would set the flag, hand back the stand-in value, and let the caller go on
+    /// computing with it — running statements, printing, and possibly looping forever on
+    /// a number that was never produced.
+    fn check_failed(&mut self) {
+        let flag = self.fresh();
+        let unwind = self.fresh_label();
+        let cont = self.fresh_label();
+        let _ = writeln!(self.out, "  %{flag} = load i1, ptr @nz.failed");
+        let _ = writeln!(
+            self.out,
+            "  br i1 %{flag}, label %b{unwind}, label %b{cont}"
+        );
+        self.open(&format!("b{unwind}"));
+        self.unwind();
         self.open(&format!("b{cont}"));
     }
 
@@ -485,8 +521,35 @@ impl Emitter {
     /// has not been allowed to finish.
     fn join_through(&mut self, depth: usize) {
         for tids in self.scopes.clone().into_iter().skip(depth).rev() {
-            let _ = writeln!(self.out, "  call void @nz.scope_join(ptr %{tids})");
+            self.join_one(tids);
         }
+    }
+
+    /// Join one scope and take on the first failure any of its tasks had.
+    ///
+    /// `@nz.fail` keeps the first failure a thread records, so adopting a task's here can
+    /// never displace one the body already had — which is the precedence `docs/spec.md`
+    /// states: a task that failed because the body stopped feeding it is a consequence,
+    /// not a cause.
+    fn join_one(&mut self, tids: u32) {
+        let r = self.fresh();
+        let msg = self.fresh();
+        let has = self.fresh();
+        let take = self.fresh_label();
+        let cont = self.fresh_label();
+        let _ = writeln!(
+            self.out,
+            "  %{r} = call {{ ptr, i64 }} @nz.scope_join(ptr %{tids})"
+        );
+        let _ = writeln!(self.out, "  %{msg} = extractvalue {{ ptr, i64 }} %{r}, 0");
+        let _ = writeln!(self.out, "  %{has} = icmp ne ptr %{msg}, null");
+        let _ = writeln!(self.out, "  br i1 %{has}, label %b{take}, label %b{cont}");
+        self.open(&format!("b{take}"));
+        let len = self.fresh();
+        let _ = writeln!(self.out, "  %{len} = extractvalue {{ ptr, i64 }} %{r}, 1");
+        let _ = writeln!(self.out, "  call void @nz.fail(ptr %{msg}, i64 %{len})");
+        let _ = writeln!(self.out, "  br label %b{cont}");
+        self.open(&format!("b{cont}"));
     }
 
     /// `scope { body }` — a list of tasks, the body, and the wait.
@@ -521,7 +584,10 @@ impl Emitter {
         // point it left from — writing one here as well would append to a block that
         // already has a terminator.
         if reach == Reach::FallsThrough {
-            let _ = writeln!(self.out, "  call void @nz.scope_join(ptr %{tids})");
+            // The closing brace: wait for every task, take on the first failure any of
+            // them had, and only then decide whether this program continues.
+            self.join_one(tids);
+            self.check_failed();
         }
         reach
     }
@@ -546,11 +612,17 @@ impl Emitter {
             }
         }
 
-        // The handle first, then each argument at its own offset. `Str` is sixteen
-        // bytes; everything else is eight, which keeps every offset a multiple of eight
-        // and so correctly aligned for whatever is stored there.
+        // The handle first, then this task's diagnostic — message pointer at 8, length at
+        // 16 — then each argument at its own offset. `Str` is sixteen bytes; everything
+        // else is eight, which keeps every offset a multiple of eight and so correctly
+        // aligned for whatever is stored there.
+        //
+        // The diagnostic lives here rather than in a slot the scope owns because each
+        // task then writes only to memory nobody else touches, and the join reads it
+        // after `pthread_join`. That is a happens-before edge, so no lock is involved.
+        const TASK_HEADER: u64 = 24;
         let mut offsets = Vec::new();
-        let mut size = 8u64;
+        let mut size = TASK_HEADER;
         for (_, ty) in &vals {
             offsets.push(size);
             size += if *ty == Ty::Str { 16 } else { 8 };
@@ -568,6 +640,16 @@ impl Emitter {
             },
             span.start,
         );
+
+        // `malloc` does not zero, and the join reads this slot for every task it joins —
+        // including the ones that succeeded. Left uninitialised it would be whatever the
+        // allocator last held there, and a program that never failed would report.
+        let em = self.fresh();
+        let el = self.fresh();
+        let _ = writeln!(self.out, "  %{em} = getelementptr i8, ptr %{blk}, i64 8");
+        let _ = writeln!(self.out, "  store ptr null, ptr %{em}");
+        let _ = writeln!(self.out, "  %{el} = getelementptr i8, ptr %{blk}, i64 16");
+        let _ = writeln!(self.out, "  store i64 0, ptr %{el}");
 
         for ((value, ty), offset) in vals.iter().zip(&offsets) {
             let slot = self.fresh();
@@ -642,6 +724,25 @@ impl Emitter {
             callee.symbol(),
             passed.join(", ")
         );
+        // A failure ends the *task*, not the process. The diagnostic is left in this
+        // task's own argument block, where the scope's join reads it after
+        // `pthread_join` — so the failure is reported by the thread that owns the scope,
+        // once every sibling has finished, rather than by whichever thread happened to
+        // fail first while the others were still working.
+        let _ = writeln!(&mut body, "  %failed = load i1, ptr @nz.failed");
+        let _ = writeln!(
+            &mut body,
+            "  br i1 %failed, label %publish, label %finished"
+        );
+        let _ = writeln!(&mut body, "publish:");
+        let _ = writeln!(&mut body, "  %em = load ptr, ptr @nz.errmsg");
+        let _ = writeln!(&mut body, "  %el = load i64, ptr @nz.errlen");
+        let _ = writeln!(&mut body, "  %emp = getelementptr i8, ptr %a, i64 8");
+        let _ = writeln!(&mut body, "  store ptr %em, ptr %emp");
+        let _ = writeln!(&mut body, "  %elp = getelementptr i8, ptr %a, i64 16");
+        let _ = writeln!(&mut body, "  store i64 %el, ptr %elp");
+        let _ = writeln!(&mut body, "  br label %finished");
+        let _ = writeln!(&mut body, "finished:");
         let _ = writeln!(&mut body, "  ret ptr null");
         let _ = writeln!(&mut body, "}}");
         self.tasks.push_str(&body);
@@ -902,6 +1003,10 @@ impl Emitter {
                     ret.llvm(),
                     callee.symbol()
                 );
+                // A callee that failed has already unwound to its own `ret` and handed
+                // back a stand-in value. This is where that is noticed, so the failure
+                // keeps travelling outward instead of the caller carrying on with it.
+                self.check_failed();
                 Val::Of {
                     value: out,
                     ty: *ret,
@@ -1681,6 +1786,7 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
         source_len: source.len(),
         loops: Vec::new(),
         scopes: Vec::new(),
+        used_unwind: false,
         tasks: String::new(),
         needs_tasks: false,
         task_count: 0,
@@ -1712,6 +1818,19 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
         let _ = writeln!(e.out, "  store ptr %argv, ptr @nz.argv");
     }
     let _ = writeln!(e.out, "  %result = call i64 {}()", module.entry.symbol());
+    // The single place a diagnostic is written. By the time control is here every scope
+    // `main` opened has been joined, so nothing is still running when the process ends —
+    // which is the difference between reporting a failure and abandoning the program
+    // where it happened.
+    let _ = writeln!(e.out, "  %failed = load i1, ptr @nz.failed");
+    let _ = writeln!(
+        e.out,
+        "  br i1 %failed, label %nz.reported, label %nz.finished"
+    );
+    let _ = writeln!(e.out, "nz.reported:");
+    let _ = writeln!(e.out, "  call void @nz.report()");
+    let _ = writeln!(e.out, "  unreachable");
+    let _ = writeln!(e.out, "nz.finished:");
     let _ = writeln!(
         e.out,
         "  %print = call i32 (ptr, ...) @printf(ptr @.fmt, i64 %result)"
@@ -1844,10 +1963,39 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
     // Not `llvm.trap`: a process killed by SIGILL is not "stops with a diagnostic".
     // Named in the same reserved `@nz.` space as the generated functions, so a Nazm
     // program cannot reach it and cannot collide with it.
-    let _ = writeln!(
-        head,
-        "define internal void @nz.fail(ptr %m, i64 %n) noreturn {{"
-    );
+    //
+    // **It records and returns; it does not exit.** `docs/spec.md` says a failure inside
+    // a `scope` is reported at the closing brace, after every task has been joined —
+    // so the thread that fails has to be able to walk back out to that brace. Writing
+    // the message and calling `@exit` here, which is what this did, ended the process
+    // wherever the failure happened and killed sibling tasks where they stood.
+    //
+    // The state is **thread-local**: two tasks can fail at once and neither may see the
+    // other's message. Only the *first* failure on a thread is kept, so a second one
+    // caused by continuing with the stand-in value of the first cannot overwrite it.
+    let _ = writeln!(head, "@nz.failed = internal thread_local global i1 false");
+    let _ = writeln!(head, "@nz.errmsg = internal thread_local global ptr null");
+    let _ = writeln!(head, "@nz.errlen = internal thread_local global i64 0");
+    head.push('\n');
+    let _ = writeln!(head, "define internal void @nz.fail(ptr %m, i64 %n) {{");
+    let _ = writeln!(head, "entry:");
+    let _ = writeln!(head, "  %had = load i1, ptr @nz.failed");
+    let _ = writeln!(head, "  br i1 %had, label %done, label %record");
+    let _ = writeln!(head, "record:");
+    let _ = writeln!(head, "  store i1 true, ptr @nz.failed");
+    let _ = writeln!(head, "  store ptr %m, ptr @nz.errmsg");
+    let _ = writeln!(head, "  store i64 %n, ptr @nz.errlen");
+    let _ = writeln!(head, "  br label %done");
+    let _ = writeln!(head, "done:");
+    let _ = writeln!(head, "  ret void");
+    let _ = writeln!(head, "}}");
+    head.push('\n');
+    // The one place a diagnostic is written and the process ends: reached from the entry
+    // wrapper, once every task has been joined.
+    let _ = writeln!(head, "define internal void @nz.report() noreturn {{");
+    let _ = writeln!(head, "entry:");
+    let _ = writeln!(head, "  %m = load ptr, ptr @nz.errmsg");
+    let _ = writeln!(head, "  %n = load i64, ptr @nz.errlen");
     let _ = writeln!(head, "  %w = call i64 @write(i32 2, ptr %m, i64 %n)");
     let _ = writeln!(head, "  call void @exit(i32 2)");
     let _ = writeln!(head, "  unreachable");
@@ -2133,6 +2281,7 @@ fn emit_function(e: &mut Emitter, f: &Function) {
     // numbering.
     e.next = 0;
     e.current = "entry".to_owned();
+    e.used_unwind = false;
     // No loop target crosses a function boundary. Push and pop are balanced, so this is
     // already empty — clearing it says so rather than relying on it.
     e.loops.clear();
@@ -2179,6 +2328,13 @@ fn emit_function(e: &mut Emitter, f: &Function) {
         // `unreachable` on a path control really takes, is undefined behaviour in
         // silence.
         Val::Transferred => {}
+    }
+    // One exit for every failure that passed through this function. Whatever it returns
+    // is never read: the caller checks the failure flag first, and the entry wrapper
+    // reports rather than using the value.
+    if e.used_unwind {
+        let _ = writeln!(e.out, "nz.unwind:");
+        let _ = writeln!(e.out, "  ret {} {}", f.ret.llvm(), f.ret.unwind_value());
     }
     let _ = writeln!(e.out, "}}");
     e.out.push('\n');
@@ -2253,7 +2409,19 @@ ok:
   ret i32 0
 }
 
-define internal void @nz.scope_join(ptr %h) {
+; Joins every task and reports the first failure any of them had, as { message, length },
+; or { null, 0 } if none did.
+;
+; **Every** task is joined before anything is reported, including after one has been found
+; to have failed — returning at the first would leave the rest running, and a scope that
+; does not contain its tasks is not a scope. The failure taken is the earliest by position
+; in the list, which is the order the tasks were spawned in, so which one is reported does
+; not depend on which thread happened to finish first.
+;
+; No lock is needed. A task writes its own diagnostic into its own argument block before
+; its thread ends, and this reads that block only after `pthread_join` has returned for
+; it, which is a happens-before edge.
+define internal { ptr, i64 } @nz.scope_join(ptr %h) {
 entry:
   ; The count is read once. Nothing can be added while this runs: the scope's body has
   ; finished by every path that reaches here, and a task cannot spawn into its parent.
@@ -2262,7 +2430,9 @@ entry:
   %data = load ptr, ptr %dp
   br label %test
 test:
-  %i = phi i64 [ 0, %entry ], [ %next, %body ]
+  %i = phi i64 [ 0, %entry ], [ %next, %after ]
+  %msg = phi ptr [ null, %entry ], [ %msg2, %after ]
+  %len = phi i64 [ 0, %entry ], [ %len2, %after ]
   %more = icmp slt i64 %i, %n
   br i1 %more, label %body, label %done
 body:
@@ -2271,10 +2441,26 @@ body:
   %blk = inttoptr i64 %raw to ptr
   %tid = load ptr, ptr %blk
   %rc = call i32 @pthread_join(ptr %tid, ptr null)
+  ; The task's own diagnostic, at a fixed offset in the block it was given.
+  %emp = getelementptr i8, ptr %blk, i64 8
+  %em = load ptr, ptr %emp
+  %elp = getelementptr i8, ptr %blk, i64 16
+  %el = load i64, ptr %elp
+  %none = icmp eq ptr %msg, null
+  %this = icmp ne ptr %em, null
+  %take = and i1 %none, %this
+  br i1 %take, label %first, label %after
+first:
+  br label %after
+after:
+  %msg2 = phi ptr [ %em, %first ], [ %msg, %body ]
+  %len2 = phi i64 [ %el, %first ], [ %len, %body ]
   %next = add i64 %i, 1
   br label %test
 done:
-  ret void
+  %r0 = insertvalue { ptr, i64 } undef, ptr %msg, 0
+  %r1 = insertvalue { ptr, i64 } %r0, i64 %len, 1
+  ret { ptr, i64 } %r1
 }
 ";
 
@@ -2428,8 +2614,10 @@ take:
   %oom = icmp eq ptr %grown, null
   br i1 %oom, label %nomem, label %push
 nomem:
+  ; Records and returns, like every other failure. `false` is the stand-in `chan_recv`
+  ; hands back while unwinding; the caller checks the flag before it reads it.
   call void @nz.fail(ptr %msg, i64 %mn)
-  unreachable
+  ret i1 false
 push:
   %sn = load i64, ptr %seq
   %sslot = getelementptr i64, ptr %grown, i64 %sn

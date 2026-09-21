@@ -28,7 +28,7 @@ performance comparison of any kind.
 | Compiler frontend and lowering/emission in Nazm, external dependencies documented | done **for the bootstrap subset** | `compiler/lex.nz`, `parse.nz`, `analyse.nz`, `emit.nz`; dependencies in `docs/bootstrap.md`. The subset excludes concurrency *emission*, which is under *Known limitations*; module resolution is implemented in `compiler/module.nz` |
 | Native C1 → C2 → C3 bootstrap, conformance and reproducibility | done | `compiler/bootstrap.sh`; C2 and C3 byte-identical in IR and executable, 5 conformance cases |
 | Ordinary independent programs compile with the Nazm-written compiler | done **within the subset** | `crates/nazm-cli/tests/selfhost.rs`. A program using `scope`/`spawn`/`Chan` parses and checks but is refused at emission, by name rather than miscompiled; multi-file programs compile, imports and all |
-| Initial structured concurrency: transfer/capture rules, cancellation, cleanup | done | `docs/spec.md`; 17 interpreter tests and 12 native tests, all deadline-bounded. The compiled runtime does **not** join a scope before reporting a failure — see *Known limitations* |
+| Initial structured concurrency: transfer/capture rules, cancellation, cleanup | done | `docs/spec.md`; 17 interpreter tests and 17 native tests, all deadline-bounded. Both implementations join a scope before reporting a failure, verified at `-O0` and `-O2` against the interpreter for a failing body, a failing task, a failure below the body, nested scopes, and body-over-task precedence |
 | Structured developer interfaces, grammar/guide, formatting, repair workflow | done | `docs/diagnostics.md`, `schema/`, `docs/grammar.ebnf`, `docs/guide.md`, `scripts/repair.sh` |
 | Performance baselines, a profiling/optimisation pass, no unsupported speed claims | done | `docs/performance.md`, `bench/baseline.json` (Darwin), `bench/baseline-linux-aarch64.json` |
 | A clean rebuild of the integrated final state on a supported target | done | a fresh copy, `--offline`, full suite — see *Reproducing this* |
@@ -42,7 +42,7 @@ Six different kinds of evidence are involved, and they are not interchangeable.
 | --- | --- | --- |
 | The two implementations agree | every native test runs the same program under `nazm run` and compares | that either matches the specification where both are wrong the same way |
 | The compiler is self-hosting | `bootstrap.sh`: C2 and C3 byte-identical | that the compiler is *correct*. A compiler that miscompiles its own source in a way that reproduces the miscompilation is also a fixpoint — stated in `docs/bootstrap.md` |
-| Concurrency works | 29 tests, each with a deadline so a hang fails by name; invariants and totals, never a schedule | freedom from deadlock, which the specification explicitly does not promise |
+| Concurrency works | 34 tests, each with a deadline so a hang fails by name; invariants and totals, never a schedule | freedom from deadlock, which the specification explicitly does not promise |
 | The formatter is safe | it re-lexes to the same token kinds, is idempotent, and keeps every comment | that its layout is the one you would choose |
 | Fixes are applicable | preconditions on every fix; `--apply` refuses to write a file that would not parse | that a `needs_review` fix is right — that is what the label means |
 | The optimisation helped | a profile before, a measurement against a recorded baseline after, same machine minutes apart | anything about another machine, or about any other language |
@@ -79,17 +79,6 @@ These are properties of the release, not a backlog.
   fairness, no cancellation beyond closing a channel, and no deadlock freedom. At
   roughly 4.5 µs per channel hand-off it is suited to coarse-grained work and not to
   fine-grained message passing.
-- **A compiled program does not join its scope before reporting a failure.** The
-  specification says a failure inside a `scope` is reported at the closing brace, after
-  every task has been joined, and the interpreter does exactly that. The compiled program
-  does not: `@nz.fail` writes the diagnostic and calls `@exit` on whichever thread failed,
-  so sibling tasks are terminated wherever they happen to be. Measured at `-O0` and `-O2`
-  — the exit status and the diagnostic match the interpreter in both cases, and only the
-  task's observable effects are lost, which is why a test asserting the code alone cannot
-  see it. Closing it needs a way for a failure to leave a task without leaving the
-  process; the emitted code has no unwinding mechanism and `@nz.fail` is `noreturn` from
-  arbitrary call depth. `nazm-cli/tests/concurrent.rs` carries the contract as an ignored
-  test so it starts passing the day the runtime can honour it.
 - **The bootstrap compiler reads and checks concurrency but cannot yet emit it.** The
   Nazm-written parser produces the same `scope` and `spawn` trees as the reference, and
   the Nazm-written checker types `Chan`, knows the four `chan_*` built-ins and enforces
@@ -122,7 +111,7 @@ These are properties of the release, not a backlog.
 ## Results
 
 `cargo test --workspace`, run through `cargo xtask contained` on Linux:
-**541 passed, 0 failed, 7 ignored.** What they cover, grouped by the question each group
+**546 passed, 0 failed, 6 ignored.** What they cover, grouped by the question each group
 answers:
 
 | | count | what it establishes |
@@ -131,7 +120,7 @@ answers:
 | Native end-to-end (`nazm-cli/tests/build.rs`) | 127 | every case compiled at `-O0` **and** `-O2`, and compared against the interpreter |
 | Self-hosting differentials (`nazm-cli/tests/selfhost.rs`) | 17 | the Nazm lexer, parser and checker against the Rust ones over every `.nz` in the tree, and the full bootstrap chain |
 | Concurrency, interpreted (`nazm-core/tests/concurrency.rs`) | 17 | joins, capture, cancellation, cleanup, contention — every one with a deadline |
-| Concurrency, native (`nazm-cli/tests/concurrent.rs`) | 12 | the same programs compiled, at `-O0` and `-O2`, against a written expectation *and* the interpreter. A thirteenth states the join-before-reporting contract that the compiled runtime does **not** yet honour, and is ignored with that reason rather than inverted — see *Known limitations* |
+| Concurrency, native (`nazm-cli/tests/concurrent.rs`) | 17 | the same programs compiled, at `-O0` and `-O2`, against a written expectation *and* the interpreter. Six of them establish that a failure joins its scope before it is reported, by giving a task an observable effect and ordering it with channel handshakes rather than by how fast anything runs |
 | Machine interface (`nazm-cli/tests/schemas.rs`) | 5 | real command output validated against `schema/*.json` |
 | Formatter (`nazm-syntax/tests/format.rs`) | 11 | token preservation, idempotence, comment preservation, over every source in the tree |
 | Grammar (`nazm-syntax/tests/grammar.rs`) | 4 | every lexer token written down, every rule reachable, every example parsed by the real parser |

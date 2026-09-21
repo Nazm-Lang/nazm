@@ -601,7 +601,7 @@ own, and the parent drains while the workers run.
 | **Nesting** | A `scope` may contain another. The inner one joins first, because it closes first |
 | **The scope's value** | None. `scope { … }` is a statement |
 | **Result propagation** | A task's return value is **discarded**. Results travel through channels, which is the one mechanism, rather than two |
-| **Error propagation** | A task that fails at run time — overflow, a bad index, a failed allocation — ends the **whole program** with its diagnostic and exit status 2. Tasks do not have private failure modes. It ends **at the scope's closing brace, not the instant the task failed**: the scope joins every task first, so the diagnostic is reported once nothing is still running. What follows says what that costs. **The compiled implementation does not do this yet** — see below |
+| **Error propagation** | A task that fails at run time — overflow, a bad index, a failed allocation — ends the **whole program** with its diagnostic and exit status 2. Tasks do not have private failure modes. It ends **at the scope's closing brace, not the instant the task failed**: the scope joins every task first, so the diagnostic is reported once nothing is still running. Both implementations do this. What follows says what it costs, and how the compiled one manages it |
 
 #### When a task starts, and when a scope waits
 
@@ -630,27 +630,26 @@ the join, and a join that never returns never delivers it. Closing the channels 
 waits on is the program's responsibility, and the `while chan_recv(c, buf)` loop is the
 idiom that makes it work.
 
-##### The two implementations disagree here, and the compiled one is wrong
+##### How the compiled program does this
 
-**The interpreter joins before reporting. The compiled program does not.** Measured, not
-inferred: a program whose body overflows while a worker it has just released is still
-running prints the worker's output under `nazm run` and prints nothing at `-O0` or `-O2`,
-with the same `N0400` and the same exit status 2 either way. The same holds when a *task*
-fails and a sibling is still working.
+A compiled failure does not end the process where it happens. `@nz.fail` records the
+diagnostic in **thread-local** state and returns; each generated function gains one extra
+exit that a failure leaves by, and every call site checks the flag afterwards, so a
+failure walks back out through the calls that led to it. On the way it passes each open
+`scope`, joining it — innermost first, which is the nesting. Only the entry wrapper
+writes a diagnostic and exits, by which time nothing is still running.
 
-The cause is in the emitted runtime. `@nz.fail` writes the diagnostic and calls `@exit`
-on whichever thread failed, so the process ends where the failure happened;
-`@nz.scope_join` does join every task, but a failure never reaches it. Closing the gap
-needs a way for a failure to leave a task without leaving the process, which the emitted
-code has no mechanism for — there is no unwinding, and `@nz.fail` is `noreturn` from
-arbitrary call depth.
+A task that fails leaves its message in its own argument block rather than reporting it.
+The scope's join reads that block after `pthread_join` has returned for it, which is a
+happens-before edge, so no lock is involved; the earliest failure by spawn position is
+the one taken, so which task is reported does not depend on which thread finished first.
+Only the first failure a thread records is kept, which is what makes the body's failure
+win: a task's is adopted at the join, and the join happens after the body's was recorded.
 
-Until then: **the guarantee above is the specification and the interpreter's behaviour,
-not the compiled one.** A compiled program must not be relied on to finish a task's
-observable effects when another part of the same scope fails. The exit status and the
-diagnostic agree across both; only the joining does not.
-`nazm-cli/tests/concurrent.rs` states the contract as an executable test, ignored with
-this reason rather than inverted, so it starts passing the day the runtime can honour it.
+Verified at `-O0` and `-O2` against the interpreter, for a failing body, a failing task,
+a failure two calls below the body, and nested scopes — and for the case where a task
+fails *strictly before* the body does, where the body's diagnostic is still the one
+reported.
 
 #### What may cross into a task
 
