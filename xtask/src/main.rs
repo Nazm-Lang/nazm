@@ -49,7 +49,34 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some("mutate") => report(&[("mutation coverage", run_mutations())]),
+        Some("mutate") => {
+            // `--only NAME` selects by substring, repeatably. Nothing else is accepted:
+            // a typo that silently ran the whole catalogue, or none of it, would waste
+            // hours either way.
+            let rest: Vec<String> = args.collect();
+            let mut only = Vec::new();
+            let mut i = 0;
+            while i < rest.len() {
+                match rest.get(i).map(String::as_str) {
+                    Some("--only") => match rest.get(i + 1) {
+                        Some(name) => {
+                            only.push(name.clone());
+                            i += 2;
+                        }
+                        None => {
+                            eprintln!("mutate: --only needs a mutation name");
+                            return ExitCode::FAILURE;
+                        }
+                    },
+                    Some(other) => {
+                        eprintln!("mutate: unknown option {other}");
+                        return ExitCode::FAILURE;
+                    }
+                    None => break,
+                }
+            }
+            report(&[("mutation coverage", run_mutations(&only))])
+        }
         // Documented, because it is now the *only* way to recover an interrupted run:
         // `mutate` refuses rather than repairing, since it cannot establish that the
         // dead run's descendants have stopped.
@@ -87,7 +114,9 @@ fn help() {
            guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
            bench           measure; --save records a baseline, --check compares to one,\n  \
                            --runs N sets the repetitions (default 5)\n  \
-           mutate          inject catalogued defects; each must be caught\n  \
+           mutate          inject catalogued defects; each must be caught.\n  \
+                           --only NAME selects by substring, repeatably, because each\n  \
+                           entry costs a full build and test run\n  \
            mutate-recover  repair a tree an interrupted mutation run left mutated;\n  \
                            needs --confirm-no-writers, and read what it prints first\n  \
            help            this message\n"
@@ -439,9 +468,12 @@ fn mutate_run(args: &mut impl Iterator<Item = String>) -> ExitCode {
     let (Ok(root), Ok(catalogue)) = (need(&f, "root"), need(&f, "catalogue")) else {
         return ExitCode::FAILURE;
     };
+    // The lifecycle tests want the whole of whatever catalogue they point at, so no
+    // filter here.
     match mutate::run_all(
         std::path::Path::new(&root),
         std::path::Path::new(&catalogue),
+        &[],
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(problems) => {
@@ -518,10 +550,10 @@ fn mutate_recover(args: &mut impl Iterator<Item = String>) -> ExitCode {
     }
 }
 
-fn run_mutations() -> Result<(), Vec<String>> {
+fn run_mutations(only: &[String]) -> Result<(), Vec<String>> {
     let Some(root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() else {
         return Err(vec!["could not locate workspace root".to_owned()]);
     };
     let catalogue = root.join("xtask/mutations/mutations.toml");
-    mutate::run_all(root, &catalogue)
+    mutate::run_all(root, &catalogue, only)
 }

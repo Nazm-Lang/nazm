@@ -467,10 +467,36 @@ pub(crate) fn load(path: &Path) -> Result<Vec<Mutation>, String> {
     Ok(catalogue.mutation)
 }
 
-pub(crate) fn run_all(root: &Path, catalogue: &Path) -> Result<(), Vec<String>> {
-    let mutations = match load(catalogue) {
+pub(crate) fn run_all(root: &Path, catalogue: &Path, only: &[String]) -> Result<(), Vec<String>> {
+    let all = match load(catalogue) {
         Ok(m) => m,
         Err(e) => return Err(vec![e]),
+    };
+
+    // A subset, when one is asked for. Each entry costs a full workspace build and test
+    // run, so re-running fifty to check one repaired pattern is hours for one fact.
+    //
+    // Matched by substring, and **a filter that matches nothing is an error**: the
+    // alternative is a run that reports no problems because it ran no mutations, which
+    // is the most convincing wrong answer this tool could give.
+    let mutations: Vec<Mutation> = if only.is_empty() {
+        all
+    } else {
+        let chosen: Vec<Mutation> = all
+            .into_iter()
+            .filter(|m| only.iter().any(|want| m.name.contains(want.as_str())))
+            .collect();
+        if chosen.is_empty() {
+            return Err(vec![format!(
+                "no mutation matches {only:?}. A filter that selects nothing would \
+                 report a clean run having tested nothing."
+            )]);
+        }
+        println!(
+            "running {} of the catalogue, selected by {only:?}",
+            chosen.len()
+        );
+        chosen
     };
 
     // Bound to a name that lives to the end of this function on purpose. The kernel
