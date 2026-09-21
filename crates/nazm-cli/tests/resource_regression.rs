@@ -188,9 +188,12 @@ fn nzlex_stays_within_a_small_memory_budget_on_input_that_used_to_exhaust_it() {
         String::from_utf8_lossy(&run.stderr)
     );
 
-    let peak: u64 = fields[0].parse().expect("memory.peak");
-    let produced: u64 = fields[1].parse().expect("output size");
-    let code: i32 = fields[2].parse().expect("exit code");
+    let [peak, produced, code] = fields.as_slice() else {
+        panic!("expected three fields from the container, got {fields:?}");
+    };
+    let peak: u64 = peak.parse().expect("memory.peak");
+    let produced: u64 = produced.parse().expect("output size");
+    let code: i32 = code.parse().expect("exit code");
 
     assert_eq!(
         code, 0,

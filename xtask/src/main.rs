@@ -603,6 +603,18 @@ fn run_contained(args: &[String]) -> ExitCode {
                 shell("sh compiler/bootstrap.sh /work/bootstrap"),
             )
         }
+        Some("bench") => {
+            // The one workload whose product is a file in the tree: `bench/record.json`.
+            bounds.writable_source = true;
+            bounds.deadline = Duration::from_secs(2400);
+            (
+                "bench",
+                shell(
+                    "cargo build --release --locked -p nazm-cli --jobs 1 >/dev/null \
+                     && cargo run -q -p xtask -- bench --runs 5 --check",
+                ),
+            )
+        }
         Some("run") => {
             let cmd = args.get(1..).unwrap_or_default().join(" ");
             if cmd.trim().is_empty() {
@@ -613,7 +625,7 @@ fn run_contained(args: &[String]) -> ExitCode {
         }
         other => {
             eprintln!(
-                "contained: unknown workload {:?}\n  probe | selfhost | bootstrap | run <command>",
+                "contained: unknown workload {:?}\n  probe | selfhost | bootstrap | bench | run <command>",
                 other.unwrap_or("<none>")
             );
             return ExitCode::FAILURE;
@@ -680,6 +692,7 @@ fn contained_probe(repo: &std::path::Path) -> ExitCode {
         fsize_bytes: 4 * 1024 * 1024,
         deadline: Duration::from_secs(20),
         output_cap: 256 * 1024,
+        writable_source: false,
     };
 
     // (name, argv, expected outcome, what it proves)
