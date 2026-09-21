@@ -345,7 +345,7 @@ is never set on the host; `NAZM_ALLOW_UNCONTAINED=1` is never used.
 - [x] Compiler frontend and lowering/emission in Nazm — `82645f2`; external dependencies (`clang`, libc) documented in `docs/bootstrap.md`
 - [x] C1 → C2 → C3 bootstrap with conformance and reproducibility — `82645f2`; byte-identical, caveats stated
 - [x] Ordinary independent programs compile with the Nazm-written compiler — 5 conformance cases plus ~40 end-to-end programs
-- [x] Structured concurrency: transfer/capture rules, cancellation, cleanup — specified in `docs/spec.md`, interpreted, and compiled; 29 tests, all deadline-bounded; the compiled runtime does not yet join a scope before reporting a failure (recorded in `docs/delivery.md`)
+- [x] Structured concurrency: transfer/capture rules, cancellation, cleanup — specified in `docs/spec.md`, interpreted, and compiled; 34 tests, all deadline-bounded; both implementations join a scope before reporting a failure
 - [x] Developer interfaces, grammar/guide, formatting, repair workflow — `7243447`; schemas in `schema/`, the grammar checked against the lexer and the parser, the guide generated from it, 27 tests across `schemas.rs`, `format.rs`, `grammar.rs` and `workflow.rs`
 - [x] Performance baselines, profiling/optimisation pass, no unsupported speed claims — `3bc0505`; `bench/baseline.json` and `docs/performance.md`, which states that nothing has been compared to another language
 - [x] Clean rebuild of the integrated state on a supported target — `git archive HEAD` into an empty tree, offline, 506 tests, every gate, byte-identical bootstrap
