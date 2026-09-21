@@ -1,0 +1,163 @@
+// Module resolution, written in Nazm.
+//
+// Until now `use` was parsed and thrown away, and the *driver* — `nazm-cli/src/load.rs`,
+// written in Rust — read the import graph and handed the compiler one merged buffer. That
+// left a hole in the self-hosting claim: the compiler written in Nazm could not build a
+// multi-file program on its own, and `docs/delivery.md` listed it under *Known
+// limitations*. This file closes it.
+//
+// # The order is the contract
+//
+// The root first, then its imports depth-first in source order, each file read at most
+// once. That is exactly what `load.rs` produces, so both front ends see the same bytes in
+// the same order — which matters because offsets into the merged buffer are what
+// diagnostics point at. A cycle terminates because the second visit finds the file
+// already loaded; it is not an error.
+//
+// # Where this differs from the driver, and why
+//
+// `load.rs` keys each file by its **canonical** path, which resolves symbolic links. The
+// emitted runtime has eighteen symbols and `realpath` is not among them, so this keys by
+// a **textually normalised** path instead: `./x.nz`, `x.nz` and `a/../x.nz` are one key,
+// but two names that reach one file through a symbolic link are two keys, and that file
+// would be read twice and its functions defined twice. Recorded in `docs/bootstrap.md`
+// rather than papered over — it is a real difference in behaviour, not a detail.
+
+use "lex.nz";
+
+// --- paths ----------------------------------------------------------------------------
+
+/// The directory part of `path`, keeping its trailing `/`. `""` when there is none, so
+/// joining is always `dir ++ rel`.
+fn dir_of(path: Str) -> Str {
+    let mut i = str_len(path);
+    while i > 0 {
+        if str_byte(path, i - 1) == 47 { return str_slice(path, 0, i); }
+        i = i - 1;
+    }
+    ""
+}
+
+/// Fold away `.` and `..` so that two spellings of one file are one key.
+///
+/// A leading `..` is kept: there is nothing above the root of a relative path to cancel
+/// it against, and dropping it would silently turn `../x.nz` into `x.nz`.
+fn normalise(path: Str) -> Str {
+    let parts = strs_new();
+    let n = str_len(path);
+    let mut from = 0;
+    let mut i = 0;
+    while i <= n {
+        let mut boundary = 0;
+        if i == n { boundary = 1; }
+        if boundary == 0 {
+            if str_byte(path, i) == 47 { boundary = 1; }
+        }
+        if boundary == 1 {
+            let seg = str_slice(path, from, i);
+            if str_len(seg) > 0 {
+                // 0 ordinary, 1 `.`, 2 `..`. Written as a number because the language has
+                // no `&&`, so the alternative is a tower of nested `if`s.
+                let mut kind = 0;
+                if seg == "." { kind = 1; }
+                if seg == ".." { kind = 2; }
+                if kind == 0 { strs_push(parts, seg); }
+                if kind == 2 {
+                    let k = strs_len(parts);
+                    let mut cancels = 0;
+                    if k > 0 {
+                        if strs_get(parts, k - 1) == ".." { cancels = 0; } else { cancels = 1; }
+                    }
+                    if cancels == 1 { strs_pop(parts); } else { strs_push(parts, seg); }
+                }
+            }
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    let mut lead = "";
+    if n > 0 {
+        if str_byte(path, 0) == 47 { lead = "/"; }
+    }
+    str_concat(lead, str_join(parts, "/"))
+}
+
+/// Resolve one import against the directory of the file that wrote it. An absolute path
+/// stands on its own, exactly as the driver treats one.
+fn resolve_import(dir: Str, rel: Str) -> Str {
+    if str_len(rel) > 0 {
+        if str_byte(rel, 0) == 47 { return normalise(rel); }
+    }
+    normalise(str_concat(dir, rel))
+}
+
+// --- the import graph -------------------------------------------------------------------
+
+fn strs_has(xs: Strs, want: Str) -> Bool {
+    let mut i = 0;
+    while i < strs_len(xs) {
+        if strs_get(xs, i) == want { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+/// Every path `src` imports, already resolved against `dir`, in source order.
+///
+/// The real lexer does the reading. A second, ad-hoc scanner for `use` lines would be a
+/// second definition of what an import is, and the two would drift — a `use` inside a
+/// comment or a string is exactly the case a `grep` gets wrong and a lexer does not.
+fn imports_of(src: Str, dir: Str) -> Strs {
+    let kinds = ints_new();
+    let starts = ints_new();
+    let ends = ints_new();
+    let texts = strs_new();
+    lex(src, kinds, starts, ends, texts);
+
+    let out = strs_new();
+    let mut i = 0;
+    while i < ints_len(kinds) {
+        if ints_get(kinds, i) == k_use() {
+            if i + 1 < ints_len(kinds) {
+                if ints_get(kinds, i + 1) == k_str() {
+                    strs_push(out, resolve_import(dir, strs_get(texts, i + 1)));
+                }
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// `root` and everything it imports, as one buffer.
+///
+/// Files are separated by a newline so that a file not ending in one cannot weld its last
+/// line to the next file's first.
+fn load_program(root: Str) -> Str {
+    let seen = strs_new();
+    let parts = strs_new();
+    let stack = strs_new();
+    strs_push(stack, normalise(root));
+
+    while strs_len(stack) > 0 {
+        let path = strs_pop(stack);
+        if strs_has(seen, path) == false {
+            strs_push(seen, path);
+            if file_exists(path) == false {
+                eprint(str_concat(str_concat("cannot find ", path), str_from_byte(10)));
+                exit_with(2);
+            }
+            strs_push(parts, read_file(path));
+
+            // Pushed in reverse so the stack pops them in source order: the buffer's
+            // layout follows the program's text, which is what makes it reproducible.
+            let kids = imports_of(strs_get(parts, strs_len(parts) - 1), dir_of(path));
+            let mut i = strs_len(kids);
+            while i > 0 {
+                strs_push(stack, strs_get(kids, i - 1));
+                i = i - 1;
+            }
+        }
+    }
+    str_join(parts, str_from_byte(10))
+}

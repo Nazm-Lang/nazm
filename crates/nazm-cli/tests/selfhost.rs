@@ -1447,3 +1447,132 @@ fn the_bootstrap_chain_reaches_a_fixpoint() {
         );
     }
 }
+
+/// The compiler written in Nazm resolves `use` itself.
+///
+/// Until this existed the *driver* read the import graph and handed the compiler one
+/// merged buffer, so "the compiler written in Nazm" could not build a multi-file program
+/// on its own — `docs/delivery.md` listed it under *Known limitations*. The program below
+/// is arranged so that a resolver which merely concatenated would fail: `lib/math.nz` is
+/// reached twice, once as `./lib/math.nz` from the root and once as `math.nz` from inside
+/// `lib/`, and the two spellings must fold to one file or `triple` is defined twice and
+/// nothing compiles.
+#[test]
+fn the_nazm_written_compiler_resolves_its_own_imports() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("lib")).expect("lib");
+    std::fs::write(
+        root.join("lib/math.nz"),
+        "fn triple(n: Int) -> Int { n * 3 }\n",
+    )
+    .expect("math");
+    std::fs::write(
+        root.join("lib/util.nz"),
+        "use \"math.nz\";\nfn twice_tripled(n: Int) -> Int { triple(n) + triple(n) }\n",
+    )
+    .expect("util");
+    let prog = root.join("prog.nz");
+    std::fs::write(
+        &prog,
+        "use \"lib/util.nz\";\nuse \"./lib/math.nz\";\nfn main() -> Int { twice_tripled(7) + triple(1) }\n",
+    )
+    .expect("prog");
+
+    let ir = Command::new(&emitter)
+        .arg(&prog)
+        .output()
+        .expect("run emitter");
+    assert_eq!(
+        ir.status.code(),
+        Some(0),
+        "the Nazm compiler could not resolve the imports: {}",
+        String::from_utf8_lossy(&ir.stderr)
+    );
+    let ll = root.join("prog.ll");
+    std::fs::write(&ll, &ir.stdout).expect("write IR");
+
+    let exe = root.join("prog");
+    let built = Command::new("clang")
+        .args(["-Wno-override-module", "-o"])
+        .arg(&exe)
+        .arg(&ll)
+        .output()
+        .expect("run clang");
+    assert!(
+        built.status.success(),
+        "clang rejected the IR: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let (code, stdout, _) = run_bounded(
+        &mut common::bounded_exe(&exe),
+        std::time::Duration::from_secs(30),
+    )
+    .expect("the compiled program hung");
+    assert_eq!(code, Some(0), "{stdout}");
+    assert_eq!(
+        stdout.trim(),
+        "45",
+        "twice_tripled(7) + triple(1) is 45; a resolver that dropped an import or read one \
+         file twice would not get here at all"
+    );
+
+    // The reference implementations, which resolve imports their own way, agree.
+    let reference = root.join("prog_rs");
+    let rs = Command::new(NAZM)
+        .args(["build", prog.to_str().unwrap()])
+        .arg("-o")
+        .arg(&reference)
+        .output()
+        .expect("nazm build");
+    assert!(
+        rs.status.success(),
+        "the reference compiler rejected it: {}",
+        String::from_utf8_lossy(&rs.stderr)
+    );
+    let (_, rs_out, _) = run_bounded(
+        &mut common::bounded_exe(&reference),
+        std::time::Duration::from_secs(30),
+    )
+    .expect("hung");
+    assert_eq!(rs_out.trim(), "45", "the reference compiler disagrees");
+
+    let interp = Command::new(NAZM)
+        .args(["run", prog.to_str().unwrap()])
+        .output()
+        .expect("nazm run");
+    assert_eq!(
+        String::from_utf8_lossy(&interp.stdout).trim(),
+        "45",
+        "the interpreter disagrees"
+    );
+}
+
+/// An import that is not there is refused by name, rather than quietly producing a
+/// program missing the functions it needed.
+#[test]
+fn the_nazm_written_compiler_refuses_an_import_it_cannot_find() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    let prog = dir.path().join("bad.nz");
+    std::fs::write(&prog, "use \"nowhere.nz\";\nfn main() -> Int { 0 }\n").expect("write");
+
+    let out = Command::new(&emitter)
+        .arg(&prog)
+        .output()
+        .expect("run emitter");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a missing import must fail, got {:?}",
+        out.status.code()
+    );
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("cannot find"),
+        "it must name what it could not find, got {said:?}"
+    );
+}
