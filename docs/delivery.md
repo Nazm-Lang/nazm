@@ -32,7 +32,7 @@ performance comparison of any kind.
 | Structured developer interfaces, grammar/guide, formatting, repair workflow | done | `docs/diagnostics.md`, `schema/`, `docs/grammar.ebnf`, `docs/guide.md`, `scripts/repair.sh` |
 | Performance baselines, a profiling/optimisation pass, no unsupported speed claims | done | `docs/performance.md`, `bench/baseline-linux-aarch64.json` (current); `bench/baseline.json` (Darwin) is **stale** — see `docs/performance.md` |
 | A clean rebuild of the integrated final state on a supported target | done | a fresh copy, `--offline`, full suite — see *Reproducing this* |
-| A final local review/release package | done | `scripts/release-candidate.sh`, run contained: every gate passed and the candidate was verified against its own manifest — 68 files, every digest matching. The script validates what it assembled rather than trusting it, and compares file counts both ways so a file copied in but not listed fails |
+| A final local review/release package | done | `scripts/release-candidate.sh`, run contained at `c3fb078`: every gate passed and the candidate was verified against its own manifest — **70 files**, every digest matching — then extracted and re-digested independently on the host. The script validates what it assembled rather than trusting it, and compares file counts both ways so a file copied in but not listed fails |
 
 ## What is verified, and what that means
 
@@ -165,8 +165,9 @@ passing one is the most misleading thing a suite can contain.
 | | |
 | --- | --- |
 | Repository | local only; no remote is configured, which is not a blocker to anything here |
-| Integrated commit | the tip of `main` at delivery; `scripts/release-candidate.sh` records it in `MANIFEST.txt` and refuses to run on a dirty tree without `--allow-dirty` |
-| Remaining diff | none. The candidate is assembled only from a clean tree unless that flag is passed, and the manifest says which |
+| Integrated commit | **`c3fb0789bc8b0731bed083f90ab998816ecd8a09`** — what the packaged candidate was built and tested at. `scripts/release-candidate.sh` records it in `PROVENANCE.txt` and refuses to assemble a candidate whose revision it cannot establish |
+| Remaining diff | none at that commit. Documentation committed *after* it — this file, `docs/performance.md`, `docs/goal-status.md` and the provenance labelling in `scripts/release-candidate.sh` — is **not** in the package and was **not** covered by its test run |
+| Source digest | `PROVENANCE.txt` carries one over the source *files* (`.rs`, `.nz`, `.md`, `.json`, `.sh`, `.ebnf` under seven roots — 140 files). It is **not** a whole-tree digest: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, the Dockerfile, the mutation catalogue and every `.expected` fixture sit outside it |
 
 ## Reproducing this
 
@@ -208,8 +209,26 @@ nazm run broken.nz     # 2
 
 ## The archive
 
-`scripts/release-candidate.sh` assembles `target/release-candidate/`: the binary, the
-documentation, the JSON schemas, the examples, the recorded baseline, the bootstrap
-record, and a `MANIFEST.txt` carrying the commit, the toolchain, and a SHA-256 of every
-file. It builds nothing that has not passed every gate, and it does not tag, push or
-publish — that is a decision for a person.
+`scripts/release-candidate.sh` assembles `target/release-candidate/`: **both** compilers
+(`bin/nazm`, the Rust implementation that builds C1, and `bin/nazmc-selfhosted`, the
+Nazm-written C2 — both Linux aarch64 ELF and neither portable off it), the sources the
+bootstrap needs, the documentation, the JSON schemas, the examples, every recorded
+baseline, the bootstrap record, a `MANIFEST.txt` with a SHA-256 of every file, and a
+`PROVENANCE.txt` saying which revision it is and what was checked against it. It builds
+nothing that has not passed every gate, and it does not tag, push or publish — that is a
+decision for a person.
+
+The candidate built at `c3fb078`:
+
+| | |
+| --- | --- |
+| Path | `target/release-candidate/` — under `target/`, so gitignored and rebuildable, not a durable store |
+| `nazm-release-candidate.tar.gz` | 932,147 bytes, SHA-256 `361347f63a36aaa2c9838c5685f2464f5ec985998e1f3a7af15e17ce45e357ed` |
+| `MANIFEST.txt` | 7,611 bytes, SHA-256 `a121c2c46ef5423229427f64844308a5d6973266d32d1b4c52d8c31f5b259171` |
+| `PROVENANCE.txt` | 2,447 bytes, SHA-256 `5d52da22c3b0dea8c670283e68a106fcb9a8e04ed0cd0cdf1446e15e82b0d773` |
+
+**The archive is not claimed to be bit-reproducible.** It was produced once, on one host;
+building it again has not been shown to yield the same bytes, and nothing in the pipeline
+normalises timestamps or the link step. What *is* established is that its contents match
+`MANIFEST.txt` — checked inside the container and again after extraction on the host —
+and that C2 and C3 are byte-identical to each other.
