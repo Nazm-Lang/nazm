@@ -284,7 +284,7 @@ fn collect_rs(dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>>
 ///
 /// Named "doc claims", which over-promises: both checks below concern whether the
 /// evaluation protocol's pre-registration status is stated consistently, and both are
-/// no-ops while `docs/evaluation-preregistration.md` does not exist. A reader seeing
+/// no-ops while `docs/research/evaluation-preregistration.md` does not exist. A reader seeing
 /// `ok doc claims` should not take it for more than that.
 ///
 /// The language's documented claims are checked by `crates/nazm-cli/tests/docs.rs`,
@@ -304,7 +304,7 @@ fn check_doc_claims() -> Result<(), Vec<String>> {
     };
 
     let mut problems = Vec::new();
-    let prereg = root.join("docs/evaluation-preregistration.md");
+    let prereg = root.join("docs/research/evaluation-preregistration.md");
     let readme = match std::fs::read_to_string(root.join("README.md")) {
         Ok(s) => s,
         Err(e) => return Err(vec![format!("could not read README.md: {e}")]),
@@ -315,24 +315,24 @@ fn check_doc_claims() -> Result<(), Vec<String>> {
 
     if prereg.exists() && readme_says_not_registered {
         problems.push(
-            "docs/evaluation-preregistration.md exists, but README.md still says the \
+            "docs/research/evaluation-preregistration.md exists, but README.md still says the \
              decision rule is not pre-registered. One of them is wrong."
                 .to_owned(),
         );
     }
 
     // The reverse: the evaluation protocol must keep its own status honest.
-    match std::fs::read_to_string(root.join("docs/evaluation.md")) {
+    match std::fs::read_to_string(root.join("docs/research/evaluation.md")) {
         Ok(eval) => {
             if prereg.exists() && eval.contains("Not yet pre-registered") {
                 problems.push(
-                    "docs/evaluation.md still carries its draft banner although a \
+                    "docs/research/evaluation.md still carries its draft banner although a \
                      pre-registration exists."
                         .to_owned(),
                 );
             }
         }
-        Err(e) => problems.push(format!("could not read docs/evaluation.md: {e}")),
+        Err(e) => problems.push(format!("could not read docs/research/evaluation.md: {e}")),
     }
 
     // The claim that rotted in four places at once. `crates/nazm-lir` is an IR crate and

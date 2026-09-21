@@ -174,7 +174,7 @@ fn the_documented_target_is_the_one_the_emitter_names() {
     let note = nazm_lir::TARGET_NOTE;
     let target = "aarch64-apple-darwin";
     assert!(note.contains(target), "the emitter's note changed: {note}");
-    for file in ["README.md", "docs/delivery.md"] {
+    for file in ["README.md", "docs/releases/4fb1554.md"] {
         let text = flowed(&read(file));
         assert!(
             text.contains(target),

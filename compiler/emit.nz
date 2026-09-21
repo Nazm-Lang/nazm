@@ -3,7 +3,7 @@
 // The fourth component, and the one that makes the others a *compiler*: it turns the node
 // arena into LLVM IR text, which `clang` assembles. Same arrangement as `nazm build` —
 // `docs/architecture.md` §1 says not to link LLVM in year one, and `clang` reads IR from
-// a file — and the same arrangement `docs/NAZM_AUTONOMOUS_GOAL.md` §8 permits: emitting
+// a file — and the same arrangement `docs/bootstrap.md` §4 records: emitting
 // LLVM and invoking an external assembler is self-hosting, a wrapper that shells out to
 // the Rust compiler is not.
 //
