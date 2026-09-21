@@ -12,8 +12,8 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `91ec4d6` |
-| Working tree | **modified**: the resource repair below is applied and unstaged |
+| Current commit | `011d7ff` (was `7677ebb` before the repair) |
+| Working tree | clean; the resource repair is committed as `011d7ff` |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
 | Disk | 50 GiB free of 460 GiB (88 % full) after reclaiming 33.5 GiB of `target/` on 2026-09-21 |
 
@@ -118,7 +118,7 @@ IR and sources, Gate A and root-cause write-ups).
 | Concurrency in the *Nazm* compiler | **deliberately absent** | outside the bootstrap subset, named as such in `compiler/analyse.nz` and guarded by a test. See `docs/bootstrap-design.md` |
 | Formatter, grammar artefact, fix application, benchmarks | planned | nothing exists |
 
-## Cleared to run (against `7677ebb` + the unstaged repair, 2026-09-21)
+## Cleared to run (against `011d7ff`, 2026-09-21)
 
 Serial, one workload at a time. Everything else stays paused.
 
