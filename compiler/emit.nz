@@ -182,10 +182,70 @@ fn guard(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
     // `@nz.fail` records and returns; it does not end the process. The failure leaves
     // this function by its own exit, so that a `scope` further out can join its tasks
     // before anything is reported — see `docs/spec.md`, *Error propagation*.
-    ints_set(live, 1, 1);
-    add_line(out, "  br label %nz.unwind");
+    unwind(out, next, current, live);
     open_block(out, current, live, str_concat("b", int_to_str(cont)));
     cont
+}
+
+// Join one scope's tasks and take on the first failure any of them had.
+//
+// `@nz.fail` keeps the first failure a thread records, so a task's can never displace one
+// the body already had — which is the precedence the specification states.
+fn emit_join(out: Strs, next: Ints, current: Strs, live: Ints, tids: Int) -> Int {
+    let r = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(r)),
+            str_concat(" = call { ptr, i64 } @nz.scope_join(ptr ", str_concat(v(tids), ")"))));
+    let msg = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(msg)),
+            str_concat(" = extractvalue { ptr, i64 } ", str_concat(v(r), ", 0"))));
+    let has = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(has)),
+            str_concat(" = icmp ne ptr ", str_concat(v(msg), ", null"))));
+    let take = take_label(next);
+    let cont = take_label(next);
+    add_line(out, str_concat(str_concat("  br i1 ", v(has)),
+            str_concat(str_concat(", label %b", int_to_str(take)),
+            str_concat(", label %b", int_to_str(cont)))));
+    open_block(out, current, live, str_concat("b", int_to_str(take)));
+    let len = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(len)),
+            str_concat(" = extractvalue { ptr, i64 } ", str_concat(v(r), ", 1"))));
+    add_line(out, str_concat(str_concat("  call void @nz.fail(ptr ", v(msg)),
+            str_concat(str_concat(", i64 ", v(len)), ")")));
+    add_line(out, str_concat("  br label %b", int_to_str(cont)));
+    open_block(out, current, live, str_concat("b", int_to_str(cont)));
+    0
+}
+
+// Leave for the failure exit, joining every scope still open, innermost first.
+//
+// The open scopes are held from index 2 of `live`, innermost last — in the array already
+// threaded to every emitter rather than in a parameter added to eleven signatures and to
+// everything that calls them.
+fn unwind(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
+    let mut i = ints_len(live) - 1;
+    while i >= 2 {
+        emit_join(out, next, current, live, ints_get(live, i));
+        i = i - 1;
+    }
+    ints_set(live, 1, 1);
+    add_line(out, "  br label %nz.unwind");
+    0
+}
+
+// If this thread has failed, leave; otherwise carry on in a fresh block.
+fn check_failed(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
+    let flag = take_number(next);
+    let uw = take_label(next);
+    let ok = take_label(next);
+    add_line(out, str_concat(str_concat("  ", v(flag)), " = load i1, ptr @nz.failed"));
+    add_line(out, str_concat(str_concat("  br i1 ", v(flag)),
+            str_concat(str_concat(", label %b", int_to_str(uw)),
+            str_concat(", label %b", int_to_str(ok)))));
+    open_block(out, current, live, str_concat("b", int_to_str(uw)));
+    unwind(out, next, current, live);
+    open_block(out, current, live, str_concat("b", int_to_str(ok)));
+    0
 }
 
 // The value a function hands back while a failure is travelling through it. Never read:
@@ -954,18 +1014,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     // outward instead of this function carrying on with a value that was
                     // never produced — which would run statements, print, and could loop
                     // forever on it.
-                    let flag = take_number(next);
-                    let uw = take_label(next);
-                    let ok = take_label(next);
-                    add_line(out, str_concat(str_concat("  ", v(flag)),
-                            " = load i1, ptr @nz.failed"));
-                    add_line(out, str_concat(str_concat("  br i1 ", v(flag)),
-                            str_concat(str_concat(", label %b", int_to_str(uw)),
-                            str_concat(", label %b", int_to_str(ok)))));
-                    open_block(out, current, live, str_concat("b", int_to_str(uw)));
-                    ints_set(live, 1, 1);
-                    add_line(out, "  br label %nz.unwind");
-                    open_block(out, current, live, str_concat("b", int_to_str(ok)));
+                    check_failed(out, next, current, live);
                     ints_push(vals, n);
                 }
             } else {
@@ -1548,6 +1597,56 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         return make_str(out, next, buf, n);
     }
 
+    if name == "chan_new" {
+        let small = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(small)),
+                str_concat(" = icmp slt i64 ", str_concat(v(a0), ", 1"))));
+        guard(out, msgs, next, current, live, small, "N0405",
+                "a channel needs a capacity of at least 1", at);
+        let c = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(c)),
+                str_concat(" = call ptr @nz.chan_new(i64 ", str_concat(v(a0), ")"))));
+        let bad = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(bad)),
+                str_concat(" = icmp eq ptr ", str_concat(v(c), ", null"))));
+        guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+        return c;
+    }
+
+    if name == "chan_send" {
+        let ok = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(ok)),
+                str_concat(str_concat(" = call i1 @nz.chan_send(ptr ", v(a0)),
+                str_concat(str_concat(", i64 ", v(a1)), ")"))));
+        return ok;
+    }
+
+    // The received value is pushed onto the sequence by the helper rather than returned
+    // and pushed here, because the push happens only when there *was* a value and a call
+    // site cannot branch without a block of its own. The failure text is passed in: the
+    // helper is shared and the position is not.
+    if name == "chan_recv" {
+        let text = failure_text("N0406", "out of memory", at);
+        let idx = message_index(msgs, text);
+        let ok = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(ok)),
+                str_concat(str_concat(" = call i1 @nz.chan_recv(ptr ", v(a0)),
+                str_concat(str_concat(str_concat(", ptr ", v(a1)), ", ptr @.m"),
+                str_concat(str_concat(int_to_str(idx), ", i64 "),
+                str_concat(int_to_str(str_len(text) + 1), ")"))))));
+        // A failed allocation is reported by recording it and returning `false`, which is
+        // otherwise how the helper says the channel is closed and drained. Unchecked,
+        // `while chan_recv(c, buf)` would read the one as the other.
+        check_failed(out, next, current, live);
+        return ok;
+    }
+
+    if name == "chan_close" {
+        add_line(out, str_concat(str_concat("  call void @nz.chan_close(ptr ", v(a0)), ")"));
+        // The language has no unit type and `chan_close` is specified to produce `Int`.
+        return constant(out, next, "0");
+    }
+
     if name == "ints_new" { return new_sequence(out, msgs, next, current, live, at); }
     if name == "strs_new" { return new_sequence(out, msgs, next, current, live, at); }
     if name == "ints_len" { return binop(out, next, "load", "i64,", str_concat("ptr ", v(a0)), ""); }
@@ -1708,4 +1807,255 @@ fn pop_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, ha
     // the sequence while it is being fetched. Capacity is left alone.
     add_line(out, str_concat(str_concat("  store i64 ", v(last)), str_concat(", ptr ", v(handle))));
     value
+}
+
+// The task runtime, as generated LLVM: start a thread, record it, join the list and
+// report the first failure any of them had. Transcribed from
+// `crates/nazm-lir/src/emit.rs`, which documents why each piece is the way it is.
+fn task_runtime() -> Str {
+    let r = strs_new();
+    strs_push(r, "define internal i32 @nz.spawn(ptr %h, ptr %fn, ptr %blk) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %data = call ptr @nz.arr_grow(ptr %h, i64 8)");
+    strs_push(r, "  %oom = icmp eq ptr %data, null");
+    strs_push(r, "  br i1 %oom, label %nomem, label %record");
+    strs_push(r, "nomem:");
+    strs_push(r, "  ret i32 -1");
+    strs_push(r, "record:");
+    strs_push(r, "  %len = load i64, ptr %h");
+    strs_push(r, "  %slot = getelementptr i64, ptr %data, i64 %len");
+    strs_push(r, "  %raw = ptrtoint ptr %blk to i64");
+    strs_push(r, "  store i64 %raw, ptr %slot");
+    strs_push(r, "  %next = add i64 %len, 1");
+    strs_push(r, "  store i64 %next, ptr %h");
+    strs_push(r, "  %rc = call i32 @pthread_create(ptr %blk, ptr null, ptr %fn, ptr %blk)");
+    strs_push(r, "  %bad = icmp ne i32 %rc, 0");
+    strs_push(r, "  br i1 %bad, label %undo, label %ok");
+    strs_push(r, "undo:");
+    strs_push(r, "  store i64 %len, ptr %h");
+    strs_push(r, "  ret i32 1");
+    strs_push(r, "ok:");
+    strs_push(r, "  ret i32 0");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "; Joins every task and reports the first failure any of them had, as { message, length },");
+    strs_push(r, "; or { null, 0 } if none did.");
+    strs_push(r, ";");
+    strs_push(r, "; **Every** task is joined before anything is reported, including after one has been found");
+    strs_push(r, "; to have failed — returning at the first would leave the rest running, and a scope that");
+    strs_push(r, "; does not contain its tasks is not a scope. The failure taken is the earliest by position");
+    strs_push(r, "; in the list, which is the order the tasks were spawned in, so which one is reported does");
+    strs_push(r, "; not depend on which thread happened to finish first.");
+    strs_push(r, ";");
+    strs_push(r, "; No lock is needed. A task writes its own diagnostic into its own argument block before");
+    strs_push(r, "; its thread ends, and this reads that block only after `pthread_join` has returned for");
+    strs_push(r, "; it, which is a happens-before edge.");
+    strs_push(r, "define internal { ptr, i64 } @nz.scope_join(ptr %h) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  ; The count is read once. Nothing can be added while this runs: the scope's body has");
+    strs_push(r, "  ; finished by every path that reaches here, and a task cannot spawn into its parent.");
+    strs_push(r, "  %n = load i64, ptr %h");
+    strs_push(r, "  %dp = getelementptr i8, ptr %h, i64 16");
+    strs_push(r, "  %data = load ptr, ptr %dp");
+    strs_push(r, "  br label %test");
+    strs_push(r, "test:");
+    strs_push(r, "  %i = phi i64 [ 0, %entry ], [ %next, %after ]");
+    strs_push(r, "  %msg = phi ptr [ null, %entry ], [ %msg2, %after ]");
+    strs_push(r, "  %len = phi i64 [ 0, %entry ], [ %len2, %after ]");
+    strs_push(r, "  %more = icmp slt i64 %i, %n");
+    strs_push(r, "  br i1 %more, label %body, label %done");
+    strs_push(r, "body:");
+    strs_push(r, "  %ep = getelementptr i64, ptr %data, i64 %i");
+    strs_push(r, "  %raw = load i64, ptr %ep");
+    strs_push(r, "  %blk = inttoptr i64 %raw to ptr");
+    strs_push(r, "  %tid = load ptr, ptr %blk");
+    strs_push(r, "  %rc = call i32 @pthread_join(ptr %tid, ptr null)");
+    strs_push(r, "  ; The task's own diagnostic, at a fixed offset in the block it was given.");
+    strs_push(r, "  %emp = getelementptr i8, ptr %blk, i64 8");
+    strs_push(r, "  %em = load ptr, ptr %emp");
+    strs_push(r, "  %elp = getelementptr i8, ptr %blk, i64 16");
+    strs_push(r, "  %el = load i64, ptr %elp");
+    strs_push(r, "  %none = icmp eq ptr %msg, null");
+    strs_push(r, "  %this = icmp ne ptr %em, null");
+    strs_push(r, "  %take = and i1 %none, %this");
+    strs_push(r, "  br i1 %take, label %first, label %after");
+    strs_push(r, "first:");
+    strs_push(r, "  br label %after");
+    strs_push(r, "after:");
+    strs_push(r, "  %msg2 = phi ptr [ %em, %first ], [ %msg, %body ]");
+    strs_push(r, "  %len2 = phi i64 [ %el, %first ], [ %len, %body ]");
+    strs_push(r, "  %next = add i64 %i, 1");
+    strs_push(r, "  br label %test");
+    strs_push(r, "done:");
+    strs_push(r, "  %r0 = insertvalue { ptr, i64 } undef, ptr %msg, 0");
+    strs_push(r, "  %r1 = insertvalue { ptr, i64 } %r0, i64 %len, 1");
+    strs_push(r, "  ret { ptr, i64 } %r1");
+    strs_push(r, "}");
+    str_concat(str_join(r, nl()), nl())
+}
+
+// The channel runtime: one mutex, one condition variable, one ring. Transcribed from
+// `crates/nazm-lir/src/emit.rs`.
+fn channel_runtime() -> Str {
+    let r = strs_new();
+    strs_push(r, "define internal ptr @nz.chan_new(i64 %cap) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %c = call ptr @malloc(i64 56)");
+    strs_push(r, "  %bad = icmp eq ptr %c, null");
+    strs_push(r, "  br i1 %bad, label %fail, label %ring");
+    strs_push(r, "fail:");
+    strs_push(r, "  ret ptr null");
+    strs_push(r, "ring:");
+    strs_push(r, "  %bytes = mul i64 %cap, 8");
+    strs_push(r, "  %d = call ptr @malloc(i64 %bytes)");
+    strs_push(r, "  %badd = icmp eq ptr %d, null");
+    strs_push(r, "  br i1 %badd, label %fail, label %lock");
+    strs_push(r, "lock:");
+    strs_push(r, "  ; Sized generously on purpose: pthread_mutex_t and pthread_cond_t are opaque and");
+    strs_push(r, "  ; differently sized on every platform, and there is no header to ask from here.");
+    strs_push(r, "  ; Over-allocating is what makes this portable without a size to get wrong.");
+    strs_push(r, "  %m = call ptr @malloc(i64 128)");
+    strs_push(r, "  %badm = icmp eq ptr %m, null");
+    strs_push(r, "  br i1 %badm, label %fail, label %cond");
+    strs_push(r, "cond:");
+    strs_push(r, "  %v = call ptr @malloc(i64 128)");
+    strs_push(r, "  %badv = icmp eq ptr %v, null");
+    strs_push(r, "  br i1 %badv, label %fail, label %init");
+    strs_push(r, "init:");
+    strs_push(r, "  %mi = call i32 @pthread_mutex_init(ptr %m, ptr null)");
+    strs_push(r, "  %vi = call i32 @pthread_cond_init(ptr %v, ptr null)");
+    strs_push(r, "  store i64 %cap, ptr %c");
+    strs_push(r, "  %lenp = getelementptr i8, ptr %c, i64 8");
+    strs_push(r, "  store i64 0, ptr %lenp");
+    strs_push(r, "  %headp = getelementptr i8, ptr %c, i64 16");
+    strs_push(r, "  store i64 0, ptr %headp");
+    strs_push(r, "  %closedp = getelementptr i8, ptr %c, i64 24");
+    strs_push(r, "  store i64 0, ptr %closedp");
+    strs_push(r, "  %datap = getelementptr i8, ptr %c, i64 32");
+    strs_push(r, "  store ptr %d, ptr %datap");
+    strs_push(r, "  %mp = getelementptr i8, ptr %c, i64 40");
+    strs_push(r, "  store ptr %m, ptr %mp");
+    strs_push(r, "  %vp = getelementptr i8, ptr %c, i64 48");
+    strs_push(r, "  store ptr %v, ptr %vp");
+    strs_push(r, "  ret ptr %c");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal i1 @nz.chan_send(ptr %c, i64 %v) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %mp = getelementptr i8, ptr %c, i64 40");
+    strs_push(r, "  %m = load ptr, ptr %mp");
+    strs_push(r, "  %vp = getelementptr i8, ptr %c, i64 48");
+    strs_push(r, "  %cv = load ptr, ptr %vp");
+    strs_push(r, "  %lenp = getelementptr i8, ptr %c, i64 8");
+    strs_push(r, "  %headp = getelementptr i8, ptr %c, i64 16");
+    strs_push(r, "  %closedp = getelementptr i8, ptr %c, i64 24");
+    strs_push(r, "  %datap = getelementptr i8, ptr %c, i64 32");
+    strs_push(r, "  %l = call i32 @pthread_mutex_lock(ptr %m)");
+    strs_push(r, "  br label %check");
+    strs_push(r, "check:");
+    strs_push(r, "  ; Closed is tested first and on every pass, so a channel closed while this sender");
+    strs_push(r, "  ; waited refuses rather than queueing into something nobody will drain.");
+    strs_push(r, "  %closed = load i64, ptr %closedp");
+    strs_push(r, "  %isclosed = icmp ne i64 %closed, 0");
+    strs_push(r, "  br i1 %isclosed, label %refuse, label %space");
+    strs_push(r, "space:");
+    strs_push(r, "  %len = load i64, ptr %lenp");
+    strs_push(r, "  %cap = load i64, ptr %c");
+    strs_push(r, "  %full = icmp sge i64 %len, %cap");
+    strs_push(r, "  br i1 %full, label %wait, label %store");
+    strs_push(r, "wait:");
+    strs_push(r, "  %w = call i32 @pthread_cond_wait(ptr %cv, ptr %m)");
+    strs_push(r, "  br label %check");
+    strs_push(r, "refuse:");
+    strs_push(r, "  %u1 = call i32 @pthread_mutex_unlock(ptr %m)");
+    strs_push(r, "  ret i1 false");
+    strs_push(r, "store:");
+    strs_push(r, "  %head = load i64, ptr %headp");
+    strs_push(r, "  %sum = add i64 %head, %len");
+    strs_push(r, "  %idx = urem i64 %sum, %cap");
+    strs_push(r, "  %data = load ptr, ptr %datap");
+    strs_push(r, "  %slot = getelementptr i64, ptr %data, i64 %idx");
+    strs_push(r, "  store i64 %v, ptr %slot");
+    strs_push(r, "  %n1 = add i64 %len, 1");
+    strs_push(r, "  store i64 %n1, ptr %lenp");
+    strs_push(r, "  %b = call i32 @pthread_cond_broadcast(ptr %cv)");
+    strs_push(r, "  %u2 = call i32 @pthread_mutex_unlock(ptr %m)");
+    strs_push(r, "  ret i1 true");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal i1 @nz.chan_recv(ptr %c, ptr %seq, ptr %msg, i64 %mn) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %mp = getelementptr i8, ptr %c, i64 40");
+    strs_push(r, "  %m = load ptr, ptr %mp");
+    strs_push(r, "  %vp = getelementptr i8, ptr %c, i64 48");
+    strs_push(r, "  %cv = load ptr, ptr %vp");
+    strs_push(r, "  %lenp = getelementptr i8, ptr %c, i64 8");
+    strs_push(r, "  %headp = getelementptr i8, ptr %c, i64 16");
+    strs_push(r, "  %closedp = getelementptr i8, ptr %c, i64 24");
+    strs_push(r, "  %datap = getelementptr i8, ptr %c, i64 32");
+    strs_push(r, "  %l = call i32 @pthread_mutex_lock(ptr %m)");
+    strs_push(r, "  br label %check");
+    strs_push(r, "check:");
+    strs_push(r, "  ; A queued value wins over the close flag, which is what makes closing end a channel");
+    strs_push(r, "  ; rather than discard what is in it.");
+    strs_push(r, "  %len = load i64, ptr %lenp");
+    strs_push(r, "  %empty = icmp sle i64 %len, 0");
+    strs_push(r, "  br i1 %empty, label %maybe, label %take");
+    strs_push(r, "maybe:");
+    strs_push(r, "  %closed = load i64, ptr %closedp");
+    strs_push(r, "  %isclosed = icmp ne i64 %closed, 0");
+    strs_push(r, "  br i1 %isclosed, label %drained, label %wait");
+    strs_push(r, "wait:");
+    strs_push(r, "  %w = call i32 @pthread_cond_wait(ptr %cv, ptr %m)");
+    strs_push(r, "  br label %check");
+    strs_push(r, "drained:");
+    strs_push(r, "  %u1 = call i32 @pthread_mutex_unlock(ptr %m)");
+    strs_push(r, "  ret i1 false");
+    strs_push(r, "take:");
+    strs_push(r, "  %head = load i64, ptr %headp");
+    strs_push(r, "  %cap = load i64, ptr %c");
+    strs_push(r, "  %data = load ptr, ptr %datap");
+    strs_push(r, "  %slot = getelementptr i64, ptr %data, i64 %head");
+    strs_push(r, "  %val = load i64, ptr %slot");
+    strs_push(r, "  %h1 = add i64 %head, 1");
+    strs_push(r, "  %nh = urem i64 %h1, %cap");
+    strs_push(r, "  store i64 %nh, ptr %headp");
+    strs_push(r, "  %n1 = sub i64 %len, 1");
+    strs_push(r, "  store i64 %n1, ptr %lenp");
+    strs_push(r, "  %b = call i32 @pthread_cond_broadcast(ptr %cv)");
+    strs_push(r, "  %u2 = call i32 @pthread_mutex_unlock(ptr %m)");
+    strs_push(r, "  ; The push happens after the unlock. Growing a sequence may call `realloc`, and holding");
+    strs_push(r, "  ; a channel's mutex across an allocation would make every other task on it wait for the");
+    strs_push(r, "  ; allocator.");
+    strs_push(r, "  %grown = call ptr @nz.arr_grow(ptr %seq, i64 8)");
+    strs_push(r, "  %oom = icmp eq ptr %grown, null");
+    strs_push(r, "  br i1 %oom, label %nomem, label %push");
+    strs_push(r, "nomem:");
+    strs_push(r, "  ; Records and returns, like every other failure. `false` is the stand-in `chan_recv`");
+    strs_push(r, "  ; hands back while unwinding; the caller checks the flag before it reads it.");
+    strs_push(r, "  call void @nz.fail(ptr %msg, i64 %mn)");
+    strs_push(r, "  ret i1 false");
+    strs_push(r, "push:");
+    strs_push(r, "  %sn = load i64, ptr %seq");
+    strs_push(r, "  %sslot = getelementptr i64, ptr %grown, i64 %sn");
+    strs_push(r, "  store i64 %val, ptr %sslot");
+    strs_push(r, "  %sn1 = add i64 %sn, 1");
+    strs_push(r, "  store i64 %sn1, ptr %seq");
+    strs_push(r, "  ret i1 true");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal void @nz.chan_close(ptr %c) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %mp = getelementptr i8, ptr %c, i64 40");
+    strs_push(r, "  %m = load ptr, ptr %mp");
+    strs_push(r, "  %vp = getelementptr i8, ptr %c, i64 48");
+    strs_push(r, "  %cv = load ptr, ptr %vp");
+    strs_push(r, "  %l = call i32 @pthread_mutex_lock(ptr %m)");
+    strs_push(r, "  %closedp = getelementptr i8, ptr %c, i64 24");
+    strs_push(r, "  store i64 1, ptr %closedp");
+    strs_push(r, "  %b = call i32 @pthread_cond_broadcast(ptr %cv)");
+    strs_push(r, "  %u = call i32 @pthread_mutex_unlock(ptr %m)");
+    strs_push(r, "  ret void");
+    strs_push(r, "}");
+    str_concat(str_join(r, nl()), nl())
 }
