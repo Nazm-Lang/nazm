@@ -21,7 +21,7 @@ FROM rust:1.98.1-slim-trixie
 # separate them, so a live lock would look dead and be stolen. Without `ps` the probe
 # correctly reports Unknown and four tests fail; the slim image simply does not ship it.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends clang ca-certificates procps \
+ && apt-get install -y --no-install-recommends clang ca-certificates procps time \
  && rm -rf /var/lib/apt/lists/*
 
 # Cargo writes here, never into the read-only source mount. The host's `target/` holds
