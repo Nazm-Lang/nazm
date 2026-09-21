@@ -581,6 +581,16 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
         // came back too high would leave it unpopped and reassociate the expression.
         "fn m() -> Int { let mut a = 0; let x = 1 + if true { a = 5; a } else { 3 }; x + a }",
         "fn m(c: Bool) -> Int { let mut a = 2; let x = 1 + 2 * if c { a = 3; a } else { 4 } - 5; x + a }",
+        // Structured concurrency. `scope` is a statement whose one child is its block;
+        // `spawn` is a call node with the callee as its text and its arguments as its
+        // children, spanning from the keyword to the `;`. The shapes are the ones
+        // `dump_stmt` above writes down.
+        "fn m() -> Int { scope { } 0 }",
+        "fn w() -> Int { 0 }\nfn m() -> Int { scope { spawn w(); } 0 }",
+        "fn w(a: Int, b: Int) -> Int { a + b }\nfn m() -> Int { scope { spawn w(1, 2 + 3); } 0 }",
+        "fn w(c: Chan) -> Int { 0 }\nfn m() -> Int { let c = chan_new(1); scope { spawn w(c); spawn w(c); } 0 }",
+        "fn w() -> Int { 0 }\nfn m() -> Int { scope { scope { spawn w(); } spawn w(); } 0 }",
+        "fn w(n: Int) -> Int { n }\nfn m() -> Int { let mut i = 0; scope { while i < 3 { spawn w(i); i = i + 1; } } i }",
         "fn m(s: Int) -> Int { s + if s > 0 { 1 } else { 0 } }",
         "fn m() -> Int { f(if true { 1 } else { 2 }) }",
         "fn m() -> Int { f(1, if true { 2 } else { 3 }, 4) }",
@@ -631,7 +641,7 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
 /// is right on the day it is written.
 ///
 /// `docs/bootstrap-design.md` says which constructs these are and why they are left out.
-fn outside_the_bootstrap_subset(source: &str) -> bool {
+fn uses_concurrency(source: &str) -> bool {
     use nazm_core::__syntax::TokenKind as T;
     let (tokens, _) = nazm_core::__syntax::lex(source);
     tokens.iter().any(|t| matches!(t.kind, T::Scope | T::Spawn))
@@ -666,26 +676,11 @@ fn the_nazm_parser_agrees_with_the_reference_on_every_source_in_the_tree() {
         assert!(errors.is_empty(), "{}: {errors:#?}", file.display());
         let theirs = dump_program(&program);
 
+        // `scope` and `spawn` are no longer skipped or asserted to be refused here: the
+        // Nazm parser handles them, and `examples/worker-pool.nz` is compared tree for
+        // tree like every other file. The checker is a separate question — see
+        // `the_nazm_checker_agrees_with_the_reference_on_names_and_types`.
         let out = common::bounded_exe(&exe).arg(file).output().expect("run");
-        if outside_the_bootstrap_subset(&source) {
-            // A refusal, and a located one. A bootstrap parser that quietly produced
-            // *some* tree for a construct it does not handle would agree with nothing
-            // and be discovered much later — which is why this is asserted rather than
-            // skipped.
-            assert_eq!(
-                out.status.code(),
-                Some(1),
-                "{} is outside the bootstrap subset and should have been refused",
-                file.display()
-            );
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            assert!(
-                stderr.contains("parse error at "),
-                "{}: the refusal should say where: {stderr}",
-                file.display()
-            );
-            continue;
-        }
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -930,9 +925,10 @@ fn the_nazm_checker_accepts_the_compiler_it_is_part_of() {
         // its imported names look undefined in isolation. Those files are checked as a
         // whole program by `nazm check`, which is what the assertion below uses.
         let source = std::fs::read_to_string(file).expect("read");
-        if outside_the_bootstrap_subset(&source) {
-            // Parsing fails before checking can begin, so there is nothing to compare.
-            // The refusal itself is asserted by the parser's own tree-wide test.
+        if uses_concurrency(&source) {
+            // The parser handles these now; the checker does not type `Chan` or know the
+            // `chan_*` built-ins yet, so there is nothing to compare. Narrowed from
+            // "outside the bootstrap subset" to what it actually is: a checker gap.
             continue;
         }
         let standalone = !source.contains("use \"");
