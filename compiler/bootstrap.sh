@@ -16,8 +16,12 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-out=${1:-"$root/target/bootstrap"}
-nazm="$root/target/debug/nazm"
+out=${1:-"${CARGO_TARGET_DIR:-$root/target}/bootstrap"}
+# The Rust implementation, C0. `CARGO_TARGET_DIR` is honoured because the contained
+# runner puts Linux artefacts there: the checkout's own `target/` holds
+# aarch64-apple-darwin binaries, and running one under a Linux kernel is an
+# "Exec format error", not a bootstrap failure. `NAZM` overrides both.
+nazm=${NAZM:-"${CARGO_TARGET_DIR:-$root/target}/debug/nazm"}
 
 # S: the compiler's source, as one translation unit.
 #
@@ -27,6 +31,16 @@ nazm="$root/target/debug/nazm"
 sources="lex.nz parse.nz analyse.nz emit.nz"
 
 say() { printf '%s\n' "$*"; }
+# `shasum` on macOS, `sha256sum` on GNU userland. A digest line that silently vanished
+# would weaken the reproducibility record without failing anything, so this resolves once
+# and fails loudly if neither exists.
+if command -v shasum >/dev/null 2>&1; then
+  sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
+elif command -v sha256sum >/dev/null 2>&1; then
+  sha256() { sha256sum "$1" | cut -d' ' -f1; }
+else
+  sha256() { printf 'no-sha256-tool\n'; }
+fi
 fail() { printf 'bootstrap: %s\n' "$*" >&2; exit 1; }
 
 # Every stage below is a compiler written in Nazm, run natively with no ceiling. On
@@ -79,12 +93,22 @@ mkdir -p "$out/stage1" "$out/stage2" "$out/stage3"
 # filename in a per-stage directory removes the second — but a binary without an
 # `LC_UUID` is one macOS refuses to load, so the normalised copy exists **only** to be
 # compared and is never executed. Nothing about code or data is touched by either.
+#
+# ELF has the same problem with a different name: GNU ld and lld stamp a build-id, which
+# `--build-id=none` removes. The flag has to be chosen per platform because each linker
+# rejects the other's spelling, and the bootstrap now runs on Linux inside the contained
+# runner as well as on macOS.
+case "$(uname -s)" in
+  Darwin) normalise_flag="-Wl,-no_uuid" ;;
+  *)      normalise_flag="-Wl,--build-id=none" ;;
+esac
+
 link() {
   stage=$1
   clang -Wno-override-module -o "$stage/nazmc" "$stage/nazmc.ll" \
     || fail "$(basename "$stage") assembly failed"
   mkdir -p "$stage/normalised"
-  clang -Wno-override-module -Wl,-no_uuid -o "$stage/normalised/nazmc" "$stage/nazmc.ll" \
+  clang -Wno-override-module "$normalise_flag" -o "$stage/normalised/nazmc" "$stage/nazmc.ll" \
     || fail "$(basename "$stage") normalised assembly failed"
 }
 
@@ -97,7 +121,7 @@ cat_sources() {
 }
 
 cat_sources > "$out/S.nz"
-say "source digest: $(shasum -a 256 "$out/S.nz" | cut -d' ' -f1)" >> "$out/record.txt"
+say "source digest: $(sha256 "$out/S.nz")" >> "$out/record.txt"
 say "source lines: $(wc -l < "$out/S.nz" | tr -d ' ')" >> "$out/record.txt"
 
 # The same source must also pass the reference front end, so a bootstrap cannot succeed
@@ -135,9 +159,9 @@ else
 fi
 # Both digests, and the difference between the runnable and normalised forms, so a reader
 # can see exactly what was normalised away.
-say "c2-digest: $(shasum -a 256 "$out/stage2/normalised/nazmc" | cut -d' ' -f1)" >> "$out/record.txt"
-say "c3-digest: $(shasum -a 256 "$out/stage3/normalised/nazmc" | cut -d' ' -f1)" >> "$out/record.txt"
-say "c2-runnable-digest: $(shasum -a 256 "$out/stage2/nazmc" | cut -d' ' -f1)" >> "$out/record.txt"
+say "c2-digest: $(sha256 "$out/stage2/normalised/nazmc")" >> "$out/record.txt"
+say "c3-digest: $(sha256 "$out/stage3/normalised/nazmc")" >> "$out/record.txt"
+say "c2-runnable-digest: $(sha256 "$out/stage2/nazmc")" >> "$out/record.txt"
 say "runnable-bytes-differing: $(cmp -l "$out/stage2/nazmc" "$out/stage3/nazmc" | wc -l | tr -d ' ')" >> "$out/record.txt"
 
 # --- conformance: both later stages compile the corpus and agree ---------------------

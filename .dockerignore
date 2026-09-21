@@ -1,0 +1,4 @@
+# The host's target/ holds aarch64-apple-darwin artefacts; mixing them with Linux ones
+# would be wrong as well as enormous.
+target/
+.git/
