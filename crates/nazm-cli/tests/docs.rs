@@ -135,6 +135,40 @@ fn every_schema_file_is_documented_and_every_documented_schema_exists() {
 }
 
 #[test]
+fn every_example_is_checked_by_a_test() {
+    // `examples/` is what a reader is pointed at first, so an example that nothing runs
+    // is the worst place for a program that does not work. The list in `tests/build.rs`
+    // pairs each with its expected value and runs it; this requires the list to be
+    // complete.
+    let root = repo_root();
+    let mut present: BTreeSet<String> = BTreeSet::new();
+    for entry in std::fs::read_dir(root.join("examples"))
+        .expect("examples/")
+        .flatten()
+    {
+        let p = entry.path();
+        if p.extension().is_some_and(|e| e == "nz") {
+            present.insert(
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            );
+        }
+    }
+    assert!(present.len() >= 4, "only {present:?}");
+
+    let build = read("crates/nazm-cli/tests/build.rs");
+    let missing: Vec<&String> = present
+        .iter()
+        .filter(|f| !build.contains(&format!("examples/{f}")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these examples are run by nothing: {missing:?}. Add each to the list in          crates/nazm-cli/tests/build.rs with the value it should produce."
+    );
+}
+
+#[test]
 fn the_documented_target_is_the_one_the_emitter_names() {
     // One sentence, in one place, quoted rather than paraphrased wherever it appears.
     let note = nazm_lir::TARGET_NOTE;
