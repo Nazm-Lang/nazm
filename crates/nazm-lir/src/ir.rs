@@ -233,7 +233,7 @@ pub enum Stmt {
     /// loop. That is the existing language's rule, read out of both implementations —
     /// `check.rs` raises `loop_depth` around the body alone, and `eval.rs` lets a
     /// `Flow::Break` from the condition return straight out of `while_loop`. See
-    /// `docs/roadmap.md`, *Where a loop target binds*.
+    /// `docs/spec.md`, *Where a loop target binds*.
     While { cond: Expr, body: Vec<Stmt> },
     /// Statement-position `if`. Produces no value; either branch may transfer control.
     ///
@@ -257,8 +257,9 @@ pub enum Stmt {
     /// Leave the enclosing **function** with this value.
     ///
     /// Not a loop transfer: a `return` inside a loop leaves the function, which is why it
-    /// needs no target from the loop stack and emits its own `ret`. See `docs/roadmap.md`,
-    /// *One `ret` per `return`, not a shared exit block*.
+    /// needs no target from the loop stack and emits its own `ret`. One `ret` per
+    /// `return` rather than a shared exit block: nothing needs cleanup on the way out yet,
+    /// and a shared block would be machinery for a guarantee this backend does not make.
     Return(Expr),
     /// Leave the innermost enclosing loop.
     Break,

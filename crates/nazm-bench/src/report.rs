@@ -2,7 +2,7 @@
 //!
 //! This computes **point estimates only**. It deliberately does not decide the gate.
 //!
-//! `docs/evaluation.md` §6 requires uncertainty estimated on the difference and the ratio
+//! `docs/research/evaluation.md` §6 requires uncertainty estimated on the difference and the ratio
 //! themselves, with task as a random effect and model as a second grouping factor —
 //! repeated runs of one task are not independent samples. That is a mixed-effects model,
 //! it belongs in R or Python, and writing a hand-rolled approximation here would produce a
@@ -38,7 +38,7 @@ pub struct ArmSummary {
     /// Acceptance rate over counted attempts. `None` when nothing counted.
     pub acceptance_rate: Option<f64>,
     /// **The primary metric.** All attributable spend — failures, retries, and void
-    /// attempts — divided by acceptances. `docs/evaluation.md` §5 defines it as "total cost
+    /// attempts — divided by acceptances. `docs/research/evaluation.md` §5 defines it as "total cost
     /// of all attempts", and this is that.
     ///
     /// An earlier version excluded void spend here and reported it separately. That was a
@@ -65,7 +65,7 @@ pub struct FamilyCount {
 
 /// Summarise one arm's attempts.
 ///
-/// Takes every attempt including failures: `docs/evaluation.md` §5 puts failed attempts in
+/// Takes every attempt including failures: `docs/research/evaluation.md` §5 puts failed attempts in
 /// the denominator, because an arm that fails cheaply and often is not cheap.
 #[must_use]
 pub fn summarise(arm: Arm, attempts: &[Attempt]) -> ArmSummary {
@@ -129,7 +129,7 @@ pub fn summarise(arm: Arm, attempts: &[Attempt]) -> ArmSummary {
 /// The A3-vs-A2 comparison, as point estimates.
 ///
 /// Named `Comparison`, not `GateResult`, on purpose: it carries no verdict. `delta_p` and
-/// `cost_ratio` are the estimands from `docs/evaluation.md` §6, but the thresholds there
+/// `cost_ratio` are the estimands from `docs/research/evaluation.md` §6, but the thresholds there
 /// are stated on confidence bounds, and this struct has none.
 /// The cost ratio, or an explicit reason it could not be formed.
 ///

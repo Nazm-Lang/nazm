@@ -1,6 +1,6 @@
 //! Attempt outcomes, and the categories that explain where post-success cost went.
 //!
-//! Two rules from `docs/evaluation.md` are encoded here:
+//! Two rules from `docs/research/evaluation.md` are encoded here:
 //!
 //! * The harness must distinguish *every* outcome class, including the one that matters
 //!   most — a solution that passes the visible tests but fails the independent acceptance

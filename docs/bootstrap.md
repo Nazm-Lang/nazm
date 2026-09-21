@@ -1,7 +1,74 @@
-# The bootstrap, and what it establishes
+# The bootstrap: how it was designed, what it does, and what it establishes
 
-`compiler/bootstrap.sh` runs the chain Milestone D of `docs/NAZM_AUTONOMOUS_GOAL.md`
-describes, from one compiler source **S**:
+**One document for the whole subject.** It absorbed `bootstrap-design.md` on 2026-09-21 —
+the pre-implementation design record — because a reader asking "why is the self-hosted
+compiler shaped like this?" and one asking "what does the fixpoint prove?" were being sent
+to two files that each answered half.
+
+---
+
+## 1. The design, and why it came first — *historical, 2026-09*
+
+*This section is the design record as written **before** the language was extended, kept
+because the reasoning is the point. It describes intent at the time, not current status;
+`capability-matrix.md` is the authority on what exists.*
+
+The compiler was designed first, on purpose: **the language features added next were
+derived from a compiler that had been designed**, not chosen from a wish list and justified
+afterwards. `nazmc` reads `.nz` files and writes LLVM IR text, then hands it to `clang` —
+the same pipeline `nazm build` already ran, so the target was known exactly rather than
+imagined.
+
+**The whole compiler is expressible with `Int`, `Bool`, `Str`, and growable arrays of `Int`
+and `Str`.** No generics, traits, closures, user-defined types, pattern matching, or a
+shared-pointer graph. The technique is the one bootstrap compilers have always used:
+*structures of parallel arrays, addressed by index*, with every traversal iterative and
+every work stack an explicit `Ints`.
+
+That analysis produced the feature list, and nothing beyond it:
+
+| Needed for | Feature | Milestone |
+| --- | --- | --- |
+| reading source, names, literals, building output | `Str` with length, byte access, slicing, concatenation, comparison, `Int` conversion | B1 |
+| every table above | growable `Ints` and `Strs` with `push`, indexed get/set, `len` | B2 |
+| reading input, writing the `.ll`, reporting, exit status | file read/write, arguments, stderr, exit codes | B3 |
+| a compiler in more than one file | modules with deterministic multi-file resolution | B4 |
+| every traversal | nothing — iterative algorithms use the `Ints` stack from B2 | B5 |
+
+**Deliberately not added, and still absent:** generics, traits, closures, user-defined
+records or tagged unions, pattern matching, a hash map, reference types, a borrow checker,
+destructors, exceptions, iterators, operator overloading, a package registry. Each may be a
+good idea later; none was a prerequisite for the first compiler. This list is the source
+for the *deferred rather than delivered* distinction in `capability-matrix.md`.
+
+**The memory model was stated as a limitation, not discovered as a bug.** Strings and
+arrays are immutable in identity and allocated from a process-lifetime region that is never
+freed: a compiler process reads input, produces output and exits, so reclaiming memory
+inside that lifetime buys nothing and costs an ownership system the bootstrap does not
+otherwise need. The consequence was named at design time and required testing rather than
+assuming — *peak memory grows with input size and with the number of intermediate strings,
+so string building uses an array plus one join rather than repeated concatenation.*
+
+That sentence is the one this project paid for. Three stage drivers were written with
+`str_concat` in a loop anyway, and on 2026-09-21 the quadratic retention that follows from
+never freeing took the machine down three times. `runbook.md` carries the incident and the
+containment rules it produced.
+
+### What the design did not settle
+
+- The public ABI and value layout stay unfrozen. `Str` and arrays are compiler-internal
+  representations, and no program can observe their layout.
+- Whether the self-hosted compiler eventually uses records and pattern matching is a
+  question for after it exists. Writing it with arrays first was a claim about the shortest
+  sound path, not about the language's eventual shape.
+- Concurrency was designed separately and was expected to share none of this. It is now
+  **compiled by this compiler** — `compiler/emit.nz` carries the task and channel runtime.
+
+---
+
+## 2. What the chain does
+
+`compiler/bootstrap.sh` runs, from one compiler source **S**:
 
 1. the retained Rust implementation compiles S into **C1**;
 2. C1 compiles S into **C2**;
@@ -13,22 +80,28 @@ stale binary cannot stand in for one that was never built. Every stage is checke
 failure propagates — a script that prints success after a failed stage is worse than no
 script.
 
-## The result, on the verified configuration
+**The source is imported, not concatenated.** Every stage compiles `compiler/emit.nz` and
+resolves its `use` lines itself, with the resolver written in Nazm (`compiler/module.nz`),
+so what is bootstrapped is the compiler as it is actually written. The script used to strip
+the `use` lines and paste the files together, which worked but meant the chain never
+exercised the thing it was meant to prove.
+
+## 3. The result, on the verified configuration
 
 | | |
 | --- | --- |
 | Host | **Linux aarch64**, inside `nazm-contained:1.98.1` — the configuration of record since containment became mandatory. Darwin arm64 remains *a* verified configuration, historically |
 | Toolchain | rustc 1.98.1 (pinned); Debian clang 19.1.7 in the container, Apple clang 21.0.0 on Darwin |
-| S | `compiler/{lex,parse,analyse,module,emit}.nz`, **4,647 lines** (this row read four files and 3524 lines until 2026-09-21; `module.nz` joined when the compiler began resolving its own `use` lines) |
+| S | `compiler/{lex,parse,analyse,module,emit}.nz`, **4,647 lines** |
 | **C2 vs C3, emitted IR** | **byte-identical** |
 | **C2 vs C3, executables** | **byte-identical**, including the runnable form |
 | Conformance | 5 cases, each agreeing across C2, C3 **and the interpreter** |
 
-The IR being identical is the fixpoint: compiling S with a compiler built by Rust and
-with a compiler built by itself produces the same output. That is what self-hosting
-means, and it is checked rather than asserted.
+The IR being identical is the fixpoint: compiling S with a compiler built by Rust and with
+a compiler built by itself produces the same output. That is what self-hosting means, and
+it is checked rather than asserted.
 
-## What is normalised, and why it is narrow
+### What is normalised, and why it is narrow
 
 The macOS linker stamps an `LC_UUID` and embeds the output *filename* in the ad-hoc code
 signature. Neither is anything the compiler produced. The script therefore assembles each
@@ -37,58 +110,53 @@ without an `LC_UUID` is one macOS refuses to load, so the normalised copy is nev
 executed. Each stage links to the same filename in its own directory, which removes the
 second difference.
 
-Nothing about code or data is touched. On this configuration the runnable binaries turn
-out to be byte-identical too (`runnable-bytes-differing: 0`), because the UUID clang
-computes is a function of the content — so the normalisation removes a difference that
-did not arise. It is kept because it *can* arise, and finding out by having the check
-fail would be worse.
+Nothing about code or data is touched. On this configuration the runnable binaries turn out
+to be byte-identical too (`runnable-bytes-differing: 0`), because the UUID clang computes
+is a function of the content — so the normalisation removes a difference that did not
+arise. It is kept because it *can* arise, and finding out by having the check fail would be
+worse.
 
-## What this does **not** establish
+## 4. What this does **not** establish
 
 - **It is not evidence that the compiler is correct.** A compiler that miscompiles S in a
   way that reproduces the same miscompilation is a fixpoint too. Reproducibility and
   correctness are different claims; the conformance corpus and the differential tests in
   `crates/nazm-cli/tests/selfhost.rs` are what speak to the second, and they compare
-  against the Rust implementation and against explicit expectations rather than against
-  the Nazm compiler itself.
-- **It is one target.** aarch64-apple-darwin with Apple clang. Nothing here says what
-  another target would do.
-- **The source is imported, not concatenated.** Every stage compiles `compiler/emit.nz`
-  and resolves its `use` lines itself, with the resolver written in Nazm
-  (`compiler/module.nz`). What is bootstrapped is the compiler as it is written. The
-  script used to strip the `use` lines and paste the files together, which worked but
-  meant the chain never exercised the thing it was meant to prove; the record now lists
-  each source with its own digest, since there is no merged file to take one of.
+  against the Rust implementation and against explicit expectations rather than against the
+  Nazm compiler itself.
+- **It is one target per run.** Nothing here says what an unverified target would do.
+- **It says nothing about archive reproducibility.** That is a separate claim with a
+  separate answer; see the release report.
+- **The Rust implementation is still required**, to build C1 and to run `nazm check` inside
+  the script. It is the bootstrap toolchain and the semantic oracle, and deleting it after
+  the first successful build is exactly what must not happen.
+- **External dependencies remain**: `clang` assembles the IR and links, and libc supplies
+  `malloc`, `realloc`, `memcmp`, `memcpy`, `snprintf`, `write`, `exit` and the `stdio` file
+  functions. Emitting LLVM and invoking an external assembler is permitted and documented;
+  it is not hidden.
+
+## 5. Current limitations
+
 - **Module resolution keys files by a textually normalised path, not a canonical one.**
-  `./x.nz`, `x.nz` and `a/../x.nz` are one file; two names that reach one file through a
+  `./x.nz`, `x.nz` and `a/../x.nz` are one file; two names reaching one file through a
   symbolic link are two, and it would be read twice. The Rust driver keys by the canonical
   path instead, because it can — the emitted runtime has no `realpath`.
-- **The Rust implementation is still required**, to build C1 and to run `nazm check`
-  inside the script. `docs/NAZM_AUTONOMOUS_GOAL.md` §8 keeps it deliberately: it is the
-  bootstrap toolchain and the semantic oracle, and deleting it after the first successful
-  build is exactly what the contract forbids.
-- **External dependencies remain**: `clang` assembles the IR and links, and libc supplies
-  `malloc`, `realloc`, `memcmp`, `memcpy`, `snprintf`, `write`, `exit` and the `stdio`
-  file functions. Emitting LLVM and invoking an external assembler is permitted and
-  documented; it is not hidden.
+- **Nothing is freed.** See §1; the design stated it, and `capability-matrix.md` area 4
+  carries the current status and the acceptance condition.
+- **The chain cannot run uncontained**, by design. See §6.
 
-## Reproducing it
+## 6. Reproducing it
 
 ```sh
 cargo xtask contained bootstrap      # builds the image if needed, writes the record
-```
-
-**Corrected 2026-09-21.** This block used to read `cargo build -p nazm-cli` followed by
-`./compiler/bootstrap.sh`, and that second command now **refuses to run**: the script
-requires an external memory ceiling, because a stage written in Nazm allocates without
-bound and reaches the machine rather than the process. Setting `NAZM_CONTAINED=1` on the
-host to satisfy it would be exactly the mistake the refusal exists to prevent — the
-variable is a declaration, not a boundary, and only the contained runner is entitled to set
-it. To read the record afterwards:
-
-```sh
 cat target/bootstrap/record.txt
 ```
 
+`./compiler/bootstrap.sh` on its own **refuses to run**: the script requires an external
+memory ceiling, because a stage written in Nazm allocates without bound and reaches the
+machine rather than the process. Setting `NAZM_CONTAINED=1` on the host to satisfy it would
+be exactly the mistake the refusal exists to prevent. `runbook.md` owns that rule.
+
 The record names the date, host, toolchain versions, commit, whether the tree was clean,
-the source digest and line count, both compiler digests, and the conformance count.
+each source with its own digest and line count, both compiler digests, and the conformance
+count.

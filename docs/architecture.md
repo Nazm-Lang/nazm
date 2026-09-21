@@ -348,6 +348,31 @@ channels, reactor, allocator — the one crate allowed `unsafe`) · `std-build` 
 allowance for `nazm-rt` and the FFI crates when those exist — stack switching and allocators
 cannot be written without it. `xtask` enforces that the allowance stays narrow.
 
+## 7.1 The next boundary, and the test it has to pass
+
+*Added 2026-09-21.* §7's table lists crates by the level they would occupy. That is the
+wrong question to ask next, and `master-architecture.md` §3 says why: **a layer earns its
+existence by owning a semantic responsibility no existing layer owns.** The table would put
+`nazm-hir` next because it is the next row. The tree gives a better reason.
+
+**Name and signature resolution is currently performed twice.** `nazm_core::check` resolves
+and returns a signature map; `nazm-core/src/lib.rs` discards it; `nazm-lir/src/lower.rs`
+rebuilds it with its own `sigs` map, its own `resolve`, and its own slot allocation. The
+built-in table is transcribed twice as well — `Intrinsic::ALL` and `ir::Builtin`, 31 entries
+each, kept in agreement by a test rather than by construction. That is one responsibility
+with two implementations, and it is the first thing since M1 that would *remove* code.
+
+**The constraint that produced it** is `xtask/src/rules.rs`: `nazm-lir` may not depend on
+`nazm-core`. The backend was given its own resolver because it could not use the checker's.
+So the design question is not "which level is next" but **where a shared resolution artefact
+lives** — in `nazm-syntax`, which both already depend on, or in a new crate they both
+depend on. That choice is the milestone's first decision, not its last.
+
+The test a new crate has to pass: **after it exists, one of the two resolvers is gone.** If
+both remain and merely share a type, the layer is a pass-through and matching the diagram
+was the only thing it achieved. `roadmap.md` N1 carries the eight questions that have to be
+answered before any of it is written.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

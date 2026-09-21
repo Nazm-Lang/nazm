@@ -650,7 +650,7 @@ Caught behaviourally by 13 tests, and the distinction between how they catch it 
 point. Nine report a **deadline**, including
 `the_condition_is_reevaluated_on_every_iteration`, which runs the compiled program under an
 explicit 10-second limit at `-O0` and `-O2` and fails if it has not finished — that test
-exists because `nazm build` emits no iteration budget (`docs/roadmap.md`, *The native
+exists because `nazm build` emits no iteration budget (`docs/spec.md`, *The native
 execution contract for loops*), so a suite without deadlines would hang rather than report.
 The other four terminate and fail on the **outcome**: their runaway bodies overflow `Int`
 within seconds, so the program exits 2 with `N0400` where 0 and a value were expected.

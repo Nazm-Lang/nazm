@@ -403,7 +403,8 @@ fn lower_function(ctx: &mut Ctx, f: &AstFn) -> Option<Function> {
 /// is reachable would introduce a dead-code reachability rule as a side effect of a
 /// backend limitation — so deleting a call somewhere else would silently change whether a
 /// function is diagnosed. That is a language-visible rule arriving by accident, and this
-/// increment does not make one. See `docs/roadmap.md`, *M1c subset*.
+/// increment does not make one; see `docs/master-architecture.md` §2, *a refusal is
+/// never disguised as a result*.
 ///
 /// Direct and mutual recursion are the same condition here, found the same way, rather
 /// than one being a special case of the other.

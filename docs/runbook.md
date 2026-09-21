@@ -1,8 +1,112 @@
-# Runbook — operating environment
+# Runbook — operating environment and execution safety
 
-**Facts measured on the development machine on 2026-09-19, not assumptions.** Re-measure
-before trusting any of this; every figure here is machine-specific and several are the
-kind that change without anyone noticing.
+**This document owns every operational rule in the repository.** If a heavy workload is
+about to run, this is the file to read, and it is the only one that has to be read.
+
+**Facts measured on the development machine on 2026-09-19 and 2026-09-21, not
+assumptions.** Re-measure before trusting any figure here; every one is machine-specific
+and several are the kind that change without anyone noticing.
+
+---
+
+## Mandatory containment
+
+*Absorbed 2026-09-21 from `NAZM_AUTONOMOUS_GOAL.md` §2.1, which was the completed Era-1
+execution contract. These rules did not expire with it.*
+
+### What must never run uncontained
+
+Only through the verified contained runner, `cargo xtask contained <workload>`:
+
+- any generated compiler stage — `nzlex`, `nzparse`, `nzcheck`, `nzemit`, `nazmc`;
+- the selfhost suite and `compiler/bootstrap.sh`;
+- fuzzing, the mutation catalogue, and heavy benchmarks.
+
+**An environment variable is a declaration, not a ceiling. Never set `NAZM_CONTAINED=1` on
+the host, and never use `NAZM_ALLOW_UNCONTAINED=1`.** The runner sets `NAZM_CONTAINED=1`
+only *inside* an environment where a real ceiling already applies.
+
+The reason is specific to this platform: **macOS cannot cap a child's memory.** `RLIMIT_AS`
+is an alias of `RLIMIT_RSS` there, and `setrlimit(2)` documents it as advisory — the system
+*prefers* to reclaim from an offender rather than refusing its allocation. The ceiling must
+come from outside the process.
+
+`compiler/bootstrap.sh` and selfhost's four stage builders enforce this themselves: they
+refuse to start rather than run unbounded.
+
+### What the runner must enforce
+
+- **Memory and swap set equal.** A cap that can be swapped past is not a cap.
+- CPU and pid limits.
+- **Wall-clock deadlines** — and a deadline is not a memory bound. Both are required.
+- **Bounded stdout and stderr, drained concurrently**, so a flood cannot grow the parent.
+- Bounded temporary and artefact storage. A memory limit does not stop a disk fill.
+- Descendant cleanup and reaping. Killing a client is not killing the workload.
+- **Compilation bounded too**, not only the execution of generated programs.
+- **Explicit failure when containment is unavailable.** A silent skip reporting green on no
+  evidence is a defect, not a pass.
+- Effective limits verified by probes that allocate *and touch* memory, whose own maximum
+  stays safe even if enforcement fails. Require a confirmed limit event, not a generic
+  nonzero exit. `cargo xtask contained probe` is that check.
+
+Refusal tests prove the gate works; they do not prove self-hosting works. The real selfhost
+suite and the real bootstrap must run through the runner and produce correct results within
+budget, with verified cleanup.
+
+### Serial execution
+
+One Cargo build job and one test thread where applicable. No competing heavy workloads.
+**When a workload exceeds a budget, investigate the cause rather than raising the limit.**
+Do not change machine-wide settings and do not delete unrelated files.
+
+### Autonomy limits
+
+Do not publish, push, tag, deploy, buy services, use paid model APIs, expose credentials,
+change account permissions, delete unrelated files, reset user work, or prune shared Docker
+resources. Do not disable Gatekeeper, SIP or watchdogs, and do not downgrade or reinstall
+the OS. A missing remote is not a blocker to local development or local checks.
+
+### Status vocabulary
+
+**passed**, **skipped**, **refused**, **failed** and **unexecuted** are five different
+outcomes and are never reported as one another. A timeout is a failure, not a result.
+
+---
+
+## The incident that produced these rules — 2026-09-21
+
+*Condensed from the Era-1 ledger. The full narrative, the panic reports and the before/after
+measurements are in Git history and at `~/nazm-incident-2026-09-21/`.*
+
+Three kernel panics (08:12:30, 08:26:49, 08:44:44), all *"watchdog timeout: no checkins
+from watchdogd in ~93 seconds"*, while `xtask → cargo → selfhost` ran nine stage binaries
+plus `nazmc` at once — `cargo test` uses one thread per core and this machine has ten.
+
+**Cause, measured.** `lexer.nz`, `parser.nz` and `check.nz` accumulated output with
+`out = str_concat(out, ..)` in a loop. Each concatenation allocates a new buffer and copies
+everything accumulated, and **the generated runtime never frees**, so retained bytes are
+quadratic in output length. `emit.nz` had already been migrated to `strs_push` + `str_join`;
+the other three had not. Doubling the input quadrupled the peak.
+
+**Repaired**, with byte-identical output across 24 stage/input combinations. `nzlex` on
+21,490 B went from 2,889 MB to **7.1 MB**; inputs that had OOM'd at 3 GiB now peak near
+11 MB.
+
+**Still open, and not to be reported as closed:**
+
+- `nzemit` was reported at ~17 GB in the panic yet **could not be reproduced** — it
+  measures linear and modest. Unexplained.
+- The panic's `residentMemoryBytes` sums to 173.9 GB on a 32 GiB machine, so it is not
+  disjoint physical RAM and its exact meaning is unconfirmed.
+- **Kernel-panic causation is unproven.** A watchdog panic reports starvation, not
+  causation, and this was a beta kernel (macOS 27.2, build 26B5086k). The compiler workload
+  is a strong suspect, not a demonstrated cause.
+- Quiet uptime since is an observation, not proof of stability.
+
+The standing lesson is the one the rules above encode: **a deadline does not bound memory.**
+A wall-clock timeout was already in place when the machine went down.
+
+---
 
 ## Docker address pool — the most imminent failure, and it is not disk
 
