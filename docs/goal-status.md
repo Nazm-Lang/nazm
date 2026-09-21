@@ -10,7 +10,7 @@ what was verified when it was written, not what is true now.
 
 | | |
 | --- | --- |
-| Branch | `master` (no remote configured; local-only is not a blocker) |
+| Branch | `main` (renamed from `master`; no remote configured, local-only is not a blocker) |
 | Goal base commit | `4326100` |
 | Current commit | `6ec965d` (repair `011d7ff`, contract v1.1 `fc21968`, runner `a74bdba`) |
 | Working tree | the contained-runner work is in progress on top of `a74bdba` |
