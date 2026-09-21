@@ -828,7 +828,12 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 i = i + 2;
                 ints_push(pk, pend_assign());
                 ints_push(pdepth, ints_len(fk));
-                ints_push(pbase, ints_len(ops));
+                // Exactly one floor per pending expression, because exactly one is
+                // popped when it completes. Pushing twice here left a stale floor on top
+                // of the stack, and an expression that suspended at an `if` and resumed
+                // afterwards read *that* instead of its own — too high, so operators
+                // below it were never popped. `let x = 1 + if c { a = 1; a } else { 2 };`
+                // silently lost its `+`.
                 ints_push(pbase, ints_len(ops));
                 ints_push(pstart, stmt_start);
                 strs_push(ptext, name);
