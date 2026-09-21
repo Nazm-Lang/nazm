@@ -1,8 +1,18 @@
 # Capability matrix
 
 **Status: source-backed against `4fb15542dfbf9af0bf34c42fe52783637b3daed4`, the commit the
-retained candidate was built and tested at. No source file has changed since, so every
-claim below is a claim about the tested tree.**
+retained candidate was built and tested at.**
+
+**The capability claims remain grounded in the tested `4fb1554` implementation.** Changes
+since that tested tree are documentation, test and reference wiring, comments, or other
+non-capability changes. Specifically: every change under `compiler/`, `crates/nazm-lir/src`
+and `crates/nazm-core/src` is comment-only — verified by diffing with comment lines removed;
+the only shipping-code changes are two `evidence:` strings in
+`crates/nazm-cli/src/capabilities.rs` and the `--help` description in
+`crates/nazm-cli/src/main.rs`, both correcting stale prose rather than altering behaviour;
+the rest is test wiring and a new `cargo xtask check` rule. No behavioural change has been made
+to the compiler, and the workspace suite reports the same result. Where a row below rests on
+something newer, it says so.
 
 This is one table serving two purposes. The directive asked for a capability matrix and a
 gap map; they are the same information at the same granularity, so the five fields of a
