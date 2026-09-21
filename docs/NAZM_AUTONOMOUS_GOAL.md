@@ -1,6 +1,6 @@
 # Nazm autonomous development goal
 
-Version: 1.0  
+Version: 1.1  
 Owner: Md Ferdous Alam  
 Suggested repository location: `docs/NAZM_AUTONOMOUS_GOAL.md`
 
@@ -43,6 +43,82 @@ Ask only when an essential action lacks authorization, an essential external dep
 
 An agent session cannot run beyond its platform's enforced time, budget, or context limits. Do not bypass those controls. Persist the exact state and next command before yielding when possible. Such a yield is an interruption, not goal completion.
 
+## 2.1 Execution safety: mandatory resource containment
+
+Added in v1.1 after the incident of 2026-09-21, when the selfhost suite panicked the
+machine three times. Sections 3 onward keep their original numbers so existing
+references (including "Section 13") stay valid.
+
+### 2.1.1 What must never run uncontained
+
+These run **only** through the verified contained runner:
+
+- Any generated compiler stage (`nzlex`, `nzparse`, `nzcheck`, `nzemit`, `nazmc`).
+- The selfhost suite and `compiler/bootstrap.sh`.
+- Fuzzing, the mutation catalogue, and heavy benchmarks.
+
+An environment variable is a declaration, not a ceiling. **Never set `NAZM_CONTAINED=1`
+on the host, and never use `NAZM_ALLOW_UNCONTAINED=1`.** `NAZM_CONTAINED=1` is set only
+*inside* an environment where a real ceiling already applies, by the runner itself.
+
+macOS cannot cap a child's memory: `RLIMIT_AS` is an alias of `RLIMIT_RSS` there and
+`setrlimit(2)` documents it as advisory — the system *prefers* to reclaim from an
+offender rather than refusing its allocation. The ceiling must therefore come from
+outside the process.
+
+### 2.1.2 What the contained runner must enforce
+
+- Aggregate **memory and swap** limits, set equal. A cap that can be swapped past is not
+  a cap.
+- CPU and process/pid limits.
+- Wall-clock deadlines. A deadline is not a memory bound; both are required.
+- Bounded stdout and stderr, drained concurrently so a flood cannot grow the parent.
+- Bounded temporary and artifact storage. A memory limit does not stop a disk fill.
+- Descendant cleanup and reaping; killing a client is not killing the workload.
+- **Compilation is bounded too**, not just execution of generated programs.
+- Explicit failure when containment is unavailable. A silent skip reporting green on no
+  evidence is a defect.
+- Effective limits verified by small controlled probes that allocate *and touch* memory,
+  whose own maximum stays safe even if enforcement fails. Require a confirmed
+  limit event, not a generic nonzero exit.
+
+### 2.1.3 Serial execution
+
+One Cargo build job and one test thread where applicable. No competing heavy workloads.
+Preserve established resource budgets: when a workload exceeds one, investigate the cause
+rather than raising the limit. Do not change machine-wide settings, and do not delete
+unrelated files.
+
+### 2.1.4 Completing the resource investigation
+
+Preserve the `lexer.nz` / `parser.nz` / `check.nz` allocation fixes and both their
+correctness and resource regressions (`011d7ff`).
+
+`nzemit` is a separate, open question: it was reported at ~17 GB in the panic yet
+measures linear and modest, and `emit.nz` was already migrated. Investigate it on
+representative inputs, and **distinguish binaries produced by the Rust bootstrap compiler
+from those produced by the compiler written in Nazm**. For every measurement record
+correctness, executable provenance, elapsed time, output size, and peak memory, together
+with whether the peak includes compilation, supervision, or scratch storage.
+
+Do not claim the historical high-memory event is explained unless the evidence
+establishes it. Absence of a reproduction is a finding to record, not a resolution.
+
+### 2.1.5 Verifying the real pipeline
+
+Refusal tests prove the gate works; they do not prove self-hosting works. The actual
+selfhost suite and the actual bootstrap must run **through the contained runner** and
+produce correct results within budget, with successful cleanup. If the historical
+`nzemit` event stays unreproduced, document it and continue once the intended workloads
+pass inside verified containment.
+
+### 2.1.6 Checkpoint discipline
+
+`docs/goal-status.md` records exact source state, the changes made, verification results,
+resource measurements, limitations, and the next safe action. Commits stay focused and
+local. Status vocabulary is not interchangeable — distinguish **passed**, **skipped**,
+**refused**, **failed**, and **unexecuted**, and never report one as another.
+
 ## 3. Starting evidence: verify, do not assume
 
 The latest supplied handoff reports M1e completed from base commit `4326100`, with cumulative M1d/M1e changes uncommitted. This is historical evidence, not a requirement to return to that commit.
@@ -68,7 +144,7 @@ For each bounded increment:
 2. State scope, explicit exclusions, and the semantic contract before implementing.
 3. Reuse existing mechanisms; make the smallest coherent change.
 4. Add tests for behavior, failure paths, and meaningful regressions.
-5. Run focused verification, then required repository gates against the final state.
+5. Run focused verification, then required repository gates against the final state. Anything listed in Section 2.1.1 runs only through the contained runner.
 6. Review the diff for semantic drift, dead scaffolding, unsafe assumptions, and inaccurate claims.
 7. Update the ledger, capability matrix, and affected documentation; create a local checkpoint when appropriate.
 8. Immediately begin the next increment. Do not stop with “ready for review” or ask whether to continue.
