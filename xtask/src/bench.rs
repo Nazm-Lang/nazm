@@ -441,7 +441,7 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
     match mode {
         Mode::Record => ExitCode::SUCCESS,
         Mode::Save => {
-            let baseline = root.join("bench/baseline.json");
+            let baseline = baseline_path(&root);
             match std::fs::write(&baseline, &json) {
                 Ok(()) => {
                     println!("baseline: {}", baseline.display());
@@ -772,9 +772,37 @@ fn quote(s: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// The baseline belonging to *this* machine.
+///
+/// `bench/baseline.json` was recorded on Darwin. A Linux run must not overwrite it: the
+/// comparison already refuses to run across hosts, so one file per host is the only
+/// arrangement in which both can exist and either can be checked. Whichever host owns
+/// the legacy name keeps it, so nothing has to be migrated, and every other host gets
+/// `bench/baseline-<host>.json`.
+fn baseline_path(root: &Path) -> PathBuf {
+    let host = shell("uname", &["-sm"]);
+    let legacy = root.join("bench/baseline.json");
+    match std::fs::read_to_string(&legacy) {
+        Ok(text) if field(&text, "host") == host => legacy,
+        _ => {
+            let slug: String = host
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+            root.join(format!("bench/baseline-{slug}.json"))
+        }
+    }
+}
+
 /// Compare against the recorded baseline, on the same machine only.
 fn compare(root: &Path, measurements: &[Measurement]) -> ExitCode {
-    let path = root.join("bench/baseline.json");
+    let path = baseline_path(root);
     let Ok(text) = std::fs::read_to_string(&path) else {
         eprintln!(
             "bench: no baseline at {}. Record one with `cargo xtask bench --save`.",
