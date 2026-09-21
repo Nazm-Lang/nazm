@@ -513,3 +513,146 @@ fn a_task_that_fails_ends_the_whole_program() {
         "the interpreter and the executable must agree on the exit status"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Does a failure wait for the scope's tasks?
+//
+// `docs/spec.md` promises the closing brace joins every task *including when the body
+// itself failed*, so a failure is reported once nothing is still running. Asserting the
+// diagnostic code cannot check that: a run that joined first and a run that exited on the
+// spot produce the same code and the same exit status. The difference is only visible in
+// whether the task's own effect happened, so these programs give the worker one — a line
+// on stdout — and coordinate deterministically rather than by sleeping.
+//
+// The worker cannot print until the body has sent to `go`, and the body fails immediately
+// after sending. Under the promised semantics the marker is therefore *always* printed:
+// the program cannot exit before the worker returns. Under an implementation that exits
+// where it failed, the worker is still counting and the marker is lost.
+// ---------------------------------------------------------------------------
+
+/// The body overflows while a worker it just released is still working.
+const BODY_FAILS: &str = r#"
+fn worker(go: Chan) -> Int {
+    let buf = ints_new();
+    chan_recv(go, buf);
+    ints_pop(buf);
+    let mut acc = 0;
+    let mut i = 0;
+    while i < 200000 { acc = acc + i; i = i + 1; }
+    print("worker finished");
+    acc
+}
+fn main() -> Int {
+    let go = chan_new(1);
+    let mut top = 1;
+    scope {
+        spawn worker(go);
+        chan_send(go, 1);
+        let mut n = 0;
+        while n < 64 { top = top + top; n = n + 1; }
+    }
+    top
+}
+"#;
+
+/// One task divides by zero while a sibling is still working.
+const TASK_FAILS: &str = r#"
+fn bad(dead: Chan) -> Int {
+    let buf = ints_new();
+    chan_recv(dead, buf);
+    1 / ints_pop(buf)
+}
+fn worker(go: Chan) -> Int {
+    let buf = ints_new();
+    chan_recv(go, buf);
+    ints_pop(buf);
+    let mut acc = 0;
+    let mut i = 0;
+    while i < 200000 { acc = acc + i; i = i + 1; }
+    print("worker finished");
+    acc
+}
+fn main() -> Int {
+    let dead = chan_new(1);
+    let go = chan_new(1);
+    scope {
+        spawn bad(dead);
+        spawn worker(go);
+        chan_send(go, 1);
+        chan_send(dead, 0);
+    }
+    0
+}
+"#;
+
+const MARKER: &str = "worker finished";
+
+#[test]
+fn a_failing_scope_joins_its_tasks_before_reporting_interpreted() {
+    for (what, src, code) in [
+        ("body fails", BODY_FAILS, "N0400"),
+        ("task fails", TASK_FAILS, "N0401"),
+    ] {
+        let (_dir, path) = write_program(src);
+        let ran = run_bounded(Command::new(NAZM).args(["run", path.to_str().unwrap()]))
+            .unwrap_or_else(|| panic!("{what}: `nazm run` did not finish"));
+        assert_eq!(ran.code, Some(2), "{what}: {}", ran.stderr);
+        assert!(
+            ran.stderr.contains(code),
+            "{what}: expected {code}, got {}",
+            ran.stderr
+        );
+        assert!(
+            ran.stdout.contains(MARKER),
+            "{what}: the scope reported before its task finished — {MARKER:?} is missing \
+             from stdout, which is what a failure that did not join looks like. stdout: {:?}",
+            ran.stdout
+        );
+    }
+}
+
+/// The same contract, compiled. **Currently false**, and measured rather than assumed:
+/// at `-O0` and `-O2` both programs exit 2 with the right diagnostic and print nothing,
+/// because `@nz.fail` writes the message and calls `@exit` on whichever thread failed
+/// (`crates/nazm-lir/src/emit.rs`, `@nz.fail`). `@nz.scope_join` does join every task,
+/// but a failure never reaches it.
+///
+/// Ignored rather than deleted or inverted: inverting it would make the divergence look
+/// like the specification, and deleting it would lose the only executable statement of
+/// what the native runtime still owes. Closing it needs a way for a failure to leave a
+/// task without leaving the process — see *Known limitations* in `docs/delivery.md`.
+#[test]
+#[ignore = "known divergence: native @nz.fail exits the process where it failed instead of \
+            joining the scope; see docs/spec.md, Error propagation"]
+fn a_failing_scope_joins_its_tasks_before_reporting_natively() {
+    for (what, src, code) in [
+        ("body fails", BODY_FAILS, "N0400"),
+        ("task fails", TASK_FAILS, "N0401"),
+    ] {
+        let (dir, path) = write_program(src);
+        for opt in ["0", "2"] {
+            let exe = dir.path().join(format!("prog{opt}"));
+            let built = run_bounded(
+                Command::new(NAZM)
+                    .args(["build", path.to_str().unwrap()])
+                    .arg("-o")
+                    .arg(&exe)
+                    .arg("--opt-level")
+                    .arg(opt),
+            )
+            .unwrap_or_else(|| panic!("{what}: -O{opt} build did not finish"));
+            assert_eq!(built.code, Some(0), "{what}: -O{opt}: {}", built.stderr);
+
+            let ran = run_bounded(&mut common::bounded_exe(&exe))
+                .unwrap_or_else(|| panic!("{what}: the -O{opt} executable did not finish"));
+            assert_eq!(ran.code, Some(2), "{what} -O{opt}: {}", ran.stderr);
+            assert!(ran.stderr.contains(code), "{what} -O{opt}: {}", ran.stderr);
+            assert!(
+                ran.stdout.contains(MARKER),
+                "{what} -O{opt}: the process exited where it failed instead of joining \
+                 the scope. stdout: {:?}",
+                ran.stdout
+            );
+        }
+    }
+}

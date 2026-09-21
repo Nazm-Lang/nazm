@@ -24,12 +24,17 @@ fn the_delivery_reports_groups_sum_to_its_total() {
     let p = repo_root().join("docs/delivery.md");
     let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
 
-    // The one sentence that states the total.
+    // The one sentence that states the total. The ignored count is read rather than
+    // written down here: hard-coding it meant this test had to be edited by hand every
+    // time a test was ignored, which is the drift it exists to catch.
     let total: usize = text
         .split("**")
-        .find_map(|chunk| chunk.strip_suffix(" passed, 0 failed, 6 ignored."))
-        .and_then(|n| n.parse().ok())
-        .expect("docs/delivery.md should state `**N passed, 0 failed, 6 ignored.**`");
+        .find_map(|chunk| {
+            let (n, rest) = chunk.split_once(" passed, 0 failed, ")?;
+            rest.trim_end().strip_suffix("ignored.")?;
+            n.parse().ok()
+        })
+        .expect("docs/delivery.md should state `**N passed, 0 failed, M ignored.**`");
 
     // The results table: rows whose second cell is a bare number.
     let rows: Vec<usize> = text

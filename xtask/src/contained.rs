@@ -388,19 +388,10 @@ fn export_validated(container: &str, policy: &ExportPolicy) -> Result<(), String
 
     let result = (|| -> Result<Vec<(String, std::path::PathBuf)>, String> {
         let manifest_local = stage.join("EXPORTS");
-        copy_out(container, &policy.manifest, &manifest_local)
+        // Bounded during the transfer, not after it: a manifest larger than a manifest
+        // could ever be is refused while the rest of it is still inside the container.
+        copy_out_bounded(container, &policy.manifest, &manifest_local, MANIFEST_MAX)
             .map_err(|e| format!("manifest {}: {e}", policy.manifest))?;
-        let meta =
-            std::fs::symlink_metadata(&manifest_local).map_err(|e| format!("manifest: {e}"))?;
-        if !meta.is_file() {
-            return Err("manifest is not a regular file".to_owned());
-        }
-        if meta.len() > MANIFEST_MAX {
-            return Err(format!(
-                "manifest is {} bytes, over {MANIFEST_MAX}",
-                meta.len()
-            ));
-        }
         let text = std::fs::read_to_string(&manifest_local)
             .map_err(|e| format!("manifest is not text: {e}"))?;
 
@@ -435,20 +426,14 @@ fn export_validated(container: &str, policy: &ExportPolicy) -> Result<(), String
             }
 
             let local = stage.join(name);
-            copy_out(container, &format!("{dir}/{name}"), &local)
+            // The manifest's own claim is the transfer budget. Nothing crosses onto host
+            // storage beyond the size it declared, and a symlink, directory or device node
+            // is refused from the archive header — before any of it is extracted.
+            let written = copy_out_bounded(container, &format!("{dir}/{name}"), &local, declared)
                 .map_err(|e| format!("{name}: {e}"))?;
-            // `symlink_metadata` so a symlink is seen as a symlink rather than followed.
-            let m = std::fs::symlink_metadata(&local).map_err(|e| format!("{name}: {e}"))?;
-            if m.file_type().is_symlink() {
-                return Err(format!("{name} is a symlink"));
-            }
-            if !m.is_file() {
-                return Err(format!("{name} is not a regular file"));
-            }
-            if m.len() != declared {
+            if written != declared {
                 return Err(format!(
-                    "{name}: {} bytes on disk, manifest declared {declared}",
-                    m.len()
+                    "{name}: transferred {written} bytes, manifest declared {declared}"
                 ));
             }
             staged.push((name.to_owned(), local));
@@ -481,24 +466,170 @@ fn export_validated(container: &str, policy: &ExportPolicy) -> Result<(), String
     Ok(())
 }
 
-/// `docker cp` one path out, reporting why rather than whether.
-fn copy_out(container: &str, inside: &str, local: &std::path::Path) -> Result<(), String> {
-    let out = Command::new("docker")
+/// Copy one path out of a stopped container, refusing anything that is not a regular file
+/// and stopping the moment the transfer exceeds `max` bytes.
+///
+/// `docker cp SRC DEST` writes the whole file to host storage and leaves every question
+/// about it until afterwards, so a workload that emits a huge artefact has already filled
+/// the disk by the time the check runs. Post-copy validation cannot enforce a transfer
+/// budget — only the transfer can.
+///
+/// `docker cp SRC -` instead writes a tar stream to stdout, and a tar header states the
+/// entry's type and size *before* any of its bytes follow. Reading the stream here means
+/// a directory, a symlink, a device node or an oversized file is rejected while its
+/// content is still inside the container, and that no more than `max` bytes are ever
+/// written out. Returns how many bytes were written.
+fn copy_out_bounded(
+    container: &str,
+    inside: &str,
+    local: &std::path::Path,
+    max: u64,
+) -> Result<u64, String> {
+    use std::io::{Read as _, Write as _};
+
+    let mut child = Command::new("docker")
         .arg("cp")
         .arg(format!("{container}:{inside}"))
-        .arg(local)
-        .output()
+        .arg("-")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("could not run docker cp: {e}"))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr)
-            .lines()
-            .next()
-            .unwrap_or("docker cp failed")
-            .trim()
-            .to_owned())
+    let Some(mut stream) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("docker cp gave no stream".to_owned());
+    };
+
+    // Every failure below goes through here: kill the transfer first, so a refused copy
+    // cannot keep pulling bytes, then let docker's own message explain it if it has one.
+    let stop = |child: &mut std::process::Child, why: String| -> String {
+        let _ = child.kill();
+        let said = child.stderr.take().map_or(String::new(), |s| {
+            let mut buf = Vec::new();
+            let _ = s.take(4096).read_to_end(&mut buf);
+            String::from_utf8_lossy(&buf)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        });
+        let _ = child.wait();
+        if said.is_empty() {
+            why
+        } else {
+            format!("{why} ({said})")
+        }
+    };
+
+    let mut header = [0_u8; 512];
+    if let Err(e) = stream.read_exact(&mut header) {
+        return Err(stop(
+            &mut child,
+            format!("no tar header from docker cp: {e}"),
+        ));
     }
+    let at = |lo: usize, hi: usize| -> &[u8] { header.get(lo..hi).unwrap_or_default() };
+    if at(257, 262) != b"ustar" {
+        return Err(stop(&mut child, "not a tar stream".to_owned()));
+    }
+
+    // Type before size: reject what should never be extracted at all.
+    match header.get(156).copied().unwrap_or(0) {
+        b'0' | 0 => {}
+        b'2' => return Err(stop(&mut child, format!("{inside} is a symlink"))),
+        b'5' => return Err(stop(&mut child, format!("{inside} is a directory"))),
+        // Measured on this daemon: `docker cp` writes plain ustar for the short names and
+        // small sizes exported here, so a PAX header means something about the artefact
+        // changed — a very long name, a size past the octal field. Named rather than
+        // folded into the catch-all so it reads as "unhandled", not as "malicious".
+        b'x' | b'g' => {
+            return Err(stop(
+                &mut child,
+                format!("{inside}: the archive is PAX-extended, which this path does not read"),
+            ))
+        }
+        t => {
+            let kind = char::from(t);
+            return Err(stop(
+                &mut child,
+                format!("{inside} is not a regular file (tar entry type {kind:?})"),
+            ));
+        }
+    }
+
+    // A size with the high bit set is base-256 encoded, which tar uses only for sizes too
+    // large for the octal field — over 8 GiB, and so far over any budget here that the
+    // encoding alone settles it.
+    if header.get(124).copied().unwrap_or(0) & 0x80 != 0 {
+        return Err(stop(
+            &mut child,
+            format!(
+                "{inside}: size is base-256 encoded, vastly over the {max}-byte transfer budget"
+            ),
+        ));
+    }
+    let raw = String::from_utf8_lossy(at(124, 136)).into_owned();
+    let digits = raw.trim_matches(|c: char| c == '\0' || c == ' ');
+    let size = match u64::from_str_radix(digits, 8) {
+        Ok(n) => n,
+        Err(_) => {
+            return Err(stop(
+                &mut child,
+                format!("{inside}: unreadable tar size field {digits:?}"),
+            ))
+        }
+    };
+    if size > max {
+        return Err(stop(
+            &mut child,
+            format!(
+                "{inside}: the archive header declares {size} bytes, over the {max}-byte transfer budget"
+            ),
+        ));
+    }
+
+    // Only now does anything reach host storage, and only `size` bytes of it.
+    let mut file = match std::fs::File::create(local) {
+        Ok(f) => f,
+        Err(e) => return Err(stop(&mut child, format!("{inside}: {e}"))),
+    };
+    let mut buf = vec![0_u8; 64 * 1024];
+    let mut left = size;
+    while left > 0 {
+        let want = usize::try_from(left.min(buf.len() as u64)).unwrap_or(0);
+        let Some(slot) = buf.get_mut(..want) else {
+            return Err(stop(&mut child, format!("{inside}: internal buffer error")));
+        };
+        let n = match stream.read(slot) {
+            Ok(0) => {
+                return Err(stop(
+                    &mut child,
+                    format!("{inside}: the stream ended {left} bytes early"),
+                ))
+            }
+            Ok(n) => n,
+            Err(e) => return Err(stop(&mut child, format!("{inside}: {e}"))),
+        };
+        let Some(got) = slot.get(..n) else {
+            return Err(stop(&mut child, format!("{inside}: short read")));
+        };
+        if let Err(e) = file.write_all(got) {
+            return Err(stop(&mut child, format!("{inside}: {e}")));
+        }
+        left -= n as u64;
+    }
+    if let Err(e) = file.flush() {
+        return Err(stop(&mut child, format!("{inside}: {e}")));
+    }
+    drop(file);
+
+    // The payload is in hand; the rest of the archive is padding and end-of-file blocks
+    // that nothing here needs, so the transfer stops rather than draining it.
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(size)
 }
 
 /// The platform slug of the image the workloads run in, measured by the supervisor.
@@ -738,5 +869,72 @@ mod tests {
         let r = export_validated(&c, &policy(&dest, &["record.json"]));
         drop_fixture(&c);
         assert!(r.is_err(), "{r:?}");
+    }
+
+    /// The case post-copy validation cannot catch: a manifest declaring five bytes for an
+    /// artefact holding two megabytes. The old path copied all two megabytes onto the host
+    /// and only then compared sizes, so the budget was enforced after the damage.
+    #[test]
+    fn an_artefact_larger_than_it_declared_never_reaches_the_destination() {
+        if !docker_or_skip() {
+            return;
+        }
+        let c = fixture(
+            "oversized",
+            "dd if=/dev/zero of=/out/record.json bs=1024 count=2048 2>/dev/null \
+             && echo \"record.json 5\" > /out/EXPORTS",
+        );
+        let dest = scratch("oversized");
+        let r = export_validated(&c, &policy(&dest, &["record.json"]));
+        drop_fixture(&c);
+        let why = format!("{r:?}");
+        assert!(r.is_err(), "an oversized artefact must refuse, got {why}");
+        assert!(
+            why.contains("transfer budget"),
+            "it must refuse during the transfer, not after it: {why}"
+        );
+        assert!(!dest.join("record.json").exists());
+    }
+
+    /// The same bound, measured on the transfer itself rather than through the policy:
+    /// once the header is over budget nothing is written, so no file is created at all.
+    #[test]
+    fn the_transfer_stops_at_the_budget_before_writing() {
+        if !docker_or_skip() {
+            return;
+        }
+        let c = fixture(
+            "budget",
+            "dd if=/dev/zero of=/out/record.json bs=1024 count=2048 2>/dev/null",
+        );
+        let dir = scratch("budget");
+        let local = dir.join("record.json");
+        let r = copy_out_bounded(&c, "/out/record.json", &local, 5);
+        drop_fixture(&c);
+        assert!(
+            r.is_err(),
+            "2 MiB against a 5-byte budget must refuse: {r:?}"
+        );
+        assert!(
+            !local.exists(),
+            "nothing may be written once the header is over budget"
+        );
+    }
+
+    /// A non-regular entry is refused from the archive header, before extraction.
+    #[test]
+    fn a_directory_is_refused_from_the_header() {
+        if !docker_or_skip() {
+            return;
+        }
+        let c = fixture("dir", "mkdir -p /out/record.json");
+        let dir = scratch("dir");
+        let local = dir.join("record.json");
+        let r = copy_out_bounded(&c, "/out/record.json", &local, 1024);
+        drop_fixture(&c);
+        let why = format!("{r:?}");
+        assert!(r.is_err(), "a directory must refuse, got {why}");
+        assert!(why.contains("directory"), "{why}");
+        assert!(!local.exists());
     }
 }

@@ -601,7 +601,7 @@ own, and the parent drains while the workers run.
 | **Nesting** | A `scope` may contain another. The inner one joins first, because it closes first |
 | **The scope's value** | None. `scope { … }` is a statement |
 | **Result propagation** | A task's return value is **discarded**. Results travel through channels, which is the one mechanism, rather than two |
-| **Error propagation** | A task that fails at run time — overflow, a bad index, a failed allocation — ends the **whole program** with its diagnostic and exit status 2, exactly as the same failure would in `main`. Tasks do not have private failure modes |
+| **Error propagation** | A task that fails at run time — overflow, a bad index, a failed allocation — ends the **whole program** with its diagnostic and exit status 2. Tasks do not have private failure modes. It ends **at the scope's closing brace, not the instant the task failed**: the scope joins every task first, so the diagnostic is reported once nothing is still running. What follows says what that costs. **The compiled implementation does not do this yet** — see below |
 
 #### When a task starts, and when a scope waits
 
@@ -624,8 +624,33 @@ feeding it is a consequence, not a cause.
 
 There is no cancellation beyond closing a channel. A scope whose body fails still waits
 for tasks that may be blocked on a channel nobody will now close, and such a program
-hangs rather than reporting. Closing the channels a task waits on is the program's
-responsibility, and the `while chan_recv(c, buf)` loop is the idiom that makes it work.
+hangs rather than reporting. This is the price of the paragraph above, and it is the same
+mechanism seen from the other side: the diagnostic exists, but every failure leaves through
+the join, and a join that never returns never delivers it. Closing the channels a task
+waits on is the program's responsibility, and the `while chan_recv(c, buf)` loop is the
+idiom that makes it work.
+
+##### The two implementations disagree here, and the compiled one is wrong
+
+**The interpreter joins before reporting. The compiled program does not.** Measured, not
+inferred: a program whose body overflows while a worker it has just released is still
+running prints the worker's output under `nazm run` and prints nothing at `-O0` or `-O2`,
+with the same `N0400` and the same exit status 2 either way. The same holds when a *task*
+fails and a sibling is still working.
+
+The cause is in the emitted runtime. `@nz.fail` writes the diagnostic and calls `@exit`
+on whichever thread failed, so the process ends where the failure happened;
+`@nz.scope_join` does join every task, but a failure never reaches it. Closing the gap
+needs a way for a failure to leave a task without leaving the process, which the emitted
+code has no mechanism for — there is no unwinding, and `@nz.fail` is `noreturn` from
+arbitrary call depth.
+
+Until then: **the guarantee above is the specification and the interpreter's behaviour,
+not the compiled one.** A compiled program must not be relied on to finish a task's
+observable effects when another part of the same scope fails. The exit status and the
+diagnostic agree across both; only the joining does not.
+`nazm-cli/tests/concurrent.rs` states the contract as an executable test, ignored with
+this reason rather than inverted, so it starts passing the day the runtime can honour it.
 
 #### What may cross into a task
 
