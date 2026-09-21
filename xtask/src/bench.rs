@@ -208,6 +208,18 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
         }
     };
 
+    // Before any timing: both implementations must produce the recorded answer.
+    //
+    // `docs/NAZM_AUTONOMOUS_GOAL.md` §12 asks for equivalent work and results to be
+    // verified rather than assumed, and this is the failure it is guarding against — a
+    // benchmark whose compiled form was folded away, or whose two implementations
+    // quietly disagree, still produces a number, and the number is the thing people
+    // quote. Refusing to report is the only useful response.
+    if let Err(e) = verify(&nazm, &scratch, &programs) {
+        eprintln!("bench: {e}");
+        return ExitCode::FAILURE;
+    }
+
     let mut measurements = Vec::new();
     for path in &programs {
         let name = path
@@ -359,6 +371,69 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
         }
         Mode::Check => compare(&root, &measurements),
     }
+}
+
+/// Every program must produce its recorded answer, interpreted and compiled.
+///
+/// The `.expected` file beside each program is the same convention `nazm test` and
+/// `compiler/bootstrap.sh` use. A program with none is refused rather than skipped: an
+/// unverified benchmark is a number nobody can defend, and skipping it silently is how
+/// it becomes one.
+fn verify(nazm: &Path, scratch: &Path, programs: &[PathBuf]) -> Result<(), String> {
+    for path in programs {
+        let name = path
+            .file_stem()
+            .map_or_else(|| "?".to_owned(), |s| s.to_string_lossy().into_owned());
+        let expected_path = path.with_extension("expected");
+        let expected = std::fs::read_to_string(&expected_path)
+            .map_err(|_| {
+                format!(
+                    "{} has no `.expected` beside it. Every benchmark states its answer,                      so that a compiled form which folded away cannot be timed as though                      it had run.",
+                    path.display()
+                )
+            })?
+            .trim()
+            .to_owned();
+
+        let interpreted = output(Command::new(nazm).args(["run", &path.display().to_string()]));
+        if interpreted != expected {
+            return Err(format!(
+                "{name}: `nazm run` produced {interpreted:?}, expected {expected:?}"
+            ));
+        }
+
+        let exe = scratch.join(&name);
+        let built = Command::new(nazm)
+            .args(["build", &path.display().to_string(), "-o"])
+            .arg(&exe)
+            .args(["--opt-level", "2"])
+            .output()
+            .map_err(|e| format!("{name}: could not build: {e}"))?;
+        if !built.status.success() {
+            return Err(format!(
+                "{name}: `nazm build` refused it: {}",
+                String::from_utf8_lossy(&built.stderr).trim()
+            ));
+        }
+        let native = output(&mut Command::new(&exe));
+        if native != expected {
+            return Err(format!(
+                "{name}: the -O2 executable produced {native:?}, expected {expected:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn output(cmd: &mut Command) -> String {
+    cmd.output().map_or_else(
+        |e| format!("could not run: {e}"),
+        |o| {
+            let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&o.stderr));
+            text.trim().to_owned()
+        },
+    )
 }
 
 /// The compiler's four sources as one file, the way `compiler/bootstrap.sh` assembles
