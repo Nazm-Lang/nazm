@@ -71,7 +71,34 @@ strictly: **passed** / **skipped** / **refused** / **failed** / **unexecuted**.
 | `cargo xtask check` | **passed** — 6/6 gates (layering, codegen reach, emission reach, unsafe policy, doc claims, guide from grammar) |
 | `contained bench --save` | **passed** — recorded `bench/baseline-linux-aarch64.json`; the Darwin `baseline.json` untouched |
 | `contained bench` (check) | **passed** — nothing slower than the Linux baseline by more than 25% and 5 ms |
-| mutation catalogue (3 targeted) | **in progress** — contained, against a disposable copy |
+| mutation catalogue (3 targeted) | **1 failed, 2 re-running** — see below; contained, disposable copy, 0 survivors |
+
+### Mutation re-check: one regression of mine, one real finding
+
+Two of the three entries came back **NOT INJECTED**, and that was **my regression**:
+`the-statement-conditional-selects-the-wrong-branch` and
+`the-value-conditional-selects-the-wrong-branch` both `find` on
+`format!("b{}", self.fresh())`, which the label-counter change renamed to
+`fresh_label()`. The catalogue mutates source by literal text, so renaming the source
+silently disarmed two of its fifty-one entries — they reported NOT INJECTED rather than
+failing, which is precisely how a mutation suite quietly stops testing anything. Four
+occurrences realigned.
+
+The third, `the-loop-reuses-its-first-condition`, **injected** and then took the whole
+container to the 4 GiB ceiling (`Killed`, outcome `memory-limit`, 0 survivors).
+
+Cause, investigated rather than accommodated: the mutation makes the emitter's loop reuse
+its first condition, so emission never terminates. `nazm-lir`'s emitter accumulates the
+whole module in an `out: String` and `build.rs` writes it only at the end, so a
+non-terminating emit loop grows that string without bound. `build_at` *does* bound the
+call — with `run_bounded` and a deadline — but a deadline is a time bound and cannot stop
+an allocation. That is the same lesson as `gtimeout` in the original incident.
+
+The budget was **not** raised. Two honest readings, and they are different claims: the
+mutation is demonstrably detected, because the mutated compiler cannot finish; but it was
+detected by the ceiling rather than by an assertion, so it is not "caught" in the sense
+the catalogue means. On Linux — unlike Darwin — `ulimit -v` is enforced, so bounding the
+compiler child inside the container is the available fix. **Open.**
 
 ### Both emitters now number temporaries sequentially
 
