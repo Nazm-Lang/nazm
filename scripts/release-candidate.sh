@@ -46,7 +46,26 @@ target=${CARGO_TARGET_DIR:-"$root/target"}
 
 # A candidate has to be attributable to a commit, or the manifest's commit line is a
 # guess about which of the working tree's states was built.
-dirty=$(git status --porcelain 2>/dev/null || true)
+# Who this candidate says it is.
+#
+# `git` is not in the contained image — deliberately, it has no business there — so inside
+# the runner `git rev-parse` returns nothing and the honest answer would be "unknown". The
+# supervisor has git and knows exactly which revision it mounted, so it passes both facts
+# in. When they are absent this falls back to asking git directly, which is what happens
+# when the script is run by hand on a host.
+#
+# A candidate that cannot name its revision is refused. The whole point of the manifest and
+# the provenance record is to let someone else check this artefact against a source tree,
+# and neither is worth anything if the tree cannot be identified.
+commit=${NAZM_SOURCE_COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}
+if [ -n "${NAZM_SOURCE_TREE_CLEAN+set}" ]; then
+    if [ "$NAZM_SOURCE_TREE_CLEAN" = yes ]; then dirty=; else dirty="the supervisor reported uncommitted changes"; fi
+else
+    dirty=$(git status --porcelain 2>/dev/null || true)
+fi
+if [ "$commit" = unknown ]; then
+    fail "the source revision could not be established, so the candidate could not be attributed to one"
+fi
 if [ -n "$dirty" ] && [ "$allow_dirty" = no ]; then
     printf '%s\n' "$dirty" >&2
     fail "the tree is not clean. Commit first, or pass --allow-dirty and accept that the manifest's commit will not describe what was built."
@@ -137,7 +156,7 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
 # the tests run against it?" should not have to infer the answer from a file list.
 {
     printf 'nazm release candidate — provenance\n\n'
-    printf 'source-commit:      %s\n' "$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    printf 'source-commit:      %s\n' "$commit"
     printf 'source-tree-clean:  %s\n' "$([ -z "$dirty" ] && echo yes || echo 'no (--allow-dirty)')"
     # The tree as built, independent of git: every tracked-by-this-package source, in a
     # fixed order, digested together. A commit identifies a revision only if the working
@@ -183,7 +202,7 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
 {
     printf 'nazm release candidate\n\n'
     printf 'date-utc:    %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf 'commit:      %s\n' "$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    printf 'commit:      %s\n' "$commit"
     printf 'tree-clean:  %s\n' "$([ -z "$dirty" ] && echo yes || echo 'no (--allow-dirty)')"
     printf 'host:        %s\n' "$(uname -sm)"
     printf 'rustc:       %s\n' "$(rustc --version)"

@@ -11,7 +11,7 @@ mod metadata;
 mod mutate;
 mod rules;
 
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -634,10 +634,46 @@ fn run_contained(args: &[String]) -> ExitCode {
                 eprintln!("contained: cannot prepare {}: {e}", dest.display());
                 return ExitCode::FAILURE;
             }
+            // The revision, established here rather than inside. `git` is not in the
+            // image and has no business being there, so the container cannot answer
+            // "which commit is this?" — it would record `unknown` and a clean tree it had
+            // no way to check. The supervisor mounted the tree and knows both.
+            let commit = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&repo)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .unwrap_or_default();
+            let porcelain = Command::new("git")
+                .args(["status", "--porcelain"])
+                .current_dir(&repo)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+            let Some(dirty) = porcelain else {
+                eprintln!(
+                    "contained: cannot read the tree's state with git, so the candidate \
+                     could not be attributed to a revision"
+                );
+                return ExitCode::FAILURE;
+            };
+            if commit.is_empty() {
+                eprintln!("contained: cannot establish the source commit");
+                return ExitCode::FAILURE;
+            }
+            let clean = if dirty.is_empty() { "yes" } else { "no" };
+            // Only the verdict crosses, not the porcelain text: a changed path may contain
+            // a quote, and interpolating it into a shell command is how a filename becomes
+            // an instruction.
+            let identity = format!("NAZM_SOURCE_COMMIT={commit} NAZM_SOURCE_TREE_CLEAN={clean} ");
             (
                 "release",
                 shell(
-                    "sh scripts/release-candidate.sh \
+                    &(identity
+                        + "sh scripts/release-candidate.sh \
                      && mkdir -p /work/rc \
                      && cp /work/target/release-candidate/MANIFEST.txt /work/rc/ \
                      && cp /work/target/release-candidate/PROVENANCE.txt /work/rc/ \
@@ -648,7 +684,7 @@ fn run_contained(args: &[String]) -> ExitCode {
                      && for f in nazm-release-candidate.tar.gz MANIFEST.txt PROVENANCE.txt; do \
                             printf '%s %s\\n' \"$f\" \"$(wc -c < $f | tr -d ' ')\"; \
                         done > EXPORTS \
-                     && cat EXPORTS",
+                     && cat EXPORTS"),
                 ),
             )
         }
