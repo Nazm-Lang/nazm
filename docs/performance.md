@@ -43,6 +43,36 @@ about fifteen milliseconds is below this method's noise floor**. Those numbers a
 recorded and not gated. Measuring them properly needs a harness that does not pay
 process start-up per sample, and this one does.
 
+### Verifying that the work is real
+
+Two things can make a benchmark number meaningless, and both were checked rather than
+assumed.
+
+**The compiled form might have been folded away.** None of these programs reads external
+input, so an optimiser is entitled to compute the answer at compile time and leave a
+loop that does nothing. Checked by scaling the input and seeing whether the time
+scales — `calls` at 1M, 4M and 16M iterations, at `-O2`, with the process floor
+subtracted:
+
+| iterations | wall | minus the floor |
+| ---: | ---: | ---: |
+| 1 000 000 | 3.80 ms | 0.92 ms |
+| 4 000 000 | 6.03 ms | 3.15 ms |
+| 16 000 000 | 13.41 ms | 10.53 ms |
+
+Four times the work takes about 3.4× and 3.3× the time. That is linear within the
+noise, so the loop runs.
+
+**The two implementations might not be doing the same thing.** Every program states its
+answer in a `.expected` file beside it, and `cargo xtask bench` runs both forms and
+compares before it times anything. A program whose implementations disagree, or which
+has no recorded answer, is refused rather than measured.
+
+**Everything below includes process start-up.** `floor.nz` is an empty program and
+measures that cost alone: about **2.9 ms**. It is not subtracted from the table — the
+numbers are wall time of a whole process, which is the thing a person waits for — but
+it is measured every run so it can be.
+
 ### Interpreter against native
 
 Median milliseconds, after the optimisation pass below.
@@ -67,9 +97,12 @@ misread:
   anything the compiler emits. The structured-concurrency model is usable for
   coarse-grained work and is **not** suitable for fine-grained message passing; nothing
   here claims otherwise, and no scheduler work has been done.
-- **`calls` is 135×** because the interpreter builds an environment frame per call while
-  the native code does not. It is the largest ratio here and the least representative of
-  anything.
+- **`calls` is 135×, and that ratio is the least useful number here.** The interpreter
+  builds an environment frame per call and the native code does not, so the gap is
+  real — but 4.8 ms of native wall time is about 1.9 ms of work on a 2.9 ms floor, so
+  the ratio is as much a statement about process start-up as about the compiler. Every
+  native figure in the table has the same shape; `arith`, with roughly 4.8 ms of work,
+  is the one where the measurement is mostly the program.
 
 ### Compile time
 
