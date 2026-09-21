@@ -565,18 +565,51 @@ find = 'ArithOp::Add => "sadd",'
 replace = 'ArithOp::Add => "uadd",'
 
 [[mutation]]
-name = "the-conditional-selects-the-wrong-branch"
+name = "the-statement-conditional-selects-the-wrong-branch"
 why = """
-The one thing an `if` has to get right. Swapping the branch labels compiles, produces
-well-formed IR that clang accepts, and every phi still names a real predecessor — so
-nothing structural catches it. Only running a program whose two branches differ does.
+Swaps the arms of a statement-position `if`, so `if c { a } else { b }` runs `b` when `c`
+holds. Nothing structural notices: both labels exist, both blocks have terminators, and
+clang accepts the module — the program simply does the other thing.
 
-Caught by `both_branch_outcomes_are_reachable` and others, which assert the exact printed
-value rather than merely that the program ran.
+Split from a single `the-conditional-selects-the-wrong-branch` entry at final
+integration. That entry's pattern was the `br i1` line alone, which occurs in **two**
+functions — `statement_if` and `conditional` — so the runner refused it as not unique
+and the mutation had stopped applying at all. A pattern that matches twice proves
+nothing, and the repair is two precise entries rather than one ambiguous one: the
+statement form and the value form are separate code paths and each deserves its own
+fact.
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = '"  br i1 %{c}, label %{then_label}, label %{else_label}"'
-replace = '"  br i1 %{c}, label %{else_label}, label %{then_label}"'
+find = """        let else_label = format!("b{}", self.fresh());
+        let _ = writeln!(
+            self.out,
+            "  br i1 %{c}, label %{then_label}, label %{else_label}"
+        );"""
+replace = """        let else_label = format!("b{}", self.fresh());
+        let _ = writeln!(
+            self.out,
+            "  br i1 %{c}, label %{else_label}, label %{then_label}"
+        );"""
+
+[[mutation]]
+name = "the-value-conditional-selects-the-wrong-branch"
+why = """
+The same swap in a value-position `if`, which is a different function and a different
+shape: it has a join block and a `phi`, so the wrong arm's value is what the expression
+produces. Caught by outcome rather than by anything about the IR being malformed — the
+`phi` is well-formed either way.
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """        let join_label = format!("b{}", self.fresh());
+        let _ = writeln!(
+            self.out,
+            "  br i1 %{c}, label %{then_label}, label %{else_label}"
+        );"""
+replace = """        let join_label = format!("b{}", self.fresh());
+        let _ = writeln!(
+            self.out,
+            "  br i1 %{c}, label %{else_label}, label %{then_label}"
+        );"""
 
 [[mutation]]
 name = "two-same-typed-arguments-are-transposed"
@@ -625,10 +658,14 @@ Neither group alone would have been the whole story, and a timeout is recorded a
 failure rather than as a result.
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """        self.stmts(body);
-        let _ = writeln!(self.out, "  br label %{head}");"""
-replace = """        self.stmts(body);
-        let _ = writeln!(self.out, "  br label %{body_label}");"""
+find = """        self.loops.pop();
+        if reach == Reach::FallsThrough {
+            let _ = writeln!(self.out, "  br label %{head}");
+        }"""
+replace = """        self.loops.pop();
+        if reach == Reach::FallsThrough {
+            let _ = writeln!(self.out, "  br label %{body_label}");
+        }"""
 
 [[mutation]]
 name = "continue-jumps-to-the-body-not-the-condition"
