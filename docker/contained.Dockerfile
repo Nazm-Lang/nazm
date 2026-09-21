@@ -16,8 +16,12 @@
 # defect from masquerading as a bootstrap failure.
 FROM rust:1.98.1-slim-trixie
 
+# `procps` supplies `ps`, which `xtask`'s mutation lock uses to tell "no such process"
+# apart from "exists but is not yours" — `kill -0` fails for both and offers no errno to
+# separate them, so a live lock would look dead and be stolen. Without `ps` the probe
+# correctly reports Unknown and four tests fail; the slim image simply does not ship it.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends clang ca-certificates \
+ && apt-get install -y --no-install-recommends clang ca-certificates procps \
  && rm -rf /var/lib/apt/lists/*
 
 # Cargo writes here, never into the read-only source mount. The host's `target/` holds

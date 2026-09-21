@@ -55,6 +55,63 @@ Outcomes are five distinct words — **passed, skipped, refused, failed, unexecu
 the runner never collapses them: `Unavailable` is a refusal with an explanation, not a
 skip.
 
+## Verified through the contained runner (2026-09-21)
+
+Every line below was executed inside the ceiling, serially. Words are used strictly:
+**passed** / **skipped** / **refused** / **failed** / **unexecuted**.
+
+| workload | result |
+| --- | --- |
+| `contained probe` | **passed** — 6/6 bounds real, 0 survivors |
+| `contained selfhost` | **passed** — 15/15 in 14.9 s, 0 survivors, nothing OOM-killed |
+| `contained bootstrap` | **passed** — 3.5 s, `ir: identical`, `runnable-bytes-differing: 0`, 5 conformance cases |
+| `contained run 'cargo test --locked --workspace --jobs 1 -- --test-threads 1'` | **failed** — 27 suites passed, 1 failed (4 xtask lock tests); cause is the image, see below |
+
+### C0 → C1 → C2 → C3 now demonstrated on a second platform
+
+The bootstrap record, produced inside the container:
+
+    host: Linux aarch64        rustc 1.98.1        clang 19.1.7
+    source digest: 6359b0f8c8f6d26fdebe31db1dc98099da9a38f15093eb8ae7584497f3aa2552
+    source lines: 3561
+    ir: identical
+    executables: byte-identical once the linker UUID is removed
+    c2-digest == c3-digest == a28b8b345d4faddd1c5ac9ff6e1c7a654086e5d9fc86647229fe8424838a7a8c
+    runnable-bytes-differing: 0
+    conformance-cases: 5
+
+Previously this had only been checked on aarch64-apple-darwin. Three portability
+assumptions had to be fixed first: the Mach-O-only `-Wl,-no_uuid`, `shasum` versus
+`sha256sum`, and a hardcoded `$root/target/debug/nazm` that under the read-only source
+mount is the host's Mach-O binary ("Exec format error" is not a bootstrap failure).
+
+### The one failure is the image, not the code
+
+`xtask`'s four mutation-lock tests fail in the container because `rust:1.98.1-slim-trixie`
+ships no `procps`, so `ps` is missing and `process_exists` correctly reports `Unknown`.
+The same four **passed** on the host, where `ps` exists. `procps` added to the image;
+rebuild in progress. Recorded because "failed in the container" and "broken" are not the
+same claim.
+
+### nzemit: NOT REPRODUCED
+
+Required by §2.1.4. Peak is per-process `VmHWM`, execution only — not clang, not scratch.
+
+| binary | produced by | input | peak RSS | output | elapsed |
+| --- | --- | --- | --- | --- | --- |
+| C1 | **C0, the Rust implementation** | S.nz 162,099 B | 35.8 MB | 1,420,791 B | — |
+| C2 | **C1, the compiler written in Nazm** | S.nz 162,099 B | 35.8 MB | 1,420,791 B | — |
+| C1 | Rust | 5,290 B | 4.8 MB | 101,799 B | 6 ms |
+| C1 | Rust | 21,490 B | 14.0 MB | 387,999 B | 74 ms |
+| C1 | Rust | 88,490 B | 50.4 MB | 1,547,001 B | 932 ms |
+| C1 | Rust | 162,099 B (S.nz) | 35.6 MB | 1,420,791 B | 1,590 ms |
+
+Provenance changes peak by 0.2 %. Peak tracks **output** size, not input — S.nz has 1.8x
+the input of the 88,490-byte case but emits less IR and uses less memory. Linear, no
+quadratic term. The ~17 GB attributed to `nzemit` in the panic report is **not explained**
+and is not written up as resolved. Full record:
+`~/nazm-incident-2026-09-21/nzemit-investigation.md`.
+
 ## HALT — resource incident, 2026-09-21 (read before running anything)
 
 Three kernel panics (08:12:30, 08:26:49, 08:44:44), all
