@@ -7,5 +7,18 @@ fn main() -> Int {
     let mut j = 0;
     while j < ints_len(a) { sum = sum + ints_get(a, j); j = j + 1; }
     ints_set(a, 0, 1000);
-    sum + ints_get(a, 0) + ints_pop(a) - ints_len(a)
+
+    // `Strs` too, and `strs_pop` in particular: it is used throughout the compiler
+    // written in Nazm and was, until this case existed, the one built-in no test and no
+    // conformance program named. Exercised end to end here so C2, C3 and the
+    // interpreter have to agree about it like everything else.
+    let b = strs_new();
+    strs_push(b, "alpha");
+    strs_push(b, "beta");
+    strs_push(b, "gamma");
+    let last = strs_pop(b);
+    strs_set(b, 0, str_concat(strs_get(b, 0), last));
+    let text = str_join(b, "-");
+
+    sum + ints_get(a, 0) + ints_pop(a) - ints_len(a) + str_len(text) + strs_len(b)
 }
