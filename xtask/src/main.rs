@@ -273,6 +273,17 @@ fn collect_rs(dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>>
     Ok(out)
 }
 
+/// Documented claims that must stay true — **about the benchmark harness only**.
+///
+/// Named "doc claims", which over-promises: both checks below concern whether the
+/// evaluation protocol's pre-registration status is stated consistently, and both are
+/// no-ops while `docs/evaluation-preregistration.md` does not exist. A reader seeing
+/// `ok doc claims` should not take it for more than that.
+///
+/// The language's documented claims are checked by `crates/nazm-cli/tests/docs.rs`,
+/// which can run the binary and read the emitter's own constants — neither of which
+/// `xtask` may do, since it depends on no internal crate. It is a test rather than a
+/// gate for that reason, and `cargo test --workspace` runs it.
 fn check_doc_claims() -> Result<(), Vec<String>> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
