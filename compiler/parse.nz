@@ -64,6 +64,8 @@ fn n_break() -> Int { 16 }
 fn n_continue() -> Int { 17 }
 fn n_exprstmt() -> Int { 18 }
 fn n_if() -> Int { 19 }
+fn n_scope() -> Int { 20 }
+fn n_spawn() -> Int { 21 }
 
 fn node_name(k: Int) -> Str {
     if k == n_int() { return "int"; }
@@ -85,6 +87,8 @@ fn node_name(k: Int) -> Str {
     if k == n_continue() { return "continue"; }
     if k == n_exprstmt() { return "exprstmt"; }
     if k == n_if() { return "if"; }
+    if k == n_scope() { return "scope"; }
+    if k == n_spawn() { return "spawn"; }
     "?"
 }
 
@@ -529,6 +533,7 @@ fn frame_body() -> Int { 1 }
 fn frame_while() -> Int { 2 }
 fn frame_if_then() -> Int { 3 }
 fn frame_if_else() -> Int { 4 }
+fn frame_scope() -> Int { 5 }
 
 // What to do once the expression now being parsed finally completes. It is a stack
 // because an `if` can suspend an expression that was itself the value of a `let`, and
@@ -539,6 +544,7 @@ fn pend_assign() -> Int { 2 }
 fn pend_return() -> Int { 3 }
 fn pend_while() -> Int { 4 }
 fn pend_stmt() -> Int { 5 }
+fn pend_spawn() -> Int { 6 }
 
 fn push_frame(fk: Ints, fstart: Ints, fcount: Ints, ftail: Ints, faux: Ints, fparams: Ints,
         ftext: Strs, kind: Int, start: Int, aux: Int, params: Int, text: Str) -> Int {
@@ -684,6 +690,19 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             if what == pend_return() {
                 emit(nk, nar, nst, nen, ntx, n_return(), 1, at, semi, "");
             }
+            if what == pend_spawn() {
+                // The expression parser has just emitted the call. A `spawn` *is* that
+                // node with a different kind and a span that starts at the keyword, so it
+                // is retagged in place rather than rebuilt — which keeps exactly one
+                // definition of how a call's arguments are parsed.
+                let last = ints_len(nk) - 1;
+                if ints_get(nk, last) != n_call() {
+                    die("`spawn` needs a call to a named function", at);
+                }
+                ints_set(nk, last, n_spawn());
+                ints_set(nst, last, at);
+                ints_set(nen, last, semi);
+            }
             bump(fcount);
             continue;
         }
@@ -785,6 +804,13 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 resuming = true;
                 continue;
             }
+            if kind == frame_scope() {
+                // The block is the one child, and the `scope` spans from its keyword to
+                // the closing brace — the shape `selfhost.rs` writes down for it.
+                emit(nk, nar, nst, nen, ntx, n_scope(), 1, aux, close, "");
+                bump(fcount);
+                continue;
+            }
             if kind == frame_while() {
                 // The condition was emitted before the body, so the two children are
                 // already in post-order and the `while` closes over them.
@@ -839,6 +865,37 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 strs_push(ptext, name);
                 continue;
             }
+        }
+
+        if t == k_scope() {
+            let stmt_start = start_at(starts, i);
+            i = i + 1;
+            let brace = start_at(starts, i);
+            i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a scope");
+            push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
+                    frame_scope(), brace, stmt_start, 0, "");
+            continue;
+        }
+
+        if t == k_spawn() {
+            let stmt_start = start_at(starts, i);
+            i = i + 1;
+            // A task runs a *named* function — there are no function values, so the
+            // callee is an identifier and nothing else. Checked here rather than left to
+            // the expression parser, which would report whatever it happened to find.
+            if kind_at(kinds, i) != k_ident() {
+                die("expected a function name after `spawn`", start_at(starts, i));
+            }
+            if kind_at(kinds, i + 1) != k_lparen() {
+                die("expected `(` after the function name in a `spawn`",
+                        start_at(starts, i + 1));
+            }
+            ints_push(pk, pend_spawn());
+            ints_push(pdepth, ints_len(fk));
+            ints_push(pbase, ints_len(ops));
+            ints_push(pstart, stmt_start);
+            strs_push(ptext, "");
+            continue;
         }
 
         if t == k_while() {
