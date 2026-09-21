@@ -9,7 +9,7 @@
 //! find the next spends a turn per character.
 
 use nazm_diag::{codes, Diagnostic};
-use nazm_span::Span;
+use nazm_span::{FileId, Span};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
@@ -219,9 +219,18 @@ pub struct Token {
 }
 
 /// Tokenise, collecting every error rather than stopping at the first.
+///
+/// For a single-file program. Multi-file compilation goes through
+/// [`crate::parse_map`], which lexes each file against its own [`FileId`].
 #[must_use]
 pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
-    let (tokens, errors, _) = lex_with_comments(text);
+    lex_in(FileId::ROOT, text)
+}
+
+/// Tokenise one file, so every span it produces names that file.
+#[must_use]
+pub fn lex_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
+    let (tokens, errors, _) = lex_with_comments_in(file, text);
     (tokens, errors)
 }
 
@@ -234,6 +243,12 @@ pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
 /// string literal, which is exactly the case a second scanner gets wrong.
 #[must_use]
 pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>) {
+    lex_with_comments_in(FileId::ROOT, text)
+}
+
+/// [`lex_with_comments`], for a named file.
+#[must_use]
+pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>) {
     let bytes = text.as_bytes();
     // Checked access throughout. Every one of these reads is provably in bounds from the
     // surrounding loop condition, but "provably" is a property of today's code: the lint
@@ -264,7 +279,7 @@ pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>)
             }
             // Not including the newline: the comment is the text, and where the line
             // ends is the formatter's decision rather than the comment's.
-            comments.push(Span::new(at(start), at(i)));
+            comments.push(Span::new(file, at(start), at(i)));
             continue;
         }
 
@@ -282,7 +297,7 @@ pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>)
             match raw.parse::<i64>() {
                 Ok(v) => tokens.push(Token {
                     kind: TokenKind::Int(v),
-                    span: Span::new(at(start), at(i)),
+                    span: Span::new(file, at(start), at(i)),
                 }),
                 // Refused at the boundary rather than silently wrapped. A literal that
                 // does not fit the type it is written as is a mistake, not a value.
@@ -291,7 +306,7 @@ pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>)
                 // still does not.
                 Err(_) => tokens.push(Token {
                     kind: TokenKind::IntTooLarge(raw),
-                    span: Span::new(at(start), at(i)),
+                    span: Span::new(file, at(start), at(i)),
                 }),
             }
             continue;
@@ -322,7 +337,7 @@ pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>)
             };
             tokens.push(Token {
                 kind,
-                span: Span::new(at(start), at(i)),
+                span: Span::new(file, at(start), at(i)),
             });
             continue;
         }
@@ -339,11 +354,11 @@ pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>)
                 errors.push(
                     Diagnostic::error(
                         codes::UNTERMINATED_STRING,
-                        Span::new(at(start), at(i)),
+                        Span::new(file, at(start), at(i)),
                         "this string has no closing quote",
                     )
                     .fix_with_review(
-                        Span::new(at(i), at(i)),
+                        Span::new(file, at(i), at(i)),
                         "\"",
                         "close the string",
                         "the string was meant to end at the end of this line, rather \
@@ -356,7 +371,7 @@ pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>)
             i += 1;
             tokens.push(Token {
                 kind: TokenKind::Str(value),
-                span: Span::new(at(start), at(i)),
+                span: Span::new(file, at(start), at(i)),
             });
             continue;
         }
@@ -375,7 +390,7 @@ pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>)
             i += width;
             tokens.push(Token {
                 kind,
-                span: Span::new(at(start), at(i)),
+                span: Span::new(file, at(start), at(i)),
             });
             continue;
         }
@@ -403,7 +418,7 @@ pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>)
                 i += 1;
                 tokens.push(Token {
                     kind,
-                    span: Span::new(at(start), at(i)),
+                    span: Span::new(file, at(start), at(i)),
                 });
             }
             None => {
@@ -416,7 +431,7 @@ pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>)
                 i += ch.len_utf8();
                 errors.push(Diagnostic::error(
                     codes::UNKNOWN_CHARACTER,
-                    Span::new(at(start), at(i)),
+                    Span::new(file, at(start), at(i)),
                     format!("`{ch}` is not valid here"),
                 ));
             }
@@ -425,7 +440,7 @@ pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>)
 
     tokens.push(Token {
         kind: TokenKind::Eof,
-        span: Span::new(at(bytes.len()), at(bytes.len())),
+        span: Span::new(file, at(bytes.len()), at(bytes.len())),
     });
     (tokens, errors, comments)
 }

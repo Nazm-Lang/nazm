@@ -28,7 +28,7 @@ pub(crate) fn run(
     emit_ir: bool,
     opt_level: u8,
 ) -> ExitCode {
-    let file = match crate::load::load(input) {
+    let map = match crate::load::load(input) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
             emit(&diagnostics, &partial, json);
@@ -60,9 +60,9 @@ pub(crate) fn run(
     //
     // A program that does not type-check is not a question about the backend's coverage,
     // so those diagnostics are reported first and lowering never runs.
-    let ir = match nazm_core::on_checked(file.text(), |program| {
+    let ir = match nazm_core::on_checked_map(&map, |program| {
         nazm_lir::lower(program)
-            .map(|module| nazm_lir::emit_llvm(&module, &input.display().to_string(), file.text()))
+            .map(|module| nazm_lir::emit_llvm(&module, &input.display().to_string(), &map))
             .map_err(|e| e.diagnostics)
     }) {
         Ok(ir) => ir,
@@ -73,7 +73,7 @@ pub(crate) fn run(
             let unsupported = diagnostics
                 .iter()
                 .any(|d| d.code == nazm_diag::codes::UNSUPPORTED_CONSTRUCT);
-            emit(&diagnostics, &file, json);
+            emit(&diagnostics, &map, json);
             let n = diagnostics.len();
             if unsupported {
                 eprintln!(

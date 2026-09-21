@@ -243,7 +243,7 @@ pub fn lower(program: &Program) -> Result<Module, LowerError> {
             return Err(LowerError {
                 diagnostics: vec![Diagnostic::error(
                     codes::MISSING_MAIN,
-                    Span::new(0, 0),
+                    Span::synthetic(),
                     "this program has no `main` to compile",
                 )],
             })
@@ -271,7 +271,7 @@ pub fn lower(program: &Program) -> Result<Module, LowerError> {
         Err(LowerError {
             diagnostics: vec![Diagnostic::error(
                 codes::UNSUPPORTED_CONSTRUCT,
-                Span::new(0, 0),
+                Span::synthetic(),
                 "`nazm build` could not lower this program and did not say why",
             )
             .help("this is a bug in the compiler; `nazm run` still works")],

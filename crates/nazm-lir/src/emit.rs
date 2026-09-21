@@ -45,7 +45,7 @@
 
 use std::fmt::Write as _;
 
-use nazm_span::Span;
+use nazm_span::{SourceMap, Span};
 
 use crate::ir::{ArithOp, Block, Builtin, Expr, FuncId, Function, Module, Stmt, Ty};
 
@@ -60,7 +60,7 @@ struct Failure {
     message: String,
 }
 
-struct Emitter {
+struct Emitter<'a> {
     out: String,
     /// Next SSA value number. LLVM requires unnamed values to be numbered consecutively
     /// within a function, so this also numbers blocks to keep them distinct.
@@ -77,9 +77,13 @@ struct Emitter {
     blobs: Vec<(String, Vec<u8>)>,
     /// Where the source came from, for the runtime message.
     file: String,
-    /// Byte offset of the start of each line, for turning a span into a position.
-    lines: Vec<usize>,
-    source_len: usize,
+    /// Where every span in this module came from.
+    ///
+    /// The emitter used to build its own line-start table from a single source string —
+    /// a third copy of logic `nazm-span` already owned, and one that assumed all files
+    /// were one buffer. It asks the map now, which also means a baked position names the
+    /// line of the file the error is in rather than of a concatenation.
+    map: &'a SourceMap,
     /// Active loops, innermost last. Pushed around a loop's **body** only — a `break` in
     /// a loop's *condition* belongs to the enclosing loop, which is the existing
     /// language's rule (`docs/spec.md`, *Where a loop target binds*). Cleared at every
@@ -184,7 +188,7 @@ macro_rules! operand {
     };
 }
 
-impl Emitter {
+impl Emitter<'_> {
     fn fresh(&mut self) -> u32 {
         let n = self.next;
         self.next += 1;
@@ -215,11 +219,9 @@ impl Emitter {
     /// `line:column`, 1-based, from a byte offset. Mirrors the renderer's convention so a
     /// runtime error from a compiled program points where the same error from
     /// `nazm run` would.
-    fn position(&self, offset: u32) -> (usize, usize) {
-        let offset = (offset as usize).min(self.source_len);
-        let line = self.lines.partition_point(|&start| start <= offset);
-        let line_start = self.lines.get(line.saturating_sub(1)).copied().unwrap_or(0);
-        (line.max(1), offset - line_start + 1)
+    fn position(&self, span: Span) -> (usize, usize) {
+        let at = self.map.line_col(span);
+        (at.line as usize, at.column as usize)
     }
 
     /// Intern a `Str` literal, and return the symbol of a **constant `{ptr, i64}`** for
@@ -277,7 +279,7 @@ impl Emitter {
                 code: "N0405",
                 message: message.to_owned(),
             },
-            span.start,
+            span,
         );
     }
 
@@ -324,7 +326,7 @@ impl Emitter {
                 code: "N0406",
                 message: "out of memory".to_owned(),
             },
-            span.start,
+            span,
         );
         buf
     }
@@ -348,8 +350,8 @@ impl Emitter {
     /// Split out of [`Self::guard`] because a runtime helper that can fail — the one
     /// behind `chan_recv` — has to be *given* its message: it is one function serving
     /// every call site, and the position in the text is the call site's, not its own.
-    fn failure_text(&mut self, failure: &Failure, span_offset: u32) -> (String, usize) {
-        let (line, col) = self.position(span_offset);
+    fn failure_text(&mut self, failure: &Failure, span: Span) -> (String, usize) {
+        let (line, col) = self.position(span);
         let text = format!(
             "nazm: error[{}]: {} at {}:{line}:{col}\n",
             failure.code, failure.message, self.file
@@ -357,8 +359,8 @@ impl Emitter {
         self.intern(&text)
     }
 
-    fn guard(&mut self, cond: u32, failure: &Failure, span_offset: u32) {
-        let (sym, len) = self.failure_text(failure, span_offset);
+    fn guard(&mut self, cond: u32, failure: &Failure, span: Span) {
+        let (sym, len) = self.failure_text(failure, span);
         let fail = self.fresh_label();
         let cont = self.fresh_label();
         let _ = writeln!(self.out, "  br i1 %{cond}, label %b{fail}, label %b{cont}");
@@ -590,7 +592,7 @@ impl Emitter {
                 code: "N0406",
                 message: "out of memory".to_owned(),
             },
-            span.start,
+            span,
         );
 
         self.scopes.push(tids);
@@ -654,7 +656,7 @@ impl Emitter {
                 code: "N0406",
                 message: "out of memory".to_owned(),
             },
-            span.start,
+            span,
         );
 
         // `malloc` does not zero, and the join reads this slot for every task it joins —
@@ -692,7 +694,7 @@ impl Emitter {
                 code: "N0406",
                 message: "out of memory".to_owned(),
             },
-            span.start,
+            span,
         );
         let bad = self.fresh();
         let _ = writeln!(self.out, "  %{bad} = icmp sgt i32 %{rc}, 0");
@@ -705,7 +707,7 @@ impl Emitter {
                 // machine rather than anything about the program.
                 message: "this task could not be started".to_owned(),
             },
-            span.start,
+            span,
         );
         Reach::FallsThrough
     }
@@ -934,7 +936,7 @@ impl Emitter {
                         code: "N0400",
                         message: "this negation overflows `Int`".to_owned(),
                     },
-                    span.start,
+                    *span,
                 );
                 let out = self.fresh();
                 let _ = writeln!(self.out, "  %{out} = extractvalue {{i64, i1}} %{r}, 0");
@@ -951,11 +953,9 @@ impl Emitter {
                 let a = operand!(self.expr(lhs));
                 let b = operand!(self.expr(rhs));
                 let value = match op {
-                    ArithOp::Add | ArithOp::Sub | ArithOp::Mul => {
-                        self.checked(*op, a, b, span.start)
-                    }
-                    ArithOp::Div => self.divide(a, b, span.start),
-                    ArithOp::Rem => self.remainder(a, b, span.start),
+                    ArithOp::Add | ArithOp::Sub | ArithOp::Mul => self.checked(*op, a, b, *span),
+                    ArithOp::Div => self.divide(a, b, *span),
+                    ArithOp::Rem => self.remainder(a, b, *span),
                 };
                 Val::Of { value, ty: Ty::Int }
             }
@@ -1231,7 +1231,7 @@ impl Emitter {
                         code: "N0407",
                         message: "this file could not be read".to_owned(),
                     },
-                    span.start,
+                    span,
                 );
                 return Val::Of {
                     value: out,
@@ -1255,7 +1255,7 @@ impl Emitter {
                         code: "N0407",
                         message: "this file could not be written".to_owned(),
                     },
-                    span.start,
+                    span,
                 );
                 return Val::Of {
                     value: n,
@@ -1294,7 +1294,7 @@ impl Emitter {
                         code: "N0406",
                         message: "out of memory".to_owned(),
                     },
-                    span.start,
+                    span,
                 );
                 return Val::Of {
                     value: h,
@@ -1348,7 +1348,7 @@ impl Emitter {
                         code: "N0406",
                         message: "out of memory".to_owned(),
                     },
-                    span.start,
+                    span,
                 );
                 return Val::Of {
                     value: out,
@@ -1374,7 +1374,7 @@ impl Emitter {
                         code: "N0406",
                         message: "out of memory".to_owned(),
                     },
-                    span.start,
+                    span,
                 );
                 return Val::Of {
                     value: c,
@@ -1407,7 +1407,7 @@ impl Emitter {
                         code: "N0406",
                         message: "out of memory".to_owned(),
                     },
-                    span.start,
+                    span,
                 );
                 let ok = self.fresh();
                 let _ = writeln!(
@@ -1490,7 +1490,7 @@ impl Emitter {
                         code: "N0406",
                         message: "out of memory".to_owned(),
                     },
-                    span.start,
+                    span,
                 );
                 let len = self.fresh();
                 let _ = writeln!(self.out, "  %{len} = load i64, ptr %{}", arg(0));
@@ -1668,7 +1668,7 @@ impl Emitter {
         }
     }
 
-    fn checked(&mut self, op: ArithOp, a: u32, b: u32, offset: u32) -> u32 {
+    fn checked(&mut self, op: ArithOp, a: u32, b: u32, span: Span) -> u32 {
         let intrinsic = match op {
             ArithOp::Add => "sadd",
             ArithOp::Sub => "ssub",
@@ -1690,7 +1690,7 @@ impl Emitter {
                 code: "N0400",
                 message: format!("this {} overflows `Int`", op.overflow_noun()),
             },
-            offset,
+            span,
         );
         let out = self.fresh();
         let _ = writeln!(self.out, "  %{out} = extractvalue {{i64, i1}} %{r}, 0");
@@ -1698,7 +1698,7 @@ impl Emitter {
     }
 
     /// Both of division's failures, in the order the interpreter checks them.
-    fn divide(&mut self, a: u32, b: u32, offset: u32) -> u32 {
+    fn divide(&mut self, a: u32, b: u32, span: Span) -> u32 {
         let zero = self.fresh();
         let _ = writeln!(self.out, "  %{zero} = icmp eq i64 %{b}, 0");
         self.guard(
@@ -1707,7 +1707,7 @@ impl Emitter {
                 code: "N0401",
                 message: "division by zero".to_owned(),
             },
-            offset,
+            span,
         );
 
         let overflows = self.min_over_minus_one(a, b);
@@ -1717,7 +1717,7 @@ impl Emitter {
                 code: "N0400",
                 message: "this division overflows `Int`".to_owned(),
             },
-            offset,
+            span,
         );
 
         let out = self.fresh();
@@ -1732,7 +1732,7 @@ impl Emitter {
     /// computes the quotient — so the pair is answered with a constant and never reaches
     /// the instruction. Getting this wrong would give `%` a second failure case the
     /// language says it does not have.
-    fn remainder(&mut self, a: u32, b: u32, offset: u32) -> u32 {
+    fn remainder(&mut self, a: u32, b: u32, span: Span) -> u32 {
         let zero = self.fresh();
         let _ = writeln!(self.out, "  %{zero} = icmp eq i64 %{b}, 0");
         self.guard(
@@ -1741,7 +1741,7 @@ impl Emitter {
                 code: "N0401",
                 message: "division by zero".to_owned(),
             },
-            offset,
+            span,
         );
 
         let special = self.min_over_minus_one(a, b);
@@ -1787,14 +1787,7 @@ impl Emitter {
 /// The result is text on purpose: `docs/architecture.md` §1 says not to link against LLVM
 /// in year one, and `clang` reads IR directly, so this needs no LLVM dependency at all.
 #[must_use]
-pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
-    let mut line_starts = vec![0usize];
-    for (i, b) in source.bytes().enumerate() {
-        if b == b'\n' {
-            line_starts.push(i + 1);
-        }
-    }
-
+pub fn emit_llvm(module: &Module, file: &str, map: &SourceMap) -> String {
     let mut e = Emitter {
         out: String::new(),
         next: 0,
@@ -1803,8 +1796,7 @@ pub fn emit_llvm(module: &Module, file: &str, source: &str) -> String {
         strings: Vec::new(),
         blobs: Vec::new(),
         file: file.to_owned(),
-        lines: line_starts,
-        source_len: source.len(),
+        map,
         loops: Vec::new(),
         scopes: Vec::new(),
         used_unwind: false,
@@ -2296,7 +2288,7 @@ done:
 /// again — the language has no mutable parameter — so one write at entry is the whole
 /// story, and the emitter needs no notion of what a parameter is beyond "the first
 /// `params` slots".
-fn emit_function(e: &mut Emitter, f: &Function) {
+fn emit_function(e: &mut Emitter<'_>, f: &Function) {
     // Numbering restarts per function: LLVM requires a function's unnamed values to be
     // consecutive from zero, and `%p<n>`/`%slot<n>` are named so they do not consume the
     // numbering.
@@ -2668,7 +2660,7 @@ entry:
 mod tests {
     use super::*;
     use crate::ir::{Block, CmpOp, Expr, FuncId, Function, Local, Module, Stmt};
-    use nazm_span::Span;
+    use nazm_span::{SourceMap, Span};
 
     fn block(result: Expr) -> Block {
         Block {
@@ -2720,7 +2712,11 @@ mod tests {
     }
 
     fn ir_of(m: &Module) -> String {
-        emit_llvm(m, "t.nz", "a source line\nand another\n")
+        emit_llvm(
+            m,
+            "t.nz",
+            &SourceMap::single("t.nz", "a source line\nand another\n"),
+        )
     }
 
     #[test]
@@ -2733,7 +2729,7 @@ mod tests {
                 op: ArithOp::Add,
                 lhs: Box::new(Expr::Int(1)),
                 rhs: Box::new(Expr::Int(2)),
-                span: Span::new(0, 1),
+                span: Span::new(nazm_span::FileId::ROOT, 0, 1),
             },
             Vec::new(),
             Vec::new(),
@@ -2752,7 +2748,7 @@ mod tests {
                 op: ArithOp::Div,
                 lhs: Box::new(Expr::Int(1)),
                 rhs: Box::new(Expr::Int(0)),
-                span: Span::new(2, 3),
+                span: Span::new(nazm_span::FileId::ROOT, 2, 3),
             },
             Vec::new(),
             Vec::new(),
@@ -2772,7 +2768,7 @@ mod tests {
                 op: ArithOp::Rem,
                 lhs: Box::new(Expr::Int(i64::MIN)),
                 rhs: Box::new(Expr::Int(-1)),
-                span: Span::new(0, 1),
+                span: Span::new(nazm_span::FileId::ROOT, 0, 1),
             },
             Vec::new(),
             Vec::new(),
@@ -2799,12 +2795,16 @@ mod tests {
                 rhs: Box::new(Expr::Int(0)),
                 // The `/` on the third line: 18 bytes of preceding lines plus six into
                 // this one, which is column 7.
-                span: Span::new(24, 25),
+                span: Span::new(nazm_span::FileId::ROOT, 24, 25),
             },
             Vec::new(),
             Vec::new(),
         );
-        let ir = emit_llvm(&m, "prog.nz", "line one\nline two\n    1 / 0\n");
+        let ir = emit_llvm(
+            &m,
+            "prog.nz",
+            &SourceMap::single("prog.nz", "line one\nline two\n    1 / 0\n"),
+        );
         assert!(ir.contains("prog.nz:3:7"), "{ir}");
         assert!(ir.contains("N0401"), "{ir}");
     }
@@ -2867,7 +2867,7 @@ mod tests {
                     op: ArithOp::Add,
                     lhs: Box::new(Expr::Int(1)),
                     rhs: Box::new(Expr::Int(2)),
-                    span: Span::new(0, 1),
+                    span: Span::new(nazm_span::FileId::ROOT, 0, 1),
                 })),
                 else_block: Box::new(block(Expr::Int(0))),
                 ty: Some(Ty::Int),
