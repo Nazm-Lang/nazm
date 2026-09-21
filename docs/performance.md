@@ -14,7 +14,7 @@ is the only order in which a benchmark can falsify anything.
 
 `cargo xtask bench` times six programs in `bench/programs/` plus the compiler's own
 source, through five stages each. Seven runs after one discarded warm-up; the median is
-reported, and `bench/baseline.json` holds the full record.
+reported, and one baseline file per host holds the full record.
 
 | | |
 | --- | --- |
@@ -22,6 +22,39 @@ reported, and `bench/baseline.json` holds the full record.
 | Toolchain | rustc 1.98.1, Apple clang 21.0.0 |
 | Baseline commit | `8ec8729`, clean tree |
 | Not controlled | thermal state, other processes, CPU frequency scaling, address-space layout |
+
+> **`bench/baseline.json` (Darwin) is stale and has not been re-recorded.** Two things
+> changed under it: a failure now leaves a compiled function through an explicit exit, so
+> the emitter writes a check after every call; and the compiler benchmark's input changed
+> from a four-file concatenation to the real five-file source with its imports resolved.
+> Re-recording it means running generated programs on the host, which the resource
+> contract forbids, so it stays as it is and is **not** a valid comparison until someone
+> re-records it on a Darwin machine. `bench/baseline-linux-aarch64.json` *has* been
+> re-recorded, inside the contained runner, and is current.
+
+### What the failure protocol cost
+
+Measured rather than estimated, because the number is large enough to matter:
+
+| | before | after |
+| --- | ---: | ---: |
+| `strings/build-O0` (unchanged program) | 38.8 ms | 39.1 ms |
+| `strings/build-O2` (unchanged program) | 49.1 ms | 49.7 ms |
+| `compiler/check` (no emission) | 12.4 ms | 12.5 ms |
+| `compiler/build-O0` | 200.1 ms | 468.7 ms |
+
+An unchanged program costs **under 1%**. The compiler's own build is 2.4× — and 1.22× of
+that is the input, which grew from a 3,700-line concatenation missing `module.nz` to the
+real 4,501-line source. The rest is the check itself, which is written once per call site,
+so the cost tracks how call-dense a program is rather than how long it is. The compiler
+has about sixteen hundred call sites; the benchmark programs have a handful each.
+
+Of the 503 ms measured before the block reduction below, **457 ms was clang** and about
+46 ms was Nazm's own emission — so this is IR volume reaching the assembler, not the
+emitter being slow. Branching a failed call straight to the function's exit, rather than
+through a block that only forwards to it, removed 1,564 basic blocks of 9,310 and about
+28 ms. The remainder is the price of reporting a failure only once every task in scope has
+been joined, and it was paid deliberately.
 
 **The comparison unit is two runs on one machine minutes apart.** `cargo xtask bench
 --check` refuses to compare across hosts rather than producing a percentage that means

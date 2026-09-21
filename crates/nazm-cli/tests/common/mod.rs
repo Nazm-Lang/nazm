@@ -14,6 +14,13 @@
 //! there and `setrlimit(2)` documents it as advisory — so the ceiling has to come from
 //! outside the process, and the refusal has to be explicit rather than a silent skip.
 
+// Every integration test that needs `bounded_exe` includes this whole file, and only the
+// ones that *build a stage executable* call `require_containment`. So in the others it is
+// genuinely unused, and `-D warnings` makes that fatal. Allowed here rather than by
+// splitting the module, because the two halves belong together: the gate and the ceiling
+// are one subject, and a reader looking for either should find both.
+#![allow(dead_code)]
+
 use std::sync::Once;
 
 /// Set inside the bounded environment, where a real ceiling already applies.

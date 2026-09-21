@@ -389,15 +389,31 @@ impl Emitter {
     /// a number that was never produced.
     fn check_failed(&mut self) {
         let flag = self.fresh();
-        let unwind = self.fresh_label();
         let cont = self.fresh_label();
         let _ = writeln!(self.out, "  %{flag} = load i1, ptr @nz.failed");
-        let _ = writeln!(
-            self.out,
-            "  br i1 %{flag}, label %b{unwind}, label %b{cont}"
-        );
-        self.open(&format!("b{unwind}"));
-        self.unwind();
+        if self.scopes.is_empty() {
+            // Nothing is open to join, so the failure goes straight to the function's
+            // exit rather than through a block whose only instruction forwards to it.
+            //
+            // Worth writing down: this is emitted after *every* call, and the compiler's
+            // own source has about sixteen hundred of them. Each intermediate block cost
+            // clang far more at `-O0` than its two instructions suggest — building the
+            // compiler with itself went from 200 ms to 515 ms when this path did not
+            // exist, and 457 ms of that was clang rather than emission.
+            self.used_unwind = true;
+            let _ = writeln!(
+                self.out,
+                "  br i1 %{flag}, label %nz.unwind, label %b{cont}"
+            );
+        } else {
+            let unwind = self.fresh_label();
+            let _ = writeln!(
+                self.out,
+                "  br i1 %{flag}, label %b{unwind}, label %b{cont}"
+            );
+            self.open(&format!("b{unwind}"));
+            self.unwind();
+        }
         self.open(&format!("b{cont}"));
     }
 

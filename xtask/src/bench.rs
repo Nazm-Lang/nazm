@@ -612,27 +612,21 @@ fn output(cmd: &mut Command) -> String {
     )
 }
 
-/// The compiler's four sources as one file, the way `compiler/bootstrap.sh` assembles
-/// them.
-fn compiler_source(root: &Path, scratch: &Path) -> Result<PathBuf, String> {
-    let mut whole = String::new();
-    for name in ["lex.nz", "parse.nz", "analyse.nz", "emit.nz"] {
-        let path = root.join("compiler").join(name);
-        let text =
-            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        // The `use` lines are dropped, exactly as the bootstrap script drops them: the
-        // compiler written in Nazm does not resolve them, and this measures the same
-        // translation unit the bootstrap builds.
-        for line in text.lines() {
-            if !line.trim_start().starts_with("use \"") {
-                whole.push_str(line);
-                whole.push('\n');
-            }
-        }
+/// The compiler's own source, as the bootstrap chain compiles it: the root, with its
+/// imports resolved on the way in.
+///
+/// This used to paste the sources together and strip their `use` lines, which is what
+/// `compiler/bootstrap.sh` did at the time. Both now resolve instead, and this keeps no
+/// list of its own — a second copy of which files the compiler is made of is a second
+/// thing to forget to update, and forgetting it is exactly what happened: `module.nz` was
+/// added, the list was not, and the benchmark measured a program missing the function
+/// that resolves imports.
+fn compiler_source(root: &Path, _scratch: &Path) -> Result<PathBuf, String> {
+    let path = root.join("compiler").join("emit.nz");
+    if !path.exists() {
+        return Err(format!("{} is missing", path.display()));
     }
-    let out = scratch.join("whole.nz");
-    std::fs::write(&out, whole).map_err(|e| format!("{}: {e}", out.display()))?;
-    Ok(out)
+    Ok(path)
 }
 
 fn tempdir(_root: &Path) -> Result<PathBuf, String> {
