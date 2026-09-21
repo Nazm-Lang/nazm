@@ -1,15 +1,15 @@
 # Nazm — an AI-native programming language.
 #
 # Constitution: docs/master-architecture.md · What exists: docs/capability-matrix.md
-# Direction: docs/direction.md · Roadmap: docs/roadmap.md
+# Roadmap: docs/roadmap.md · Long-term goals: docs/NAZM_LANGUAGE_GOALS.md
 # Design record: docs/architecture.md · Spec: docs/spec.md
-# Evaluation protocol (draft, not pre-registered): docs/evaluation.md
+# Evaluation protocol (draft, not pre-registered): docs/research/evaluation.md
 #
 # Two tracks in one workspace. The language — span, diag, syntax, core, lir, cli — is an
 # interpreter and a native compiler: lexer, parser, checker, tree-walking evaluator, one
 # IR level (nazm-lir) and one backend (LLVM IR as text, assembled by clang). Alongside it,
 # nazm-bench, an agent-cost harness that now measures specific claims rather than gating
-# the project's existence (docs/direction.md).
+# the project's existence.
 #
 # Corrected twice, and both are left visible because a header is where a stale claim does
 # the most damage. It read "there is deliberately no compiler here yet" until 2026-09-20,

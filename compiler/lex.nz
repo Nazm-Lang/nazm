@@ -8,7 +8,7 @@
 // out is the honest workaround until privacy exists.
 //
 // The first component of the self-hosted compiler, and the first real test of the
-// bootstrap subset. It follows `docs/bootstrap-design.md` exactly: tokens live in
+// bootstrap subset. It follows `docs/bootstrap.md` §1 exactly: tokens live in
 // parallel `Ints`/`Strs` arrays addressed by index, spans are byte offsets so they mean
 // the same thing as `nazm-span::Span`, and **every loop is a loop** — there is no
 // recursion anywhere, which is what lets this compile natively today.

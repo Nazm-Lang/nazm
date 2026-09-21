@@ -3,9 +3,10 @@
 **Status: hypotheses, kept apart from commitments. Nothing here is a plan, a roadmap entry
 or a capability, and nothing here may be cited as evidence for one.**
 
-`direction.md:72-84` separates implemented behaviour, accepted design, open questions and
-research proposals, and notes that the last is *"speculative, and not entitled to be
-described as a plan"*. That distinction survived the first era in one place — automatic
+`master-architecture.md` §1 separates implemented behaviour, accepted design, open
+questions and research proposals — a distinction inherited from the 2026-09-20 decision
+record, which noted that the last is *"speculative, and not entitled to be described as a
+plan"*. That distinction survived the first era in one place — automatic
 layout selection, which `architecture.md` §4 labels a proposed research direction pending a
 literature review that has not been done — and nowhere else. This document gives the rest of
 them the same treatment.
@@ -81,7 +82,7 @@ agent-facing use rather than the hashing.
 **Required prerequisite** · R2.
 
 **Evidence needed** · A measured reduction in wasted agent effort, under the protocol in
-`docs/evaluation.md` — whose thresholds `direction.md` forbids relaxing — rather than an
+`docs/research/evaluation.md` — whose thresholds are frozen and may not be relaxed — rather than an
 anecdote.
 
 **Invalidating result** · No-op edits turn out to be rare, or agents do not act differently
@@ -203,7 +204,7 @@ irreconcilable with the subset — which is the reason this item is worth tracki
 than later, since such a decision is cheap to avoid and expensive to undo.
 
 **Status: RESEARCH.** See the warning paragraph in
-[`domain-profiles.md`](domain-profiles.md) under Critical; it applies to every sentence
+[`capability-matrix.md`](capability-matrix.md) under area 19; it applies to every sentence
 here.
 
 ---
@@ -220,5 +221,5 @@ here.
 | What must be settled before `nazm test --backend=all` means anything | `docs/spec.md` *Open* → Backend semantics |
 | Surface syntax, and novelty as a budget | `docs/spec.md` *Open* → Syntax |
 | Where the performance headroom is, ranked with confidence labels | `docs/performance.md` |
-| Authority: ambient today, capability parameter as the growth path | `docs/goal-status.md` |
-| Visibility: private-by-default is a known future break | `docs/goal-status.md` |
+| Authority: ambient today, capability parameter as the growth path | `docs/spec.md`, and `capability-matrix.md` area 6 |
+| Visibility: private-by-default is a known future break | `docs/spec.md` |

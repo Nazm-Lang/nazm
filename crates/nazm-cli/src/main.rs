@@ -177,7 +177,8 @@ enum Command {
     },
     /// Compile to a native executable.
     ///
-    /// A narrow subset for now — see `docs/roadmap.md` M1a. Anything outside it is
+    /// A narrower subset than `nazm run` — ask `nazm capabilities` for this build's own
+    /// answer rather than a document. Anything outside it is
     /// refused by name after ordinary checking; nothing is partially compiled.
     Build {
         file: PathBuf,

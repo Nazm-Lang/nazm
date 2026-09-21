@@ -76,7 +76,7 @@ const CONSTRUCTS: &[ConstructRow] = &[
         name: "recursion, direct or mutual",
         interpreted: true,
         compiled: false,
-        evidence: "refused by name; pending a native stack contract (docs/roadmap.md)",
+        evidence: "refused by name; pending a native stack contract (docs/spec.md)",
     },
     ConstructRow {
         name: "`if` in statement and value position",
@@ -94,7 +94,7 @@ const CONSTRUCTS: &[ConstructRow] = &[
         name: "a bare block used as an expression",
         interpreted: true,
         compiled: false,
-        evidence: "refused by name; a separate scoping question (docs/roadmap.md)",
+        evidence: "refused by name; a separate scoping question (docs/spec.md)",
     },
     ConstructRow {
         name: "modules: `use`, relative resolution, diamonds, cycles",

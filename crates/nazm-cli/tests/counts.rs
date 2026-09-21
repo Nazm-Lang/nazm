@@ -1,6 +1,6 @@
 //! The delivery report's test counts add up to the suite's total.
 //!
-//! `docs/delivery.md` breaks the suite into groups. A table of numbers in prose drifts
+//! A release report breaks the suite into groups. A table of numbers in prose drifts
 //! the moment anybody adds a test, and a reader has no way to tell — the numbers look
 //! exactly as authoritative either way. This does not check that each row is *right*
 //! (that needs running the suite, which is what is running this), but it does check
@@ -19,10 +19,32 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Every frozen release report under `docs/releases/`.
+///
+/// Globbed rather than named: a release report is frozen evidence for one commit, so they
+/// accumulate, and a hard-coded path would make this test something to remember to update
+/// at exactly the moment nobody is thinking about it.
+fn release_reports() -> Vec<PathBuf> {
+    let dir = repo_root().join("docs/releases");
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .collect();
+    found.sort();
+    assert!(!found.is_empty(), "no release report in {}", dir.display());
+    found
+}
+
 #[test]
 fn the_delivery_reports_groups_sum_to_its_total() {
-    let p = repo_root().join("docs/delivery.md");
-    let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    for p in release_reports() {
+        check_one(&p);
+    }
+}
+
+fn check_one(p: &Path) {
+    let text = std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
 
     // The one sentence that states the total. The ignored count is read rather than
     // written down here: hard-coding it meant this test had to be edited by hand every
@@ -34,7 +56,12 @@ fn the_delivery_reports_groups_sum_to_its_total() {
             rest.trim_end().strip_suffix("ignored.")?;
             n.parse().ok()
         })
-        .expect("docs/delivery.md should state `**N passed, 0 failed, M ignored.**`");
+        .unwrap_or_else(|| {
+            panic!(
+                "{} should state `**N passed, 0 failed, M ignored.**`",
+                p.display()
+            )
+        });
 
     // The results table: rows whose second cell is a bare number.
     let rows: Vec<usize> = text

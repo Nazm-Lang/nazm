@@ -3,7 +3,7 @@
 // Until now `use` was parsed and thrown away, and the *driver* — `nazm-cli/src/load.rs`,
 // written in Rust — read the import graph and handed the compiler one merged buffer. That
 // left a hole in the self-hosting claim: the compiler written in Nazm could not build a
-// multi-file program on its own, and `docs/delivery.md` listed it under *Known
+// multi-file program on its own, and the release report listed it under *Known
 // limitations*. This file closes it.
 //
 // # The order is the contract

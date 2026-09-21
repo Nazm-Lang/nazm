@@ -17,7 +17,7 @@ the uncomfortable one: that better tooling on an existing language might capture
 the benefit.
 
 The language is the primary track. That was decided on 2026-09-20 and recorded in
-[`docs/direction.md`](docs/direction.md); what comes next, in dependency order, is
+a decision record Git retains; what comes next, in dependency order, is
 [`docs/roadmap.md`](docs/roadmap.md). The harness keeps its protocol, its thresholds and
 its control arm unchanged — it is now evidence for claims rather than a gate on the
 project's existence.
@@ -169,13 +169,13 @@ degrees of freedom to churn over.
 
 **Whether that is worth a new language, or just better tooling for TypeScript, is a real
 question and the harness is built to keep answering it honestly** — see
-[`docs/direction.md`](docs/direction.md) for what changed about how the answer is used.
+[`docs/research/evaluation.md`](docs/research/evaluation.md) for what changed about how the answer is used.
 
 ## The experiment
 
 Three arms. The third is the hypothesis; the second is why the experiment is honest. It
 measures specific claims — it no longer decides whether the language gets built
-([`docs/direction.md`](docs/direction.md)).
+([`docs/research/evaluation.md`](docs/research/evaluation.md)).
 
 | Arm | Contents |
 | --- | --- |
@@ -186,7 +186,7 @@ measures specific claims — it no longer decides whether the language gets buil
 If A2 captures most of the benefit, that is a finding about the claim under test and it
 stays in the record. The decision rule, its thresholds and the cost policy are unchanged,
 and are written down **before** the evaluation runs — see
-[`docs/evaluation.md`](docs/evaluation.md).
+[`docs/research/evaluation.md`](docs/research/evaluation.md).
 
 First workload: small HTTP/JSON services on PostgreSQL — validation, transactions,
 authorization, error handling, cancellation. First user: a backend developer using coding
@@ -289,17 +289,20 @@ result out, and report what is left as JSON.
 
 | | |
 | --- | --- |
-| [`docs/delivery.md`](docs/delivery.md) | **Start here.** What was built, what verifies it, what it does not establish, and how to reproduce all of it |
-| [`docs/capability-matrix.md`](docs/capability-matrix.md) | **What exists, area by area, with evidence.** The answer to "is X implemented?" — and the only status table with a gate under it |
-| [`docs/master-architecture.md`](docs/master-architecture.md) | The durable constitution: the invariants, how a claim may be stated, and one language with many profiles |
-| [`docs/architecture.md`](docs/architecture.md) | The design record: why this compiler design, the IR levels, the type system, the toolchain choices |
-| [`docs/domain-profiles.md`](docs/domain-profiles.md) | General, Systems, Embedded, Critical, Cybersecurity, AI/HPC — restrictions and missing prerequisites |
-| [`docs/research-register.md`](docs/research-register.md) | Hypotheses, each with what would invalidate it. Not plans |
+| [`docs/capability-matrix.md`](docs/capability-matrix.md) | **Start here for "does X exist?"** Every area, with evidence — the only status authority, and the one with a gate under it |
+| [`docs/master-architecture.md`](docs/master-architecture.md) | The durable constitution: the laws, the evidence vocabulary, and **context routing** — which documents to read for which task |
+| [`docs/NAZM_LANGUAGE_GOALS.md`](docs/NAZM_LANGUAGE_GOALS.md) | Where Nazm is ultimately going and why: the historical barriers, the long-term goals, the token-efficiency constitution. **Goals, not evidence** |
 | [`docs/guide.md`](docs/guide.md) | The language, for someone writing a program in it. Its syntax section is generated from the grammar |
 | [`docs/spec.md`](docs/spec.md) | What each construct means, and the decision behind it |
+| [`docs/architecture.md`](docs/architecture.md) | The compiler design record: IR levels, type system, layout boundary, toolchain choices |
+| [`docs/roadmap.md`](docs/roadmap.md) | What comes next, and why in that order |
+| [`docs/research-register.md`](docs/research-register.md) | Hypotheses, each with what would invalidate it. Not plans |
 | [`docs/diagnostics.md`](docs/diagnostics.md) | The machine interface: schemas, fixes, capabilities, exit statuses |
-| [`docs/bootstrap.md`](docs/bootstrap.md) | What the self-hosting claim does and does not establish |
+| [`docs/bootstrap.md`](docs/bootstrap.md) | Self-hosting: how it was designed, what it does, and what it does **not** establish |
 | [`docs/performance.md`](docs/performance.md) | What has been measured, and the noise floor under it |
+| [`docs/runbook.md`](docs/runbook.md) | **Containment and resource safety. Read before running anything heavy** |
+| [`docs/releases/`](docs/releases/) | Frozen evidence, one file per tested commit |
+| [`docs/research/evaluation.md`](docs/research/evaluation.md) | The comparative agent-cost protocol, with frozen thresholds |
 
 ## What is not built yet
 
@@ -358,8 +361,8 @@ Almost everything. Specifically:
   adapter — the path is validated for the development fixtures, not for a benchmark.
 - **Holdout isolation is a workflow control, not a boundary.** The API refuses holdout
   fixtures without a verified freeze; it does nothing about filesystem access. Real
-  isolation for the gate run is operational — see `docs/evaluation.md` §3.
-- **No task corpus.** The six task families in `docs/evaluation.md` are described, not
+  isolation for the gate run is operational — see `docs/research/evaluation.md` §3.
+- **No task corpus.** The six task families in `docs/research/evaluation.md` are described, not
   written.
 - **The decision rule is not pre-registered.** It is a draft until committed with its hash
   recorded, and it is not binding before then. Registration is bound by git ancestry plus a

@@ -3,7 +3,7 @@
 //! # Why `Ints` and `Strs` rather than `[Int]` and `[Str]`
 //!
 //! A bootstrap compiler needs growable sequences of integers and of strings, and nothing
-//! else (`docs/bootstrap-design.md`). Naming them as **ordinary type names** buys two
+//! else (`docs/bootstrap.md` §1). Naming them as **ordinary type names** buys two
 //! things: the lexer needs no bracket tokens and the parser needs no type grammar, so
 //! neither acquires a shape that a future generic `[T]` would have to be compatible
 //! with. Concrete names commit to nothing about how generics will eventually look, which

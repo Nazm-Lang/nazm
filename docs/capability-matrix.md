@@ -1,8 +1,8 @@
 # Capability matrix
 
 **Status: source-backed against `4fb15542dfbf9af0bf34c42fe52783637b3daed4`, the commit the
-retained candidate was built and tested at. HEAD differs from it by `docs/goal-status.md`
-alone, so every source claim below is a claim about the tested tree.**
+retained candidate was built and tested at. No source file has changed since, so every
+claim below is a claim about the tested tree.**
 
 This is one table serving two purposes. The directive asked for a capability matrix and a
 gap map; they are the same information at the same granularity, so the five fields of a
@@ -133,9 +133,9 @@ reserved and refused by name rather than silently absent
 — but it means the type system has never been asked the questions that make type systems
 hard.
 
-**Next dependency** · Nothing forces the order. `docs/roadmap.md` M2 rows 3 and 4 hold the
-design for records/variants and generics; both were **bypassed** rather than delivered —
-the compiler was written with parallel `Ints`/`Strs` arrays instead.
+**Next dependency** · Nothing forces the order. Records, tagged unions and generics were
+**bypassed rather than delivered** — the compiler was written with parallel `Ints`/`Strs`
+arrays instead. `docs/roadmap.md`, *What M2 bypassed*, records why that matters.
 
 **Accepted when** · Chosen by the milestone that needs it, not by completeness.
 
@@ -194,9 +194,9 @@ That is a real limitation, not a design."*
 *toolchain descriptor* — what one build of the compiler supports. It is unrelated to
 object capabilities or capability-safety, and it is VERIFIED under area 22.
 
-**Limitation** · `docs/roadmap.md` M2 presents `fn main(io: IO)` as the plan of record;
-that design was **not** adopted, and `docs/goal-status.md` records it as deliberately not
-chosen. The roadmap prose is corrected but the decision stays open.
+**Limitation** · `fn main(io: IO)` was written down as the plan of record and then **not**
+adopted: I/O shipped as ambient authority, labelled as a limitation in `docs/spec.md`. It
+remains the most likely growth path, and it remains unchosen.
 
 **Next dependency** · Effects, or an independent capability-parameter design — the two are
 separable and `architecture.md` §5 insists they stay separate concerns.
@@ -277,7 +277,7 @@ without `-g`, so a compiled program cannot be debugged symbolically.
 
 ### 12. Cranelift backend — DESIGNED
 
-**Evidence** · `architecture.md` §1 and `direction.md` — one component doing four jobs
+**Evidence** · `architecture.md` §1 and `roadmap.md`, *Backends* — one component doing four jobs
 (JIT, comptime evaluator, REPL, hot reload), and an explicit ordering decision that it
 comes after, not instead. `xtask/src/main.rs` gates against a codegen dependency appearing
 unannounced.
@@ -374,7 +374,7 @@ lists the FFI boundary under *Open*, so it is not designed either.
 **Limitation** · Total. This is the single largest gap between the language and any
 systems, embedded or cybersecurity use.
 
-**Next dependency** · A settled ABI and layout story, which `docs/bootstrap-design.md`
+**Next dependency** · A settled ABI and layout story, which `docs/bootstrap.md`
 deliberately left unfrozen.
 
 **Accepted when** · A C function is declared and called, with the safety boundary stated
@@ -384,26 +384,102 @@ and the provenance question (what label a returned value carries) answered.
 
 ## Domain profiles
 
-Areas 18–21 are covered in [`domain-profiles.md`](domain-profiles.md), which carries the
-restrictions and prerequisites for all six. Summarised here only so the matrix is complete.
+`NAZM_LANGUAGE_GOALS.md` §10 owns what each profile is *for*. `master-architecture.md`
+§4 owns the invariant that makes them profiles rather than dialects, and the ladder a
+profile has to climb to become real. **This section owns what exists**, which is: one
+profile, unnamed, and five ambitions.
+
+**General — PARTIAL.** What `nazm run` and `nazm build` accept today: ambient authority,
+checked arithmetic that traps, structured concurrency over OS threads, no reclamation. It
+is the widest profile and every other is a restriction of it. PARTIAL rather than VERIFIED
+for one reason: **the interpreter's subset and the native subset are not the same** —
+recursion runs under `nazm run` and is refused by both compilers. A profile whose two
+implementations accept different programs is not yet a profile. *Accepted when* the two
+subsets coincide, or the difference is itself declared as a profile boundary rather than
+left as a gap.
+
+**Systems — MISSING.** Would need explicit control over allocation and layout, no hidden
+allocation where none is declared, and a stated ABI; would grant raw memory access and
+foreign calls inside a named, narrow boundary. Nothing profile-specific exists. Blocked on
+area 17 (FFI and ABI, MISSING) and area 4 (ownership, MISSING). The architectural
+commitment that keeps it reachable — field access stays symbolic until the lowest level, so
+layout selection remains possible — is already honoured and must be preserved rather than
+undone when this profile arrives.
 
 ### 18. Embedded support — MISSING
-No cross-compilation, no target triple handling, no freestanding target, no `no_std`
-equivalent, no control over allocation. `crates/nazm-cli/src/build.rs` emits a module with
-no triple and lets `clang` supply the host's.
+
+**What it would restrict** · No allocation after startup, or none at all; a stack bound
+that is computed; no I/O except through declared capabilities; a freestanding target with
+no libc.
+
+**Evidence of absence** · No cross-compilation, no target triple handling, no freestanding
+target, no `no_std` equivalent, no control over allocation. `crates/nazm-cli/src/build.rs`
+emits a module with no triple and lets `clang` supply the host's. The emitted runtime
+declares 18 libc and pthread symbols and cannot currently be built without them.
+
+**Next dependency** · Cross-compilation (area 33), then a freestanding runtime — which
+means area 13 and therefore area 4. **A language that never frees cannot run on a device
+with kilobytes.**
+
+**Accepted when** · A program runs on a target with no libc, within a stack bound that was
+computed rather than hoped for. Native frame counts do not bound stack bytes, and that
+obligation is inherited here.
 
 ### 19. Critical profile — DESIGNED
-An architectural intention only. **Nothing here is a statement about airworthiness,
-certification, or fitness for any safety-related use**, and the anticipation of the profile
-is not evidence for it.
+
+**Read this before the rest.** This profile is an architectural intention. It is **not** a
+claim that Nazm is suitable for any safety-related, airborne, medical, automotive or
+otherwise regulated use; it is not a certification path; and no artefact in this repository
+has been produced under a safety standard or assessed against one. **The architecture
+anticipating a Critical profile is not evidence for one.**
+
+**What it would restrict** · No dynamic allocation, no recursion, bounded loops with an
+established bound, total functions, and every failure mode enumerated rather than trapped;
+contracts and invariants checked rather than asserted.
+
+**What exists that is genuinely relevant** · Three things, and they are real. Arithmetic is
+**specified rather than inherited from the hardware** — overflow traps, and
+`crates/nazm-lir/src/emit.rs` refuses `nsw` so no optimiser may delete the check. Recursion
+is already **refused by both compilers**, which is the restriction this profile would want,
+arrived at for an unrelated reason. Everything outside a backend's coverage is **refused by
+name with a span**, never silently approximated or partially compiled.
+
+**Missing prerequisites** · A memory model; effects; contracts; a bounded-stack story; and
+a qualified toolchain, which the bootstrap explicitly does **not** provide — `docs/bootstrap.md`
+§4 puts compiler trustworthiness on the list of things a fixpoint does not establish.
+
+**Accepted when** · A proof obligation is discharged on a real Nazm program and assessed
+against a named standard by someone qualified to make that assessment. Not a test count.
 
 ### 20. Cybersecurity profile — DESIGNED
-Requires areas 6 and 7, both MISSING. The one real ingredient present is
-refuse-by-name-with-a-span rather than silent degradation.
+
+**What it would restrict** · Untrusted input tracked to its uses; declassification
+explicit and audited; no ambient authority; constant-time obligations honoured where they
+are declared.
+
+**Evidence** · The one real ingredient present is refuse-by-name-with-a-span rather than
+silent degradation, and failures that are diagnostics rather than undefined behaviour.
+
+**Limitation** · Against that: authority is **ambient and labelled as such in the source**
+— `crates/nazm-core/src/intrinsic.rs` says nothing in the language restricts which
+functions may reach the filesystem.
+
+**Next dependency** · Areas 6 and 7 — capabilities and information flow — both MISSING,
+with every design question still open in `docs/spec.md`.
+
+**Accepted when** · Untrusted input is tracked to its uses and declassification is explicit
+and audited, with the approximation's blind spots stated.
 
 ### 21. AI/HPC — RESEARCH
-No tensors, no accelerators, no vectorisation work. `architecture.md` §1 says MLIR should
-be revisited *only if* Nazm pivots toward tensor codegen, and nothing proposes that pivot.
+
+**Evidence of absence** · No tensors, no GPU path, no vectorisation work, no measurement.
+
+**Next dependency** · A reason. `architecture.md` §1 says MLIR should be revisited *only
+if* Nazm pivots toward tensor/accelerator codegen, and nothing proposes that pivot.
+Treating this as a profile rather than a declined direction is itself the open question,
+tracked as R7 in `research-register.md`.
+
+**Accepted when** · A workload the project actually has, that a CPU backend cannot serve.
 
 ---
 

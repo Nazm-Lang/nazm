@@ -12,7 +12,7 @@ use nazm_bench::{Arm, PostSuccessCategory};
 #[command(
     name = "nazm-bench",
     about = "Measures what it costs a coding agent to build and maintain backend services.",
-    long_about = "Implements the protocol in docs/evaluation.md. Three arms: TypeScript \
+    long_about = "Implements the protocol in docs/research/evaluation.md. Three arms: TypeScript \
                   baseline, TypeScript with improved agent tooling, and Nazm. The primary \
                   comparison is Nazm against the TOOLED TypeScript arm, never the baseline \
                   — that control is what separates a language benefit from a tooling one.",
@@ -28,7 +28,7 @@ enum Command {
     /// Describe the evaluation protocol as currently configured.
     Protocol,
     /// Run the harness self-tests: the known-answer and failure-case checks from
-    /// docs/evaluation.md §8 that must pass before any result is believable.
+    /// docs/research/evaluation.md §8 that must pass before any result is believable.
     Selftest,
     /// Bring an attempt up and exit **without tearing it down**, leaving real resources
     /// behind.
@@ -117,7 +117,7 @@ fn protocol() -> anyhow::Result<()> {
         };
         println!("  {c:?}  — {note}");
     }
-    println!("\nProtocol: docs/evaluation.md");
+    println!("\nProtocol: docs/research/evaluation.md");
     println!("Decision rule: NOT YET PRE-REGISTERED — draft, not binding.");
     Ok(())
 }
@@ -156,7 +156,7 @@ fn selftest() -> anyhow::Result<()> {
 fn run(arm: Option<Arm>) -> anyhow::Result<()> {
     anyhow::bail!(
         "not implemented{}.\n\n\
-         Needs, in order: a task corpus (docs/evaluation.md §3), agent drivers, isolated \
+         Needs, in order: a task corpus (docs/research/evaluation.md §3), agent drivers, isolated \
          per-attempt workspaces, independent acceptance tests running outside the agent's \
          writable environment, and the self-test passing.\n\n\
          Phase 2 builds arm A1 only.",

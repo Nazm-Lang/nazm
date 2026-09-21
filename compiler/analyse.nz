@@ -17,7 +17,7 @@
 // work stack — which is what scoping needs, since a scope opens before the statements
 // inside it are seen.
 //
-// Neither pass recurses. See `docs/bootstrap-design.md`, *Traversal is iterative,
+// Neither pass recurses. See `docs/bootstrap.md` §1, *traversal is iterative,
 // always*.
 //
 // Usage: check FILE

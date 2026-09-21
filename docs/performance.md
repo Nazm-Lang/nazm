@@ -283,8 +283,13 @@ guess presented as a forecast.
 1. **Layout wins are measured against hand-written SoA Rust**, not only idiomatic Rust.
 2. **Compile time and runtime are reported separately.** They trade against each other.
 3. **Agent development efficiency is reported separately from both**, under
-   [`evaluation.md`](evaluation.md). Go is a runtime reference there, not an arm.
+   [`evaluation.md`](research/evaluation.md). Go is a runtime reference there, not an arm.
 4. **The task-memory benchmark states its terms**: task states distinguished (created /
    parked / runnable / running), stack allocation strategy, lazy commit, **RSS measured
    rather than virtual reservation**, page size recorded per platform.
 5. Every published figure carries the machine, toolchain version, and commit hash.
+6. **An external comparator must do equivalent work and produce the same result**, and is
+   not timed at all if its answer differs from the Nazm program's. `xtask/src/bench.rs`
+   enforces this rather than trusting it: a reference program has to reproduce the case's
+   `.expected` output before a single measurement is taken. *(Absorbed 2026-09-21 from the
+   Era-1 contract §12, which is otherwise retired.)*

@@ -1004,7 +1004,7 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
 // `compiler/emit.nz` reads a `.nz` file and writes LLVM IR. `clang` assembles it. The
 // result is a native executable produced by a compiler written in Nazm, with the Rust
 // implementation nowhere in the pipeline except as the bootstrap that compiled the
-// compiler — which is what `docs/NAZM_AUTONOMOUS_GOAL.md` §8 permits and a wrapper
+// compiler — which is what `docs/bootstrap.md` §4 records and a wrapper
 // shelling out to Rust is not.
 // ---------------------------------------------------------------------------
 
@@ -1496,7 +1496,7 @@ fn the_bootstrap_chain_reaches_a_fixpoint() {
 ///
 /// Until this existed the *driver* read the import graph and handed the compiler one
 /// merged buffer, so "the compiler written in Nazm" could not build a multi-file program
-/// on its own — `docs/delivery.md` listed it under *Known limitations*. The program below
+/// on its own — the release report listed it under *Known limitations*. The program below
 /// is arranged so that a resolver which merely concatenated would fail: `lib/math.nz` is
 /// reached twice, once as `./lib/math.nz` from the root and once as `math.nz` from inside
 /// `lib/`, and the two spellings must fold to one file or `triple` is defined twice and

@@ -200,6 +200,22 @@ while i < n {
 Both are **statements**, they affect the **innermost** enclosing loop, and there are no
 labels. `continue` re-evaluates the condition.
 
+#### Where a loop target binds
+
+**A loop's condition is not inside that loop.** A `break` in a `while`'s condition leaves
+the *enclosing* loop; a `continue` there starts the enclosing loop's next iteration. In the
+outermost loop's condition there is no enclosing loop, so it is `N0312`.
+
+*Moved here from `roadmap.md` on 2026-09-21: it is a rule about what a program means, so a
+plan was the wrong owner — and three source files were citing the plan for it.* The rule
+was read out of the implementations rather than assumed: `check.rs` raises `loop_depth`
+around the body only, and `eval.rs` evaluates the condition outside the loop's own flow
+handling, so a `Flow::Break` raised there is consumed by the enclosing loop. Two probe
+programs pin it — a `break` in an inner loop's condition prints `102` and a `continue`
+there prints `204`, both only explicable if the target is the outer loop. The native
+backend pushes a loop's targets around its **body and not its condition**, and asserts the
+same two numbers.
+
 They are only legal inside a loop body, and **only in statement position**. `break` is not
 an expression and has no value, so `let x = break;` and `if c { break } else { 1 }` do not
 parse. Rust gives `break` the never type and makes this work; a never type is a real
@@ -332,6 +348,28 @@ nesting limit is the parser's; this implementation has all three so that a runaw
 fails visibly instead of consuming a machine. A different implementation may choose
 differently.
 
+#### Why native recursion is refused rather than counted
+
+*Condensed here from `roadmap.md` on 2026-09-21.* A call-depth counter alone **does not**
+guarantee a diagnostic before the native stack is exhausted: a counter bounds the number of
+frames, and whether that many frames fit is a question about frame size and about how much
+stack the process actually has. A budget of 512 says nothing until both are known.
+
+The interpreter never relied on a counter alone. `--max-depth` is one half of a pair —
+`nazm_core::eval::on_interpreter_stack` runs the pipeline on a thread whose stack it sizes
+*from the budget it is about to enforce*, with `N0404` when the host will not grant the
+reservation. It is the **combination** that makes `N0403` arrive before the stack runs out.
+Copying only the counter into generated code would copy the half that does not carry the
+guarantee, and neither quantity — the platform's main-thread stack, or a generated
+function's frame size — has been measured for native code. Emitting a bound derived from
+neither would be a guarantee with no basis. So recursion is **refused by name** until the
+contract exists, by both compilers.
+
+**The general rule, of which these are instances: a runtime resource limit is an
+implementation contract, never a silently invented language rule.** Where an
+implementation imposes one it is stated, named in diagnostics, and recorded as that
+implementation's choice — not promoted into the semantics because it happens to hold.
+
 **`nazm build` is that different implementation, and it has chosen none of them.** A
 compiled program has no iteration budget and no call-depth budget: a loop whose condition
 never becomes false runs until something kills it, with no `N0402`. This is stated here so
@@ -339,8 +377,9 @@ that the difference is part of the record rather than a discovery. The two imple
 agree on what a *terminating* program produces; they do not agree on what a runaway one
 does, and no test claims otherwise. Recursion is refused outright by **both** compilers for
 the related reason — `nazm build` since the native path existed, and the compiler written
-in Nazm since 2026-09-21, when a measured divergence between them was closed. See
-`docs/roadmap.md`, *Recursion: pending a native execution contract*.
+in Nazm since 2026-09-21, when a measured divergence between them was closed. The reason
+it is a refusal rather than a counter is below, under *Why native recursion is refused
+rather than counted*.
 
 ### Strings are bytes, and what that commits to
 
@@ -429,7 +468,7 @@ aliasing, nothing tracks lifetimes, nothing detects a sequence used after the co
 built it has finished, and nothing is ever reclaimed. Peak memory grows with everything
 a program ever allocates.
 
-That is a deliberate bootstrap trade (`docs/bootstrap-design.md`, *Memory model*): a
+That is a deliberate bootstrap trade (`docs/bootstrap.md` §1, *the memory model*): a
 compiler reads input, writes output and exits, and reclaiming inside that lifetime buys
 nothing while costing an ownership system the bootstrap does not otherwise need. It is a
 **stated limitation with a cost that must be measured**, not a design anybody should
@@ -692,7 +731,7 @@ a channel closes are still received — closing ends a channel, it does not disc
 A task's arguments are values or channels, so nothing it holds can dangle: values are
 copied, and a channel outlives every scope that uses it because nothing is ever freed.
 There are no destructors to run and nothing to reclaim — the same bootstrap memory model
-the rest of the language has (`docs/bootstrap-design.md`).
+the rest of the language has (`docs/bootstrap.md` §1).
 
 Cleanup is therefore about *joining*, not about freeing, and joining is guaranteed by the
 scope's closing brace.
@@ -770,6 +809,32 @@ The original paragraph, unedited:
 
 ## Open — later phases must settle these
 
+### Source identity and definition identity
+
+*Added 2026-09-21. These are the questions the next milestone — `roadmap.md` N1 — has to
+answer, and they are semantic rather than merely structural, which is why they are here.*
+
+- **What is a compilation unit?** Today there is none: `use` is followed from a root file
+  and every reachable file is concatenated into one buffer, so the language has modules but
+  no separately meaningful unit. Deciding this decides whether two files can ever be
+  checked independently.
+- **What does a span identify?** A `Span` is a byte range into that one buffer and carries
+  no file. The filename is recovered from the offset. Whether file identity is part of a
+  span is a question about what a diagnostic *means*, not only about a struct.
+- **What is the stable identity of a definition, and what changes it?** An answer is a
+  prerequisite for incremental compilation, for caching, and for telling an agent that an
+  edit produced the same definition (`research-register.md` R2, R3). A name is not an
+  answer while two files may define the same name and visibility does not exist.
+- **Do built-ins share that identity model?** They live in the ordinary function namespace
+  and may not be redefined, but they are declared in a compiler table rather than in
+  source. Whether they are definitions with identities, or something else the resolver
+  knows about, is undecided — and the answer determines whether the two existing built-in
+  tables can become one.
+
+None of this changes what any current program means. It is listed here because the first
+answer that *does* change a meaning — visibility, most likely — has to be given
+deliberately rather than discovered.
+
 ### Memory and values
 
 - Exact copy semantics: when is a value copied, when projected, when moved?
@@ -842,7 +907,7 @@ macros · comptime beyond constant folding · general effect handlers · whole-p
 layout selection · a package manager · a module system beyond files
 
 **Self-hosting was on this list and has been moved off it.** It is now a stated long-term
-objective — see [`direction.md`](direction.md) — and the staged path was
+objective — recorded in the 2026-09-20 decision record — and the staged path was
 [`roadmap.md`](roadmap.md) M3.
 
 **Achieved 2026-09-21.** The sentence that closed this section — *"the language has no

@@ -82,7 +82,7 @@ struct Emitter {
     source_len: usize,
     /// Active loops, innermost last. Pushed around a loop's **body** only — a `break` in
     /// a loop's *condition* belongs to the enclosing loop, which is the existing
-    /// language's rule (`docs/roadmap.md`, *Where a loop target binds*). Cleared at every
+    /// language's rule (`docs/spec.md`, *Where a loop target binds*). Cleared at every
     /// function boundary, so no target can leak from one function into another.
     loops: Vec<Targets>,
     /// Open `scope` blocks, innermost last, each as the SSA value of its list of tasks.
@@ -1108,7 +1108,7 @@ impl Emitter {
                 let _ = writeln!(self.out, "  %{bad} = or i1 %{a}, %{past}");
                 self.require(bad, "this slice is not inside the `Str`", span);
                 // No copy: a slice of an immutable, never-freed buffer is a pointer and
-                // a length. See `docs/bootstrap-design.md`, *Memory model*.
+                // a length. See `docs/bootstrap.md` §1, *the memory model*.
                 let start = self.fresh();
                 let _ = writeln!(
                     self.out,

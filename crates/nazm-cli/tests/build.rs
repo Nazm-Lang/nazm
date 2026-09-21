@@ -37,7 +37,7 @@ const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 ///
 /// Generous, because this is not a performance assertion — it is the thing that stops a
 /// **compiled Nazm program from hanging the test suite**. `nazm build` emits no iteration
-/// budget (see `docs/roadmap.md`, *The native execution contract for loops*), so a
+/// budget (see `docs/spec.md`, *The iteration and depth limits*), so a
 /// miscompiled loop does not fail, it runs forever; without a deadline the suite would
 /// stop reporting rather than report a defect.
 const DEADLINE: Duration = Duration::from_secs(30);
@@ -1742,7 +1742,7 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
 // Every case here terminates inside the interpreter's iteration budget, which is what
 // makes differential comparison possible at all: `nazm build` emits **no** iteration
 // budget, so the two implementations agree on what a terminating program produces and do
-// not agree on what a non-terminating one does. See `docs/roadmap.md`, *The native
+// not agree on what a non-terminating one does. See `docs/spec.md`, *The iteration and depth limits*. *The native
 // execution contract for loops*. Nothing below infers a resource guarantee from a passing
 // test, and every subprocess runs under a deadline whose expiry is a failure.
 // ---------------------------------------------------------------------------
@@ -2861,7 +2861,7 @@ fn the_emitted_ir_for_nested_control_flow_is_well_formed() {
 // M1f — native `return`
 //
 // One `ret` per `return`, not a shared exit block: nothing needs cleanup on the way out
-// yet. See `docs/roadmap.md`, *M1f subset*.
+// yet.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -3206,7 +3206,7 @@ fn a_wrongly_typed_return_belongs_to_the_checker() {
 //
 // `Str` is `{ pointer, byte length }` by value. Slices share storage; concatenation and
 // `int_to_str` allocate from a region that is never freed. See
-// `docs/bootstrap-design.md`, *Memory model for the bootstrap*.
+// `docs/bootstrap.md` §1, *the memory model*.
 // ---------------------------------------------------------------------------
 
 /// A program returning `Int`, checked against an expectation and the interpreter, at

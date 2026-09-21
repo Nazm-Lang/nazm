@@ -1,6 +1,6 @@
 //! Cost accounting, built so that absent data cannot masquerade as zero.
 //!
-//! `docs/evaluation.md` §8 names this as the failure mode that can manufacture an
+//! `docs/research/evaluation.md` §8 names this as the failure mode that can manufacture an
 //! arbitrary winner: an arm whose usage records go missing looks cheap. The defence is
 //! that absence is *representable* — [`CostComponent::Missing`] — and that every
 //! aggregation carries the fact forward, so a total is never a bare number.
@@ -119,7 +119,7 @@ impl CostComponent {
     }
 }
 
-/// The three cost lines from `docs/evaluation.md` §5, kept separate on purpose: they are
+/// The three cost lines from `docs/research/evaluation.md` §5, kept separate on purpose: they are
 /// reported individually and are not interchangeable when interpreting a result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cost {
@@ -227,7 +227,7 @@ impl Total {
     /// Cost per accepted solution — the protocol's primary metric.
     ///
     /// Returns `None` if any cost was missing, or if nothing was accepted. Note the second
-    /// case: zero acceptances is not an infinitely good score, and `docs/evaluation.md` §5
+    /// case: zero acceptances is not an infinitely good score, and `docs/research/evaluation.md` §5
     /// requires this figure to be read alongside the acceptance rate for exactly that
     /// reason. An arm accepting 40/100 at $40 beats one accepting 90/100 at $100 on this
     /// number alone, which is why this number alone decides nothing.
@@ -333,7 +333,7 @@ impl CostPerAccepted {
 
 /// Aggregate every attempt's cost, carrying missing-data facts forward.
 ///
-/// Takes all attempts, not just successful ones: `docs/evaluation.md` §5 requires failed
+/// Takes all attempts, not just successful ones: `docs/research/evaluation.md` §5 requires failed
 /// attempts in the denominator, because an arm that fails cheaply and often is not cheap.
 pub fn total<'a>(costs: impl IntoIterator<Item = &'a Cost>) -> Total {
     let mut sum = Some(Money::ZERO);

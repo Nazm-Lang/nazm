@@ -2,16 +2,28 @@
 
 **Status: draft. Not yet pre-registered.**
 The decision rule in §6 becomes binding when it is committed and its commit hash is
-recorded in `docs/evaluation-preregistration.md`. That file **does not exist**; until it
+recorded in `docs/research/evaluation-preregistration.md`. That file **does not exist**; until it
 does, the rule is a proposal and may change freely. After that, it may not.
 
 > **Scope changed 2026-09-20, contents unchanged.** This protocol no longer decides
-> whether the language project exists — see [`direction.md`](direction.md). It is now
-> **evidence for specific usability and performance claims**, and it is reproduced here
-> exactly as registered-in-draft: the arms, the metrics, the thresholds in §6 (`point
-> R_C ≤ 0.80` **and** `upper CB < 1.00`), the cost policy, and the void-rate rule are
-> untouched. Nothing has been relaxed to fit the new direction, and no earlier result has
-> been reinterpreted.
+> whether the language project exists. It is now **evidence for specific usability and
+> performance claims**, and it is reproduced here exactly as registered-in-draft: the arms,
+> the metrics, the thresholds in §6 (`point R_C ≤ 0.80` **and** `upper CB < 1.00`), the cost
+> policy, and the void-rate rule are untouched. Nothing has been relaxed to fit the new
+> direction, and no earlier result has been reinterpreted.
+>
+> *The decision record that changed this scope (`direction.md`) was retired on 2026-09-21
+> once each of its standing decisions had an owner; Git retains it. The decision itself,
+> restated here because this is the document it governs:*
+>
+> **The language is the primary track. This protocol is evidence for claims, not a stop
+> condition for the project.** Arm A2 keeps its role — if improved TypeScript tooling
+> captures most of a measured benefit, that is a finding about *that claim* and it stays in
+> the record. The claims it is now evidence for: that agents spend less effort per accepted
+> change in Nazm than in TypeScript with comparable tooling; that structured diagnostics and
+> a canonical formatter reduce rework; and eventually the runtime claims in
+> [`../performance.md`](../performance.md), which are a separate experiment and must never
+> be collapsed into one score with this one.
 >
 > **A2 keeps its role.** If improved tooling on an existing language captures most of a
 > measured benefit, that is a finding about the claim under test and it stays in the
