@@ -655,10 +655,12 @@ fn run_contained(args: &[String]) -> ExitCode {
     }
 }
 
+/// `sh -c`, not `sh -lc`: a login shell re-reads `/etc/profile` and drops the image's
+/// PATH, which is where the pinned toolchain lives.
 fn shell(cmd: &str) -> Vec<String> {
     vec![
         "sh".to_owned(),
-        "-lc".to_owned(),
+        "-c".to_owned(),
         format!("cd /src && {cmd}"),
     ]
 }

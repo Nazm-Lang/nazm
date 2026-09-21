@@ -1,6 +1,6 @@
 # Goal execution ledger
 
-Contract: `docs/NAZM_AUTONOMOUS_GOAL.md` v1.0. This file is the resume point. **On
+Contract: `docs/NAZM_AUTONOMOUS_GOAL.md` **v1.1** (Section 2.1 makes containment a condition of execution). This file is the resume point. **On
 resumption, check it against Git and running processes before trusting it** — it records
 what was verified when it was written, not what is true now.
 
@@ -12,10 +12,48 @@ what was verified when it was written, not what is true now.
 | --- | --- |
 | Branch | `master` (no remote configured; local-only is not a blocker) |
 | Goal base commit | `4326100` |
-| Current commit | `011d7ff` (was `7677ebb` before the repair) |
-| Working tree | clean; the resource repair is committed as `011d7ff` |
+| Current commit | `a74bdba` (repair `011d7ff`, contract v1.1 `fc21968`) |
+| Working tree | the contained-runner work is in progress on top of `a74bdba` |
 | Platform verified | aarch64-apple-darwin (Darwin arm64), rustc 1.98.1 pinned, Apple clang 21.0.0 |
 | Disk | 50 GiB free of 460 GiB (88 % full) after reclaiming 33.5 GiB of `target/` on 2026-09-21 |
+
+## Execution prerequisite: the contained runner
+
+Contract v1.1 §2.1 forbids running generated stages, the selfhost suite, the bootstrap,
+fuzzing, the mutation catalogue or heavy benchmarks outside a verified ceiling.
+`NAZM_CONTAINED=1` is set by the runner **inside the container only**; it is never set on
+the host, and `NAZM_ALLOW_UNCONTAINED=1` is never used.
+
+    cargo xtask contained probe        # verify every bound is real on this daemon
+    cargo xtask contained selfhost     # the real suite, inside the ceiling
+    cargo xtask contained bootstrap    # the real bootstrap, inside the ceiling
+    cargo xtask contained run '<cmd>'  # anything else, bounded
+
+Image `nazm-contained:1.98.1` — rust 1.98.1 exactly as `rust-toolchain.toml` pins, clang
+19 (clang 17 rejects at least one emitted module; tracked separately).
+
+**Bounds, and how each was verified rather than assumed** — `contained probe`, **6/6
+passed, 0 survivors**:
+
+| bound | mechanism | probe result |
+| --- | --- | --- |
+| memory | `--memory` | **passed** — 400 MiB allocated *and memset* against a 256 MiB cap is OOM-killed |
+| swap | `--memory-swap` = `--memory` | **passed** — `memory.swap.max` reads 0 inside |
+| CPU / pids | `--cpus`, `--pids-limit` | **passed** — `cpu.max`, `pids.max` read back inside |
+| disk | `--storage-opt size` | **passed** — supported on this daemon |
+| scratch | sized `tmpfs` | **passed** — refuses to grow past its size |
+| single file | `--ulimit fsize` | **passed** |
+| deadline | kill the **container**, not the client | **passed** — 120 s sleep killed at 20 s |
+| output | concurrent drain, byte cap | **passed** — classified `output-overflow` |
+| descendants | `--init` + teardown | **passed** — detached grandchild reaped, 0 survivors |
+
+The first memory probe piped `head` into `tr`, which streams through small buffers and
+never allocates; it reported a pass and proved nothing. Replaced with chunked
+`malloc`+`memset`. Recording it because a probe that cannot fail is worse than none.
+
+Outcomes are five distinct words — **passed, skipped, refused, failed, unexecuted** — and
+the runner never collapses them: `Unavailable` is a refusal with an explanation, not a
+skip.
 
 ## HALT — resource incident, 2026-09-21 (read before running anything)
 

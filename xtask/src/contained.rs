@@ -211,7 +211,6 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
         // The only place a real ceiling applies, so the only place this is set.
         .args(["--env", "NAZM_CONTAINED=1"])
         .args(["--env", "CARGO_TARGET_DIR=/work/target"])
-        .args(["--env", "CARGO_HOME=/work/cargo"])
         .arg(IMAGE)
         .args(argv)
         .stdin(Stdio::null())
