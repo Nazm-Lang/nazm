@@ -43,11 +43,30 @@ Measured rather than estimated, because the number is large enough to matter:
 | `compiler/check` (no emission) | 12.4 ms | 12.5 ms |
 | `compiler/build-O0` | 200.1 ms | 468.7 ms |
 
-An unchanged program costs **under 1%**. The compiler's own build is 2.4× — and 1.22× of
-that is the input, which grew from a 3,700-line concatenation missing `module.nz` to the
-real 4,501-line source. The rest is the check itself, which is written once per call site,
-so the cost tracks how call-dense a program is rather than how long it is. The compiler
-has about sixteen hundred call sites; the benchmark programs have a handful each.
+An unchanged program costs **under 1%**. The compiler's own build is 2.4×, and the two
+causes — a different compiler and a different input — are separated by measuring all four
+combinations rather than by assuming the split follows the line count. Every cell below
+was measured in one session, on one machine, inside the runner, three runs each:
+
+| median of 3 | baseline-era input, 3,561 lines | current input, 4,501 lines |
+| --- | ---: | ---: |
+| emitter before this change | **190 ms** | **247 ms** |
+| emitter after it | **380 ms** | **475 ms** |
+
+The emitter change costs **2.00× on the old input and 1.92× on the new one**; the input
+change costs **1.30× with the old emitter and 1.25× with the new one**. The two are
+consistent across both rows and both columns, which is what makes the decomposition a
+measurement rather than an apportionment. The 190 ms cell also corroborates the recorded
+baseline's 200.1 ms for the same combination.
+
+An earlier draft of this section attributed 1.22× to the input because the line count had
+risen 22%. That was a guess dressed as an attribution — line count is not compile time,
+and the measured figure is 1.25–1.30×. It is recorded here because the number happening to
+land near the guess is exactly what would have kept the guess from being noticed.
+
+The remaining 1.9× is the check itself, written once per call site, so the cost tracks how
+call-dense a program is rather than how long it is. The compiler has about sixteen hundred
+call sites; the benchmark programs have a handful each, which is why they moved under 1%.
 
 Of the 503 ms measured before the block reduction below, **457 ms was clang** and about
 46 ms was Nazm's own emission — so this is IR volume reaching the assembler, not the
