@@ -24,7 +24,8 @@ project's existence.
 
 ## What is actually here
 
-**A `.nz` program runs — and a subset of one now compiles.**
+**A `.nz` program runs, compiles, and — for the compiler's own subset — compiles
+itself.**
 
 ```sh
 $ cargo run -p nazm-cli --bin nazm -- run examples/max.nz
@@ -34,9 +35,18 @@ $ cargo run -p nazm-cli --bin nazm -- build arithmetic.nz -o arithmetic
 arithmetic
 $ ./arithmetic          # no interpreter, no nazm process
 -54
+
+$ sh compiler/bootstrap.sh   # the compiler written in Nazm, compiling itself
+bootstrap complete: C2 and C3 are byte-identical, 5 conformance cases agree
 ```
 
-`nazm build` is the native path (**M1a–M1f, then B1–B3**) and its subset is narrow on purpose:
+`compiler/*.nz` is a compiler for Nazm **written in Nazm** — lexer, parser, checker and
+LLVM emission, about 3 500 lines, every component differentially verified against the
+Rust implementation rather than merely run. It compiles itself to a fixpoint;
+[`docs/bootstrap.md`](docs/bootstrap.md) says what that does and does not establish,
+and the answer is narrower than it sounds.
+
+`nazm build` is the native path, and its subset is deliberate:
 several functions over `Int` and `Bool` with `fn main() -> Int` as the entry point,
 literals, `let` and `let mut` bindings, immutable parameters, assignment, `while` with
 `break` and `continue`, `return`, unary `-`, `+ - * / %`, the comparisons
@@ -231,8 +241,12 @@ cargo xtask check       # architectural gates, and the guide against the grammar
 cargo xtask guide       # rewrite docs/guide.md from docs/grammar.ebnf
 
 # Not in the default set: these drive nested cargo builds and kill real process
-# groups, and `cargo xtask mutate` would otherwise pay their cost 44 times over.
+# groups, and `cargo xtask mutate` would otherwise pay their cost once per entry.
 cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
+
+# Each catalogued defect is injected and must be caught. One full build and test run
+# per entry, so `--only NAME` selects a subset by substring.
+cargo xtask mutate
 ```
 
 The toolchain is pinned to 1.98.1 in `rust-toolchain.toml`. That pin is load-bearing:
