@@ -59,7 +59,11 @@ struct Measurement {
 
 impl Measurement {
     fn min(&self) -> f64 {
-        self.runs.iter().map(Duration::as_secs_f64).fold(f64::MAX, f64::min) * 1000.0
+        self.runs
+            .iter()
+            .map(Duration::as_secs_f64)
+            .fold(f64::MAX, f64::min)
+            * 1000.0
     }
 
     fn median(&self) -> f64 {
@@ -67,7 +71,9 @@ impl Measurement {
         ms.sort_by(f64::total_cmp);
         // The lower of the two middles for an even count, rather than their mean: an
         // average of two timings is a number that was never observed.
-        ms.get(ms.len().saturating_sub(1) / 2).copied().unwrap_or(0.0)
+        ms.get(ms.len().saturating_sub(1) / 2)
+            .copied()
+            .unwrap_or(0.0)
     }
 
     fn key(&self) -> String {
@@ -173,7 +179,9 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
                 let (n, s, e) = (nazm.clone(), source.clone(), exe.clone());
                 Box::new(move || {
                     let mut c = Command::new(&n);
-                    c.args(["build", &s, "-o"]).arg(&e).args(["--opt-level", "0"]);
+                    c.args(["build", &s, "-o"])
+                        .arg(&e)
+                        .args(["--opt-level", "0"]);
                     c
                 })
             }),
@@ -181,7 +189,9 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
                 let (n, s, e) = (nazm.clone(), source.clone(), exe.clone());
                 Box::new(move || {
                     let mut c = Command::new(&n);
-                    c.args(["build", &s, "-o"]).arg(&e).args(["--opt-level", "2"]);
+                    c.args(["build", &s, "-o"])
+                        .arg(&e)
+                        .args(["--opt-level", "2"]);
                     c
                 })
             }),
@@ -282,7 +292,8 @@ fn compiler_source(root: &Path, scratch: &Path) -> Result<PathBuf, String> {
     let mut whole = String::new();
     for name in ["lex.nz", "parse.nz", "analyse.nz", "emit.nz"] {
         let path = root.join("compiler").join(name);
-        let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         // The `use` lines are dropped, exactly as the bootstrap script drops them: the
         // compiler written in Nazm does not resolve them, and this measures the same
         // translation unit the bootstrap builds.
@@ -306,8 +317,16 @@ fn tempdir(root: &Path) -> Result<PathBuf, String> {
 
 fn render_table(measurements: &[Measurement]) -> String {
     let mut out = String::new();
-    let width = measurements.iter().map(|m| m.key().len()).max().unwrap_or(20);
-    let _ = writeln!(out, "\n  {:<width$}  {:>10}  {:>10}", "", "min ms", "median ms");
+    let width = measurements
+        .iter()
+        .map(|m| m.key().len())
+        .max()
+        .unwrap_or(20);
+    let _ = writeln!(
+        out,
+        "\n  {:<width$}  {:>10}  {:>10}",
+        "", "min ms", "median ms"
+    );
     for m in measurements {
         let _ = writeln!(
             out,
@@ -437,7 +456,10 @@ fn compare(root: &Path, measurements: &[Measurement]) -> ExitCode {
         println!("faster: {i}");
     }
     if regressions.is_empty() {
-        println!("\nbench: nothing slower than the baseline by more than {:.0}%", TOLERANCE * 100.0);
+        println!(
+            "\nbench: nothing slower than the baseline by more than {:.0}%",
+            TOLERANCE * 100.0
+        );
         return ExitCode::SUCCESS;
     }
     for r in &regressions {
