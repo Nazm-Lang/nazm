@@ -164,6 +164,7 @@ fn t_bool() -> Int { 2 }
 fn t_str() -> Int { 3 }
 fn t_ints() -> Int { 4 }
 fn t_strs() -> Int { 5 }
+fn t_chan() -> Int { 6 }
 
 fn type_of_name(name: Str) -> Int {
     if name == "Int" { return t_int(); }
@@ -171,6 +172,7 @@ fn type_of_name(name: Str) -> Int {
     if name == "Str" { return t_str(); }
     if name == "Ints" { return t_ints(); }
     if name == "Strs" { return t_strs(); }
+    if name == "Chan" { return t_chan(); }
     t_unknown()
 }
 
@@ -180,6 +182,7 @@ fn type_name(t: Int) -> Str {
     if t == t_str() { return "Str"; }
     if t == t_ints() { return "Ints"; }
     if t == t_strs() { return "Strs"; }
+    if t == t_chan() { return "Chan"; }
     "?"
 }
 
@@ -297,20 +300,6 @@ fn add_builtin(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: In
     strs_len(bnames)
 }
 
-// Built-ins the language has and this compiler deliberately does not lower.
-//
-// Concurrency is outside the bootstrap subset: the compiler is single-threaded and does
-// not use a channel anywhere, so `docs/bootstrap-design.md` leaves it out. Naming them
-// here rather than letting them fall through to "is not a function" is what keeps the
-// omission a decision instead of a gap.
-fn outside_bootstrap_subset(name: Str) -> Bool {
-    if name == "chan_new" { return true; }
-    if name == "chan_send" { return true; }
-    if name == "chan_recv" { return true; }
-    if name == "chan_close" { return true; }
-    false
-}
-
 fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints) -> Int {
     let n = t_unknown();
     add_builtin(bnames, bret, bfirst, bcount, bparams, "str_len", t_int(), t_str(), n, n);
@@ -332,6 +321,10 @@ fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints)
     add_builtin(bnames, bret, bfirst, bcount, bparams, "strs_push", t_int(), t_strs(), t_str(), n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "strs_pop", t_str(), t_strs(), n, n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "str_join", t_str(), t_strs(), t_str(), n);
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "chan_new", t_chan(), t_int(), n, n);
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "chan_send", t_bool(), t_chan(), t_int(), n);
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "chan_recv", t_bool(), t_chan(), t_ints(), n);
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "chan_close", t_int(), t_chan(), n, n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "args_count", t_int(), n, n, n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "arg", t_str(), t_int(), n, n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "read_file", t_str(), t_str(), n, n);
@@ -374,6 +367,40 @@ fn collect_signatures(nk: Ints, nar: Ints, ntx: Strs, kids: Ints, kid_first: Int
 
 // --- checking -------------------------------------------------------------------------
 
+// Which nodes sit inside a `scope`, so a `spawn` can be told whether anything will join
+// it.
+//
+// A post-order arena makes every subtree contiguous: node `k`'s runs from the start of its
+// first child's subtree up to `k`. Every child has a lower index than its parent, so one
+// left-to-right pass computes every subtree start and a second marks each `scope`'s span.
+// The checking walk is post-order and reaches a `scope` *after* its body, which is too
+// late to tell a `spawn` inside it anything — hence a pass of its own.
+fn scope_flags(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints, flags: Ints) -> Int {
+    let sub = ints_new();
+    let mut k = 0;
+    while k < ints_len(nk) {
+        if ints_get(nar, k) == 0 {
+            ints_push(sub, k);
+        } else {
+            ints_push(sub, ints_get(sub, ints_get(kids, ints_get(kid_first, k))));
+        }
+        ints_push(flags, 0);
+        k = k + 1;
+    }
+    k = 0;
+    while k < ints_len(nk) {
+        if ints_get(nk, k) == n_scope() {
+            let mut j = ints_get(sub, k);
+            while j < k {
+                ints_set(flags, j, 1);
+                j = j + 1;
+            }
+        }
+        k = k + 1;
+    }
+    ints_len(flags)
+}
+
 fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, nslot: Ints,
         ntype: Ints,
         kids: Ints, kid_first: Ints, root: Int,
@@ -387,6 +414,8 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
     let nmut = ints_new();
     let nslotof = ints_new();
     let ts = ints_new(); // the type stack: one entry per finished child
+    let inscope = ints_new();
+    scope_flags(nk, nar, kids, kid_first, inscope);
     // One entry per node, so the emitter can index it directly. `-1` is "no slot".
     while ints_len(nslot) < ints_len(nk) { ints_push(nslot, 0 - 1); }
     // The type each node produces, recorded for the emitter: `t_unknown` means the node
@@ -525,6 +554,48 @@ fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, n
                             ints_get(nst, value), ints_get(nen, value),
                             str_concat(str_concat("`", text), "` has a different type"));
                 }
+                ints_push(ts, t_unknown());
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
+                continue;
+            }
+            if kind == n_scope() {
+                ints_pop(ts); // the body block; a `scope` produces nothing
+                ints_push(ts, t_unknown());
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
+                continue;
+            }
+            if kind == n_spawn() {
+                if ints_get(inscope, k) == 0 {
+                    report(dcode, dstart, dend, dmsg, "N0320", from, to,
+                            "`spawn` outside a `scope`: nothing would join this task");
+                }
+                // `Ints` and `Strs` are handles to shared mutable storage with no
+                // synchronisation of any kind, so letting one cross into a task would be
+                // a data race the language had invited. `Int`, `Bool` and `Str` are
+                // values and `Chan` is the primitive designed to be shared.
+                let mut a = 0;
+                while a < arity {
+                    let at = ints_get(ts, ints_len(ts) - arity + a);
+                    let mut bad = 0;
+                    if at == t_ints() { bad = 1; }
+                    if at == t_strs() { bad = 1; }
+                    if bad == 1 {
+                        let c = ints_get(kids, first + a);
+                        report(dcode, dstart, dend, dmsg, "N0321",
+                                ints_get(nst, c), ints_get(nen, c),
+                                str_concat(str_concat("a `", type_name(at)),
+                                "` may not cross into a task"));
+                    }
+                    a = a + 1;
+                }
+                // The callee is resolved exactly as a call's is — same arity and argument
+                // rules, one definition. A task's result is discarded, which the
+                // specification states outright: results travel through channels.
+                check_call(text, arity, ts, from, to,
+                        kids, first, nst, nen,
+                        fnames, fret, ffirst, fcount, fparams,
+                        bnames, bret, bfirst, bcount, bparams,
+                        dcode, dstart, dend, dmsg);
                 ints_push(ts, t_unknown());
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
@@ -744,16 +815,6 @@ fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
     }
 
     if found == false {
-        if outside_bootstrap_subset(name) {
-            // The language has it; this compiler does not. Saying "is not a function"
-            // here would send a reader looking for a typo in a name that is spelled
-            // correctly — the difference between the language and its bootstrap
-            // compiler is the fact they need.
-            report(dcode, dstart, dend, dmsg, "N0201", from, from + str_len(name),
-                    str_concat(str_concat("`", name),
-                    "` is outside the bootstrap subset this compiler accepts"));
-            return t_unknown();
-        }
         report(dcode, dstart, dend, dmsg, "N0201", from, from + str_len(name),
                 str_concat(str_concat("`", name), "` is not a function"));
         return t_unknown();
