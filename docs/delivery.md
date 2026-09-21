@@ -173,6 +173,17 @@ cargo xtask check                # architectural gates and the guide against the
 sh compiler/bootstrap.sh         # C1 -> C2 -> C3, byte-identical
 cargo run -p xtask -- bench      # measurements; --check compares to bench/baseline.json
 sh scripts/release-candidate.sh  # every gate, then the local artefact
+
+# Not in the default set, and each says why in its own output:
+cargo xtask mutate                       # one build and test run per catalogued defect
+cargo test -p xtask --test lifecycle -- --ignored --test-threads=1
+NAZM_REQUIRE_DOCKER=1 cargo test --test docker_boundary -- --test-threads=1
+```
+
+The compiler also runs a corpus of its own:
+
+```sh
+cargo run -p nazm-cli -- test compiler/conformance   # 5 cases, interpreted and compiled
 ```
 
 Independent example programs are in `examples/`: `max.nz`, `sum.nz`, `primes.nz`,
