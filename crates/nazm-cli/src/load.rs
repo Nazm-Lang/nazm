@@ -44,8 +44,14 @@ use nazm_span::{FileId, SourceMap, Span};
 /// filesystem here would make the answer depend on where the project was checked out.
 /// `None` when the module sits outside the root, which is not an error — see
 /// `docs/spec.md`, *Durable identity*.
+///
+/// Both sides are made absolute first, so the answer does not depend on the shell's
+/// working directory: `nazm check lib/util.nz` and `nazm check ../p/lib/util.nz` are the
+/// same module of the same project. Neither absolute path survives into the key — only
+/// what is left after one is removed from the other.
 fn module_key(root: &Path, path: &Path) -> Option<ModuleKey> {
-    let relative = path.strip_prefix(root).unwrap_or(path);
+    let absolute = crate::root::absolute(path);
+    let relative = absolute.strip_prefix(root).unwrap_or(&absolute);
     // One spelling on every platform. `Path` components are already `.`-free and
     // separator-normalised; `ModuleKey::relative` folds what remains and refuses an
     // escape.
@@ -86,16 +92,13 @@ pub(crate) struct Loaded {
 /// against the positions they will keep.
 /// On failure what was loaded **so far** comes back with the diagnostics, so a
 /// "cannot find" points at the `use` line that wrote it rather than at an empty file.
-pub(crate) fn load(root: &Path) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
-    // The source root: the directory the root module sits in, derived rather than
-    // declared. Every module's durable identity is its path relative to this, so a
-    // checkout moved from one directory to another keeps its identities — which is the
-    // property `docs/spec.md` asks for and the reason the absolute path below never
-    // reaches one.
-    let source_root = root
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
+pub(crate) fn load(root: &Path, source_root: &Path) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
+    // Every module's durable identity is its path relative to this, so a checkout moved
+    // from one directory to another keeps its identities — which is the property
+    // `docs/spec.md` asks for and the reason the absolute path never reaches one. Whether
+    // the root was declared or derived is `crate::root`'s decision, made before any file
+    // was read.
+    let root_path = source_root;
 
     let mut parts: Vec<(String, String)> = Vec::new();
     // Per module, in load order: its durable identity, or `None`.
@@ -115,7 +118,7 @@ pub(crate) fn load(root: &Path) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
 
     while let Some(path) = stack.pop() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-        let logical = module_key(&source_root, &path);
+        let logical = module_key(root_path, &path);
         if let Some(&already) = index.get(&canonical) {
             // One file, reached a second time. Ordinarily that is a diamond and the two
             // spellings normalise to one key. When they do not, a symbolic link has made

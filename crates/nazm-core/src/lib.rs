@@ -7,7 +7,9 @@
 pub mod check;
 pub mod eval;
 
-pub use check::{check, check_unit, declare_unit, Signature, Unit};
+pub use check::{
+    check, check_reusing, check_unit, declare_unit, CheckEverything, Reuse, Signature, Unit,
+};
 pub use eval::{Interpreter, RuntimeError, Value};
 // `Type`, `Intrinsic` and `Resolution` moved to `nazm-syntax` on 2026-09-21, so the
 // backend could see them without depending on the interpreter, and to `nazm-sema` on
@@ -161,6 +163,56 @@ pub fn check_source(source: &str) -> Vec<nazm_diag::Diagnostic> {
         &nazm_span::SourceMap::single(ONE_FILE, source),
         &sema::ModuleGraph::single(),
     )
+}
+
+/// As [`check_source`], over every file of a compilation, reusing what `reuse` allows.
+///
+/// # Why this is not `check_map` with an argument
+///
+/// It is, and the separation is deliberate anyway: `check_map` is the whole-compilation
+/// entry point every other consumer uses, and a caller that has no cache should not have
+/// to pass something saying so. There is one checking path underneath — this function and
+/// `check_map` both reach [`check_reusing`], and a compilation that reuses nothing takes
+/// exactly the route it took before N4.
+///
+/// The modules whose source did not parse are computed here rather than asked for,
+/// because this is where parsing happens and a caller cannot know before it does.
+#[must_use]
+pub fn check_map_reusing(
+    map: &nazm_span::SourceMap,
+    graph: &sema::ModuleGraph,
+    reuse: &mut (dyn Reuse + Send),
+) -> Vec<nazm_diag::Diagnostic> {
+    let run = || {
+        let (program, mut diagnostics) = nazm_syntax::parse_map(map);
+        let parse_failed = !diagnostics.is_empty();
+
+        // A module whose file produced a parse diagnostic. Its tree is partial, so its
+        // declarations are partial, so nothing about it may be written down for a later
+        // run to inherit.
+        let unparsable: Vec<sema::ModuleId> = diagnostics
+            .iter()
+            .filter_map(|d| graph.module_of(d.primary.span.file))
+            .collect();
+
+        let (_, check_errors) = check_reusing(&program, graph, reuse, &unparsable);
+        // A function that failed to parse was never registered, so "this program has no
+        // `main`" would be reported for a file whose first line is `fn main`.
+        diagnostics.extend(
+            check_errors
+                .into_iter()
+                .filter(|d| !(parse_failed && d.code == nazm_diag::codes::MISSING_MAIN)),
+        );
+        diagnostics
+    };
+
+    eval::on_interpreter_stack(0, run).unwrap_or_else(|e| {
+        vec![nazm_diag::Diagnostic::error(
+            nazm_diag::codes::INTERPRETER_UNAVAILABLE,
+            nazm_span::Span::synthetic(),
+            format!("could not start the checker: {e}"),
+        )]
+    })
 }
 
 /// As [`check_source`], over every file of a compilation.
