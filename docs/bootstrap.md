@@ -259,7 +259,38 @@ declared root to change.
   path instead, because it can — the emitted runtime has no `realpath`.
 - **Nothing is freed** — *until N8, which closed it*. See §1; the design stated it, and
   `capability-matrix.md` area 4 carries the current status and the acceptance condition.
+- **A record's native type name is its index**, `%nz.t<n>`, exactly as a function's symbol
+  is `@nz.f<n>`. Sound because this compiler emits one LLVM module for a whole program, and
+  the same limitation N5 removed for the reference compiler and deliberately not for this
+  one. It is one limitation, not two: whatever fixes the symbols fixes the type names.
 - **The chain cannot run uncontained**, by design. See §6.
+
+### Records, and what the chain now carries — N9, 2026-09-23
+
+The compiler written in Nazm understands records: `struct` and `.` in the lexer,
+declarations and named construction and projection-path assignment in the parser, a record
+table with three declaration stages in the analyser, and named LLVM aggregates with
+generated retain and release helpers in the emitter. **There is no divergence to record** —
+it accepts and rejects the same record language the reference does, which is the standard
+N2.1 set and which this document exists partly to keep.
+
+It also **uses** one. `Place { line, column }` replaced `line_of` and `column_of` in
+`compiler/emit.nz`, which were two functions because a function returns one value. So S —
+the source this chain compiles with itself — now contains a record, and C1, C2 and C3 each
+compile one.
+
+The corpus grew with it: `compiler/conformance/records.nz` covers construction, copy,
+replacement, nesting, both return edges, a projection out of a temporary and two hundred
+short-lived records with heap fields; `modules/exported-record` sends a record with an
+owning field across a module boundary and back. Both are compiled by C2 and C3 and run
+against the reference.
+
+**The digest moved, twice, and that is expected.** `spec.md` and the milestone directive
+both say so: a compiler that gained a language feature emits different bytes. The fixpoint
+is what matters, and it held at every step —
+`1ce9aafb…` (N8) → `3ecf0921…` (records) → `3491dfed…` (a record in the compiler's own
+source). Preserving an old digest by declining the change would have been preserving the
+number rather than the property it stands for.
 
 ## 6. Reproducing it
 

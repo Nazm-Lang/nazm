@@ -47,11 +47,54 @@ running anything, and `nazm test` runs a directory of programs against recorded 
 | `Ints` | A growable sequence of `Int`, **by reference** |
 | `Strs` | The same, of `Str` |
 | `Chan` | A bounded queue of `Int`, by reference. The one type designed to be shared between tasks |
+| a `struct` you declare | A **record**: a value with named fields, each keeping its own type's rules |
 
 `Ints`, `Strs` and `Chan` are handles: two bindings of one sequence are the same storage,
 and `==` is not offered on them, because it would have to mean either identity or
 contents and the language has not chosen. A sequence may **not** be passed to a task; a
 channel may, and its operations are the synchronisation.
+
+## Records
+
+```nazm
+pub struct Point {
+    x: Int,
+    label: Str,
+}
+
+fn main() -> Int {
+    let mut p = Point(x: 1, label: "here");
+    p.x = 41;
+    p.x + str_len(p.label)
+}
+```
+
+Six things to know, and then you know records:
+
+- **Every field is named when you build one.** There is no positional form, no default
+  value and no partial record. A field you forget is an error that names it.
+- **A record is a value.** `let q = p;` gives you another record. Changing `q.x` does not
+  change `p.x` — and if a field is an `Ints`, both records still point at the *same*
+  sequence, because that is what an `Ints` is. Each field keeps its own rules; the record
+  does not override them.
+- **`p.x = 2` needs `let mut p`**, at any depth: `a.inner.count = 3` asks permission of
+  `a`. Replacing part of what a binding holds is changing the binding.
+- **Reading a field gives you a value you can keep.** `let s = make().label;` is valid
+  after the record `make()` returned is gone.
+- **Records are nominal.** Two records with the same fields are two types, and there is no
+  conversion between them. A record and a function may share a name.
+- **`a == b` is not offered**, for the same reason it is not offered on a sequence: it
+  would have to decide whether an `Ints` field means the same storage or the same contents.
+
+Field order is presentation. Moving two field declarations changes nothing at all — not
+the type, not what constructs it, not the compiled program. Construction is by name.
+
+Whether a record can be passed to a task is **worked out from its fields**: one made of
+`Int`, `Str` and `Chan` can, one holding an `Ints` anywhere inside it cannot, and the error
+tells you which field decided it.
+
+A record cannot contain itself, directly or in a circle. That is refused as a layout with
+no size rather than as a safety problem — there is nowhere for such a value to fit.
 
 ## Memory: what you do not have to do
 

@@ -244,8 +244,9 @@ hope.
 ### What a consumer of an interface does not have to read
 
 Not a token measurement: bytes, and no tokenizer has been run. For the same five modules,
-what each one's implementation weighs against what its published `nazm.interface/1`
-interface weighs:
+what each one's implementation weighs against what its published interface weighs — the
+schema was `nazm.interface/1` when this was measured and is `/2` since N9, which added
+record definitions and moves these numbers for a module that exports one:
 
 | | source | interface |
 | --- | ---: | ---: |
@@ -459,6 +460,74 @@ move, and neither does the floor.
 **`str_concat` in a loop is still quadratic in time.** Nothing here changes that, and
 `str_join` is still one pass and one allocation. What changed is that getting it wrong now
 costs time rather than the machine.
+
+### Records — measured 2026-09-23, and the cost is the fields'
+
+N9 added user-defined records. A record allocates nothing of its own, so the question is
+whether the *composition* costs anything: whether reading a field is slower than reading a
+binding, and whether copying a record is slower than copying what it holds.
+
+Median of five, `-O2`, Darwin arm64. Each loop runs three million times except the two
+marked, which run one million.
+
+| Workload | Without a record | With one | |
+| --- | ---: | ---: | --- |
+| two `Int`s built and read | 34 ms | **34 ms** | not measurable |
+| a record inside a record, three fields read | — | **36 ms** | +2 ms over the flat case |
+| three million field replacements | — | **32 ms** | |
+| copying a `Str` twice, one million times | 55 ms | **54 ms** | not measurable |
+| a cross-module call returning two values | 43 ms | **40 ms** | one call instead of two |
+
+The last row is the shape `compiler/emit.nz` actually adopted: `line_of` and `column_of`
+were two functions because a function returns one value, and `Place { line, column }` is
+one. The measured win is small and the reason it exists is not — the second scan ran
+*backwards* over the same bytes.
+
+At `-O0`, where the generated retain and release helpers are real calls rather than
+inlined, the cost appears and is still small:
+
+| Workload | Without | With | |
+| --- | ---: | ---: | --- |
+| two `Int`s built and read | 39 ms | 41 ms | +2 ms over three million |
+| a record inside a record | — | 49 ms | +10 ms; two aggregates per iteration |
+| copying a `Str` twice | 55 ms | 56 ms | +1 ms over one million |
+
+**Peak resident memory**, same platform, `-O2`:
+
+| Workload | Live set | Peak |
+| --- | --- | ---: |
+| 80,000 short-lived records of two heap strings | one record | **1.72 MiB** |
+| the same two strings, no record | one string | 1.73 MiB |
+| 80,000 temporary strings — the N8 control | one string | 1.77 MiB |
+| 80,000 short-lived sequences — the N7 control | ~400 B | 1.78 MiB |
+| 2,000 short-lived channels — the N8 control | one | 1.75 MiB |
+| empty program | — | 1.69 MiB |
+
+The first two rows are the claim: a record holding heap strings costs what the strings
+cost. The next three are the controls, and they are unmoved — adding a composite type did
+not disturb the reclamation of the types it composes.
+
+**Executable size.** A program using a record whose fields own nothing is **byte-identical**
+in size to the same program written without one (50,696 bytes), because no helper is
+generated. One whose fields own something costs **+96 bytes** — the retain and release
+helpers, once each, however many times the record is copied.
+
+**The compiler itself**, Darwin arm64 host: `nazm check compiler/emit.nz` 42 ms,
+`nazm build … --opt-level 0` 143 ms, peak 44.75 MiB.
+
+Contained, Linux aarch64, on `compiler/emit.nz` — now 3,756 lines:
+
+| | Peak | Wall |
+| --- | ---: | ---: |
+| the reference compiler | 112.94 MiB | 1.01 s |
+| the compiler written in Nazm | **32.75 MiB** | 4.01 s |
+
+N8 recorded 107.61 MiB and 24.86 MiB for the same pair, **on a 3,221-line file**, so these
+are not a controlled comparison and are not presented as one. The reference compiler's
+figure moved about as much as the input did; the self-hosted one moved more, and the reason
+is visible rather than mysterious — its node arena gained two columns and it now carries a
+record table of its own. What is being claimed here is only that neither grew unexpectedly,
+and that both still fit the 4,096 MiB the runbook allows them.
 
 ### What the counting costs
 

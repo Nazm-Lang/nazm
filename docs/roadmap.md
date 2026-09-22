@@ -308,28 +308,68 @@ against the design rather than for it.
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| **User-defined records** | a decision about value semantics for a kind of value with no existing meaning to break | `research-register.md` R1. The first type that can be recursive also ends the cycle argument this milestone's leak-freedom claim rests on, and the constitution says in advance what admitting one requires |
-| Variants, pattern matching, `Option`, `Result` | records | the shape of a payload is a record's question first |
-| Generics | records and variants | nothing to be generic over yet |
+| **User-defined records** | a decision about value semantics for a kind of value with no existing meaning to break | done — N9. Value semantics, composed field by field; cycles refused as an impossible layout rather than admitted with a policy |
+| Variants, pattern matching, `Option`, `Result` | records ✓ | the shape of a payload is a record's question first, and it has been answered |
+| Generics | records ✓ and variants | nothing to be generic over yet |
 | A lossless CST | nothing in this list | the last AI-native item, and independent of all of it |
 | `nazm explain-cost` | the cost table in `spec.md` ✓ | the model is documented; the tool is not written, and is not urgent |
 
-### N9 — the next milestone, and not started
+### After N9, in dependency order
 
-**User-defined records.** It is the recommendation, and the argument is that everything else
-now waits behind it: variants, pattern matching, `Option`, `Result` and generics all need a
-payload shape first, and the memory model has just been completed for a type universe that
-records are the natural next member of.
+| | Depends on | Why not before |
+| --- | --- | --- |
+| **Variants and pattern matching** | records ✓ | a payload is a record; a payload that is *sometimes* there is the next distinct semantic problem, and `Option` and `Result` are the first two users of it |
+| Generic containers | records ✓ and variants | a `Vec<Record>` is where value semantics usually start to hurt, and it is also what would make a reference cycle expressible again — at which point `spec.md`'s *Cycles* has to be satisfied a second time |
+| Copy elision, specified | records ✓ | `research-register.md` R1's original sharp question, still unanswered: a record copy costs one reference adjustment per owning field, and nothing says when the compiler may remove the pair |
+| A lossless CST | nothing above | unchanged; still independent, still the last AI-native item |
 
-It is also where the current leak-freedom claim gets tested rather than extended. A record
-holding a record can be made recursive, and the constitution states the rule in advance:
-either the type system refuses ownership cycles, or the kind of value that can form them
-arrives with its own policy — a weak reference, a region, or a collector for that kind
-alone. **What may not happen is a recursive type being added and the reclamation claim left
-standing.**
+### N10 — the next milestone, and not started
 
-The alternative is a lossless CST, which is the last AI-native item and depends on nothing
-here. It is smaller, it is independent, and it would leave the language exactly where it is.
+**Variants and pattern matching.** It is the recommendation, and the argument is that N9
+answered the question it was blocked on. A variant's payload is a record's problem, solved;
+what remains is a payload that is *sometimes* there, which is a different problem — it
+needs a discriminant, an exhaustiveness rule, and a binding form, and each of those is a
+decision the language has not made.
+
+It is also where the ownership model is asked a question records did not ask. A record owns
+what all of its fields own; a variant owns what **the live arm's** fields own, which is a
+run-time fact rather than a type-level one. Whether that can still be derived — or whether
+the discriminant has to be consulted at every release — is the milestone's real content,
+and the answer decides whether `Owns` stays a classification or becomes a dispatch.
+
+The alternatives are unchanged: generic containers, which want variants first, and a
+lossless CST, which wants nothing and would leave the language exactly where it is.
+
+### N9 — User-defined records — **complete, 2026-09-23**
+
+`struct Point { x: Int, y: Int, }`. Nominal value records with named fields, named
+construction, projection, field replacement through a projection path, nesting, module
+visibility, a persisted shape, and native code — in the reference compiler, the interpreter
+and the compiler written in Nazm.
+
+The milestone was never about the syntax. It asked whether the memory constitution N7 and
+N8 built could describe a type whose ownership is **composed** from arbitrary field types
+rather than branched on, and the answer is in what did not change: `Owns` gained one
+variant and no consumer gained a case. Cleanup, task safety, copy and destroy are all
+derived from the fields, recursively.
+
+The leak-freedom claim was tested rather than extended, and the constitution's *Cycles*
+was satisfied the first way it offered: a record holds its fields by value, so a
+containment cycle has no finite layout and is refused (`N0336`) before anything is lowered.
+A composition of leaves is a leaf, so the argument survives — and a generic container able
+to hold a record is what would end it.
+
+| Settled | Where |
+| --- | --- |
+| `struct` as the keyword, *record* as the category, `Point(x: 1, y: 2)` as the constructor | `spec.md`, *Records* |
+| field order is not semantic — not in the type, the fingerprint, or the layout | `spec.md`; `architecture.md` §7.10 |
+| a projection borrows when its base does, and takes a reference when it does not | §7.10 |
+| a failure releases the temporaries it was holding — §7.9's last open limitation | §7.10 |
+| `nazm.interface/2`, closed over the field types its public surface mentions | `architecture.md` §7.3, extended |
+
+Evidence: 1,038 tests over 56 suites contained, 22/22 selfhost, C2 = C3 over 12 conformance
+cases with 6 multi-module, 15 new mutations all caught, and the compiler written in Nazm
+now uses a record of its own.
 
 ---
 
