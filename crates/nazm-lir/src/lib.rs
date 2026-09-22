@@ -41,7 +41,9 @@ pub mod lower;
 pub mod names;
 pub mod symbol;
 
-pub use emit::{emit_entry, emit_runtime, emit_unit, Needs, TARGET_NOTE};
+pub use emit::{
+    emit_entry, emit_runtime, emit_unit, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, TARGET_NOTE,
+};
 pub use ir::{ArithOp, Block, CmpOp, Expr, External, Function, Local, Native, Stmt, Ty, Unit};
 pub use lower::{lower, lower_module, plan, LowerError, Lowered, Plan};
 pub use names::SourceNames;

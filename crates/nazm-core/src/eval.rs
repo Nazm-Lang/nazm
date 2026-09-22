@@ -53,9 +53,9 @@ pub enum Value {
     /// a thread the interpreter owns (`on_interpreter_stack`), so a `Value` has to be
     /// `Send`. The lock is never contended — evaluation is single-threaded — and it is
     /// not a concurrency mechanism.
-    Ints(Arc<Mutex<Vec<i64>>>),
+    Ints(Arc<Seq<Vec<i64>>>),
     /// The same, for `Str`.
-    Strs(Arc<Mutex<Vec<Vec<u8>>>>),
+    Strs(Arc<Seq<Vec<Vec<u8>>>>),
     /// A bounded channel of `Int`, by reference.
     ///
     /// The one value designed to be shared between tasks: its operations *are* the
@@ -155,6 +155,59 @@ impl Eq for Value {}
 /// better than continuing.
 fn seq<T>(lock: &Mutex<T>) -> Option<std::sync::MutexGuard<'_, T>> {
     lock.lock().ok()
+}
+
+/// Sequence storage, and the two counters that prove it is reclaimed.
+///
+/// # Why this type exists at all
+///
+/// The storage could be a bare `Mutex<T>`: the host reclaims it when the last `Arc` to it
+/// is dropped, which is exactly what `docs/spec.md`'s memory constitution requires. But
+/// *"the host does the right thing"* is not evidence, and `docs/architecture.md` §7.7 says
+/// why — a reference implementation has to model the language rather than inherit its
+/// behaviour from whatever Rust happens to do. So the allocation and the reclamation are
+/// counted here, the same two numbers a compiled program reports, and a test compares
+/// them. If the interpreter ever stopped reclaiming, the count would say so instead of the
+/// two implementations silently disagreeing.
+#[derive(Debug, Default)]
+pub struct Seq<T>(Mutex<T>);
+
+impl<T> Seq<T> {
+    fn new(value: T) -> Self {
+        ALLOCATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(Mutex::new(value))
+    }
+}
+
+impl<T> Drop for Seq<T> {
+    fn drop(&mut self) {
+        RECLAIMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl<T> std::ops::Deref for Seq<T> {
+    type Target = Mutex<T>;
+
+    fn deref(&self) -> &Mutex<T> {
+        &self.0
+    }
+}
+
+static ALLOCATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static RECLAIMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many sequences this process created, and how many it reclaimed.
+///
+/// For the driver's `NAZM_MEMORY_REPORT` line and for the tests that compare the two
+/// implementations. Not reachable from a Nazm program, for the reason the compiled
+/// counters are not: the specification states *when* storage is reclaimed and deliberately
+/// not *how*.
+#[must_use]
+pub fn sequence_counts() -> (u64, u64) {
+    (
+        ALLOCATED.load(std::sync::atomic::Ordering::Relaxed),
+        RECLAIMED.load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
 impl std::fmt::Display for Value {
@@ -789,8 +842,8 @@ impl Interpreter {
                 Ok(Value::Str(out))
             }
             (Intrinsic::IntToStr, [Value::Int(n)]) => Ok(Value::Str(n.to_string().into_bytes())),
-            (Intrinsic::IntsNew, []) => Ok(Value::Ints(Arc::default())),
-            (Intrinsic::StrsNew, []) => Ok(Value::Strs(Arc::default())),
+            (Intrinsic::IntsNew, []) => Ok(Value::Ints(Arc::new(Seq::new(Vec::new())))),
+            (Intrinsic::StrsNew, []) => Ok(Value::Strs(Arc::new(Seq::new(Vec::new())))),
             (Intrinsic::IntsLen, [Value::Ints(a)]) => seq(a)
                 .and_then(|a| index_fits(a.len()))
                 .map_or_else(|| Err(bug("a sequence that could not be read")), Ok),

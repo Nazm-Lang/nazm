@@ -1042,6 +1042,151 @@ remote or distributed cache, no LTO. The link runs every time and the report say
 field that is always `true`, because a report that omitted it would read as though something
 had been saved there.
 
+## 7.7 Memory: what values mean, and when storage goes — settled by N7, 2026-09-22
+
+`docs/spec.md`'s *memory constitution* is the law. This is the evidence it was derived
+from, the implementation, and the parts that are deliberately not done.
+
+### The audit came first, and it moved the design twice
+
+Read out of the two implementations rather than out of the documentation:
+
+| | Interpreter | Native | Aliasing observable | Crosses a task |
+| --- | --- | --- | --- | --- |
+| `Int`, `Bool` | `i64`, `bool` | `i64`, `i1` | — | yes |
+| `Str` | `Vec<u8>`, **deep-copied on every read** | `{ ptr, i64 }`, **bytes shared** | no — it is immutable | yes |
+| `Ints`, `Strs` | `Arc<Mutex<Vec<…>>>` | pointer to a header | **yes** | no, `N0321` |
+| `Chan` | `Arc<Channel>` | pointer to a runtime header | yes | yes, by design |
+
+The second row is the whole argument for the constitution's `Str` rule. The two
+implementations have *always* disagreed about whether a `Str` is copied, and no test has
+ever caught them, because the specification says the difference is unobservable. That is
+not a bug to fix; it is the licence a shared-immutable value gives an implementation, and
+it was already being used.
+
+Two findings changed what the milestone could do:
+
+**A `Str` has four provenances and does not say which.** Its bytes may live in a `private`
+constant (a literal), in the process's `argv`, in a `malloc`'d buffer — or *in the middle
+of any of those*, because `str_slice` is specified not to allocate and is emitted as a
+`getelementptr`. `free(s.ptr)` is therefore wrong for three of the four. Reclaiming `Str`
+needs a representation that records its provenance, which is a change to the hottest type
+in the language and is not this milestone.
+
+**The specification's `Str` value semantics are currently paid for with the leak.** A
+`Str` read out of a `Strs` keeps its bytes after the sequence is overwritten — measured,
+both implementations, `63` — and natively that is true only because nothing is ever freed.
+Any scheme that reclaims `Str` has to buy that guarantee some other way.
+
+### What the real workload does, counted
+
+`compiler/*.nz`, 5,272 lines, 197 functions:
+
+| | |
+| --- | --- |
+| parameters | `Ints` 108, `Str` 68, `Int` 68, `Strs` 60 |
+| returns | `Int` 153, `Str` 28, `Bool` 15, **`Strs` 1**, `Ints` 0 |
+| sequences created | 176 |
+| **`let b = a;` aliasing a sequence** | **0** |
+| sequence mutations | 746 — 588 through the binding that created it, 49 through a parameter |
+| `scope`, `spawn`, `chan_*` actually used | **none**; every occurrence is a comment or a string in the code that compiles them |
+
+A compiler that passes sequences in constantly, returns one exactly once, and aliases none
+is the shape *borrowed parameters, transfer on return* was made for. It is also why the
+reference counting below costs it nothing: the traffic is at bindings, and it has none.
+
+### The leak, before
+
+| Workload | Live set | Peak RSS |
+| --- | --- | ---: |
+| 5,000 short-lived sequences | ~400 B | 4.38 MiB |
+| 20,000 | ~400 B | 12.28 MiB |
+| 80,000 | ~400 B | 43.52 MiB |
+
+Linear in **work done**, constant in **live data**. Eleven allocation sites, **zero**
+deallocation sites: `@free` appeared nowhere in the emitted runtime.
+
+### The models that were considered, and why this one
+
+| | Why not |
+| --- | --- |
+| Unique ownership with explicit moves | 168 sequence parameters would each need a move or a borrow concept at the surface; the borrow is the common case, so this is the model below with ceremony added |
+| Copy-on-write value semantics | `let b = a; ints_push(a, 1)` is specified to be visible through `b`, and measured to be. Changing it is a language break, and §4 of this milestone forbade doing that to make reclamation easier |
+| Regions or arenas | The compiler already *is* one arena freed at exit — which is exactly why its peak is what it is. It answers nothing for a program that does not exit |
+| A tracing collector | Excluded at constitution level, and unnecessary: see cycles |
+| Reference counting on the handle | **Selected.** It matches the semantics the language already has, needs no annotation, and costs nothing where nothing is aliased |
+
+### The implementation
+
+The header grows from 24 bytes to 32: `{ i64 len, i64 cap, ptr data, i64 rc }`. Only
+`malloc`'s size changed; every existing offset is where it was.
+
+```text
+@nz.arr_new      allocate, rc = 1          @nz.seq_new      that, and count it
+@nz.arr_retain   rc += 1
+@nz.arr_release  rc -= 1, free at zero     @nz.seq_release  that, and count the free
+```
+
+**Not an atomic**, and that is a consequence rather than an optimisation: `N0321` refuses
+to let a sequence cross into a task, so no two threads can hold one handle. The comment in
+the runtime says what would have to change in the same commit if that rule were relaxed.
+
+The emitter tracks, per function, which SSA values hold a reference nobody has taken over.
+`ints_new` and a call that returned a handle create one; reading a variable does not — that
+is rule 2, and it is why passing a sequence emits no instruction at all. A binding takes
+one over, a `return` carries one out, a discard releases one.
+
+**Cleanup is on the exit edges, not at the closing brace.** There are exactly three ways
+out of a generated function — the tail value, each `return`, and the shared `nz.unwind`
+block every failure branches to — and all three release the frame. Handle slots are
+initialised to null in `entry`, and releasing null is a no-op, so a path that never reached
+a declaration needs no special case. Parameter slots are excluded, which *is* rule 2:
+releasing a borrowed parameter would destroy storage the caller still holds.
+
+A `phi` merging two branches that arrived at ownership differently —
+`if c { ints_new() } else { xs }` — is normalised inside each branch, before its jump,
+because after the `phi` there is no branch left to attribute a retain to.
+
+The scope machinery's list of task ids uses the same allocator and is now released when
+the scope is joined, on every way out. It is deliberately **not** counted: it is not a
+value any program can name, and a report about a program's sequences that included one
+would be answering a different question.
+
+### The interpreter models the rule rather than inheriting it
+
+`Arc` already reclaims at the right moment, and *"the host does the right thing"* is not
+evidence. So sequence storage is wrapped in a type whose construction and `Drop` bump the
+same two counters a compiled program reports, and every case in
+`crates/nazm-cli/tests/memory.rs` asserts the two implementations produce the same value
+**and** the same three numbers.
+
+### Measured
+
+| | Before | After |
+| --- | ---: | ---: |
+| 5,000 short-lived sequences | 4.38 MiB | **1.78 MiB** |
+| 20,000 | 12.28 MiB | **1.88 MiB** |
+| 80,000 | 43.52 MiB | **1.86 MiB** |
+| one 2,000,000-element sequence, genuinely live | 19.08 MiB | 19.08 MiB |
+| string-heavy loop, no sequences | 23.77 MiB | 23.78 MiB |
+| the self-hosted compiler on `emit.nz` | 46.81 MiB | 42.59 MiB |
+
+Flat in work where it was linear, and unchanged where the memory is live or is a `Str` —
+which is what a correct reclamation of exactly one kind of value should look like.
+
+### What this does not do
+
+- **`Str` and `Chan` storage is not reclaimed.** The reasons are above and in the
+  specification, in those words.
+- **`exit_with` reclaims nothing and reports nothing.** Found by measuring: the
+  self-hosted compiler ends that way, so the entry wrapper is never reached. It is correct
+  — a process that has ended returned everything — and there is a test so that nobody
+  later spends real time on the largest workload here "fixing" it.
+- **A failure still leaks the temporary it was holding.** A `Val::Transferred` on a guard's
+  failing path cannot be followed by a release, and that path ends the program. Stated
+  rather than papered over.
+- No destructors, no RAII, no user-visible ordering.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
