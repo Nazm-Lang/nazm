@@ -1,0 +1,3 @@
+use "main.nz";
+
+pub fn two() -> Int { one() + one() }

@@ -1,0 +1,8 @@
+use "b.nz";
+
+// A module import cycle, with no call cycle in it: the two are different questions and
+// only the second is outside the native subset.
+pub fn one() -> Int { 1 }
+pub fn three() -> Int { 3 }
+
+fn main() -> Int { two() + three() }

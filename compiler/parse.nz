@@ -547,13 +547,18 @@ fn pend_stmt() -> Int { 5 }
 fn pend_spawn() -> Int { 6 }
 
 fn push_frame(fk: Ints, fstart: Ints, fcount: Ints, ftail: Ints, faux: Ints, fparams: Ints,
-        ftext: Strs, kind: Int, start: Int, aux: Int, params: Int, text: Str) -> Int {
+        fvis: Ints, ftext: Strs, kind: Int, start: Int, aux: Int, params: Int, vis: Int,
+        text: Str) -> Int {
     ints_push(fk, kind);
     ints_push(fstart, start);
     ints_push(fcount, 0);
     ints_push(ftail, 0);
     ints_push(faux, aux);
     ints_push(fparams, params);
+    // 1 when `pub` was written before `fn`, 0 otherwise, and 0 for every frame that is
+    // not a function. The parser records **that the word appeared**; what it means is the
+    // checker's, exactly as in the reference front end.
+    ints_push(fvis, vis);
     strs_push(ftext, text);
     ints_len(fk)
 }
@@ -595,6 +600,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
     let ftail = ints_new();
     let faux = ints_new();
     let fparams = ints_new();
+    let fvis = ints_new();
     let ftext = strs_new();
 
     // The expression machinery, created once: an `if` suspends an expression part-way
@@ -635,8 +641,8 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 // the frame machine's business.
                 let brace = start_at(starts, i);
                 i = i + 1;
-                push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
-                        frame_if_then(), brace, 0, 0, "");
+                push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
+                        frame_if_then(), brace, 0, 0, 0, "");
                 continue;
             }
             // The expression finished. Complete whatever it was for.
@@ -652,8 +658,8 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             if what == pend_while() {
                 let brace = start_at(starts, i);
                 i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a loop body");
-                push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
-                        frame_while(), brace, at, 0, "");
+                push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
+                        frame_while(), brace, at, 0, 0, "");
                 continue;
             }
             if what == pend_stmt() {
@@ -718,11 +724,11 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 continue;
             }
             let fn_start = start_at(starts, i);
-            // `pub`, optional, and accepted rather than acted on. The visibility rule is
-            // the front end's (`docs/spec.md`); what this compiler must not do is fail to
-            // parse a source file the language admits. `bootstrap.md` records that it
-            // reads visibility and does not enforce it.
+            // `pub`, optional. Recorded, not interpreted: it travels on the function
+            // node's auxiliary column and the checker decides what it means.
+            let mut vis = 0;
             if kind_at(kinds, i) == k_pub() {
+                vis = 1;
                 i = i + 1;
             }
             i = expect(kinds, starts, i, k_fn(), "expected `fn`");
@@ -761,8 +767,8 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             i = i + 1;
             let brace = start_at(starts, i);
             i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the body");
-            push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
-                    frame_body(), brace, fn_start, params,
+            push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
+                    frame_body(), brace, fn_start, params, vis,
                     str_concat(str_concat(name, ":"), ret));
             continue;
         }
@@ -779,6 +785,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             let tail = top(ftail);
             let aux = top(faux);
             let params = top(fparams);
+            let vis_of = top(fvis);
             let text = strs_get(ftext, strs_len(ftext) - 1);
             ints_pop(fk);
             ints_pop(fstart);
@@ -786,6 +793,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             ints_pop(ftail);
             ints_pop(faux);
             ints_pop(fparams);
+            ints_pop(fvis);
             strs_pop(ftext);
             emit(nk, nar, nst, nen, ntx, n_block(), count + tail, start, close,
                     if tail == 1 { "tail" } else { "" }
@@ -798,8 +806,8 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                     let brace2 = start_at(starts, i);
                     i = expect(kinds, starts, i, k_lbrace(),
                             "expected `{` after `else`");
-                    push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
-                            frame_if_else(), brace2, 0, 0, "");
+                    push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
+                            frame_if_else(), brace2, 0, 0, 0, "");
                     continue;
                 }
                 finish_if(ops, opat, vs, ve, nk, nar, nst, nen, ntx, 2, close);
@@ -825,6 +833,10 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 bump(fcount);
             } else {
                 emit(nk, nar, nst, nen, ntx, n_fn(), params + 1, aux, close, text);
+                // The auxiliary column, whose meaning is per node kind: an operator's
+                // offset on a `bin`, and here the visibility bit. `set_aux` has to follow
+                // the `emit` it belongs to, which is why it is written beside it.
+                set_aux(naux, nk, vis_of);
                 functions = functions + 1;
             }
             continue;
@@ -879,8 +891,8 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             i = i + 1;
             let brace = start_at(starts, i);
             i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a scope");
-            push_frame(fk, fstart, fcount, ftail, faux, fparams, ftext,
-                    frame_scope(), brace, stmt_start, 0, "");
+            push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
+                    frame_scope(), brace, stmt_start, 0, 0, "");
             continue;
         }
 

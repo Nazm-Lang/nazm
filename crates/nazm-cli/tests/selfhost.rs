@@ -771,6 +771,23 @@ fn sorted_diagnostics(lines: &str) -> Vec<(String, u32, u32)> {
     out
 }
 
+/// The diagnostics both checkers are expected to produce for the same source.
+///
+/// Not every code: the Nazm-written checker is a checker for the bootstrap subset and does
+/// not implement the lexer's or parser's codes, or the ones for constructs it never sees.
+/// The list is what the two **do** both decide, and comparing a subset is only honest
+/// while the subset is stated — so it is one constant, used on both sides of every
+/// comparison, rather than a filter applied to whichever side is inconvenient.
+///
+/// `N0203`, `N0204`, `N0206`–`N0208` joined it on 2026-09-22 (N2.1), when the Nazm checker
+/// learned module ownership and visibility. Before that it could not produce them, and
+/// leaving them out of the reference's side was hiding a divergence rather than scoping a
+/// comparison.
+const COMPARABLE: &[&str] = &[
+    "N0200", "N0201", "N0203", "N0204", "N0206", "N0207", "N0208", "N0300", "N0301", "N0303",
+    "N0304", "N0310", "N0320", "N0321",
+];
+
 #[test]
 fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
     // **Scope, stated:** `compiler/check.nz` reports `N0200`, `N0201`, `N0300`, `N0301`,
@@ -861,20 +878,7 @@ fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
         let theirs: Vec<(String, u32, u32)> = {
             let mut v: Vec<(String, u32, u32)> = nazm_core::check_source(source)
                 .into_iter()
-                .filter(|d| {
-                    matches!(
-                        d.code.as_str(),
-                        "N0200"
-                            | "N0201"
-                            | "N0300"
-                            | "N0301"
-                            | "N0303"
-                            | "N0304"
-                            | "N0310"
-                            | "N0320"
-                            | "N0321"
-                    )
-                })
+                .filter(|d| COMPARABLE.contains(&d.code.as_str()))
                 .map(|d| {
                     (
                         d.code.as_str().to_owned(),
@@ -932,9 +936,26 @@ fn the_nazm_checker_accepts_the_compiler_it_is_part_of() {
         // `spawn` needs a `scope` (N0320) and a sequence may not cross into one (N0321).
         let standalone = !source.contains("use \"");
         if standalone {
-            assert!(
-                ours.is_empty(),
-                "{}: the Nazm checker rejected a source the reference accepts: {ours:?}",
+            // Compared against the reference rather than asserted to be empty. The old
+            // assertion said "a source the reference accepts" and never asked it, which
+            // was wrong the moment either checker gained a rule about whole files: a
+            // library module has no `main`, and `nazm check` has always said so.
+            let mut theirs: Vec<(String, u32, u32)> = nazm_core::check_source(&source)
+                .into_iter()
+                .filter(|d| COMPARABLE.contains(&d.code.as_str()))
+                .map(|d| {
+                    (
+                        d.code.as_str().to_owned(),
+                        d.primary.span.start,
+                        d.primary.span.end,
+                    )
+                })
+                .collect();
+            theirs.sort();
+            assert_eq!(
+                ours,
+                theirs,
+                "{}: the two checkers disagree",
                 file.display()
             );
         }
@@ -1983,5 +2004,343 @@ fn the_nazm_written_compiler_refuses_recursion_as_the_reference_does() {
         String::from_utf8_lossy(&interp.stdout).trim(),
         "25",
         "the interpreter disagrees"
+    );
+}
+
+// --- N2 module and visibility parity ---------------------------------------------------
+//
+// # Why these exist, and what they are not
+//
+// `C2 ≡ C3` says the compiler written in Nazm reproduces itself. It says **nothing** about
+// whether it agrees with the reference compiler on what the language is: a compiler that
+// consistently accepts a program the specification forbids reaches a fixpoint too.
+//
+// N2 settled module ownership, visibility, non-transitive imports, collision rules, the
+// root entry point and legal module cycles in the Rust front end (`docs/spec.md`). These
+// run every one of those rules through **both** implementations and require the same
+// accept/refuse answer — and, where the program runs, the same value. A divergence here is
+// two languages sharing a name.
+
+/// What both compilers must do with one program.
+enum Verdict {
+    /// Both accept, and the compiled program prints this.
+    Runs(&'static str),
+    /// Both refuse. The reference must give this code; the self-hosted compiler must
+    /// refuse, and must agree on the code when it emits one.
+    Refused(&'static str),
+}
+
+/// One module/visibility case.
+struct Parity {
+    what: &'static str,
+    /// The program. **The first file is the root.**
+    files: &'static [(&'static str, &'static str)],
+    expect: Verdict,
+}
+
+/// The code in `nazm: error[NXXXX]: ...`, which is how the Nazm-written compiler reports.
+fn selfhost_code(stderr: &str) -> Option<String> {
+    let at = stderr.find("error[")? + "error[".len();
+    let rest = stderr.get(at..)?;
+    let end = rest.find(']')?;
+    Some(rest.get(..end)?.to_owned())
+}
+
+/// The code in a rendered reference diagnostic, `error[NXXXX]: ...`.
+fn reference_code(stderr: &str) -> Option<String> {
+    selfhost_code(stderr)
+}
+
+#[test]
+fn the_two_compilers_agree_on_every_module_and_visibility_rule() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+
+    let cases: &[Parity] = &[
+        // --- accepted --------------------------------------------------------------
+        Parity {
+            what: "a module calls its own private function",
+            files: &[(
+                "root.nz",
+                "fn helper() -> Int { 7 }\nfn main() -> Int { helper() }\n",
+            )],
+            expect: Verdict::Runs("7"),
+        },
+        Parity {
+            what: "a module calls an imported `pub` function",
+            files: &[
+                ("root.nz", "use \"lib.nz\";\nfn main() -> Int { twice(3) }\n"),
+                ("lib.nz", "pub fn twice(n: Int) -> Int { n + n }\n"),
+            ],
+            expect: Verdict::Runs("6"),
+        },
+        Parity {
+            what: "two modules each own a private function of the same name",
+            files: &[
+                (
+                    "root.nz",
+                    "use \"lib.nz\";\nfn size() -> Int { 1 }\nfn main() -> Int { size() + report() }\n",
+                ),
+                (
+                    "lib.nz",
+                    "pub fn report() -> Int { size() }\nfn size() -> Int { 40 }\n",
+                ),
+            ],
+            expect: Verdict::Runs("41"),
+        },
+        Parity {
+            what: "a forward call inside one module",
+            files: &[(
+                "root.nz",
+                "fn main() -> Int { later() }\nfn later() -> Int { 9 }\n",
+            )],
+            expect: Verdict::Runs("9"),
+        },
+        Parity {
+            what: "a diamond import is one module",
+            files: &[
+                (
+                    "root.nz",
+                    "use \"left.nz\";\nuse \"right.nz\";\nfn main() -> Int { l() + r() }\n",
+                ),
+                ("left.nz", "use \"shared.nz\";\npub fn l() -> Int { s() }\n"),
+                ("right.nz", "use \"shared.nz\";\npub fn r() -> Int { s() }\n"),
+                ("shared.nz", "pub fn s() -> Int { 21 }\n"),
+            ],
+            expect: Verdict::Runs("42"),
+        },
+        Parity {
+            what: "a module import cycle, with no call cycle in it",
+            files: &[
+                (
+                    "root.nz",
+                    "use \"b.nz\";\npub fn one() -> Int { 1 }\npub fn three() -> Int { 3 }\n\
+                     fn main() -> Int { two() + three() }\n",
+                ),
+                (
+                    "b.nz",
+                    "use \"root.nz\";\npub fn two() -> Int { one() + one() }\n",
+                ),
+            ],
+            expect: Verdict::Runs("5"),
+        },
+        Parity {
+            what: "the root's `main` is private, which is allowed",
+            files: &[
+                ("root.nz", "use \"lib.nz\";\nfn main() -> Int { v() }\n"),
+                ("lib.nz", "pub fn v() -> Int { 4 }\n"),
+            ],
+            expect: Verdict::Runs("4"),
+        },
+        // --- refused ---------------------------------------------------------------
+        Parity {
+            what: "calling an imported private function",
+            files: &[
+                ("root.nz", "use \"lib.nz\";\nfn main() -> Int { hidden() }\n"),
+                ("lib.nz", "fn hidden() -> Int { 1 }\n"),
+            ],
+            expect: Verdict::Refused("N0206"),
+        },
+        Parity {
+            what: "reaching a name through a dependency's import",
+            files: &[
+                ("root.nz", "use \"b.nz\";\nfn main() -> Int { deep() }\n"),
+                ("b.nz", "use \"c.nz\";\npub fn mid() -> Int { deep() }\n"),
+                ("c.nz", "pub fn deep() -> Int { 7 }\n"),
+            ],
+            expect: Verdict::Refused("N0201"),
+        },
+        Parity {
+            what: "two direct imports exporting one name",
+            files: &[
+                (
+                    "root.nz",
+                    "use \"a.nz\";\nuse \"b.nz\";\nfn main() -> Int { same() }\n",
+                ),
+                ("a.nz", "pub fn same() -> Int { 1 }\n"),
+                ("b.nz", "pub fn same() -> Int { 2 }\n"),
+            ],
+            expect: Verdict::Refused("N0207"),
+        },
+        Parity {
+            what: "an ambiguity nothing uses is still an ambiguity",
+            files: &[
+                (
+                    "root.nz",
+                    "use \"a.nz\";\nuse \"b.nz\";\nfn main() -> Int { 0 }\n",
+                ),
+                ("a.nz", "pub fn same() -> Int { 1 }\n"),
+                ("b.nz", "pub fn same() -> Int { 2 }\n"),
+            ],
+            expect: Verdict::Refused("N0207"),
+        },
+        Parity {
+            what: "an import colliding with a local definition",
+            files: &[
+                (
+                    "root.nz",
+                    "use \"lib.nz\";\nfn size() -> Int { 1 }\nfn main() -> Int { size() }\n",
+                ),
+                ("lib.nz", "pub fn size() -> Int { 2 }\n"),
+            ],
+            expect: Verdict::Refused("N0208"),
+        },
+        Parity {
+            what: "redefining a built-in",
+            files: &[(
+                "root.nz",
+                "fn str_len(s: Str) -> Int { 0 }\nfn main() -> Int { 1 }\n",
+            )],
+            expect: Verdict::Refused("N0203"),
+        },
+        Parity {
+            what: "an imported `main` is not the program's entry point",
+            files: &[
+                ("root.nz", "use \"tool.nz\";\npub fn v() -> Int { 1 }\n"),
+                ("tool.nz", "fn main() -> Int { 0 }\n"),
+            ],
+            expect: Verdict::Refused("N0204"),
+        },
+        Parity {
+            what: "a name defined twice in one module",
+            files: &[(
+                "root.nz",
+                "fn dup() -> Int { 1 }\nfn dup() -> Int { 2 }\nfn main() -> Int { dup() }\n",
+            )],
+            expect: Verdict::Refused("N0203"),
+        },
+    ];
+
+    let mut divergences: Vec<String> = Vec::new();
+
+    for (n, case) in cases.iter().enumerate() {
+        let work = dir.path().join(format!("case{n}"));
+        std::fs::create_dir_all(&work).expect("case dir");
+        for (name, text) in case.files {
+            let path = work.join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("parent");
+            }
+            std::fs::write(&path, text).expect("write");
+        }
+        let root = work.join(case.files.first().expect("a case has files").0);
+
+        // The reference first, so a change to it is reported as a change to it rather
+        // than as a self-hosted defect.
+        let reference = Command::new(NAZM)
+            .args(["check", root.to_str().unwrap()])
+            .output()
+            .expect("run the reference");
+        let ref_err = String::from_utf8_lossy(&reference.stderr).into_owned();
+        let ref_ok = reference.status.success();
+
+        let (rc, ir, ir_err) = run_stage(&emitter, &root);
+        let self_ok = rc == Some(0);
+
+        match case.expect {
+            Verdict::Runs(value) => {
+                if !ref_ok {
+                    divergences.push(format!(
+                        "{}: the reference refused a program it should accept:\n{ref_err}",
+                        case.what
+                    ));
+                    continue;
+                }
+                if !self_ok {
+                    divergences.push(format!(
+                        "{}: the self-hosted compiler refused a program the reference accepts:\n{ir_err}",
+                        case.what
+                    ));
+                    continue;
+                }
+                // Both accepted. They must also agree on what it means.
+                let ll = work.join("out.ll");
+                std::fs::write(&ll, &ir).expect("write IR");
+                let exe = work.join("out");
+                let built = Command::new("clang")
+                    .args(["-Wno-override-module", "-o"])
+                    .arg(&exe)
+                    .arg(&ll)
+                    .output()
+                    .expect("run clang");
+                if !built.status.success() {
+                    divergences.push(format!(
+                        "{}: clang rejected the self-hosted IR:\n{}",
+                        case.what,
+                        String::from_utf8_lossy(&built.stderr)
+                    ));
+                    continue;
+                }
+                let (code, out, _) = run_bounded(
+                    &mut common::bounded_exe(&exe),
+                    std::time::Duration::from_secs(60),
+                )
+                .expect("the compiled program hung");
+                if code != Some(0) || out.trim() != value {
+                    divergences.push(format!(
+                        "{}: the self-hosted build printed {:?}, expected {value:?}",
+                        case.what,
+                        out.trim()
+                    ));
+                    continue;
+                }
+                let interpreted = Command::new(NAZM)
+                    .args(["run", root.to_str().unwrap()])
+                    .output()
+                    .expect("run");
+                let got = String::from_utf8_lossy(&interpreted.stdout)
+                    .trim()
+                    .to_owned();
+                if got != value {
+                    divergences.push(format!(
+                        "{}: the reference ran it to {got:?}, expected {value:?}",
+                        case.what
+                    ));
+                }
+            }
+            Verdict::Refused(code) => {
+                if ref_ok {
+                    divergences.push(format!(
+                        "{}: the reference accepted a program it should refuse",
+                        case.what
+                    ));
+                    continue;
+                }
+                match reference_code(&ref_err) {
+                    Some(c) if c == code => {}
+                    other => divergences.push(format!(
+                        "{}: the reference gave {other:?}, expected {code:?}",
+                        case.what
+                    )),
+                }
+                if self_ok {
+                    divergences.push(format!(
+                        "{}: the self-hosted compiler ACCEPTED a program the reference \
+                         refuses with {code}",
+                        case.what
+                    ));
+                    continue;
+                }
+                // It refused. When it names a code, that code must be the same one:
+                // an agreement on "no" that disagrees on "why" is half a parity.
+                if let Some(c) = selfhost_code(&ir_err) {
+                    if c != code {
+                        divergences.push(format!(
+                            "{}: the self-hosted compiler refused with {c}, the reference \
+                             with {code}",
+                            case.what
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        divergences.is_empty(),
+        "{} of {} module/visibility rules diverge between the two compilers:\n\n{}",
+        divergences.len(),
+        cases.len(),
+        divergences.join("\n\n")
     );
 }

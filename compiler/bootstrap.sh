@@ -175,6 +175,7 @@ say "runnable-bytes-differing: $(cmp -l "$out/stage2/nazmc" "$out/stage3/nazmc" 
 say "conformance: C2 and C3 compile the corpus"
 corpus="$root/compiler/conformance"
 checked=0
+modules=0
 for case in "$corpus"/*.nz; do
   [ -e "$case" ] || continue
   name=$(basename "$case" .nz)
@@ -191,10 +192,40 @@ for case in "$corpus"/*.nz; do
   [ "$interp" = "$expected" ] || fail "the interpreter disagrees about $name: '$interp'"
   checked=$((checked + 1))
 done
+
+# Multi-module cases, each a directory whose `main.nz` is the root. They exist because a
+# single-file corpus cannot exercise the thing N2 settled: every compiler here resolves
+# `use` for itself, so these compare **module semantics** — ownership, visibility,
+# non-transitive imports, one identity for a diamond, and the root's `main` — across the
+# reference, C2 and C3. That is a different claim from C2 = C3, which is a fixpoint and
+# says nothing about whether either agrees with the reference about the language.
+say "conformance: C2, C3 and the reference agree on module semantics"
+for case in "$corpus"/modules/*/; do
+  [ -d "$case" ] || continue
+  name=$(basename "$case")
+  expected=$(cat "$case/expected")
+  for stage in stage2 stage3; do
+    "$out/$stage/nazmc" "$case/main.nz" > "$out/$stage/$name.ll" \
+      || fail "$stage refused module case $name"
+    clang -Wno-override-module -o "$out/$stage/$name" "$out/$stage/$name.ll" \
+      || fail "$stage emitted IR clang rejected for module case $name"
+    got=$("$out/$stage/$name" 2>&1 || true)
+    [ "$got" = "$expected" ] || fail "$stage: $name gave '$got', expected '$expected'"
+  done
+  # And the reference front end, which is what makes this a parity claim rather than a
+  # self-consistency one.
+  interp=$("$nazm" run "$case/main.nz" 2>&1 || true)
+  [ "$interp" = "$expected" ] || fail "the reference disagrees about $name: '$interp'"
+  checked=$((checked + 1))
+  modules=$((modules + 1))
+done
+
 say "conformance-cases: $checked" >> "$out/record.txt"
+say "module-conformance-cases: $modules" >> "$out/record.txt"
 [ "$checked" -gt 0 ] || fail "no conformance cases were run"
+[ "$modules" -gt 0 ] || fail "no module conformance cases were run"
 
 say ""
-say "bootstrap complete: C2 and C3 are byte-identical, $checked conformance cases agree"
+say "bootstrap complete: C2 and C3 are byte-identical, $checked conformance cases agree ($modules of them multi-module)"
 say "record: $out/record.txt"
 cat "$out/record.txt"

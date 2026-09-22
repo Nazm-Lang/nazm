@@ -272,7 +272,7 @@ fn check_failed(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
 // fails, which the join reads after `pthread_join` — a happens-before edge, so no lock.
 fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, tasks: Strs,
         vals: Ints, nar: Ints, ntype: Ints, kids: Ints, kid_first: Ints, fnames: Strs,
-        fret: Ints, k: Int, callee: Str, at: Str) -> Int {
+        fret: Ints, k: Int, callee: Int, at: Str) -> Int {
     let argc = ints_get(nar, k);
     // Popped in reverse, then read back in source order.
     let args = ints_new();
@@ -350,13 +350,9 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     // The *callee's* return type, not the `spawn`'s: a `spawn` produces nothing, so its
     // own node type is unknown and would emit `void` for a function that returns `Int`.
     let mut cret = t_int();
-    let mut fi = 0;
-    while fi < strs_len(fnames) {
-        if strs_get(fnames, fi) == callee { cret = ints_get(fret, fi); }
-        fi = fi + 1;
-    }
+    if callee >= 0 { cret = ints_get(fret, callee); }
     strs_push(t, str_concat(str_concat(str_concat("  %r = call ", llvm_type(cret)),
-            str_concat(" ", symbol(fnames, callee))),
+            str_concat(" ", symbol(callee))),
             str_concat(str_concat("(", passed), ")")));
     // A failure ends the task, not the process. The diagnostic is left here for the
     // scope's join to find, so it is reported by the thread that owns the scope once every
@@ -948,26 +944,27 @@ fn enclosing_loop(nk: Ints, parent: Ints, childno: Ints, from: Int) -> Int {
     0 - 1
 }
 
-// The generated symbol for a function.
+// The generated symbol for a function, from **the definition's index**.
 //
-// From its index, **never from the source name**: a Nazm identifier would need escaping
-// rules to be safe in an LLVM identifier, and the escaping is the bug. It also means no
-// program can collide with `@main`, with `@nz.fail`, or with `printf`.
-fn symbol(fnames: Strs, name: Str) -> Str {
-    let mut i = 0;
-    while i < strs_len(fnames) {
-        if strs_get(fnames, i) == name {
-            return str_concat("@nz.f", int_to_str(i));
-        }
-        i = i + 1;
-    }
-    "@nz.unknown"
+// Never from the source name: a Nazm identifier would need escaping rules to be safe in an
+// LLVM identifier, and the escaping is the bug. It also means no program can collide with
+// `@main`, with `@nz.fail`, or with `printf`.
+//
+// Until 2026-09-22 this took a name and scanned for the first definition with it, which
+// was correct while a program had one namespace and silently wrong the moment it did not:
+// two modules each defining a private `helper` both emitted `@nz.f0`, and clang refused
+// the module with "invalid redefinition". The index comes from the checker now — the same
+// resolution the call was type-checked against — so emission never decides what a name
+// means and cannot decide it differently.
+fn symbol(index: Int) -> Str {
+    if index < 0 { return "@nz.unknown"; }
+    str_concat("@nz.f", int_to_str(index))
 }
 
 fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
-        nk: Ints, nar: Ints, ntx: Strs, nslot: Ints, ntype: Ints,
-        kids: Ints, kid_first: Ints, fnames: Strs, k: Int, begin: Int,
-        src: Str, path: Str) -> Int {
+        nk: Ints, nar: Ints, nst: Ints, ntx: Strs, nslot: Ints, ntype: Ints,
+        kids: Ints, kid_first: Ints, fnames: Strs, fowner: Ints, mstart: Ints,
+        k: Int, begin: Int, src: Str, path: Str) -> Int {
     // Numbering restarts per function: LLVM requires a function's unnamed values to be
     // consecutive from zero, and `%p<n>`/`%slot<n>` are named so they consume none of it.
     ints_set(next, 0, 0);
@@ -983,9 +980,14 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
         list = str_concat(list, str_concat(str_concat(llvm_type(pt), " %p"), int_to_str(p)));
         p = p + 1;
     }
+    // Which definition this node *is*, by the same rule its callers were resolved with:
+    // a module's own name, in the module the declaration sits in. Names are unique within
+    // a module (`N0203`), so this is exact.
+    let me = owned_index(fnames, fowner, module_at(mstart, ints_get(nst, k)),
+            before_colon(text));
     add_line(out, str_concat(str_concat(str_concat("define internal ",
             llvm_type(type_of_name(after_colon(text)))),
-            str_concat(" ", symbol(fnames, before_colon(text)))),
+            str_concat(" ", symbol(me))),
             str_concat(str_concat("(", list), str_concat(") {   ; ", before_colon(text)))));
     add_line(out, "entry:");
     strs_set(current, 0, "entry");
@@ -1057,21 +1059,22 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
 // contract one: this refuses at the first cycle it finds, where the reference collects
 // one diagnostic per function. The set of programs refused is the same.
 fn refuse_recursion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent: Ints,
-        fnames: Strs, bnames: Strs) -> Int {
-    // Which function each `fn` node is. `collect_signatures` walks the arena in the same
-    // order, so a function's position here is the index `fnames` gave it.
+        ncallee: Ints, fnames: Strs, fowner: Ints, mstart: Ints) -> Int {
+    // Which function each `fn` node is, by the same rule everything else uses: the
+    // definition its own module makes under its name. Counting `fn` nodes in order would
+    // have been equivalent until a declaration could be refused and skipped, and a call
+    // graph built on a stale numbering names the wrong function.
     let fnof = ints_new();
     let mut k = 0;
     while k < ints_len(nk) {
         ints_push(fnof, 0 - 1);
         k = k + 1;
     }
-    let mut seen = 0;
     k = 0;
     while k < ints_len(nk) {
         if ints_get(nk, k) == n_fn() {
-            ints_set(fnof, k, seen);
-            seen = seen + 1;
+            ints_set(fnof, k, owned_index(fnames, fowner,
+                    module_at(mstart, ints_get(nst, k)), before_colon(strs_get(ntx, k))));
         }
         k = k + 1;
     }
@@ -1087,31 +1090,27 @@ fn refuse_recursion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent:
         if ints_get(nk, k) == n_call() { calls = true; }
         if ints_get(nk, k) == n_spawn() { calls = true; }
         if calls {
-            let name = strs_get(ntx, k);
-            // A built-in is not an edge. `check_call` also resolves built-ins first, so a
-            // user function sharing a built-in name is never the callee and never an edge
-            // either; the two agree deliberately rather than by accident.
-            if builtin_index(bnames, name) < 0 {
-                let to = builtin_index(fnames, name);
-                if to >= 0 {
-                    // The function this call sits in, found by walking parents with a
-                    // loop. A compiler about to refuse recursion should not need it to
-                    // say so.
-                    let mut up = k;
-                    let mut from = 0 - 1;
-                    while up >= 0 {
-                        if ints_get(nk, up) == n_fn() {
-                            from = ints_get(fnof, up);
-                            up = 0 - 1;
-                        } else {
-                            up = ints_get(parent, up);
-                        }
+            // The callee the **checker** resolved, not a name looked up again here. A
+            // built-in is `-2` and is not an edge: it is emitted as instructions, and
+            // instructions do not recurse.
+            let to = ints_get(ncallee, k);
+            if to >= 0 {
+                // The function this call sits in, found by walking parents with a loop.
+                // A compiler about to refuse recursion should not need it to say so.
+                let mut up = k;
+                let mut from = 0 - 1;
+                while up >= 0 {
+                    if ints_get(nk, up) == n_fn() {
+                        from = ints_get(fnof, up);
+                        up = 0 - 1;
+                    } else {
+                        up = ints_get(parent, up);
                     }
-                    if from >= 0 {
-                        ints_push(efrom, from);
-                        ints_push(eto, to);
-                        ints_push(eat, ints_get(nst, k));
-                    }
+                }
+                if from >= 0 {
+                    ints_push(efrom, from);
+                    ints_push(eto, to);
+                    ints_push(eat, ints_get(nst, k));
                 }
             }
         }
@@ -1181,9 +1180,10 @@ fn refuse_recursion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent:
 }
 
 fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
-        naux: Ints, nslot: Ints, ntype: Ints,
+        naux: Ints, nslot: Ints, ntype: Ints, ncallee: Ints,
         parent: Ints, childno: Ints, substart: Ints, kids: Ints, kid_first: Ints,
-        fnames: Strs, fret: Ints, out: Strs, msgs: Strs, blobs: Strs, tasks: Strs) -> Int {
+        fnames: Strs, fret: Ints, fowner: Ints, mstart: Ints,
+        out: Strs, msgs: Strs, blobs: Strs, tasks: Strs) -> Int {
     let next = ints_new();
     ints_push(next, 0);
     // Slot 1 is the block-label counter, separate from slot 0 because the labels are
@@ -1258,8 +1258,9 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
 
         // A function's definition opens before its body, for the same reason.
         if ints_get(fn_at, k) >= 0 {
-            open_function(out, current, live, next, vals, nk, nar, ntx, nslot, ntype,
-                    kids, kid_first, fnames, ints_get(fn_at, k), k, src, path);
+            open_function(out, current, live, next, vals, nk, nar, nst, ntx, nslot, ntype,
+                    kids, kid_first, fnames, fowner, mstart, ints_get(fn_at, k), k,
+                    src, path);
         }
 
         // A loop header opens before its condition, never after: `continue` and the back
@@ -1299,7 +1300,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         } else {
             if kind == n_spawn() {
                 emit_spawn(out, msgs, next, current, live, tasks, vals, nar, ntype,
-                        kids, kid_first, fnames, fret, k, text, position(src, path, from));
+                        kids, kid_first, fnames, fret, k, ints_get(ncallee, k),
+                        position(src, path, from));
             } else {
                 if kind == n_param() {
                     // Handled by `open_function`, which stored it before the body began.
@@ -1332,7 +1334,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                             let n = take_number(next);
                             add_line(out, str_concat(str_concat("  ", v(n)),
                                     str_concat(str_concat(str_concat(" = call ", llvm_type(ints_get(ntype, k))),
-                                    str_concat(" ", symbol(fnames, text))),
+                                    str_concat(" ", symbol(ints_get(ncallee, k)))),
                                     str_concat(str_concat("(", list), ")"))));
                             // A callee that failed has already left by its own exit and handed
                             // back a stand-in. Noticed here, so the failure keeps travelling
@@ -1618,11 +1620,17 @@ fn main() -> Int {
         eprint(str_concat(str_concat("cannot read ", path), nl()));
         exit_with(2);
     }
-    // The root and everything it imports, as one buffer. Resolved here rather than handed
-    // over pre-merged by the driver, so a multi-file program compiles with this compiler
-    // and nothing else — see `compiler/module.nz` for the order and for the one way it
-    // differs from `nazm-cli/src/load.rs`.
-    let src = load_program(path);
+    // The root and everything it imports — and **which module is which**. The text is one
+    // buffer for the passes that walk bytes; the module boundaries and the import edges
+    // travel beside it, because a concatenation is not a module interface and nothing
+    // semantic may ask it a question about ownership.
+    let mpath = strs_new();
+    let mstart = ints_new();
+    let mfirst = ints_new();
+    let mcount = ints_new();
+    let mto = ints_new();
+    let mat = ints_new();
+    let src = load_modules(path, mpath, mstart, mfirst, mcount, mto, mat);
 
     let kinds = ints_new();
     let starts = ints_new();
@@ -1643,12 +1651,8 @@ fn main() -> Int {
     let kids = ints_new();
     let kid_first = ints_new();
     build_children(nk, nar, kids, kid_first);
-    let fnames = strs_new();
-    let fret = ints_new();
-    let ffirst = ints_new();
-    let fcount = ints_new();
-    let fparams = ints_new();
-    collect_signatures(nk, nar, ntx, kids, kid_first, fnames, fret, ffirst, fcount, fparams);
+    // Built-ins first: they belong to no module, and a definition may not take one of
+    // their names whatever its visibility, which `collect_signatures` needs to know.
     let bnames = strs_new();
     let bret = ints_new();
     let bfirst = ints_new();
@@ -1659,10 +1663,37 @@ fn main() -> Int {
     let dstart = ints_new();
     let dend = ints_new();
     let dmsg = strs_new();
+
+    let fnames = strs_new();
+    let fret = ints_new();
+    let ffirst = ints_new();
+    let fcount = ints_new();
+    let fparams = ints_new();
+    let fowner = ints_new();
+    let fpub = ints_new();
+    collect_signatures(nk, nar, nst, ntx, naux, kids, kid_first, mstart,
+            fnames, fret, ffirst, fcount, fparams, fowner, fpub, bnames,
+            dcode, dstart, dend, dmsg);
+
+    // Interfaces before bodies: what each module's direct imports bring into it, and the
+    // collisions that creates. Every module's, before any body is checked, which is what
+    // lets an import cycle have no ordering to violate.
+    let vmod = ints_new();
+    let vname = strs_new();
+    let vfn = ints_new();
+    check_imports(mfirst, mcount, mto, mat, strs_len(mpath), fnames, fowner, fpub,
+            vmod, vname, vfn, dcode, dstart, dend, dmsg);
+
+    let entry = entry_point(fnames, fowner, dcode, dstart, dend, dmsg);
+
     let nslot = ints_new();
     let ntype = ints_new();
-    check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, kids, kid_first, ints_len(nk) - 1,
+    let ncallee = ints_new();
+    check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
+            kids, kid_first, ints_len(nk) - 1,
+            mstart, mfirst, mcount, mto,
             fnames, fret, ffirst, fcount, fparams,
+            fowner, fpub, vmod, vname, vfn,
             bnames, bret, bfirst, bcount, bparams,
             dcode, dstart, dend, dmsg);
     if strs_len(dcode) > 0 {
@@ -1689,9 +1720,10 @@ fn main() -> Int {
     build_relations(nk, nar, kids, kid_first, parent, childno, substart);
     // Before a single instruction is written: a refusal that arrived after the IR was on
     // stdout would be a refusal nobody could act on.
-    refuse_recursion(src, path, nk, nst, ntx, parent, fnames, bnames);
-    emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype,
-            parent, childno, substart, kids, kid_first, fnames, fret, body, msgs, blobs, tasks);
+    refuse_recursion(src, path, nk, nst, ntx, parent, ncallee, fnames, fowner, mstart);
+    emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
+            parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
+            body, msgs, blobs, tasks);
 
     // The header comes last because interning the messages is what discovers them.
     let head = strs_new();
@@ -1812,7 +1844,9 @@ fn main() -> Int {
     add_line(tail, "  %an = sub i64 %a64, 1");
     add_line(tail, "  store i64 %an, ptr @nz.argc");
     add_line(tail, "  store ptr %argv, ptr @nz.argv");
-    add_line(tail, str_concat("  %r = call i64 ", str_concat(symbol(fnames, "main"), "()")));
+    // The **root** module's `main`, which the checker already located. An imported
+    // module's `main` is one of its definitions and not an entry point.
+    add_line(tail, str_concat("  %r = call i64 ", str_concat(symbol(entry), "()")));
     // The one place a diagnostic is written. By the time control is here every scope
     // `main` opened has been joined, so nothing is still running when the process ends.
     add_line(tail, "  %failed = load i1, ptr @nz.failed");

@@ -451,6 +451,29 @@ this definition" has an answer without changing what identifies one.
 It remains session-local, in the same sense as `FileId` and `ModuleId`. Nothing here is a
 cache key or survives a process; `research-register.md` R2 and R3 are unchanged by this.
 
+### The same architecture, in the compiler written in Nazm — N2.1, 2026-09-22
+
+Worth recording because it is a second implementation of these semantics, in a language
+with no structs, no nested arrays and no map type, and it came out with the same shape:
+
+```text
+module.nz    load_modules  →  the merged text, and beside it: where each module's text
+                              begins, and which module each `use` names
+analyse.nz   collect_signatures  →  each definition's owner and `pub` bit
+             check_imports       →  every module's visible imports, before any body,
+                                    with N0207/N0208 raised at the `use`
+             check_all           →  bodies, resolving each call in the asking module and
+                                    **recording** what it resolved to
+emit.nz                          →  reads that record; looks up no name
+```
+
+Parallel `Ints`/`Strs` columns stand in for the structs `nazm-sema` has, and a linear scan
+stands in for a `HashMap`. What is not a substitution is the division of responsibility:
+the parser records that `pub` was written, the module layer records relationships, the
+checker decides what a name means, and emission consumes the decision. The last edge is the
+one that had teeth — emission used to turn a *name* into an LLVM symbol, which was correct
+under one namespace and a miscompile under modules.
+
 ### What is still whole-program
 
 Lowering and code generation. `nazm_lir::lower` takes the whole `Program` and one

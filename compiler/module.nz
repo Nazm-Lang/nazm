@@ -102,12 +102,14 @@ fn strs_has(xs: Strs, want: Str) -> Bool {
     false
 }
 
-/// Every path `src` imports, already resolved against `dir`, in source order.
+/// Every path `src` imports, resolved against `dir`, in source order — with the offset of
+/// the quoted path **within `src`**, so a diagnostic about an import can point at the line
+/// that wrote it.
 ///
 /// The real lexer does the reading. A second, ad-hoc scanner for `use` lines would be a
 /// second definition of what an import is, and the two would drift — a `use` inside a
 /// comment or a string is exactly the case a `grep` gets wrong and a lexer does not.
-fn imports_of(src: Str, dir: Str) -> Strs {
+fn imports_of(src: Str, dir: Str, at: Ints) -> Strs {
     let kinds = ints_new();
     let starts = ints_new();
     let ends = ints_new();
@@ -121,6 +123,7 @@ fn imports_of(src: Str, dir: Str) -> Strs {
             if i + 1 < ints_len(kinds) {
                 if ints_get(kinds, i + 1) == k_str() {
                     strs_push(out, resolve_import(dir, strs_get(texts, i + 1)));
+                    ints_push(at, ints_get(starts, i + 1));
                 }
             }
         }
@@ -129,35 +132,151 @@ fn imports_of(src: Str, dir: Str) -> Strs {
     out
 }
 
-/// `root` and everything it imports, as one buffer.
+/// Which module owns the byte at `offset`.
+///
+/// The modules are laid out in load order and `mstart` is where each begins, so this is
+/// the last module that starts at or before the offset. A linear scan, over a list that
+/// is one entry per source file of one program.
+pub fn module_at(mstart: Ints, offset: Int) -> Int {
+    let mut owner = 0;
+    let mut i = 0;
+    while i < ints_len(mstart) {
+        if ints_get(mstart, i) <= offset { owner = i; }
+        i = i + 1;
+    }
+    owner
+}
+
+/// Whether module `from` directly imports module `to`.
+///
+/// **Directly.** What `to` in turn imports is not consulted and must not be: that is the
+/// non-transitivity rule, and expressing it as "this list and no closure over it" is what
+/// keeps it from being reintroduced by a later convenience.
+pub fn imports_directly(mfirst: Ints, mcount: Ints, mto: Ints, from: Int, to: Int) -> Bool {
+    let first = ints_get(mfirst, from);
+    let mut j = 0;
+    while j < ints_get(mcount, from) {
+        if ints_get(mto, first + j) == to { return true; }
+        j = j + 1;
+    }
+    false
+}
+
+/// `root` and everything it imports, as one buffer — **and the module graph**.
 ///
 /// Files are separated by a newline so that a file not ending in one cannot weld its last
-/// line to the next file's first.
-pub fn load_program(root: Str) -> Str {
-    let seen = strs_new();
+/// line to the next file's first. That the text is concatenated is a representation
+/// detail of this compiler and **not** a module interface: the boundaries travel beside
+/// it, explicitly, in `mstart`, and every semantic question about ownership is answered
+/// from those rather than from the text.
+///
+/// Filled in load order, one entry per module:
+///
+/// * `mpath`  — the normalised path it was read from;
+/// * `mstart` — where its text begins in the returned buffer;
+/// * `mfirst`, `mcount` — this module's slice of `mto`/`mat`;
+/// * `mto`    — the module each `use` names;
+/// * `mat`    — where that `use`'s quoted path is, in the returned buffer.
+///
+/// A `use` naming a file that is not there ends the program, as it did before. A module
+/// importing itself contributes no edge: it already sees all of its own definitions, so
+/// the edge could only make it collide with itself.
+pub fn load_modules(root: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: Ints,
+        mto: Ints, mat: Ints) -> Str {
     let parts = strs_new();
     let stack = strs_new();
     strs_push(stack, normalise(root));
 
+    // The edges as written, before any module has an index: owner, target path, offset.
+    let raw_owner = ints_new();
+    let raw_path = strs_new();
+    let raw_at = ints_new();
+
+    let mut total = 0;
     while strs_len(stack) > 0 {
         let path = strs_pop(stack);
-        if strs_has(seen, path) == false {
-            strs_push(seen, path);
+        if strs_has(mpath, path) == false {
             if file_exists(path) == false {
                 eprint(str_concat(str_concat("cannot find ", path), str_from_byte(10)));
                 exit_with(2);
             }
-            strs_push(parts, read_file(path));
+            let text = read_file(path);
+            let me = strs_len(mpath);
+            strs_push(mpath, path);
+            // Where this file's text begins in the joined buffer. The join inserts one
+            // newline between parts, so every module after the first starts one byte
+            // later than the sum of the lengths before it.
+            ints_push(mstart, total);
+            total = total + str_len(text) + 1;
+            strs_push(parts, text);
+
+            let at = ints_new();
+            let kids = imports_of(strs_get(parts, me), dir_of(path), at);
+            let mut i = 0;
+            while i < strs_len(kids) {
+                ints_push(raw_owner, me);
+                strs_push(raw_path, strs_get(kids, i));
+                ints_push(raw_at, ints_get(mstart, me) + ints_get(at, i));
+                i = i + 1;
+            }
 
             // Pushed in reverse so the stack pops them in source order: the buffer's
             // layout follows the program's text, which is what makes it reproducible.
-            let kids = imports_of(strs_get(parts, strs_len(parts) - 1), dir_of(path));
-            let mut i = strs_len(kids);
-            while i > 0 {
-                strs_push(stack, strs_get(kids, i - 1));
-                i = i - 1;
+            let mut j = strs_len(kids);
+            while j > 0 {
+                strs_push(stack, strs_get(kids, j - 1));
+                j = j - 1;
             }
         }
     }
+
+    // Every module has an index now, so the edges can have one too. In module order, so
+    // `mfirst`/`mcount` describe a contiguous slice.
+    let mut m = 0;
+    while m < strs_len(mpath) {
+        ints_push(mfirst, ints_len(mto));
+        let mut n = 0;
+        let mut e = 0;
+        while e < ints_len(raw_owner) {
+            if ints_get(raw_owner, e) == m {
+                let target = path_index(mpath, strs_get(raw_path, e));
+                // A self-import adds nothing, and a duplicate import adds it once.
+                let mut keep = 0;
+                if target >= 0 {
+                    if target != m { keep = 1; }
+                }
+                // Deduplicated against what this module has already taken. `mcount` has
+                // no entry for `m` until the loop ends, so `imports_directly` cannot be
+                // used here — it would read past the end of it.
+                if keep == 1 {
+                    let base = ints_get(mfirst, m);
+                    let mut d = 0;
+                    while d < n {
+                        if ints_get(mto, base + d) == target { keep = 0; }
+                        d = d + 1;
+                    }
+                }
+                if keep == 1 {
+                    ints_push(mto, target);
+                    ints_push(mat, ints_get(raw_at, e));
+                    n = n + 1;
+                }
+            }
+            e = e + 1;
+        }
+        ints_push(mcount, n);
+        m = m + 1;
+    }
+
     str_join(parts, str_from_byte(10))
+}
+
+/// Which module was read from `want`, or `-1`.
+fn path_index(mpath: Strs, want: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(mpath) {
+        if strs_get(mpath, i) == want { return i; }
+        i = i + 1;
+    }
+    0 - 1
 }

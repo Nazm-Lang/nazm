@@ -1,0 +1,6 @@
+use "mid.nz";
+use "deep.nz";
+
+// `deep` is named here because this module imports the module that exports it. Reaching
+// it through `mid.nz` alone is refused; that half is in the differential suite.
+fn main() -> Int { deep() + mid() }

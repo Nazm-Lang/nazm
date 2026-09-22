@@ -150,7 +150,7 @@ whose source does not exist, and refuses the same module when that interface is 
 exports; imports are not transitive; every collision is a diagnostic naming both sides
 (`N0206`–`N0208`). Twenty cases in `crates/nazm-cli/tests/visibility.rs`, most of them run
 interpreted and compiled and required to agree. The self-hosted compiler was migrated
-rather than exempted: 80 of its 215 functions are `pub`, 135 are private.
+rather than exempted: 84 of its 224 functions are `pub`, 140 are private, and since N2.1 it enforces the rule as well as expressing it.
 
 **Limitation** · **Nothing is separately *compiled*.** A unit can be checked from
 interfaces; lowering and code generation still take the whole program and emit one LLVM
@@ -675,7 +675,7 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **53** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **57** catalogued defects;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -684,8 +684,11 @@ is tested in `xtask/tests/lifecycle.rs`.
 
 *N2 added two and ran four contained on 2026-09-22 — `every-definition-is-exported` and
 `imports-become-transitive`, plus the two existing entries in the files N2 rewrote most, to
-confirm their patches still apply. All four were caught, by 8 to 18 tests each. That is a
-targeted run, not a catalogue run; the row below still stands.*
+confirm their patches still apply. All four were caught, by 8 to 18 tests each. N2.1 added
+four more against the **self-hosted** path — the `pub` bit ignored, resolution across every
+module, the first ambiguous import winning, and any `main` accepted as the entry point —
+and all four were caught by the parity suite. Both are targeted runs, not catalogue runs;
+the row below still stands.*
 
 **Limitation** · The **whole-catalogue run timed out unexplained** at its 3600 s deadline
 without reaching injection, and is recorded as incomplete rather than as a result; the
@@ -718,9 +721,19 @@ fixpoint claim itself is unaffected — C1 → C2 → C3 is about the compiler w
 and the reference check is explicitly not part of the chain — but *which front end built
 C1* was not what the record said it was.
 
-**Since N2** the compiler source states its own module boundaries: 80 of its 215 functions
-are `pub`, 135 are private, and `emit.nz`, `check.nz` and `parser.nz` gained the `use` lines
+**Since N2** the compiler source states its own module boundaries: 84 of its 224 functions
+are `pub`, 140 are private, and `emit.nz`, `check.nz` and `parser.nz` gained the `use` lines
 for modules they were reaching through someone else's import.
+
+**Since N2.1 the two implementations accept the same language.** For one day they did not:
+the Nazm-written compiler parsed `pub` and resolved every name across the whole program, so
+it accepted eight kinds of program the reference refuses and emitted an invalid module for a
+ninth. It now carries a module graph, a per-definition owner and visibility, per-module
+interfaces collected before any body, and a recorded resolution that emission consumes.
+Fifteen rules are compared through both compilers
+(`the_two_compilers_agree_on_every_module_and_visibility_rule`), and five multi-module
+conformance cases agree across the reference, C2 and C3 — which is a **different** claim
+from C2 = C3 and is recorded separately in `bootstrap.md`.
 
 **Next dependency** · None.
 

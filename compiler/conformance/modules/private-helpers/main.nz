@@ -1,0 +1,7 @@
+use "lib.nz";
+
+// Both modules keep a private `size`. They are two definitions, and a compiler that
+// resolved either of them by name alone would emit one symbol for both.
+fn size() -> Int { 1 }
+
+fn main() -> Int { size() + report() }
