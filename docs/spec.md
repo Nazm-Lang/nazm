@@ -475,6 +475,14 @@ nothing while costing an ownership system the bootstrap does not otherwise need.
 inherit. A later allocator with reclamation is intended to change none of the meanings
 above.
 
+> **Superseded in part by N7, 2026-09-22.** *"Never freed"* and *"a sequence lives until
+> the process exits"* described every implementation up to that milestone. Sequence storage
+> is reclaimed now, under the rule in *The memory constitution* below, and **none of the
+> meanings above changed** — which is what the last sentence promised. Everything else in
+> this section still holds: sequences are still shared, still mutable, still aliasable, and
+> a push through one binding is still visible through every other. `Str` storage and
+> channel storage are still not reclaimed, and the constitution says so in those words.
+
 #### An expression may be a statement
 
 `ints_push(a, 1);` is an expression evaluated for its effect, with its value discarded.
@@ -482,6 +490,122 @@ This is not new syntax — a block has always been statements and an optional ta
 it is newly *useful*: without it, a language with no unit type would force
 `let _unused = ints_push(a, 1);` at every mutation, which is a workaround for a missing
 type rather than a rule worth having.
+
+### The memory constitution: four kinds of value, and when storage is reclaimed
+
+Settled by N7, 2026-09-22, from an audit of what the two implementations actually do
+rather than from what a memory model is usually shaped like. `docs/architecture.md` §7.7
+carries the implementation and the evidence; this section is the law.
+
+The whole of it is four kinds of value and five rules. Nothing here is new syntax, nothing
+here is an annotation, and **no program that was legal before this section existed changed
+its meaning because of it.** That was a requirement rather than an outcome: a memory model
+that had to break aliasing to be implementable would have been the wrong model for a
+language whose specification already promised aliasing.
+
+#### The four kinds
+
+| Kind | Types | Assignment produces | Storage |
+| --- | --- | --- | --- |
+| **Immediate** | `Int`, `Bool` | an independent copy | none |
+| **Shared immutable value** | `Str` | a value with the same bytes | shared or copied, **unobservably** |
+| **Owned mutable handle** | `Ints`, `Strs` | another reference to the same storage | reclaimed when the last reference dies |
+| **Runtime-managed handle** | `Chan` | another reference to the same channel | the runtime's, bounded by its `scope` |
+
+There are four because the language has four kinds of thing, not because four was a good
+number. A fifth would need a value that is none of: a number, an immutable byte string, a
+mutable container, or a synchronisation primitive.
+
+#### The five rules
+
+**1. Assignment never copies a handle, and never observably copies a `Str`.**
+`let b = a;` makes `b` refer to what `a` refers to. For `Ints` and `Strs` that sharing is
+observable and specified above. For `Str` it is not observable at all — *Strings are bytes*
+already says passing, returning, binding and copying produce a string with the same bytes
+and there is no way to tell whether a copy was made — so an implementation may share the
+bytes, copy them, or intern them. The reference interpreter copies and the native backend
+shares, and both conform.
+
+**2. A parameter is borrowed.** A function may read a handle, mutate what it refers to, and
+pass it on. It may not keep it after it returns, and the language gives it nowhere to keep
+one: a handle can be stored only in a local binding, and a local binding dies with its
+frame. Parameters are not mutable bindings (*Mutation is opt-in*), so a callee cannot even
+rebind its own parameter. The caller's reference is unaffected by the call and is still
+valid after it.
+
+**3. Returning transfers.** A function that returns a handle hands its caller a reference
+that is independent of anything the callee still held. The caller's binding is then one of
+the references that keeps the storage alive.
+
+**4. Storage is reclaimed when the last reference to it dies, and never before.** A
+reference is a binding, an argument in a call that has not returned, or a value on its way
+out of a `return`. An implementation may reclaim later than this and may not reclaim
+earlier. It is deliberately not stated *how*: reference counting, an escape analysis, and a
+region scheme all satisfy it, and `architecture.md` §7.7 records which one is implemented
+and why.
+
+This is where the milestone's scope is stated rather than implied:
+
+| | |
+| --- | --- |
+| `Ints`, `Strs` storage | reclaimed |
+| `Str` storage | **not reclaimed.** A `Str` may point into a literal, into the process's arguments, into a heap buffer, or into the middle of any of those, and the value does not say which. Reclaiming one needs a representation that knows, and that is not this milestone |
+| `Chan` storage | **not reclaimed** |
+| the interpreter | reclaims under the same rule, through the host's own reference counting |
+
+**5. What crosses a task boundary is decided by kind.** An immediate crosses by copy. A
+`Str` crosses by immutable sharing, which is safe precisely because nothing can mutate it.
+A `Chan` crosses by runtime-managed sharing, which is what it is for. A handle **does not
+cross at all** — `N0321` refuses it, and that is unchanged.
+
+That refusal is load-bearing rather than incidental. Because a handle cannot reach a second
+task, its reference count is never touched by two threads at once, so reclamation needs no
+atomic operation and no lock. A language rule that existed for data-race safety pays for
+itself a second time here.
+
+#### What this costs, stated so it can be checked
+
+Nazm does not call something automatic and leave the reader to find out what it costs.
+
+| Statement | May allocate | May copy | May adjust a reference count | May synchronise | May block |
+| --- | --- | --- | --- | --- | --- |
+| `let n = a + b;` | no | no | no | no | no |
+| `let s = str_concat(a, b);` | **yes** | **yes** | no | no | no |
+| `let xs = ints_new();` | **yes** | no | no | no | no |
+| `let ys = xs;` | no | no | **yes** | no | no |
+| `f(xs)` | no | no | no | no | no |
+| `return xs;` | no | no | **yes** | no | no |
+| `ints_push(xs, v)` | **yes**, on growth | no | no | no | no |
+| a binding going out of scope | no | no | **yes**, if it holds a handle | no | no |
+| `chan_send(c, v)` | no | no | no | **yes** | **yes** |
+
+Two entries in that table deserve their emphasis. **Passing a handle to a function costs
+nothing**, which is rule 2 turned into a number: the caller keeps its reference across the
+call, so nothing has to be counted. And **the count is adjusted only where a binding takes
+or loses a handle**, which is a place a reader can see and a tool can list.
+
+#### Cycles
+
+A reference cycle is impossible in the language as it stands, and not by luck: a `Ints`
+holds `Int`, a `Strs` holds `Str`, and `Str` is a leaf. **No value can refer to another
+value that can refer back.** So counting references reclaims everything, and the leak
+freedom claimed for sequence storage is a claim about this type system rather than about
+counting in general.
+
+A recursive user-defined type would end that, and the constitution says in advance what
+admitting one requires: either the type system refuses ownership cycles, or the value kind
+that can form them arrives with its own policy — a weak reference, a region, or a
+collector for that kind alone. **What may not happen is a recursive type being added and
+the reclamation claim left standing.**
+
+#### What is not promised
+
+- **Leak freedom for a whole program.** `Str` and `Chan` storage is not reclaimed, so a
+  program that concatenates in a loop still grows. `capability-matrix.md` states the scope
+  per type rather than as one word.
+- **Deadlock freedom.** Unchanged, and still not promised.
+- **A destructor.** There is no user-visible destruction, no RAII and no ordering a program
+  can observe, because nothing a program can write runs at reclamation.
 
 ### What the outside-world built-ins do and do not promise
 
@@ -1074,7 +1198,19 @@ What is left in this section changes no current program's meaning.
 
 ### Memory and values
 
-- Exact copy semantics: when is a value copied, when projected, when moved?
+*Copy semantics, aliasing, parameter and return conventions, reclamation, cross-task
+transfer and cycles were settled by N7 — see **The memory constitution** above. What
+remains open is what the four kinds do not yet cover.*
+
+- **`Str` storage.** A `Str` may point into a literal, into `argv`, into a heap buffer, or
+  into the interior of any of them, and the value does not record which. Reclaiming one
+  needs a representation that does. Which representation, and what it costs on a type that
+  is copied in every hot loop, is unsettled.
+- **Channel storage.** A channel outlives the tasks that use it and is bounded only by its
+  `scope`. Whether that bound is enough to reclaim it, or whether the runtime needs its own
+  count, is unsettled.
+- **User-defined and recursive types.** The constitution says what admitting a recursive
+  type requires. It does not say which of those routes the language takes.
 - Closure capture: which conventions may a closure capture under, and what escapes?
 - Copy elision: what does the compiler *guarantee*, versus what does it merely usually do?
   MVS is unusable if this is folklore.

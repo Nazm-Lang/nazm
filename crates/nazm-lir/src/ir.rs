@@ -57,6 +57,19 @@ pub enum Ty {
 }
 
 impl Ty {
+    /// Whether a value of this type is a **handle** to storage with a reference count.
+    ///
+    /// `docs/spec.md`'s memory constitution calls these *owned mutable handles*: they are
+    /// the only values whose storage is reclaimed, and the only ones a binding can hold a
+    /// reference to. `Chan` is a handle in the ordinary sense and deliberately not one
+    /// here — it is runtime-managed, its lifetime is the enclosing `scope`'s, and counting
+    /// references to it would be a different mechanism with a different soundness
+    /// argument.
+    #[must_use]
+    pub fn is_handle(self) -> bool {
+        matches!(self, Self::Ints | Self::Strs)
+    }
+
     /// Bytes one element of this sequence occupies, for indexing and growth.
     #[must_use]
     pub fn element_size(self) -> Option<u32> {
