@@ -132,3 +132,532 @@ fn the_root_module_still_names_itself() {
         "nazm: error[N0401]: division by zero at one.nz:1:22"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Separate code generation
+// ---------------------------------------------------------------------------
+
+/// Build with `--emit-ir` and return every artefact, by its name.
+///
+/// One per Nazm module, plus the runtime and the entry wrapper. Reading them is how a
+/// test can ask what was generated *before* the linker combined it — which is the only
+/// place the separation is visible.
+fn artefacts(dir: &Path, files: &[(&str, &str)]) -> Vec<(String, String)> {
+    for (name, text) in files {
+        write(dir, name, text);
+    }
+    let built = Command::new(NAZM)
+        .args(["build", files[0].0, "-o", "prog", "--emit-ir"])
+        .current_dir(dir)
+        .output()
+        .expect("build");
+    assert!(
+        built.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).expect("read dir").flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|x| x == "ll") {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            out.push((name, std::fs::read_to_string(&path).expect("read ir")));
+        }
+    }
+    out.sort();
+    assert!(!out.is_empty(), "no artefacts were written");
+    out
+}
+
+/// Every symbol any artefact defines, as `linkage symbol`.
+fn defined(artefacts: &[(String, String)]) -> Vec<String> {
+    let mut out: Vec<String> = artefacts
+        .iter()
+        .flat_map(|(_, ir)| ir.lines())
+        .filter(|l| l.starts_with("define "))
+        .map(|l| {
+            let head = l.split('(').next().unwrap_or_default();
+            let mut parts: Vec<&str> = head.split_whitespace().collect();
+            let symbol = parts.pop().unwrap_or_default().to_owned();
+            let linkage = if head.contains(" internal ") {
+                "internal"
+            } else if head.contains(" hidden ") {
+                "hidden"
+            } else {
+                "external"
+            };
+            format!("{linkage} {symbol}")
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Every Nazm definition symbol, with no linkage and no runtime.
+fn nazm_symbols(artefacts: &[(String, String)]) -> Vec<String> {
+    let mut out: Vec<String> = defined(artefacts)
+        .into_iter()
+        .filter_map(|s| s.split_whitespace().nth(1).map(str::to_owned))
+        .filter(|s| s.starts_with("@nz.m.") || s.starts_with("@nz.u."))
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn a_call_into_an_imported_module_is_a_reference_the_linker_resolves() {
+    // §23 of the directive. The caller's artefact *declares* the callee and defines it
+    // nowhere; the callee's artefact defines it; the linker joins them. No name is looked
+    // up, and no whole-program number decides anything.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let files = &[
+        ("a.nz", "use \"b.nz\";\nfn main() -> Int { twice(4) }\n"),
+        ("b.nz", "pub fn twice(n: Int) -> Int { n + n }\n"),
+    ];
+    let art = artefacts(dir.path(), files);
+
+    let caller = &art
+        .iter()
+        .find(|(_, ir)| ir.contains("a.nz\""))
+        .expect("a unit for a.nz")
+        .1;
+    assert!(
+        caller.contains("declare i64 @nz.m.b_2Enz.twice(i64)"),
+        "the caller should declare the callee, not define it:\n{caller}"
+    );
+    assert!(!caller.contains("define hidden i64 @nz.m.b_2Enz.twice"));
+
+    let callee = &art
+        .iter()
+        .find(|(_, ir)| ir.contains("b.nz\""))
+        .expect("a unit for b.nz")
+        .1;
+    assert!(callee.contains("define hidden i64 @nz.m.b_2Enz.twice(i64 %p0)"));
+
+    assert_eq!(build_and_run(dir.path(), files).stdout, "8");
+}
+
+#[test]
+fn one_imported_module_may_call_another() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let files = &[
+        ("a.nz", "use \"b.nz\";\nfn main() -> Int { mid(3) }\n"),
+        (
+            "b.nz",
+            "use \"c.nz\";\npub fn mid(n: Int) -> Int { deep(n) + 1 }\n",
+        ),
+        ("c.nz", "pub fn deep(n: Int) -> Int { n * 10 }\n"),
+    ];
+    assert_eq!(build_and_run(dir.path(), files).stdout, "31");
+    assert_eq!(interpret(dir.path(), files).stdout, "31");
+}
+
+#[test]
+fn three_modules_may_each_define_a_private_helper_of_the_same_name() {
+    // The miscompile class this whole line of work began with: before N2 two modules'
+    // private `helper` both became `@nz.f0` and clang rejected the module. Now each is a
+    // different symbol in a different object, and all three are `internal` — nothing
+    // outside a module can name its private definitions, so nothing needs to.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let files = &[
+        (
+            "a.nz",
+            "use \"b.nz\";\nuse \"c.nz\";\nfn helper() -> Int { 1 }\n\
+             fn main() -> Int { helper() + from_b() + from_c() }\n",
+        ),
+        (
+            "b.nz",
+            "fn helper() -> Int { 20 }\npub fn from_b() -> Int { helper() }\n",
+        ),
+        (
+            "c.nz",
+            "fn helper() -> Int { 300 }\npub fn from_c() -> Int { helper() }\n",
+        ),
+    ];
+    let art = artefacts(dir.path(), files);
+    let symbols = defined(&art);
+    for m in ["a_2Enz", "b_2Enz", "c_2Enz"] {
+        assert!(
+            symbols.contains(&format!("internal @nz.m.{m}.helper")),
+            "{m}'s helper should be its own internal definition: {symbols:?}"
+        );
+    }
+    assert_eq!(build_and_run(dir.path(), files).stdout, "321");
+}
+
+#[test]
+fn a_diamond_generates_the_shared_module_once() {
+    // §25. `D` is reached through both `B` and `C`, and is one module with one identity,
+    // so it is code-generated once. Compiling it per incoming edge would give the linker
+    // two definitions of one symbol and fail — which is what makes this testable at all.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let files = &[
+        (
+            "a.nz",
+            "use \"b.nz\";\nuse \"c.nz\";\nfn main() -> Int { from_b() + from_c() }\n",
+        ),
+        (
+            "b.nz",
+            "use \"d.nz\";\npub fn from_b() -> Int { shared() }\n",
+        ),
+        (
+            "c.nz",
+            "use \"d.nz\";\npub fn from_c() -> Int { shared() * 2 }\n",
+        ),
+        ("d.nz", "pub fn shared() -> Int { 7 }\n"),
+    ];
+    let art = artefacts(dir.path(), files);
+    assert_eq!(
+        defined(&art)
+            .iter()
+            .filter(|s| s.ends_with("@nz.m.d_2Enz.shared"))
+            .count(),
+        1,
+        "the shared module was generated more than once"
+    );
+    // Four modules, plus the runtime and the entry.
+    assert_eq!(
+        art.len(),
+        6,
+        "{:?}",
+        art.iter().map(|(n, _)| n).collect::<Vec<_>>()
+    );
+    assert_eq!(build_and_run(dir.path(), files).stdout, "21");
+}
+
+#[test]
+fn a_legal_module_cycle_compiles_and_links() {
+    // §13 and §26. An import cycle is legal and says nothing about recursion: `A::f`
+    // calls `B::g`, `B` imports `A` and calls nothing in it. A linker has no opinion
+    // about the order objects were produced in, which is exactly why separate generation
+    // needs no topological order.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let files = &[
+        (
+            "a.nz",
+            "use \"b.nz\";\npub fn shared() -> Int { 5 }\nfn main() -> Int { g() }\n",
+        ),
+        (
+            "b.nz",
+            "use \"a.nz\";\npub fn g() -> Int { 37 }\npub fn unused() -> Int { shared() }\n",
+        ),
+    ];
+    assert_eq!(build_and_run(dir.path(), files).stdout, "37");
+    assert_eq!(interpret(dir.path(), files).stdout, "37");
+}
+
+#[test]
+fn a_call_cycle_across_modules_is_still_refused() {
+    // §11 and §26's second half. The recursion policy is a whole-program analysis and
+    // stays one: `A::f → B::g → A::f` is a cycle no single module can see, and per-module
+    // code generation is not a reason to stop looking for it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\npub fn f(n: Int) -> Int { g(n) }\nfn main() -> Int { f(1) }\n",
+    );
+    write(
+        dir.path(),
+        "b.nz",
+        "use \"a.nz\";\npub fn g(n: Int) -> Int { f(n) }\n",
+    );
+    let out = Command::new(NAZM)
+        .args(["build", "a.nz", "-o", "prog"])
+        .current_dir(dir.path())
+        .output()
+        .expect("build");
+    assert!(
+        !out.status.success(),
+        "a cross-module cycle must be refused"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("N0101"), "{err}");
+    assert!(err.contains("recursion"), "{err}");
+    assert!(
+        !dir.path().join("prog").exists(),
+        "nothing should be written"
+    );
+}
+
+#[test]
+fn an_imported_modules_main_is_not_the_process_entry() {
+    // N2's rule, now also a linker fact. The imported `main` is an ordinary definition
+    // with an ordinary symbol; the platform entry calls the **root** module's.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let files = &[
+        ("app.nz", "use \"lib.nz\";\nfn main() -> Int { helper() }\n"),
+        (
+            "lib.nz",
+            "pub fn helper() -> Int { 11 }\nfn main() -> Int { 99 }\n",
+        ),
+    ];
+    let art = artefacts(dir.path(), files);
+    let entry = &art
+        .iter()
+        .find(|(_, ir)| ir.contains("<nazm entry>"))
+        .expect("an entry unit")
+        .1;
+    assert!(entry.contains("call i64 @nz.m.app_2Enz.main()"), "{entry}");
+    assert!(!entry.contains("@nz.m.lib_2Enz.main"), "{entry}");
+    // And the imported one is still generated, because it is one of that module's
+    // definitions and nothing more.
+    assert!(defined(&art).contains(&"internal @nz.m.lib_2Enz.main".to_owned()));
+    assert_eq!(build_and_run(dir.path(), files).stdout, "11");
+}
+
+#[test]
+fn string_constants_from_two_modules_do_not_collide() {
+    // §19. Each unit numbers its own constants from zero, so two artefacts both contain
+    // `@.s0`. That is safe because the linkage is `private`, which makes them local
+    // labels rather than symbol-table entries — established here by linking and running
+    // rather than by reasoning about it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let files = &[
+        (
+            "a.nz",
+            "use \"b.nz\";\nfn main() -> Int { str_len(\"aaaa\") + from_b() }\n",
+        ),
+        ("b.nz", "pub fn from_b() -> Int { str_len(\"bbbbbbb\") }\n"),
+    ];
+    let art = artefacts(dir.path(), files);
+    assert!(
+        art.iter()
+            .filter(|(_, ir)| ir.contains("@.s0 = private"))
+            .count()
+            >= 2,
+        "both units should have numbered a constant from zero"
+    );
+    assert_eq!(build_and_run(dir.path(), files).stdout, "11");
+}
+
+#[test]
+fn the_runtime_is_defined_exactly_once() {
+    // §16. Every definition that must exist once per program lives in one artefact. A
+    // second copy would be a duplicate symbol and the link would fail — so the strongest
+    // evidence is that a program using every helper set links at all.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let files = &[
+        (
+            "a.nz",
+            "use \"b.nz\";\nfn main() -> Int { work() + str_len(int_to_str(7)) }\n",
+        ),
+        (
+            "b.nz",
+            "pub fn work() -> Int {\n    let got = ints_new();\n    \
+             let c = chan_new(1);\n    scope { spawn feed(c); }\n    \
+             let more = chan_recv(c, got);\n    ints_get(got, 0) + 4\n}\n\
+             pub fn feed(c: Chan) -> Int { chan_send(c, 30); chan_close(c); 0 }\n",
+        ),
+    ];
+    let art = artefacts(dir.path(), files);
+    let symbols = defined(&art);
+    for helper in [
+        "@nz.fail",
+        "@nz.report",
+        "@nz.arr_new",
+        "@nz.arr_grow",
+        "@nz.spawn",
+        "@nz.scope_join",
+        "@nz.chan_new",
+        "@nz.chan_send",
+        "@nz.chan_recv",
+        "@nz.chan_close",
+    ] {
+        assert_eq!(
+            symbols.iter().filter(|s| s.ends_with(helper)).count(),
+            1,
+            "{helper} should be defined once: {symbols:?}"
+        );
+    }
+    assert_eq!(
+        symbols.iter().filter(|s| s.ends_with("@main")).count(),
+        1,
+        "exactly one process entry"
+    );
+    assert_eq!(build_and_run(dir.path(), files).stdout, "35");
+}
+
+#[test]
+fn two_checkouts_generate_the_same_symbols() {
+    // §6 and §19 of the directive. Nothing about where a checkout sits reaches a symbol,
+    // because nothing about it reaches a `DefKey`.
+    let files = &[
+        ("a.nz", "use \"lib/b.nz\";\nfn main() -> Int { twice(4) }\n"),
+        ("lib/b.nz", "pub fn twice(n: Int) -> Int { n + n }\n"),
+    ];
+    let one = tempfile::tempdir().expect("tempdir");
+    let two = tempfile::tempdir().expect("tempdir");
+    assert_ne!(one.path(), two.path());
+    assert_eq!(
+        nazm_symbols(&artefacts(one.path(), files)),
+        nazm_symbols(&artefacts(two.path(), files))
+    );
+}
+
+#[test]
+fn a_shared_module_gets_the_same_symbols_from_either_entry_point() {
+    // §6's entry-point independence, which is N4's declared source root doing its job:
+    // `lib/common.nz` is the same module whichever application named it, so its
+    // definitions are the same definitions and get the same symbols.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(dir.path(), "nazm.root", "");
+    let common = (
+        "lib/common.nz",
+        "fn hidden_helper() -> Int { 2 }\npub fn shared(n: Int) -> Int { n * hidden_helper() }\n",
+    );
+    let from_app = artefacts(
+        dir.path(),
+        &[
+            (
+                "app.nz",
+                "use \"lib/common.nz\";\nfn main() -> Int { shared(3) }\n",
+            ),
+            common,
+        ],
+    );
+    let from_tool = artefacts(
+        dir.path(),
+        &[
+            (
+                "tool.nz",
+                "use \"lib/common.nz\";\nfn main() -> Int { shared(5) }\n",
+            ),
+            common,
+        ],
+    );
+
+    let of_common = |art: &[(String, String)]| {
+        let mut s: Vec<String> = nazm_symbols(art)
+            .into_iter()
+            .filter(|s| s.contains("lib_2Fcommon"))
+            .collect();
+        s.sort();
+        s
+    };
+    assert_eq!(of_common(&from_app), of_common(&from_tool));
+    assert_eq!(
+        of_common(&from_app),
+        vec![
+            "@nz.m.lib_2Fcommon_2Enz.hidden_5Fhelper".to_owned(),
+            "@nz.m.lib_2Fcommon_2Enz.shared".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn pub_chooses_linkage_and_never_spelling() {
+    // §5. `pub` says which Nazm modules may name a definition. It decides whether the
+    // linker must be able to bind the symbol — and it does not decide what the symbol is
+    // called, because the symbol comes from the definition's identity, which `pub` is not
+    // part of.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let private = artefacts(
+        dir.path(),
+        &[(
+            "a.nz",
+            "fn spare() -> Int { 4 }\nfn main() -> Int { spare() }\n",
+        )],
+    );
+    let exported = artefacts(
+        dir.path(),
+        &[(
+            "a.nz",
+            "pub fn spare() -> Int { 4 }\nfn main() -> Int { spare() }\n",
+        )],
+    );
+    assert_eq!(nazm_symbols(&private), nazm_symbols(&exported));
+    assert!(defined(&private).contains(&"internal @nz.m.a_2Enz.spare".to_owned()));
+    assert!(defined(&exported).contains(&"hidden @nz.m.a_2Enz.spare".to_owned()));
+}
+
+#[test]
+fn a_native_build_is_unaffected_by_the_semantic_cache() {
+    // `nazm build` reuses nothing: it needs the resolution only checking a body produces.
+    // Asserted rather than assumed, because "the cache changed a native build" is exactly
+    // the sort of thing that would be discovered late.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(dir.path(), "nazm.root", "");
+    let files = &[
+        ("a.nz", "use \"b.nz\";\nfn main() -> Int { twice(6) }\n"),
+        ("b.nz", "pub fn twice(n: Int) -> Int { n + n }\n"),
+    ];
+    let cold = artefacts(dir.path(), files);
+    assert!(!dir.path().join(".nazm").exists(), "a build wrote a cache");
+
+    // Warm the semantic cache, then build again.
+    let checked = Command::new(NAZM)
+        .args(["check", "a.nz"])
+        .current_dir(dir.path())
+        .output()
+        .expect("check");
+    assert!(checked.status.success());
+    assert!(
+        dir.path().join(".nazm").exists(),
+        "check should have cached"
+    );
+
+    let warm = artefacts(dir.path(), files);
+    assert_eq!(nazm_symbols(&cold), nazm_symbols(&warm));
+    assert_eq!(build_and_run(dir.path(), files).stdout, "12");
+}
+
+#[test]
+fn a_backend_refusal_inside_an_imported_module_names_that_module() {
+    // §29. Emission moved per module; a diagnostic must still point where the source is,
+    // which is the property N1 established and N5 must not spend.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = "use \"lib.nz\";\nfn main() -> Int { go(2) }\n";
+    write(dir.path(), "app.nz", app);
+    write(
+        dir.path(),
+        "lib.nz",
+        "pub fn go(n: Int) -> Int { if n < 1 { 0 } else { go(n - 1) } }\n",
+    );
+
+    // The rendered form names the file outright.
+    let rendered = Command::new(NAZM)
+        .args(["build", "app.nz", "-o", "prog"])
+        .current_dir(dir.path())
+        .output()
+        .expect("build");
+    assert!(!rendered.status.success());
+    let text = String::from_utf8_lossy(&rendered.stderr);
+    assert!(text.contains("--> lib.nz:1:50"), "{text}");
+    assert!(text.contains("N0101"), "{text}");
+    assert!(
+        !dir.path().join("prog").exists(),
+        "nothing should be written"
+    );
+
+    // The machine form identifies it by an offset into the concatenation of every file in
+    // load order — `docs/diagnostics.md` fixes that shape, and a `file` field would be a
+    // schema version rather than a side effect of moving emission. What N5 must not break
+    // is that the offset lands in the right file, so that is what this asserts.
+    let json = Command::new(NAZM)
+        .args(["build", "app.nz", "-o", "prog", "--json"])
+        .current_dir(dir.path())
+        .output()
+        .expect("build");
+    let reported: Vec<serde_json::Value> = String::from_utf8_lossy(&json.stderr)
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let refusal = reported
+        .iter()
+        .find(|d| d["code"] == "N0101")
+        .expect("a refusal");
+    let at = refusal["primary"]["span"]["start"]
+        .as_u64()
+        .expect("an offset");
+    assert!(
+        at >= app.len() as u64,
+        "the offset should be inside `lib.nz`, past the {} bytes of `app.nz`: {at}",
+        app.len()
+    );
+}
