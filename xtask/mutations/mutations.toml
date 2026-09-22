@@ -1076,7 +1076,7 @@ a use-after-free the language's own aliasing rule makes ordinary rather than exo
 """
 file = "crates/nazm-lir/src/emit.rs"
 find = """        if !self.owned.remove(&value) {
-            self.retain(value);
+            self.retain(value, ty);
         }"""
 replace = """        self.owned.remove(&value);"""
 
@@ -1143,5 +1143,135 @@ aliasing behaves identically, and one that aliases — which the language specif
 measures — reads freed storage
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = "  %last = icmp sle i64 %rc2, 0"
-replace = "  %last = icmp sle i64 %rc2, 9223372036854775807"
+find = """  %last = icmp sle i64 %rc2, 0
+  br i1 %last, label %free, label %kept"""
+replace = """  %last = icmp sle i64 %rc2, 9223372036854775807
+  br i1 %last, label %free, label %kept"""
+
+# --- N8: strings and channels ---------------------------------------------------------
+#
+# The eight defects the N8 architecture makes possible. Each one is a rule from the memory
+# constitution removed, and each is the *cheapest* way to remove it — a line deleted, a
+# comparison widened — because a mutation that also breaks compilation proves nothing.
+
+[[mutation]]
+name = "a-slice-does-not-retain-its-backing"
+why = """
+makes `str_slice` a pointer and a length again, keeping the owner field but adding no
+reference to it. The slice then dies with whatever it was cut from, which for
+`str_slice(str_concat(a, b), 1, 2)` is the same statement: the argument is released as a
+temporary the moment the built-in returns, and the result points into the freed buffer.
+This is the exact failure the third field exists to make impossible
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                let _ = writeln!(self.out, "  call void @nz.str_retain(ptr %{owner})");
+                self.needs_strings = true;
+                let out = self.make_str(start, n, &format!("%{owner}"));"""
+replace = """                self.needs_strings = true;
+                let out = self.make_str(start, n, &format!("%{owner}"));"""
+
+[[mutation]]
+name = "a-sequence-does-not-retain-the-string-it-stores"
+why = """
+lets `strs_push` keep a string without taking a reference to it. The caller's binding is
+then the only one counted, and the element becomes a dangling view the moment that binding
+dies — while the sequence goes on reporting a length that includes it
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                self.retain(arg(1), elem);
+                let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(1));"""
+replace = """                let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(1));"""
+
+[[mutation]]
+name = "a-string-read-out-of-a-sequence-is-only-borrowed"
+why = """
+hands back the stored descriptor without a reference of its own, so overwriting the
+element — or releasing the sequence — invalidates a value the program is still holding.
+`docs/spec.md` has promised since sequences existed that a `Str` already read out is
+unaffected by changing the sequence; until N8 that was true because nothing was freed
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                self.take(v, elem);
+                self.owned.insert(v);
+                return Val::Of { value: v, ty: elem };"""
+replace = """                return Val::Of { value: v, ty: elem };"""
+
+[[mutation]]
+name = "an-overwritten-element-is-never-released"
+why = """
+replaces an element and abandons the one it replaced, which is the leak N8 exists to close
+wearing a container as a disguise: a loop that writes the same slot a million times holds a
+million backings and reports a sequence of length one
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(2));
+                self.release(old, elem);"""
+replace = """                let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(2));"""
+
+[[mutation]]
+name = "a-sequence-of-strings-does-not-release-its-contents"
+why = """
+frees the array of descriptors and leaves every string it named behind. The count of
+sequences then looks perfect — the header really was reclaimed — while the bytes are gone
+for good. Converting a leak into a leak inside a container is the failure §17 of the N8
+directive names by that description
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = "  br i1 %last, label %contents, label %done"
+replace = "  br i1 %last, label %storage, label %done"
+
+[[mutation]]
+name = "string-storage-goes-while-another-view-remains"
+why = """
+frees a backing on every release rather than on the last one, which is reference counting
+with the counting removed. A slice of a slice, or a string bound twice, then frees storage
+its siblings still point into — and a program with no sharing behaves identically, which is
+what makes this the shape worth catching
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """  %old = atomicrmw sub ptr %b, i64 1 release
+  %last = icmp eq i64 %old, 1"""
+replace = """  %old = atomicrmw sub ptr %b, i64 1 release
+  %last = icmp sge i64 %old, 1"""
+
+[[mutation]]
+name = "a-channel-goes-while-another-reference-remains"
+why = """
+destroys a channel's mutex, condition variable, ring and header on the first release. The
+argument that makes `rc == 0` a safe moment to do this is that a waiter implies a live
+reference; removing the count removes the argument, and a channel a task still holds is
+torn down under it
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """  %old = atomicrmw sub ptr %rcp, i64 1 release
+  %last = icmp eq i64 %old, 1"""
+replace = """  %old = atomicrmw sub ptr %rcp, i64 1 release
+  %last = icmp sge i64 %old, 1"""
+
+[[mutation]]
+name = "a-spawn-argument-is-not-held-for-its-task"
+why = """
+packs a string or a channel into a task's argument block without taking a reference to it,
+so a binding reassigned inside the scope releases storage the task is still reading — and
+the trampoline then releases it a second time. The window is real rather than theoretical:
+the scope's body runs concurrently with the task by construction
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """            self.take(*value, *ty);
+            let _ = writeln!(self.out, "  store {} %{value}, ptr %{slot}", ty.llvm());"""
+replace = """            let _ = writeln!(self.out, "  store {} %{value}, ptr %{slot}", ty.llvm());"""
+
+[[mutation]]
+name = "the-self-hosted-emitter-skips-one-release-path"
+why = """
+takes the frame release off the tail of every function the **Nazm-written** compiler emits,
+which is the shape N7 shipped for a whole milestone without noticing: every behavioural test
+still passes, because a program that never frees computes the same answers as one that does.
+Only a differential test that compares what the two compilers' programs *reclaimed* can see
+it, which is what `the_nazm_written_compiler_emits_the_same_memory_semantics` is for
+"""
+file = "compiler/emit.nz"
+find = """                                                own_keep(out, next, owned, tv, type_of_name(after_colon(text)));
+                                                release_frame(out, next, frame);"""
+replace = """                                                own_keep(out, next, owned, tv, type_of_name(after_colon(text)));"""
+
