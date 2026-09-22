@@ -133,11 +133,13 @@ say "source lines: $total_lines" >> "$out/record.txt"
 # downstream depends on it; it is here so a bootstrap cannot succeed on a program the
 # language does not accept. Stages 2 and 3 resolve and check for themselves, with the
 # compiler written in Nazm.
-"$nazm" check "$S" >/dev/null || fail "the compiler source does not check under the reference front end"
+"$nazm" check --no-cache "$S" >/dev/null || fail "the compiler source does not check under the reference front end"
 
 # --- stage 1: Rust builds C1 --------------------------------------------------------
 say "stage 1: the Rust implementation compiles the compiler source into C1"
-"$nazm" build "$S" -o "$out/stage1/nazmc" >/dev/null || fail "stage 1 failed"
+# `--no-cache` on both: the bootstrap of record is the authority, and an
+# authority may not depend on derived data that happened to be warm.
+"$nazm" build --no-cache "$S" -o "$out/stage1/nazmc" >/dev/null || fail "stage 1 failed"
 [ -x "$out/stage1/nazmc" ] || fail "stage 1 produced no executable"
 
 # --- stage 2: C1 builds C2 ----------------------------------------------------------

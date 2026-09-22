@@ -31,7 +31,7 @@
 //! That is a smaller claim than "incremental compilation" and it is the one that is true.
 //! `docs/capability-matrix.md` says which.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 
 use nazm_cache::{
@@ -45,13 +45,6 @@ use nazm_span::SourceMap;
 
 use crate::root::How;
 use crate::{exit, load, root};
-
-/// The environment variable that moves the store somewhere else.
-///
-/// For a read-only checkout, a container that wants the cache on a scratch volume, and
-/// the tests that need two projects to share one store. It moves where entries are kept
-/// and changes nothing about what they are: the location is not part of any identity.
-const CACHE_DIR: &str = "NAZM_CACHE_DIR";
 
 /// What the run did, if anyone asked.
 #[derive(Debug, Default, Clone, Copy)]
@@ -224,14 +217,6 @@ impl nazm_core::Reuse for Cache<'_> {
     }
 }
 
-/// Where this project's entries live.
-fn store_for(source_root: &Path) -> Store {
-    match std::env::var_os(CACHE_DIR) {
-        Some(dir) if !dir.is_empty() => Store::at(PathBuf::from(dir)),
-        _ => Store::for_project(source_root),
-    }
-}
-
 /// One `nazm.check-report/1` object.
 ///
 /// Structured because the reader is as likely to be a script or an agent as a person, and
@@ -281,7 +266,7 @@ pub(crate) fn run(
     let map = &loaded.map;
 
     let (diagnostics, tally) = if cache {
-        let mut c = Cache::new(map, store_for(source_root.path()));
+        let mut c = Cache::new(map, crate::derived::checks(source_root.path()));
         let d = nazm_core::check_map_reusing(map, &loaded.graph, &mut c);
         (d, c.tally)
     } else {

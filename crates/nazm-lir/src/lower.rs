@@ -367,7 +367,7 @@ pub fn lower(
     program: &Program,
     res: &Resolution,
     graph: &ModuleGraph,
-    map: &nazm_span::SourceMap,
+    names: &crate::names::SourceNames<'_>,
 ) -> Result<Native, LowerError> {
     let settled = plan(program, res, graph)?;
 
@@ -375,7 +375,9 @@ pub fn lower(
     let mut calls = Vec::new();
     let mut errors = Vec::new();
     for module in graph.ids() {
-        let source = graph.file(module).map_or("", |f| map.name(f));
+        // The module's durable identity where it has one, which is what makes the
+        // artefact the same bytes from any checkout. `crate::names` owns the rule.
+        let source = graph.file(module).map_or("", |f| names.name(f));
         let mut lowered = lower_module(program, res, &settled, module, source);
         units.push(lowered.unit);
         calls.append(&mut lowered.calls);

@@ -14,11 +14,49 @@
 //!
 //! The output path is refused if it is the input, because a build that overwrote its own
 //! source would be unrecoverable.
+//!
+//! # What is reused, and what is not
+//!
+//! Every stage above `clang -c` runs on every build: the files are read, parsed, checked,
+//! admitted, lowered and emitted, every time. What is reused is the one step that costs
+//! more than all of them together — turning one LLVM unit into one object — and it is
+//! reused only when the exact bytes handed to the object compiler, the configuration that
+//! compiler resolved, and the compiler itself are all the ones a previous build recorded.
+//! `crate::backend` owns the first three and `nazm_cache::object` owns the key.
+//!
+//! The link runs on every build too. There is no executable cache, no link-result cache
+//! and no incremental linker, and `docs/capability-matrix.md` says so in those words.
+//!
+//! # Why the reuse cannot skip anything it must not
+//!
+//! A key is a digest of an artefact, so the artefact has to exist before the key does —
+//! which means everything required to produce it has already run, including the
+//! whole-program admissibility that refuses cross-module recursion. A fully warm store
+//! still checks, still plans, still lowers and still refuses. That is not a rule this file
+//! follows; it is the shape of the pipeline.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 
+use nazm_cache::{LlvmInput, ObjectArtifact, ObjectFound, ObjectKey, ObjectStore};
+
+use crate::backend::{Backend, Outcome, DRIVER};
 use crate::{emit, exit};
+
+/// What one build did with the native cache, if anyone asked.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Native {
+    /// LLVM units emitted. Always every unit: emission is not cached.
+    units: usize,
+    /// Units handed to `clang -c`.
+    compiled: usize,
+    /// Units whose object came from the store.
+    reused: usize,
+    /// Units compiled because what was filed could not be used.
+    rejected: usize,
+    /// Objects written to the store this run.
+    stored: usize,
+}
 
 /// Compile, or explain what stopped it.
 pub(crate) fn run(
@@ -27,9 +65,13 @@ pub(crate) fn run(
     json: bool,
     emit_ir: bool,
     opt_level: u8,
+    cache: bool,
+    with_report: bool,
 ) -> ExitCode {
-    // Discovered, never given. Native compilation reuses nothing and persists nothing
-    // keyed on a module, so the root is asked for only because the loader computes keys.
+    // Discovered, never given: `nazm build` takes no `--source-root`, and the marker is
+    // how a project declares one. It decides every module's durable identity, which is
+    // the name the generated code carries and therefore part of what an object is keyed
+    // on.
     let source_root = match crate::root::decide(input, None) {
         Ok(r) => r,
         Err(e) => {
@@ -70,9 +112,12 @@ pub(crate) fn run(
     //
     // A program that does not type-check is not a question about the backend's coverage,
     // so those diagnostics are reported first and lowering never runs.
+    // What a generated artefact calls each file: its durable identity where it has one,
+    // so the same project built from two checkouts produces the same bytes.
+    let names = nazm_lir::SourceNames::of(map, &loaded.graph);
     let artefacts = match nazm_core::on_checked_map(map, &loaded.graph, |program, resolution| {
-        nazm_lir::lower(program, resolution, &loaded.graph, map)
-            .map(|native| emit_artefacts(&native, map))
+        nazm_lir::lower(program, resolution, &loaded.graph, &names)
+            .map(|native| emit_artefacts(&native, &names))
             .map_err(|e| e.diagnostics)
     }) {
         Ok(a) => a,
@@ -120,27 +165,84 @@ pub(crate) fn run(
         let _ = std::fs::remove_file(&tmp_exe);
     };
 
+    // Asked once, before anything is compiled: what this backend is, and what it would
+    // do. `crate::backend` says why the answer comes from the compiler rather than from
+    // the three arguments this one passes.
+    let backend = if cache {
+        Backend::discover(opt_level, &work)
+    } else {
+        Backend::unidentified(opt_level)
+    };
+    // A backend that would not say what it is gets no cache. Guessing a configuration is
+    // how one target's objects end up in another's build.
+    let store: Option<ObjectStore> = backend
+        .settled()
+        .map(|_| crate::derived::objects(source_root.path()));
+
+    let mut tally = Native {
+        units: artefacts.len(),
+        ..Native::default()
+    };
     let mut objects: Vec<PathBuf> = Vec::new();
     for artefact in &artefacts {
         let ll = work.join(format!("{}.ll", artefact.name));
         let obj = work.join(format!("{}.o", artefact.name));
+
+        // The key is over the bytes that are about to be handed over, so it cannot
+        // describe anything but what is compiled.
+        let key = backend
+            .settled()
+            .map(|s| ObjectKey::of(LlvmInput::of(artefact.ir.as_bytes()), s.identity, s.config));
+        if let (Some(store), Some(key)) = (store.as_ref(), key) {
+            match store.get(&key) {
+                ObjectFound::Hit(bytes) => {
+                    // Materialised into this build's own directory. A cached entry is an
+                    // envelope, not an object, and it is never written to or linked in
+                    // place — it is immutable derived data.
+                    if std::fs::write(&obj, &bytes).is_ok() {
+                        tally.reused += 1;
+                        objects.push(obj);
+                        continue;
+                    }
+                }
+                ObjectFound::Miss => {}
+                ObjectFound::Rejected(_) => tally.rejected += 1,
+            }
+        }
+
         if let Err(e) = std::fs::write(&ll, &artefact.ir) {
             cleanup(false);
             eprintln!("nazm: cannot write {}: {e}", ll.display());
             return ExitCode::from(exit::TOOLCHAIN_FAILED);
         }
-        // **Independently generated.** Each unit becomes an object on its own, with no
-        // other unit's IR in scope, which is what makes this separate code generation
-        // rather than concatenation with extra steps.
-        match clang(&["-c"], opt_level, &obj, std::slice::from_ref(&ll)) {
-            Outcome::Ran(o) if o.status.success() => objects.push(obj),
+        match backend.compile(&ll, &obj) {
+            Outcome::Ran(o) if o.status.success() => tally.compiled += 1,
             other => return report_clang(other, &ll, cleanup),
         }
+
+        // Published after it exists and from the bytes that were produced, so what is
+        // stored is what was linked. A store that will not take an entry is not a reason
+        // to fail a build: the disk is full, or the tree is read-only, and the program is
+        // fine either way.
+        if let (Some(store), Some(key), Some(settled), Ok(bytes)) =
+            (store.as_ref(), key, backend.settled(), std::fs::read(&obj))
+        {
+            let entry = ObjectArtifact::of(
+                LlvmInput::of(artefact.ir.as_bytes()),
+                settled.identity,
+                settled.config,
+                bytes,
+            );
+            if entry.key() == Some(key) && store.put(&entry).is_ok() {
+                tally.stored += 1;
+            }
+        }
+        objects.push(obj);
     }
 
     // Deterministic: the units are in load order and the support artefacts last, so the
     // command line does not depend on anything the filesystem decided.
-    match clang(&[], opt_level, &tmp_exe, &objects) {
+    match backend.link(&tmp_exe, &objects) {
         Outcome::Ran(o) if o.status.success() => {}
         other => return report_clang(other, &work, cleanup),
     }
@@ -163,8 +265,43 @@ pub(crate) fn run(
         eprintln!("nazm: cannot write {}: {e}", output.display());
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
+    if with_report {
+        println!("{}", report(source_root.how(), map.len(), tally));
+    }
     println!("{}", output.display());
     ExitCode::from(exit::OK)
+}
+
+/// One `nazm.build-report/1` object.
+///
+/// Structured because the reader is as likely to be a script or an agent as a person, and
+/// versioned because anything a script reads is an interface. Off unless asked for: a
+/// compiler that reports on itself on every run is a compiler whose output has to be
+/// filtered before it can be read.
+///
+/// # Why `semantic.reused` is always zero here
+///
+/// It is not an oversight and it is not a placeholder. `nazm check` may skip a module's
+/// bodies because all it needs afterwards is the interface; `nazm build` needs the
+/// *resolution* those bodies produce, because that is what lowering reads, and nothing
+/// persists a resolution. So a build checks everything, every time, and says so rather
+/// than leaving a reader to infer it from a missing field. `docs/roadmap.md` records what
+/// reusing it would require.
+///
+/// # Why `link.performed` is always true
+///
+/// Same reason, stated the same way. The report is printed after a successful link, and
+/// the link runs on every build: there is no executable cache and no incremental linker.
+fn report(root: crate::root::How, modules: usize, t: Native) -> String {
+    format!(
+        r#"{{"schema":"nazm.build-report/1","root":"{}","semantic":{{"checked":{modules},"reused":0}},"native":{{"units":{},"compiled":{},"reused":{},"rejected":{},"stored":{}}},"link":{{"performed":true}}}}"#,
+        root.as_str(),
+        t.units,
+        t.compiled,
+        t.reused,
+        t.rejected,
+        t.stored,
+    )
 }
 
 /// One generated native unit, ready to be written down.
@@ -183,11 +320,11 @@ struct Artefact {
 ///
 /// The order is load order, then the runtime, then the entry. Nothing here reads a
 /// directory, so the same program produces the same artefacts in the same order.
-fn emit_artefacts(native: &nazm_lir::Native, map: &nazm_span::SourceMap) -> Vec<Artefact> {
+fn emit_artefacts(native: &nazm_lir::Native, names: &nazm_lir::SourceNames<'_>) -> Vec<Artefact> {
     let mut out = Vec::new();
     let mut needs = nazm_lir::Needs::default();
     for (i, unit) in native.units.iter().enumerate() {
-        let (ir, reached) = nazm_lir::emit_unit(unit, map);
+        let (ir, reached) = nazm_lir::emit_unit(unit, names);
         needs = needs.union(reached);
         out.push(Artefact {
             name: format!("m{i}"),
@@ -207,37 +344,13 @@ fn emit_artefacts(native: &nazm_lir::Native, map: &nazm_span::SourceMap) -> Vec<
     out
 }
 
-/// What running `clang` produced.
-enum Outcome {
-    Ran(std::process::Output),
-    Missing,
-    Failed(std::io::Error),
-}
-
-fn clang(extra: &[&str], opt_level: u8, output: &Path, inputs: &[PathBuf]) -> Outcome {
-    let mut c = Command::new("clang");
-    c.arg(format!("-O{opt_level}"))
-        // The modules carry no target triple, so clang supplies the host's and would
-        // otherwise warn about overriding nothing.
-        .arg("-Wno-override-module")
-        .args(extra)
-        .arg("-o")
-        .arg(output)
-        .args(inputs);
-    match c.output() {
-        Ok(o) => Outcome::Ran(o),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Outcome::Missing,
-        Err(e) => Outcome::Failed(e),
-    }
-}
-
 /// Explain a `clang` failure, keeping the IR when its complaint is about it.
 fn report_clang(outcome: Outcome, kept: &Path, cleanup: impl Fn(bool)) -> ExitCode {
     match outcome {
         Outcome::Missing => {
             cleanup(false);
             eprintln!(
-                "nazm: `clang` was not found on PATH, and `nazm build` needs it to \
+                "nazm: `{DRIVER}` was not found on PATH, and `nazm build` needs it to \
                  assemble the LLVM IR it generates.\n\
                  nazm: install the Xcode command line tools (`xcode-select --install`) \
                  or your platform's clang package. `nazm run` needs none of this."
@@ -246,7 +359,7 @@ fn report_clang(outcome: Outcome, kept: &Path, cleanup: impl Fn(bool)) -> ExitCo
         }
         Outcome::Failed(e) => {
             cleanup(false);
-            eprintln!("nazm: could not run `clang`: {e}");
+            eprintln!("nazm: could not run `{DRIVER}`: {e}");
             ExitCode::from(exit::TOOLCHAIN_FAILED)
         }
         Outcome::Ran(o) => {
@@ -255,9 +368,10 @@ fn report_clang(outcome: Outcome, kept: &Path, cleanup: impl Fn(bool)) -> ExitCo
             cleanup(true);
             eprint!("{}", String::from_utf8_lossy(&o.stderr));
             eprintln!(
-                "nazm: `clang` rejected the generated IR (exit {:?}). This is a bug in \
+                "nazm: `{}` rejected the generated IR (exit {:?}). This is a bug in \
                  `nazm build`, not in your program — the IR has been kept at {} to \
                  report it with.",
+                DRIVER,
                 o.status.code(),
                 kept.display()
             );
