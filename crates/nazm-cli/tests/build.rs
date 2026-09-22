@@ -4190,3 +4190,55 @@ fn the_spec_worker_pool_example_terminates_and_answers_ninety() {
         assert_eq!(ran.stdout.trim(), "90", "-O{opt}");
     }
 }
+
+// --- records, across the three backends --------------------------------------------------
+
+#[test]
+fn records_of_mixed_field_sizes_read_and_write_the_right_field() {
+    // §99's case. Fields of every width the language has, in an order that is not the
+    // layout order, each read back and folded into one number — so a projection that
+    // reached the wrong position, or a layout the two backends disagreed about, changes
+    // the answer rather than hiding.
+    //
+    // `zz` sorts last and is declared first; `aa` sorts first and is declared last. The
+    // layout is canonical by name, so the two orders are deliberately opposite.
+    let src = "struct Inner {\n    n: Int,\n}\n\
+               struct Mixed {\n    zz: Str,\n    flag: Bool,\n    mid: Int,\n    \
+               inner: Inner,\n    aa: Ints,\n}\n\
+               fn main() -> Int {\n    \
+               let m = Mixed(zz: \"abcd\", flag: true, mid: 7, inner: Inner(n: 100), aa: ints_new());\n    \
+               ints_push(m.aa, 3);\n    \
+               let f = if m.flag { 1000 } else { 0 };\n    \
+               f + m.inner.n + m.mid * 10 + str_len(m.zz) + ints_get(m.aa, 0)\n}\n";
+    expect_program(src, "1177");
+}
+
+#[test]
+fn a_record_survives_construction_copy_replacement_and_return_at_both_levels() {
+    let src = "struct Inner {\n    text: Str,\n}\n\
+               struct Outer {\n    inner: Inner,\n    count: Int,\n}\n\
+               fn make(n: Int) -> Outer { Outer(inner: Inner(text: int_to_str(n)), count: n) }\n\
+               fn returned(n: Int) -> Outer {\n    let o = make(n);\n    return o;\n}\n\
+               fn size(o: Outer) -> Int { str_len(o.inner.text) + o.count }\n\
+               fn main() -> Int {\n    \
+               let mut a = make(5);\n    let b = a;\n    \
+               a.inner.text = str_concat(a.inner.text, \"!\");\n    a.count = 6;\n    \
+               let c = returned(40);\n    \
+               size(a) + size(b) + size(c) + str_len(b.inner.text)\n}\n";
+    // a: len("5!")=2 + 6 = 8; b: len("5")=1 + 5 = 6; c: len("40")=2 + 40 = 42; +1 = 57.
+    expect_program(src, "57");
+}
+
+#[test]
+fn a_record_field_written_in_a_loop_keeps_the_right_value() {
+    // Storage reuse must never become value reuse: the hidden slot a construction is
+    // assembled in is reached once per iteration and must start empty each time.
+    let src = "struct Holder {\n    name: Str,\n    n: Int,\n}\n\
+               fn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    \
+               while i < 50 {\n        let mut h = Holder(name: int_to_str(i), n: i);\n        \
+               h.name = str_concat(h.name, \"x\");\n        \
+               total = total + str_len(h.name) + h.n;\n        i = i + 1;\n    }\n    \
+               total\n}\n";
+    // str_len: i<10 → 2 (10 × 2 = 20), i<50 → 3 (40 × 3 = 120); sum of i 0..49 = 1225.
+    expect_program(src, "1365");
+}

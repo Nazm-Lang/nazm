@@ -49,18 +49,40 @@ pub(crate) fn run(path: &Path, with_hash: bool, declared: Option<&Path>) -> Exit
     // As a **module**, not as a program: a library has no `main` and is exactly the thing
     // whose interface is worth publishing. `nazm_core::Entry` names the distinction.
     let published = nazm_core::on_module_map(&loaded.map, &loaded.graph, |program, _| {
-        let units = [nazm_core::Unit::of(program, &loaded.graph, ModuleId::ROOT)];
+        // **Every module of the compilation**, not only the root.
+        //
+        // The interface published is the root's, and computing it needs the others: a
+        // field of an exported record may have a type declared in a module this one
+        // imports, and resolving that name means the imported module's records have been
+        // declared. Running the stages over the whole graph is what a compilation does,
+        // and an interface produced by a shorter path would describe a module nobody
+        // checked — which is how `Inner` was published as `Int` before this read the
+        // graph rather than the root.
+        let units: Vec<nazm_core::Unit<'_>> = loaded
+            .graph
+            .ids()
+            .map(|m| nazm_core::Unit::of(program, &loaded.graph, m))
+            .collect();
         let mut res = nazm_core::Resolution::default();
         let mut errors = Vec::new();
-        // The record stages first, and in order: a signature may name a record, and a
-        // field type may name one declared later. Publishing runs the same stages a
-        // compilation does, because an interface that skipped one would describe a module
-        // nobody checked.
         let types = nazm_core::declare_records(&units, &mut res, &mut errors);
-        let deps: Vec<&nazm_core::UnitInterface> = types.iter().collect();
-        nazm_core::resolve_record_fields(&units[0], &deps, &mut res, &mut errors);
+        let deps_of = |u: &nazm_core::Unit<'_>| -> Vec<&nazm_core::UnitInterface> {
+            loaded
+                .graph
+                .imports(u.module())
+                .iter()
+                .filter_map(|d| types.get(d.on.index()))
+                .collect()
+        };
+        for u in &units {
+            nazm_core::resolve_record_fields(u, &deps_of(u), &mut res, &mut errors);
+        }
         nazm_core::validate_record_layouts(&mut res, &mut errors);
-        let interface = nazm_core::declare_unit(&units[0], &deps, &mut res, &mut errors);
+        let root = units
+            .iter()
+            .find(|u| u.module() == ModuleId::ROOT)
+            .ok_or_else(Vec::new)?;
+        let interface = nazm_core::declare_unit(root, &deps_of(root), &mut res, &mut errors);
         Ok::<_, Vec<nazm_diag::Diagnostic>>(PersistentUnitInterface::published(
             &interface,
             &loaded.graph,

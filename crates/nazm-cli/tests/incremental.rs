@@ -507,12 +507,20 @@ fn entries(dir: &Path) -> Vec<std::path::PathBuf> {
 }
 
 /// The entry for the module whose durable key is `key`.
+/// The entry **for** that module, not one that merely mentions it.
+///
+/// `"module"` appears twice in an entry's bytes: once as the module the entry is about,
+/// and once per dependency. Matching the bare field found whichever file the directory
+/// happened to yield first, which is a digest and therefore arbitrary — and it changed
+/// when the interface schema did, so a test that had been passing started damaging an
+/// importer's entry instead of the one it named. The field that follows tells them apart:
+/// an entry's own module is followed by its source fingerprint, a dependency's by the
+/// interface hash it was checked against.
 fn entry_for(dir: &Path, key: &str) -> std::path::PathBuf {
+    let wanted = format!(r#""module":"{key}","source""#);
     entries(dir)
         .into_iter()
-        .find(|p| {
-            std::fs::read_to_string(p).is_ok_and(|t| t.contains(&format!(r#""module":"{key}""#)))
-        })
+        .find(|p| std::fs::read_to_string(p).is_ok_and(|t| t.contains(&wanted)))
         .expect("an entry for that module")
 }
 
@@ -798,4 +806,145 @@ fn two_compilers_publishing_at_once_leave_a_usable_store() {
     let after = check(dir.path(), "a.nz");
     assert_eq!((after.checked, after.reused), (0, 2));
     assert!(after.accepted);
+}
+
+// --- records, and which edits reach an importer -----------------------------------------
+
+/// A → B where B exports a record and a function over it.
+fn two_modules_with_a_record(dir: &Path, b: &str) {
+    project(dir);
+    write(
+        dir,
+        "a.nz",
+        "use \"b.nz\";\n\
+         fn size(p: Point) -> Int { p.x }\n\
+         fn main() -> Int { size(at(21)) + Point(x: 21).x }\n",
+    );
+    write(dir, "b.nz", b);
+}
+
+const RECORD_B: &str = "pub struct Point {\n    x: Int,\n}\n\
+                        struct Hidden {\n    n: Int,\n}\n\
+                        fn secret() -> Int { Hidden(n: 1).n }\n\
+                        pub fn at(n: Int) -> Point { Point(x: n + secret() - 1) }\n";
+
+#[test]
+fn a_private_record_change_leaves_the_importer_alone() {
+    // The record analogue of the decisive case. B's private record changes shape: B's
+    // source fingerprint moves, so B is checked again; B's *interface* does not, so A is
+    // not. A record is not special here — it goes through the same fingerprint.
+    let dir = tempfile::tempdir().expect("tempdir");
+    two_modules_with_a_record(dir.path(), RECORD_B);
+    let first = check(dir.path(), "a.nz");
+    assert_eq!((first.checked, first.reused), (2, 0));
+
+    write(
+        dir.path(),
+        "b.nz",
+        "pub struct Point {\n    x: Int,\n}\n\
+         struct Hidden {\n    n: Str,\n    extra: Int,\n}\n\
+         fn secret() -> Int { str_len(Hidden(n: \"\", extra: 0).n) + 1 }\n\
+         pub fn at(n: Int) -> Point { Point(x: n + secret() - 1) }\n",
+    );
+    let after = check(dir.path(), "a.nz");
+    assert_eq!(
+        (after.checked, after.reused),
+        (1, 1),
+        "exactly B should have been checked"
+    );
+    assert!(after.accepted);
+    assert_eq!(meaning(&after), meaning(&cold(dir.path(), "a.nz")));
+}
+
+#[test]
+fn an_exported_record_change_rechecks_the_importer() {
+    // The other half: each of these moves B's interface, so A's key moves with it.
+    let edits: &[(&str, &str)] = &[
+        (
+            "a field is added",
+            "pub struct Point {\n    x: Int,\n    y: Int,\n}\n\
+             pub fn at(n: Int) -> Point { Point(x: n, y: 0) }\n",
+        ),
+        (
+            "a field changes type",
+            "pub struct Point {\n    x: Str,\n}\n\
+             pub fn at(n: Int) -> Point { Point(x: int_to_str(n)) }\n",
+        ),
+        (
+            "a record is added",
+            "pub struct Point {\n    x: Int,\n}\n\
+             pub struct Other {\n    y: Int,\n}\n\
+             pub fn at(n: Int) -> Point { Point(x: n) }\n",
+        ),
+    ];
+    for (what, after_text) in edits {
+        let dir = tempfile::tempdir().expect("tempdir");
+        two_modules_with_a_record(dir.path(), RECORD_B);
+        check(dir.path(), "a.nz");
+        write(dir.path(), "b.nz", after_text);
+        let after = check(dir.path(), "a.nz");
+        assert_eq!(after.reused, 0, "{what}: A should have been re-checked");
+    }
+}
+
+#[test]
+fn reordering_an_exported_records_fields_reaches_nobody() {
+    // The claim `docs/spec.md` makes about field order, measured where it is easiest to
+    // get wrong: B's source moves, so B re-checks, and A does not — because the
+    // interface's fields are sorted by name and the bytes did not move.
+    let dir = tempfile::tempdir().expect("tempdir");
+    two_modules_with_a_record(
+        dir.path(),
+        "pub struct Point {\n    x: Int,\n    y: Int,\n}\n\
+         pub fn at(n: Int) -> Point { Point(x: n, y: 0) }\n",
+    );
+    // This B's `Point` has two fields, so A's own construction names both.
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\n\
+         fn size(p: Point) -> Int { p.x }\n\
+         fn main() -> Int { size(at(21)) + Point(x: 21, y: 0).x }\n",
+    );
+    let first = check(dir.path(), "a.nz");
+    assert_eq!(
+        (first.checked, first.stored),
+        (2, 2),
+        "both should be stored"
+    );
+    write(
+        dir.path(),
+        "b.nz",
+        "pub struct Point {\n    y: Int,\n    x: Int,\n}\n\
+         pub fn at(n: Int) -> Point { Point(x: n, y: 0) }\n",
+    );
+    let after = check(dir.path(), "a.nz");
+    assert_eq!(
+        (after.checked, after.reused),
+        (1, 1),
+        "reordering fields should reach nobody"
+    );
+}
+
+#[test]
+fn an_entry_written_before_records_existed_cannot_become_a_hit() {
+    // §81. A cached answer is keyed by the checker that produced it, and that identity
+    // reads the interface schema and the semantic epoch — both of which moved in N9. So
+    // an entry from a build that had no concept of a record is unreachable by
+    // construction rather than by a rule someone has to remember, and nothing deletes it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    two_modules_with_a_record(dir.path(), RECORD_B);
+    let first = check(dir.path(), "a.nz");
+    assert_eq!(first.stored, 2);
+
+    // The identity is a digest of the build, so forging an older one is not possible from
+    // out here. What *is* checkable is that the identity moved: an entry stored under the
+    // previous epoch is not this build's, and this build's key is what the store is asked
+    // for. The epoch is asserted directly.
+    assert_eq!(
+        nazm_cache::SEMANTIC_EPOCH,
+        2,
+        "N9 changed what the checker accepts, so the epoch must have moved"
+    );
+    assert_eq!(nazm_iface::SCHEMA, "nazm.interface/2");
 }

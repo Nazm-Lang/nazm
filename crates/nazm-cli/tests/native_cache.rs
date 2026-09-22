@@ -919,3 +919,164 @@ fn a_semantic_hit_does_not_imply_a_native_hit() {
     assert_eq!(build(dir.path(), "a.nz").compiled, 0);
     assert_eq!(check(&[]), 2);
 }
+
+// --- records, and the boundary they must not blur ---------------------------------------
+
+/// A calls B, and B exports a record.
+const A_USES_B_RECORD: &[(&str, &str)] = &[
+    (
+        "a.nz",
+        "use \"b.nz\";\n\
+         fn main() -> Int { let p = at(21); print(int_to_str(p.x + p.x)); 0 }\n",
+    ),
+    (
+        "b.nz",
+        "pub struct Point {\n    x: Int,\n}\n\
+         struct Hidden {\n    n: Int,\n}\n\
+         fn secret() -> Int { Hidden(n: 0).n }\n\
+         pub fn at(n: Int) -> Point { Point(x: n + secret()) }\n",
+    ),
+];
+
+#[test]
+fn a_record_program_is_compiled_cold_and_reused_warm() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path(), A_USES_B_RECORD);
+    let first = build(dir.path(), "a.nz");
+    assert_eq!(first.reused, 0);
+    assert_eq!(run(dir.path(), "prog").stdout, "420");
+
+    let second = build(dir.path(), "a.nz");
+    assert_eq!(second.compiled, 0, "nothing changed, so nothing to compile");
+    assert_eq!(second.reused, second.units);
+}
+
+#[test]
+fn a_private_record_added_to_a_dependency_leaves_the_caller_s_object_reusable() {
+    // N6's boundary, asked of records: A's unit names B through a `declare` and a `call`,
+    // and a record B keeps to itself is not in A's text — so it cannot move A's key.
+    // Nothing about `ObjectKey` had to learn what a record is for this to hold.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path(), A_USES_B_RECORD);
+    build(dir.path(), "a.nz");
+
+    write(
+        dir.path(),
+        "b.nz",
+        "pub struct Point {\n    x: Int,\n}\n\
+         struct Hidden {\n    n: Int,\n    extra: Str,\n}\n\
+         struct Another {\n    m: Int,\n}\n\
+         fn secret() -> Int { str_len(Hidden(n: 0, extra: \"\").extra) + Another(m: 0).m }\n\
+         pub fn at(n: Int) -> Point { Point(x: n + secret()) }\n",
+    );
+    let after = build(dir.path(), "a.nz");
+    assert_eq!(
+        after.compiled, 1,
+        "only b.nz's unit should have been compiled"
+    );
+    assert_eq!(after.reused, after.units - 1);
+    assert_eq!(run(dir.path(), "prog").stdout, "420");
+}
+
+#[test]
+fn a_record_a_unit_never_mentions_is_not_in_its_text() {
+    // The other half of the same boundary, read out of the IR rather than inferred from
+    // a cache hit: a unit carries the record types **it uses**, closed over field types,
+    // and nothing else. A record declared in another module and never named here would
+    // otherwise put that module's edits into this module's key.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[
+            ("a.nz", "use \"b.nz\";\nfn main() -> Int { plain() }\n"),
+            (
+                "b.nz",
+                "pub struct Unused {\n    x: Int,\n}\n\
+                 pub fn plain() -> Int { Unused(x: 1).x }\n",
+            ),
+        ],
+    );
+    let units = emitted(dir.path(), "a.nz", "prog");
+    let a = unit_of(&units, "a.nz");
+    let b = unit_of(&units, "b.nz");
+    assert!(
+        !a.contains("nz.t."),
+        "a.nz names no record and should carry no record type:\n{a}"
+    );
+    assert!(
+        b.contains("nz.t."),
+        "b.nz uses `Unused` and must define its type:\n{b}"
+    );
+}
+
+#[test]
+fn a_record_type_is_named_from_its_durable_identity_and_not_its_position() {
+    // Two modules each declare a private `Thing`. Both units must lay one out, and the
+    // two names must differ — a name derived from a declaration index or a load order
+    // would have made them one type to the linker, which is the miscompile N5 removed for
+    // functions and this is the same removal for types.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[
+            (
+                "main.nz",
+                "use \"a.nz\";\nuse \"b.nz\";\nfn main() -> Int { from_a() + from_b() }\n",
+            ),
+            (
+                "a.nz",
+                "struct Thing {\n    n: Int,\n}\npub fn from_a() -> Int { Thing(n: 1).n }\n",
+            ),
+            (
+                "b.nz",
+                "struct Thing {\n    m: Str,\n}\npub fn from_b() -> Int { str_len(Thing(m: \"ab\").m) }\n",
+            ),
+        ],
+    );
+    let units = emitted(dir.path(), "main.nz", "prog");
+    let a = unit_of(&units, "a.nz");
+    let b = unit_of(&units, "b.nz");
+    let name_in = |text: &str| -> String {
+        text.lines()
+            .find(|l| l.contains("= type {"))
+            .unwrap_or_else(|| panic!("no record type in:\n{text}"))
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let (an, bn) = (name_in(&a), name_in(&b));
+    assert_ne!(an, bn, "two modules' `Thing` share a native name");
+    assert!(an.contains("a_2Enz"), "{an}");
+    assert!(bn.contains("b_2Enz"), "{bn}");
+}
+
+#[test]
+fn reordering_a_records_fields_changes_no_object() {
+    // `docs/spec.md` says field order is not semantic; the layout is canonical by field
+    // name, so the claim holds of the object file too. A source edit that means nothing
+    // must not produce a different binary, or the compiler and the linker would disagree
+    // about whether anything happened.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[(
+            "m.nz",
+            "struct Point {\n    x: Int,\n    label: Str,\n}\n\
+             fn main() -> Int { let p = Point(x: 1, label: \"ab\"); p.x + str_len(p.label) }\n",
+        )],
+    );
+    let before = emitted(dir.path(), "m.nz", "prog");
+    write(
+        dir.path(),
+        "m.nz",
+        "struct Point {\n    label: Str,\n    x: Int,\n}\n\
+         fn main() -> Int { let p = Point(x: 1, label: \"ab\"); p.x + str_len(p.label) }\n",
+    );
+    let after = emitted(dir.path(), "m.nz", "prog");
+    assert_eq!(
+        unit_of(&before, "m.nz"),
+        unit_of(&after, "m.nz"),
+        "reordering two field declarations changed the emitted IR"
+    );
+}
