@@ -1301,6 +1301,14 @@ that holds the handle** — a built-in borrows its argument and the caller keeps
 across the call — so a waiter implies a live reference, and therefore no reference implies
 no waiter. That is why `rc == 0` is a sufficient condition and no second one is needed.
 
+**The destroy results are not checked**, and that is a decision rather than an oversight.
+`pthread_mutex_destroy` returns `EBUSY` for a mutex that is still locked or waited on, which
+is exactly the state the argument above rules out — so a branch on it would be a path no
+test can reach and no diagnostic can name, in a helper that has no source position to report
+at. If the argument were ever wrong, refusing to free would convert a use-after-free into a
+leak, which is the safer failure; the reason not to write it is that an unreachable
+recovery path is itself a place for a defect to live.
+
 ### What crosses into a task, and who holds it
 
 A `spawn` argument is **held for the task**, not borrowed from the statement that started
