@@ -1428,6 +1428,42 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
              while chan_recv(c, buf) {\n    }\n    ints_len(buf)\n}\n",
             "2",
         ),
+        // Records: copied, nested, replaced field by field, and returned — all of it on
+        // top of fields that own something, so a drop that did not recurse or a copy that
+        // did not retain would show as a different count rather than a different answer.
+        (
+            "struct Inner {\n    text: Str,\n}\n\
+             struct Outer {\n    inner: Inner,\n    values: Ints,\n}\n\
+             fn make(n: Int) -> Outer {\n    \
+             Outer(inner: Inner(text: int_to_str(n)), values: ints_new())\n}\n\
+             fn main() -> Int {\n    let mut o = make(7);\n    let p = o;\n    \
+             o.inner.text = str_concat(o.inner.text, \"!\");\n    \
+             ints_push(p.values, 1);\n    let mut i = 0;\n    let mut total = 0;\n    \
+             while i < 30 {\n        let each = make(i);\n        \
+             total = total + str_len(each.inner.text);\n        i = i + 1;\n    }\n    \
+             total + str_len(o.inner.text) + ints_len(p.values)\n}\n",
+            "53",
+        ),
+        // A projection out of a temporary, which must take its own reference before the
+        // record it came from is dropped.
+        (
+            "struct Holder {\n    name: Str,\n}\n\
+             fn make() -> Holder { Holder(name: str_concat(\"ab\", \"cd\")) }\n\
+             fn main() -> Int {\n    let s = make().name;\n    \
+             let mut noise = \"\";\n    let mut i = 0;\n    \
+             while i < 20 {\n        noise = str_concat(noise, \"zz\");\n        i = i + 1;\n    }\n    \
+             str_byte(s, 3)\n}\n",
+            "100",
+        ),
+        // A construction that fails part way through, and a temporary still in hand when
+        // it does. Both compilers have to release both.
+        (
+            "struct Two {\n    a: Str,\n    b: Int,\n}\n\
+             fn main() -> Int {\n    let z = 0;\n    \
+             let t = Two(a: str_concat(\"ab\", \"cd\"), b: str_len(str_concat(\"x\", int_to_str(1 / z))));\n    \
+             t.b\n}\n",
+            "",
+        ),
     ];
 
     /// The `nazm-memory:` line, which both compilers' programs print under the same
