@@ -38,7 +38,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 611 passed, 0 failed, 6 ignored, across 41 suites**, run through
+**Current suite: 649 passed, 0 failed, 6 ignored, across 45 suites**, run through
 `cargo xtask contained tests`. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
