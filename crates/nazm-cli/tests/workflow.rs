@@ -265,10 +265,18 @@ fn the_conformance_corpus_passes_under_nazm_test() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    // Every case, and a floor rather than an exact count: the corpus grows, and a test
+    // that had to be edited for each addition is one that eventually is not.
+    let summary = String::from_utf8_lossy(&out.stderr);
+    let passed: usize = summary
+        .split_whitespace()
+        .nth(1)
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    assert!(passed >= 6, "{summary}");
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("5 of 5 passed"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
+        summary.contains(&format!("{passed} of {passed} passed")),
+        "{summary}"
     );
 }
 

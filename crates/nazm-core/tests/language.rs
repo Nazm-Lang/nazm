@@ -269,11 +269,11 @@ fn absent_features_are_refused_by_name() {
         ("fn main() -> Int { loop { 1 } }", "loop"),
         ("fn main() -> Int { for x in y { 1 } }", "for"),
         ("fn main() -> Int { match 1 { } }", "match"),
-        ("fn main() -> Int { struct S { } }", "struct"),
-        // `print` was on this list until B3, when it stopped being a name held for a
-        // feature that did not exist and became the feature. A reserved word earns its
-        // place by naming something absent; once it arrives, reserving it would be
-        // refusing the thing it was reserving.
+        // `print` was on this list until B3, and `struct` until N9, when each stopped
+        // being a name held for a feature that did not exist and became the feature. A
+        // reserved word earns its place by naming something absent; once it arrives,
+        // reserving it would be refusing the thing it was reserving. What `struct` in a
+        // *body* gets instead is the case below.
     ] {
         match run(src) {
             Outcome::CheckFailed(ds) => {
@@ -286,6 +286,22 @@ fn absent_features_are_refused_by_name() {
             }
             other => panic!("`{word}` should be refused, got {other:?}"),
         }
+    }
+}
+
+#[test]
+fn a_record_declared_inside_a_function_is_refused_where_it_was_written() {
+    // `struct` is no longer absent, so it is no longer refused by name — but a
+    // declaration in a body is still wrong, and "expected an expression" would be true
+    // and useless. The message says where it belongs.
+    match run("fn main() -> Int { struct S { x: Int, } 0 }") {
+        Outcome::CheckFailed(ds) => {
+            let d = &ds[0];
+            assert_eq!(d.code, codes::UNEXPECTED_TOKEN);
+            assert!(d.message.contains("top level"), "{}", d.message);
+            assert!(d.help.is_some(), "should say where a record goes");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
     }
 }
 
