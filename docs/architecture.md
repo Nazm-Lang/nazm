@@ -1219,14 +1219,23 @@ A `Str` is `{ pointer, length, owner }`, 24 bytes.
 `owner` is not language-visible. No Nazm expression can read it, `docs/spec.md` still
 specifies a `Str` as its bytes, and the type `nazm capabilities` reports is unchanged.
 
-The four origins become three answers and one of them is free:
+**Every** expression that produces a `Str`, and what it owns. The four origins become
+three answers and one of them is free:
 
-| Origin | `owner` | Cost of retaining or releasing |
-| --- | --- | --- |
-| a literal | `null` — it is in read-only data and outlives the process's work | one comparison |
-| `arg(i)` | `null` — the bytes are the operating system's | one comparison |
-| `str_concat`, `str_join`, `int_to_str`, `str_from_byte`, `read_file` | the backing that call allocated | one atomic add or subtract |
-| `str_slice` of any of those | **the same owner as its source** | the source's |
+| Producer | Class | `owner` | What the expression holds |
+| --- | --- | --- | --- |
+| a literal | immortal | `null` | nothing — a retain is one comparison |
+| `arg(i)` | external | `null` | nothing — the bytes are the operating system's |
+| `str_concat`, `str_join`, `int_to_str`, `str_from_byte`, `read_file` | owned heap | the backing that call allocated | **one reference**, born with the allocation |
+| `str_slice` | view | **the same owner as its source** | **one reference**, taken inside the built-in — see below |
+| `strs_get` | view | the stored element's owner | **one reference**, taken inside the built-in |
+| `strs_pop` | view | the stored element's owner | **one reference**, *transferred* — the sequence gives up its own, so nothing is retained and nothing released |
+
+`str_slice` and `strs_get` take their reference **inside** the built-in rather than leaving
+it to whoever binds the result, and the reason is the order. A built-in's arguments are
+released as temporaries the moment it returns, so `str_slice(str_concat(a, b), 1, 2)` and
+`strs_get(one(), 0)` would otherwise free the storage their own results point into before
+anything could claim it.
 
 Null being a valid owner is what makes *immortal* and *external* cost nothing and need no
 tag: they are simply strings that own nothing, and `@nz.str_retain(null)` is a branch.
