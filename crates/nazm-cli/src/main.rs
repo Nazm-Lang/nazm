@@ -393,11 +393,21 @@ fn main() -> ExitCode {
     // the value they produce. `docs/spec.md` says when storage is reclaimed; this is how a
     // test checks that both of them did it.
     if std::env::var_os(nazm_lir::MEMORY_VARIABLE).is_some() {
-        let (allocated, reclaimed) = nazm_core::eval::sequence_counts();
-        eprintln!(
-            "nazm-memory: sequences allocated={allocated} reclaimed={reclaimed} live={}",
-            allocated - reclaimed
-        );
+        let c = nazm_core::eval::memory_counts();
+        let mut line = String::from("nazm-memory:");
+        for (name, (allocated, reclaimed)) in [
+            ("sequences", c.sequences),
+            ("strings", c.strings),
+            ("channels", c.channels),
+        ] {
+            use std::fmt::Write as _;
+            let _ = write!(
+                line,
+                " {name} allocated={allocated} reclaimed={reclaimed} live={}",
+                allocated - reclaimed
+            );
+        }
+        eprintln!("{line}");
     }
 
     match outcome {
