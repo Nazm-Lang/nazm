@@ -746,7 +746,7 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **68** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **73** catalogued defects;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a

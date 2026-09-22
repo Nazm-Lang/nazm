@@ -21,11 +21,14 @@
 //! result types, and different failure modes (`+` can overflow, `<` cannot). One enum
 //! would let a `match` arm written for arithmetic silently start accepting comparisons.
 
+use nazm_sema::ModuleId;
 use nazm_span::Span;
+
+use crate::symbol::{Linkage, NativeSymbol};
 
 /// The value types this backend can represent. Not the language's — `Str` exists and is
 /// refused by name in [`crate::lower`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Ty {
     Int,
     Bool,
@@ -117,13 +120,6 @@ impl Ty {
     }
 }
 
-/// Which function. An index into [`Module::functions`], resolved once during lowering.
-///
-/// Calls carry this rather than a name: looking a string up again at emission time would
-/// be a second name resolution, and two resolutions are two chances to disagree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FuncId(pub usize);
-
 impl Ty {
     /// The backend's representation of a front-end [`Type`](nazm_sema::Type).
     ///
@@ -142,33 +138,60 @@ impl Ty {
     }
 }
 
-impl FuncId {
-    /// The LLVM symbol for this function.
+/// One Nazm module, lowered: everything that belongs in its own native artefact.
+///
+/// # What is in it, and what is deliberately not
+///
+/// The functions **this module declares**, the external definitions it refers to, and
+/// nothing else. A module that imports another does not acquire its bodies here, which is
+/// the whole of what "separately code-generated" means: the unit for `a.nz` is a function
+/// of `a.nz`'s source and of its dependencies' *signatures*, and a change to a
+/// dependency's body cannot alter a byte of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unit {
+    /// Which Nazm module this is. Session-local, and used for naming the artefact and
+    /// reporting — never for a symbol, which comes from the durable identity.
+    pub module: ModuleId,
+    /// The name of the source file, for `source_filename`. A unit knows its own origin;
+    /// before N5 one filename stood for a whole compilation.
+    pub source: String,
+    pub functions: Vec<Function>,
+    /// Definitions this unit calls and does not define, so the emitter can declare them.
     ///
-    /// Generated from the index and **never from the source name**. A Nazm identifier
-    /// would need escaping rules to be safe in an LLVM identifier, and the escaping is
-    /// the bug — so there is none to get wrong. It also means no program can collide
-    /// with the runtime helper, with the platform entry point, or with `printf`,
-    /// `write` or `exit`.
-    #[must_use]
-    pub fn symbol(self) -> String {
-        format!("@nz.f{}", self.0)
-    }
+    /// Sorted and deduplicated, so two builds of one module produce one text.
+    pub externals: Vec<External>,
 }
 
-/// One compiled program.
+/// A definition another unit owns, as this one needs to see it.
+///
+/// A symbol and a signature. **Not a body** — that is the point, and it is why a
+/// dependency's implementation cannot reach this unit's object.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct External {
+    pub symbol: NativeSymbol,
+    pub params: Vec<Ty>,
+    pub ret: Ty,
+}
+
+/// Everything one `nazm build` generates, before any of it is written down.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Module {
-    /// Indexed by [`FuncId`].
-    pub functions: Vec<Function>,
-    /// Nazm's `main` — an ordinary function here. The C entry point is a wrapper the
-    /// emitter adds, which is what keeps a Nazm program from colliding with `@main`.
-    pub entry: FuncId,
+pub struct Native {
+    /// One per Nazm module, in load order.
+    pub units: Vec<Unit>,
+    /// The root module's `main`, which the platform entry wrapper calls.
+    ///
+    /// An ordinary definition with an ordinary symbol: `docs/architecture.md` keeps the
+    /// language's entry point and the operating system's apart, so that `main` is special
+    /// only at the boundary where a process starts.
+    pub entry: NativeSymbol,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
-    pub id: FuncId,
+    /// What the linker calls it, derived from its durable identity.
+    pub symbol: NativeSymbol,
+    /// How much of the program may bind to it.
+    pub linkage: Linkage,
     /// The source name. For comments and diagnostics only — never for a symbol, and
     /// never resolved against.
     pub name: String,
@@ -296,13 +319,13 @@ pub enum Stmt {
     Scope { body: Vec<Stmt>, span: Span },
     /// `spawn f(args);` — start a task, to be joined by the enclosing [`Stmt::Scope`].
     ///
-    /// The callee is a [`FuncId`], not an expression: the language has no function
-    /// values, so a task is always a named function.
+    /// The callee is a symbol, not an expression: the language has no function values,
+    /// so a task is always a named function.
     ///
     /// `span` is carried because starting a task can fail — the machine may refuse
     /// another thread — and that failure is reported where the `spawn` is written.
     Spawn {
-        callee: FuncId,
+        callee: NativeSymbol,
         args: Vec<Expr>,
         /// The callee's return type, carried for the same reason [`Expr::Call`] carries
         /// it: emission needs it to write the call, and looking it up in the module
@@ -347,17 +370,19 @@ pub enum Expr {
     },
     /// A direct call to a known function.
     ///
-    /// There is no indirect call, because the language has no function values. `ret` is
-    /// carried so [`Expr::ty`] stays total without consulting the module.
+    /// There is no indirect call, because the language has no function values. The callee
+    /// is the symbol resolution already decided on — emission never looks a name up, and
+    /// a call into another module is an ordinary external reference. `ret` is carried so
+    /// [`Expr::ty`] stays total without consulting anything else.
     Call {
-        callee: FuncId,
+        callee: NativeSymbol,
         args: Vec<Expr>,
         ret: Ty,
     },
     /// A built-in operation.
     ///
     /// Separate from [`Expr::Call`] because it resolves to emitted instructions rather
-    /// than to a `FuncId`, and because **the set this backend lowers is its own**. A
+    /// than to a symbol, and because **the set this backend lowers is its own**. A
     /// built-in the front end has and this does not is an ordinary backend limitation,
     /// reported as `N0101` like any other, and `lower` refuses it by name rather than
     /// emitting something approximate.
