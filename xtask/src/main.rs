@@ -32,6 +32,7 @@ fn main() -> ExitCode {
         Some("check-sema") => report(&[("sema purity", check_sema_purity())]),
         Some("check-cache") => report(&[("cache soundness", check_cache_soundness())]),
         Some("check-symbols") => report(&[("native identity", check_native_identity())]),
+        Some("check-objects") => report(&[("object cache", check_object_cache())]),
         Some("check-guide") => report(&[("guide from grammar", guide::check())]),
         Some("bench") => {
             let rest: Vec<String> = args.collect();
@@ -157,6 +158,7 @@ fn run_checks() -> ExitCode {
         ("sema purity", check_sema_purity()),
         ("cache soundness", check_cache_soundness()),
         ("native identity", check_native_identity()),
+        ("object cache", check_object_cache()),
         ("guide from grammar", guide::check()),
     ])
 }
@@ -1164,6 +1166,173 @@ fn check_cache_soundness() -> Result<(), Vec<String>> {
             }
         }
         Err(e) => problems.push(format!("could not read {}: {e}", dir.display())),
+    }
+
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
+/// The native object cache: what a key must cover, and what a lookup must prove.
+///
+/// # Why a gate and not only tests
+///
+/// The tests establish behaviour — a body edit reuses a caller's object, a corrupted entry
+/// is a miss. Each of them would keep passing if a key quietly *gained* a field, and each
+/// would fail for a reason that reads like a flaky cache if one quietly lost one. These
+/// rules are about the shape of the thing rather than about one run of it:
+///
+/// 1. an `ObjectKey` still covers all three of its inputs;
+/// 2. reading an entry still recomputes the key from its recorded inputs **and** the digest
+///    of the object beside them;
+/// 3. nothing semantic reaches the key — no module identity, no interface, no source
+///    fingerprint. Including any of them would be sound and would throw away exactly the
+///    precision N5 measured;
+/// 4. the stored header carries the fields it validates and no others, so a field cannot be
+///    added to the wire without someone deciding whether it belongs in the key;
+/// 5. the arguments that are hashed and the arguments that are executed come from one
+///    function, so a key cannot describe an invocation that did not happen;
+/// 6. the object compiler is invoked with an environment built from nothing, both when it
+///    is asked what it will do and when it does it.
+fn check_object_cache() -> Result<(), Vec<String>> {
+    let Some(root) = workspace_root() else {
+        return Err(vec!["could not locate workspace root".to_owned()]);
+    };
+    let mut problems = Vec::new();
+    let read = |rel: &str| std::fs::read_to_string(root.join(rel)).ok();
+
+    // 1 and 3. The key, and nothing but the key.
+    match read("crates/nazm-cache/src/object.rs") {
+        Some(text) => {
+            let body = text
+                .split("pub fn of(input: LlvmInput")
+                .nth(1)
+                .and_then(|t| t.split("\n    }").next())
+                .unwrap_or("");
+            for (what, needle) in [
+                ("the emitted LLVM", "input.to_string()"),
+                ("the backend's identity", "tool.to_string()"),
+                ("the resolved configuration", "config.to_string()"),
+            ] {
+                if !body.contains(needle) {
+                    problems.push(format!(
+                        "an object key no longer covers {what}. An input left out of the \
+                         key is an object handed to a build that did not produce it — a \
+                         wrong program linked, not a slow build."
+                    ));
+                }
+            }
+            for line in text.lines().filter(|l| l.trim_start().starts_with("use ")) {
+                for id in [
+                    "ModuleKey",
+                    "InterfaceHash",
+                    "SourceFingerprint",
+                    "CheckKey",
+                ] {
+                    if line.contains(id) {
+                        problems.push(format!(
+                            "crates/nazm-cache/src/object.rs imports `{id}`. An object is \
+                             keyed on what the object compiler reads; a semantic fact in \
+                             the key would invalidate a caller whose own input never moved."
+                        ));
+                    }
+                }
+            }
+        }
+        None => problems.push("could not read crates/nazm-cache/src/object.rs".to_owned()),
+    }
+
+    // 2 and 4. What a lookup proves, and what an entry may carry.
+    match read("crates/nazm-cache/src/objects.rs") {
+        Some(text) => {
+            let body = text
+                .split("pub fn read(")
+                .nth(1)
+                .and_then(|t| t.split("\n    }").next())
+                .unwrap_or("");
+            for (what, needle) in [
+                (
+                    "recompute the key from the inputs it records",
+                    "ObjectKey::of(input, tool, config)",
+                ),
+                (
+                    "recompute the digest of the object it carries",
+                    "ObjectFingerprint::of(bytes)",
+                ),
+                ("check the length it claims", "header.length"),
+            ] {
+                if !body.contains(needle) {
+                    problems.push(format!(
+                        "reading a stored object no longer {what}. A file name is how an \
+                         entry is found and never why it is believed."
+                    ));
+                }
+            }
+
+            const HEADER: &[&str] = &[
+                "schema",
+                "key",
+                "llvm_input",
+                "tool",
+                "config",
+                "object",
+                "length",
+            ];
+            let fields: Vec<String> = text
+                .split("pub struct ObjectHeader {")
+                .nth(1)
+                .and_then(|t| t.split("\n}").next())
+                .unwrap_or("")
+                .lines()
+                .filter_map(|l| l.trim().strip_prefix("pub "))
+                .filter_map(|l| l.split(':').next())
+                .map(str::to_owned)
+                .collect();
+            for f in &fields {
+                if !HEADER.contains(&f.as_str()) {
+                    problems.push(format!(
+                        "a stored object's header carries `{f}`, which this gate does not \
+                         know. Every field in an entry is recomputed or compared — add it \
+                         here once it is, so that a field nothing validates cannot appear."
+                    ));
+                }
+            }
+            for f in HEADER {
+                if !fields.iter().any(|x| x == f) {
+                    problems.push(format!(
+                        "a stored object's header no longer carries `{f}`, so a lookup has \
+                         one fewer thing it can prove."
+                    ));
+                }
+            }
+        }
+        None => problems.push("could not read crates/nazm-cache/src/objects.rs".to_owned()),
+    }
+
+    // 5 and 6. One argument list, and an environment built from nothing.
+    match read("crates/nazm-cli/src/backend.rs") {
+        Some(text) => {
+            let uses = text.matches("compile_args(").count();
+            if uses < 3 {
+                problems.push(
+                    "the probe and the compilation no longer share one argument list. Two \
+                     lists are two lists that can differ, and the difference is a key \
+                     describing an invocation nobody ran."
+                        .to_owned(),
+                );
+            }
+            if text.matches("env_clear()").count() < 2 {
+                problems.push(
+                    "the object compiler is no longer invoked with an environment built \
+                     from nothing. `CCC_OVERRIDE_OPTIONS` was measured to rewrite an \
+                     invocation's own flags, which no key can see."
+                        .to_owned(),
+                );
+            }
+        }
+        None => problems.push("could not read crates/nazm-cli/src/backend.rs".to_owned()),
     }
 
     if problems.is_empty() {
