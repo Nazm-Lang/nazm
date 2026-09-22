@@ -90,31 +90,40 @@ fn llvm_type(t: Int) -> Str {
 // `line:column`, 1-based, from a byte offset — the same convention the renderer uses, so
 // a runtime error from a compiled program points where `nazm run` would.
 
-fn line_of(src: Str, offset: Int) -> Int {
-    let mut i = 0;
-    let mut line = 1;
-    while i < offset {
-        if str_byte(src, i) == 10 { line = line + 1; }
-        i = i + 1;
-    }
-    line
+// Where an offset is: a line and a column, 1-based.
+//
+// **The first record in this compiler's own source**, and it is here because this is the
+// one place the language could not express what the code meant. `line_of` and
+// `column_of` were two functions because a function returns one value: the first scanned
+// forward counting newlines, the second scanned *backward* looking for one, and every
+// diagnostic paid for both. A column falls out of the forward scan for nothing — reset it
+// at each newline — so the two passes were never anything but the missing return type.
+struct Place {
+    line: Int,
+    column: Int,
 }
 
-fn column_of(src: Str, offset: Int) -> Int {
-    let mut i = offset;
-    let mut col = 1;
-    while i > 0 {
-        if str_byte(src, i - 1) == 10 { return col; }
-        col = col + 1;
-        i = i - 1;
+fn place_of(src: Str, offset: Int) -> Place {
+    let mut i = 0;
+    let mut line = 1;
+    let mut column = 1;
+    while i < offset {
+        if str_byte(src, i) == 10 {
+            line = line + 1;
+            column = 1;
+        } else {
+            column = column + 1;
+        }
+        i = i + 1;
     }
-    col
+    Place(line: line, column: column)
 }
 
 fn position(src: Str, path: Str, offset: Int) -> Str {
+    let at = place_of(src, offset);
     str_concat(str_concat(path, ":"),
-            str_concat(str_concat(int_to_str(line_of(src, offset)), ":"),
-            int_to_str(column_of(src, offset))))
+            str_concat(str_concat(int_to_str(at.line), ":"),
+            int_to_str(at.column)))
 }
 
 // --- the failure helper and its messages --------------------------------------------
