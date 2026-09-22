@@ -8,7 +8,8 @@ pub mod check;
 pub mod eval;
 
 pub use check::{
-    check, check_reusing, check_unit, declare_unit, CheckEverything, Reuse, Signature, Unit,
+    check, check_reusing, check_unit, declare_records, declare_unit, resolve_record_fields,
+    validate_record_layouts, CheckEverything, Reuse, Signature, Unit,
 };
 pub use eval::{Interpreter, RuntimeError, Value};
 // `Type`, `Intrinsic` and `Resolution` moved to `nazm-syntax` on 2026-09-21, so the
@@ -16,7 +17,7 @@ pub use eval::{Interpreter, RuntimeError, Value};
 // 2026-09-22, once N2 showed that the syntax crate's own code referred to them exactly
 // never. Re-exported here because they are still what a caller of this crate means by a
 // type, a built-in and a resolution.
-pub use nazm_sema::{Intrinsic, Resolution, Type};
+pub use nazm_sema::{Intrinsic, Resolution, Type, UnitInterface};
 
 /// What a program means, as its own vocabulary.
 ///

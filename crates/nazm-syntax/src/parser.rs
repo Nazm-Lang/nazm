@@ -9,8 +9,8 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, Span};
 
 use crate::ast::{
-    Assign, BinOp, Block, Expr, Function, Import, Let, Param, Program, Return, Scope, Spawn, Stmt,
-    TypeName, While,
+    Assign, BinOp, Block, Expr, Field, FieldInit, Function, Import, Let, Param, Place, PlaceField,
+    Program, Record, Return, Scope, Spawn, Stmt, TypeName, While,
 };
 use crate::lexer::{Token, TokenKind};
 
@@ -22,8 +22,9 @@ const RESERVED: &[(&str, &str)] = &[
         "there are no loop labels; `break` leaves the innermost loop",
     ),
     ("loop", "there is no `loop`; write `while true`"),
-    ("struct", "there are no user-defined types yet"),
-    ("enum", "there are no user-defined types yet"),
+    // `struct` left this list in N9, when it became the keyword it was reserving. The
+    // entry existed to refuse a word people would reach for before it worked.
+    ("enum", "there are no variant types yet"),
     ("match", "there is no pattern matching yet"),
     // `use` left this list when imports arrived; `mod` stays, because there is no
     // module *declaration* — a file is the unit, and `use` names one by path.
@@ -42,7 +43,8 @@ const SUPPORTED: &str = concat!(
     "the supported subset is functions, `let` and `let mut`, assignment, `while` with ",
     "`break` and `continue`, `return`, `if`/`else` as a statement or an expression, ",
     "arithmetic and comparison over `Int`, `Bool` and `Str`, the `Ints` and `Strs` ",
-    "sequences, and the built-in operations on them — see docs/spec.md"
+    "sequences, `struct` records with named fields, and the built-in operations on them ",
+    "— see docs/spec.md"
 );
 
 #[derive(Debug)]
@@ -82,6 +84,7 @@ pub fn parse_in(file: FileId, tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
         reported_too_deep: false,
     };
     let mut functions = Vec::new();
+    let mut records = Vec::new();
     let mut imports = Vec::new();
 
     while !p.at(&TokenKind::Eof) {
@@ -98,6 +101,21 @@ pub fn parse_in(file: FileId, tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
         p.depth = 0;
         p.built = 0;
         p.reported_too_deep = false;
+        // `struct` or `pub struct`. Looking one token past a `pub` is what keeps the two
+        // kinds of item apart without either grammar knowing about the other.
+        let is_record = p.at(&TokenKind::Struct)
+            || (p.at(&TokenKind::Pub)
+                && matches!(
+                    p.tokens.get(p.pos + 1).map(|t| &t.kind),
+                    Some(TokenKind::Struct)
+                ));
+        if is_record {
+            match p.record() {
+                Some(r) => records.push(r),
+                None => p.recover_to_item(),
+            }
+            continue;
+        }
         match p.function() {
             Some(f) => functions.push(f),
             None => {
@@ -108,7 +126,14 @@ pub fn parse_in(file: FileId, tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
         }
     }
 
-    (Program { functions, imports }, p.errors)
+    (
+        Program {
+            functions,
+            records,
+            imports,
+        },
+        p.errors,
+    )
 }
 
 /// How deep the syntax tree may be.
@@ -259,7 +284,11 @@ impl<'a> Parser<'a> {
     }
 
     fn recover_to_item(&mut self) {
-        while !self.at(&TokenKind::Eof) && !self.at(&TokenKind::Fn) && !self.at(&TokenKind::Pub) {
+        while !self.at(&TokenKind::Eof)
+            && !self.at(&TokenKind::Fn)
+            && !self.at(&TokenKind::Pub)
+            && !self.at(&TokenKind::Struct)
+        {
             self.pos += 1;
         }
     }
@@ -362,6 +391,80 @@ impl<'a> Parser<'a> {
             callee_span,
             args,
             span: start.join(end),
+        })
+    }
+
+    /// `struct Name { field: Type, … }`, with an optional `pub` in front.
+    ///
+    /// A trailing comma is allowed and canonical, as it is in every other comma list the
+    /// formatter emits one item to a line.
+    fn record(&mut self) -> Option<Record> {
+        let start = self.peek_span();
+        let pub_span = self.at(&TokenKind::Pub).then(|| {
+            let s = self.peek_span();
+            self.advance();
+            s
+        });
+        self.expect(&TokenKind::Struct, "to start a record")?;
+
+        let name_span = self.peek_span();
+        let name = match self.advance() {
+            TokenKind::Ident(n) => {
+                if self.reserved(&n, name_span) {
+                    return None;
+                }
+                n
+            }
+            other => {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        name_span,
+                        format!("expected a record name, found {}", other.describe()),
+                    )
+                    .help("a record is declared `struct Point { x: Int, y: Int, }`"),
+                );
+                return None;
+            }
+        };
+
+        self.expect(&TokenKind::LBrace, "to start the fields")?;
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            let field_span = self.peek_span();
+            let field_name = match self.advance() {
+                TokenKind::Ident(n) => n,
+                other => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            field_span,
+                            format!("expected a field name, found {}", other.describe()),
+                        )
+                        .help("each field is written `name: Type,`"),
+                    );
+                    return None;
+                }
+            };
+            self.expect(&TokenKind::Colon, "after a field name")?;
+            let ty = self.type_name()?;
+            fields.push(Field {
+                name: field_name,
+                name_span: field_span,
+                span: field_span.join(ty.span),
+                ty,
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        let close = self.expect(&TokenKind::RBrace, "to close the fields")?;
+        Some(Record {
+            name,
+            name_span,
+            pub_span,
+            fields,
+            span: start.join(close),
         })
     }
 
@@ -691,38 +794,122 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// An assignment, if the next two tokens are `ident =`.
+    /// An assignment, if what follows is `ident ( . ident )* =`.
     ///
-    /// Two tokens of lookahead rather than parsing an expression and checking what it
-    /// turned out to be: `x` alone is a perfectly good tail expression, and committing to
-    /// a statement before seeing the `=` would make `{ x }` a parse error.
+    /// Lookahead rather than parsing an expression and checking what it turned out to be:
+    /// `x` alone is a perfectly good tail expression, and `a.b` is a perfectly good one
+    /// too, so committing to a statement before seeing the `=` would make `{ a.b }` a
+    /// parse error. The scan is bounded by the tokens it walks and reads nothing it does
+    /// not then consume.
     ///
     /// `Ok(None)` means "not an assignment", which is different from "an assignment that
     /// failed to parse" — the second has already reported and must not be retried as an
     /// expression.
     fn try_assign(&mut self) -> Option<Option<Assign>> {
-        let is_assign = matches!(self.peek(), TokenKind::Ident(_))
-            && matches!(
-                self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                Some(TokenKind::Eq)
-            );
-        if !is_assign {
+        if !matches!(self.peek(), TokenKind::Ident(_)) {
             return Some(None);
+        }
+        // `ident` then any number of `. ident`, then `=`. A `==` is a different token, so
+        // a comparison in statement position is never mistaken for one of these.
+        let mut at = self.pos + 1;
+        loop {
+            match self.tokens.get(at).map(|t| &t.kind) {
+                Some(TokenKind::Eq) => break,
+                Some(TokenKind::Dot) => {
+                    if matches!(
+                        self.tokens.get(at + 1).map(|t| &t.kind),
+                        Some(TokenKind::Ident(_))
+                    ) {
+                        at += 2;
+                    } else {
+                        return Some(None);
+                    }
+                }
+                _ => return Some(None),
+            }
         }
 
         let name_span = self.peek_span();
         let TokenKind::Ident(name) = self.advance() else {
             return Some(None);
         };
+        let mut path = Vec::new();
+        let mut last = name_span;
+        while self.eat(&TokenKind::Dot) {
+            let field_span = self.peek_span();
+            let TokenKind::Ident(field) = self.advance() else {
+                return Some(None);
+            };
+            last = field_span;
+            path.push(PlaceField {
+                name: field,
+                name_span: field_span,
+            });
+        }
         self.advance(); // `=`
         let value = self.expr()?;
         let semi = self.expect(&TokenKind::Semi, "after an assignment")?;
         Some(Some(Assign {
-            name,
-            name_span,
+            place: Place {
+                name,
+                name_span,
+                path,
+                span: name_span.join(last),
+            },
             value,
             span: name_span.join(semi),
         }))
+    }
+
+    /// `Name(field: value, …)`, the `(` already seen by the caller's lookahead.
+    ///
+    /// Every field is named, there is no positional form, and a trailing comma is allowed.
+    /// Duplicates, omissions and unknown names are the checker's to report: they are
+    /// questions about a type, and the parser has not resolved one.
+    fn construction(&mut self, ty: String, ty_span: Span) -> Option<Expr> {
+        self.expect(&TokenKind::LParen, "to start the fields")?;
+        let mut fields = Vec::new();
+        let mut deepest = 0;
+        while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+            let name_span = self.peek_span();
+            let name = match self.advance() {
+                TokenKind::Ident(n) => n,
+                other => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            name_span,
+                            format!("expected a field name, found {}", other.describe()),
+                        )
+                        .help(
+                            "every field of a record is named when it is built: \
+                             `Point(x: 1, y: 2)`",
+                        ),
+                    );
+                    return None;
+                }
+            };
+            self.expect(&TokenKind::Colon, "after a field name")?;
+            let value = self.expr()?;
+            deepest = deepest.max(self.child());
+            fields.push(FieldInit {
+                name,
+                name_span,
+                span: name_span.join(value.span()),
+                value,
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        let close = self.expect(&TokenKind::RParen, "to close the fields")?;
+        self.built(deepest + 1)?;
+        Some(Expr::Construct {
+            ty,
+            ty_span,
+            fields,
+            span: ty_span.join(close),
+        })
     }
 
     fn expr(&mut self) -> Option<Expr> {
@@ -795,9 +982,50 @@ impl<'a> Parser<'a> {
         if !self.enter() {
             return None;
         }
-        let out = self.primary_inner();
+        let out = self.primary_inner().and_then(|e| self.projections(e));
         self.leave();
         out
+    }
+
+    /// `expr.name`, repeated. Binds tighter than any operator, including negation's
+    /// operand, because it is part of the operand.
+    ///
+    /// A loop rather than recursion: `a.b.c.d` is a left spine, so it costs one tree level
+    /// per field and no parser recursion at all.
+    fn projections(&mut self, base: Expr) -> Option<Expr> {
+        let mut out = base;
+        let mut depth = self.child();
+        while self.at(&TokenKind::Dot) {
+            self.advance();
+            let name_span = self.peek_span();
+            let name = match self.advance() {
+                TokenKind::Ident(n) => n,
+                other => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            name_span,
+                            format!(
+                                "expected a field name after `.`, found {}",
+                                other.describe()
+                            ),
+                        )
+                        .help("`.` reads a field out of a record: `p.x`"),
+                    );
+                    return None;
+                }
+            };
+            depth += 1;
+            self.built(depth)?;
+            out = Expr::Field {
+                span: out.span().join(name_span),
+                base: Box::new(out),
+                name,
+                name_span,
+            };
+        }
+        self.built = depth;
+        Some(out)
     }
 
     fn primary_inner(&mut self) -> Option<Expr> {
@@ -925,6 +1153,22 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 self.advance();
+                // `Name(field: …)` is a construction; `f(a, b)` is a call. Two tokens
+                // past the `(` decide it, and the decision is total: no expression can
+                // begin with a name followed by a colon, so neither form can be mistaken
+                // for the other and neither needs to know about the other.
+                let constructing = self.at(&TokenKind::LParen)
+                    && matches!(
+                        self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                        Some(TokenKind::Ident(_))
+                    )
+                    && matches!(
+                        self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                        Some(TokenKind::Colon)
+                    );
+                if constructing {
+                    return self.construction(name, span);
+                }
                 if self.eat(&TokenKind::LParen) {
                     let mut args = Vec::new();
                     let mut deepest = 0;
@@ -947,6 +1191,24 @@ impl<'a> Parser<'a> {
                     self.built(1)?;
                     Some(Expr::Var { name, span })
                 }
+            }
+            TokenKind::Struct => {
+                // A `struct` inside a body is a declaration in the wrong place, not an
+                // expression. Saying which is the difference between one useful error and
+                // a cascade of "expected an expression".
+                self.advance();
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        span,
+                        "a record can only be declared at the top level",
+                    )
+                    .help(
+                        "move the `struct` out of the function. Records are module-level \
+                         declarations, like functions",
+                    ),
+                );
+                None
             }
             kw @ (TokenKind::Break | TokenKind::Continue) => {
                 // "expected an expression, found `break`" is true and unhelpful. The
@@ -1250,6 +1512,12 @@ mod ast_depth_tests {
                             stack.push((Node::Expr(a), d + 1));
                         }
                     }
+                    Expr::Construct { fields, .. } => {
+                        for f in fields {
+                            stack.push((Node::Expr(&f.value), d + 1));
+                        }
+                    }
+                    Expr::Field { base, .. } => stack.push((Node::Expr(base), d + 1)),
                     Expr::If {
                         cond,
                         then_block,

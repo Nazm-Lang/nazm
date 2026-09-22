@@ -42,12 +42,14 @@ pub mod interface;
 pub mod intrinsic;
 pub mod key;
 pub mod module;
+pub mod record;
 pub mod resolve;
 pub mod types;
 
-pub use interface::{Export, UnitInterface, Visibility};
+pub use interface::{reachable_records, Export, RecordExport, UnitInterface, Visibility};
 pub use intrinsic::Intrinsic;
 pub use key::{DefKey, DefKind, ModuleKey};
 pub use module::{Dependency, ModuleGraph, ModuleId};
-pub use resolve::{Callee, FnDef, FnId, LocalDef, Resolution};
+pub use record::{FieldDef, LayoutCycle, RecordDef, RecordId, Records, TaskUnsafe};
+pub use resolve::{Callee, FieldRef, FnDef, FnId, LocalDef, Resolution};
 pub use types::Type;

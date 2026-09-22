@@ -1,4 +1,4 @@
-//! The persisted shape of a module's interface: `nazm.interface/1`.
+//! The persisted shape of a module's interface: `nazm.interface/2`.
 //!
 //! # What may appear in it
 //!
@@ -25,9 +25,12 @@
 
 use serde::{Deserialize, Serialize};
 
-use nazm_sema::interface::{Export, UnitInterface};
+use std::collections::HashMap;
+
+use nazm_sema::interface::{Export, RecordExport, UnitInterface, Visibility};
 use nazm_sema::key::{DefKey, DefKind, ModuleKey};
 use nazm_sema::module::ModuleGraph;
+use nazm_sema::record::{FieldDef, RecordDef, RecordId, Records};
 use nazm_sema::resolve::FnId;
 use nazm_sema::types::Type;
 use nazm_sema::ModuleId;
@@ -36,11 +39,58 @@ use nazm_span::Span;
 /// The identifier every persisted interface carries.
 ///
 /// `name/major`, the same rule `nazm.diagnostic/1` follows: the major number changes when
-/// a reader written against the previous one would be **wrong**. A future user-defined
-/// type, a generic parameter or an effect row is a new shape for an exported signature,
-/// and this is what stops one being read as the old shape. `docs/diagnostics.md` states
-/// the versioning rule in full and this format follows it.
-pub const SCHEMA: &str = "nazm.interface/1";
+/// a reader written against the previous one would be **wrong**.
+///
+/// # Why N9 versioned it rather than extending `/1`
+///
+/// `/1` wrote every type as a built-in name. A `/1` reader handed a `/2` file would meet
+/// `lib/model.nz::record Point` where it expects `Int`, and — being a reader that
+/// validates — would reject it. That is the good case. The bad one is the reason for the
+/// bump: a `/1` reader that *did* parse a `/2` file would conclude a module exports a
+/// function of a type it cannot represent, and would then answer questions about that
+/// module wrongly rather than declining. Compatibility means an old consumer stays
+/// **correct**, not that parsing succeeds, and there is no extension of `/1` under which
+/// an old reader stays correct about a record it has no concept of.
+///
+/// Unknown majors remain refused rather than reinterpreted — including a future `/3`.
+pub const SCHEMA: &str = "nazm.interface/2";
+
+/// One field of a published record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentField {
+    /// The field's name, which **is** its identity. Never its position: `docs/spec.md`
+    /// makes declaration order non-semantic, so a durable form keyed on an index would
+    /// change meaning when an author moved two lines.
+    pub name: String,
+    /// Its type, in the encoding [`type_name`] produces.
+    pub ty: String,
+}
+
+/// One record definition an importer needs, as published.
+///
+/// # Why some of these are not exported
+///
+/// The list is **closed over field types**: if an exported record has a field whose type
+/// is a record from a third module, that record's shape is here too, because an importer
+/// has to understand it to project through it and cannot go and read the module that
+/// declared it. Which of them an importer may *name* is not a flag — it is whether
+/// [`Self::def`] belongs to this interface's module, and it cannot be anything else: a
+/// private type in a public surface is refused (`N0337`) before an interface is written,
+/// so every record of this module that reaches this list is one it exports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentRecord {
+    /// Which logical record this is: `module::record Name`.
+    pub def: String,
+    /// What a dependent writes to name it, when it may. Redundant with the tail of `def`
+    /// and kept for the same reason [`PersistentExport::name`] is.
+    pub name: String,
+    /// Its fields, sorted by name.
+    ///
+    /// Sorted rather than in declaration order, so that moving two field declarations
+    /// produces identical bytes — which is what makes `docs/spec.md`'s claim that field
+    /// order is not semantic true of the fingerprint as well as of the language.
+    pub fields: Vec<PersistentField>,
+}
 
 /// One exported definition, as published.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,10 +105,31 @@ pub struct PersistentExport {
     /// `fn`, today. Spelled as a word so that adding a second kind cannot reinterpret a
     /// value already written.
     pub kind: String,
-    /// The parameter types, in declaration order, by their source names.
+    /// The parameter types, in declaration order, in the encoding [`type_name`] produces.
     pub params: Vec<String>,
-    /// The return type, by its source name.
+    /// The return type, in the same encoding.
     pub ret: String,
+}
+
+/// How a type is written in a persisted interface.
+///
+/// A built-in is its source name. A record is its **durable identity** — `module::record
+/// Name` — and not its source name, because the same spelling may name a different record
+/// in every module, and an interface that said `Point` would be telling a reader nothing
+/// about which `Point`. The two encodings cannot be confused: a built-in's name contains
+/// no `::` and a `DefKey`'s always does.
+fn type_name(t: Type, records: &Records, graph: &ModuleGraph) -> Option<String> {
+    match t {
+        Type::Record(id) => {
+            let def = records.get(id)?;
+            // The record's **own** module, which for a closure entry is not the module
+            // publishing this interface. A `Records` holds a session-local `ModuleId`, so
+            // the graph is what turns it into something durable.
+            let key = graph.key(def.module)?;
+            Some(DefKey::new(key.clone(), DefKind::Record, def.name.clone()).to_string())
+        }
+        other => other.builtin_name().map(ToOwned::to_owned),
+    }
 }
 
 /// A module's interface, as persisted.
@@ -74,6 +145,11 @@ pub struct PersistentUnitInterface {
     /// **Direct only**, which is the rule `spec.md` settles. A dependency's own
     /// dependencies are its business and are not part of what this module offers.
     pub dependencies: Vec<String>,
+    /// Every record definition its public surface mentions, sorted by durable identity.
+    ///
+    /// Before the exports, because an export's signature may refer to one of these and a
+    /// reader should meet the definitions first.
+    pub records: Vec<PersistentRecord>,
     /// What it offers, sorted by name.
     pub exports: Vec<PersistentExport>,
 }
@@ -88,6 +164,10 @@ pub enum PublishError {
     /// A module it imports has none, and naming a dependency by a session-local id would
     /// be exactly the leak this format exists to prevent.
     DependencyWithoutKey(ModuleId),
+    /// A record its public surface mentions is declared in a module with no durable
+    /// identity, so there is nothing to write the field's type as. The same answer as the
+    /// other two and for the same reason.
+    RecordWithoutKey(ModuleId),
 }
 
 impl std::fmt::Display for PublishError {
@@ -100,6 +180,10 @@ impl std::fmt::Display for PublishError {
             Self::DependencyWithoutKey(_) => f.write_str(
                 "a module it imports has no durable identity, so this interface could not \
                  name its dependencies",
+            ),
+            Self::RecordWithoutKey(_) => f.write_str(
+                "a record in its public surface is declared in a module with no durable \
+                 identity, so this interface could not name that type",
             ),
         }
     }
@@ -120,8 +204,13 @@ pub enum ReadError {
     UnknownSchema(String),
     /// A module or definition key that is not in the canonical spelling.
     BadKey(String),
-    /// A type name this build does not have.
+    /// A type name this build does not have, or a record identity this interface does not
+    /// define. A `/2` interface is **closed**: every record a signature or a field names
+    /// is defined in the same file, so a dangling reference is a malformed interface
+    /// rather than something to go and look for.
     UnknownType(String),
+    /// Two records under one identity.
+    DuplicateRecord(String),
     /// A definition kind this build does not have.
     UnknownKind(String),
     /// Two exports under one name, which no module can have.
@@ -144,7 +233,8 @@ impl std::fmt::Display for ReadError {
                 "interface schema `{s}` is not `{SCHEMA}`; this build cannot read it"
             ),
             Self::BadKey(k) => write!(f, "`{k}` is not a durable key in canonical form"),
-            Self::UnknownType(t) => write!(f, "`{t}` is not a type this build has"),
+            Self::UnknownType(t) => write!(f, "`{t}` is not a type this interface defines"),
+            Self::DuplicateRecord(d) => write!(f, "`{d}` is defined twice"),
             Self::UnknownKind(k) => write!(f, "`{k}` is not a definition kind this build has"),
             Self::DuplicateExport(n) => write!(f, "`{n}` is exported twice"),
             Self::ForeignExport(d) => write!(f, "`{d}` is not a definition of this module"),
@@ -162,7 +252,11 @@ impl PersistentUnitInterface {
     /// # Errors
     ///
     /// [`PublishError`] when this module or one it imports has no durable identity.
-    pub fn published(interface: &UnitInterface, graph: &ModuleGraph) -> Result<Self, PublishError> {
+    pub fn published(
+        interface: &UnitInterface,
+        graph: &ModuleGraph,
+        records: &Records,
+    ) -> Result<Self, PublishError> {
         let module = graph
             .key(interface.module())
             .ok_or(PublishError::NoModuleKey(interface.module()))?;
@@ -179,17 +273,54 @@ impl PersistentUnitInterface {
         dependencies.sort();
         dependencies.dedup();
 
-        let mut exports: Vec<PersistentExport> = interface
-            .exports()
-            .iter()
-            .map(|e| PersistentExport {
+        // Every record the public surface mentions, each under its own module's key.
+        let mut published_records: Vec<PersistentRecord> = Vec::new();
+        for r in interface.records() {
+            let Some(def) = records.get(r.def) else {
+                continue;
+            };
+            let owner = graph
+                .key(def.module)
+                .ok_or(PublishError::RecordWithoutKey(def.module))?;
+            let mut fields: Vec<PersistentField> = Vec::new();
+            for f in &def.fields {
+                let ty = type_name(f.ty, records, graph)
+                    .ok_or(PublishError::RecordWithoutKey(def.module))?;
+                fields.push(PersistentField {
+                    name: f.name.clone(),
+                    ty,
+                });
+            }
+            // By name: the field list is a set of named fields, and the order the author
+            // declared them in is not part of it.
+            fields.sort_by(|a, b| a.name.cmp(&b.name));
+            published_records.push(PersistentRecord {
+                def: DefKey::new(owner.clone(), DefKind::Record, def.name.clone()).to_string(),
+                name: def.name.clone(),
+                fields,
+            });
+        }
+        published_records.sort_by(|a, b| a.def.cmp(&b.def));
+        published_records.dedup_by(|a, b| a.def == b.def);
+
+        let mut exports: Vec<PersistentExport> = Vec::new();
+        for e in interface.exports() {
+            let mut params = Vec::with_capacity(e.params.len());
+            for t in &e.params {
+                params.push(
+                    type_name(*t, records, graph)
+                        .ok_or_else(|| PublishError::NoModuleKey(interface.module()))?,
+                );
+            }
+            exports.push(PersistentExport {
                 def: DefKey::new(module.clone(), DefKind::Function, e.name.clone()).to_string(),
                 name: e.name.clone(),
                 kind: DefKind::Function.as_str().to_owned(),
-                params: e.params.iter().map(|t| t.name().to_owned()).collect(),
-                ret: e.ret.name().to_owned(),
-            })
-            .collect();
+                params,
+                ret: type_name(e.ret, records, graph)
+                    .ok_or_else(|| PublishError::NoModuleKey(interface.module()))?,
+            });
+        }
         // By name, which is unique within a module. Declaration order is where the author
         // put them and is not part of what the module offers.
         exports.sort_by(|a, b| a.name.cmp(&b.name));
@@ -198,6 +329,7 @@ impl PersistentUnitInterface {
             schema: SCHEMA.to_owned(),
             module: module.as_str().to_owned(),
             dependencies,
+            records: published_records,
             exports,
         })
     }
@@ -250,12 +382,61 @@ impl PersistentUnitInterface {
             return Err(ReadError::NotCanonical("dependencies".to_owned()));
         }
 
+        // The records first: every type reference in this file must name a built-in or
+        // one of these, and a reader that validated signatures before knowing the record
+        // set would have to guess.
+        let mut defined: Vec<&str> = Vec::new();
+        let mut previous_record: Option<&str> = None;
+        for r in &self.records {
+            let key = parse_record_key(&r.def).ok_or_else(|| ReadError::BadKey(r.def.clone()))?;
+            if key.name() != r.name {
+                return Err(ReadError::NameMismatch(r.def.clone()));
+            }
+            match previous_record {
+                Some(p) if p == r.def => return Err(ReadError::DuplicateRecord(r.def.clone())),
+                Some(p) if p > r.def.as_str() => {
+                    return Err(ReadError::NotCanonical("records".to_owned()))
+                }
+                _ => {}
+            }
+            previous_record = Some(&r.def);
+            defined.push(&r.def);
+            let mut previous_field: Option<&str> = None;
+            for f in &r.fields {
+                match previous_field {
+                    Some(p) if p == f.name => {
+                        return Err(ReadError::DuplicateRecord(format!("{}.{}", r.def, f.name)))
+                    }
+                    Some(p) if p > f.name.as_str() => {
+                        return Err(ReadError::NotCanonical("fields".to_owned()))
+                    }
+                    _ => {}
+                }
+                previous_field = Some(&f.name);
+            }
+        }
+        // Closed: a field or a signature may name a built-in or a record this file
+        // defines, and nothing else. Checked after the whole set is known, so a forward
+        // reference between two records is fine and a dangling one is not.
+        for r in &self.records {
+            for f in &r.fields {
+                if Type::from_name(&f.ty).is_none() && !defined.contains(&f.ty.as_str()) {
+                    return Err(ReadError::UnknownType(f.ty.clone()));
+                }
+            }
+        }
+
         let mut previous: Option<&str> = None;
         for e in &self.exports {
             let kind =
                 DefKind::parse(&e.kind).ok_or_else(|| ReadError::UnknownKind(e.kind.clone()))?;
+            if kind != DefKind::Function {
+                // `records` is where a record is published; an export entry claiming to be
+                // one would be the same definition in two places.
+                return Err(ReadError::UnknownKind(e.kind.clone()));
+            }
             for t in e.params.iter().chain(std::iter::once(&e.ret)) {
-                if Type::from_name(t).is_none() {
+                if Type::from_name(t).is_none() && !defined.contains(&t.as_str()) {
                     return Err(ReadError::UnknownType(t.clone()));
                 }
             }
@@ -301,20 +482,88 @@ impl PersistentUnitInterface {
     ///   data — so nothing is lost. A future consumer that needs them has the keys in
     ///   [`Self::dependencies`] and must resolve them to ids itself.
     #[must_use]
-    pub fn rehydrate(&self, module: ModuleId, first: FnId) -> UnitInterface {
+    pub fn rehydrate(&self, module: ModuleId, first: FnId, records: &mut Records) -> UnitInterface {
+        // Two passes, for the reason the checker declares record names before resolving
+        // field types: a field may name a record defined later in this file, and both
+        // orders have to work.
+        let mut ids: HashMap<&str, RecordId> = HashMap::new();
+        let own = self.module_key();
+        for r in &self.records {
+            // A record this interface's module declares is one an importer may name. One
+            // from another module is here because a shape mentions it, and naming it
+            // would be the transitive visibility `docs/spec.md` refuses — so it is
+            // declared **without** registering its name.
+            let mine = parse_record_key(&r.def)
+                .zip(own.as_ref())
+                .is_some_and(|(k, m)| k.module() == m);
+            let def = RecordDef {
+                name: r.name.clone(),
+                module,
+                visibility: if mine {
+                    Visibility::Exported
+                } else {
+                    Visibility::Private
+                },
+                // No span: the exporting file is not open, which is the point. A
+                // diagnostic about an imported type points nowhere rather than somewhere
+                // wrong.
+                name_span: Span::synthetic(),
+                fields: Vec::new(),
+                layout: Vec::new(),
+                // No declaration to go back to. Nothing reads `decl` for a record that
+                // came from an interface, because there is no tree it indexes into.
+                decl: u32::MAX,
+            };
+            let id = if mine {
+                records.declare(def)
+            } else {
+                records.declare_unnamed(def)
+            };
+            ids.insert(&r.def, id);
+        }
+        for r in &self.records {
+            let Some(id) = ids.get(r.def.as_str()).copied() else {
+                continue;
+            };
+            let fields = r
+                .fields
+                .iter()
+                .map(|f| FieldDef {
+                    name: f.name.clone(),
+                    ty: read_type(&f.ty, &ids),
+                    name_span: Span::synthetic(),
+                    ty_span: Span::synthetic(),
+                })
+                .collect();
+            records.complete(id, fields);
+        }
+
         let exports = self
             .exports
             .iter()
             .enumerate()
             .map(|(i, e)| Export {
                 name: e.name.clone(),
-                params: e.params.iter().filter_map(|t| Type::from_name(t)).collect(),
-                ret: Type::from_name(&e.ret).unwrap_or(Type::Int),
+                params: e.params.iter().map(|t| read_type(t, &ids)).collect(),
+                ret: read_type(&e.ret, &ids),
                 name_span: Span::synthetic(),
                 def: FnId::from_index(first.index() + i),
             })
             .collect();
-        UnitInterface::new(module, exports, Vec::new())
+        let record_exports = self
+            .records
+            .iter()
+            .filter_map(|r| {
+                let def = ids.get(r.def.as_str()).copied()?;
+                Some(RecordExport {
+                    def,
+                    nameable: parse_record_key(&r.def)
+                        .zip(own.as_ref())
+                        .is_some_and(|(k, m)| k.module() == m),
+                })
+            })
+            .collect();
+        UnitInterface::new(module, exports, record_exports, Vec::new())
     }
 
     /// This module's durable identity. Validated on read, so this cannot fail afterwards.
@@ -322,4 +571,34 @@ impl PersistentUnitInterface {
     pub fn module_key(&self) -> Option<ModuleKey> {
         ModuleKey::parse(&self.module)
     }
+}
+
+/// Split `module::record Name` back into a key.
+///
+/// Written out rather than given to `DefKey` as a parser, because a `DefKey` is a value a
+/// compilation computes and this is the one place a *file* claims to be one. Anything that
+/// is not in the canonical spelling is refused rather than repaired.
+fn parse_record_key(text: &str) -> Option<DefKey> {
+    let (module, rest) = text.split_once("::")?;
+    let (kind, name) = rest.split_once(' ')?;
+    if DefKind::parse(kind)? != DefKind::Record {
+        return None;
+    }
+    if name.is_empty() || name.contains(' ') {
+        return None;
+    }
+    Some(DefKey::new(
+        ModuleKey::parse(module)?,
+        DefKind::Record,
+        name,
+    ))
+}
+
+/// A published type string, as a [`Type`] in the reading compilation.
+///
+/// Validation has already established that every name is either a built-in or one of this
+/// file's records, so the fallback is unreachable; it is `Int` rather than a panic for the
+/// same reason the checker continues as `Int` after an unknown type.
+fn read_type(text: &str, ids: &HashMap<&str, RecordId>) -> Type {
+    Type::from_name(text).unwrap_or_else(|| ids.get(text).copied().map_or(Type::Int, Type::Record))
 }

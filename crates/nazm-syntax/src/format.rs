@@ -194,6 +194,14 @@ struct Printer<'a> {
     indent: usize,
     /// Whether each open block is being kept on one line, innermost last.
     inline: Vec<bool>,
+    /// Which bracket opened each nesting level, innermost last: `true` for `{`.
+    ///
+    /// What a comma means depends on it. In a brace — a record's field list — a comma
+    /// ends a line, exactly as a `;` does in a body. In a parenthesis — an argument list,
+    /// a parameter list, a record construction — it separates items on one line. Without
+    /// the stack the formatter would have to guess from the token alone, and would get
+    /// one of the two wrong.
+    brackets: Vec<bool>,
     /// The last two tokens printed. Two, because whether a `-` is negation depends on
     /// what came before *it*, not on the `-`.
     previous: Option<&'a TokenKind>,
@@ -217,6 +225,7 @@ fn print<'a>(text: &'a str, pieces: &'a [Piece<'a>], layout: &'a Layout) -> Stri
         out: String::new(),
         indent: 0,
         inline: Vec::new(),
+        brackets: Vec::new(),
         previous: None,
         before: None,
         previous_end: 0,
@@ -269,6 +278,9 @@ impl<'a> Printer<'a> {
         // it rather than after — unless its block is on one line, where there is no
         // level and no break.
         let closing_inline = *kind == TokenKind::RBrace && self.inline.pop().unwrap_or(false);
+        if *kind == TokenKind::RBrace {
+            self.brackets.pop();
+        }
         if *kind == TokenKind::RBrace && !closing_inline {
             self.indent = self.indent.saturating_sub(1);
             self.continuing = false;
@@ -303,13 +315,26 @@ impl<'a> Printer<'a> {
             TokenKind::LBrace => {
                 let inline = self.layout.inline.get(at).copied().unwrap_or(false);
                 self.inline.push(inline);
+                self.brackets.push(true);
                 if !inline {
                     self.indent += 1;
                     self.continuing = false;
                     self.break_line();
                 }
             }
+            TokenKind::LParen => self.brackets.push(false),
+            TokenKind::RParen => {
+                self.brackets.pop();
+            }
             TokenKind::Semi if !self.in_inline() => {
+                self.continuing = false;
+                self.break_line();
+            }
+            // A field list: one field to a line, like every other brace-delimited
+            // sequence. An argument list is parenthesised and stays as it is.
+            TokenKind::Comma
+                if self.brackets.last().copied().unwrap_or(false) && !self.in_inline() =>
+            {
                 self.continuing = false;
                 self.break_line();
             }
@@ -344,15 +369,20 @@ impl<'a> Printer<'a> {
         if *previous == TokenKind::Minus && !self.before.is_some_and(ends_a_value) {
             return false;
         }
-        // Nothing before a closer or a separator.
+        // Nothing before a closer or a separator. `.` is here because it binds to what
+        // it projects out of: `p.x`, never `p . x`.
         if matches!(
             next,
-            TokenKind::RParen | TokenKind::Comma | TokenKind::Colon | TokenKind::Semi
+            TokenKind::RParen
+                | TokenKind::Comma
+                | TokenKind::Colon
+                | TokenKind::Semi
+                | TokenKind::Dot
         ) {
             return false;
         }
-        // Nothing after an opener.
-        if *previous == TokenKind::LParen {
+        // Nothing after an opener, or after a `.`.
+        if matches!(previous, TokenKind::LParen | TokenKind::Dot) {
             return false;
         }
         // `f(` is one thing; `while (` is two. The bracket is glued to a name and

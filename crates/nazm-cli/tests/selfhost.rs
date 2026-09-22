@@ -124,6 +124,7 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::Scope => 22,
                 T::Spawn => 23,
                 T::Pub => 24,
+                T::Struct => 25,
                 T::LParen => 30,
                 T::RParen => 31,
                 T::LBrace => 32,
@@ -133,6 +134,7 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::Semi => 36,
                 T::Arrow => 37,
                 T::Eq => 38,
+                T::Dot => 39,
                 T::Plus => 40,
                 T::Minus => 41,
                 T::Star => 42,
@@ -366,7 +368,15 @@ fn dump_stmt(s: &nazm_core::__syntax::Stmt, out: &mut String) {
         }
         S::Assign(a) => {
             dump_expr(&a.value, out);
-            push_node(out, "assign", 1, a.span.start, a.span.end, &a.name);
+            // The place, as the binding's name and the field path it walks — the same
+            // text both parsers have to produce, so a path written to one field depth in
+            // one parser and another in the other is a difference the dump shows.
+            let mut place = a.place.name.clone();
+            for f in &a.place.path {
+                place.push('.');
+                place.push_str(&f.name);
+            }
+            push_node(out, "assign", 1, a.span.start, a.span.end, &place);
         }
         S::While(w) => {
             dump_expr(&w.cond, out);
@@ -417,6 +427,35 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
         }
         E::Str { value, span } => push_node(out, "str", 0, span.start, span.end, value),
         E::Var { name, span } => push_node(out, "var", 0, span.start, span.end, name),
+        E::Construct {
+            ty, fields, span, ..
+        } => {
+            // Initialisers in the order **written**, each named, because that is the
+            // order both parsers must record: it is the order the values are computed in,
+            // and a parser that sorted them would have changed the program's meaning.
+            for f in fields {
+                dump_expr(&f.value, out);
+            }
+            let names = fields
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            push_node(
+                out,
+                "construct",
+                fields.len(),
+                span.start,
+                span.end,
+                &format!("{ty}({names})"),
+            );
+        }
+        E::Field {
+            base, name, span, ..
+        } => {
+            dump_expr(base, out);
+            push_node(out, "field", 1, span.start, span.end, name);
+        }
         E::Neg { operand, span, .. } => {
             dump_expr(operand, out);
             push_node(out, "neg", 1, span.start, span.end, "");

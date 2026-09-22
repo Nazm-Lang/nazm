@@ -99,17 +99,21 @@ accepts.
 
 | Rule | Definition |
 | --- | --- |
-| `program` | `{ use_item } , { function }` |
+| `program` | `{ use_item } , { function \| record }` |
 | `use_item` | `"use" , STRING , ";"` |
 | `function` | `[ visibility ] , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block` |
 | `visibility` | `"pub"` |
+| `record` | `[ visibility ] , "struct" , IDENT , "{" , [ fields ] , "}"` |
+| `fields` | `field , { "," , field } , [ "," ]` |
+| `field` | `IDENT , ":" , type` |
 | `parameters` | `parameter , { "," , parameter }` |
 | `parameter` | `IDENT , ":" , type` |
 | `type` | `IDENT` |
 | `block` | `"{" , { statement } , [ expression ] , "}"` |
 | `statement` | `let_statement \| assignment \| while_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| spawn_statement \| expression_statement` |
 | `let_statement` | `"let" , [ "mut" ] , IDENT , "=" , expression , ";"` |
-| `assignment` | `IDENT , "=" , expression , ";"` |
+| `assignment` | `place , "=" , expression , ";"` |
+| `place` | `IDENT , { "." , IDENT }` |
 | `while_statement` | `"while" , expression , block` |
 | `return_statement` | `"return" , expression , ";"` |
 | `break_statement` | `"break" , ";"` |
@@ -122,15 +126,19 @@ accepts.
 | `sum` | `product , { ( "+" \| "-" ) , product }` |
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" ] , primary` |
-| `primary` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| if_expression \| "(" , expression , ")"` |
+| `primary` | `atom , { "." , IDENT }` |
+| `atom` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| if_expression \| "(" , expression , ")"` |
 | `call` | `IDENT , "(" , [ arguments ] , ")"` |
+| `construction` | `IDENT , "(" , initialisers , ")"` |
+| `initialisers` | `initialiser , { "," , initialiser } , [ "," ]` |
+| `initialiser` | `IDENT , ":" , expression` |
 | `arguments` | `expression , { "," , expression }` |
 | `if_expression` | `"if" , expression , block , [ "else" , ( block \| if_expression ) ]` |
 
 ### `program`
 
 ```ebnf
-program = { use_item } , { function } ;
+program = { use_item } , { function | record } ;
 ```
 
 ```nazm
@@ -139,6 +147,10 @@ fn main() -> Int { 0 }
 
 ```nazm
 use "other.nz"; fn main() -> Int { 0 }
+```
+
+```nazm
+struct Point { x: Int, } fn main() -> Int { Point(x: 1).x }
 ```
 
 ### `use_item`
@@ -182,6 +194,47 @@ are no packages and no friends. See `docs/spec.md`.
 
 ```nazm
 pub fn helper() -> Int { 1 } fn main() -> Int { helper() }
+```
+
+### `record`
+
+```ebnf
+record = [ visibility ] , "struct" , IDENT , "{" , [ fields ] , "}" ;
+```
+
+A record: a nominal type whose fields are named. `struct` is the keyword; *record* is
+what the semantics call the category. One concept, one spelling in each place — see
+`docs/spec.md`, *Records*.
+Declaration order is written down and means nothing: construction names every field,
+and reordering two fields changes neither the type, nor its interface fingerprint, nor
+its native layout.
+
+```nazm
+struct Point { x: Int, y: Int, } fn main() -> Int { Point(x: 1, y: 2).x }
+```
+
+```nazm
+pub struct User { name: Str, } fn main() -> Int { str_len(User(name: "a").name) }
+```
+
+### `fields`
+
+```ebnf
+fields = field , { "," , field } , [ "," ] ;
+```
+
+```nazm
+struct P { x: Int, y: Int, } fn main() -> Int { P(x: 1, y: 2).y }
+```
+
+### `field`
+
+```ebnf
+field = IDENT , ":" , type ;
+```
+
+```nazm
+struct P { x: Int, } fn main() -> Int { P(x: 7).x }
 ```
 
 ### `parameters`
@@ -262,11 +315,29 @@ fn main() -> Int { let mut a = 1; a = 2; a }
 ### `assignment`
 
 ```ebnf
-assignment = IDENT , "=" , expression , ";" ;
+assignment = place , "=" , expression , ";" ;
 ```
+
+The left-hand side is a **place**: a binding, then a path of fields through it.
+Mutability is checked at the binding, so `p.x = 2` needs `let mut p` — see
+`docs/spec.md`, *Binding mutability reaches every field*.
 
 ```nazm
 fn main() -> Int { let mut a = 1; a = 2; a }
+```
+
+```nazm
+struct P { x: Int, } fn main() -> Int { let mut p = P(x: 1); p.x = 2; p.x }
+```
+
+### `place`
+
+```ebnf
+place = IDENT , { "." , IDENT } ;
+```
+
+```nazm
+struct I { n: Int, } struct O { i: I, } fn main() -> Int { let mut o = O(i: I(n: 1)); o.i.n = 2; o.i.n }
 ```
 
 ### `while_statement`
@@ -416,7 +487,7 @@ fn main() -> Int { -1 }
 ### `primary`
 
 ```ebnf
-primary = INTEGER | STRING | "true" | "false" | IDENT | call | if_expression | "(" , expression , ")" ;
+primary = atom , { "." , IDENT } ;
 ```
 
 ```nazm
@@ -435,6 +506,20 @@ fn main() -> Int { if false { 1 } else { 0 } }
 fn main() -> Int { str_len("a name") }
 ```
 
+```nazm
+struct P { x: Int, } fn main() -> Int { P(x: 1).x }
+```
+
+### `atom`
+
+```ebnf
+atom = INTEGER | STRING | "true" | "false" | IDENT | call | construction | if_expression | "(" , expression , ")" ;
+```
+
+```nazm
+fn main() -> Int { 1 }
+```
+
 ### `call`
 
 ```ebnf
@@ -443,6 +528,43 @@ call = IDENT , "(" , [ arguments ] , ")" ;
 
 ```nazm
 fn main() -> Int { str_len("abc") }
+```
+
+### `construction`
+
+```ebnf
+construction = IDENT , "(" , initialisers , ")" ;
+```
+
+Named, never positional, so field order is never an implicit API. Parenthesised rather
+than `Point { x: 1 }` because `IDENT "{"` is exactly what an `if` whose condition is a
+bare name looks like, and no amount of parser lookahead makes that a decision rather
+than a guess. See `docs/spec.md`, *Why construction is parenthesised*.
+Told apart from `call` by two tokens: `IDENT "(" IDENT ":"`. No argument expression can
+begin with a name followed by a colon, so the two forms cannot be confused.
+
+```nazm
+struct P { x: Int, y: Int, } fn main() -> Int { P(x: 1, y: 2).x }
+```
+
+### `initialisers`
+
+```ebnf
+initialisers = initialiser , { "," , initialiser } , [ "," ] ;
+```
+
+```nazm
+struct P { x: Int, } fn main() -> Int { P(x: 1,).x }
+```
+
+### `initialiser`
+
+```ebnf
+initialiser = IDENT , ":" , expression ;
+```
+
+```nazm
+struct P { x: Int, } fn main() -> Int { P(x: 1 + 1).x }
 ```
 
 ### `arguments`

@@ -12,12 +12,15 @@ use std::collections::HashMap;
 
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
-use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Return, Spawn, Stmt, While};
+use nazm_syntax::{
+    Assign, BinOp, Block, Expr, FieldInit, Function, Program, Record, Return, Spawn, Stmt, While,
+};
 
-use nazm_sema::interface::{Export, UnitInterface, Visibility};
+use nazm_sema::interface::{reachable_records, Export, RecordExport, UnitInterface, Visibility};
 use nazm_sema::intrinsic::Intrinsic;
 use nazm_sema::module::{Dependency, ModuleGraph, ModuleId};
-use nazm_sema::resolve::{Callee, FnDef, FnId, LocalDef, Resolution};
+use nazm_sema::record::{FieldDef, RecordDef, RecordId, Records, MAX_RECORD_DEPTH};
+use nazm_sema::resolve::{Callee, FieldRef, FnDef, FnId, LocalDef, Resolution};
 use nazm_sema::types::Type;
 
 #[derive(Debug, Clone)]
@@ -148,6 +151,17 @@ struct Visible {
     callee: Callee,
 }
 
+/// What one module may name in the type namespace.
+///
+/// Built-in type names are not in here: they are parsed by [`Type::from_name`] and cannot
+/// be shadowed, which is the rule `docs/spec.md` states as *built-ins are not a module's
+/// definitions*. This holds records only — this module's own, public and private alike,
+/// and the ones its direct imports export.
+#[derive(Debug, Default)]
+struct Types {
+    names: HashMap<String, RecordId>,
+}
+
 /// What one module may name.
 ///
 /// Built-ins, this module's own definitions — public and private alike — and the exports
@@ -184,6 +198,8 @@ pub struct Unit<'a> {
     module: ModuleId,
     /// Each function of this module, with its index in `Program::functions`.
     functions: Vec<(u32, &'a Function)>,
+    /// Each record of this module, with its index in `Program::records`.
+    records: Vec<(u32, &'a Record)>,
     imports: &'a [Dependency],
 }
 
@@ -198,9 +214,17 @@ impl<'a> Unit<'a> {
             .filter(|(_, f)| graph.module_of(f.name_span.file) == Some(module))
             .map(|(i, f)| (u32::try_from(i).unwrap_or(u32::MAX), f))
             .collect();
+        let records = program
+            .records
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| graph.module_of(r.name_span.file) == Some(module))
+            .map(|(i, r)| (u32::try_from(i).unwrap_or(u32::MAX), r))
+            .collect();
         Self {
             module,
             functions,
+            records,
             imports: graph.imports(module),
         }
     }
@@ -220,8 +244,16 @@ pub struct Checker<'a> {
     res: &'a mut Resolution,
     /// The module whose bodies are being checked.
     module: ModuleId,
-    /// What that module may name.
+    /// What that module may name, in the function namespace.
     env: Env,
+    /// What that module may name, in the **type** namespace.
+    ///
+    /// A second map rather than a second kind of entry in the first, because
+    /// `docs/spec.md` gives types and functions separate namespaces: a module may declare
+    /// a record `Point` and a function `Point`, and one map could not hold both. Where
+    /// the grammar puts a name decides which map is consulted, and the grammar always
+    /// knows.
+    types: Types,
     /// The modules it directly imports, for the diagnostic that tells a reader a
     /// definition exists and is private rather than that it does not exist.
     imports: Vec<ModuleId>,
@@ -274,7 +306,11 @@ pub trait Reuse {
     /// [`Reuse::must_check`] — notably each module's `InterfaceHash`, which is a function
     /// of its own declarations and therefore available for every module at once, cycles
     /// included.
-    fn plan(&mut self, graph: &ModuleGraph, interfaces: &[UnitInterface]);
+    ///
+    /// `records` is every record the compilation declared, which a driver needs to
+    /// publish an interface: since N9 an exported signature may name one, and a record's
+    /// shape is not in the interface value itself.
+    fn plan(&mut self, graph: &ModuleGraph, interfaces: &[UnitInterface], records: &Records);
 
     /// Whether this module's bodies must be checked.
     fn must_check(&self, module: ModuleId) -> bool;
@@ -291,7 +327,7 @@ pub trait Reuse {
 pub struct CheckEverything;
 
 impl Reuse for CheckEverything {
-    fn plan(&mut self, _graph: &ModuleGraph, _interfaces: &[UnitInterface]) {}
+    fn plan(&mut self, _graph: &ModuleGraph, _interfaces: &[UnitInterface], _records: &Records) {}
 
     fn must_check(&self, _module: ModuleId) -> bool {
         true
@@ -346,24 +382,71 @@ pub fn check_reusing(
 
     let units: Vec<Unit<'_>> = graph.ids().map(|m| Unit::of(program, graph, m)).collect();
 
+    // `declared_cleanly` is per module, because "this module checked" has to mean every
+    // stage. A module whose declarations collide and whose bodies are fine is not a
+    // module that checked.
+    //
+    // Two of the stages below are whole-graph — record names, and layout validation over
+    // the containment graph — so an error in either makes **every** module unclean. That
+    // is conservative and it is the only correct answer: an artefact means *this module
+    // checked cleanly*, and a compilation with an unresolved type cycle has no module of
+    // which that is true.
+    let mut declared_cleanly: Vec<bool> = vec![true; units.len()];
+    let mark = |cleanly: &mut Vec<bool>, n: usize, before: usize, now: usize| {
+        if now != before {
+            if let Some(slot) = cleanly.get_mut(n) {
+                *slot = false;
+            }
+        }
+    };
+
+    // Stage 0a: every record's name, for the whole graph. Before any field type, because
+    // a field may name a record declared later or in another module.
+    let before = errors.len();
+    let type_interfaces = declare_records(&units, &mut res, &mut errors);
+    if errors.len() != before {
+        declared_cleanly.iter_mut().for_each(|c| *c = false);
+    }
+
+    // Stage 0b: each module's field types, against the type half of its imports'
+    // interfaces. Stage 0c: the layouts those fields describe.
+    for (n, u) in units.iter().enumerate() {
+        let deps: Vec<&UnitInterface> = u
+            .imports
+            .iter()
+            .filter_map(|d| type_interfaces.get(d.on.index()))
+            .collect();
+        let before = errors.len();
+        resolve_record_fields(u, &deps, &mut res, &mut errors);
+        mark(&mut declared_cleanly, n, before, errors.len());
+    }
+    let before = errors.len();
+    validate_record_layouts(&mut res, &mut errors);
+    if errors.len() != before {
+        // A layout cycle may span modules, so every module is conservatively unclean:
+        // an artefact means *this checked*, and none of them did.
+        declared_cleanly.iter_mut().for_each(|c| *c = false);
+    }
+
     // Stage 1, for the whole graph before any body is checked. A cycle needs this: A's
     // body may call B while B's calls A, and neither ordering of the two would work.
-    //
-    // `declared_cleanly` is per module, because "this module checked" has to mean both
-    // stages. A module whose declarations collide and whose bodies are fine is not a
-    // module that checked.
-    let mut declared_cleanly: Vec<bool> = Vec::with_capacity(units.len());
     let interfaces: Vec<UnitInterface> = units
         .iter()
-        .map(|u| {
+        .enumerate()
+        .map(|(n, u)| {
+            let deps: Vec<&UnitInterface> = u
+                .imports
+                .iter()
+                .filter_map(|d| type_interfaces.get(d.on.index()))
+                .collect();
             let before = errors.len();
-            let interface = declare_unit(u, &mut res, &mut errors);
-            declared_cleanly.push(errors.len() == before);
+            let interface = declare_unit(u, &deps, &mut res, &mut errors);
+            mark(&mut declared_cleanly, n, before, errors.len());
             interface
         })
         .collect();
 
-    reuse.plan(graph, &interfaces);
+    reuse.plan(graph, &interfaces, res.records());
 
     // Stage 2, module by module. `deps` is the *direct* imports and nothing else, so a
     // name only reachable transitively is not in scope — by construction rather than by a
@@ -401,6 +484,381 @@ pub fn check_reusing(
     (res, errors)
 }
 
+/// Stage 0a for the whole compilation: declare every record's **name**.
+///
+/// Names before field types, for every module, because a field type may name a record
+/// declared later in the file or in another module — `docs/spec.md` makes declaration
+/// order irrelevant, and that is only true if every name exists before any type is
+/// resolved. It is N2's declare-then-check, one stage earlier, and the returned
+/// interfaces are the *type* half of what a dependent needs.
+///
+/// The interfaces returned carry records and imports and no exports: at this point no
+/// record has fields, so there is nothing to close over and no signature to publish.
+/// [`declare_unit`] returns the whole thing once both are known.
+pub fn declare_records(
+    units: &[Unit<'_>],
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<UnitInterface> {
+    let mut interfaces = Vec::with_capacity(units.len());
+    for unit in units {
+        let mut exported = Vec::new();
+        for (decl, r) in &unit.records {
+            // A built-in's name is not a module's to define. Unlike a duplicate, there is
+            // no declaration to point at, so the reason is said rather than shown.
+            if Type::from_name(&r.name).is_some() {
+                errors.push(
+                    Diagnostic::error(
+                        codes::BUILTIN_TYPE_REDEFINED,
+                        r.name_span,
+                        format!("`{}` is a built-in type and cannot be redefined", r.name),
+                    )
+                    .help(
+                        "built-in type names mean the same thing in every module of every \
+                         program, so none of them may be shadowed; choose another name",
+                    ),
+                );
+                continue;
+            }
+            if let Some(first) = res
+                .records()
+                .declared(unit.module, &r.name)
+                .and_then(|id| res.records().get(id))
+            {
+                errors.push(
+                    Diagnostic::error(
+                        codes::DUPLICATE_TYPE,
+                        r.name_span,
+                        format!("`{}` is declared more than once in this module", r.name),
+                    )
+                    .secondary(first.name_span, "first declared here"),
+                );
+                continue;
+            }
+            let visibility = Visibility::from_keyword(r.pub_span);
+            let id = res.records_mut().declare(RecordDef {
+                name: r.name.clone(),
+                module: unit.module,
+                visibility,
+                name_span: r.name_span,
+                fields: Vec::new(),
+                layout: Vec::new(),
+                decl: *decl,
+            });
+            if visibility.is_exported() {
+                exported.push(RecordExport {
+                    def: id,
+                    nameable: true,
+                });
+            }
+        }
+        interfaces.push(UnitInterface::new(
+            unit.module,
+            Vec::new(),
+            exported,
+            unit.imports.to_vec(),
+        ));
+    }
+    interfaces
+}
+
+/// Stage 0b for one module: resolve its records' field types.
+///
+/// `deps` are the type-carrying interfaces of the modules this one directly imports —
+/// what [`declare_records`] returned, selected by the caller. Their *bodies* are not a
+/// parameter and never will be, which is the same claim [`check_unit`] makes one stage
+/// later.
+pub fn resolve_record_fields(
+    unit: &Unit<'_>,
+    deps: &[&UnitInterface],
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let types = type_environment(unit, deps, res, errors, Collisions::Report);
+    // Only the first declaration of a name gets fields: a duplicate was already reported
+    // and must not overwrite the shape the winner has.
+    let mut completed: Vec<&str> = Vec::new();
+    for (_, r) in &unit.records {
+        let Some(id) = res.records().declared(unit.module, &r.name) else {
+            continue;
+        };
+        if completed.contains(&r.name.as_str()) {
+            continue;
+        }
+        completed.push(&r.name);
+        let mut fields: Vec<FieldDef> = Vec::new();
+        for f in &r.fields {
+            if let Some(first) = fields.iter().find(|e| e.name == f.name) {
+                errors.push(
+                    Diagnostic::error(
+                        codes::DUPLICATE_FIELD,
+                        f.name_span,
+                        format!("`{}` has two fields called `{}`", r.name, f.name),
+                    )
+                    .secondary(first.name_span, "first declared here")
+                    .help("a field is identified by its name, so two cannot share one"),
+                );
+                continue;
+            }
+            let ty = resolve_type_in(&types, res, &f.ty.name, f.ty.span, errors);
+            fields.push(FieldDef {
+                name: f.name.clone(),
+                ty,
+                name_span: f.name_span,
+                ty_span: f.ty.span,
+            });
+        }
+        // A record with no fields. Refused rather than allowed, and the reason is the
+        // grammar: `Marker()` is exactly what a call to a function named `Marker` looks
+        // like, and types and functions are separate namespaces, so the two forms would
+        // be genuinely ambiguous. `docs/spec.md` records the decision and what would make
+        // it reversible.
+        if fields.is_empty() && !r.fields.is_empty() {
+            // Every field was a duplicate; those are already reported.
+        } else if fields.is_empty() {
+            errors.push(
+                Diagnostic::error(
+                    codes::UNSUPPORTED_CONSTRUCT,
+                    r.name_span,
+                    format!("`{}` has no fields, which is not supported yet", r.name),
+                )
+                .help(
+                    "a record with no fields would be built by writing `Name()`, which is \
+                     exactly how a call to a function of that name is written — and types \
+                     and functions are separate namespaces, so neither reading could be \
+                     preferred. Give it a field, or use `Bool`",
+                ),
+            );
+        }
+        res.records_mut().complete(id, fields);
+    }
+}
+
+/// Stage 0c for the whole compilation: refuse records that cannot be laid out.
+///
+/// A record contains its fields by value, so a chain of record-typed fields that returns
+/// to where it started describes a value containing itself. `docs/spec.md` refuses it as
+/// an **impossible layout** rather than as a safety problem, and states the rule over
+/// *inline containment* so that a future indirection can break a cycle without the rule
+/// changing.
+///
+/// Reported before anything lowers, so LLVM never sees a recursive type — a backend
+/// complaining about one is a refusal that arrives after the compiler decided the program
+/// was fine.
+pub fn validate_record_layouts(res: &mut Resolution, errors: &mut Vec<Diagnostic>) {
+    let mut reported = vec![false; res.records().len()];
+    for i in 0..res.records().len() {
+        let id = RecordId::from_index(i);
+        if reported.get(i).copied().unwrap_or(true) {
+            continue;
+        }
+        let Some(cycle) = res.records().layout_cycle(id) else {
+            continue;
+        };
+        // One diagnostic per cycle, not one per record in it.
+        for r in &cycle.through {
+            if let Some(slot) = reported.get_mut(r.index()) {
+                *slot = true;
+            }
+        }
+        let names: Vec<&str> = cycle
+            .through
+            .iter()
+            .filter_map(|r| res.records().get(*r))
+            .map(|d| d.name.as_str())
+            .collect();
+        let (closing, at) = cycle.via;
+        let Some(field) = res
+            .records()
+            .get(closing)
+            .and_then(|d| d.fields.get(at as usize))
+        else {
+            continue;
+        };
+        let Some(start) = res.records().get(id) else {
+            continue;
+        };
+        let message = if names.len() == 2 {
+            format!("`{}` contains itself", start.name)
+        } else {
+            format!(
+                "`{}` contains itself through {}",
+                start.name,
+                names.join(" → ")
+            )
+        };
+        errors.push(
+            Diagnostic::error(codes::RECURSIVE_RECORD, start.name_span, message)
+                .secondary(field.name_span, "this field closes the cycle")
+                .help(
+                    "a record holds its fields by value, so this one would have no finite \
+                     size. This is an impossible layout rather than a safety problem: a \
+                     later type that holds its contents somewhere else would make the same \
+                     shape expressible",
+                ),
+        );
+    }
+
+    // Depth is only meaningful once there is no cycle to walk forever.
+    for i in 0..res.records().len() {
+        let id = RecordId::from_index(i);
+        if reported.get(i).copied().unwrap_or(true) {
+            continue;
+        }
+        if res.records().depth(Type::Record(id)).is_none() {
+            let Some(def) = res.records().get(id) else {
+                continue;
+            };
+            errors.push(
+                Diagnostic::error(
+                    codes::TYPE_NESTING_TOO_DEEP,
+                    def.name_span,
+                    format!("records may contain records {MAX_RECORD_DEPTH} deep"),
+                )
+                .help(
+                    "each level multiplies the copy and cleanup code generated for every \
+                     value of the outer record, so the bound is on the emitted program \
+                     rather than on the compiler. It is stated rather than discovered",
+                ),
+            );
+        }
+    }
+}
+
+/// The type names one module may write.
+///
+/// Its own records — public and private, since a module sees all of its own — then the
+/// records each direct import makes nameable. Both ways a name can collide are reported
+/// here, with the same wording and the same philosophy as the function namespace's, and
+/// for the same reason: an ambiguity is refused where it is created.
+/// Whether a call to [`type_environment`] is the one that reports name collisions.
+///
+/// Three stages build the same environment — field resolution, signature declaration and
+/// body checking — and a collision is one mistake, so exactly one of them says so.
+/// `docs/spec.md` refuses an ambiguity where it is created, and the earliest stage that
+/// can see it is where it is created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Collisions {
+    Report,
+    Silent,
+}
+
+fn type_environment(
+    unit: &Unit<'_>,
+    deps: &[&UnitInterface],
+    res: &Resolution,
+    errors: &mut Vec<Diagnostic>,
+    collisions: Collisions,
+) -> Types {
+    let mut names: HashMap<String, RecordId> = HashMap::new();
+    for (_, r) in &unit.records {
+        if let Some(id) = res.records().declared(unit.module, &r.name) {
+            names.insert(r.name.clone(), id);
+        }
+    }
+
+    let mut brought_in: HashMap<String, Span> = HashMap::new();
+    for d in unit.imports {
+        let Some(iface) = deps.iter().find(|i| i.module() == d.on) else {
+            continue;
+        };
+        for e in iface.records().iter().filter(|e| e.nameable) {
+            let Some(def) = res.records().get(e.def) else {
+                continue;
+            };
+            if let Some(own) = res
+                .records()
+                .declared(unit.module, &def.name)
+                .and_then(|id| res.records().get(id))
+            {
+                if collisions == Collisions::Report {
+                    errors.push(
+                        Diagnostic::error(
+                            codes::IMPORT_COLLIDES_WITH_DEFINITION,
+                            d.at,
+                            format!(
+                                "this import brings in the type `{}`, which this module \
+                                 declares",
+                                def.name
+                            ),
+                        )
+                        .secondary(own.name_span, "declared here")
+                        .secondary(def.name_span, "and exported here")
+                        .help(
+                            "an imported type and a local one are not ranked: rename one \
+                             of them, or stop exporting the other",
+                        ),
+                    );
+                }
+                continue;
+            }
+            if let Some(first) = brought_in.get(&def.name) {
+                if collisions == Collisions::Report {
+                    errors.push(
+                        Diagnostic::error(
+                            codes::AMBIGUOUS_IMPORT,
+                            d.at,
+                            format!(
+                                "the type `{}` is exported by two imported modules",
+                                def.name
+                            ),
+                        )
+                        .secondary(*first, "also brought in here")
+                        .secondary(def.name_span, "exported here")
+                        .help(
+                            "there is no way to write which one is meant, so the \
+                             ambiguity is refused where it is created rather than where \
+                             it is used",
+                        ),
+                    );
+                }
+                continue;
+            }
+            brought_in.insert(def.name.clone(), d.at);
+            names.insert(def.name.clone(), e.def);
+        }
+    }
+    Types { names }
+}
+
+/// A type name, against the built-ins and then this module's visible records.
+///
+/// Built-ins first and unshadowable, which is why they are matched before the map is
+/// consulted rather than being put in it.
+fn resolve_type_in(
+    types: &Types,
+    res: &Resolution,
+    name: &str,
+    span: Span,
+    errors: &mut Vec<Diagnostic>,
+) -> Type {
+    if let Some(t) = Type::from_name(name) {
+        return t;
+    }
+    if let Some(id) = types.names.get(name) {
+        return Type::Record(*id);
+    }
+    let mut d = Diagnostic::error(codes::UNKNOWN_TYPE, span, format!("`{name}` is not a type"))
+        .help(format!(
+            "the built-in types are {}, and a `struct` declares another",
+            Type::all_names()
+        ));
+    // The same courtesy the function namespace extends: a type that exists somewhere is
+    // more usefully reported as unreachable than as non-existent.
+    if let Some(elsewhere) = res
+        .records()
+        .declared_anywhere(name)
+        .next()
+        .and_then(|id| res.records().get(id))
+    {
+        d = d.secondary(elsewhere.name_span, "a type of this name is declared here");
+    }
+    errors.push(d);
+    // Continue as `Int` rather than abandoning: one unknown type should not suppress
+    // every other error around it.
+    Type::Int
+}
+
 /// Stage 1 for one module: declare what it defines, and say what it offers.
 ///
 /// Reads this module's declarations and nothing else — no other module's source, no other
@@ -408,18 +866,20 @@ pub fn check_reusing(
 /// that contains a cycle.
 pub fn declare_unit(
     unit: &Unit<'_>,
+    deps: &[&UnitInterface],
     res: &mut Resolution,
     errors: &mut Vec<Diagnostic>,
 ) -> UnitInterface {
+    let types = type_environment(unit, deps, res, errors, Collisions::Silent);
     let mut exports = Vec::new();
 
     for (decl, f) in &unit.functions {
         let params: Vec<Type> = f
             .params
             .iter()
-            .map(|p| resolve_type(&p.ty.name, p.ty.span, errors))
+            .map(|p| resolve_type_in(&types, res, &p.ty.name, p.ty.span, errors))
             .collect();
-        let ret = resolve_type(&f.return_type.name, f.return_type.span, errors);
+        let ret = resolve_type_in(&types, res, &f.return_type.name, f.return_type.span, errors);
 
         // A built-in has no source span to point at, so "first defined here" would aim
         // at byte zero. Said plainly instead. Built-ins are not a module's definitions,
@@ -469,6 +929,19 @@ pub fn declare_unit(
         });
 
         if visibility.is_exported() {
+            // A public signature naming a private record would publish a type the
+            // importer cannot resolve. Checked at each public item on its *direct*
+            // references, which is the recursion `docs/spec.md` asks for expressed
+            // distributively: an intermediate record must itself be public to appear
+            // here, and its own declaration is checked the same way — so one mistake
+            // produces exactly one diagnostic, at the place the private name is written.
+            for (t, at) in params
+                .iter()
+                .zip(f.params.iter().map(|p| p.ty.span))
+                .chain(std::iter::once((&ret, f.return_type.span)))
+            {
+                report_private_type(*t, at, f.name_span, "function", &f.name, res, errors);
+            }
             exports.push(Export {
                 name: f.name.clone(),
                 params,
@@ -479,7 +952,89 @@ pub fn declare_unit(
         }
     }
 
-    UnitInterface::new(unit.module, exports, unit.imports.to_vec())
+    // The same check for an exported record's own fields, and the interface's record set.
+    let mut records: Vec<RecordExport> = Vec::new();
+    let mut roots: Vec<Type> = Vec::new();
+    for (_, r) in &unit.records {
+        let Some(id) = res.records().declared(unit.module, &r.name) else {
+            continue;
+        };
+        let Some(def) = res.records().get(id) else {
+            continue;
+        };
+        if !def.visibility.is_exported() {
+            continue;
+        }
+        let name = def.name.clone();
+        let name_span = def.name_span;
+        let fields: Vec<(Type, Span)> = def.fields.iter().map(|f| (f.ty, f.ty_span)).collect();
+        for (t, at) in fields {
+            report_private_type(t, at, name_span, "record", &name, res, errors);
+        }
+        records.push(RecordExport {
+            def: id,
+            nameable: true,
+        });
+        roots.push(Type::Record(id));
+    }
+    // Closed over what the public surface mentions: an importer that projects through an
+    // exported record needs every shape it can reach, and cannot go and read the module
+    // that declared one. `RecordExport` says why this is not transitive visibility.
+    roots.extend(exports.iter().flat_map(|e| {
+        e.params
+            .iter()
+            .copied()
+            .chain(std::iter::once(e.ret))
+            .collect::<Vec<_>>()
+    }));
+    for id in reachable_records(res.records(), roots) {
+        if !records.iter().any(|r| r.def == id) {
+            records.push(RecordExport {
+                def: id,
+                nameable: false,
+            });
+        }
+    }
+
+    UnitInterface::new(unit.module, exports, records, unit.imports.to_vec())
+}
+
+/// Report a public item that names a private record.
+///
+/// `kind` and `name` describe the **public** item, so the message says what is leaking
+/// and the labels say from where to where.
+fn report_private_type(
+    t: Type,
+    at: Span,
+    item_span: Span,
+    kind: &str,
+    name: &str,
+    res: &Resolution,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let Type::Record(id) = t else { return };
+    let Some(def) = res.records().get(id) else {
+        return;
+    };
+    if def.visibility.is_exported() {
+        return;
+    }
+    errors.push(
+        Diagnostic::error(
+            codes::PRIVATE_TYPE_EXPOSED,
+            at,
+            format!(
+                "this public {kind} exposes `{}`, which is private to this module",
+                def.name
+            ),
+        )
+        .secondary(item_span, format!("`{name}` is public"))
+        .secondary(def.name_span, "declared without `pub` here")
+        .help(
+            "an importer would have to name this type to use the item and cannot. Export \
+             the type with `pub`, or stop exporting the item",
+        ),
+    );
 }
 
 /// Stage 2 for one module: check its bodies against its environment.
@@ -495,11 +1050,16 @@ pub fn check_unit(
     errors: &mut Vec<Diagnostic>,
 ) {
     let env = environment(unit, deps, res, errors);
+    // Built from `deps` rather than from a graph, so the one path that checks a module
+    // against persisted interfaces resolves type names by exactly the rule the
+    // whole-program path uses. Two builders would be two rules.
+    let types = type_environment(unit, deps, res, errors, Collisions::Silent);
     let imports = unit.imports.iter().map(|d| d.on).collect();
     let mut c = Checker {
         res,
         module: unit.module,
         env,
+        types,
         imports,
         current: None,
         scopes: Scopes::default(),
@@ -630,26 +1190,6 @@ fn environment(
     Env { names }
 }
 
-/// A type name, or `Int` and a diagnostic.
-///
-/// A free function rather than a method: stage 1 resolves signatures before there is a
-/// `Checker` to be a method on, and having two copies of "what is a type name" is the
-/// class of duplication N1 removed.
-fn resolve_type(name: &str, span: Span, errors: &mut Vec<Diagnostic>) -> Type {
-    match Type::from_name(name) {
-        Some(t) => t,
-        None => {
-            errors.push(
-                Diagnostic::error(codes::UNKNOWN_TYPE, span, format!("`{name}` is not a type"))
-                    .help(format!("v0.1 has {}", Type::all_names())),
-            );
-            // Continue as `Int` rather than abandoning the function: one unknown type
-            // should not suppress every other error in the body.
-            Type::Int
-        }
-    }
-}
-
 impl Checker<'_> {
     /// Give a binding its slot in the current function's storage.
     ///
@@ -746,8 +1286,207 @@ impl Checker<'_> {
         })
     }
 
+    /// How a type is spelled in a message.
+    ///
+    /// A `String` rather than a `Display` adapter because the table it reads is behind the
+    /// same `&mut self` most of these sites already hold. A built-in spells itself; a
+    /// record spells its declared name, which is not its identity — two modules may each
+    /// declare `Thing`, and a message that says `Thing` is right about what was written.
+    fn show(&self, t: Type) -> String {
+        self.res.records().show(t).to_owned()
+    }
+
     fn resolve_type(&mut self, name: &str, span: Span) -> Type {
-        resolve_type(name, span, &mut self.errors)
+        // Split borrow: the environment and the error list are both behind `self`.
+        let mut errors = std::mem::take(&mut self.errors);
+        let t = resolve_type_in(&self.types, self.res, name, span, &mut errors);
+        self.errors = errors;
+        t
+    }
+
+    /// Which record a type name written in an expression refers to, if it is one.
+    ///
+    /// Reports through [`Self::resolve_type`], so an unknown name is one diagnostic
+    /// wherever it was written.
+    fn resolve_record(&mut self, name: &str, span: Span) -> Option<RecordId> {
+        match self.resolve_type(name, span) {
+            Type::Record(id) => Some(id),
+            other => {
+                // A known type that is not a record: `Int(x: 1)`. Distinguished from an
+                // unknown name, which `resolve_type` has already reported.
+                if Type::from_name(name).is_some() {
+                    let shown = self.show(other);
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNKNOWN_FIELD,
+                            span,
+                            format!("`{shown}` is not a record, so it has no fields to name"),
+                        )
+                        .help(
+                            "this form builds a record. A built-in type is built by its \
+                             own operations",
+                        ),
+                    );
+                }
+                None
+            }
+        }
+    }
+
+    /// Check a record construction and return the record it builds.
+    ///
+    /// Initialisers are evaluated **in the order written**, which `docs/spec.md` fixes
+    /// and which this order of checking mirrors: a diagnostic about the second field
+    /// comes after one about the first, and so does the side effect at runtime.
+    fn check_construction(
+        &mut self,
+        ty: &str,
+        ty_span: Span,
+        fields: &[FieldInit],
+        span: Span,
+    ) -> Option<Type> {
+        let Some(id) = self.resolve_record(ty, ty_span) else {
+            // Still check the initialisers: one unknown type should not silence every
+            // error inside it.
+            for f in fields {
+                self.check_expr(&f.value, None);
+            }
+            return None;
+        };
+        self.res.record_construction(ty_span, id);
+
+        let mut given: Vec<(String, Span)> = Vec::new();
+        for f in fields {
+            let declared = self
+                .res
+                .records()
+                .get(id)
+                .and_then(|d| d.field(&f.name).map(|(_, fd)| (fd.ty, fd.name_span)));
+            let Some((want, declared_at)) = declared else {
+                let name = self.res.records().show(Type::Record(id)).to_owned();
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNKNOWN_FIELD,
+                        f.name_span,
+                        format!("`{name}` has no field `{}`", f.name),
+                    )
+                    .secondary(
+                        self.res.records().get(id).map_or(ty_span, |d| d.name_span),
+                        "declared here",
+                    ),
+                );
+                self.check_expr(&f.value, None);
+                continue;
+            };
+            if let Some((_, first)) = given.iter().find(|(g, _)| *g == f.name) {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::DUPLICATE_FIELD,
+                        f.name_span,
+                        format!("`{}` is given a value twice", f.name),
+                    )
+                    .secondary(*first, "first given here")
+                    .help("every field is given exactly one value; there is no update form"),
+                );
+                self.check_expr(&f.value, None);
+                continue;
+            }
+            given.push((f.name.clone(), f.name_span));
+            let got = self.value_type(&f.value, Some(want));
+            if got != want {
+                let (swant, sgot) = (self.show(want), self.show(got));
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        f.value.span(),
+                        format!("`{}` is `{swant}`, but this is `{sgot}`", f.name),
+                    )
+                    .secondary(declared_at, format!("declared `{swant}` here")),
+                );
+            }
+        }
+
+        let missing: Vec<String> = self.res.records().get(id).map_or_else(Vec::new, |d| {
+            d.fields
+                .iter()
+                .filter(|f| !given.iter().any(|(g, _)| *g == f.name))
+                .map(|f| f.name.clone())
+                .collect()
+        });
+        if !missing.is_empty() {
+            let name = self.res.records().show(Type::Record(id)).to_owned();
+            let list = missing
+                .iter()
+                .map(|m| format!("`{m}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.errors.push(
+                Diagnostic::error(
+                    codes::MISSING_FIELD,
+                    span,
+                    format!("this `{name}` does not give a value for {list}"),
+                )
+                .secondary(
+                    self.res.records().get(id).map_or(ty_span, |d| d.name_span),
+                    "declared here",
+                )
+                .help(
+                    "every field is given a value when a record is built. There are no \
+                     default values and no partial records",
+                ),
+            );
+        }
+        Some(Type::Record(id))
+    }
+
+    /// Check `base.name` and return the field's type.
+    ///
+    /// Field lookup begins at the base's **resolved type** and goes no further: there is
+    /// no global field namespace, so a name that is a field of some other record is not a
+    /// field of this one. `docs/spec.md`, *Field resolution starts from the type*.
+    fn check_projection(&mut self, base_ty: Type, name: &str, name_span: Span) -> Option<Type> {
+        let Type::Record(id) = base_ty else {
+            let shown = self.show(base_ty);
+            self.errors.push(
+                Diagnostic::error(
+                    codes::INVALID_PROJECTION,
+                    name_span,
+                    format!("`{shown}` is not a record, so `.{name}` has nothing to read"),
+                )
+                .help("`.` reads a declared field out of a record value"),
+            );
+            return None;
+        };
+        let found = self
+            .res
+            .records()
+            .get(id)
+            .and_then(|d| d.field(name).map(|(i, f)| (i, f.ty)));
+        let Some((index, ty)) = found else {
+            let shown = self.show(base_ty);
+            let at = self.res.records().get(id).map(|d| d.name_span);
+            let mut d = Diagnostic::error(
+                codes::UNKNOWN_FIELD,
+                name_span,
+                format!("`{shown}` has no field `{name}`"),
+            );
+            if let Some(at) = at {
+                d = d.secondary(at, "declared here");
+            }
+            self.errors.push(d.help(
+                "a field is looked for on the type of the value it is read from, and \
+                 nowhere else",
+            ));
+            return None;
+        };
+        self.res.record_field(
+            name_span,
+            FieldRef {
+                record: id,
+                field: index,
+            },
+        );
+        Some(ty)
     }
 
     fn check_function(&mut self, f: &Function) {
@@ -794,6 +1533,7 @@ impl Checker<'_> {
             Completion::Diverges => {}
             Completion::Value(actual) if actual == declared => {}
             Completion::Value(actual) => {
+                let (actual, declared) = (self.show(actual), self.show(declared));
                 self.errors.push(
                     Diagnostic::error(
                         codes::TYPE_MISMATCH,
@@ -807,6 +1547,7 @@ impl Checker<'_> {
                 );
             }
             Completion::Unit => {
+                let declared = self.show(declared);
                 self.errors.push(
                     Diagnostic::error(
                         codes::TYPE_MISMATCH,
@@ -934,7 +1675,10 @@ impl Checker<'_> {
                         Diagnostic::error(
                             codes::TYPE_MISMATCH,
                             tail.span(),
-                            format!("a `scope` has no value, but this produces `{t}`"),
+                            format!(
+                                "a `scope` has no value, but this produces `{}`",
+                                self.show(t)
+                            ),
                         )
                         .help("add `;` to discard it, or send it through a channel"),
                     );
@@ -1013,9 +1757,11 @@ impl Checker<'_> {
                         codes::TYPE_MISMATCH,
                         a.span(),
                         format!(
-                            "argument {} of `{}` is `{want}`, but this is `{got}`",
+                            "argument {} of `{}` is `{}`, but this is `{}`",
                             i + 1,
-                            s.callee
+                            s.callee,
+                            self.show(want),
+                            self.show(got)
                         ),
                     ));
                 }
@@ -1023,17 +1769,26 @@ impl Checker<'_> {
             // The capture rule. A sequence is a handle to unsynchronised shared mutable
             // storage, so letting one cross into a task would be a data race the
             // language had invited — see `docs/spec.md`.
-            if !got.may_cross_into_a_task() {
-                self.errors.push(
-                    Diagnostic::error(
-                        codes::ILLEGAL_TASK_CAPTURE,
-                        a.span(),
-                        format!("a `{got}` may not be passed to a task"),
+            // Derived rather than asked of the type: a record's legality is its fields',
+            // recursively, so the table answers and the answer carries the field path
+            // that made it illegal. `docs/spec.md`, *Task safety is derived*.
+            if let Err(why) = self.res.records().task_safety(got) {
+                let shown = self.show(got);
+                let named = self.show(why.ty);
+                let message = if why.path.is_empty() {
+                    format!("a `{shown}` may not be passed to a task")
+                } else {
+                    format!(
+                        "a `{shown}` may not be passed to a task: its `{}` is a `{named}`",
+                        why.path.join(".")
                     )
-                    .help(
+                };
+                self.errors.push(
+                    Diagnostic::error(codes::ILLEGAL_TASK_CAPTURE, a.span(), message).help(
                         "`Ints` and `Strs` are handles to shared mutable storage with no \
-                         synchronisation. Pass `Int`, `Bool` or `Str` values, or a `Chan`, \
-                         which is the primitive designed to be shared",
+                         synchronisation, and a record containing one at any depth inherits \
+                         that. Pass `Int`, `Bool` or `Str` values, a `Chan`, or a record \
+                         whose every field may cross",
                     ),
                 );
             }
@@ -1052,7 +1807,11 @@ impl Checker<'_> {
                 Diagnostic::error(
                     codes::TYPE_MISMATCH,
                     r.value.span(),
-                    format!("this returns `{actual}`, but the function returns `{declared}`"),
+                    format!(
+                        "this returns `{}`, but the function returns `{}`",
+                        self.show(actual),
+                        self.show(declared)
+                    ),
                 )
                 .help("`return` leaves the function, so its value must match the signature"),
             );
@@ -1060,12 +1819,13 @@ impl Checker<'_> {
     }
 
     fn check_assign(&mut self, a: &Assign) {
-        let Some(binding) = self.scopes.lookup(&a.name) else {
+        let place = &a.place;
+        let Some(binding) = self.scopes.lookup(&place.name) else {
             self.errors.push(
                 Diagnostic::error(
                     codes::UNDEFINED_VARIABLE,
-                    a.name_span,
-                    format!("`{}` is not defined", a.name),
+                    place.name_span,
+                    format!("`{}` is not defined", place.name),
                 )
                 .help("assignment changes an existing binding; `let` introduces one"),
             );
@@ -1073,14 +1833,28 @@ impl Checker<'_> {
             return;
         };
 
-        self.res.record_var(a.name_span, binding.slot);
+        self.res.record_var(place.name_span, binding.slot);
 
+        // Mutability is checked at the **root binding**, whatever the path. `p.x = 2`
+        // replaces part of what `p` holds, so it needs `let mut p` for the same reason
+        // `p = q` does — a record is a value, not a handle to one. `docs/spec.md`,
+        // *Binding mutability reaches every field*.
         if !binding.mutable {
-            let d = Diagnostic::error(
-                codes::ASSIGN_TO_IMMUTABLE,
-                a.name_span,
-                format!("`{}` is not mutable", a.name),
-            );
+            let written = if place.path.is_empty() {
+                format!("`{}` is not mutable", place.name)
+            } else {
+                format!(
+                    "`{}` is not mutable, so its `{}` cannot be replaced",
+                    place.name,
+                    place
+                        .path
+                        .iter()
+                        .map(|f| f.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".")
+                )
+            };
+            let d = Diagnostic::error(codes::ASSIGN_TO_IMMUTABLE, place.name_span, written);
             // The edit belongs at the `let`, not here. A parameter has no `let` to edit
             // — `mut` on one is refused — so it gets the other repair as prose instead
             // of an edit that would not compile.
@@ -1090,7 +1864,7 @@ impl Checker<'_> {
                     .secondary(at, "declared here")
                     .fix_automatically(
                         at,
-                        format!("mut {}", a.name),
+                        format!("mut {}", place.name),
                         "make the binding mutable",
                         "`mut` is the only thing making this assignment illegal, and \
                          adding it to a declaration changes nothing else about the \
@@ -1103,19 +1877,64 @@ impl Checker<'_> {
             });
         }
 
-        // Checked against the binding's type, so a reassignment cannot change it. A
+        // Walk the projection path to the type actually being written. Each step is
+        // recorded exactly as a read would be, because it is one: `a.b.c = v` reads `a.b`
+        // and replaces `c` in it.
+        let mut target = binding.ty;
+        let mut declared_at = binding.declared_at;
+        for step in &place.path {
+            match self.check_projection(target, &step.name, step.name_span) {
+                Some(t) => {
+                    declared_at = self
+                        .res
+                        .field(step.name_span)
+                        .and_then(|r| self.res.records().get(r.record))
+                        .and_then(|d| {
+                            d.fields.get(
+                                self.res
+                                    .field(step.name_span)
+                                    .map_or(usize::MAX, |r| r.field as usize),
+                            )
+                        })
+                        .map(|f| f.name_span);
+                    target = t;
+                }
+                None => {
+                    self.check_expr(&a.value, None);
+                    return;
+                }
+            }
+        }
+
+        // Checked against the place's type, so a reassignment cannot change it. A
         // variable whose type depends on how far through the function you are is exactly
         // the thing a reader cannot predict.
-        let vt = self.value_type(&a.value, Some(binding.ty));
-        if vt != binding.ty {
-            self.errors.push(
-                Diagnostic::error(
-                    codes::TYPE_MISMATCH,
-                    a.value.span(),
-                    format!("`{}` is `{}`, but this is `{vt}`", a.name, binding.ty),
+        let vt = self.value_type(&a.value, Some(target));
+        if vt != target {
+            let written = if place.path.is_empty() {
+                place.name.clone()
+            } else {
+                format!(
+                    "{}.{}",
+                    place.name,
+                    place
+                        .path
+                        .iter()
+                        .map(|f| f.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".")
                 )
-                .secondary(a.name_span, format!("declared `{}` here", binding.ty)),
+            };
+            let (starget, svt) = (self.show(target), self.show(vt));
+            let mut d = Diagnostic::error(
+                codes::TYPE_MISMATCH,
+                a.value.span(),
+                format!("`{written}` is `{starget}`, but this is `{svt}`"),
             );
+            if let Some(at) = declared_at {
+                d = d.secondary(at, format!("declared `{starget}` here"));
+            }
+            self.errors.push(d);
         }
     }
 
@@ -1126,7 +1945,10 @@ impl Checker<'_> {
                 Diagnostic::error(
                     codes::CONDITION_NOT_BOOL,
                     w.cond.span(),
-                    format!("a `while` condition must be `Bool`, but this is `{ct}`"),
+                    format!(
+                        "a `while` condition must be `Bool`, but this is `{}`",
+                        self.show(ct)
+                    ),
                 )
                 .help("Nazm has no truthiness: use a comparison such as `i < n`"),
             );
@@ -1142,7 +1964,10 @@ impl Checker<'_> {
                 Diagnostic::error(
                     codes::TYPE_MISMATCH,
                     tail.span(),
-                    format!("a loop body has no value, but this produces `{t}`"),
+                    format!(
+                        "a loop body has no value, but this produces `{}`",
+                        self.show(t)
+                    ),
                 )
                 .help("add `;` to discard it, or assign it to something")
                 .fix_with_review(
@@ -1233,7 +2058,7 @@ impl Checker<'_> {
                     self.errors.push(Diagnostic::error(
                         codes::INVALID_OPERANDS,
                         *op_span,
-                        format!("`-` applies to `Int`, but this is `{t}`"),
+                        format!("`-` applies to `Int`, but this is `{}`", self.show(t)),
                     ));
                 }
                 Completion::Value(Type::Int)
@@ -1309,14 +2134,44 @@ impl Checker<'_> {
                                 codes::TYPE_MISMATCH,
                                 a.span(),
                                 format!(
-                                    "argument {} of `{callee}` is `{want}`, but this is `{got}`",
-                                    i + 1
+                                    "argument {} of `{callee}` is `{}`, but this is `{}`",
+                                    i + 1,
+                                    self.show(want),
+                                    self.show(got)
                                 ),
                             ));
                         }
                     }
                 }
                 Completion::Value(sig.ret)
+            }
+
+            Expr::Construct {
+                ty,
+                ty_span,
+                fields,
+                span,
+            } => match self.check_construction(ty, *ty_span, fields, *span) {
+                Some(t) => Completion::Value(t),
+                // The type did not resolve, and that is already reported. `Int` is what
+                // every unresolved type continues as, so no second error is raised here.
+                None => Completion::Value(Type::Int),
+            },
+
+            Expr::Field {
+                base,
+                name,
+                name_span,
+                ..
+            } => {
+                // The base is checked with no expectation: what a projection wants of its
+                // base is "a record with this field", which is not a `Type` and so cannot
+                // be passed as one.
+                let base_ty = self.value_type(base, None);
+                match self.check_projection(base_ty, name, *name_span) {
+                    Some(t) => Completion::Value(t),
+                    None => Completion::Value(Type::Int),
+                }
             }
 
             Expr::If {
@@ -1331,7 +2186,10 @@ impl Checker<'_> {
                         Diagnostic::error(
                             codes::CONDITION_NOT_BOOL,
                             cond.span(),
-                            format!("an `if` condition must be `Bool`, but this is `{ct}`"),
+                            format!(
+                                "an `if` condition must be `Bool`, but this is `{}`",
+                                self.show(ct)
+                            ),
                         )
                         .help("Nazm has no truthiness: use a comparison such as `x != 0`"),
                     );
@@ -1354,6 +2212,7 @@ impl Checker<'_> {
                     (Completion::Diverges, other) | (other, Completion::Diverges) => other,
                     (Completion::Value(a), Completion::Value(b)) if a == b => Completion::Value(a),
                     (Completion::Value(a), Completion::Value(b)) => {
+                        let (sa, sb) = (self.show(a), self.show(b));
                         self.errors.push(
                             Diagnostic::error(
                                 codes::BRANCH_TYPES_DIFFER,
@@ -1361,14 +2220,14 @@ impl Checker<'_> {
                                     .tail
                                     .as_ref()
                                     .map_or(else_block.span, |t| t.span()),
-                                format!("this branch is `{b}`, but the other is `{a}`"),
+                                format!("this branch is `{sb}`, but the other is `{sa}`"),
                             )
                             .secondary(
                                 then_block
                                     .tail
                                     .as_ref()
                                     .map_or(then_block.span, |t| t.span()),
-                                format!("this one is `{a}`"),
+                                format!("this one is `{sa}`"),
                             )
                             .help("both branches of an `if` must have the same type"),
                         );
@@ -1377,11 +2236,12 @@ impl Checker<'_> {
                     // One branch produces a value and the other does not.
                     (Completion::Value(a), Completion::Unit)
                     | (Completion::Unit, Completion::Value(a)) => {
+                        let sa = self.show(a);
                         self.errors.push(
                             Diagnostic::error(
                                 codes::BRANCH_TYPES_DIFFER,
                                 *e.span_ref(),
-                                format!("one branch produces `{a}` and the other produces nothing"),
+                                format!("one branch produces `{sa}` and the other produces nothing"),
                             )
                             .help("both branches of an `if` must agree, or neither may produce a value"),
                         );
@@ -1429,15 +2289,16 @@ impl Checker<'_> {
             } else {
                 "combine"
             };
+            let (slt, srt) = (self.show(lt), self.show(rt));
             let detail = if lt == rt {
-                format!("`{}` does not apply to `{lt}`", op.symbol())
+                format!("`{}` does not apply to `{slt}`", op.symbol())
             } else {
-                format!("`{}` cannot {verb} `{lt}` with `{rt}`", op.symbol())
+                format!("`{}` cannot {verb} `{slt}` with `{srt}`", op.symbol())
             };
             self.errors.push(
                 Diagnostic::error(codes::INVALID_OPERANDS, op_span, detail)
-                    .secondary(lhs_span, format!("this is `{lt}`"))
-                    .secondary(rhs_span, format!("this is `{rt}`")),
+                    .secondary(lhs_span, format!("this is `{slt}`"))
+                    .secondary(rhs_span, format!("this is `{srt}`")),
             );
 
             // The operands were wrong, so this expression has no honest type. Reporting

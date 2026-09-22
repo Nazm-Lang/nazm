@@ -59,6 +59,7 @@ fn interface_of_b(module: nazm_core::sema::ModuleId) -> UnitInterface {
             def: FnId::from_index(4096),
         }],
         Vec::new(),
+        Vec::new(),
     )
 }
 
@@ -76,7 +77,7 @@ fn a_module_checks_against_an_interface_whose_bodies_do_not_exist() {
 
     // Stage 1 for A alone. It needs nothing from B, which is what lets the two stages be
     // ordered freely — including around a cycle.
-    let own = declare_unit(&unit, &mut res, &mut errors);
+    let own = declare_unit(&unit, &[], &mut res, &mut errors);
     assert!(errors.is_empty(), "{errors:#?}");
     assert_eq!(own.module(), graph.root());
     assert!(
@@ -111,9 +112,14 @@ fn without_that_interface_the_same_module_is_refused() {
     let mut res = Resolution::default();
     let mut errors = Vec::new();
 
-    declare_unit(&unit, &mut res, &mut errors);
+    declare_unit(&unit, &[], &mut res, &mut errors);
     // B exists and exports nothing.
-    let empty = UnitInterface::new(graph.ids().nth(1).unwrap(), Vec::new(), Vec::new());
+    let empty = UnitInterface::new(
+        graph.ids().nth(1).unwrap(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
     check_unit(&unit, &[&empty], &mut res, &mut errors);
 
     assert_eq!(errors.len(), 1, "{errors:#?}");
@@ -135,7 +141,7 @@ fn a_dependencys_private_names_are_not_in_its_interface_and_so_are_not_in_scope(
         "pub fn shown() -> Int { hidden() }\nfn hidden() -> Int { 1 }\n",
     );
     let b_unit = Unit::of(&b_program, &graph, b);
-    let iface = declare_unit(&b_unit, &mut res, &mut errors);
+    let iface = declare_unit(&b_unit, &[], &mut res, &mut errors);
     assert!(errors.is_empty(), "{errors:#?}");
 
     assert_eq!(iface.exports().len(), 1);

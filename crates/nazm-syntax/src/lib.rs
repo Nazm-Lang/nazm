@@ -6,8 +6,8 @@ pub mod lexer;
 pub mod parser;
 
 pub use ast::{
-    Assign, BinOp, Block, Expr, Function, Import, Let, Param, Program, Return, Scope, Spawn, Stmt,
-    TypeName, While,
+    Assign, BinOp, Block, Expr, Field, FieldInit, Function, Import, Let, Param, Place, PlaceField,
+    Program, Record, Return, Scope, Spawn, Stmt, TypeName, While,
 };
 pub use format::format;
 pub use lexer::{lex, lex_in, lex_with_comments, lex_with_comments_in, Token, TokenKind};
@@ -52,13 +52,22 @@ pub fn parse_file(file: nazm_span::FileId, text: &str) -> (Program, Vec<nazm_dia
 /// exactly as before.
 pub fn parse_map(map: &nazm_span::SourceMap) -> (Program, Vec<nazm_diag::Diagnostic>) {
     let mut functions = Vec::new();
+    let mut records = Vec::new();
     let mut imports = Vec::new();
     let mut errors = Vec::new();
     for id in map.ids() {
         let (program, file_errors) = parse_file(id, map.text(id));
         functions.extend(program.functions);
+        records.extend(program.records);
         imports.extend(program.imports);
         errors.extend(file_errors);
     }
-    (Program { functions, imports }, errors)
+    (
+        Program {
+            functions,
+            records,
+            imports,
+        },
+        errors,
+    )
 }

@@ -57,9 +57,9 @@ use nazm_sema::module::{ModuleGraph, ModuleId};
 
 use crate::ir::{
     fits, ArithOp, Block, Builtin, CmpOp, Expr, External, Function, Local, Lowering as _, Native,
-    Stmt, Ty, Unit,
+    RecordLayout, RecordTy, Stmt, Ty, Unit,
 };
-use crate::symbol::{Linkage, NativeSymbol};
+use crate::symbol::{Linkage, NativeSymbol, NativeTypeName};
 
 /// What the subset is, in one sentence, for every refusal to point at.
 const SUBSET: &str = "`nazm build` currently compiles functions over `Int`, `Bool` and \
@@ -106,6 +106,13 @@ pub struct Plan {
     /// By [`FnId`], the signature this backend accepted — or `None` where it refused one,
     /// which is what tells a refused user function apart from a built-in.
     sig: Vec<Option<Sig>>,
+    /// By [`RecordTy`], how that record is laid out.
+    ///
+    /// Global, and computed once: two units that mention one record must lay it out
+    /// identically or the objects they produce will not link, so the layout is settled
+    /// here rather than by each unit for itself. Each unit then publishes the subset it
+    /// mentions, which is what keeps one unit's text independent of another's records.
+    records: Vec<RecordLayout>,
     entry: NativeSymbol,
 }
 
@@ -126,6 +133,13 @@ struct Ctx<'a> {
     module: ModuleId,
     /// Definitions this module calls and does not own, collected as they are found.
     externals: Vec<External>,
+    /// Record types this unit's code mentions, collected as they are found.
+    ///
+    /// A set rather than a list, because one record is mentioned many times and the unit
+    /// must carry it once. Closed over field types at the end: a record this unit names is
+    /// laid out in its LLVM text, and a field of record type makes that definition refer
+    /// to another named type which must also be defined here.
+    used_records: std::collections::BTreeSet<u32>,
     /// Locals of the function being lowered, in slot order, taken from the resolution.
     locals: Vec<Local>,
     /// Call edges, as **resolved definition identities**: the cycle check is a question
@@ -157,7 +171,94 @@ enum Ends {
     Transfers,
 }
 
+/// How every record in this compilation is laid out.
+///
+/// One table, computed before any unit is lowered, for the reason `docs/spec.md` gives
+/// under *Separate code generation*: two objects that pass a record between them must
+/// agree about it, and the only way to be sure is that neither decided.
+///
+/// The order is **canonical by field name**, which is the layout rule. Nothing about the
+/// author's declaration order reaches the object file, so moving two field declarations —
+/// an edit the language says means nothing — changes no byte of it.
+fn record_layouts(res: &Resolution, graph: &ModuleGraph) -> Vec<RecordLayout> {
+    res.records()
+        .all()
+        .iter()
+        .enumerate()
+        .map(|(i, def)| {
+            let id = RecordTy(u32::try_from(i).unwrap_or(u32::MAX));
+            // Derived from the durable identity where there is one, exactly as a function
+            // symbol is, and from load order where there is not — for a module that has
+            // no durable identity, which still compiles.
+            let name = match graph.key(def.module) {
+                Some(key) => NativeTypeName::of_definition(&DefKey::new(
+                    key.clone(),
+                    DefKind::Record,
+                    def.name.clone(),
+                )),
+                None => NativeTypeName::of_unkeyed(def.module, &def.name),
+            };
+            let fields: Vec<Ty> = def.in_layout_order().map(|(_, f)| Ty::of(f.ty)).collect();
+            let mut of_declaration = vec![0_u32; def.fields.len()];
+            for (position, (declared, _)) in def.in_layout_order().enumerate() {
+                if let Some(slot) = of_declaration.get_mut(declared as usize) {
+                    *slot = u32::try_from(position).unwrap_or(u32::MAX);
+                }
+            }
+            RecordLayout {
+                id,
+                name,
+                source: def.name.clone(),
+                fields,
+                of_declaration,
+            }
+        })
+        .collect()
+}
+
 impl Ctx<'_> {
+    /// Note that this unit's code mentions a type, so its definition travels with it.
+    ///
+    /// Called wherever a type enters the unit — a local, a signature, an expression's
+    /// result. A record whose name never appears in the text is not carried, which is what
+    /// keeps this unit's object independent of records declared elsewhere.
+    fn note(&mut self, ty: Ty) {
+        if let Ty::Record(id) = ty {
+            self.used_records.insert(id.0);
+        }
+    }
+
+    /// The layout of a record this compilation declared.
+    fn layout(&self, id: RecordTy) -> Option<&RecordLayout> {
+        self.plan.records.get(id.index())
+    }
+
+    /// Where the field declared at `declared` sits in the LLVM struct.
+    ///
+    /// **The layout boundary.** Everything above this holds a declaration index, which is
+    /// how a field's semantic identity is spelled in one session; everything below holds a
+    /// position. This function is the only place the two meet.
+    fn field_index(&self, id: RecordTy, declared: u32) -> Option<u32> {
+        self.layout(id)?
+            .of_declaration
+            .get(declared as usize)
+            .copied()
+    }
+
+    /// Add a hidden local, and return its slot.
+    ///
+    /// For a record being assembled: `docs/spec.md` requires a construction that fails
+    /// part way through to release what it has already taken, and a value in a register is
+    /// not reachable from the frame's cleanup. Named so that `--emit-ir` shows what it is.
+    fn hidden(&mut self, ty: Ty, what: &str) -> usize {
+        let slot = self.locals.len();
+        self.locals.push(Local {
+            name: format!("{what}#{slot}"),
+            ty,
+        });
+        slot
+    }
+
     /// `what` is a short noun phrase. The sentence supplies the rest, and the help
     /// supplies the subset — a phrase carrying its own clause reads as two sentences
     /// spliced together, which is how the first version of these messages read.
@@ -231,6 +332,8 @@ pub fn plan(program: &Program, res: &Resolution, graph: &ModuleGraph) -> Result<
         }
     }
 
+    let records = record_layouts(res, graph);
+
     let entry = match res
         .entry()
         .and_then(|id| sig.get(id.index()))
@@ -270,7 +373,11 @@ pub fn plan(program: &Program, res: &Resolution, graph: &ModuleGraph) -> Result<
     }
 
     if errors.is_empty() {
-        Ok(Plan { sig, entry })
+        Ok(Plan {
+            sig,
+            records,
+            entry,
+        })
     } else {
         Err(LowerError {
             diagnostics: errors,
@@ -309,6 +416,7 @@ pub fn lower_module(
         plan,
         module,
         externals: Vec::new(),
+        used_records: std::collections::BTreeSet::new(),
         locals: Vec::new(),
         calls: Vec::new(),
         current: FnId::from_index(0),
@@ -338,12 +446,34 @@ pub fn lower_module(
     // happened to mention them. Two builds of one module produce one text.
     ctx.externals.sort();
 
+    // Closed over field types: a named LLVM type whose definition refers to another must
+    // have that one defined beside it. Iterative, and bounded by the number of records.
+    let mut work: Vec<u32> = ctx.used_records.iter().copied().collect();
+    while let Some(id) = work.pop() {
+        let Some(layout) = plan.records.get(id as usize) else {
+            continue;
+        };
+        for f in &layout.fields {
+            if let Ty::Record(inner) = f {
+                if ctx.used_records.insert(inner.0) {
+                    work.push(inner.0);
+                }
+            }
+        }
+    }
+    let records: Vec<RecordLayout> = ctx
+        .used_records
+        .iter()
+        .filter_map(|id| plan.records.get(*id as usize).cloned())
+        .collect();
+
     Lowered {
         unit: Unit {
             module,
             source: source.to_owned(),
             functions,
             externals: ctx.externals,
+            records,
         },
         calls: ctx.calls,
         errors: ctx.errors,
@@ -509,6 +639,12 @@ fn lower_function(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn) -> Option<Function> {
             ty: Ty::of(l.ty),
         })
         .collect();
+    // Every local's type is mentioned by this unit's text: it is the type of an `alloca`.
+    let local_types: Vec<Ty> = ctx.locals.iter().map(|l| l.ty).collect();
+    for t in local_types {
+        ctx.note(t);
+    }
+    ctx.note(ret);
     ctx.current = id;
     ctx.ret_ty = ret;
     // No loop target crosses a function boundary, so the depth starts at zero here and
@@ -966,25 +1102,48 @@ fn lower_statement_if(
 /// expression can leave a local holding something.
 fn lower_assign(ctx: &mut Ctx<'_>, a: &nazm_syntax::Assign) -> Option<Stmt> {
     let value = lower_expr(ctx, &a.value);
+    let place = &a.place;
 
-    let Some((slot, ty)) = ctx.slot_at(a.name_span) else {
+    let Some((slot, ty)) = ctx.slot_at(place.name_span) else {
         // Unreachable: the checker resolved this name and recorded the slot. Reaching
         // here means the resolution is missing an entry it should have, which is a
         // compiler bug and worth reporting as one rather than as "unsupported".
         ctx.errors.push(
             Diagnostic::error(
                 codes::UNDEFINED_VARIABLE,
-                a.name_span,
-                format!("`{}` is not a local the native backend can see", a.name),
+                place.name_span,
+                format!("`{}` is not a local the native backend can see", place.name),
             )
             .help("this is a bug in the compiler; `nazm run` still works"),
         );
         return None;
     };
 
+    // The projection path, one step at a time, each turned from a field identity into a
+    // position. `target` is what the assignment actually writes.
+    let mut path: Vec<(u32, Ty)> = Vec::with_capacity(place.path.len());
+    let mut target = ty;
+    for step in &place.path {
+        let to = ctx.res.field(step.name_span)?;
+        let Ty::Record(rid) = target else {
+            ctx.unsupported(
+                place.span,
+                "a field written on something that is not a record",
+            );
+            return None;
+        };
+        let at = ctx.field_index(rid, to.field)?;
+        let field_ty = ctx
+            .layout(rid)
+            .and_then(|l| l.fields.get(at as usize).copied())?;
+        ctx.note(field_ty);
+        path.push((at, field_ty));
+        target = field_ty;
+    }
+
     let value = value?;
-    if !fits(&value, ty) {
-        // Unreachable after checking, which requires an assignment to match the binding's
+    if !fits(&value, target) {
+        // Unreachable after checking, which requires an assignment to match the place's
         // declared type (`N0300`). Reported rather than assumed away: a mismatched store
         // is a miscompile, and LLVM would reject the module for a reason that named none
         // of this.
@@ -993,14 +1152,18 @@ fn lower_assign(ctx: &mut Ctx<'_>, a: &nazm_syntax::Assign) -> Option<Stmt> {
             &format!(
                 "an assignment of `{}` to `{}`, which is `{}`",
                 value.ty().map_or("nothing", Ty::name),
-                a.name,
-                ty.name()
+                place.name,
+                target.name()
             ),
         );
         return None;
     }
 
-    Some(Stmt::Assign { slot, value })
+    if path.is_empty() {
+        Some(Stmt::Assign { slot, value })
+    } else {
+        Some(Stmt::SetField { slot, path, value })
+    }
 }
 
 /// `while cond { body }`.
@@ -1080,6 +1243,15 @@ fn lower_expr(ctx: &mut Ctx<'_>, e: &AstExpr) -> Option<Expr> {
             args,
             ..
         } => lower_call(ctx, callee, *callee_span, args),
+        AstExpr::Construct {
+            ty_span, fields, ..
+        } => lower_construct(ctx, *ty_span, fields),
+        AstExpr::Field {
+            base,
+            name_span,
+            span,
+            ..
+        } => lower_field(ctx, base, *name_span, *span),
         AstExpr::If {
             cond,
             then_block,
@@ -1335,6 +1507,75 @@ fn lower_call(
         callee: symbol,
         args,
         ret,
+    })
+}
+
+/// `Point(x: 1, y: 2)`.
+///
+/// Which record, and which field each initialiser fills, are **read from the resolution**:
+/// the checker decided both, and deciding them again here would be the second resolver
+/// N1 removed. What is decided here — and only here — is where each field sits.
+fn lower_construct(
+    ctx: &mut Ctx<'_>,
+    ty_span: Span,
+    fields: &[nazm_syntax::FieldInit],
+) -> Option<Expr> {
+    let id = ctx.res.construction(ty_span)?;
+    let ty = Ty::of(nazm_sema::Type::Record(id));
+    ctx.note(ty);
+    let Ty::Record(rid) = ty else { return None };
+
+    // In the order **written**, which is the order side effects happen in. The layout
+    // index rides along, so emission never has to know the field's name.
+    let mut lowered = Vec::with_capacity(fields.len());
+    for f in fields {
+        let declared = ctx
+            .res
+            .records()
+            .get(id)
+            .and_then(|d| d.field(&f.name).map(|(i, _)| i))?;
+        let at = ctx.field_index(rid, declared)?;
+        let value = lower_expr(ctx, &f.value)?;
+        lowered.push((at, value));
+    }
+
+    // A slot only where a field owns something. A record of `Int`s cannot leak a partial
+    // construction, so it does not pay for the machinery that stops one.
+    let slot = ctx
+        .res
+        .records()
+        .needs_cleanup(nazm_sema::Type::Record(id))
+        .then(|| ctx.hidden(ty, "record"));
+
+    Some(Expr::Record {
+        ty,
+        fields: lowered,
+        slot,
+    })
+}
+
+/// `base.name`.
+fn lower_field(ctx: &mut Ctx<'_>, base: &AstExpr, name_span: Span, span: Span) -> Option<Expr> {
+    let to = ctx.res.field(name_span)?;
+    let base_lowered = lower_expr(ctx, base)?;
+    let base_ty = base_lowered.ty()?;
+    let Ty::Record(rid) = base_ty else {
+        // Unreachable after checking, which refuses a projection on anything else
+        // (`N0335`). Reported rather than assumed away.
+        ctx.unsupported(span, "a field read from something that is not a record");
+        return None;
+    };
+    let at = ctx.field_index(rid, to.field)?;
+    let ty = ctx
+        .layout(rid)
+        .and_then(|l| l.fields.get(at as usize).copied())?;
+    ctx.note(base_ty);
+    ctx.note(ty);
+    Some(Expr::Field {
+        base: Box::new(base_lowered),
+        base_ty,
+        at,
+        ty,
     })
 }
 

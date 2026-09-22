@@ -9,6 +9,12 @@ use nazm_span::Span;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub functions: Vec<Function>,
+    /// `struct` declarations, in source order.
+    ///
+    /// A separate list from the functions, because they are a separate namespace: a
+    /// module may declare a record `Point` and a function `Point` and they do not
+    /// collide. `docs/spec.md`, *Types and functions are separate namespaces*.
+    pub records: Vec<Record>,
     /// `use "path";` items, in source order.
     ///
     /// The parser records them and does nothing else with them: resolving a path means
@@ -25,6 +31,37 @@ pub struct Import {
     pub path: String,
     /// The string literal's span, which is where a "cannot find" diagnostic points.
     pub path_span: Span,
+    pub span: Span,
+}
+
+/// `struct Name { field: Type, … }`
+///
+/// The keyword is `struct` and the category is *record* — one concept with one spelling
+/// in source and one in the semantics, chosen so that neither word has to do both jobs.
+/// `docs/spec.md` states the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Record {
+    pub name: String,
+    pub name_span: Span,
+    /// Where `pub` was written, if it was. Syntax, not meaning — exactly as
+    /// [`Function::pub_span`].
+    pub pub_span: Option<Span>,
+    /// The fields, in the order written.
+    ///
+    /// Order is recorded because a reader wrote it and a formatter must preserve it. It
+    /// is **not** part of what the type means: construction is by name, and
+    /// `docs/spec.md` makes reordering two fields a no-op for both the interface
+    /// fingerprint and the native layout.
+    pub fields: Vec<Field>,
+    pub span: Span,
+}
+
+/// One declared field: `name: Type`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Field {
+    pub name: String,
+    pub name_span: Span,
+    pub ty: TypeName,
     pub span: Span,
 }
 
@@ -159,6 +196,41 @@ pub struct Let {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assign {
+    /// What is being written to.
+    pub place: Place,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// Where an assignment writes: a binding, then a path of fields through it.
+///
+/// A **projection path**, not a variable and an optional field. `docs/architecture.md`
+/// asks for this shape before it is strictly needed, because the ownership and mutability
+/// rules are about a *place*: `a.inner.count = 3` checks mutability at `a` and replaces a
+/// field two levels down, and a representation that held one optional field name could not
+/// say that. An empty [`Self::path`] is the ordinary `a = …`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    /// The root binding's name. Mutability is checked here and nowhere else — see
+    /// `docs/spec.md`, *Binding mutability reaches every field*.
+    pub name: String,
+    pub name_span: Span,
+    /// The fields, outermost first: `a.b.c` is `["b", "c"]`.
+    pub path: Vec<PlaceField>,
+    pub span: Span,
+}
+
+/// One step of a projection path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaceField {
+    pub name: String,
+    /// Where the field name is written — the span resolution keys this access by.
+    pub name_span: Span,
+}
+
+/// One field of a construction: `name: value`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldInit {
     pub name: String,
     pub name_span: Span,
     pub value: Expr,
@@ -217,6 +289,34 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// `Point(x: 1, y: 2)` — construct a record, naming every field.
+    ///
+    /// Named rather than positional, so that field order is never an implicit API. The
+    /// parenthesised form rather than `Point { … }` avoids the ambiguity between a record
+    /// literal and the block of an `if` whose condition is a bare name; `docs/spec.md`
+    /// records both decisions.
+    ///
+    /// Distinguished from [`Self::Call`] by two tokens of lookahead — `IDENT (` followed
+    /// by `IDENT :` — which is a decision, not a guess: no argument expression can begin
+    /// with a name followed by a colon.
+    Construct {
+        ty: String,
+        ty_span: Span,
+        fields: Vec<FieldInit>,
+        span: Span,
+    },
+    /// `expr.name` — project a field out of a record.
+    ///
+    /// The base is an expression, not a name, so `make().value` and `a.b.c` are the same
+    /// construct nested. What the projection *means* depends on the base's resolved type
+    /// and is decided when checking; there is no global field namespace.
+    Field {
+        base: Box<Expr>,
+        name: String,
+        /// Where the field name is written — the span resolution keys this access by.
+        name_span: Span,
+        span: Span,
+    },
     If {
         cond: Box<Expr>,
         then_block: Block,
@@ -240,6 +340,8 @@ impl Expr {
             | Self::Neg { span, .. }
             | Self::Binary { span, .. }
             | Self::Call { span, .. }
+            | Self::Construct { span, .. }
+            | Self::Field { span, .. }
             | Self::If { span, .. } => span,
             Self::Block(b) => &b.span,
         }
@@ -255,6 +357,8 @@ impl Expr {
             | Self::Neg { span, .. }
             | Self::Binary { span, .. }
             | Self::Call { span, .. }
+            | Self::Construct { span, .. }
+            | Self::Field { span, .. }
             | Self::If { span, .. } => *span,
             Self::Block(b) => b.span,
         }

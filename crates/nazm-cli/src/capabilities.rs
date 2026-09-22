@@ -143,13 +143,17 @@ fn inventory() -> Inventory {
         schema: SCHEMA,
         version: env!("CARGO_PKG_VERSION"),
         native_target: nazm_lir::TARGET_NOTE,
-        types: Type::ALL.iter().map(|t| t.name()).collect(),
+        // Built-ins only. A user-defined record is not part of the language's
+        // vocabulary — it exists in one program — and listing one here would confuse an
+        // inventory of what the *compiler* has with an inventory of what a *source file*
+        // declares. `docs/spec.md` keeps the two apart.
+        types: Type::ALL.iter().filter_map(|t| t.builtin_name()).collect(),
         builtins: Intrinsic::ALL
             .iter()
             .map(|i| BuiltinRow {
                 name: i.name(),
-                params: i.params().iter().map(|t| t.name()).collect(),
-                returns: i.ret().name(),
+                params: i.params().iter().filter_map(|t| t.builtin_name()).collect(),
+                returns: i.ret().builtin_name().unwrap_or("?"),
                 interpreted: true,
                 compiled: Builtin::by_name(i.name()).is_some(),
             })

@@ -3425,6 +3425,9 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
                 nazm_core::Type::Ints => "ints_new()",
                 nazm_core::Type::Strs => "strs_new()",
                 nazm_core::Type::Chan => "chan_new(1)",
+                // No built-in takes or returns a record, and none can: a built-in is
+                // part of the language and a record exists in one program.
+                nazm_core::Type::Record(_) => unreachable!("no built-in names a record"),
             })
             .collect();
         // Every built-in currently returns `Int` or `Str`; wrap the `Str` ones so `main`
@@ -3443,6 +3446,7 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
             // program may observe without racing. Sending into it is the shortest way
             // to reach an `Int` from one.
             nazm_core::Type::Chan => format!("if chan_send({call}, 0) {{ 1 }} else {{ 0 }}"),
+            nazm_core::Type::Record(_) => unreachable!("no built-in names a record"),
         };
         let src = format!("fn main() -> Int {{ {body} }}\n");
 

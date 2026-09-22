@@ -67,7 +67,13 @@ use crate::digest::{self, Framed};
 /// and for what is derived instead.
 ///
 /// `1` — N4, 2026-09-22. The first value, set when semantic reuse began.
-pub const SEMANTIC_EPOCH: u32 = 1;
+///
+/// `2` — N9, 2026-09-23. Records. The checker gained declaration stages, a type
+/// namespace, and rules — construction, projection, field replacement, derived task
+/// safety — that every one of the new codes below covers *except* one: `==` on a record
+/// is refused under the existing `N0304`, so the code set alone would not have moved for
+/// it. That is exactly the case this counter exists for.
+pub const SEMANTIC_EPOCH: u32 = 2;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -81,20 +87,30 @@ pub const CHECKER_CODES: &[&str] = &[
     "AMBIGUOUS_IMPORT",
     "ASSIGN_TO_IMMUTABLE",
     "BRANCH_TYPES_DIFFER",
+    "BUILTIN_TYPE_REDEFINED",
     "CONDITION_NOT_BOOL",
+    "DUPLICATE_FIELD",
     "DUPLICATE_FUNCTION",
+    "DUPLICATE_TYPE",
     "ILLEGAL_TASK_CAPTURE",
     "IMPORT_COLLIDES_WITH_DEFINITION",
     "INVALID_OPERANDS",
+    "INVALID_PROJECTION",
+    "MISSING_FIELD",
     "MISSING_MAIN",
     "NOT_IN_A_LOOP",
     "PRIVATE_DEFINITION",
+    "PRIVATE_TYPE_EXPOSED",
+    "RECURSIVE_RECORD",
     "SPAWN_OUTSIDE_SCOPE",
     "TYPE_MISMATCH",
+    "TYPE_NESTING_TOO_DEEP",
     "UNDEFINED_FUNCTION",
     "UNDEFINED_VARIABLE",
+    "UNKNOWN_FIELD",
     "UNKNOWN_TYPE",
     "UNREACHABLE_STATEMENT",
+    "UNSUPPORTED_CONSTRUCT",
     "WRONG_ARGUMENT_COUNT",
 ];
 
@@ -125,15 +141,18 @@ impl CheckerIdentity {
         for i in Intrinsic::ALL {
             f.field(i.name());
             f.number(u32::try_from(i.params().len()).unwrap_or(u32::MAX));
+            // Every built-in's signature is built-in types only, so `builtin_name` is
+            // total here. A record cannot appear: records exist only in the compilation
+            // that declared them, and this identity describes the build.
             for p in i.params() {
-                f.field(p.name());
+                f.field(p.builtin_name().unwrap_or("?"));
             }
-            f.field(i.ret().name());
+            f.field(i.ret().builtin_name().unwrap_or("?"));
         }
 
         f.number(u32::try_from(Type::ALL.len()).unwrap_or(u32::MAX));
         for t in Type::ALL {
-            f.field(t.name());
+            f.field(t.builtin_name().unwrap_or("?"));
         }
 
         f.number(u32::try_from(CHECKER_CODES.len()).unwrap_or(u32::MAX));
