@@ -573,13 +573,17 @@ of semantics bugs to keep in agreement for no present benefit.
 
 **Evidence** · There is no runtime crate; the runtime is LLVM IR generated into each
 program, emitted lazily only when reached — `crates/nazm-lir/src/emit.rs` carries the
-join, I/O, sequence, task and channel runtimes, and `compiler/emit.nz` mirrors them. The
-external surface is 18 libc/pthread symbols plus three overflow intrinsics and `memcpy`.
+join, I/O, sequence, string, task and channel runtimes. `compiler/emit.nz` does not
+*mirror* them since N8: its copy is **derived** from the Rust one line by line, and
+`cargo xtask check`'s `runtime parity` gate re-derives it and refuses a difference. The
+external surface is 26 libc/pthread symbols plus five overflow intrinsics and `memcpy`.
 
-**Limitation** · No deallocation (area 4). No `nazm-rt` crate, so no scheduler, no
-allocator, no reactor.
+**Limitation** · No `nazm-rt` crate, so no scheduler, no allocator, no reactor. *This
+read "No deallocation (area 4)" until N8; the emitted runtime reclaims every heap-backed
+value now, and the remaining gap is the crate rather than the model.*
 
-**Next dependency** · The memory model.
+**Next dependency** · A reason to have a runtime crate — stack switching or a custom
+allocator — since the memory model no longer waits on one.
 
 **Accepted when** · `nazm-rt` exists with a narrow `unsafe` allowance that `xtask check`
 enforces, per `architecture.md` §7.
@@ -665,7 +669,9 @@ profile has to climb to become real. **This section owns what exists**, which is
 profile, unnamed, and five ambitions.
 
 **General — PARTIAL.** What `nazm run` and `nazm build` accept today: ambient authority,
-checked arithmetic that traps, structured concurrency over OS threads, no reclamation. It
+checked arithmetic that traps, structured concurrency over OS threads, and automatic
+reclamation of every heap-backed value with no annotation to write. *That last clause read
+"no reclamation" until N8.* It
 is the widest profile and every other is a restriction of it. PARTIAL rather than VERIFIED
 for one reason: **the interpreter's subset and the native subset are not the same** —
 recursion runs under `nazm run` and is refused by both compilers. A profile whose two
@@ -676,7 +682,9 @@ left as a gap.
 **Systems — MISSING.** Would need explicit control over allocation and layout, no hidden
 allocation where none is declared, and a stated ABI; would grant raw memory access and
 foreign calls inside a named, narrow boundary. Nothing profile-specific exists. Blocked on
-area 17 (FFI and ABI, MISSING) and area 4 (ownership, MISSING). The architectural
+area 17 (FFI and ABI, MISSING) and on area 4, which is now VERIFIED for the current type
+universe but says nothing about *explicit* control over allocation and layout — a profile
+that must declare where memory comes from needs more than automatic reclamation. The architectural
 commitment that keeps it reachable — field access stays symbolic until the lowest level, so
 layout selection remains possible — is already honoured and must be preserved rather than
 undone when this profile arrives.
@@ -693,8 +701,11 @@ emits a module with no triple and lets `clang` supply the host's. The emitted ru
 declares 18 libc and pthread symbols and cannot currently be built without them.
 
 **Next dependency** · Cross-compilation (area 33), then a freestanding runtime — which
-means area 13 and therefore area 4. **A language that never frees cannot run on a device
-with kilobytes.**
+means area 13. *This clause added "and therefore area 4" with the sentence "A language that
+never frees cannot run on a device with kilobytes." The first half of that is closed since
+N8; the second is not, because the profile's real requirement is "no allocation after
+startup, or none at all", and reclaiming what you allocate is not the same as not
+allocating.*
 
 **Accepted when** · A program runs on a target with no libc, within a stack bound that was
 computed rather than hoped for. Native frame counts do not bound stack bytes, and that
