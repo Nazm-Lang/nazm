@@ -1305,7 +1305,7 @@ Only a differential test that compares what the two compilers' programs *reclaim
 it, which is what `the_nazm_written_compiler_emits_the_same_memory_semantics` is for
 """
 file = "compiler/emit.nz"
-find = """                                                                                                own_keep(out, next, owned, tv, type_of_name(after_colon(text)));
-                                                                                                release_frame(out, next, frame);"""
-replace = """                                                                                                own_keep(out, next, owned, tv, type_of_name(after_colon(text)));"""
+find = """                                                                                                own_keep(out, next, owned, tv, ints_get(nrec, k), rowns);
+                                                                                                release_frame(out, next, frame, rowns);"""
+replace = """                                                                                                own_keep(out, next, owned, tv, ints_get(nrec, k), rowns);"""
 

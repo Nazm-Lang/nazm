@@ -69,6 +69,32 @@ fn main() -> Int {
     let dend = ints_new();
     let dmsg = strs_new();
 
+    // Records, in three stages before any signature. Names first, for the whole
+    // compilation, because a field's type may name a record declared later or in another
+    // module; then the field types; then the layouts those fields describe. `docs/spec.md`
+    // orders them and says why declaration order is not a dependency.
+    let rnames = strs_new();
+    let rowner = ints_new();
+    let rpub = ints_new();
+    let rat = ints_new();
+    let rnode = ints_new();
+    let rfirst = ints_new();
+    let rcount = ints_new();
+    let rfname = strs_new();
+    let rftype = ints_new();
+    let rfat = ints_new();
+    let tmod = ints_new();
+    let tname = strs_new();
+    let trec = ints_new();
+    collect_records(nk, nar, nst, nen, ntx, naux, mstart,
+            rnames, rowner, rpub, rat, rnode, dcode, dstart, dend, dmsg);
+    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath),
+            rnames, rowner, rpub, tmod, tname, trec, dcode, dstart, dend, dmsg);
+    resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first,
+            rnames, rowner, rat, rnode, rfirst, rcount, rfname, rftype, rfat,
+            tmod, tname, trec, dcode, dstart, dend, dmsg);
+    check_record_layouts(rnames, rat, rfirst, rcount, rftype, dcode, dstart, dend, dmsg);
+
     // Signatures before any body, so a forward reference resolves — the same two-pass
     // shape `nazm-lir::lower` uses, and for the same reason.
     let fnames = strs_new();
@@ -78,8 +104,10 @@ fn main() -> Int {
     let fparams = ints_new();
     let fowner = ints_new();
     let fpub = ints_new();
-    collect_signatures(nk, nar, nst, ntx, naux, kids, kid_first, mstart,
+    collect_signatures(nk, nar, nst, nen, ntx, naux, kids, kid_first, mstart,
             fnames, fret, ffirst, fcount, fparams, fowner, fpub, bnames,
+            rnames, rowner, rpub, rat, rfirst, rcount, rfname, rftype, rfat,
+            tmod, tname, trec,
             dcode, dstart, dend, dmsg);
 
     // What each module's imports bring in, and the collisions that creates. Nothing here
@@ -96,12 +124,15 @@ fn main() -> Int {
     let nslot = ints_new();
     let ntype = ints_new();
     let ncallee = ints_new();
-    check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
+    let nrec = ints_new();
+    check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee, nrec,
             kids, kid_first, ints_len(nk) - 1,
             mstart, mfirst, mcount, mto,
             fnames, fret, ffirst, fcount, fparams,
             fowner, fpub, vmod, vname, vfn,
             bnames, bret, bfirst, bcount, bparams,
+            rnames, rowner, rfirst, rcount, rfname, rftype,
+            tmod, tname, trec,
             dcode, dstart, dend, dmsg);
 
     // One allocation for the whole output; see the note in `lexer.nz`.

@@ -66,6 +66,11 @@ pub fn n_exprstmt() -> Int { 18 }
 pub fn n_if() -> Int { 19 }
 pub fn n_scope() -> Int { 20 }
 pub fn n_spawn() -> Int { 21 }
+// Records, added by N9. A declaration and its fields, a construction, and a projection.
+pub fn n_record() -> Int { 22 }
+pub fn n_structfield() -> Int { 23 }
+pub fn n_construct() -> Int { 24 }
+pub fn n_fieldread() -> Int { 25 }
 
 pub fn node_name(k: Int) -> Str {
     if k == n_int() { return "int"; }
@@ -89,6 +94,10 @@ pub fn node_name(k: Int) -> Str {
     if k == n_if() { return "if"; }
     if k == n_scope() { return "scope"; }
     if k == n_spawn() { return "spawn"; }
+    if k == n_record() { return "record"; }
+    if k == n_structfield() { return "structfield"; }
+    if k == n_construct() { return "construct"; }
+    if k == n_fieldread() { return "field"; }
     "?"
 }
 
@@ -152,6 +161,10 @@ fn sent_paren() -> Int { 90 }
 fn sent_unary() -> Int { 91 }
 fn sent_call() -> Int { 92 }
 fn sent_if() -> Int { 93 }
+// A record construction. Told from a call by two tokens at the opening bracket —
+// `IDENT ( IDENT :` — which is a decision rather than a guess, because no argument
+// expression can begin with a name followed by a colon.
+fn sent_construct() -> Int { 94 }
 
 // --- the arena ---------------------------------------------------------------------
 
@@ -209,7 +222,7 @@ fn die(message: Str, offset: Int) -> Int {
 // own span rather than the brackets'.
 fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
         nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
-        ops: Ints, opat: Ints, cname: Strs, cargs: Ints, vs: Ints, ve: Ints,
+        ops: Ints, opat: Ints, cname: Strs, cargs: Ints, cfields: Strs, vs: Ints, ve: Ints,
         status: Ints, resuming: Bool, base: Int, naux: Ints) -> Int {
     // `base` is how deep the operator stack was when *this* expression started. The
     // stacks are shared — an `if` suspends one expression while the expressions inside
@@ -302,6 +315,21 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 continue;
             }
             if t == k_ident() {
+                if constructing(kinds, i) {
+                    // `Name(field: …)`. The sentinel is a second kind of bracket rather
+                    // than a flag on the call one, so the closing `)` cannot build the
+                    // wrong node, and the field names are accumulated as they are read.
+                    let name = text_at(texts, i);
+                    let at = start_at(starts, i);
+                    i = i + 2;
+                    ints_push(ops, sent_construct());
+                    ints_push(opat, at);
+                    strs_push(cname, name);
+                    ints_push(cargs, 0);
+                    strs_push(cfields, text_at(texts, i));
+                    i = i + 2;
+                    continue;
+                }
                 if kind_at(kinds, i + 1) == k_lparen() {
                     let name = text_at(texts, i);
                     let at = start_at(starts, i);
@@ -336,6 +364,24 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
 
         // --- everything after an operand ---------------------------------------------
         while true {
+            // A projection binds tighter than anything, **including a pending unary
+            // minus**: `-p.x` is `-(p.x)`, because the reference parser reads a field
+            // chain as part of the operand rather than as an operator over it. Handled
+            // before the unary reduction below for exactly that reason.
+            while kind_at(kinds, i) == k_dot() {
+                if kind_at(kinds, i + 1) != k_ident() {
+                    die("expected a field name after `.`", start_at(starts, i + 1));
+                }
+                let fname = text_at(texts, i + 1);
+                let to = end_at(ends, i + 1);
+                let at = ints_get(vs, ints_len(vs) - 1);
+                pop_val(vs, ve);
+                emit(nk, nar, nst, nen, ntx, n_fieldread(), 1, at, to, fname);
+                ints_push(vs, at);
+                ints_push(ve, to);
+                i = i + 2;
+            }
+
             // Pending unary minus binds tighter than any binary operator, so it is
             // applied as soon as its operand exists.
             while ints_len(ops) > base {
@@ -387,6 +433,26 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 { break; }
                     reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx, naux);
                 }
+                if ints_get(ops, ints_len(ops) - 1) == sent_construct() {
+                    // A trailing comma is allowed and ends the list, so it must not count
+                    // as another initialiser.
+                    if kind_at(kinds, i + 1) == k_rparen() {
+                        i = i + 1;
+                        continue;
+                    }
+                    if kind_at(kinds, i + 1) != k_ident() {
+                        die("expected a field name", start_at(starts, i + 1));
+                    }
+                    if kind_at(kinds, i + 2) != k_colon() {
+                        die("expected `:` after a field name", start_at(starts, i + 2));
+                    }
+                    strs_set(cfields, strs_len(cfields) - 1,
+                            str_concat(str_concat(strs_get(cfields, strs_len(cfields) - 1), ","),
+                            text_at(texts, i + 1)));
+                    ints_set(cargs, ints_len(cargs) - 1, ints_get(cargs, ints_len(cargs) - 1) + 1);
+                    i = i + 3;
+                    break;
+                }
                 ints_set(cargs, ints_len(cargs) - 1, ints_get(cargs, ints_len(cargs) - 1) + 1);
                 i = i + 1;
                 break;
@@ -407,6 +473,26 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     continue;
                 }
                 if top == sent_if() { return i; }
+                if top == sent_construct() {
+                    let at = ints_get(opat, ints_len(opat) - 1);
+                    pop_op(ops, opat);
+                    let argc = ints_get(cargs, ints_len(cargs) - 1) + 1;
+                    let name = strs_get(cname, strs_len(cname) - 1);
+                    let fields = strs_get(cfields, strs_len(cfields) - 1);
+                    pop_call(cname, cargs);
+                    strs_pop(cfields);
+                    let to = end_at(ends, i);
+                    let mut dropped = 0;
+                    while dropped < argc { pop_val(vs, ve); dropped = dropped + 1; }
+                    // `Ty(a,b)` — the type and the field names in the order written,
+                    // which is the order their values were computed in.
+                    emit(nk, nar, nst, nen, ntx, n_construct(), argc, at, to,
+                            str_concat(str_concat(str_concat(name, "("), fields), ")"));
+                    ints_push(vs, at);
+                    ints_push(ve, to);
+                    i = i + 1;
+                    continue;
+                }
                 if top == sent_call() {
                     let at = ints_get(opat, ints_len(opat) - 1);
                     pop_op(ops, opat);
@@ -472,11 +558,33 @@ fn innermost_is_if(ops: Ints, base: Int) -> Bool {
     false
 }
 
+// `IDENT ( IDENT :` — the two tokens past the bracket that tell a construction from a
+// call. Total, because no argument expression can begin with a name followed by a colon.
+// `ident ( . ident )* =` — an assignment rather than an expression. `==` is a different
+// token, so a comparison in statement position is never mistaken for one.
+fn assignment_ahead(kinds: Ints, i: Int) -> Bool {
+    let mut at = i + 1;
+    while true {
+        if kind_at(kinds, at) == k_eq() { return true; }
+        if kind_at(kinds, at) != k_dot() { return false; }
+        if kind_at(kinds, at + 1) != k_ident() { return false; }
+        at = at + 2;
+    }
+    false
+}
+
+fn constructing(kinds: Ints, i: Int) -> Bool {
+    if kind_at(kinds, i + 1) != k_lparen() { return false; }
+    if kind_at(kinds, i + 2) != k_ident() { return false; }
+    kind_at(kinds, i + 3) == k_colon()
+}
+
 fn innermost_is_call(ops: Ints, base: Int) -> Bool {
     let mut i = ints_len(ops) - 1;
     while i >= base {
         let v = ints_get(ops, i);
         if v == sent_call() { return true; }
+        if v == sent_construct() { return true; }
         if v == sent_paren() { return false; }
         if v == sent_if() { return false; }
         i = i - 1;
@@ -609,6 +717,9 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
     let opat = ints_new();
     let cname = strs_new();
     let cargs = ints_new();
+    // The field names of each construction being read, innermost last, as one
+    // comma-separated string per construction — which is the form the node carries.
+    let cfields = strs_new();
     let vs = ints_new();
     let ve = ints_new();
     let status = ints_new();
@@ -626,14 +737,17 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
     let pbase = ints_new();
 
     let mut i = 0;
-    let mut functions = 0;
+    // Functions **and** records: both are top-level items and both are children of the
+    // program node, in the order they were written. The reference dump sorts its two
+    // lists back into source order for the same reason.
+    let mut items = 0;
     let mut resuming = false;
 
     while i < ints_len(kinds) {
         // --- an expression is in progress -------------------------------------------
         if resumable(pk, pdepth, fk) {
             i = parse_expr(kinds, starts, ends, texts, i, nk, nar, nst, nen, ntx,
-                    ops, opat, cname, cargs, vs, ve, status, resuming,
+                    ops, opat, cname, cargs, cfields, vs, ve, status, resuming,
                     ints_get(pbase, ints_len(pbase) - 1), naux);
             resuming = false;
             if ints_get(status, 0) == 1 {
@@ -724,13 +838,52 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 continue;
             }
             let fn_start = start_at(starts, i);
-            // `pub`, optional. Recorded, not interpreted: it travels on the function
-            // node's auxiliary column and the checker decides what it means.
+            // `pub`, optional. Recorded, not interpreted: it travels on the item node's
+            // auxiliary column and the checker decides what it means.
             let mut vis = 0;
             if kind_at(kinds, i) == k_pub() {
                 vis = 1;
                 i = i + 1;
             }
+
+            // `struct Name { field: Type, … }`. No frame machine and no expression: a
+            // field list is names and type names, so one loop reads it.
+            if kind_at(kinds, i) == k_struct() {
+                i = i + 1;
+                if kind_at(kinds, i) != k_ident() {
+                    die("expected a record name", start_at(starts, i));
+                }
+                let rname = text_at(texts, i);
+                i = i + 1;
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the fields");
+                let mut nfields = 0;
+                while kind_at(kinds, i) != k_rbrace() {
+                    if kind_at(kinds, i) != k_ident() {
+                        die("expected a field name", start_at(starts, i));
+                    }
+                    let fname = text_at(texts, i);
+                    let fat = start_at(starts, i);
+                    i = i + 1;
+                    i = expect(kinds, starts, i, k_colon(), "expected `:` after a field name");
+                    if kind_at(kinds, i) != k_ident() {
+                        die("expected a field type", start_at(starts, i));
+                    }
+                    let ftype = text_at(texts, i);
+                    let fto = end_at(ends, i);
+                    i = i + 1;
+                    emit(nk, nar, nst, nen, ntx, n_structfield(), 0, fat, fto,
+                            str_concat(str_concat(fname, ":"), ftype));
+                    nfields = nfields + 1;
+                    if kind_at(kinds, i) == k_comma() { i = i + 1; }
+                }
+                let close = end_at(ends, i);
+                i = i + 1;
+                emit(nk, nar, nst, nen, ntx, n_record(), nfields, fn_start, close, rname);
+                set_aux(naux, nk, vis);
+                items = items + 1;
+                continue;
+            }
+
             i = expect(kinds, starts, i, k_fn(), "expected `fn`");
             if kind_at(kinds, i) != k_ident() {
                 die("expected a function name", start_at(starts, i));
@@ -837,7 +990,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 // offset on a `bin`, and here the visibility bit. `set_aux` has to follow
                 // the `emit` it belongs to, which is why it is written beside it.
                 set_aux(naux, nk, vis_of);
-                functions = functions + 1;
+                items = items + 1;
             }
             continue;
         }
@@ -867,10 +1020,18 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         }
 
         if t == k_ident() {
-            if kind_at(kinds, i + 1) == k_eq() {
+            // `ident ( . ident )* =`. The scan walks the path and stops at the first
+            // token that is not part of one, so `a.b` as a tail expression and `a == b`
+            // in statement position are both left alone.
+            if assignment_ahead(kinds, i) {
                 let stmt_start = start_at(starts, i);
-                let name = text_at(texts, i);
-                i = i + 2;
+                let mut name = text_at(texts, i);
+                i = i + 1;
+                while kind_at(kinds, i) == k_dot() {
+                    name = str_concat(str_concat(name, "."), text_at(texts, i + 1));
+                    i = i + 2;
+                }
+                i = i + 1;
                 ints_push(pk, pend_assign());
                 ints_push(pdepth, ints_len(fk));
                 // Exactly one floor per pending expression, because exactly one is
@@ -978,7 +1139,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
     if ints_len(fk) > 0 {
         die("this block is never closed", top(fstart));
     }
-    emit(nk, nar, nst, nen, ntx, n_program(), functions, 0, 0, "");
+    emit(nk, nar, nst, nen, ntx, n_program(), items, 0, 0, "");
     pad_aux(naux, nk);
-    functions
+    items
 }

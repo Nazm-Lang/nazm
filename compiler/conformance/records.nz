@@ -1,0 +1,78 @@
+// Records: construction, projection, copy, replacement, nesting, return and cleanup.
+//
+// One program rather than nine, so the corpus stays a corpus. Every value it produces is
+// folded into one integer, which is what makes disagreement between the reference, C2 and
+// C3 impossible to miss.
+
+struct Inner {
+    text: Str,
+    count: Int,
+}
+
+struct Outer {
+    inner: Inner,
+    tag: Str,
+    total: Int,
+}
+
+// A record built as a tail expression, and one built through a binding and returned.
+// N7 and N8 both found that these are different implementation edges.
+fn tail(n: Int) -> Inner {
+    Inner(text: int_to_str(n), count: n)
+}
+
+fn explicit(n: Int) -> Inner {
+    let made = Inner(text: str_concat("v", int_to_str(n)), count: n * 2);
+    return made;
+}
+
+// A borrowed record parameter: read, never consumed, and the caller keeps its own.
+fn width(i: Inner) -> Int {
+    str_len(i.text) + i.count
+}
+
+// A record whose field is read out of a temporary that dies on the same line.
+fn from_temporary(n: Int) -> Int {
+    str_len(tail(n).text)
+}
+
+fn main() -> Int {
+    let mut acc = 0;
+
+    // Construction and projection.
+    let a = Inner(text: "ab", count: 3);
+    acc = acc + str_len(a.text) + a.count;
+
+    // A copy. The `Int` fields are independent; the `Str`s are equal values.
+    let mut b = a;
+    b.count = 40;
+    acc = acc + b.count - a.count;
+
+    // Field replacement, including one whose new value is backed by the old.
+    b.text = str_concat(b.text, "cd");
+    b.text = b.text;
+    acc = acc + str_len(b.text);
+
+    // Nesting, and a nested field replaced through a path.
+    let mut o = Outer(inner: explicit(5), tag: str_concat("t", "ag"), total: 0);
+    o.inner.count = o.inner.count + 1;
+    o.total = width(o.inner) + str_len(o.tag);
+    acc = acc + o.total;
+
+    // Whole-record replacement, including a self-assignment.
+    let mut c = tail(7);
+    c = c;
+    c = explicit(9);
+    acc = acc + width(c);
+
+    // Many short-lived records with heap fields, and a constant live set: the count of
+    // live string backings must not grow with the number of records ever built.
+    let mut i = 0;
+    while i < 200 {
+        let each = Outer(inner: tail(i), tag: int_to_str(i), total: i);
+        acc = acc + str_len(each.inner.text);
+        i = i + 1;
+    }
+
+    acc + from_temporary(12345)
+}

@@ -78,6 +78,10 @@ fn llvm_type(t: Int) -> Str {
     if t == t_ints() { return "ptr"; }
     if t == t_strs() { return "ptr"; }
     if t == t_chan() { return "ptr"; }
+    // A record is a **named** LLVM aggregate, by value. Named for the reason a function
+    // is named by index here: this emitter writes one module for a whole program, so the
+    // index is unique by construction and is the same discipline `symbol` uses.
+    if is_record(t) { return str_concat("%nz.t", int_to_str(record_of(t))); }
     "void"
 }
 
@@ -285,7 +289,7 @@ fn check_failed(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
 // fails, which the join reads after `pthread_join` — a happens-before edge, so no lock.
 fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, tasks: Strs,
         owned: Ints, vals: Ints, nar: Ints, ntype: Ints, kids: Ints, kid_first: Ints,
-        fnames: Strs, fret: Ints, k: Int, callee: Int, at: Str) -> Int {
+        fnames: Strs, fret: Ints, k: Int, callee: Int, at: Str, rowns: Ints) -> Int {
     let argc = ints_get(nar, k);
     // Popped in reverse, then read back in source order.
     let args = ints_new();
@@ -337,7 +341,7 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
         add_line(out, str_concat(str_concat("  ", v(slot)),
                 str_concat(str_concat(" = getelementptr i8, ptr ", v(blk)),
                 str_concat(", i64 ", int_to_str(ints_get(offs, i))))));
-        own_keep(out, next, owned, value, t);
+        own_keep(out, next, owned, value, t, rowns);
         add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(t)),
                 str_concat(" ", v(value))),
                 str_concat(", ptr ", v(slot))));
@@ -394,7 +398,7 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     i = 0;
     while i < argc {
         let ty = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
-        let o = owns(ty);
+        let o = owns(ty, rowns);
         if o == 1 {
             strs_push(t, str_concat(str_concat("  call void @nz.seq_release(ptr %v",
                     int_to_str(i)), ")"));
@@ -425,7 +429,7 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     add_line(out, str_concat(str_concat("  ", v(rc)),
             str_concat(str_concat(" = call i32 @nz.spawn(ptr ", v(tids)),
             str_concat(str_concat(", ptr ", name), str_concat(str_concat(", ptr ", v(blk)), ")")))));
-    unspawn(out, next, ntype, kids, kid_first, offs, blk, k, argc, rc, current, live);
+    unspawn(out, next, ntype, kids, kid_first, offs, blk, k, argc, rc, current, live, rowns);
     let oom = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(oom)),
             str_concat(" = icmp eq i32 ", str_concat(v(rc), ", -1"))));
@@ -442,7 +446,7 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
 // Emitted between `@nz.spawn` returning non-zero and the guard that reports it: the one
 // path where a program is already out of resources must not also be the path that leaks.
 fn unspawn(out: Strs, next: Ints, ntype: Ints, kids: Ints, kid_first: Ints,
-        offs: Ints, blk: Int, k: Int, argc: Int, rc: Int, current: Strs, live: Ints) -> Int {
+        offs: Ints, blk: Int, k: Int, argc: Int, rc: Int, current: Strs, live: Ints, rowns: Ints) -> Int {
     let started = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(started)),
             str_concat(" = icmp eq i32 ", str_concat(v(rc), ", 0"))));
@@ -455,7 +459,7 @@ fn unspawn(out: Strs, next: Ints, ntype: Ints, kids: Ints, kid_first: Ints,
     let mut i = 0;
     while i < argc {
         let t = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
-        if owns(t) != 0 {
+        if owns(t, rowns) != 0 {
             let slot = take_number(next);
             add_line(out, str_concat(str_concat("  ", v(slot)),
                     str_concat(str_concat(" = getelementptr i8, ptr ", v(blk)),
@@ -464,7 +468,7 @@ fn unspawn(out: Strs, next: Ints, ntype: Ints, kids: Ints, kid_first: Ints,
             add_line(out, str_concat(str_concat("  ", v(held)),
                     str_concat(str_concat(" = load ", llvm_type(t)),
                     str_concat(", ptr ", v(slot)))));
-            emit_release(out, next, held, t);
+            emit_release(out, next, held, t, rowns);
         }
         i = i + 1;
     }
@@ -480,6 +484,10 @@ fn unwind_value(t: Int) -> Str {
     if t == t_int() { return "0"; }
     if t == t_bool() { return "false"; }
     if t == t_str() { return "zeroinitializer"; }
+    // Also what a record slot holds before anything is stored in it: every owning field
+    // null, so releasing it is a no-op. That is what makes a partly built record safe to
+    // clean on a failure part way through a construction.
+    if is_record(t) { return "zeroinitializer"; }
     "null"
 }
 
@@ -596,6 +604,287 @@ fn predicate(op: Str) -> Str {
 // values, which would have evaluated the `memcmp` first.
 // --- pieces the built-ins share ------------------------------------------------------
 
+// One field out of a record value already in a register.
+// One record's retain or release helper.
+//
+// Written as a function of its own rather than inlined at each site: a record released in
+// forty places emits forty calls instead of forty copies of its field walk, and a nested
+// record's helper calls the inner record's — which puts the recursion in the emitted
+// program, where there is a stack, rather than in this compiler, which has none.
+//
+// Numbering restarts per function, as it must, and the parameter is named so it does not
+// consume the implicit counter.
+// The node kinds records added, as one function: a declaration and its fields emit
+// nothing, a construction builds a value, and a projection reads one out. Answers `1`
+// when it handled the node, so the chain below it gains one level rather than four.
+// Replace the field a place's path reaches, starting from a slot.
+//
+// A record is a value, not a handle, so there is nothing to write *through*: the record
+// is read out of its slot, one field inside it is replaced, and the whole thing is stored
+// back — rebuilding each level on the way out, because each level is a value too.
+//
+// The new value has already been produced, and is **taken** before the old one is
+// released. That order is the whole of the correctness: `p.name = p.name` and a new value
+// backed by the same allocation as the old are both safe because of it.
+fn set_field(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: Int,
+        root_t: Int, place: Str, rowns: Ints,
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
+    own_keep(out, next, owned, value, vt, rowns);
+    let steps = path_length(place);
+    // The aggregate at each level on the way in, so the way out can rebuild it.
+    let levels = ints_new();
+    let level_t = ints_new();
+    let level_at = ints_new();
+    let loaded = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(loaded)),
+            str_concat(str_concat(" = load ", llvm_type(root_t)),
+            str_concat(", ptr %slot", int_to_str(slot)))));
+    let mut current_v = loaded;
+    let mut current_t = root_t;
+    let mut i = 0;
+    while i < steps {
+        let r = record_of(current_t);
+        let decl = field_index(rfirst, rcount, rfname, r, path_step(place, i));
+        let at = layout_index(rfirst, rcount, rfname, r, decl);
+        ints_push(levels, current_v);
+        ints_push(level_t, current_t);
+        ints_push(level_at, at);
+        current_v = record_field(out, next, current_v, current_t, at);
+        current_t = ints_get(rftype, ints_get(rfirst, r) + decl);
+        i = i + 1;
+    }
+    // `current_v` is the old field, released **after** the new value was taken.
+    let old = current_v;
+    let old_t = current_t;
+
+    let mut built = value;
+    let mut built_t = vt;
+    let mut back = steps - 1;
+    while back >= 0 {
+        let agg = ints_get(levels, back);
+        let agg_t = ints_get(level_t, back);
+        let at = ints_get(level_at, back);
+        let n = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(n)),
+                str_concat(str_concat(str_concat(" = insertvalue ", llvm_type(agg_t)),
+                str_concat(" ", v(agg))),
+                str_concat(str_concat(str_concat(", ", llvm_type(built_t)),
+                str_concat(" ", v(built))),
+                str_concat(", ", int_to_str(at))))));
+        built = n;
+        built_t = agg_t;
+        back = back - 1;
+    }
+    add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(built_t)),
+            str_concat(" ", v(built))),
+            str_concat(", ptr %slot", int_to_str(slot))));
+    emit_release(out, next, old, old_t, rowns);
+    0
+}
+
+fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
+        nk: Ints, nar: Ints, ntx: Strs, ntype: Ints, nrec: Ints, nslot: Ints,
+        kids: Ints, kid_first: Ints, k: Int,
+        rowns: Ints, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
+    let kind = ints_get(nk, k);
+    // A declaration is not code. Neither is a field of one.
+    if kind == n_record() { return 1; }
+    if kind == n_structfield() { return 1; }
+
+    if kind == n_construct() {
+        let t = ints_get(ntype, k);
+        let r = ints_get(nrec, k);
+        let ty = llvm_type(t);
+        let arity = ints_get(nar, k);
+        let text = strs_get(ntx, k);
+        // The initialisers are on the value stack in the order they were **written**,
+        // which is the order their side effects happened in; each goes to the position
+        // the layout gave it, which is unrelated. Keeping the two apart is why the node
+        // carries both the names and the arity.
+        let args = ints_new();
+        let mut a = 0;
+        while a < arity { ints_push(args, ints_pop(vals)); a = a + 1; }
+        let slot = ints_get(nslot, k);
+        if slot < 0 {
+            // Nothing to clean, so the value is built in registers.
+            let mut built = str_concat(ty, " undef");
+            let mut last = 0;
+            a = 0;
+            while a < arity {
+                let value = ints_get(args, arity - 1 - a);
+                let decl = field_index(rfirst, rcount, rfname, r, field_name_at(text, a));
+                let at = layout_index(rfirst, rcount, rfname, r, decl);
+                let ft = ints_get(rftype, ints_get(rfirst, r) + decl);
+                let n = take_number(next);
+                add_line(out, str_concat(str_concat("  ", v(n)),
+                        str_concat(str_concat(" = insertvalue ", built),
+                        str_concat(str_concat(str_concat(", ", llvm_type(ft)),
+                        str_concat(" ", v(value))),
+                        str_concat(", ", int_to_str(at))))));
+                built = str_concat(str_concat(ty, " "), v(n));
+                last = n;
+                a = a + 1;
+            }
+            ints_push(vals, last);
+            return 1;
+        }
+        // Zeroed first: the slot is reused each time this expression is reached — in a
+        // loop, for instance — and what a previous round left in it has been handed on.
+        add_line(out, str_concat(str_concat(str_concat("  store ", ty),
+                str_concat(" ", unwind_value(t))),
+                str_concat(", ptr %slot", int_to_str(slot))));
+        a = 0;
+        while a < arity {
+            let value = ints_get(args, arity - 1 - a);
+            let decl = field_index(rfirst, rcount, rfname, r, field_name_at(text, a));
+            let at = layout_index(rfirst, rcount, rfname, r, decl);
+            let ft = ints_get(rftype, ints_get(rfirst, r) + decl);
+            // The initialiser's reference moves into the record, which the frame now
+            // owns. Taking it here is what makes the cleanup on a later failure a
+            // release rather than a double release.
+            own_keep(out, next, owned, value, ft, rowns);
+            let held = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(held)),
+                    str_concat(str_concat(" = load ", ty),
+                    str_concat(", ptr %slot", int_to_str(slot)))));
+            let made = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(made)),
+                    str_concat(str_concat(str_concat(" = insertvalue ", ty),
+                    str_concat(" ", v(held))),
+                    str_concat(str_concat(str_concat(", ", llvm_type(ft)),
+                    str_concat(" ", v(value))),
+                    str_concat(", ", int_to_str(at))))));
+            add_line(out, str_concat(str_concat(str_concat("  store ", ty),
+                    str_concat(" ", v(made))),
+                    str_concat(", ptr %slot", int_to_str(slot))));
+            a = a + 1;
+        }
+        // Complete. The value leaves with the references the slot was holding, and the
+        // slot is zeroed so the frame does not release them a second time.
+        let whole = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(whole)),
+                str_concat(str_concat(" = load ", ty),
+                str_concat(", ptr %slot", int_to_str(slot)))));
+        add_line(out, str_concat(str_concat(str_concat("  store ", ty),
+                str_concat(" ", unwind_value(t))),
+                str_concat(", ptr %slot", int_to_str(slot))));
+        own_add(owned, whole);
+        ints_push(vals, whole);
+        return 1;
+    }
+
+    if kind == n_fieldread() {
+        let base = ints_pop(vals);
+        let bt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+        let t = ints_get(ntype, k);
+        let r = record_of(bt);
+        let at = layout_index(rfirst, rcount, rfname, r, ints_get(nrec, k));
+        let got = record_field(out, next, base, bt, at);
+        // The order is the rule: **retain first**, then let the base go. Reversed, a
+        // projection out of a temporary would read storage the temporary had just
+        // released — which is what makes `make().name` valid.
+        if owns(t, rowns) != 0 {
+            emit_retain(out, next, got, t, rowns);
+            own_add(owned, got);
+        }
+        own_drop(out, next, owned, base, bt, rowns);
+        ints_push(vals, got);
+        return 1;
+    }
+    0
+}
+
+fn record_helper(out: Strs, next: Ints, r: Int, retain: Bool, rowns: Ints,
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
+    ints_set(next, 0, 0);
+    ints_set(next, 1, 0);
+    let ty = llvm_type(t_record(r));
+    let mut name = str_concat("@nz.rl", int_to_str(r));
+    if retain { name = str_concat("@nz.rt", int_to_str(r)); }
+    add_line(out, "");
+    add_line(out, str_concat(str_concat("define internal void ", name),
+            str_concat(str_concat("(", ty), " %r) {")));
+    add_line(out, "entry:");
+    // Layout order, which is deterministic and which no program can observe:
+    // `docs/spec.md` says a record is destroyed by releasing each field and deliberately
+    // does not say in which order.
+    let mut pos = 0;
+    while pos < ints_get(rcount, r) {
+        let decl = layout_field(rfirst, rcount, rfname, r, pos);
+        let ft = ints_get(rftype, ints_get(rfirst, r) + decl);
+        if owns(ft, rowns) != 0 {
+            let n = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(n)),
+                    str_concat(str_concat(" = extractvalue ", ty),
+                    str_concat(" %r, ", int_to_str(pos)))));
+            if retain {
+                emit_retain(out, next, n, ft, rowns);
+            } else {
+                emit_release(out, next, n, ft, rowns);
+            }
+        }
+        pos = pos + 1;
+    }
+    add_line(out, "  ret void");
+    add_line(out, "}");
+    0
+}
+
+fn record_field(out: Strs, next: Ints, value: Int, rt: Int, at: Int) -> Int {
+    let n = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(n)),
+            str_concat(str_concat(" = extractvalue ", llvm_type(rt)),
+            str_concat(str_concat(" ", v(value)),
+            str_concat(", ", int_to_str(at))))));
+    n
+}
+
+// Where a field sits in the LLVM struct.
+//
+// **Canonical, by field name.** `docs/spec.md` makes declaration order non-semantic, so
+// laying fields out in name order makes that true of the object file as well: moving two
+// field declarations — an edit the language says means nothing — changes no byte here.
+// This is the layout boundary; nothing above it knows a position.
+fn layout_index(rfirst: Ints, rcount: Ints, rfname: Strs, r: Int, at: Int) -> Int {
+    let mine = strs_get(rfname, ints_get(rfirst, r) + at);
+    let mut before = 0;
+    let mut i = 0;
+    while i < ints_get(rcount, r) {
+        if str_before(strs_get(rfname, ints_get(rfirst, r) + i), mine) {
+            before = before + 1;
+        }
+        i = i + 1;
+    }
+    before
+}
+
+// Byte-lexicographic order, written out because the language has no `<` on `Str` — it
+// would need a collation decision `docs/spec.md` has not made. Field names are
+// identifiers, so bytes are the whole of it, and this is the same order the reference
+// compiler sorts by.
+fn str_before(a: Str, b: Str) -> Bool {
+    let mut i = 0;
+    while i < str_len(a) {
+        if i >= str_len(b) { return false; }
+        let x = str_byte(a, i);
+        let y = str_byte(b, i);
+        if x < y { return true; }
+        if x > y { return false; }
+        i = i + 1;
+    }
+    str_len(a) < str_len(b)
+}
+
+// The declaration index of the field that sits at layout position `pos`.
+fn layout_field(rfirst: Ints, rcount: Ints, rfname: Strs, r: Int, pos: Int) -> Int {
+    let mut i = 0;
+    while i < ints_get(rcount, r) {
+        if layout_index(rfirst, rcount, rfname, r, i) == pos { return i; }
+        i = i + 1;
+    }
+    0
+}
+
 fn field(out: Strs, next: Ints, s: Int, index: Str) -> Int {
     let n = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(n)),
@@ -640,11 +929,21 @@ fn make_str(out: Strs, next: Ints, ptr: Int, len: Int, owner: Str) -> Int {
 // What a value of this type owns: 0 nothing, 1 an `Ints`, 2 a `Strs`, 3 a string backing,
 // 4 a channel. One classification, so adding a type means answering here rather than
 // finding every site that retains.
-fn owns(t: Int) -> Int {
+// What a value of this type owns, as a small code the retain and release paths dispatch
+// on. `5` is a record, which owns **whatever its fields own** — nothing of its own, no
+// header and no count — and is therefore the one answer that depends on the program
+// rather than on the type alone. `rowns` is that answer, computed once.
+fn owns(t: Int, rowns: Ints) -> Int {
     if t == t_ints() { return 1; }
     if t == t_strs() { return 2; }
     if t == t_str() { return 3; }
     if t == t_chan() { return 4; }
+    if is_record(t) {
+        if record_of(t) < ints_len(rowns) {
+            if ints_get(rowns, record_of(t)) == 1 { return 5; }
+        }
+        return 0;
+    }
     0
 }
 
@@ -669,9 +968,20 @@ fn own_add(owned: Ints, n: Int) -> Int {
 }
 
 // Add a reference to whatever this value owns.
-fn emit_retain(out: Strs, next: Ints, value: Int, t: Int) -> Int {
-    let o = owns(t);
+fn emit_retain(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
+    let o = owns(t, rowns);
     if o == 0 { return 0; }
+    if o == 5 {
+        // One generated helper per record per direction, rather than the field walk
+        // inlined here. A record copied in forty places then emits forty calls instead of
+        // forty copies of the walk — and, because a nested record's helper calls the
+        // inner record's, the recursion lives in the emitted program rather than in this
+        // compiler, which has none.
+        add_line(out, str_concat(str_concat(str_concat("  call void @nz.rt",
+                int_to_str(record_of(t))), str_concat("(", llvm_type(t))),
+                str_concat(str_concat(" ", v(value)), ")")));
+        return 0;
+    }
     if o == 3 {
         let owner = field(out, next, value, "2");
         add_line(out, str_concat(str_concat("  call void @nz.str_retain(ptr ", v(owner)), ")"));
@@ -686,9 +996,15 @@ fn emit_retain(out: Strs, next: Ints, value: Int, t: Int) -> Int {
 }
 
 // Drop a reference. The storage goes when the last one does.
-fn emit_release(out: Strs, next: Ints, value: Int, t: Int) -> Int {
-    let o = owns(t);
+fn emit_release(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
+    let o = owns(t, rowns);
     if o == 0 { return 0; }
+    if o == 5 {
+        add_line(out, str_concat(str_concat(str_concat("  call void @nz.rl",
+                int_to_str(record_of(t))), str_concat("(", llvm_type(t))),
+                str_concat(str_concat(" ", v(value)), ")")));
+        return 0;
+    }
     if o == 1 {
         add_line(out, str_concat(str_concat("  call void @nz.seq_release(ptr ", v(value)), ")"));
         return 0;
@@ -713,18 +1029,18 @@ fn emit_release(out: Strs, next: Ints, value: Int, t: Int) -> Int {
 // Called where something takes a reference over: a binding, a `return`, a sequence that
 // keeps what it is given. A value that was already owned is handed on unchanged, which is
 // what keeps `let xs = ints_new();` free of traffic.
-fn own_keep(out: Strs, next: Ints, owned: Ints, value: Int, t: Int) -> Int {
-    if owns(t) == 0 { return 0; }
+fn own_keep(out: Strs, next: Ints, owned: Ints, value: Int, t: Int, rowns: Ints) -> Int {
+    if owns(t, rowns) == 0 { return 0; }
     if own_take(owned, value) == 1 { return 0; }
-    emit_retain(out, next, value, t)
+    emit_retain(out, next, value, t, rowns)
 }
 
 // Release a reference nothing took over: a temporary a callee only borrowed, or a
 // statement whose value was discarded. Both are ordinary; neither is an error.
-fn own_drop(out: Strs, next: Ints, owned: Ints, value: Int, t: Int) -> Int {
-    if owns(t) == 0 { return 0; }
+fn own_drop(out: Strs, next: Ints, owned: Ints, value: Int, t: Int, rowns: Ints) -> Int {
+    if owns(t, rowns) == 0 { return 0; }
     if own_take(owned, value) == 0 { return 0; }
-    emit_release(out, next, value, t)
+    emit_release(out, next, value, t, rowns)
 }
 
 // Release everything this frame is still holding.
@@ -735,16 +1051,16 @@ fn own_drop(out: Strs, next: Ints, owned: Ints, value: Int, t: Int) -> Int {
 // `t_int()` where the slot needs nothing; parameter slots are `t_int()` for that reason,
 // which *is* rule 2. A slot never written holds a zeroed value, and releasing a null owner
 // is a no-op, so a path that skipped a declaration costs one comparison.
-fn release_frame(out: Strs, next: Ints, frame: Ints) -> Int {
+fn release_frame(out: Strs, next: Ints, frame: Ints, rowns: Ints) -> Int {
     let mut i = 0;
     while i < ints_len(frame) {
         let t = ints_get(frame, i);
-        if owns(t) != 0 {
+        if owns(t, rowns) != 0 {
             let n = take_number(next);
             add_line(out, str_concat(str_concat("  ", v(n)),
                     str_concat(str_concat(" = load ", llvm_type(t)),
                     str_concat(", ptr %slot", int_to_str(i)))));
-            emit_release(out, next, n, t);
+            emit_release(out, next, n, t, rowns);
         }
         i = i + 1;
     }
@@ -774,14 +1090,14 @@ fn string_data(out: Strs, next: Ints, own: Int) -> Int {
 // The order is the whole of the correctness: the new reference is taken **first**, so that
 // `a = a` — and the re-execution of a `let` in a loop with the same value — cannot drop the
 // count to zero between the two steps and free storage that is about to be stored again.
-fn store_binding(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: Int) -> Int {
-    if owns(vt) == 0 {
+fn store_binding(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: Int, rowns: Ints) -> Int {
+    if owns(vt, rowns) == 0 {
         add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
                 str_concat(" ", v(value))),
                 str_concat(", ptr %slot", int_to_str(slot))));
         return 0;
     }
-    own_keep(out, next, owned, value, vt);
+    own_keep(out, next, owned, value, vt, rowns);
     let old = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(old)),
             str_concat(str_concat(" = load ", llvm_type(vt)),
@@ -789,17 +1105,17 @@ fn store_binding(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: 
     add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
             str_concat(" ", v(value))),
             str_concat(", ptr %slot", int_to_str(slot))));
-    emit_release(out, next, old, vt);
+    emit_release(out, next, old, vt, rowns);
     0
 }
 
 // Release every argument of a call that nothing took over.
 fn drop_arguments(out: Strs, next: Ints, owned: Ints, ordered: Ints, ntype: Ints,
-        kids: Ints, kid_first: Ints, k: Int, argc: Int) -> Int {
+        kids: Ints, kid_first: Ints, k: Int, argc: Int, rowns: Ints) -> Int {
     let mut d = 0;
     while d < argc {
         own_drop(out, next, owned, ints_get(ordered, d),
-                ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + d)));
+                ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + d)), rowns);
         d = d + 1;
     }
     0
@@ -1441,7 +1757,8 @@ fn symbol(index: Int) -> Str {
 fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
         nk: Ints, nar: Ints, nst: Ints, ntx: Strs, nslot: Ints, ntype: Ints,
         kids: Ints, kid_first: Ints, fnames: Strs, fowner: Ints, mstart: Ints,
-        frame: Ints, owned: Ints, k: Int, begin: Int, src: Str, path: Str) -> Int {
+        frame: Ints, owned: Ints, k: Int, begin: Int, src: Str, path: Str, rowns: Ints,
+        nrec: Ints) -> Int {
     // Numbering restarts per function: LLVM requires a function's unnamed values to be
     // consecutive from zero, and `%p<n>`/`%slot<n>` are named so they consume none of it.
     ints_set(next, 0, 0);
@@ -1453,7 +1770,7 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     let mut p = 0;
     while p < params {
         if p > 0 { list = str_concat(list, ", "); }
-        let pt = type_of_name(after_colon(strs_get(ntx, ints_get(kids, first + p))));
+        let pt = ints_get(nrec, ints_get(kids, first + p));
         list = str_concat(list, str_concat(str_concat(llvm_type(pt), " %p"), int_to_str(p)));
         p = p + 1;
     }
@@ -1463,7 +1780,7 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     let me = owned_index(fnames, fowner, module_at(mstart, ints_get(nst, k)),
             before_colon(text));
     add_line(out, str_concat(str_concat(str_concat("define internal ",
-            llvm_type(type_of_name(after_colon(text)))),
+            llvm_type(ints_get(nrec, k))),
             str_concat(" ", symbol(me))),
             str_concat(str_concat("(", list), str_concat(") {   ; ", before_colon(text)))));
     add_line(out, "entry:");
@@ -1485,13 +1802,21 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     while scan <= k {
         let sk = ints_get(nk, scan);
         if sk == n_param() {
-            ints_set(styp, ints_get(nslot, scan), type_of_name(after_colon(strs_get(ntx, scan))));
+            ints_set(styp, ints_get(nslot, scan), ints_get(nrec, scan));
         }
         if sk == n_let() {
             // A binding's type is its initialiser's, which the checker already recorded
             // on the initialiser node.
             ints_set(styp, ints_get(nslot, scan),
                     ints_get(ntype, ints_get(kids, ints_get(kid_first, scan))));
+        }
+        // A construction that owns something is assembled in a hidden slot of its own, so
+        // that an initialiser failing part way through releases what the earlier ones
+        // produced. The slot's type is the record's.
+        if sk == n_construct() {
+            if ints_get(nslot, scan) >= 0 {
+                ints_set(styp, ints_get(nslot, scan), ints_get(ntype, scan));
+            }
         }
         scan = scan + 1;
     }
@@ -1526,7 +1851,7 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     sl = 0;
     while sl < slots {
         let st = ints_get(frame, sl);
-        if owns(st) != 0 {
+        if owns(st, rowns) != 0 {
             add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(st)),
                     str_concat(" ", unwind_value(st))),
                     str_concat(", ptr %slot", int_to_str(sl))));
@@ -1539,7 +1864,7 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     while p < params {
         let child = ints_get(kids, first + p);
         let slot = ints_get(nslot, child);
-        let pt = type_of_name(after_colon(strs_get(ntx, child)));
+        let pt = ints_get(nrec, child);
         add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(pt)),
                 str_concat(" %p", int_to_str(p))),
                 str_concat(", ptr %slot", int_to_str(slot))));
@@ -1692,7 +2017,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         naux: Ints, nslot: Ints, ntype: Ints, ncallee: Ints,
         parent: Ints, childno: Ints, substart: Ints, kids: Ints, kid_first: Ints,
         fnames: Strs, fret: Ints, fowner: Ints, mstart: Ints,
-        out: Strs, msgs: Strs, blobs: Strs, tasks: Strs) -> Int {
+        out: Strs, msgs: Strs, blobs: Strs, tasks: Strs, nrec: Ints, rowns: Ints, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
     let next = ints_new();
     ints_push(next, 0);
     // Slot 1 is the block-label counter, separate from slot 0 because the labels are
@@ -1774,7 +2099,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         if ints_get(fn_at, k) >= 0 {
             open_function(out, current, live, next, vals, nk, nar, nst, ntx, nslot, ntype,
                     kids, kid_first, fnames, fowner, mstart, frame, owned,
-                    ints_get(fn_at, k), k, src, path);
+                    ints_get(fn_at, k), k, src, path, rowns, nrec);
         }
 
         // A loop header opens before its condition, never after: `continue` and the back
@@ -1815,8 +2140,13 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             if kind == n_spawn() {
                 emit_spawn(out, msgs, next, current, live, tasks, owned, vals, nar, ntype,
                         kids, kid_first, fnames, fret, k, ints_get(ncallee, k),
-                        position(src, path, from));
+                        position(src, path, from), rowns);
             } else {
+                if emit_record_node(out, next, vals, owned, nk, nar, ntx, ntype, nrec,
+                        nslot, kids, kid_first, k, rowns, rfirst, rcount, rfname,
+                        rftype) == 1 {
+                    // A record declaration, a construction or a projection.
+                } else {
                 if kind == n_param() {
                     // Handled by `open_function`, which stored it before the body began.
                 } else {
@@ -1832,11 +2162,11 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                         let mut o = argc - 1;
                         while o >= 0 { ints_push(ordered, ints_get(args, o)); o = o - 1; }
                         let built = emit_builtin(text, ordered, owned, out, msgs, next, current,
-                                live, position(src, path, from));
+                                live, position(src, path, from), rowns);
                         if built >= 0 {
                             // A built-in borrows its arguments, exactly as a function does,
                             // so a temporary handed to one is nobody's after it returns.
-                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc);
+                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc, rowns);
                             ints_push(vals, built);
                         } else {
                             let mut list = "";
@@ -1863,8 +2193,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                             // this expression now holds. Rule 2: the arguments were only
                             // borrowed, so a temporary passed in is still nobody's and is
                             // dropped here.
-                            if owns(ints_get(ntype, k)) != 0 { own_add(owned, n); }
-                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc);
+                            if owns(ints_get(ntype, k), rowns) != 0 { own_add(owned, n); }
+                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc, rowns);
                             ints_push(vals, n);
                         }
                     } else {
@@ -1907,7 +2237,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                 // arrived.
                                                 own_take(owned, av);
                                                 own_take(owned, bv);
-                                                if owns(ints_get(ntype, k)) != 0 { own_add(owned, n); }
+                                                if owns(ints_get(ntype, k), rowns) != 0 { own_add(owned, n); }
                                                 add_line(out, str_concat(str_concat("  ", v(n)),
                                                         str_concat(str_concat(str_concat(" = phi ", llvm_type(ints_get(ntype, k))),
                                                         str_concat(" [ ", v(av))),
@@ -1936,8 +2266,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                         // **before** the frame lets go of everything else
                                                         // — otherwise returning a local would release the
                                                         // storage it is returning.
-                                                        own_keep(out, next, owned, value, vt);
-                                                        release_frame(out, next, frame);
+                                                        own_keep(out, next, owned, value, vt, rowns);
+                                                        release_frame(out, next, frame, rowns);
                                                         add_line(out, str_concat(str_concat("  ret ", llvm_type(vt)), str_concat(" ", v(value))));
                                                         ints_set(live, 0, 0);
                                                     } else {
@@ -1952,14 +2282,21 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                 // The value is already on the stack: its subtree came first.
                                                                 let value = ints_pop(vals);
                                                                 let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                                store_binding(out, next, owned, value, vt, ints_get(nslot, k));
+                                                                store_binding(out, next, owned, value, vt, ints_get(nslot, k), rowns);
                                                             } else {
                                                                 if kind == n_assign() {
-                                                                    // The same store. A declaration and a reassignment differ in the source and
-                                                                    // not once the slot is known, so there is one code path rather than two.
+                                                                    // The same store as a `let`, when the place is a plain binding: a
+                                                                    // declaration and a reassignment differ in the source and not once the
+                                                                    // slot is known, so there is one code path rather than two.
                                                                     let value = ints_pop(vals);
                                                                     let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                                    store_binding(out, next, owned, value, vt, ints_get(nslot, k));
+                                                                    if path_length(text) == 0 {
+                                                                        store_binding(out, next, owned, value, vt, ints_get(nslot, k), rowns);
+                                                                    } else {
+                                                                        set_field(out, next, owned, value, vt, ints_get(nslot, k),
+                                                                                ints_get(nrec, k), text, rowns,
+                                                                                rfirst, rcount, rfname, rftype);
+                                                                    }
                                                                 } else {
                                                                     if kind == n_exprstmt() {
                                                                         // Evaluated for its effects; the value is dropped, exactly as `nazm run`
@@ -1968,7 +2305,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                         if ints_get(ntype, ints_get(kids, ints_get(kid_first, k))) != 0 {
                                                                             let dropped = ints_pop(vals);
                                                                             own_drop(out, next, owned, dropped,
-                                                                                    ints_get(ntype, ints_get(kids, ints_get(kid_first, k))));
+                                                                                    ints_get(ntype, ints_get(kids, ints_get(kid_first, k))), rowns);
                                                                         }
                                                                     } else {
                                                                         if kind == n_int() {
@@ -2011,7 +2348,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                         }
                                                                                     } else {
                                                                                         if kind == n_fn() {
-                                                                                            if llvm_type(type_of_name(after_colon(text))) == "void" {
+                                                                                            if llvm_type(ints_get(nrec, k)) == "void" {
                                                                                                 refuse(str_concat(str_concat("a function returning `",
                                                                                                         after_colon(text)), "`"),
                                                                                                         position(src, path, from));
@@ -2037,21 +2374,21 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                                 // rules: take the reference the caller is about to receive, then let the
                                                                                                 // frame go.
                                                                                                 let tv = ints_pop(vals);
-                                                                                                own_keep(out, next, owned, tv, type_of_name(after_colon(text)));
-                                                                                                release_frame(out, next, frame);
+                                                                                                own_keep(out, next, owned, tv, ints_get(nrec, k), rowns);
+                                                                                                release_frame(out, next, frame, rowns);
                                                                                                 add_line(out, str_concat(str_concat("  ret ",
-                                                                                                        llvm_type(type_of_name(after_colon(text)))),
+                                                                                                        llvm_type(ints_get(nrec, k))),
                                                                                                         str_concat(" ", v(tv))));
                                                                                             }
                                                                                             // The one exit every failure in this function leaves by,
                                                                                             // written only if something branched to it.
                                                                                             if ints_get(live, 1) == 1 {
-                                                                                                let rt = type_of_name(after_colon(text));
+                                                                                                let rt = ints_get(nrec, k);
                                                                                                 add_line(out, "nz.unwind:");
                                                                                                 // A failure leaves through here from anywhere in the function, so this is
                                                                                                 // the one exit source indentation would never have found. A program that
                                                                                                 // failed still reclaims what it was holding.
-                                                                                                release_frame(out, next, frame);
+                                                                                                release_frame(out, next, frame, rowns);
                                                                                                 add_line(out, str_concat(str_concat("  ret ",
                                                                                                         llvm_type(rt)),
                                                                                                         str_concat(" ", unwind_value(rt))));
@@ -2088,6 +2425,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     }
                 }
             }
+        }
         }
 
         // --- the boundary between two children ------------------------------------
@@ -2137,7 +2475,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                         // jump**, which is the only place a retain can go: after the `phi`
                         // there is no branch left to attribute it to.
                         let bv = ints_pop(vals);
-                        own_keep(out, next, owned, bv, ints_get(ntype, p));
+                        own_keep(out, next, owned, bv, ints_get(ntype, p), rowns);
                         own_add(owned, bv);
                         ints_push(phi_val, bv);
                         strs_push(phi_blk, strs_get(current, 0));
@@ -2216,6 +2554,47 @@ fn main() -> Int {
     let dend = ints_new();
     let dmsg = strs_new();
 
+    // Records, in three stages before any signature. The order is `docs/spec.md`'s:
+    // names for the whole compilation first, because a field's type may name a record
+    // declared later or in another module; then field types; then the layouts they
+    // describe, so a cycle is refused before anything is emitted.
+    let rnames = strs_new();
+    let rowner = ints_new();
+    let rpub = ints_new();
+    let rat = ints_new();
+    let rnode = ints_new();
+    let rfirst = ints_new();
+    let rcount = ints_new();
+    let rfname = strs_new();
+    let rftype = ints_new();
+    let rfat = ints_new();
+    let tmod = ints_new();
+    let tname = strs_new();
+    let trec = ints_new();
+    collect_records(nk, nar, nst, nen, ntx, naux, mstart,
+            rnames, rowner, rpub, rat, rnode, dcode, dstart, dend, dmsg);
+    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath),
+            rnames, rowner, rpub, tmod, tname, trec, dcode, dstart, dend, dmsg);
+    resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first,
+            rnames, rowner, rat, rnode, rfirst, rcount, rfname, rftype, rfat,
+            tmod, tname, trec, dcode, dstart, dend, dmsg);
+    check_record_layouts(rnames, rat, rfirst, rcount, rftype, dcode, dstart, dend, dmsg);
+    // One bit per record: whether anything in it, at any depth, has to be released. The
+    // emitter asks this at every binding, every temporary and every frame slot, and it is
+    // the only thing about a record those sites need — so it travels as one array rather
+    // than the whole table. Computed once, after the fields are known and after a cycle
+    // would have been refused, so the walk below terminates.
+    let rowns = ints_new();
+    let mut r = 0;
+    while r < strs_len(rnames) {
+        if needs_cleanup(t_record(r), rfirst, rcount, rftype) {
+            ints_push(rowns, 1);
+        } else {
+            ints_push(rowns, 0);
+        }
+        r = r + 1;
+    }
+
     let fnames = strs_new();
     let fret = ints_new();
     let ffirst = ints_new();
@@ -2223,8 +2602,10 @@ fn main() -> Int {
     let fparams = ints_new();
     let fowner = ints_new();
     let fpub = ints_new();
-    collect_signatures(nk, nar, nst, ntx, naux, kids, kid_first, mstart,
+    collect_signatures(nk, nar, nst, nen, ntx, naux, kids, kid_first, mstart,
             fnames, fret, ffirst, fcount, fparams, fowner, fpub, bnames,
+            rnames, rowner, rpub, rat, rfirst, rcount, rfname, rftype, rfat,
+            tmod, tname, trec,
             dcode, dstart, dend, dmsg);
 
     // Interfaces before bodies: what each module's direct imports bring into it, and the
@@ -2241,12 +2622,15 @@ fn main() -> Int {
     let nslot = ints_new();
     let ntype = ints_new();
     let ncallee = ints_new();
-    check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
+    let nrec = ints_new();
+    check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee, nrec,
             kids, kid_first, ints_len(nk) - 1,
             mstart, mfirst, mcount, mto,
             fnames, fret, ffirst, fcount, fparams,
             fowner, fpub, vmod, vname, vfn,
             bnames, bret, bfirst, bcount, bparams,
+            rnames, rowner, rfirst, rcount, rfname, rftype,
+            tmod, tname, trec,
             dcode, dstart, dend, dmsg);
     if strs_len(dcode) > 0 {
         let mut d = 0;
@@ -2275,7 +2659,7 @@ fn main() -> Int {
     refuse_recursion(src, path, nk, nst, ntx, parent, ncallee, fnames, fowner, mstart);
     emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
             parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
-            body, msgs, blobs, tasks);
+            body, msgs, blobs, tasks, nrec, rowns, rfirst, rcount, rfname, rftype);
 
     // Whether this program can reach a channel. A `spawn` is not the only way: a program
     // may create one, send to it and receive from it without ever starting a task, and
@@ -2321,6 +2705,27 @@ fn main() -> Int {
         add_line(head, "declare i32 @pthread_cond_broadcast(ptr)");
         add_line(head, "declare i32 @pthread_mutex_destroy(ptr)");
         add_line(head, "declare i32 @pthread_cond_destroy(ptr)");
+    }
+    // The record types this program declares, each as a named LLVM aggregate, in
+    // **layout order** — canonical by field name, so moving two field declarations
+    // changes no byte of this. Before anything that uses one: a named type referenced
+    // before it is defined is opaque to LLVM's textual parser, and an opaque type has no
+    // size.
+    let mut rdef = 0;
+    while rdef < strs_len(rnames) {
+        let mut fields = "";
+        let mut pos = 0;
+        while pos < ints_get(rcount, rdef) {
+            if pos > 0 { fields = str_concat(fields, ", "); }
+            let decl = layout_field(rfirst, rcount, rfname, rdef, pos);
+            fields = str_concat(fields,
+                    llvm_type(ints_get(rftype, ints_get(rfirst, rdef) + decl)));
+            pos = pos + 1;
+        }
+        add_line(head, str_concat(str_concat(str_concat("%nz.t", int_to_str(rdef)),
+                str_concat(" = type { ", fields)), str_concat(" }    ; ",
+                strs_get(rnames, rdef))));
+        rdef = rdef + 1;
     }
     add_line(head, "declare i32 @memcmp(ptr, ptr, i64)");
     add_line(head, "declare i32 @snprintf(ptr noundef, i64, ptr noundef, ...)");
@@ -2498,8 +2903,24 @@ fn main() -> Int {
     if concurrent {
         rt = str_concat(rt, channel_runtime());
     }
+    // One retain and one release helper per record that owns something. A record whose
+    // every field is an `Int` gets neither, and no call site emits one either — it costs
+    // nothing, one level later than `owns` says so.
+    let helpers = strs_new();
+    let hnext = ints_new();
+    ints_push(hnext, 0);
+    ints_push(hnext, 0);
+    let mut hr = 0;
+    while hr < strs_len(rnames) {
+        if ints_get(rowns, hr) == 1 {
+            record_helper(helpers, hnext, hr, true, rowns, rfirst, rcount, rfname, rftype);
+            record_helper(helpers, hnext, hr, false, rowns, rfirst, rcount, rfname, rftype);
+        }
+        hr = hr + 1;
+    }
     print(str_concat(str_concat(str_concat(join(head), rt),
-            str_concat(join(body), join(tasks))), join(tail)));
+            str_concat(join(body), join(tasks))),
+            str_concat(join(helpers), join(tail))));
     // `exit_with`, not a return: the platform wrapper prints `main`'s value, and this
     // program's standard output *is* the LLVM module. A stray integer at the end of it
     // is a module clang rejects.
@@ -2516,7 +2937,7 @@ fn main() -> Int {
 // site tells a built-in from a user function without a second name table.
 
 fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next: Ints,
-        current: Strs, live: Ints, at: Str) -> Int {
+        current: Strs, live: Ints, at: Str, rowns: Ints) -> Int {
     let a0 = if ints_len(args) > 0 { ints_get(args, 0) } else { 0 }
     ;
     let a1 = if ints_len(args) > 1 { ints_get(args, 1) } else { 0 }
@@ -2706,7 +3127,7 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         // what makes the specification's promise — a `Str` already read out is unaffected
         // by changing the sequence — true by construction rather than true because
         // nothing was ever freed.
-        emit_retain(out, next, got, t_str());
+        emit_retain(out, next, got, t_str(), rowns);
         own_add(owned, got);
         return got;
     }
@@ -2723,25 +3144,25 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         // the old one is released, so replacing an element with a string that shares its
         // backing cannot drop the count to zero in between.
         let old = binop(out, next, "load", "{ ptr, i64, ptr },", str_concat("ptr ", v(slot)), "");
-        emit_retain(out, next, a2, t_str());
+        emit_retain(out, next, a2, t_str(), rowns);
         add_line(out, str_concat(str_concat("  store { ptr, i64, ptr } ", v(a2)),
                 str_concat(", ptr ", v(slot))));
-        emit_release(out, next, old, t_str());
+        emit_release(out, next, old, t_str(), rowns);
         return a1;
     }
     if name == "ints_push" {
-        return push_sequence(out, msgs, next, current, live, a0, a1, "i64", "8", t_int(), at);
+        return push_sequence(out, msgs, next, current, live, a0, a1, "i64", "8", t_int(), at, rowns);
     }
     if name == "strs_push" {
         return push_sequence(out, msgs, next, current, live, a0, a1, "{ ptr, i64, ptr }", "24",
-                t_str(), at);
+                t_str(), at, rowns);
     }
     if name == "ints_pop" {
-        return pop_sequence(out, msgs, next, current, live, owned, a0, "i64", t_int(), at);
+        return pop_sequence(out, msgs, next, current, live, owned, a0, "i64", t_int(), at, rowns);
     }
     if name == "strs_pop" {
         return pop_sequence(out, msgs, next, current, live, owned, a0, "{ ptr, i64, ptr }",
-                t_str(), at);
+                t_str(), at, rowns);
     }
 
     if name == "args_count" {
@@ -2851,7 +3272,7 @@ fn new_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
 }
 
 fn push_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, handle: Int, value: Int,
-        elem: Str, size: Str, et: Int, at: Str) -> Int {
+        elem: Str, size: Str, et: Int, at: Str, rowns: Ints) -> Int {
     let data = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(data)),
             str_concat(str_concat(" = call ptr @nz.arr_grow(ptr ", v(handle)),
@@ -2863,7 +3284,7 @@ fn push_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, h
             str_concat("i64 ", v(len)));
     // The sequence keeps what it is given, so it takes a reference of its own. The
     // caller's value is untouched and is still valid after the call.
-    emit_retain(out, next, value, et);
+    emit_retain(out, next, value, et, rowns);
     add_line(out, str_concat(str_concat(str_concat("  store ", elem), str_concat(" ", v(value))),
             str_concat(", ptr ", v(slot))));
     let grown = binop(out, next, "add", "i64", v(len), "1");
@@ -2872,7 +3293,7 @@ fn push_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, h
 }
 
 fn pop_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, owned: Ints,
-        handle: Int, elem: Str, et: Int, at: Str) -> Int {
+        handle: Int, elem: Str, et: Int, at: Str, rowns: Ints) -> Int {
     let len = binop(out, next, "load", "i64,", str_concat("ptr ", v(handle)), "");
     let empty = binop(out, next, "icmp sle", "i64", v(len), "0");
     require(out, msgs, next, current, live, empty, "this sequence is empty", at);
@@ -2887,7 +3308,7 @@ fn pop_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, ow
     add_line(out, str_concat(str_concat("  store i64 ", v(last)), str_concat(", ptr ", v(handle))));
     // A **transfer**: shortening the sequence gives up its reference and this expression
     // takes that same one over. No retain, no release, and the count is unchanged.
-    if owns(et) != 0 { own_add(owned, value); }
+    if owns(et, rowns) != 0 { own_add(owned, value); }
     value
 }
 

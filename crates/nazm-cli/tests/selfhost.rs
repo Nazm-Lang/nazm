@@ -293,11 +293,52 @@ fn a_lexing_error_is_located_and_stops_the_program() {
 
 fn dump_program(p: &nazm_core::__syntax::Program) -> String {
     let mut out = String::new();
-    for f in &p.functions {
-        dump_function(f, &mut out);
+    // **Source order**, across both lists. The Nazm parser appends to one arena as it
+    // reads, so its items come out interleaved; the reference keeps functions and records
+    // apart and has to be sorted back. Sorting by where each item was written is what both
+    // parsers actually see, so it is the honest reconstruction rather than a convention
+    // the two agreed on.
+    enum Item<'a> {
+        Fn(&'a nazm_core::__syntax::Function),
+        Record(&'a nazm_core::__syntax::Record),
     }
-    push_node(&mut out, "program", p.functions.len(), 0, 0, "");
+    let mut items: Vec<(u32, Item<'_>)> = Vec::new();
+    for f in &p.functions {
+        items.push((f.span.start, Item::Fn(f)));
+    }
+    for r in &p.records {
+        items.push((r.span.start, Item::Record(r)));
+    }
+    items.sort_by_key(|(at, _)| *at);
+    for (_, item) in &items {
+        match item {
+            Item::Fn(f) => dump_function(f, &mut out),
+            Item::Record(r) => dump_record(r, &mut out),
+        }
+    }
+    push_node(&mut out, "program", items.len(), 0, 0, "");
     out
+}
+
+fn dump_record(r: &nazm_core::__syntax::Record, out: &mut String) {
+    for f in &r.fields {
+        push_node(
+            out,
+            "structfield",
+            0,
+            f.span.start,
+            f.span.end,
+            &format!("{}:{}", f.name, f.ty.name),
+        );
+    }
+    push_node(
+        out,
+        "record",
+        r.fields.len(),
+        r.span.start,
+        r.span.end,
+        &r.name,
+    );
 }
 
 fn push_node(out: &mut String, kind: &str, arity: usize, start: u32, end: u32, text: &str) {
@@ -1691,16 +1732,36 @@ fn the_bootstrap_chain_reaches_a_fixpoint() {
     );
 
     let record = std::fs::read_to_string(out.join("record.txt")).expect("the record");
-    for expected in [
-        "ir: identical",
-        "executables: byte-identical",
-        "conformance-cases: 5",
-    ] {
+    for expected in ["ir: identical", "executables: byte-identical"] {
         assert!(
             record.contains(expected),
             "the record does not say {expected:?}:\n{record}"
         );
     }
+    // Whole lines, and a floor rather than an exact count.
+    //
+    // This read `record.contains("conformance-cases: 5")` until N9, and it was passing
+    // for the wrong reason: there were ten cases, and the substring it looked for was the
+    // tail of `module-conformance-cases: 5`. A corpus that had shrunk to five would have
+    // satisfied it, and so would one that had shrunk to none while the module count
+    // happened to be five. Parsing the number is what makes it an assertion about the
+    // corpus rather than about the text.
+    let count = |key: &str| -> usize {
+        record
+            .lines()
+            .find(|l| l.starts_with(key))
+            .and_then(|l| l.split(' ').nth(1))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0)
+    };
+    assert!(
+        count("conformance-cases:") >= 12,
+        "the corpus has shrunk:\n{record}"
+    );
+    assert!(
+        count("module-conformance-cases:") >= 6,
+        "the module corpus has shrunk:\n{record}"
+    );
     // The two compilers really are the same bytes, read out of the record rather than
     // inferred from the script not having failed.
     let digest = |key: &str| -> String {

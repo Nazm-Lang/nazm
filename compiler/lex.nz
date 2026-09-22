@@ -48,6 +48,10 @@ pub fn k_spawn() -> Int { 23 }
 // a keyword to one lexer and an identifier to the other is a divergence, so it is here
 // as soon as it is a keyword at all, whatever the later stages do with it.
 pub fn k_pub() -> Int { 24 }
+// `struct` — the record declaration keyword, added by N9. It was reserved by name in the
+// reference parser long before it meant anything, for the reason above: a word that is a
+// keyword to one lexer and an identifier to the other is a divergence.
+pub fn k_struct() -> Int { 25 }
 pub fn k_lparen() -> Int { 30 }
 pub fn k_rparen() -> Int { 31 }
 pub fn k_lbrace() -> Int { 32 }
@@ -55,6 +59,9 @@ pub fn k_rbrace() -> Int { 33 }
 pub fn k_comma() -> Int { 34 }
 pub fn k_colon() -> Int { 35 }
 pub fn k_semi() -> Int { 36 }
+// `.` — field projection. Never part of a number: the language has no float, so a dot is
+// always this and never the start of one.
+pub fn k_dot() -> Int { 39 }
 pub fn k_arrow() -> Int { 37 }
 pub fn k_eq() -> Int { 38 }
 pub fn k_plus() -> Int { 40 }
@@ -116,6 +123,7 @@ fn keyword_kind(word: Str) -> Int {
     if word == "scope" { return k_scope(); }
     if word == "spawn" { return k_spawn(); }
     if word == "pub" { return k_pub(); }
+    if word == "struct" { return k_struct(); }
     k_ident()
 }
 
@@ -251,6 +259,7 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int 
         if b == 44 { kind = k_comma(); }
         if b == 58 { kind = k_colon(); }
         if b == 59 { kind = k_semi(); }
+        if b == 46 { kind = k_dot(); }
         if b == 61 { kind = k_eq(); }
         if b == 43 { kind = k_plus(); }
         if b == 45 { kind = k_minus(); }
