@@ -1408,16 +1408,176 @@ one has to be the shape where nothing else is holding the value.
 
 ### What this still does not do
 
-- **Nothing about future types.** Leak freedom here is a claim about six built-in types and
-  rests on the cycle argument in `docs/spec.md`: `Ints` holds `Int`, `Strs` holds `Str`,
+- **Nothing about future types.** Leak freedom here is a claim about six built-in types —
+  and, since N9, about records composed of them (§7.10) — and rests on the cycle argument
+  in `docs/spec.md`: `Ints` holds `Int`, `Strs` holds `Str`,
   `Str` is a leaf, and a channel holds `Int`, so no value can refer to one that refers back.
   The first recursive user-defined type ends that, and the constitution says in advance what
   admitting one requires.
 - **`exit_with` reclaims nothing and reports nothing.** Unchanged from §7.7, and correct: a
   process that has ended returned everything.
-- **A failure still leaks the temporary it was holding.** A `Val::Transferred` on a guard's
-  failing path cannot be followed by a release, and that path ends the program.
+- **A failure still leaks the temporary it was holding** — *closed by N9; see §7.10*. A
+  `Val::Transferred` on a guard's failing path still cannot be followed by a release, and
+  that path ends the program. What N9 added is the release of everything the expression
+  *was* holding when the failure left, which is the larger half of what this bullet meant.
 - **No sanitizer result is claimed.** The language-level counters are the evidence here.
+
+## 7.10 Records: composition instead of cases — settled by N9, 2026-09-23
+
+N9 adds the first user-defined type. The question it exists to answer is not whether
+records compile — it is whether the memory constitution N7 and N8 built can describe a type
+whose ownership behaviour is **composed from arbitrary field types** rather than written
+out in compiler branches.
+
+The answer is in what did *not* change. `Owns` gained one variant, `Owns::Record`, and no
+consumer gained a case: every retain, every release, every frame slot, every container and
+every task boundary still dispatches on the one answer `Ty::owns()` gives. The four
+properties a record has are all derived:
+
+| | Derived as |
+| --- | --- |
+| needs cleanup | some field does, recursively |
+| may cross into a task | every field may, recursively — and the failing path is reported |
+| copy | retain each owning field, by that field's rule |
+| destroy | release each owning field, by that field's rule |
+
+A record adds no new **kind** of value. It is a composition of the four that existed, which
+is also why `spec.md`'s cycle argument survives: a composition of leaves is a leaf, and a
+containment cycle has no finite layout and is refused (`N0336`) before anything is lowered.
+
+### Semantic identity, and where a field's position is decided
+
+A record's durable identity is a `DefKey` with `DefKind::Record` — the second kind that
+enum has ever had, and no key written before N9 changed meaning, which is what N3 designed
+it for. `Type::Record(RecordId)` carries a session-local index and **not** a field list:
+two records with identical fields are different types, so a type that held its shape would
+compare equal where the language says unequal.
+
+§4 has required since before there was a backend that *field access remains symbolic until
+the low-level layout boundary*. N9 is the first feature where that costs anything, and the
+boundary is one function:
+
+```text
+checker          FieldRef { record, field }      a field's identity, as a declaration index
+  ↓
+nazm-lir::lower  RecordLayout::of_declaration    the only place a position is decided
+  ↓
+emitter          extractvalue %rec, <position>
+```
+
+Nothing above `lower` knows a position, and nothing anywhere knows a byte offset — the LLVM
+struct is named and its offsets are the target's business. A future AoS/SoA pass changes
+`record_layouts` and nothing else.
+
+### Why the layout is canonical by field name
+
+`spec.md` makes declaration order non-semantic: construction is named, and moving two field
+declarations is not a change to the type. Laying fields out in **name order** makes that
+true of the object file as well.
+
+The alternative — declaration order — would have produced an ABI difference from an edit
+the compiler itself calls meaningless: the fingerprint would not move, the semantic cache
+would reuse, and the object would differ. A compiler and a linker disagreeing about whether
+anything happened is the worst kind of disagreement, because each is right.
+
+### A projection borrows when its base does
+
+Reading a field out of a record held in a **slot** takes no reference. The slot keeps the
+field's storage alive, nothing in one expression can change it — assignment is a statement
+— and rule 2 says a borrowed reference costs nothing. Reading one out of an owned
+**temporary** must take a reference first, before the temporary is dropped; that ordering is
+the whole of why `make().name` is valid.
+
+Retaining unconditionally was the first implementation and it was wrong in a way only a
+failure could show: `ints_get(h.values, 0)` took a reference, the built-in failed, and the
+release that would have balanced it was on the path the program did not take.
+
+### A failure now releases what it was holding
+
+§7.9 listed, under *what this still does not do*: **"A failure still leaks the temporary it
+was holding."** N8 knew about it and left it; N9 closes it, because a record projection made
+the shape ordinary enough to test.
+
+The shared `nz.unwind` block releases the frame's **slots**, which is right for everything a
+binding holds and says nothing about a value in a register.
+`str_concat(str_concat(a, b), int_to_str(1 / z))` has the inner result in hand when the
+division fails, and the call that would have consumed it is on a path control never takes.
+Both emitters now release the outstanding set at each failure site — the only place that
+knows it, because which temporaries are live is a property of the program point rather than
+of the block they all eventually reach.
+
+The first attempt was unsound and `clang` said so: *Instruction does not dominate all uses*.
+A value created in a `then` block does not dominate the `else` block, so the set is scoped
+to the branch that created it. The refusal came from an assembler rather than from a wrong
+program, which is the failure mode this backend is built to have.
+
+### A construction is assembled in a slot when it owns anything
+
+`Holder(name: int_to_str(1), n: 1 / z)` allocates a string and then fails. A value held only
+in a register is not reachable from the frame's cleanup, so a construction with an owning
+field is assembled into a hidden local instead. The "which fields are initialised"
+bookkeeping is the **zeroed slot itself**: an unwritten field is null, releasing null is a
+no-op in every release helper, and there is no separate flag to keep in agreement with the
+value. A record whose fields own nothing gets no slot and pays for none of it.
+
+### One helper per record per direction
+
+A record released in forty places emits forty calls, not forty copies of its field walk —
+and a nested record's helper calls the inner record's, which puts the recursion in the
+**emitted program**, where there is a stack, rather than in the compiler. The self-hosted
+emitter has no recursion at all, so this is not a convenience there; it is the mechanism.
+
+### A premature free is not a counting error
+
+One mutation survived the first run: releasing the old field **before** taking the new one.
+Both orders end with the same two numbers, so the reclamation counters — the instrument
+every other rule in §7.7–§7.9 is checked with — cannot see it. The existing
+same-allocation case used `str_slice`, which takes its own reference inside the built-in
+and so survived the wrong order by accident.
+
+The shape that observes it is `h.name = h.name` — a projection out of a borrowed record,
+which holds no reference of its own — followed by three hundred small allocations, so the
+block the wrong order freed is handed back out. The program then stops with a signal rather
+than returning a wrong answer.
+
+This is §7.9's lesson in a form that section did not cover. There, the compensating
+mechanism was a binding. Here it was an allocator that had not yet reused the block, and
+the general rule is the same: **the test that finds a defect has to be the shape where
+nothing is compensating for it.**
+
+### The self-hosted compiler
+
+`compiler/lex.nz`, `parse.nz`, `analyse.nz` and `emit.nz` all learned records: the keyword
+and `.`, declarations and named construction and projection-path assignment, the record
+table and its three declaration stages, and named LLVM aggregates with generated helpers.
+There is **no divergence to record** — the reference and the Nazm-written compiler accept
+and reject the same record language, and `compiler/conformance/records.nz` plus
+`modules/exported-record` are checked by C2, C3 and the reference.
+
+Two differences are inherited rather than introduced. The self-hosted emitter names a record
+`%nz.t<index>` exactly as it names a function `@nz.f<index>`, which is sound because it
+emits one module for a whole program and is the same limitation N5 removed for the reference
+compiler and not for this one. And its `owns` answer for a record is a precomputed bit per
+record rather than a walk, because a Nazm function cannot recurse.
+
+It also **uses** one. `Place { line, column }` in `compiler/emit.nz` replaced `line_of` and
+`column_of`, which were two functions because a function returns one value: the first
+scanned forward counting newlines, the second scanned backward looking for one, and every
+diagnostic paid for both. A column falls out of the forward scan for nothing. That is the
+whole of the dogfood evidence and it is deliberately one record — see
+`research-register.md` R1 for why a wider migration would not have been honest.
+
+### What this still does not do
+
+- **No variants, no generics, no traits, no methods, no pattern matching.** N9 is product
+  types. Sum types are the next distinct semantic problem.
+- **No layout promise.** A record's field offsets, size and calling convention are
+  compiler-private. `pub` says which Nazm modules may name the type.
+- **Nothing about a record inside a sequence.** `Ints` holds `Int` and `Strs` holds `Str`;
+  there is no container that can hold a record, which is also why the cycle argument still
+  holds. A generic container is what would end it.
+- **No sanitizer result is claimed**, and the one defect class the counters cannot see —
+  a premature free — is covered by exactly one test shape rather than by an instrument.
 
 ## 8. Toolchain, and one real incompatibility
 

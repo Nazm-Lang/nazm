@@ -93,6 +93,61 @@ being reclaimed says nothing about whether value semantics suit a user-defined t
 
 ---
 
+### N9 ran the experiment, 2026-09-23. Status: **SUPPORTED, not VERIFIED.**
+
+Records exist, and they are **nominal value types whose fields keep their own semantics**:
+an `Int` field copies, a `Str` field is a value with the same bytes, an `Ints` or `Chan`
+field is another reference to the same storage, and a nested record recurses. No lifetime
+syntax, no region, no borrow annotation, and no escape hatch. `docs/spec.md`, *Records*,
+is the model; `architecture.md` §7.10 is what it took to implement.
+
+**What the evidence is.** The invalidating result this item names — *a pattern in
+`compiler/*.nz` that cannot be expressed without exposing regions in the surface syntax* —
+did not appear. Records were implemented in both compilers, used across module boundaries,
+passed into tasks, returned from functions on both edges, nested, and copied in loops, and
+none of it needed a region, a lifetime or an annotation. 27 memory cases and 15 mutations
+hold the ownership half; `spec.md`'s cost table states what a copy costs so that the
+ergonomics are not bought with a hidden price.
+
+**And the compiler uses one.** `Place { line, column }` in `compiler/emit.nz`. That is
+deliberately one record rather than a migration, and the reason is itself the finding:
+
+* the structures this compiler is built from — the token columns, the node arena, the
+  function table, the record table N9 itself added — are **parallel arrays**, and each
+  wants a `Vec<Record>` before a rewrite would be honest. There is no container that can
+  hold a record, so a migration would have meant packing fields into strings, which is what
+  the arrays already avoid;
+* several of those arrays are passed **because they are shared mutable state** — the value
+  counter, the label counter, the ownership set, the block-liveness flags. A record is a
+  value, so it cannot replace them. That is not a defect in records; it is the value/handle
+  distinction doing exactly what `spec.md` says it does, and it means records and sequences
+  are complements rather than alternatives;
+* what was left is the case where the language genuinely could not say what the code meant:
+  a function returning two values. `line_of` and `column_of` existed as two functions for
+  that reason alone, one scanning forward and one backward. That is a small win, and it is
+  a *real* one, and one real win is worth more than a manufactured migration.
+
+**Why SUPPORTED and not VERIFIED.** The hypothesis is about ergonomics, and one record in
+one compiler plus a test suite is evidence, not proof. Three questions the experiment did
+not reach:
+
+* **no container has been asked the question.** `Vec<Record>` is where value semantics
+  usually start to hurt — element access, in-place mutation, and whether `xs[i].f = v` is
+  expressible without a place calculus the surface hides;
+* **no variant has been asked it.** A payload's ownership is a record's question, but a
+  payload that is *sometimes* there is not;
+* **copy elision is still folklore.** This item's original prerequisite called that the
+  sharp question and it remains unanswered: `let b = a;` on a record with many owning
+  fields costs one reference adjustment per field, `spec.md` says so, and nothing yet
+  promises when the compiler may elide the pair. `performance.md` measures the cost;
+  nobody has specified when it disappears.
+
+**Evidence needed next** · A generic container holding a record, and a statement of when
+redundant retain/release pairs may be elided. Either could still invalidate the surface
+model; neither has been tried.
+
+---
+
 ## R2 · Content-addressed semantic IR pays for itself
 
 **Hypothesis** · Normalising each top-level definition after type checking — names erased

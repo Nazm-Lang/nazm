@@ -38,7 +38,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 842 passed, 0 failed, 6 ignored, across 54 suites**, run through
+**Current suite: 1,038 passed, 0 failed, 6 ignored, across 56 suites**, run through
 `cargo xtask contained tests`. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -159,8 +159,11 @@ rather than exempted: 84 of its 224 functions are `pub`, 140 are private, and si
 `ModuleKey` is its normalised path relative to the compilation's source root, and a
 definition's `DefKey` is that key plus its kind and name
 (`crates/nazm-sema/src/key.rs`). `nazm interface FILE` writes a module's interface as
-`nazm.interface/1` — durable keys, canonical type names, no spans, no session ids
-(`crates/nazm-iface/`) — and `--hash` fingerprints it with BLAKE3. The session ids are
+`nazm.interface/2` — durable keys, canonical type names, exported **record definitions**
+closed over their field types, no spans, no session ids (`crates/nazm-iface/`) — and
+`--hash` fingerprints it with BLAKE3. It was `/1` until N9; a `/1` file describes a
+language with no records, so reading one as a `/2` would be believing a module offers less
+than it does, and both directions are refused rather than reinterpreted. The session ids are
 unchanged and were not renamed; both layers coexist.
 
 `crates/nazm-cli/tests/durable_identity.rs` establishes it across real boundaries: the same
@@ -235,22 +238,34 @@ exist.
 
 ### 3. Type system — PARTIAL
 
-**Evidence** · Six types, closed, `crates/nazm-sema/src/types.rs`: `Int`, `Bool`, `Str`,
-`Ints`, `Strs`, `Chan`. Local inference for `let`; parameters and returns always written.
-Completion analysis decides whether a block produces a value, which is what lets one `if`
-serve both statement and value position. Codes `N0300`–`N0314`. 114 behavioural tests in
-`crates/nazm-core/tests/language.rs`.
+**Evidence** · Six built-in types, `crates/nazm-sema/src/types.rs`: `Int`, `Bool`, `Str`,
+`Ints`, `Strs`, `Chan` — **and, since N9, user-defined records**. Local inference for
+`let`; parameters and returns always written. Completion analysis decides whether a block
+produces a value, which is what lets one `if` serve both statement and value position.
+Codes `N0300`–`N0314` and `N0330`–`N0338`. 114 behavioural tests in
+`crates/nazm-core/tests/language.rs`, 33 in `crates/nazm-core/tests/records.rs`.
 
-**Limitation** · No generics, no traits, no user-defined types, no pattern matching, no
-closures or function values, no unit type, no `Option`, no `Never`. Eight keywords are
-reserved and refused by name rather than silently absent
-(`crates/nazm-syntax/src/parser.rs`). This is law 12 working as intended, not an oversight
-— but it means the type system has never been asked the questions that make type systems
-hard.
+*N9, 2026-09-23.* `struct Point { x: Int, y: Int, }` — nominal value records with named
+fields, named construction, projection, field replacement through a projection path,
+nesting, and separate type and function namespaces. The type enum stopped being closed:
+`Type::Record(RecordId)` names a definition rather than a shape, because two records with
+identical fields are different types. Every property a record has — cleanup, task safety,
+copy, destroy — is **derived from its fields**, recursively, and that composition rather
+than the syntax is what the milestone was for. `docs/spec.md`, *Records*, is the law;
+`architecture.md` §7.10 is the implementation.
 
-**Next dependency** · Nothing forces the order. Records, tagged unions and generics were
-**bypassed rather than delivered** — the compiler was written with parallel `Ints`/`Strs`
-arrays instead. `docs/roadmap.md`, *What M2 bypassed*, records why that matters.
+**Limitation** · No variants or tagged unions, no pattern matching, no generics, no traits,
+no methods or `impl`, no closures or function values, no unit type, no `Option`, no
+`Never`, no derived equality on a record, no field-level visibility, no default field
+values, no record update syntax. Seven keywords remain reserved and refused by name rather
+than silently absent (`crates/nazm-syntax/src/parser.rs`); `struct` left that list in N9
+for the same reason `print` did in B3 — a reserved word earns its place by naming
+something absent. A record cannot be put in a sequence, because there is no container that
+can hold one.
+
+**Next dependency** · Variants, which need a payload shape and now have one. Then pattern
+matching, then generics — and a generic container is what would let a record be stored in
+a collection, which is also what would end the cycle argument area 4 rests on.
 
 **Accepted when** · Chosen by the milestone that needs it, not by completeness.
 
@@ -267,10 +282,15 @@ because what it said was true and the numbers in it are what the work was measur
 **Read the status carefully.** VERIFIED here means: **every heap-backed type the language
 currently has is reclaimed, in both compiler implementations and in the reference
 interpreter, and that is tested rather than asserted.** It does **not** mean whole-language
-leak freedom, and it says nothing about types that do not exist. Records, variants and
-generics are not covered by anything in this row, and the first recursive user-defined type
-invalidates the argument the claim rests on — `docs/spec.md`'s *Cycles* says so in advance
-and says what admitting one requires.
+leak freedom, and it says nothing about types that do not exist.
+
+*N9, 2026-09-23, extended the type universe and the claim with it.* Records are covered:
+a record owns exactly what its fields own, recursively, and copy, destroy, cleanup and
+task safety are all **derived** rather than declared. The cycle argument survives because
+`docs/spec.md`'s *Cycles* was satisfied the first way it offered — the type system refuses
+containment cycles (`N0336`), because a record holds its fields by value and a cycle has
+no finite layout. **Variants and generics are still not covered**, and a generic container
+able to hold a record is what would end the argument.
 
 **Evidence** · `docs/spec.md`'s *memory constitution* settles assignment, parameters,
 returns, aliasing, mutation, reclamation, cross-task transfer, cycles and cost visibility
@@ -284,6 +304,7 @@ dispatches on. No program that was legal before changed its meaning.
 | `Str` | a backing allocation, named by the value's third field; null for a literal or an `arg` | **VERIFIED** |
 | `Ints`, `Strs` | a reference-counted header; a `Strs` releases every element's backing first | **VERIFIED** |
 | `Chan` | a reference-counted header, with its ring, mutex and condition variable | **VERIFIED** |
+| a **record** | none of its own — an inline aggregate whose fields own what they own | **VERIFIED**, composed: one generated retain and release helper per record that owns anything, and none at all for one that does not |
 | a `spawn`'s argument block, a file path's terminated copy | runtime-internal | **VERIFIED** — freed since N8; each was one `malloc` per operation before |
 | a literal's constant, the process's `argv` | not this program's | **not reclaimed, correctly.** Nothing allocated them and nothing may free them |
 
@@ -295,7 +316,7 @@ because both do cross. Cleanup is on the three exit edges of a generated functio
 tail, each `return`, and the shared unwind block a failure takes — with parameter slots
 excluded, which *is* rule 2.
 
-**Tested.** 41 cases in `crates/nazm-cli/tests/memory.rs`, each run twice and each requiring
+**Tested.** 68 cases in `crates/nazm-cli/tests/memory.rs`, each run twice and each requiring
 the interpreter and the compiled program to agree on the value **and** on what they
 allocated and reclaimed, by class: slices outliving their buffers, slices of slices, empty
 strings, borrowed strings returned on both edges, strings stored in and read out of
@@ -304,20 +325,43 @@ embedded NUL bytes, a process argument, the failure path, channel scaling, a ret
 channel, blocked senders and receivers woken by a close, a task that fails while holding a
 channel, and a string and a channel crossing into two tasks at once.
 
-One of those was written because a mutation survived. Removing `strs_get`'s own reference
-broke nothing the suite could see, because `let s = strs_get(xs, 0);` retains what it
-stores whether or not the built-in already did — every shape tested had a binding standing
-in for the missing reference. The shape that has none is a sequence with no binding, where
-the temporary is released before the binding's retain can run.
+*The 27 record cases added by N9* cover: a scalar record allocating nothing, a heap-string
+field, a sliced-string field, `Ints` and `Strs` and `Chan` fields, a nested owning record,
+a copy taking one reference per owning field, whole-record replacement including
+self-assignment, field replacement including one backed by the same allocation, tail and
+explicit return, a projection out of a temporary, a failed constructor at one and two
+levels, a failing replacement expression, a task-safe record crossing into two siblings, a
+record built in one branch of an `if`, four hundred short-lived records against a constant
+live set, and three cases where a failure leaves while a temporary is still in hand.
 
-**Measured.** 5,000 / 20,000 / 80,000 temporary heap strings against a constant live set:
+**Two of those were written because a mutation survived**, and the pair is the lesson.
+Removing `strs_get`'s own reference broke nothing the suite could see, because a binding
+retains what it stores whether or not the built-in already did — the shape that finds it is
+a sequence with **no** binding. And releasing a replaced field before taking the new value
+broke nothing the *counters* could see, because both orders end with the same two numbers —
+the shape that finds it is `h.name = h.name` followed by enough small allocations that the
+block the wrong order freed is handed back out, after which the program stops with a
+signal. A compensating mechanism makes a defect invisible without making it absent, and
+the compensation is sometimes the allocator.
+
+**Measured, N9.** 80,000 short-lived two-string records against a constant live set:
+**1.72 MiB**, against 1.73 MiB for the same two strings without a record, and 1.69 MiB for
+an empty program. The N8 controls are unmoved — 80,000 temporary strings 1.77 MiB, 80,000
+short-lived sequences 1.78 MiB, 2,000 short-lived channels 1.75 MiB. In time, at `-O2`, a
+record is **not measurable**: three million two-field constructions and reads take 34 ms
+against 34 ms for the same two integers through bindings, and a million record copies with
+an owning field take 54 ms against 55 ms for copying that field directly. `performance.md`
+carries the `-O0` figures, where the helpers are real calls, and the executable-size delta
+(**+96 bytes** for a record that owns something, zero for one that does not).
+
+**Measured, N8.** 5,000 / 20,000 / 80,000 temporary heap strings against a constant live set:
 1.88 / 2.33 / 4.17 MiB → **1.73 / 1.77 / 1.77 MiB**. The accumulator shape from the
 2026-09-21 incident, at 8,000 iterations: 70.66 MiB → **2.23 MiB**. 2,000 short-lived
 channels: 2.38 MiB → **1.80 MiB**. Sequences, a genuinely live 2,000,000-element sequence
 and a sieve are unchanged, which is the control. `performance.md` has the runtime cost:
 about 13–16 ns per string operation, and nothing measurable anywhere else.
 
-**Self-hosted parity — VERIFIED.** `compiler/emit.nz` emits the same model. Its runtime
+**Self-hosted parity — VERIFIED**, records included. `compiler/emit.nz` emits the same model. Its runtime
 text is **derived** from `crates/nazm-lir/src/emit.rs` rather than transcribed, and
 `cargo xtask check`'s `runtime parity` gate re-derives it and refuses a difference; its
 *decisions* are held by `the_nazm_written_compiler_emits_the_same_memory_semantics`, which
@@ -325,8 +369,8 @@ builds eight programs with both compilers and requires the same reclamation repo
 each. Between N7 and N8 the two disagreed for a whole milestone and every behavioural test
 passed throughout, which is what the gate exists to prevent.
 
-**Not claimed.** Whole-language leak freedom as a permanent property; anything about future
-types; deadlock freedom; user-visible destruction, RAII or any ordering a program can
+**Not claimed.** Whole-language leak freedom as a permanent property; anything about
+variants, generics, or a container able to hold a record; deadlock freedom; user-visible destruction, RAII or any ordering a program can
 observe; a clean sanitizer run. `exit_with` reclaims nothing and reports nothing, which is
 correct and is tested so nobody later treats it as a bug.
 
@@ -337,12 +381,16 @@ are false now, and the second was still true between N7 and N8. **Whole-language
 freedom is still NOT VERIFIED and is still not claimed** — the sentence above about types
 that do not exist is the reason, and it is not a formality.
 
-**Next dependency** · A `Str` representation that records its provenance, on the type that
-is copied in every hot loop.
+**Next dependency** · A variant type, and after it a generic container. Either can hold a
+record, and a container that can hold a record is what makes a cycle expressible again —
+at which point `docs/spec.md`'s *Cycles* has to be satisfied a second time, and refusing
+inline containment will no longer be enough.
 
 **Accepted when** · A compiled program's peak RSS is bounded by live data rather than by
-total allocation, demonstrated on the self-hosting compiler compiling itself. Not met: that
-workload fell from 46.81 MiB to 42.59 MiB, and the remainder is `Str`.
+total allocation, demonstrated on the self-hosting compiler compiling itself. **Met since
+N8**, and unmoved by N9: contained on Linux aarch64, the compiler written in Nazm compiling
+`compiler/emit.nz` peaks at 32.75 MiB against a 3,756-line input, and 80,000 short-lived
+records with heap fields peak at the empty-program floor.
 
 ### 5. Effects — MISSING
 
@@ -899,8 +947,9 @@ per case, both opt levels. `crates/nazm-cli/tests/concurrent.rs` — the same fo
 concurrency. `crates/nazm-cli/src/test.rs` — `nazm test` runs every case interpreted and
 native and requires agreement. `crates/nazm-cli/tests/selfhost.rs` — the Nazm-written
 lexer, parser and checker against the Rust ones, token-for-token and span-for-span, over
-every `.nz` in the tree including their own sources. `compiler/bootstrap.sh` — five
-conformance cases under C2, C3 and the interpreter.
+every `.nz` in the tree including their own sources, and eleven programs built by **both**
+compilers and required to report the same reclamation. `compiler/bootstrap.sh` — six
+conformance cases, six multi-module ones, under C2, C3 and the interpreter.
 
 **Limitation** · The interpreter is the oracle, so a shared specification error is
 invisible to all five. `docs/spec.md` names what must be settled before
@@ -912,7 +961,7 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **94** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **109** catalogued defects;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -932,6 +981,23 @@ four more against the **self-hosted** path — the `pub` bit ignored, resolution
 module, the first ambiguous import winning, and any `main` accepted as the entry point —
 and all four were caught by the parity suite. Both are targeted runs, not catalogue runs;
 the row below still stands.*
+
+*N9 added fifteen on 2026-09-23 and ran all fifteen contained and serial, in four
+batches.* Each attacks the composition rather than the syntax: a copy that forgets a field,
+a drop that omits one, a drop that does not recurse, a replacement that releases before it
+takes, a projection out of a temporary that does not preserve ownership, a construction
+that fails and leaks what it built, a task-safety derivation that stops at the first level,
+an interface that omits its records, a published field that loses its type, a published
+record named by its spelling, a layout that follows the declaration, a field read from the
+wrong position, a recursive record accepted, a private type leaked through a public
+signature, and the **self-hosted** emitter forgetting a record field. All fifteen are
+caught; two runs were needed, because one survived and one did not compile.
+
+The survivor is the interesting one and it is written up in `architecture.md` §7.10: a
+replacement that releases before it takes is invisible to the reclamation counters, because
+both orders end with the same two numbers. The one that did not compile is a different
+verdict and was reported as one rather than folded into a pass — which is what the
+seven-verdict distinction exists for.
 
 **Limitation** · The **whole-catalogue run timed out unexplained** at its 3600 s deadline
 without reaching injection, and is recorded as incomplete rather than as a result; the
