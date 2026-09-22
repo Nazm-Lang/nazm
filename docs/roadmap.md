@@ -198,32 +198,68 @@ which `performance.md` measures rather than hides.
 | A key independent of which file was named | a declared source root ✓ | done — N4 |
 | Semantic check reuse | that, plus a key covering every checking input ✓ | done — N4 |
 | Separate *code generation* | units ✓ + a linking model ✓ | done — N5 |
-| Native artefact reuse | separate code generation ✓ + a `CodegenKey` | `CheckKey` carries no target and reaches a body only through a source fingerprint; an object keyed on one would be handed back for a different machine |
+| Native artefact reuse | separate code generation ✓ + a key over the backend's input ✓ | done — N6 |
 | Content-addressed compilation | reuse ✓ + a normalised form of a definition | nothing normalises or hashes a definition — `research-register.md` R2 |
 | A language server | units ✓ + durable identity ✓ + reuse ✓ + a lossless CST | it would re-implement the semantic engine otherwise |
 | Ownership / the surface memory model | — | the largest open design question; `research-register.md` R1 |
 | Effects | a typed core IR | and *"is divergence an effect?"* is unanswered — `spec.md` *Open* |
 | Capabilities, information flow | effects | `architecture.md` §5 keeps the three separate |
 
-### N6 — Native artefact reuse
+### N6 — Content-addressed native object reuse · **complete, 2026-09-22**
 
-**The next milestone, and not started.** N5 produced the artefact a cache could key and
-deliberately did not key it. What N6 needs:
+An emitted LLVM unit whose object was compiled before is not compiled again.
+`architecture.md` §7.6 owns the design; this is what shipped and in what order.
 
-* a **`CodegenKey`** per unit: the emitter's identity (separate from the checker's
-  `SEMANTIC_EPOCH` — lowering rules change independently of checking rules), the target
-  triple, CPU features, the backend and its version, the optimisation level, the ABI, the
-  runtime artefact's identity, the module's own source, and **each called dependency's
-  symbol and signature** — which N5 measured and which is narrower than N4 assumed;
-* a store for objects, with the same discipline N4's has: content-addressed, validated on
-  read, atomic to publish, and never authority;
-* a rule for the **runtime artefact**, whose content is the union of what the modules
-  reached and is therefore a whole-program fact rather than a per-module one;
-* and an answer for the one thing that does depend on bodies: the recursion refusal is
-  whole-program, so it must re-run whenever any body changes even when no object does.
+| | |
+| --- | --- |
+| **preflight** | A generated artefact names a module by its durable identity. Two strings used to carry the path the command line spelled — the `source_filename` and every runtime failure's location — so one project built from two directories was two programs. Without this there is no reuse between checkouts and no honest failure message |
+| **N6A** | `ObjectKey` over three things and nothing else: a digest of the exact bytes handed to the object compiler, that compiler's identity, and the configuration it resolves. A store beside the semantic one under a shared `.nazm/` root, one file per entry, validated six ways before it is believed |
+| **N6B–D** | One `clang -###` per build reads what the driver says it will actually run, so the triple, the CPU features, the relocation model and the ABI are in the key without anyone enumerating them. The invocation is hermetic: an environment built from nothing plus ten named variables. Module, runtime and entry units all go through one key and one store. `--no-cache`, `--build-report`, `nazm.build-report/1` |
+| **N6E** | An `object cache` gate, proved by breaking each of its rules; six mutations, three of which attack the key and three the validation; forty end-to-end and store-level cases |
+| **N6F** | Measurement, and the authorities |
 
-The measured prize is specific rather than hoped for: an unchanged module's `clang -c`
-costs 80–190 ms and would not run at all.
+**What the key is, and what it is not.** Not a second dependency graph — not the module's
+source, not each dependency's exported signatures, not an emitter epoch. Every one of those
+is an approximation of what `clang -c` reads, and every approximation leaves something out.
+The emitted IR **is** the input, so N5's measured precision falls out rather than being
+encoded: a dependency's body change and an export the caller never calls each leave the
+caller's object alone, and a called signature change does not, because it is written into
+the caller's own `declare`.
+
+**What a warm store cannot do.** Bypass anything. A key is a digest of an artefact, so the
+artefact must exist before the key does, so the reading, parsing, checking, backend
+admissibility, lowering and emission have all already happened — including the whole-program
+recursion refusal, which a fully warm store never reaches.
+
+**Measured.** On the five-module compiler: `-O0` 665.4 ms with `--no-cache`, 730.7 ms cold,
+**157.6 ms** warm; `-O2` 1693.0 ms, 1755.4 ms, **157.6 ms**. A one-module edit costs
+198–218 ms whether it is a private body, a called export's body or an export nobody calls —
+the three are indistinguishable, which is the whole point. A warm build runs two external
+processes where a cache-disabled one runs eight.
+
+**What N6 is not.** Incremental native compilation. Lowering and emission run every time and
+so does the link; there is no executable cache, no `LinkKey`, no incremental linker, no
+persistent LIR, no LTO. Nothing is evicted, so the store grows until it is deleted.
+
+### N7 — the next milestone, and not started
+
+Two candidates, and the ordering between them is the first decision.
+
+**The remaining per-build processes.** A warm build's cost is now two external processes: a
+`clang -###` probe at about 60 ms and the link at about 89 ms. The probe is a fact about a
+toolchain rather than about a program, so it is memoisable — and doing so means a second
+cache whose invalidation question is exactly the one the backend identity already struggles
+with, which is why it was not done here. The link is the larger number and reusing it needs a
+`LinkKey`: the linker, its version, its options, and the identity of every object in order.
+That is executable reuse, and it is a different soundness argument from this one.
+
+**Or the front end.** `nazm build` cannot reuse a semantic check at all, because lowering
+reads the resolution that checking a body produces and nothing persists one. Persisting it
+means designing a written form for name resolution — which is `research-register.md` R2's
+neighbourhood and a larger piece of work than either cache above.
+
+Neither is urgent. A 158 ms warm build of the whole self-hosted compiler is not the
+bottleneck in this project.
 
 ---
 

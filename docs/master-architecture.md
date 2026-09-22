@@ -206,9 +206,15 @@ Two consequences worth naming, because both are dependencies rather than complai
 > it, with a `cargo xtask check` rule failing if the backend declares a name-keyed table.
 > N1 also gave `nazm_span::Span` a `FileId` and replaced the merged buffer with a
 > `SourceMap`. N2 added a compilation unit and per-unit checking, N3 durable identity and a
-> persisted interface, and **N4 incremental semantic checking** — so of the four things the
-> second bullet called blocked, three now exist and the fourth, a language server, is
-> blocked on a lossless CST rather than on identity.
+> persisted interface, **N4 incremental semantic checking**, **N5 separate code generation
+> and linking**, and **N6 native object reuse** — so of the four things the second bullet
+> called blocked, three now exist and the fourth, a language server, is blocked on a
+> lossless CST rather than on identity.
+>
+> "Incremental compilation" in that list is worth reading narrowly: a module's semantic
+> check may be skipped, and a unit's `clang -c` may be skipped. Lowering, emission and the
+> link run on every build. `capability-matrix.md` areas 2a and 10b state exactly what each
+> covers.
 >
 > The paragraph below still holds, and the level it pointed at was built: the
 > responsibility it named was owned twice, and now is not.
