@@ -41,10 +41,11 @@ bootstrap complete: C2 and C3 are byte-identical, 5 conformance cases agree
 ```
 
 `compiler/*.nz` is a compiler for Nazm **written in Nazm** — lexer, parser, checker and
-LLVM emission. The bootstrap source is five files and **4,647 lines**; `compiler/*.nz` is
-4,839 across eight, the difference being three thin command-line drivers that exist only
-because the language has no visibility yet. Every component is differentially verified
-against the Rust implementation rather than merely run. It compiles itself to a fixpoint;
+LLVM emission. The bootstrap source is five files and **4,662 lines**; `compiler/*.nz` is
+4,857 across eight, the difference being three thin command-line drivers, one per stage.
+Since 2026-09-22 it states its own module boundaries: 80 of its 154 functions are `pub`
+and 74 are private. Every component is differentially verified against the Rust
+implementation rather than merely run. It compiles itself to a fixpoint;
 [`docs/bootstrap.md`](docs/bootstrap.md) says what that does and does not establish,
 and the answer is narrower than it sounds.
 

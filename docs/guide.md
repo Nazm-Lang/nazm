@@ -25,9 +25,9 @@ running anything, and `nazm test` runs a directory of programs against recorded 
 
 ## The shape of the language, in six sentences
 
-- **A file is a module.** `use "other.nz";` loads another file relative to this one;
-  every top-level function in it becomes visible, because there is no visibility control
-  yet.
+- **A file is a module.** `use "other.nz";` makes the definitions that file marked `pub`
+  nameable here. Everything else in it stays private to it, and what *it* imports does not
+  come with it.
 - **`fn main() -> Int` is the entry point**, and every function writes its parameter and
   return types — there is no inference across a function boundary.
 - **Bindings are immutable** unless written `let mut`, and a parameter is never mutable.

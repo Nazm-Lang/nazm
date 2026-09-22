@@ -82,27 +82,69 @@ pass-through the ordering rule exists to prevent.
 — no ownership, effects, capabilities, generics, visibility, separate or incremental
 compilation, and no content-addressed identity. Every id it produces is session-local.
 
-### N2 — What a compilation unit is
+### N2 — Compilation units, visibility and module interfaces · **complete, 2026-09-22**
 
-**The next dependency, and not started.** Every file is now parsed separately and still
-**checked together** into one `Program`. Until there is a unit that can be checked on its
-own, separate compilation, incremental compilation and a language server all remain out of
-reach, and a definition has no identity that survives a process.
+**Done, in two commits** (`ae77034` the semantics, `871f09e` the implementation), after a
+separate correction (`72019e2`) that removed a lossy `Serialize` from `Span`.
 
-The decisions, all open in `spec.md` under *Source identity and definition identity*: what
-a compilation unit is; what a definition's stable identity is and what changes it; and
-whether built-ins are definitions. **Visibility is entangled with all three** — while every
-top-level function is visible to every importer, "which unit owns this name" has no answer
-— and `spec.md` already records private-by-default as a known future break. That break
-should be settled deliberately rather than discovered while building units.
+| | |
+| --- | --- |
+| **N2A** | `spec.md` settles it: one module is one file; top-level definitions are private and `pub` exports; `use` makes a module's *exported interface* nameable, unqualified; imports are **not transitive**; every collision is a diagnostic naming both sides; cycles stay legal; the root module owns `main`. Grammar gains `[ visibility ]`, one bit, one spelling |
+| **N2B** | `ModuleId` and a `ModuleGraph` the driver builds while loading — a graph, not an ordered bag of files. `nazm-sema` is created, and earns it: `nazm-syntax`'s lexer, parser, formatter and AST referred to `types`, `intrinsic` and `resolve` exactly zero times |
+| **N2C/D/E** | `declare_unit` reads one module's declarations and returns its `UnitInterface`; `check_unit` checks its bodies against its own definitions and its dependencies' **interfaces**. `check` is a loop over the two and holds no resolution of its own |
+| **N2F** | Deleted: the checker's program-wide name table, the evaluator's `HashMap<String, usize>` and its private copy of the built-in-first rule, and the backend's last two name lookups. 80 of the self-hosted compiler's 154 functions became `pub`; 74 stayed private |
 
-### After N1, in dependency order
+**The acceptance test was met.** `crates/nazm-core/tests/unit_checking.rs` checks a module
+against an interface for a module whose **source does not exist** — no tree, no body,
+nothing to parse — and refuses the same module when that interface is empty. A dependency's
+bodies are not a parameter of `check_unit` and are not reachable from one.
+
+**What N2 deliberately did not do:** nothing is separately *compiled*. Lowering still takes
+the whole program and emits one LLVM module; there are no per-module artefacts, no cached
+interfaces and no linker symbols. Every id remains session-local. No packages, no
+re-export, no aliasing, no qualified paths, no HIR.
+
+### N3 — Durable definition identity, and an interface that can be written down
+
+**The next dependency, and not started.** The acceptance condition N2 wrote for itself is:
+*a unit's interface can be written, read back in a later process, and a dependent checked
+against it without the dependency's source.* Exactly one thing blocks it. `Export::def` is
+an `FnId`, `FnDef::module` is a `ModuleId`, and a `Span` is a `FileId` and a range — all
+three are **indices into one compilation in one process**. An interface written to disk
+today would be a file of numbers that mean nothing to the run that reads it.
+
+So the question is `research-register.md` R2's: *what identifies a definition, such that
+two builds agree?* N2 narrowed it usefully — a definition now has an owner, and a name is
+unique within its module, so `(module, name)` identifies one **within a compilation**. What
+a module is identified by, across compilations, is the part that does not exist.
+
+The preflight that opened N2 is the shape of the answer's constraint: a semantic value is
+not serialisable by derive, and writing one down is an explicit act that chooses a
+representation. An interface format is that act, performed deliberately, for the first
+time.
+
+**What is not next, and why.** Incremental compilation is not a milestone, it is what
+durable identity plus interfaces would make possible. A language server needs both of those
+*and* a lossless CST. Ownership and effects remain the largest open design questions and do
+not become next by being important.
+
+**One divergence N2 opened, tracked here.** The self-hosted compiler parses `pub` and does
+not enforce it: `compiler/lex.nz` tokenises the keyword and `compiler/parse.nz` accepts it,
+but the Nazm-written compiler still resolves names across the whole program. It therefore
+accepts programs the reference front end refuses. The chain is unaffected — it compiles
+sources that are valid under the stricter rule — but the two implementations no longer
+accept the same language, and `bootstrap.md` says so. Closing it is a milestone of its own
+and is not claimed.
+
+### After N2, in dependency order
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| Separate compilation units | N1 ✓ | a span now knows its file; N2 decides what a unit *is* |
-| Incremental / content-addressed compilation | units | nothing of definition granularity to hash — `research-register.md` R2 |
-| A language server | units + a lossless CST | it would re-implement the semantic engine otherwise |
+| A persistable unit interface | durable identity | a file of session-local indices is not an interface |
+| Incremental / content-addressed compilation | persistable interfaces | nothing to compare between builds — `research-register.md` R2 |
+| Separate *code generation* | units ✓ + a linking model | checking is per unit; emission is still whole-program |
+| A language server | units ✓ + durable identity + a lossless CST | it would re-implement the semantic engine otherwise |
+| Visibility in the self-hosted compiler | — | the two implementations accept different languages until then |
 | Ownership / the surface memory model | — | the largest open design question; `research-register.md` R1 |
 | Effects | a typed core IR | and *"is divergence an effect?"* is unanswered — `spec.md` *Open* |
 | Capabilities, information flow | effects | `architecture.md` §5 keeps the three separate |
