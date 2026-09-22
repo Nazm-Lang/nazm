@@ -27,6 +27,7 @@ members = [
     "crates/nazm-syntax",
     "crates/nazm-sema",
     "crates/nazm-iface",
+    "crates/nazm-cache",
     "crates/nazm-core",
     "crates/nazm-lir",
     "crates/nazm-cli",
@@ -70,6 +71,7 @@ nazm-diag = { path = "crates/nazm-diag" }
 nazm-syntax = { path = "crates/nazm-syntax" }
 nazm-sema = { path = "crates/nazm-sema" }
 nazm-iface = { path = "crates/nazm-iface" }
+nazm-cache = { path = "crates/nazm-cache" }
 nazm-core = { path = "crates/nazm-core" }
 nazm-lir = { path = "crates/nazm-lir" }
 nazm-bench = { path = "crates/nazm-bench" }
