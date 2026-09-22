@@ -360,6 +360,7 @@ name = "nazm-core"
 version = "0.0.1"
 dependencies = [
  "nazm-diag",
+ "nazm-sema",
  "nazm-span",
  "nazm-syntax",
 ]
@@ -378,8 +379,16 @@ name = "nazm-lir"
 version = "0.0.1"
 dependencies = [
  "nazm-diag",
+ "nazm-sema",
  "nazm-span",
  "nazm-syntax",
+]
+
+[[package]]
+name = "nazm-sema"
+version = "0.0.1"
+dependencies = [
+ "nazm-span",
 ]
 
 [[package]]

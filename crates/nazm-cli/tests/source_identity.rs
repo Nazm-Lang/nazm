@@ -108,9 +108,12 @@ fn a_diamond_import_yields_one_file_not_two() {
             "main.nz",
             "use \"left.nz\";\nuse \"right.nz\";\nfn main() -> Int { l() + r() }\n",
         ),
-        ("left.nz", "use \"shared.nz\";\nfn l() -> Int { s() }\n"),
-        ("right.nz", "use \"shared.nz\";\nfn r() -> Int { s() }\n"),
-        ("shared.nz", "fn s() -> Int { 21 }\n"),
+        ("left.nz", "use \"shared.nz\";\npub fn l() -> Int { s() }\n"),
+        (
+            "right.nz",
+            "use \"shared.nz\";\npub fn r() -> Int { s() }\n",
+        ),
+        ("shared.nz", "pub fn s() -> Int { 21 }\n"),
     ]);
     let (stdout, stderr, code) = nazm(&["run", "main.nz"], dir.path());
     assert_eq!(code, 0, "{stderr}");
@@ -129,7 +132,7 @@ fn a_fix_addresses_a_byte_range_in_the_file_it_belongs_to() {
         ),
         (
             "helper.nz",
-            "fn bump() -> Int {\n    let n = 1;\n    n = 2;\n    n\n}\n",
+            "pub fn bump() -> Int {\n    let n = 1;\n    n = 2;\n    n\n}\n",
         ),
     ]);
     let (stdout, stderr, code) = nazm(&["fix", "--json", "main.nz"], dir.path());
@@ -159,7 +162,7 @@ fn applying_that_fix_edits_the_imported_file_and_leaves_the_root_alone() {
         ),
         (
             "helper.nz",
-            "fn bump() -> Int {\n    let n = 1;\n    n = 2;\n    n\n}\n",
+            "pub fn bump() -> Int {\n    let n = 1;\n    n = 2;\n    n\n}\n",
         ),
     ]);
     let root_before = std::fs::read_to_string(dir.path().join("main.nz")).expect("read");

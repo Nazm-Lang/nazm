@@ -1191,7 +1191,10 @@ fn a_function_with_no_body_is_never_run_as_an_empty_one() {
         "and the body should be absent, not empty"
     );
 
-    match nazm_core::eval::Interpreter::new(&program).run_main() {
+    // A resolution for a program whose body did not parse: checking still declares the
+    // signature, which is what makes the call resolve to a function with nothing to run.
+    let (resolution, _) = nazm_core::check(&program, &nazm_core::sema::ModuleGraph::single());
+    match nazm_core::eval::Interpreter::new(&program, &resolution).run_main() {
         Err(e) => assert_eq!(e.diagnostic.code, codes::UNSUPPORTED_CONSTRUCT),
         Ok(v) => panic!("a function with no body must not run, got {v}"),
     }

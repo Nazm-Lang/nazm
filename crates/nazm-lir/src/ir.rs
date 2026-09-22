@@ -125,19 +125,19 @@ impl Ty {
 pub struct FuncId(pub usize);
 
 impl Ty {
-    /// The backend's representation of a front-end [`Type`](nazm_syntax::Type).
+    /// The backend's representation of a front-end [`Type`](nazm_sema::Type).
     ///
     /// One-to-one today, and written as a total match rather than a default arm so that
     /// adding a type to the language is a compile error here instead of a silent `Int`.
     #[must_use]
-    pub const fn of(t: nazm_syntax::Type) -> Self {
+    pub const fn of(t: nazm_sema::Type) -> Self {
         match t {
-            nazm_syntax::Type::Int => Self::Int,
-            nazm_syntax::Type::Bool => Self::Bool,
-            nazm_syntax::Type::Str => Self::Str,
-            nazm_syntax::Type::Ints => Self::Ints,
-            nazm_syntax::Type::Strs => Self::Strs,
-            nazm_syntax::Type::Chan => Self::Chan,
+            nazm_sema::Type::Int => Self::Int,
+            nazm_sema::Type::Bool => Self::Bool,
+            nazm_sema::Type::Str => Self::Str,
+            nazm_sema::Type::Ints => Self::Ints,
+            nazm_sema::Type::Strs => Self::Strs,
+            nazm_sema::Type::Chan => Self::Chan,
         }
     }
 }
@@ -431,9 +431,9 @@ pub fn fits(e: &Expr, want: Ty) -> bool {
 /// inventory; a built-in added to one and forgotten in the other was a test failure
 /// rather than a compile error, and only because someone had written that test.
 ///
-/// Identity, name and signature are `nazm_syntax::Intrinsic`'s. What stays here is how a
+/// Identity, name and signature are `nazm_sema::Intrinsic`'s. What stays here is how a
 /// built-in is *emitted*, which is genuinely backend-specific — see [`Lowering`].
-pub use nazm_syntax::Intrinsic as Builtin;
+pub use nazm_sema::Intrinsic as Builtin;
 
 /// What lowering needs to know about a built-in, over and above its identity.
 ///
@@ -442,7 +442,7 @@ pub use nazm_syntax::Intrinsic as Builtin;
 /// its name, its identity, its signature in language types — and the backend owns what it
 /// *becomes*.**
 ///
-/// The names differ from [`Intrinsic`](nazm_syntax::Intrinsic)'s deliberately.
+/// The names differ from [`Intrinsic`](nazm_sema::Intrinsic)'s deliberately.
 /// `Intrinsic::params` answers in `Type` and `lowered_params` answers in [`Ty`]; had both
 /// been called `params`, Rust would have silently preferred the inherent one and the
 /// mismatch would have surfaced as a type error somewhere else entirely.
@@ -462,14 +462,14 @@ pub trait Lowering {
 
 impl Lowering for Builtin {
     fn sequence(self) -> Option<Ty> {
-        use nazm_syntax::Type;
+        use nazm_sema::Type;
         // Derived from the front end's own signature rather than listed again: a sequence
         // operation is one whose first parameter is a sequence, and for `ints_new` and
         // `strs_new` — which take nothing — the return type is the only evidence.
-        match nazm_syntax::Intrinsic::params(self).first() {
+        match nazm_sema::Intrinsic::params(self).first() {
             Some(Type::Ints) => Some(Ty::Ints),
             Some(Type::Strs) => Some(Ty::Strs),
-            _ => match nazm_syntax::Intrinsic::ret(self) {
+            _ => match nazm_sema::Intrinsic::ret(self) {
                 Type::Ints => Some(Ty::Ints),
                 Type::Strs => Some(Ty::Strs),
                 _ => None,
@@ -478,14 +478,14 @@ impl Lowering for Builtin {
     }
 
     fn lowered_params(self) -> Vec<Ty> {
-        nazm_syntax::Intrinsic::params(self)
+        nazm_sema::Intrinsic::params(self)
             .iter()
             .map(|t| Ty::of(*t))
             .collect()
     }
 
     fn lowered_ret(self) -> Ty {
-        Ty::of(nazm_syntax::Intrinsic::ret(self))
+        Ty::of(nazm_sema::Intrinsic::ret(self))
     }
 }
 

@@ -133,7 +133,7 @@ fn imports_of(src: Str, dir: Str) -> Strs {
 ///
 /// Files are separated by a newline so that a file not ending in one cannot weld its last
 /// line to the next file's first.
-fn load_program(root: Str) -> Str {
+pub fn load_program(root: Str) -> Str {
     let seen = strs_new();
     let parts = strs_new();
     let stack = strs_new();

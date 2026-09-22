@@ -30,6 +30,8 @@
 
 use "analyse.nz";
 use "module.nz";
+use "lex.nz";
+use "parse.nz";
 
 // --- output assembly -------------------------------------------------------------
 

@@ -22,6 +22,13 @@ fn main() -> ExitCode {
         Some("check-emission") => report(&[("emission reach", check_emission_reach())]),
         Some("check-unsafe") => report(&[("unsafe policy", check_unsafe_policy())]),
         Some("check-docs") => report(&[("doc claims", check_doc_claims())]),
+        // Listed in the help since N1 and never dispatched, so `cargo xtask check-matrix`
+        // printed "unknown task" and exited **zero**. `cargo xtask check` ran them, which
+        // is why nobody noticed; a gate that cannot be run on its own is a gate nobody
+        // debugs.
+        Some("check-matrix") => report(&[("capability matrix", check_capability_matrix())]),
+        Some("check-resolver") => report(&[("one resolver", check_single_resolver())]),
+        Some("check-span") => report(&[("span identity", check_span_identity())]),
         Some("check-guide") => report(&[("guide from grammar", guide::check())]),
         Some("bench") => {
             let rest: Vec<String> = args.collect();
@@ -117,6 +124,7 @@ fn help() {
            check-docs      documented claims that must stay true\n  \
            check-matrix    every VERIFIED row in the capability matrix cites a real path\n  \
            check-resolver  the backend reads name resolution, it does not redo it\n  \
+           check-span      a span cannot be serialised without its file\n  \
            check-guide     docs/guide.md is what docs/grammar.ebnf produces\n  \
            guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
            bench           measure; --save records a baseline, --check compares to one,\n  \
@@ -642,13 +650,15 @@ fn check_single_resolver() -> Result<(), Vec<String>> {
             if flat.contains("HashMap<String,") || flat.contains("HashSet<String>") {
                 problems.push(format!(
                     "crates/nazm-lir/src/{name}:{} declares a name-keyed table. The backend \
-                     reads `nazm_syntax::Resolution`; resolving names here is what N1 \
+                     reads `nazm_sema::Resolution`; resolving names here is what N1 \
                      removed, and two resolvers agree only until they do not.",
                     n + 1
                 ));
             }
         }
     }
+
+    problems.extend(cross_module_readers(&root));
 
     if problems.is_empty() {
         Ok(())
@@ -657,6 +667,98 @@ fn check_single_resolver() -> Result<(), Vec<String>> {
     }
 }
 
+/// Everywhere that can see **every** module's definitions at once.
+///
+/// N2 made resolution depend on who is asking: a name means what the asking module's
+/// environment says, and an environment holds that module's own definitions plus the
+/// exports of what it directly imports. `Resolution::defined_anywhere` is the one method
+/// that ignores that and looks at the whole compilation. It exists for a single
+/// diagnostic — telling a reader that a name is private rather than absent — and it runs
+/// only after resolution has already failed.
+///
+/// One caller. A second one is how a global namespace comes back: not by anyone
+/// reintroducing the old map, but by a convenience that answers "where is `parse`
+/// defined" without asking whose `parse`.
+fn cross_module_readers(root: &std::path::Path) -> Vec<String> {
+    const METHOD: &str = "defined_anywhere";
+    // Where the method is declared, and the one place it may be called.
+    const DECLARED_IN: &str = "crates/nazm-sema/src/resolve.rs";
+    const CALLER: &str = "crates/nazm-core/src/check.rs";
+
+    let mut found = Vec::new();
+    let mut problems = Vec::new();
+    for rel in source_files(root) {
+        if rel == DECLARED_IN {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(root.join(&rel)) else {
+            continue;
+        };
+        for (n, line) in text.lines().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            if line.contains(METHOD) {
+                found.push((rel.clone(), n + 1));
+            }
+        }
+    }
+
+    for (file, line) in &found {
+        if file != CALLER {
+            problems.push(format!(
+                "{file}:{line} calls `{METHOD}`, which sees every module's definitions. \
+                 Only {CALLER} may, and only to explain a resolution that already failed. \
+                 Resolving a name from it would be the global namespace N2 removed."
+            ));
+        }
+    }
+    if found.len() > 1 {
+        problems.push(format!(
+            "`{METHOD}` has {} call sites. It is allowed one, in {CALLER}: {}",
+            found.len(),
+            found
+                .iter()
+                .map(|(f, l)| format!("{f}:{l}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    problems
+}
+
+/// Every `.rs` file under `crates/`, as a repository-relative path.
+///
+/// `xtask/` is not scanned, and does not need to be: `rules.rs` gives it no internal
+/// dependencies at all, so nothing in it can reach the compiler's types. This file names
+/// the method it is checking for, which would otherwise be its own first finding.
+fn source_files(root: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.join("crates")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n == "target") {
+                    continue;
+                }
+                stack.push(path);
+            } else if path.extension().is_some_and(|x| x == "rs") {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A [`Span`](nazm_span::Span) may not be serialisable
 /// A [`Span`](nazm_span::Span) may not be serialisable, because a serialisable one was
 /// lossy and nothing about that was visible at the call site.
 ///
@@ -1021,11 +1123,23 @@ fn run_contained(args: &[String]) -> ExitCode {
             "selfhost",
             shell("cargo test --locked -p nazm-cli --test selfhost --jobs 1 -- --test-threads 1"),
         ),
+        // The reference front end is **built here**, not taken from the image.
+        //
+        // `compiler/bootstrap.sh` requires `$nazm` to exist and does not build it, and
+        // inside the container `CARGO_TARGET_DIR` is `/work/target` — which the image
+        // warms with a binary from the day it was built. Until 2026-09-22 that binary was
+        // what stage 1 used and what the reference check ran, so a bootstrap could report
+        // on a front end months older than the source mounted at `/src` and say nothing
+        // about it. The build is incremental against the image's warm cache and costs
+        // seconds; the alternative is evidence that silently names the wrong compiler.
         Some("bootstrap") => {
             bounds.deadline = Duration::from_secs(1800);
             (
                 "bootstrap",
-                shell("sh compiler/bootstrap.sh /work/bootstrap"),
+                shell(
+                    "cargo build --locked -p nazm-cli --jobs 1 \
+                     && sh compiler/bootstrap.sh /work/bootstrap",
+                ),
             )
         }
         Some("tests") => (

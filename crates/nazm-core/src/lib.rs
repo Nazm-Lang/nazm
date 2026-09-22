@@ -7,13 +7,21 @@
 pub mod check;
 pub mod eval;
 
-pub use check::{check, Signature};
+pub use check::{check, check_unit, declare_unit, Signature, Unit};
 pub use eval::{Interpreter, RuntimeError, Value};
-pub use nazm_syntax::Resolution;
-// `Type` and `Intrinsic` moved down to `nazm-syntax` on 2026-09-21, so the backend can
-// see them without depending on the interpreter. Re-exported here because they are still
-// what a caller of this crate means by a type and a built-in.
-pub use nazm_syntax::{Intrinsic, Type};
+// `Type`, `Intrinsic` and `Resolution` moved to `nazm-syntax` on 2026-09-21, so the
+// backend could see them without depending on the interpreter, and to `nazm-sema` on
+// 2026-09-22, once N2 showed that the syntax crate's own code referred to them exactly
+// never. Re-exported here because they are still what a caller of this crate means by a
+// type, a built-in and a resolution.
+pub use nazm_sema::{Intrinsic, Resolution, Type};
+
+/// What a program means, as its own vocabulary.
+///
+/// Re-exported rather than depended on directly, so that the front end has one entry
+/// point: the driver builds a [`sema::ModuleGraph`] while loading, hands it to [`check`],
+/// and never needs a second route into the compiler.
+pub use nazm_sema as sema;
 
 /// Re-exported so the CLI can parse without taking its own dependency on the syntax
 /// crate. The double underscore marks it as plumbing rather than interface.
@@ -71,6 +79,7 @@ pub fn run_with_limits(source: &str, limits: eval::Limits) -> Outcome {
 pub fn run_with(source: &str, limits: eval::Limits, args: Vec<String>) -> Outcome {
     run_map(
         &nazm_span::SourceMap::single(ONE_FILE, source),
+        &sema::ModuleGraph::single(),
         limits,
         args,
     )
@@ -78,13 +87,18 @@ pub fn run_with(source: &str, limits: eval::Limits, args: Vec<String>) -> Outcom
 
 /// As [`run_with`], over every file of a compilation.
 #[must_use]
-pub fn run_map(map: &nazm_span::SourceMap, limits: eval::Limits, args: Vec<String>) -> Outcome {
+pub fn run_map(
+    map: &nazm_span::SourceMap,
+    graph: &sema::ModuleGraph,
+    limits: eval::Limits,
+    args: Vec<String>,
+) -> Outcome {
     // The whole pipeline on a stack the interpreter controls, sized from the budget it is
     // about to enforce. Every pass here recurses: the parser with the shape of the tree,
     // the checker and the evaluator with it again, and the drop at the end once more.
     // Honouring a 512-call bound on a caller's 2 MiB thread would be a guarantee we
     // cannot keep, and so would parsing a deeply nested expression there.
-    match eval::on_interpreter_stack(limits.max_depth, || pipeline(map, limits, args)) {
+    match eval::on_interpreter_stack(limits.max_depth, || pipeline(map, graph, limits, args)) {
         Ok(outcome) => outcome,
         // The machine would not give us a thread. Nothing to do with the program, and
         // saying so beats blaming the code that was about to run. The span points at the
@@ -104,10 +118,15 @@ pub fn run_map(map: &nazm_span::SourceMap, limits: eval::Limits, args: Vec<Strin
 }
 
 /// Parse, check, and evaluate. Always called on an interpreter-owned stack.
-fn pipeline(map: &nazm_span::SourceMap, limits: eval::Limits, args: Vec<String>) -> Outcome {
+fn pipeline(
+    map: &nazm_span::SourceMap,
+    graph: &sema::ModuleGraph,
+    limits: eval::Limits,
+    args: Vec<String>,
+) -> Outcome {
     let (program, mut diagnostics) = nazm_syntax::parse_map(map);
     let parse_failed = !diagnostics.is_empty();
-    let (_resolution, check_errors) = check(&program);
+    let (resolution, check_errors) = check(&program, graph);
 
     // A function that failed to parse was never registered, so "this program has no
     // `main`" would be reported for a file whose first line is `fn main`. True of the
@@ -122,7 +141,7 @@ fn pipeline(map: &nazm_span::SourceMap, limits: eval::Limits, args: Vec<String>)
         return Outcome::CheckFailed(diagnostics);
     }
 
-    match Interpreter::new(&program)
+    match Interpreter::new(&program, &resolution)
         .with_limits(limits)
         .with_args(args)
         .run_main()
@@ -138,16 +157,22 @@ fn pipeline(map: &nazm_span::SourceMap, limits: eval::Limits, args: Vec<String>)
 /// with the shape of the tree, and neither has anything to do with call depth.
 #[must_use]
 pub fn check_source(source: &str) -> Vec<nazm_diag::Diagnostic> {
-    check_map(&nazm_span::SourceMap::single(ONE_FILE, source))
+    check_map(
+        &nazm_span::SourceMap::single(ONE_FILE, source),
+        &sema::ModuleGraph::single(),
+    )
 }
 
 /// As [`check_source`], over every file of a compilation.
 #[must_use]
-pub fn check_map(map: &nazm_span::SourceMap) -> Vec<nazm_diag::Diagnostic> {
+pub fn check_map(
+    map: &nazm_span::SourceMap,
+    graph: &sema::ModuleGraph,
+) -> Vec<nazm_diag::Diagnostic> {
     // `()` as the result, so the tree is built, walked and **dropped** inside the closure.
     // Returning it would move a recursive structure onto whatever stack the caller
     // happens to have, which is the thing this function exists to avoid.
-    match on_checked_map(map, |_, _| Ok::<(), Vec<nazm_diag::Diagnostic>>(())) {
+    match on_checked_map(map, graph, |_, _| Ok::<(), Vec<nazm_diag::Diagnostic>>(())) {
         Ok(()) => Vec::new(),
         Err(d) => d,
     }
@@ -179,7 +204,11 @@ where
     T: Send,
     F: FnOnce(&__syntax::Program, &Resolution) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
 {
-    on_checked_map(&nazm_span::SourceMap::single(ONE_FILE, source), f)
+    on_checked_map(
+        &nazm_span::SourceMap::single(ONE_FILE, source),
+        &sema::ModuleGraph::single(),
+        f,
+    )
 }
 
 /// As [`on_checked`], over every file of a compilation.
@@ -189,6 +218,7 @@ where
 /// The parse and check diagnostics if there are any, otherwise whatever `f` returns.
 pub fn on_checked_map<T, F>(
     map: &nazm_span::SourceMap,
+    graph: &sema::ModuleGraph,
     f: F,
 ) -> Result<T, Vec<nazm_diag::Diagnostic>>
 where
@@ -201,7 +231,7 @@ where
         // The resolution is **handed on** rather than discarded. Two call sites used to
         // throw it away — `let (_, check_errors) = check(&program)` — and the backend then
         // rebuilt an equivalent one, which is the duplication N1 exists to remove.
-        let (resolution, check_errors) = check(&program);
+        let (resolution, check_errors) = check(&program, graph);
         // A function that failed to parse was never registered, so "this program has no
         // `main`" would be reported for a file whose first line is `fn main`.
         diagnostics.extend(
