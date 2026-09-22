@@ -305,7 +305,7 @@ for what each one's absence currently costs.
 | Phase | Crates | State |
 | --- | --- | --- |
 | 2 | `nazm-bench` · `xtask` | **exists** |
-| 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-sema` · `nazm-core` · `nazm-cli` | **exists** (`nazm-core` is checker + evaluator, not the Core IR below; `nazm-sema` is not on this diagram at all — see §7.2) |
+| 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-sema` · `nazm-iface` · `nazm-core` · `nazm-cli` | **exists** (`nazm-core` is checker + evaluator, not the Core IR below; `nazm-sema` and `nazm-iface` are not on this diagram at all — see §7.2 and §7.3) |
 | 4 | `nazm-hir` · `nazm-ty` · `nazm-mcp` | planned |
 | 6 | `nazm-db` · `nazm-mir` · `nazm-lsp` | planned |
 | 7 | **`nazm-lir`** | **exists** — named for this level, but a structured typed tree over numbered slots rather than SSA over a CFG of places. See the note below |
@@ -333,8 +333,9 @@ such a reason.
 
 Roles, in dependency order: `span` (files, byte spans — depends on nothing; the `FileId`
 this list promised **exists** since N1, and a `Span` is a file and a range inside it) ·
-`sema` (types, built-in identity, module identity, unit interfaces, resolution — not a row
-in the table above, and §7.2 says why) · `diag` (stable error codes, fixits, JSON schema, renderer) · `syntax`
+`sema` (types, built-in identity, module identity, durable keys, unit interfaces,
+resolution — not a row in the table above, and §7.2 says why) · `iface` (a module's
+interface as persisted, and its fingerprint — §7.3) · `diag` (stable error codes, fixits, JSON schema, renderer) · `syntax`
 (lexer, parser, CST, typed AST, canonical formatter, CST-preserving edits) · `hir` (`DefId`
 graph, modules, name resolution) · `ty` (types, effect rows, provenance, inference) · `core`
 (Core IR, normalisation, Merkle hashing, reference interpreter) · `db` (salsa queries +

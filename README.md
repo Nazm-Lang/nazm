@@ -280,6 +280,7 @@ business raising the floor for the crates that ship.
 | `nazm fmt FILE…` | Lay files out canonically. `--check` writes nothing and fails if any would change |
 | `nazm fix FILE` | Apply the repairs the compiler already knows about. Nothing is written without `--apply`, and only fixes marked `automatic` are ever applied |
 | `nazm capabilities` | What this build supports, read from the compiler's own tables |
+| `nazm interface FILE` | Write what that module offers, durably — `nazm.interface/1`, or its fingerprint with `--hash`. Not a cache: it reuses nothing |
 
 `--json` on any of them emits machine-readable output under a **named, versioned
 schema**; the schemas are in [`schema/`](schema) and the compatibility rules are in

@@ -104,65 +104,59 @@ the whole program and emits one LLVM module; there are no per-module artefacts, 
 interfaces and no linker symbols. Every id remains session-local. No packages, no
 re-export, no aliasing, no qualified paths, no HIR.
 
-### N3 — Durable definition identity, and an interface that can be written down
+### N3 — Durable identity and persisted interfaces · **complete, 2026-09-22**
 
-**The next dependency, and not started.** The acceptance condition N2 wrote for itself is:
-*a unit's interface can be written, read back in a later process, and a dependent checked
-against it without the dependency's source.* Exactly one thing blocks it. `Export::def` is
-an `FnId`, `FnDef::module` is a `ModuleId`, and a `Span` is a `FileId` and a range — all
-three are **indices into one compilation in one process**. An interface written to disk
-today would be a file of numbers that mean nothing to the run that reads it.
-
-So the question is `research-register.md` R2's: *what identifies a definition, such that
-two builds agree?* N2 narrowed it usefully — a definition now has an owner, and a name is
-unique within its module, so `(module, name)` identifies one **within a compilation**. What
-a module is identified by, across compilations, is the part that does not exist.
-
-The preflight that opened N2 is the shape of the answer's constraint: a semantic value is
-not serialisable by derive, and writing one down is an explicit act that chooses a
-representation. An interface format is that act, performed deliberately, for the first
-time.
-
-**What is not next, and why.** Incremental compilation is not a milestone, it is what
-durable identity plus interfaces would make possible. A language server needs both of those
-*and* a lossless CST. Ownership and effects remain the largest open design questions and do
-not become next by being important.
-
-**The divergence N2 opened is closed.** See N2.1 below; it was a milestone of its own, as
-this paragraph said it would be, and it came before N3 rather than after.
-
-### N2.1 — Visibility and module-semantics parity · **complete, 2026-09-22**
-
-N2 left the two implementations accepting different languages: the Nazm-written compiler
-parsed `pub` and resolved every name across the whole program. **C2 = C3 throughout**,
-which is exactly why it needed catching some other way — a fixpoint is self-consistency,
-and a compiler that reproduces itself while accepting what the specification forbids
-reaches one too.
-
-The empirical parity table, taken before any edit, was **nine of fifteen rules diverging**:
-eight programs the reference refuses and the self-hosted compiler accepted, and one it
-accepted and **miscompiled** — two modules each defining a private `helper` both emitted
-`@nz.f0`, which clang rejected as an invalid redefinition.
+**Done, in one commit after a separate constitution commit** (`40b1c9a` the semantics).
 
 | | |
 | --- | --- |
-| **Representation** | `compiler/module.nz` returns the module graph beside the merged text: where each file begins, and which module each `use` names. The concatenation is a representation detail; ownership is answered from the boundaries |
-| **Decision** | `compiler/analyse.nz` alone. The parser records that `pub` was written, the module layer records relationships, the checker decides what a name means, and emission consumes a recorded resolution — the same "resolve once, consume downstream" N1 established in Rust |
-| **Deleted** | `load_program`, which returned a buffer and nothing else; `symbol(fnames, name)`, which turned a *name* into an LLVM symbol and was the miscompile; `refuse_recursion`'s name-keyed call graph and its positional function numbering |
-| **Evidence** | fifteen rules compared through both compilers; five multi-module conformance cases agreeing across the reference, C2 **and** C3; four new mutations on the self-hosted path, all caught |
+| **N3A** | `spec.md` settles what makes this the same module and the same definition, before any representation. A **source root** — the root module's directory, derived not declared. `ModuleKey` is the normalised path relative to it; `DefKey` is that plus a kind and a name. A body edit, a signature edit, a visibility change and a move all keep the key; a rename does not |
+| **N3B** | `ModuleKey`/`DefKey` in `nazm-sema`, beside the session ids rather than replacing them. The loader computes them and **withdraws** one where the two compiler implementations could disagree |
+| **N3C** | `nazm-iface`: `nazm.interface/1`, deterministic, validated on read. serde lives there and not in `nazm-sema`, so a session-local id cannot be serialised by accident |
+| **N3D** | `InterfaceHash` — BLAKE3 over the canonical bytes. Twelve invalidation rows measured rather than asserted |
+| **N3E** | `nazm interface FILE`, so the boundary is real: two processes, two directories, and a dependent checked with its dependency's source **deleted** |
+| **N3F** | A `sema purity` gate, verified to fire both ways; five identity mutations, all caught |
 
-Every `pub` in the compiler is now justified by an actual cross-module call — four that
-were not were made private again — and nothing that needs one lacks it: 84 of 224.
+**The symlink policy is the part that was settled rather than coded around.** The reference
+loader keys by canonical path and the Nazm-written one by normalised text, so an aliased
+file is one module to the first and two to the second. Durable identity **declines** where
+they could disagree, and so does a path that escapes the source root. Both compile exactly
+as before; they simply get no key, and everything built on one refuses rather than guesses.
 
-### After N2, in dependency order
+**What N3 is not.** No cache, no store, no query engine, no scheduler, no artefact reuse,
+and no claim that anything is faster. `InterfaceHash` answers *must this module's dependents
+be re-checked* and excludes bodies by design — using it as a codegen cache key would hand
+back an object file compiled from a body that has since changed, which is why
+`architecture.md` §7.3 names an implementation fingerprint and a `BuildKey` it is not.
+
+### N4 — Reuse, and the inputs an artefact actually depends on
+
+**The next dependency, and not started.** Everything N3 built is an input to something that
+does not exist. The next milestone is the first one that *reuses* work, and it needs two
+things N3 deliberately did not build:
+
+* a **`BuildKey`** — compiler identity, target, flags, dependency fingerprints and a
+  module's own implementation fingerprint. `InterfaceHash` is not it and must not become
+  it;
+* somewhere to put the result, and a rule for when reading it back is sound. Anything
+  omitted from the key is a silent miscompilation waiting to happen, which
+  `architecture.md` §3 has said since before there was a compiler.
+
+**A decision that comes first, and is a build-system decision rather than a compiler one:**
+a **declared** source root. N3's is derived from the file named on the command line, so a
+module's key depends on which file that was. A project file would fix it, and it is the
+same decision as a manifest — `capability-matrix.md` area 26.
+
+### After N3, in dependency order
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| A persistable unit interface | durable identity | a file of session-local indices is not an interface |
-| Incremental / content-addressed compilation | persistable interfaces | nothing to compare between builds — `research-register.md` R2 |
+| A persistable unit interface | durable identity ✓ | done — N3 |
+| Artefact reuse | a `BuildKey`, and somewhere to put results | `InterfaceHash` excludes bodies, so it cannot key an artefact |
+| Incremental / content-addressed compilation | reuse + a normalised form of a definition | nothing normalises or hashes a definition — `research-register.md` R2 |
+| A key independent of which file was named | a **declared** source root | today's is derived from it; the same decision as a manifest |
 | Separate *code generation* | units ✓ + a linking model | checking is per unit; emission is still whole-program |
-| A language server | units ✓ + durable identity + a lossless CST | it would re-implement the semantic engine otherwise |
-| Visibility in the self-hosted compiler | — | the two implementations accept different languages until then |
+| A language server | units ✓ + durable identity ✓ + a lossless CST | it would re-implement the semantic engine otherwise |
 | Ownership / the surface memory model | — | the largest open design question; `research-register.md` R1 |
 | Effects | a typed core IR | and *"is divergence an effect?"* is unanswered — `spec.md` *Open* |
 | Capabilities, information flow | effects | `architecture.md` §5 keeps the three separate |

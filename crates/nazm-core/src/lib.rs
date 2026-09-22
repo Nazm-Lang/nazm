@@ -225,6 +225,51 @@ where
     T: Send,
     F: FnOnce(&__syntax::Program, &Resolution) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
 {
+    on_checked_with(map, graph, Entry::Required, f)
+}
+
+/// Whether this compilation is a **program**.
+///
+/// The root module owns `main` and a program without one is `N0204` — a rule about
+/// programs, settled in `docs/spec.md`. Asking a module what it *offers* is a different
+/// question, and a library answers it perfectly well with no entry point. This is the one
+/// distinction between the two, named rather than expressed as a filter over diagnostics
+/// at a call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Entry {
+    /// It is a program: the root module must have `main`.
+    Required,
+    /// It is a module: whether anything can run is not being asked.
+    Absent,
+}
+
+/// As [`on_checked_map`], for a compilation that need not be a program.
+///
+/// # Errors
+///
+/// The parse and check diagnostics if there are any, otherwise whatever `f` returns.
+pub fn on_module_map<T, F>(
+    map: &nazm_span::SourceMap,
+    graph: &sema::ModuleGraph,
+    f: F,
+) -> Result<T, Vec<nazm_diag::Diagnostic>>
+where
+    T: Send,
+    F: FnOnce(&__syntax::Program, &Resolution) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
+{
+    on_checked_with(map, graph, Entry::Absent, f)
+}
+
+fn on_checked_with<T, F>(
+    map: &nazm_span::SourceMap,
+    graph: &sema::ModuleGraph,
+    entry: Entry,
+    f: F,
+) -> Result<T, Vec<nazm_diag::Diagnostic>>
+where
+    T: Send,
+    F: FnOnce(&__syntax::Program, &Resolution) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
+{
     let run = || {
         let (program, mut diagnostics) = nazm_syntax::parse_map(map);
         let parse_failed = !diagnostics.is_empty();
@@ -234,10 +279,11 @@ where
         let (resolution, check_errors) = check(&program, graph);
         // A function that failed to parse was never registered, so "this program has no
         // `main`" would be reported for a file whose first line is `fn main`.
+        let drop_missing_main = parse_failed || entry == Entry::Absent;
         diagnostics.extend(
             check_errors
                 .into_iter()
-                .filter(|d| !(parse_failed && d.code == nazm_diag::codes::MISSING_MAIN)),
+                .filter(|d| !(drop_missing_main && d.code == nazm_diag::codes::MISSING_MAIN)),
         );
         if diagnostics.is_empty() {
             f(&program, &resolution)

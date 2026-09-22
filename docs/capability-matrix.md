@@ -152,19 +152,36 @@ exports; imports are not transitive; every collision is a diagnostic naming both
 interpreted and compiled and required to agree. The self-hosted compiler was migrated
 rather than exempted: 84 of its 224 functions are `pub`, 140 are private, and since N2.1 it enforces the rule as well as expressing it.
 
-**Limitation** · **Nothing is separately *compiled*.** A unit can be checked from
-interfaces; lowering and code generation still take the whole program and emit one LLVM
-module (area 10). There are no per-module artefacts, no cached interfaces and no linker
-symbols. Every id — `FileId`, `ModuleId`, `FnId` — is **session-local**: an index valid for
-one compilation in one process, never a name a build system or a cache may key on. A module
-cannot export a name under another one, re-export, or be named by anything but a relative
-path.
+**Durable identity and persisted interfaces exist as of N3 (2026-09-22).** A module's
+`ModuleKey` is its normalised path relative to the compilation's source root, and a
+definition's `DefKey` is that key plus its kind and name
+(`crates/nazm-sema/src/key.rs`). `nazm interface FILE` writes a module's interface as
+`nazm.interface/1` — durable keys, canonical type names, no spans, no session ids
+(`crates/nazm-iface/`) — and `--hash` fingerprints it with BLAKE3. The session ids are
+unchanged and were not renamed; both layers coexist.
 
-**Next dependency** · A definition identity that survives a process
-(`research-register.md` R2), which is what a cached interface would have to be keyed on.
+`crates/nazm-cli/tests/durable_identity.rs` establishes it across real boundaries: the same
+project gives identical bytes in two processes and in two different directories, a module
+whose private body changed gives the same fingerprint, and **a dependent checks against a
+deserialised interface with the dependency's source deleted.** A module outside the source
+root, or one a symbolic link gave two names, is refused a durable key rather than given a
+guess.
 
-**Accepted when** · A unit's interface can be written, read back in a later process, and a
-dependent checked against it without the dependency's source.
+**Limitation** · **Nothing is separately *compiled*, and nothing is cached.** A unit can be
+checked from interfaces and an interface can be written down; lowering and code generation
+still take the whole program and emit one LLVM module (area 10), and nothing reads an
+interface back to decide to skip work. There is no build cache, no query database and no
+scheduler — `InterfaceHash` answers *would a dependent have to be re-checked*, and the
+thing that would act on the answer does not exist. A module still cannot export a name
+under another one, re-export, or be named by anything but a relative path, and the source
+root is derived from the file named on the command line rather than declared.
+
+**Next dependency** · Something that reuses work: a store keyed on these identities, and a
+`BuildKey` covering the inputs an artefact depends on — which `InterfaceHash` deliberately
+is not (`architecture.md` §7.3).
+
+**Accepted when** · Met for identity and interfaces. Incremental compilation is a separate
+row that does not exist yet.
 
 ### 3. Type system — PARTIAL
 
@@ -613,11 +630,19 @@ re-implementing it.
 implementations: `crates/nazm-cli/src/load.rs` and `compiler/module.nz`.
 
 **Limitation** · There is no project manifest, no dependency resolution, no lockfile and no
-registry. `nazm build` takes one root file. The two resolvers differ deliberately — the
-Nazm one normalises paths textually because the emitted runtime has no `realpath`, so a
-symlinked file is read twice there and once here.
+registry. `nazm build` takes one root file, and since N3 the **source root is derived from
+it** — so a module's durable identity is relative to whichever file was named. A declared
+root is what would make a key independent of that, and it is a build-system feature this
+project does not have.
 
-**Next dependency** · Compilation units (area 2).
+The two resolvers still differ deliberately — the Nazm one normalises paths textually
+because the emitted runtime has no `realpath`, so a symlinked file is read twice there and
+once here. N3 settled what that means for identity rather than closing it: a module reached
+under two names gets **no** durable key, in either implementation, so the two cannot
+disagree about one (`spec.md`, *Durable identity*).
+
+**Next dependency** · A declared source root, which is the same decision as a project
+manifest.
 
 **Accepted when** · A project builds from a manifest and the two resolvers agree on
 identity.
@@ -675,7 +700,7 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **57** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **62** catalogued defects;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a

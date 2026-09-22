@@ -811,3 +811,60 @@ the command line stops deciding what runs
 file = "compiler/analyse.nz"
 find = '    let at = owned_index(fnames, fowner, 0, "main");'
 replace = "    let at = builtin_index(fnames, \"main\");"
+
+[[mutation]]
+name = "an-absolute-path-reaches-the-module-key"
+why = """
+stops making a module's durable identity relative to the source root, so the key becomes
+the path this machine happened to use. Two checkouts of one project then disagree about
+what their modules are, and every persisted interface carries a host directory
+"""
+file = "crates/nazm-cli/src/load.rs"
+find = "    let relative = path.strip_prefix(root).unwrap_or(path);"
+replace = "    let relative = path;"
+
+[[mutation]]
+name = "a-private-definition-reaches-the-interface"
+why = """
+puts every definition into a module's interface rather than the exported ones, so its
+implementation becomes part of what it offers. Adding or removing a private helper would
+then invalidate every dependent, and a persisted interface would publish names the module
+deliberately kept
+"""
+file = "crates/nazm-core/src/check.rs"
+find = "        if visibility.is_exported() {"
+replace = "        if true {"
+
+[[mutation]]
+name = "the-signature-leaves-the-interface"
+why = """
+drops parameter types from the published interface, so changing an exported signature no
+longer moves the fingerprint. A dependent checked against the old one keeps an answer the
+new signature contradicts — a stale accept, which is the failure a fingerprint exists to
+prevent
+"""
+file = "crates/nazm-iface/src/wire.rs"
+find = "                params: e.params.iter().map(|t| t.name().to_owned()).collect(),"
+replace = "                params: Vec::new(),"
+
+[[mutation]]
+name = "an-unknown-interface-version-is-read-as-this-one"
+why = """
+accepts a schema this build does not implement, reinterpreting a future file's fields as
+the current ones. That is the failure a version exists to prevent, and it fails silently:
+the bytes parse, so the compiler acts on a meaning nobody wrote
+"""
+file = "crates/nazm-iface/src/wire.rs"
+find = "        if envelope.schema != SCHEMA {"
+replace = "        if false {"
+
+[[mutation]]
+name = "the-interface-keeps-declaration-order"
+why = """
+publishes exports in the order the author declared them rather than sorted, so two modules
+offering the same thing produce different bytes and different fingerprints. Every
+comparison built on the fingerprint then reports a change that did not happen
+"""
+file = "crates/nazm-iface/src/wire.rs"
+find = "        exports.sort_by(|a, b| a.name.cmp(&b.name));"
+replace = "        let _ = &mut exports;"

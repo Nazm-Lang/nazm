@@ -36,6 +36,7 @@ mod build;
 mod capabilities;
 mod fix;
 mod fmt;
+mod interface;
 mod load;
 mod test;
 
@@ -166,6 +167,18 @@ enum Command {
         #[arg(long)]
         interpret_only: bool,
     },
+    /// Write a module's published interface: what it offers, durably.
+    ///
+    /// The file named is the root, so the source root is its directory. Output is one
+    /// `nazm.interface/1` JSON object on stdout — the same bytes every time, for the same
+    /// interface, in this process and the next one. This is not a cache and reuses
+    /// nothing; see `docs/architecture.md` §7.3.
+    Interface {
+        file: PathBuf,
+        /// Print the fingerprint instead of the interface: `blake3-256 <hex>`.
+        #[arg(long)]
+        hash: bool,
+    },
     /// Report what this build of the compiler actually supports.
     ///
     /// Read from the compiler's own tables rather than from a written list, so it cannot
@@ -240,6 +253,7 @@ fn main() -> ExitCode {
     }
     match cli.command {
         Command::Fix { file, apply, json } => return fix::run(&file, apply, json),
+        Command::Interface { file, hash } => return interface::run(&file, hash),
         Command::Capabilities { json } => return capabilities::run(json),
         Command::Fmt { files, check } => return fmt::run(&files, check),
         Command::Test {
@@ -274,6 +288,7 @@ fn main() -> ExitCode {
         | Command::Fix { .. }
         | Command::Fmt { .. }
         | Command::Test { .. }
+        | Command::Interface { .. }
         | Command::Capabilities { .. } => {
             unreachable!("handled above")
         }
