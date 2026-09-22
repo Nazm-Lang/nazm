@@ -75,8 +75,6 @@ struct Emitter<'a> {
     /// the error strings because these are the program's data: they carry arbitrary
     /// bytes and are never NUL-terminated.
     blobs: Vec<(String, Vec<u8>)>,
-    /// Where the source came from, for the runtime message.
-    file: String,
     /// Where every span in this module came from.
     ///
     /// The emitter used to build its own line-start table from a single source string —
@@ -331,14 +329,21 @@ impl Emitter<'_> {
         buf
     }
 
-    /// Intern a NUL-terminated constant and return `(symbol, byte length)`.
+    /// Intern a constant and return `(symbol, the number of bytes to write)`.
+    ///
+    /// The stored array is NUL-terminated because C string constants are, and the length
+    /// returned is **the text's**, without it. The two used to be the same number, so
+    /// every native failure wrote its terminator to standard error after the newline —
+    /// invisible in a terminal, and not the single line `crates/nazm-cli/src/main.rs`
+    /// promises a caller. Nothing here treats the constant as NUL-terminated; `@nz.fail`
+    /// takes a pointer and a length.
     fn intern(&mut self, text: &str) -> (String, usize) {
         if let Some((sym, _)) = self.strings.iter().find(|(_, t)| t == text) {
-            return (sym.clone(), text.len() + 1);
+            return (sym.clone(), text.len());
         }
         let sym = format!("@.msg{}", self.strings.len());
         self.strings.push((sym.clone(), text.to_owned()));
-        (sym, text.len() + 1)
+        (sym, text.len())
     }
 
     /// Emit the branch that reports `failure` and never returns, then continue after it.
@@ -350,11 +355,21 @@ impl Emitter<'_> {
     /// Split out of [`Self::guard`] because a runtime helper that can fail — the one
     /// behind `chan_recv` — has to be *given* its message: it is one function serving
     /// every call site, and the position in the text is the call site's, not its own.
+    /// # The file is the span's, not the compilation's
+    ///
+    /// Until 2026-09-22 this named the file `nazm build` was invoked on, for every
+    /// failure in every module. The line and column were already the right ones — they
+    /// come from the `SourceMap` and have since N1 — so a division by zero in `lib.nz`
+    /// printed `main.nz` with `lib.nz`'s position: a location that points somewhere real
+    /// and wrong, which is worse than one that points nowhere. A span knows its file;
+    /// asking it is the fix, and it is the same thing the rendered diagnostics do.
     fn failure_text(&mut self, failure: &Failure, span: Span) -> (String, usize) {
         let (line, col) = self.position(span);
         let text = format!(
             "nazm: error[{}]: {} at {}:{line}:{col}\n",
-            failure.code, failure.message, self.file
+            failure.code,
+            failure.message,
+            self.map.name(span.file)
         );
         self.intern(&text)
     }
@@ -1795,7 +1810,6 @@ pub fn emit_llvm(module: &Module, file: &str, map: &SourceMap) -> String {
         current: "entry".to_owned(),
         strings: Vec::new(),
         blobs: Vec::new(),
-        file: file.to_owned(),
         map,
         loops: Vec::new(),
         scopes: Vec::new(),
