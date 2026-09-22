@@ -127,6 +127,52 @@ fn both(source: &str) -> Ran {
     a
 }
 
+/// The same, with process arguments, which is the one string provenance a program cannot
+/// produce for itself.
+fn both_with_args(source: &str, args: &[&str]) -> Ran {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("m.nz"), source).expect("write");
+
+    let mut run = Command::new(NAZM);
+    run.args(["run", "m.nz", "--"]).args(args);
+    let interpreted = run
+        .env(MEMORY_VARIABLE, "1")
+        .current_dir(dir.path())
+        .output()
+        .expect("run");
+    assert!(
+        interpreted.status.success(),
+        "interpreting failed: {}",
+        String::from_utf8_lossy(&interpreted.stderr)
+    );
+    let a = counts(
+        &String::from_utf8_lossy(&interpreted.stderr),
+        String::from_utf8_lossy(&interpreted.stdout)
+            .trim()
+            .to_owned(),
+    );
+
+    let built = Command::new(NAZM)
+        .args(["build", "m.nz", "-o", "prog"])
+        .current_dir(dir.path())
+        .output()
+        .expect("build");
+    assert!(built.status.success(), "{:?}", built);
+    let native = Command::new(dir.path().join("prog"))
+        .args(args)
+        .env(MEMORY_VARIABLE, "1")
+        .current_dir(dir.path())
+        .output()
+        .expect("execute");
+    let b = counts(
+        &String::from_utf8_lossy(&native.stderr),
+        String::from_utf8_lossy(&native.stdout).trim().to_owned(),
+    );
+
+    assert_eq!(a, b, "the two implementations disagree");
+    a
+}
+
 /// The same, for a program that is expected to fail at runtime.
 fn both_failing(source: &str) -> (Ran, String) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -421,6 +467,21 @@ fn a_literal_owns_nothing_and_is_never_counted() {
          str_len(str_slice(b, 1, 4))\n}\n",
     );
     assert_eq!(r.value, "3");
+}
+
+#[test]
+fn a_process_argument_is_external_storage_in_both_implementations() {
+    // The fourth provenance, and the one a program cannot make for itself: the bytes
+    // belong to the operating system. Neither implementation counts them and neither may
+    // free them — so a program that reads an argument and slices it allocates **nothing**,
+    // and both agree about that rather than one of them quietly copying.
+    let r = both_with_args(
+        "fn main() -> Int {\n    let a = arg(0);\n    let b = str_slice(a, 0, 1);\n    \
+         str_len(a) * 1000 + str_byte(b, 0)\n}\n",
+        &["hello"],
+    );
+    assert_eq!(r.value, "5104");
+    assert_eq!(r.strings, expected(0), "{r:?}");
 }
 
 #[test]
