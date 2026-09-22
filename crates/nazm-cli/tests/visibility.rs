@@ -424,3 +424,197 @@ fn main_need_not_be_public_to_be_the_entry_point() {
     // And marking it `pub` is allowed, and means only that another module could call it.
     accepted(&[("main.nz", "pub fn main() -> Int { 0 }\n")]);
 }
+
+// --- record types across modules ------------------------------------------------------
+//
+// The type namespace follows the same law as the function namespace, and these are the
+// same cases asked of it. What is new is that a record has a *shape* as well as a name:
+// an importer that can see one can construct it and project its fields, so the whole
+// definition crosses the boundary, not just the spelling.
+
+#[test]
+fn an_exported_record_is_named_constructed_and_projected_by_an_importer() {
+    let out = both_ways(&[
+        (
+            "main.nz",
+            "use \"model.nz\";\n\
+             fn size(p: Point) -> Int { p.x + str_len(p.label) }\n\
+             fn main() -> Int { size(Point(x: 40, label: \"ab\")) }\n",
+        ),
+        (
+            "model.nz",
+            "pub struct Point {\n    x: Int,\n    label: Str,\n}\n",
+        ),
+    ]);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn a_record_returned_across_a_module_boundary_keeps_its_owning_field() {
+    // The decisive shape: the library's frame exits, and the caller still holds a valid
+    // string. Both ways, and through independently generated objects in the compiled one.
+    let out = both_ways(&[
+        (
+            "main.nz",
+            "use \"model.nz\";\n\
+             fn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    \
+             while i < 10 {\n        let p = at(i);\n        \
+             total = total + str_len(p.label) + p.x;\n        i = i + 1;\n    }\n    total\n}\n",
+        ),
+        (
+            "model.nz",
+            "pub struct Point {\n    x: Int,\n    label: Str,\n}\n\
+             pub fn at(n: Int) -> Point {\n    Point(x: n, label: str_concat(\"p\", int_to_str(n)))\n}\n",
+        ),
+    ]);
+    assert_eq!(out, "65");
+}
+
+#[test]
+fn a_private_record_is_not_nameable_from_an_importer() {
+    refused(
+        &[
+            (
+                "main.nz",
+                "use \"model.nz\";\nfn main() -> Int { let p = Hidden(n: 1); p.n }\n",
+            ),
+            ("model.nz", "struct Hidden {\n    n: Int,\n}\n"),
+        ],
+        "N0305",
+    );
+}
+
+#[test]
+fn a_public_function_may_not_return_a_private_record() {
+    // Without opaque types there is no honest way to publish this: the importer would
+    // have to name the type to use the result and cannot.
+    let out = refused(
+        &[
+            ("main.nz", "use \"model.nz\";\nfn main() -> Int { 0 }\n"),
+            (
+                "model.nz",
+                "struct Secret {\n    value: Int,\n}\n\
+                 pub fn get() -> Secret { Secret(value: 1) }\n",
+            ),
+        ],
+        "N0337",
+    );
+    assert!(out.contains("Secret"), "{out}");
+}
+
+#[test]
+fn a_public_record_may_not_expose_a_private_one_through_a_field() {
+    let out = refused(
+        &[
+            ("main.nz", "use \"model.nz\";\nfn main() -> Int { 0 }\n"),
+            (
+                "model.nz",
+                "struct Secret {\n    value: Int,\n}\n\
+                 pub struct Public {\n    secret: Secret,\n}\n",
+            ),
+        ],
+        "N0337",
+    );
+    assert!(out.contains("Secret"), "{out}");
+}
+
+#[test]
+fn a_public_parameter_of_a_private_record_type_is_refused_too() {
+    refused(
+        &[
+            ("main.nz", "use \"model.nz\";\nfn main() -> Int { 0 }\n"),
+            (
+                "model.nz",
+                "struct Secret {\n    value: Int,\n}\n\
+                 pub fn take(s: Secret) -> Int { s.value }\n",
+            ),
+        ],
+        "N0337",
+    );
+}
+
+#[test]
+fn two_imported_modules_exporting_one_type_name_is_ambiguous() {
+    refused(
+        &[
+            (
+                "main.nz",
+                "use \"a.nz\";\nuse \"b.nz\";\nfn main() -> Int { 0 }\n",
+            ),
+            ("a.nz", "pub struct User {\n    n: Int,\n}\n"),
+            ("b.nz", "pub struct User {\n    m: Int,\n}\n"),
+        ],
+        "N0207",
+    );
+}
+
+#[test]
+fn an_imported_type_that_collides_with_a_local_one_is_refused() {
+    refused(
+        &[
+            (
+                "main.nz",
+                "use \"a.nz\";\nstruct User {\n    n: Int,\n}\nfn main() -> Int { 0 }\n",
+            ),
+            ("a.nz", "pub struct User {\n    m: Int,\n}\n"),
+        ],
+        "N0208",
+    );
+}
+
+#[test]
+fn the_same_record_name_in_two_modules_is_two_types() {
+    // Neither module imports the other, so both may own the name — and they are
+    // different types, with different native identities, in one program.
+    let out = both_ways(&[
+        (
+            "main.nz",
+            "use \"a.nz\";\nuse \"b.nz\";\n\
+             struct Thing {\n    here: Int,\n}\n\
+             fn main() -> Int { Thing(here: 1).here + from_a() + from_b() }\n",
+        ),
+        (
+            "a.nz",
+            "struct Thing {\n    n: Int,\n}\npub fn from_a() -> Int { Thing(n: 10).n }\n",
+        ),
+        (
+            "b.nz",
+            "struct Thing {\n    m: Str,\n}\npub fn from_b() -> Int { str_len(Thing(m: \"abc\").m) }\n",
+        ),
+    ]);
+    assert_eq!(out, "14");
+}
+
+#[test]
+fn a_module_import_cycle_with_records_is_still_legal() {
+    // A module cycle and an inline layout cycle are different things: only the second is
+    // refused, and this is the first.
+    let out = both_ways(&[
+        ("main.nz", "use \"a.nz\";\nfn main() -> Int { via_a() }\n"),
+        (
+            "a.nz",
+            "use \"b.nz\";\n\
+             pub struct Ay {\n    n: Int,\n}\n\
+             pub fn via_a() -> Int { Ay(n: 2).n * via_b() }\n",
+        ),
+        (
+            "b.nz",
+            "use \"a.nz\";\n\
+             pub struct Bee {\n    m: Int,\n}\n\
+             pub fn via_b() -> Int { Bee(m: 21).m }\n",
+        ),
+    ]);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn a_layout_cycle_across_modules_is_refused() {
+    refused(
+        &[
+            ("main.nz", "use \"a.nz\";\nfn main() -> Int { 0 }\n"),
+            ("a.nz", "use \"b.nz\";\npub struct Ay {\n    b: Bee,\n}\n"),
+            ("b.nz", "use \"a.nz\";\npub struct Bee {\n    a: Ay,\n}\n"),
+        ],
+        "N0336",
+    );
+}
