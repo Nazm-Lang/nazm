@@ -1,0 +1,20 @@
+use "model.nz";
+
+// A record parameter, borrowed: the caller keeps its own after the call.
+fn size(p: Point) -> Int {
+    p.x + str_len(p.label)
+}
+
+fn main() -> Int {
+    let mut total = size(origin());
+    let mut i = 0;
+    while i < 10 {
+        let p = at(i);
+        total = total + size(p) + size(p);
+        i = i + 1;
+    }
+    // A record value built in this module from the imported type, and a field replaced.
+    let mut here = Point(x: 5, label: "here");
+    here.label = str_concat(here.label, "!");
+    total + size(here) + unused()
+}
