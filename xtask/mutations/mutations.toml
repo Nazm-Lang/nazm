@@ -1065,3 +1065,83 @@ replace = """            .map(|s| {
                 let whole: String = artefacts.iter().map(|a| a.ir.as_str()).collect();
                 ObjectKey::of(LlvmInput::of(whole.as_bytes()), s.identity, s.config)
             });"""
+
+[[mutation]]
+name = "a-binding-does-not-take-the-reference-it-stores"
+why = """
+stores a handle into a binding without taking a reference to it, so two bindings on one
+sequence count as one. The first to die frees storage the other is still holding, which is
+a use-after-free the language's own aliasing rule makes ordinary rather than exotic —
+`let b = a;` is specified, measured and everywhere
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """        if !self.owned.remove(&value) {
+            self.retain(value);
+        }"""
+replace = """        self.owned.remove(&value);"""
+
+[[mutation]]
+name = "the-frame-is-not-released-on-a-normal-exit"
+why = """
+drops the release at the end of a function that falls off its own tail, which is the
+common way out. Every sequence a function made and did not return then lives until the
+process ends — the leak N7 measured as linear in work done, reintroduced on the path
+nothing else covers
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """            e.take(value, f.ret);
+            e.release_frame();"""
+replace = """            e.take(value, f.ret);"""
+
+[[mutation]]
+name = "the-frame-is-not-released-when-a-failure-unwinds"
+why = """
+releases nothing on the one exit source indentation would never have found: the shared
+block every failure in a function branches to. Cleanup that exists only on the path that
+succeeds is the defect `docs/spec.md` names when it says reclamation is on the semantic
+event rather than at the closing brace
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """        // A failure leaves through here from anywhere in the function, so this is the one
+        // exit that source indentation would never have found. The frame is released on
+        // the way out: a program that failed still reclaims what it was holding.
+        e.release_frame();"""
+replace = """"""
+
+[[mutation]]
+name = "a-returned-sequence-is-released-on-the-way-out"
+why = """
+lets the frame release run over a handle the function is returning, so the caller receives
+a reference to storage that has already been freed. Rule 3 says returning transfers, and
+the order of these two lines is the whole of what makes that true
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                        self.take(value, ty);
+                        self.release_frame();"""
+replace = """                        self.release_frame();"""
+
+[[mutation]]
+name = "a-borrowed-parameter-is-released-by-the-callee"
+why = """
+puts parameter slots into the set a frame releases, so a callee destroys storage its
+caller is still holding. That exclusion is not an optimisation; it **is** rule 2, and
+without it every one of the compiler's 108 `Ints` parameters is a use-after-free waiting
+for the caller's next read
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """        if i >= f.params {
+            e.frame.push((i, local.ty));
+        }"""
+replace = """        e.frame.push((i, local.ty));"""
+
+[[mutation]]
+name = "storage-goes-while-another-reference-remains"
+why = """
+frees on every release rather than on the last one, which is reference counting with the
+counting removed. It is the failure that looks most like working code: a program with no
+aliasing behaves identically, and one that aliases — which the language specifies and
+measures — reads freed storage
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = "  %last = icmp sle i64 %rc2, 0"
+replace = "  %last = icmp sle i64 %rc2, 9223372036854775807"
