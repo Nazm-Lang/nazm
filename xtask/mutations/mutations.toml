@@ -1433,8 +1433,12 @@ persisted interface alone cannot resolve a type its signatures name. N3's bounda
 because an interface was sufficient; this makes it insufficient and silent
 """
 file = "crates/nazm-sema/src/interface.rs"
-find = "        self.records"
-replace = "        &self.records[..0]"
+find = """    pub fn records(&self) -> &[RecordExport] {
+        &self.records
+    }"""
+replace = """    pub fn records(&self) -> &[RecordExport] {
+        &self.records[..0]
+    }"""
 
 [[mutation]]
 name = "a-published-field-loses-its-type"
