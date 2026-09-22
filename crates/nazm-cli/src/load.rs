@@ -14,9 +14,14 @@
 //!
 //! # What the loader decides, and what it does not
 //!
-//! It decides *which files* and *in what order*. It does not decide what a name means:
-//! after loading, name resolution is the checker's, unchanged, over one program. That
-//! keeps modules from becoming a second scoping system.
+//! It decides *which files*, *in what order*, and **which of them named which** — the
+//! `use` edges, resolved from paths to ids. It does not decide what any of it means: a
+//! module's own definitions, what it exports and what it may see are the checker's, and
+//! after this function returns nothing consults the filesystem again.
+//!
+//! Resolving a path is why this lives in the driver rather than in the front end. Reading
+//! a directory is an effect; deciding what `parse` refers to is not, and the two are kept
+//! on opposite sides of this boundary.
 //!
 //! # Determinism
 //!
@@ -29,21 +34,37 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use nazm_core::sema::ModuleGraph;
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, SourceMap, Span};
 
-/// Read `root` and everything it imports, as one buffer.
+/// The source of a compilation, and how its modules relate.
+///
+/// Two values that are always built together and always travel together: the text, for
+/// diagnostics and slicing, and the graph, for everything semantic.
+pub(crate) struct Loaded {
+    pub map: SourceMap,
+    pub graph: ModuleGraph,
+}
+
+/// Read `root` and everything it imports.
 ///
 /// # Errors
 ///
 /// A file that cannot be read, or an import that cannot be found. Parse errors are not
-/// reported here: the merged buffer is parsed again by the caller, which reports them
-/// all at once against the positions they will keep.
-/// On failure the buffer built **so far** comes back with the diagnostics, so a
+/// reported here: each file is parsed again by the caller, which reports them all at once
+/// against the positions they will keep.
+/// On failure what was loaded **so far** comes back with the diagnostics, so a
 /// "cannot find" points at the `use` line that wrote it rather than at an empty file.
-pub(crate) fn load(root: &Path) -> Result<SourceMap, (SourceMap, Vec<Diagnostic>)> {
+pub(crate) fn load(root: &Path) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
     let mut parts: Vec<(String, String)> = Vec::new();
-    let mut seen: HashMap<PathBuf, ()> = HashMap::new();
+    // Canonical path to the position the file took in load order. Canonical, so a file
+    // reached by two spellings is one module with one identity.
+    let mut index: HashMap<PathBuf, usize> = HashMap::new();
+    let mut visited: HashMap<PathBuf, ()> = HashMap::new();
+    // Parallel to `parts`: for each file, the imports it named, as `(canonical path,
+    // where it was written)`. Resolved to ids once every file has one.
+    let mut named: Vec<Vec<(PathBuf, Span)>> = Vec::new();
     let mut errors: Vec<Diagnostic> = Vec::new();
 
     // An explicit stack rather than recursion: an import chain has no bound, and the
@@ -52,7 +73,7 @@ pub(crate) fn load(root: &Path) -> Result<SourceMap, (SourceMap, Vec<Diagnostic>
 
     while let Some(path) = stack.pop() {
         let key = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if seen.insert(key, ()).is_some() {
+        if visited.insert(key.clone(), ()).is_some() {
             continue;
         }
 
@@ -88,7 +109,7 @@ pub(crate) fn load(root: &Path) -> Result<SourceMap, (SourceMap, Vec<Diagnostic>
         for import in &program.imports {
             let target = dir.join(&import.path);
             if target.exists() {
-                children.push(target);
+                children.push((target, import.path_span));
             } else {
                 errors.push(
                     Diagnostic::error(
@@ -107,17 +128,48 @@ pub(crate) fn load(root: &Path) -> Result<SourceMap, (SourceMap, Vec<Diagnostic>
 
         // Pushed in reverse so the stack pops them in source order: the map's order
         // follows the program's text, which is what makes it reproducible.
-        for child in children.into_iter().rev() {
-            stack.push(child);
+        for (child, _) in children.iter().rev() {
+            stack.push(child.clone());
         }
 
+        index.insert(key, parts.len());
+        named.push(
+            children
+                .into_iter()
+                .map(|(c, at)| (c.canonicalize().unwrap_or(c), at))
+                .collect(),
+        );
         parts.push((path.display().to_string(), text));
     }
 
-    let map = SourceMap::from_parts(parts);
+    // Ids exist now, so the edges can be. A named file that is not in `index` failed to
+    // load and already has a diagnostic; dropping the edge here would otherwise turn one
+    // error into two.
+    let mut graph = ModuleGraph::default();
+    for i in 0..parts.len() {
+        graph.add(FileId::from_index(i));
+    }
+    for (i, imports) in named.iter().enumerate() {
+        let Some(from) = graph.module_of(FileId::from_index(i)) else {
+            continue;
+        };
+        for (target, at) in imports {
+            let Some(&j) = index.get(target) else {
+                continue;
+            };
+            if let Some(to) = graph.module_of(FileId::from_index(j)) {
+                graph.import(from, to, *at);
+            }
+        }
+    }
+
+    let loaded = Loaded {
+        map: SourceMap::from_parts(parts),
+        graph,
+    };
     if errors.is_empty() {
-        Ok(map)
+        Ok(loaded)
     } else {
-        Err((map, errors))
+        Err((loaded, errors))
     }
 }

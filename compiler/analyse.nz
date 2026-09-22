@@ -40,7 +40,7 @@ use "parse.nz";
 // inside a block that opens before it. Knowing each node's parent and position lets the
 // scan emit the branch and the label at the boundary between two children, and knowing
 // where a subtree begins lets it open a loop's header before the condition is reached.
-fn build_relations(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints,
+pub fn build_relations(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints,
         parent: Ints, childno: Ints, substart: Ints) -> Int {
     let mut k = 0;
     while k < ints_len(nk) {
@@ -70,7 +70,7 @@ fn build_relations(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints,
     ints_len(parent)
 }
 
-fn build_children(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints) -> Int {
+pub fn build_children(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints) -> Int {
     let stack = ints_new();
     let mut k = 0;
     while k < ints_len(nk) {
@@ -133,7 +133,7 @@ fn has_function(fnames: Strs, want: Str) -> Bool {
 }
 
 // `name:type` and `name:mut` texts carry two fields; this takes the part before the `:`.
-fn before_colon(s: Str) -> Str {
+pub fn before_colon(s: Str) -> Str {
     let mut i = 0;
     while i < str_len(s) {
         if str_byte(s, i) == 58 { return str_slice(s, 0, i); }
@@ -142,7 +142,7 @@ fn before_colon(s: Str) -> Str {
     s
 }
 
-fn report(dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs,
+pub fn report(dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs,
         code: Str, from: Int, to: Int, message: Str) -> Int {
     strs_push(dcode, code);
     ints_push(dstart, from);
@@ -159,14 +159,14 @@ fn report(dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs,
 // the reference checker follows by continuing with the expected type.
 
 fn t_unknown() -> Int { 0 }
-fn t_int() -> Int { 1 }
-fn t_bool() -> Int { 2 }
-fn t_str() -> Int { 3 }
-fn t_ints() -> Int { 4 }
-fn t_strs() -> Int { 5 }
-fn t_chan() -> Int { 6 }
+pub fn t_int() -> Int { 1 }
+pub fn t_bool() -> Int { 2 }
+pub fn t_str() -> Int { 3 }
+pub fn t_ints() -> Int { 4 }
+pub fn t_strs() -> Int { 5 }
+pub fn t_chan() -> Int { 6 }
 
-fn type_of_name(name: Str) -> Int {
+pub fn type_of_name(name: Str) -> Int {
     if name == "Int" { return t_int(); }
     if name == "Bool" { return t_bool(); }
     if name == "Str" { return t_str(); }
@@ -194,7 +194,7 @@ fn agrees(a: Int, b: Int) -> Bool {
     a == b
 }
 
-fn after_colon(s: Str) -> Str {
+pub fn after_colon(s: Str) -> Str {
     let mut i = 0;
     while i < str_len(s) {
         if str_byte(s, i) == 58 { return str_slice(s, i + 1, str_len(s)); }
@@ -278,7 +278,7 @@ fn scope_close(marks: Ints, names: Strs, ntypes: Ints, nmut: Ints, nslotof: Ints
 // truth for the front end. A test requires every built-in there to be present here, so
 // the two cannot drift silently.
 
-fn builtin_index(bnames: Strs, want: Str) -> Int {
+pub fn builtin_index(bnames: Strs, want: Str) -> Int {
     let mut i = 0;
     while i < strs_len(bnames) {
         if strs_get(bnames, i) == want { return i; }
@@ -300,7 +300,7 @@ fn add_builtin(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: In
     strs_len(bnames)
 }
 
-fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints) -> Int {
+pub fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints) -> Int {
     let n = t_unknown();
     add_builtin(bnames, bret, bfirst, bcount, bparams, "str_len", t_int(), t_str(), n, n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "str_byte", t_int(), t_str(), t_int(), n);
@@ -340,7 +340,7 @@ fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints)
 // Collected before any body, so a forward reference resolves — the same two-pass shape
 // `nazm-lir::lower` uses, for the same reason.
 
-fn collect_signatures(nk: Ints, nar: Ints, ntx: Strs, kids: Ints, kid_first: Ints,
+pub fn collect_signatures(nk: Ints, nar: Ints, ntx: Strs, kids: Ints, kid_first: Ints,
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints) -> Int {
     let mut k = 0;
     while k < ints_len(nk) {
@@ -401,7 +401,7 @@ fn scope_flags(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints, flags: Ints) ->
     ints_len(flags)
 }
 
-fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, nslot: Ints,
+pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, nslot: Ints,
         ntype: Ints,
         kids: Ints, kid_first: Ints, root: Int,
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,

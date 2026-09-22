@@ -57,12 +57,12 @@ struct Edit {
 }
 
 pub(crate) fn run(path: &Path, apply: bool, json: bool) -> ExitCode {
-    let Some(map) = loaded(path, json) else {
+    let Some(first) = loaded(path, json) else {
         return ExitCode::from(exit::NO_SUCH_FILE);
     };
 
-    let diagnostics = nazm_core::check_map(&map);
-    let mut edits = collect(&diagnostics, &map);
+    let diagnostics = nazm_core::check_map(&first.map, &first.graph);
+    let mut edits = collect(&diagnostics, &first.map);
 
     if apply {
         write_back(&mut edits);
@@ -75,7 +75,7 @@ pub(crate) fn run(path: &Path, apply: bool, json: bool) -> ExitCode {
     // number of edits made would be a guess about what the checker will say next.
     let remaining = match apply {
         true => match loaded(path, json) {
-            Some(again) => nazm_core::check_map(&again),
+            Some(again) => nazm_core::check_map(&again.map, &again.graph),
             None => return ExitCode::from(exit::NO_SUCH_FILE),
         },
         false => diagnostics,
@@ -92,11 +92,11 @@ pub(crate) fn run(path: &Path, apply: bool, json: bool) -> ExitCode {
     }
 }
 
-fn loaded(path: &Path, json: bool) -> Option<SourceMap> {
+fn loaded(path: &Path, json: bool) -> Option<load::Loaded> {
     match load::load(path) {
         Ok(f) => Some(f),
         Err((partial, diagnostics)) => {
-            crate::emit(&diagnostics, &partial, json);
+            crate::emit(&diagnostics, &partial.map, json);
             None
         }
     }

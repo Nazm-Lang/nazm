@@ -6,14 +6,15 @@
 //! points at the operator, and both behave identically in every build — a bug that
 //! reproduces only in one build configuration is the worst kind to be handed.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use nazm_diag::{codes, Diagnostic};
 use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, While};
 
-use nazm_syntax::intrinsic::Intrinsic;
+use nazm_sema::intrinsic::Intrinsic;
+use nazm_sema::module::ModuleId;
+use nazm_sema::resolve::{Callee, FnId, Resolution};
 
 /// A runtime value.
 ///
@@ -414,8 +415,16 @@ pub struct Interpreter {
     /// handle through every method of the interpreter, including the ones that have
     /// nothing to do with concurrency.
     program: Arc<Program>,
-    /// Name to index in `program.functions`. Shared with tasks for the same reason.
-    functions: Arc<HashMap<String, usize>>,
+    /// What resolution decided. Shared with tasks for the same reason as the tree.
+    ///
+    /// The evaluator used to carry a `HashMap<String, usize>` of its own, built over
+    /// every function in the program, and to apply the built-in-first rule itself at each
+    /// call. That was a third implementation of name resolution after the checker's and
+    /// the backend's, and once a name could mean different things in different modules it
+    /// stopped being merely duplicated and started being **wrong**: one map cannot hold
+    /// two modules' private `helper`. Calls are now looked up by the span of the callee,
+    /// which the checker already resolved.
+    res: Arc<Resolution>,
     /// Tasks started by the innermost `scope`, innermost last.
     ///
     /// A stack, because a scope may contain another and the inner one joins first.
@@ -447,22 +456,33 @@ impl Interpreter {
     ///
     /// The tree is cloned once, here, so that tasks can share it. One copy per run of a
     /// program is not a cost worth designing around; one copy per task would be.
-    pub fn new(program: &Program) -> Self {
-        let functions = program
-            .functions
-            .iter()
-            .enumerate()
-            .map(|(i, f)| (f.name.clone(), i))
-            .collect();
+    pub fn new(program: &Program, res: &Resolution) -> Self {
         Self {
             program: Arc::new(program.clone()),
-            functions: Arc::new(functions),
+            res: Arc::new(res.clone()),
             pending: Vec::new(),
             depth: 0,
             max_depth: DEFAULT_MAX_DEPTH,
             iterations_left: DEFAULT_MAX_ITERATIONS,
             args: Vec::new(),
         }
+    }
+
+    /// Which declaration the call whose callee was written at `at` refers to.
+    ///
+    /// An index into `Program::functions`, because the syntax tree is still the only
+    /// place a body lives. Two hops — span to definition, definition to declaration —
+    /// and neither of them is a name.
+    fn decl_at(&self, at: nazm_span::Span) -> Option<usize> {
+        match self.res.callee(at)? {
+            Callee::Function(id) => Some(self.res.function(id)?.decl as usize),
+            Callee::Builtin(_) => None,
+        }
+    }
+
+    /// The declaration of a definition, by id.
+    fn declaration<'p>(&self, program: &'p Program, id: FnId) -> Option<&'p Function> {
+        program.functions.get(self.res.function(id)?.decl as usize)
     }
 
     /// The arguments `arg(i)` will see.
@@ -485,11 +505,13 @@ impl Interpreter {
         // Cloned before the lookup so that the body being run borrows the clone and not
         // `self`, which `call_body` needs mutably.
         let program = Arc::clone(&self.program);
+        // The **root** module's `main`, not whichever `main` the program happens to
+        // contain. An imported module may have one of its own and it is not an entry
+        // point; `docs/spec.md` says so and this is where that is true at runtime.
         let main = self
-            .functions
-            .get("main")
-            .copied()
-            .and_then(|i| program.functions.get(i))
+            .res
+            .definition(ModuleId::ROOT, "main")
+            .and_then(|id| self.declaration(&program, id))
             .ok_or_else(|| RuntimeError {
                 diagnostic: Box::new(Diagnostic::error(
                     codes::MISSING_MAIN,
@@ -615,7 +637,7 @@ impl Interpreter {
                         )),
                     });
                 }
-                let task = self.start_task(&sp.callee, values, sp.span)?;
+                let task = self.start_task(&sp.callee, sp.callee_span, values, sp.span)?;
                 if let Some(scope) = self.pending.last_mut() {
                     scope.push(task);
                 }
@@ -1009,22 +1031,19 @@ impl Interpreter {
     fn start_task(
         &self,
         callee: &str,
+        at: nazm_span::Span,
         args: Vec<Value>,
         span: nazm_span::Span,
     ) -> Result<JoinHandle<Result<(), RuntimeError>>, RuntimeError> {
-        let index = self
-            .functions
-            .get(callee)
-            .copied()
-            .ok_or_else(|| RuntimeError {
-                diagnostic: Box::new(Diagnostic::error(
-                    codes::UNDEFINED_FUNCTION,
-                    span,
-                    format!("`{callee}` is not a function"),
-                )),
-            })?;
+        let index = self.decl_at(at).ok_or_else(|| RuntimeError {
+            diagnostic: Box::new(Diagnostic::error(
+                codes::UNDEFINED_FUNCTION,
+                span,
+                format!("`{callee}` is not a function"),
+            )),
+        })?;
         let program = Arc::clone(&self.program);
-        let functions = Arc::clone(&self.functions);
+        let res = Arc::clone(&self.res);
         let max_depth = self.max_depth;
         let iterations_left = self.iterations_left;
         let name = callee.to_string();
@@ -1038,7 +1057,7 @@ impl Interpreter {
             .spawn(move || {
                 let mut task = Self {
                     program: Arc::clone(&program),
-                    functions,
+                    res,
                     pending: Vec::new(),
                     depth: 0,
                     max_depth,
@@ -1253,24 +1272,27 @@ impl Interpreter {
             }
 
             Expr::Call {
-                callee, args, span, ..
+                callee,
+                callee_span,
+                args,
+                span,
             } => {
                 let mut values = Vec::with_capacity(args.len());
                 for a in args {
                     values.push(take!(self, a, env));
                 }
-                // Built-ins are resolved before user functions, which costs nothing:
-                // the checker rejects a program that defines one, so the two sets are
-                // disjoint and the order is a statement of intent rather than a rule.
-                if let Some(i) = Intrinsic::by_name(callee) {
+                // What this call means was decided once, by the checker, and is read here
+                // rather than decided again. "Built-ins before user functions" used to be
+                // applied at this line with its own copy of the rule; it is now one of the
+                // two answers `Callee` can hold.
+                let resolved = self.res.callee(*callee_span);
+                if let Some(Callee::Builtin(i)) = resolved {
                     return Ok(Flow::Fell(Some(self.intrinsic(i, &values, *span)?)));
                 }
 
                 let program = Arc::clone(&self.program);
                 let f = self
-                    .functions
-                    .get(callee)
-                    .copied()
+                    .decl_at(*callee_span)
                     .and_then(|i| program.functions.get(i))
                     .ok_or_else(|| RuntimeError {
                         diagnostic: Box::new(Diagnostic::error(

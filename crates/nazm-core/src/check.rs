@@ -14,9 +14,11 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Return, Spawn, Stmt, While};
 
-use nazm_syntax::intrinsic::Intrinsic;
-use nazm_syntax::resolve::{Callee, FnDef, FnId, LocalDef, Resolution};
-use nazm_syntax::types::Type;
+use nazm_sema::interface::{Export, UnitInterface, Visibility};
+use nazm_sema::intrinsic::Intrinsic;
+use nazm_sema::module::{Dependency, ModuleGraph, ModuleId};
+use nazm_sema::resolve::{Callee, FnDef, FnId, LocalDef, Resolution};
+use nazm_sema::types::Type;
 
 #[derive(Debug, Clone)]
 pub struct Signature {
@@ -34,7 +36,7 @@ struct Binding {
     ///
     /// Assigned here, once, and read by **both** consumers. The backend used to allocate
     /// its own slots on a second walk; it now reads these, which is the whole point of
-    /// `nazm_syntax::Resolution`.
+    /// `nazm_sema::Resolution`.
     slot: u32,
     /// Where the name was written in the declaration, when there is a declaration to
     /// edit. `None` for a parameter.
@@ -139,13 +141,92 @@ impl Completion {
     }
 }
 
+/// A name a module may write, and what writing it means.
+#[derive(Debug, Clone)]
+struct Visible {
+    sig: Signature,
+    callee: Callee,
+}
+
+/// What one module may name.
+///
+/// Built-ins, this module's own definitions — public and private alike — and the exports
+/// of the modules it **directly** imports. Nothing else: not a transitive dependency's
+/// exports, not another module's private definitions, and not a definition from a module
+/// that happens to be in the same compilation.
+///
+/// This replaced a `HashMap<String, Signature>` built once over every function in the
+/// program. That map was the global namespace: it could not represent two modules each
+/// defining `helper`, and it gave the same answer to "what does `parse` mean" regardless
+/// of who asked. An environment is per module because the answer is.
+#[derive(Debug, Default)]
+struct Env {
+    names: HashMap<String, Visible>,
+}
+
+impl Env {
+    fn get(&self, name: &str) -> Option<&Visible> {
+        self.names.get(name)
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.names.contains_key(name)
+    }
+}
+
+/// One module's declarations, as the checker receives them.
+///
+/// The functions written in one file, the module they belong to, and what that module
+/// imports. Assembled from a `Program` because that is where the trees are; nothing here
+/// needs the other modules' trees, which is the property the whole milestone is about.
 #[derive(Debug)]
-pub struct Checker {
-    /// What resolution decided, and the single answer both consumers read.
-    res: Resolution,
+pub struct Unit<'a> {
+    module: ModuleId,
+    /// Each function of this module, with its index in `Program::functions`.
+    functions: Vec<(u32, &'a Function)>,
+    imports: &'a [Dependency],
+}
+
+impl<'a> Unit<'a> {
+    /// The part of `program` that belongs to `module`.
+    #[must_use]
+    pub fn of(program: &'a Program, graph: &'a ModuleGraph, module: ModuleId) -> Self {
+        let functions = program
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| graph.module_of(f.name_span.file) == Some(module))
+            .map(|(i, f)| (u32::try_from(i).unwrap_or(u32::MAX), f))
+            .collect();
+        Self {
+            module,
+            functions,
+            imports: graph.imports(module),
+        }
+    }
+
+    #[must_use]
+    pub fn module(&self) -> ModuleId {
+        self.module
+    }
+}
+
+#[derive(Debug)]
+pub struct Checker<'a> {
+    /// What resolution decided, and the single answer every consumer reads.
+    ///
+    /// Borrowed, not owned: one resolution spans the whole compilation while each unit is
+    /// checked separately into it. Two resolutions would be two answers.
+    res: &'a mut Resolution,
+    /// The module whose bodies are being checked.
+    module: ModuleId,
+    /// What that module may name.
+    env: Env,
+    /// The modules it directly imports, for the diagnostic that tells a reader a
+    /// definition exists and is private rather than that it does not exist.
+    imports: Vec<ModuleId>,
     /// The function whose body is being checked, for slot allocation.
     current: Option<FnId>,
-    functions: HashMap<String, Signature>,
     scopes: Scopes,
     errors: Vec<Diagnostic>,
     /// The enclosing function's declared return type, for checking `return`.
@@ -164,12 +245,163 @@ pub struct Checker {
     loop_depth: u32,
 }
 
-/// Check a program. Returns the signatures and every diagnostic found.
+/// Check a compilation. Returns what resolution decided and every diagnostic found.
+///
+/// # Two stages, and why they are two
+///
+/// 1. **Declarations**, for every module. A module's own declarations need nothing from
+///    any other module: a signature is written out in full, so reading one requires no
+///    inference and no ordering.
+/// 2. **Bodies**, each module against its own definitions and the *interfaces* of the
+///    modules it directly imports.
+///
+/// Neither stage needs modules in a particular order, which is exactly why an import cycle
+/// remains legal — see `docs/spec.md`. It is also why this function is thin: the work is
+/// in [`declare_unit`] and [`check_unit`], which are the same functions a single unit is
+/// checked with. There is no second path that resolves names differently for the
+/// whole-program case.
 #[must_use]
-pub fn check(program: &Program) -> (Resolution, Vec<Diagnostic>) {
+pub fn check(program: &Program, graph: &ModuleGraph) -> (Resolution, Vec<Diagnostic>) {
+    let mut res = Resolution::default();
+    let mut errors = Vec::new();
+
+    let units: Vec<Unit<'_>> = graph.ids().map(|m| Unit::of(program, graph, m)).collect();
+
+    // Stage 1, for the whole graph before any body is checked. A cycle needs this: A's
+    // body may call B while B's calls A, and neither ordering of the two would work.
+    let interfaces: Vec<UnitInterface> = units
+        .iter()
+        .map(|u| declare_unit(u, &mut res, &mut errors))
+        .collect();
+
+    // Stage 2, module by module. `deps` is the *direct* imports and nothing else, so a
+    // name only reachable transitively is not in scope — by construction rather than by a
+    // rule someone has to remember.
+    for u in &units {
+        let deps: Vec<&UnitInterface> = u
+            .imports
+            .iter()
+            .filter_map(|d| interfaces.get(d.on.index()))
+            .collect();
+        check_unit(u, &deps, &mut res, &mut errors);
+    }
+
+    // The **root** module owns `main`. Another module's `main` is one of its definitions
+    // and nothing more, which is why a helper file may have one.
+    if res.definition(graph.root(), "main").is_none() {
+        errors.push(
+            Diagnostic::error(
+                codes::MISSING_MAIN,
+                Span::synthetic(),
+                "this program has no `main` function",
+            )
+            .help("`nazm run` evaluates `fn main() -> Int` in the file you named"),
+        );
+    }
+
+    (res, errors)
+}
+
+/// Stage 1 for one module: declare what it defines, and say what it offers.
+///
+/// Reads this module's declarations and nothing else — no other module's source, no other
+/// module's interface. That is what makes the stage orderable in any order, including one
+/// that contains a cycle.
+pub fn declare_unit(
+    unit: &Unit<'_>,
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+) -> UnitInterface {
+    let mut exports = Vec::new();
+
+    for (decl, f) in &unit.functions {
+        let params: Vec<Type> = f
+            .params
+            .iter()
+            .map(|p| resolve_type(&p.ty.name, p.ty.span, errors))
+            .collect();
+        let ret = resolve_type(&f.return_type.name, f.return_type.span, errors);
+
+        // A built-in has no source span to point at, so "first defined here" would aim
+        // at byte zero. Said plainly instead. Built-ins are not a module's definitions,
+        // so no visibility rule makes this one legal.
+        if Intrinsic::by_name(&f.name).is_some() {
+            errors.push(
+                Diagnostic::error(
+                    codes::DUPLICATE_FUNCTION,
+                    f.name_span,
+                    format!("`{}` is a built-in and cannot be redefined", f.name),
+                )
+                .help(
+                    "built-ins share the ordinary function namespace so that a call \
+                     always means the same thing; choose another name",
+                ),
+            );
+            continue;
+        }
+
+        // Within this module. Another module defining the same name is another module's
+        // definition, and since 2026-09-22 that is not a collision.
+        if let Some(existing) = res
+            .definition(unit.module, &f.name)
+            .and_then(|id| res.function(id))
+        {
+            errors.push(
+                Diagnostic::error(
+                    codes::DUPLICATE_FUNCTION,
+                    f.name_span,
+                    format!("`{}` is defined more than once in this module", f.name),
+                )
+                .secondary(existing.name_span, "first defined here"),
+            );
+            continue;
+        }
+
+        let visibility = Visibility::from_keyword(f.pub_span);
+        let id = res.declare(FnDef {
+            name: f.name.clone(),
+            module: unit.module,
+            visibility,
+            params: params.clone(),
+            ret,
+            name_span: f.name_span,
+            decl: *decl,
+            locals: Vec::new(),
+        });
+
+        if visibility.is_exported() {
+            exports.push(Export {
+                name: f.name.clone(),
+                params,
+                ret,
+                name_span: f.name_span,
+                def: id,
+            });
+        }
+    }
+
+    UnitInterface::new(unit.module, exports, unit.imports.to_vec())
+}
+
+/// Stage 2 for one module: check its bodies against its environment.
+///
+/// `deps` are the interfaces of the modules this one **directly** imports. Their bodies
+/// are not a parameter, are not reachable from one, and are not read. That sentence is the
+/// whole claim `docs/spec.md` makes about compilation units, and this signature is where
+/// it is either true or not.
+pub fn check_unit(
+    unit: &Unit<'_>,
+    deps: &[&UnitInterface],
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let env = environment(unit, deps, res, errors);
+    let imports = unit.imports.iter().map(|d| d.on).collect();
     let mut c = Checker {
-        functions: HashMap::new(),
-        res: Resolution::default(),
+        res,
+        module: unit.module,
+        env,
+        imports,
         current: None,
         scopes: Scopes::default(),
         errors: Vec::new(),
@@ -177,45 +409,149 @@ pub fn check(program: &Program) -> (Resolution, Vec<Diagnostic>) {
         scope_depth: 0,
         loop_depth: 0,
     };
+    for (_, f) in &unit.functions {
+        c.check_function(f);
+    }
+    errors.append(&mut c.errors);
+}
+
+/// The names one module may write.
+///
+/// Built-ins, then its own definitions, then the exports of each direct import — in that
+/// order, and every conflict between the last two is reported rather than resolved.
+fn environment(
+    unit: &Unit<'_>,
+    deps: &[&UnitInterface],
+    res: &Resolution,
+    errors: &mut Vec<Diagnostic>,
+) -> Env {
+    let mut names: HashMap<String, Visible> = HashMap::new();
 
     // Built-ins first, so a user definition of one collides with it rather than
-    // shadowing it. They share the ordinary function namespace deliberately: a call is
-    // a call, and `str_len(s)` should resolve by the same rule as any other.
+    // shadowing it. They share the ordinary function namespace deliberately: a call is a
+    // call, and `str_len(s)` should resolve by the same rule as any other. They belong to
+    // no module, so every module has all of them.
     for i in Intrinsic::ALL {
-        c.functions.insert(
+        names.insert(
             i.name().to_owned(),
-            Signature {
-                params: i.params().to_vec(),
-                ret: i.ret(),
-                name_span: Span::synthetic(),
+            Visible {
+                sig: Signature {
+                    params: i.params().to_vec(),
+                    ret: i.ret(),
+                    name_span: Span::synthetic(),
+                },
+                callee: Callee::Builtin(i),
             },
         );
     }
 
-    // Signatures next, so a call to a function defined later in the file resolves.
-    for f in &program.functions {
-        c.collect_signature(f);
-    }
-
-    if !c.functions.contains_key("main") {
-        c.errors.push(
-            Diagnostic::error(
-                codes::MISSING_MAIN,
-                Span::synthetic(),
-                "this program has no `main` function",
-            )
-            .help("`nazm run` evaluates `fn main() -> Int` and prints its value"),
+    // This module's own definitions, exported or not. A module sees all of its own.
+    for (_, f) in &unit.functions {
+        let Some(id) = res.definition(unit.module, &f.name) else {
+            continue;
+        };
+        let Some(def) = res.function(id) else {
+            continue;
+        };
+        names.insert(
+            def.name.clone(),
+            Visible {
+                sig: Signature {
+                    params: def.params.clone(),
+                    ret: def.ret,
+                    name_span: def.name_span,
+                },
+                callee: Callee::Function(id),
+            },
         );
     }
 
-    for f in &program.functions {
-        c.check_function(f);
+    // The exports of each direct import, and both ways that can go wrong. `brought_in`
+    // remembers which `use` introduced each name, so the second collision points at the
+    // first rather than at "somewhere else".
+    let mut brought_in: HashMap<&str, Span> = HashMap::new();
+    for d in unit.imports {
+        let Some(iface) = deps.iter().find(|i| i.module() == d.on) else {
+            continue;
+        };
+        for e in iface.exports() {
+            if let Some(own) = res
+                .definition(unit.module, &e.name)
+                .and_then(|id| res.function(id))
+            {
+                errors.push(
+                    Diagnostic::error(
+                        codes::IMPORT_COLLIDES_WITH_DEFINITION,
+                        d.at,
+                        format!(
+                            "this import brings in `{}`, which this module defines",
+                            e.name
+                        ),
+                    )
+                    .secondary(own.name_span, "defined here")
+                    .secondary(e.name_span, "and exported here")
+                    .help(
+                        "an imported name and a local one are not ranked: rename one of \
+                         them, or stop exporting the other",
+                    ),
+                );
+                continue;
+            }
+            if let Some(first) = brought_in.get(e.name.as_str()) {
+                errors.push(
+                    Diagnostic::error(
+                        codes::AMBIGUOUS_IMPORT,
+                        d.at,
+                        format!("`{}` is exported by two imported modules", e.name),
+                    )
+                    .secondary(*first, "also brought in here")
+                    .secondary(e.name_span, "exported here")
+                    .help(
+                        "there is no way to write which one is meant, so the ambiguity \
+                         is refused where it is created rather than where it is used",
+                    ),
+                );
+                continue;
+            }
+            brought_in.insert(e.name.as_str(), d.at);
+            names.insert(
+                e.name.clone(),
+                Visible {
+                    sig: Signature {
+                        params: e.params.clone(),
+                        ret: e.ret,
+                        name_span: e.name_span,
+                    },
+                    callee: Callee::Function(e.def),
+                },
+            );
+        }
     }
 
-    (c.res, c.errors)
+    Env { names }
 }
 
-impl Checker {
+/// A type name, or `Int` and a diagnostic.
+///
+/// A free function rather than a method: stage 1 resolves signatures before there is a
+/// `Checker` to be a method on, and having two copies of "what is a type name" is the
+/// class of duplication N1 removed.
+fn resolve_type(name: &str, span: Span, errors: &mut Vec<Diagnostic>) -> Type {
+    match Type::from_name(name) {
+        Some(t) => t,
+        None => {
+            errors.push(
+                Diagnostic::error(codes::UNKNOWN_TYPE, span, format!("`{name}` is not a type"))
+                    .help(format!("v0.1 has {}", Type::all_names())),
+            );
+            // Continue as `Int` rather than abandoning the function: one unknown type
+            // should not suppress every other error in the body.
+            Type::Int
+        }
+    }
+}
+
+impl Checker<'_> {
     /// Give a binding its slot in the current function's storage.
     ///
     /// **Parameters first, in order, then body bindings as they are declared, and never
@@ -244,87 +580,84 @@ impl Checker {
     /// name is refused at declaration, so the two sets are disjoint and the order states
     /// intent rather than breaking a tie. Written once here because it is a language rule;
     /// the evaluator and the backend used to each apply their own copy of it.
-    fn resolve_callee(&mut self, name: &str, at: Span) -> Option<Callee> {
-        let callee = Intrinsic::by_name(name)
-            .map(Callee::Builtin)
-            .or_else(|| self.res.function_id(name).map(Callee::Function))?;
-        self.res.record_call(at, callee);
-        Some(callee)
+    /// Resolve a call, record what it resolved to, and hand back the signature.
+    ///
+    /// One lookup, in **this module's** environment. Built-ins are in it, this module's
+    /// own definitions are in it, and the exports of what it imports are in it; the order
+    /// they were put there in is where "built-ins first" is now expressed, once, rather
+    /// than at each call site.
+    ///
+    /// `None` is a name this module may not write. Whether that is because it does not
+    /// exist, because it is private where it lives, or because it lives in a module this
+    /// one did not import, is [`Self::why_invisible`]'s question — and getting that answer
+    /// right is most of what makes the visibility rule usable.
+    fn resolve_callee(&mut self, name: &str, at: Span) -> Option<Signature> {
+        let visible = self.env.get(name)?.clone();
+        self.res.record_call(at, visible.callee);
+        Some(visible.sig)
+    }
+
+    /// Why this module cannot write `name`, when something in the compilation has it.
+    ///
+    /// Returns the diagnostic to raise instead of a plain "not defined". Both cases point
+    /// at the definition, because in both the reader is looking at a file that has it.
+    ///
+    /// Reading every module's definitions is legitimate **here and nowhere else**: this
+    /// runs only after resolution has already failed, and it decides what to say rather
+    /// than what a name means. A resolver that consulted this would be the global
+    /// namespace again, which is why it lives behind a name that says so.
+    fn why_invisible(&self, name: &str, at: Span) -> Option<Diagnostic> {
+        let mut elsewhere = None;
+        for id in self.res.defined_anywhere(name) {
+            let Some(def) = self.res.function(id) else {
+                continue;
+            };
+            if self.imports.contains(&def.module) && !def.visibility.is_exported() {
+                return Some(
+                    Diagnostic::error(
+                        codes::PRIVATE_DEFINITION,
+                        at,
+                        format!("`{name}` is private to the module that defines it"),
+                    )
+                    .secondary(def.name_span, "defined privately here")
+                    .help(format!(
+                        "write `pub fn {name}` there to export it, if it is meant to be \
+                         part of that module's interface"
+                    )),
+                );
+            }
+            if !self.imports.contains(&def.module)
+                && def.module != self.module
+                && def.visibility.is_exported()
+            {
+                elsewhere = Some(def.name_span);
+            }
+        }
+        // Exported by a module this one does not import. Almost always a missing `use`,
+        // and almost always because the name used to be reachable through someone else's
+        // import — which is exactly what stopped being true.
+        elsewhere.map(|span| {
+            Diagnostic::error(
+                codes::UNDEFINED_FUNCTION,
+                at,
+                format!("`{name}` is not defined in this module"),
+            )
+            .secondary(span, "exported here, by a module this one does not import")
+            .help("imports are not transitive: add a `use` for the module that exports it")
+        })
     }
 
     fn resolve_type(&mut self, name: &str, span: Span) -> Type {
-        match Type::from_name(name) {
-            Some(t) => t,
-            None => {
-                self.errors.push(
-                    Diagnostic::error(codes::UNKNOWN_TYPE, span, format!("`{name}` is not a type"))
-                        .help(format!("v0.1 has {}", Type::all_names())),
-                );
-                // Continue as `Int` rather than abandoning the function: one unknown type
-                // should not suppress every other error in the body.
-                Type::Int
-            }
-        }
-    }
-
-    fn collect_signature(&mut self, f: &Function) {
-        let params: Vec<Type> = f
-            .params
-            .iter()
-            .map(|p| self.resolve_type(&p.ty.name, p.ty.span))
-            .collect();
-        let ret = self.resolve_type(&f.return_type.name, f.return_type.span);
-
-        // A built-in has no source span to point at, so "first defined here" would aim
-        // at byte zero. Said plainly instead.
-        if Intrinsic::by_name(&f.name).is_some() {
-            self.errors.push(
-                Diagnostic::error(
-                    codes::DUPLICATE_FUNCTION,
-                    f.name_span,
-                    format!("`{}` is a built-in and cannot be redefined", f.name),
-                )
-                .help(
-                    "built-ins share the ordinary function namespace so that a call \
-                     always means the same thing; choose another name",
-                ),
-            );
-            return;
-        }
-        if let Some(existing) = self.functions.get(&f.name) {
-            self.errors.push(
-                Diagnostic::error(
-                    codes::DUPLICATE_FUNCTION,
-                    f.name_span,
-                    format!("`{}` is defined more than once", f.name),
-                )
-                .secondary(existing.name_span, "first defined here"),
-            );
-            return;
-        }
-        // The same declaration, in the artefact the backend will read. Declared here and
-        // not in a second pass, so the two cannot disagree about which functions exist.
-        self.res.declare(FnDef {
-            name: f.name.clone(),
-            params: params.clone(),
-            ret,
-            name_span: f.name_span,
-            locals: Vec::new(),
-        });
-        self.functions.insert(
-            f.name.clone(),
-            Signature {
-                params,
-                ret,
-                name_span: f.name_span,
-            },
-        );
+        resolve_type(name, span, &mut self.errors)
     }
 
     fn check_function(&mut self, f: &Function) {
         // Slot allocation starts fresh per function: a caller's local and a callee's
         // local with the same spelling are different storage, not the same.
-        self.current = self.res.function_id(&f.name);
+        //
+        // Looked up in **this module's** table. Before N2 the name alone was enough,
+        // which is the same thing as saying a name meant one function in the program.
+        self.current = self.res.definition(self.module, &f.name);
         self.scopes.push();
         for p in &f.params {
             let ty = self.resolve_type(&p.ty.name, p.ty.span);
@@ -537,13 +870,17 @@ impl Checker {
             );
         }
 
-        self.resolve_callee(&s.callee, s.callee_span);
-        let Some(sig) = self.functions.get(&s.callee).cloned() else {
-            self.errors.push(Diagnostic::error(
-                codes::UNDEFINED_FUNCTION,
-                s.callee_span,
-                format!("`{}` is not a function", s.callee),
-            ));
+        let Some(sig) = self.resolve_callee(&s.callee, s.callee_span) else {
+            let d = self
+                .why_invisible(&s.callee, s.callee_span)
+                .unwrap_or_else(|| {
+                    Diagnostic::error(
+                        codes::UNDEFINED_FUNCTION,
+                        s.callee_span,
+                        format!("`{}` is not a function", s.callee),
+                    )
+                });
+            self.errors.push(d);
             for a in &s.args {
                 self.check_expr(a, None);
             }
@@ -781,7 +1118,7 @@ impl Checker {
                         *span,
                         format!("`{name}` is not defined"),
                     );
-                    if self.functions.contains_key(name) {
+                    if self.env.contains(name) {
                         d = d.help(format!("`{name}` is a function — call it as `{name}(...)`"));
                     }
                     self.errors.push(d);
@@ -831,13 +1168,15 @@ impl Checker {
                 args,
                 span,
             } => {
-                self.resolve_callee(callee, *callee_span);
-                let Some(sig) = self.functions.get(callee).cloned() else {
-                    self.errors.push(Diagnostic::error(
-                        codes::UNDEFINED_FUNCTION,
-                        *callee_span,
-                        format!("`{callee}` is not a function"),
-                    ));
+                let Some(sig) = self.resolve_callee(callee, *callee_span) else {
+                    let d = self.why_invisible(callee, *callee_span).unwrap_or_else(|| {
+                        Diagnostic::error(
+                            codes::UNDEFINED_FUNCTION,
+                            *callee_span,
+                            format!("`{callee}` is not a function"),
+                        )
+                    });
+                    self.errors.push(d);
                     for a in args {
                         self.check_expr(a, None);
                     }

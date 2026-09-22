@@ -21,12 +21,18 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         "nazm-span" => &[],
         "nazm-diag" => &["nazm-span"],
         "nazm-syntax" => &["nazm-span", "nazm-diag"],
-        "nazm-core" => &["nazm-span", "nazm-diag", "nazm-syntax"],
+        // What a program *means*, separately from how it was written. It depends on
+        // spans and nothing else — deliberately not on `nazm-syntax`, so that the
+        // vocabulary the checker uses to record its decisions cannot start describing
+        // the tree those decisions were read off. See the crate documentation for the
+        // source-level evidence that moved these types out of the syntax crate in N2.
+        "nazm-sema" => &["nazm-span"],
+        "nazm-core" => &["nazm-span", "nazm-diag", "nazm-syntax", "nazm-sema"],
         // Level 7 of the table in `docs/architecture.md` §2, and the only level built.
         // It reads the syntax tree and produces LLVM IR *as text*, so it needs no
         // code-generator dependency — which is why `may_depend_on_codegen` below stays
         // false for it.
-        "nazm-lir" => &["nazm-span", "nazm-diag", "nazm-syntax"],
+        "nazm-lir" => &["nazm-span", "nazm-diag", "nazm-syntax", "nazm-sema"],
         // The CLI deliberately does NOT depend on nazm-syntax: it goes through nazm-core,
         // so there is one entry point into the front end rather than two that can drift.
         "nazm-cli" => &["nazm-span", "nazm-diag", "nazm-core", "nazm-lir"],

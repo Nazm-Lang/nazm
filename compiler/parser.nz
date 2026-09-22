@@ -4,6 +4,7 @@
 // Output: one node per line, `kind|arity|start|end|text`, in post-order.
 
 use "parse.nz";
+use "lex.nz";
 
 fn main() -> Int {
     if args_count() < 1 {

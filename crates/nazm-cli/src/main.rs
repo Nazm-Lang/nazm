@@ -279,27 +279,28 @@ fn main() -> ExitCode {
         }
     };
 
-    // The root file and everything it imports, as one buffer. A program with no `use`
-    // takes the same path and produces a one-segment buffer.
-    let map = match load::load(&path) {
+    // The root file and everything it imports, and how they relate. A program with no
+    // `use` takes the same path and produces a graph of one module.
+    let loaded = match load::load(&path) {
         Ok(f) => f,
-        // The partial buffer comes back with the errors, so the caret lands on the
-        // `use` that could not be resolved rather than on nothing.
+        // What was loaded comes back with the errors, so the caret lands on the `use`
+        // that could not be resolved rather than on nothing.
         Err((partial, diagnostics)) => {
-            emit(&diagnostics, &partial, json);
+            emit(&diagnostics, &partial.map, json);
             return ExitCode::from(exit::NO_SUCH_FILE);
         }
     };
+    let map = &loaded.map;
 
     // Checking always runs; evaluation only when it passed. Running a program known to be
     // ill-typed produces a second, less useful error about the same mistake.
     let outcome = if let Some((limits, args)) = limits {
-        nazm_core::run_map(&map, limits, args)
+        nazm_core::run_map(map, &loaded.graph, limits, args)
     } else {
         // Through `check_source`, which puts parsing and checking on the same
         // interpreter-owned stack `run` uses. Both recurse with the shape of the tree, so
         // `nazm check` on a deeply nested file needs the stack as much as `nazm run` does.
-        let diagnostics = nazm_core::check_map(&map);
+        let diagnostics = nazm_core::check_map(map, &loaded.graph);
         if diagnostics.is_empty() {
             return report_ok("ok", None);
         }
@@ -309,7 +310,7 @@ fn main() -> ExitCode {
     match outcome {
         Outcome::Value(v) => report_ok(&v.to_string(), None),
         Outcome::CheckFailed(ds) => {
-            emit(&ds, &map, json);
+            emit(&ds, map, json);
             eprintln!(
                 "nazm: {} error{}",
                 ds.len(),
@@ -318,7 +319,7 @@ fn main() -> ExitCode {
             ExitCode::from(exit::CHECK_FAILED)
         }
         Outcome::RuntimeFailed(d) => {
-            emit(std::slice::from_ref(&d), &map, json);
+            emit(std::slice::from_ref(&d), map, json);
             ExitCode::from(exit::RUNTIME_FAILED)
         }
     }
