@@ -718,3 +718,38 @@ find = """                // A `return` leaves the function whether or not its o
                 // already reported anything written after it (`N0313`).
                 return (stmts, Ends::Transfers);"""
 replace = """                return (stmts, Ends::FallsThrough);"""
+
+[[mutation]]
+name = "every-definition-is-exported"
+why = """
+ignores `pub` and treats every top-level definition as part of its module's interface —
+the pre-N2 language, reachable by deleting one word. A module's private helper becomes
+callable from anywhere that imports it, and two modules that each keep a `size` start
+colliding through an import
+"""
+file = "crates/nazm-core/src/check.rs"
+find = "        let visibility = Visibility::from_keyword(f.pub_span);"
+replace = "        let visibility = Visibility::Exported;"
+
+[[mutation]]
+name = "imports-become-transitive"
+why = """
+brings in what a dependency imported as well as what it exports, so a module can name
+anything reachable from it. The rule with the largest effect on how much context reading
+one module requires, and its absence is invisible in any single-module test
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """    let mut brought_in: HashMap<&str, Span> = HashMap::new();
+    for d in unit.imports {"""
+replace = """    let mut brought_in: HashMap<&str, Span> = HashMap::new();
+    let reachable: Vec<Dependency> = unit
+        .imports
+        .iter()
+        .copied()
+        .chain(
+            deps.iter()
+                .flat_map(|i| i.imports().iter().copied())
+                .collect::<Vec<_>>(),
+        )
+        .collect();
+    for d in &reachable {"""
