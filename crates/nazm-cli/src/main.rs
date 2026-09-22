@@ -32,9 +32,11 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod backend;
 mod build;
 mod capabilities;
 mod checking;
+mod derived;
 mod fix;
 mod fmt;
 mod interface;
@@ -240,6 +242,18 @@ enum Command {
         /// test suite compiles the same programs at 0 and 2 to keep that true.
         #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
         opt_level: u8,
+        /// Compile every unit, reusing nothing.
+        ///
+        /// As `nazm check --no-cache`, and for the same reason: the equivalence tests
+        /// compare a build with this flag against one without and require the same
+        /// program. It disables the native object store; nothing in `nazm build` reads
+        /// the semantic one.
+        #[arg(long)]
+        no_cache: bool,
+        /// One `nazm.build-report/1` object on stdout: what was compiled, and what was
+        /// reused.
+        #[arg(long)]
+        build_report: bool,
     },
 }
 
@@ -275,9 +289,19 @@ fn main() -> ExitCode {
         json,
         emit_ir,
         opt_level,
+        no_cache,
+        build_report,
     } = cli.command
     {
-        return build::run(&file, out.as_deref(), json, emit_ir, opt_level);
+        return build::run(
+            &file,
+            out.as_deref(),
+            json,
+            emit_ir,
+            opt_level,
+            !no_cache,
+            build_report,
+        );
     }
     match cli.command {
         Command::Check {

@@ -45,7 +45,9 @@
 
 use std::fmt::Write as _;
 
-use nazm_span::{SourceMap, Span};
+use nazm_span::Span;
+
+use crate::names::SourceNames;
 
 use crate::ir::{ArithOp, Block, Builtin, Expr, Function, Lowering as _, Stmt, Ty, Unit};
 use crate::symbol::NativeSymbol;
@@ -82,7 +84,7 @@ struct Emitter<'a> {
     /// a third copy of logic `nazm-span` already owned, and one that assumed all files
     /// were one buffer. It asks the map now, which also means a baked position names the
     /// line of the file the error is in rather than of a concatenation.
-    map: &'a SourceMap,
+    names: &'a SourceNames<'a>,
     /// Active loops, innermost last. Pushed around a loop's **body** only — a `break` in
     /// a loop's *condition* belongs to the enclosing loop, which is the existing
     /// language's rule (`docs/spec.md`, *Where a loop target binds*). Cleared at every
@@ -219,7 +221,7 @@ impl Emitter<'_> {
     /// runtime error from a compiled program points where the same error from
     /// `nazm run` would.
     fn position(&self, span: Span) -> (usize, usize) {
-        let at = self.map.line_col(span);
+        let at = self.names.line_col(span);
         (at.line as usize, at.column as usize)
     }
 
@@ -381,7 +383,7 @@ impl Emitter<'_> {
             "nazm: error[{}]: {} at {}:{line}:{col}\n",
             failure.code,
             failure.message,
-            self.map.name(span.file)
+            self.names.name(span.file)
         );
         self.intern(&text)
     }
@@ -1943,7 +1945,7 @@ fn preamble(out: &mut String, source: &str) {
 ///
 /// The returned [`Needs`] is what this unit reached, for the driver to union.
 #[must_use]
-pub fn emit_unit(unit: &Unit, map: &SourceMap) -> (String, Needs) {
+pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
     let mut e = Emitter {
         out: String::new(),
         next: 0,
@@ -1951,7 +1953,7 @@ pub fn emit_unit(unit: &Unit, map: &SourceMap) -> (String, Needs) {
         current: "entry".to_owned(),
         strings: Vec::new(),
         blobs: Vec::new(),
-        map,
+        names,
         loops: Vec::new(),
         scopes: Vec::new(),
         used_unwind: false,
@@ -2876,10 +2878,8 @@ mod tests {
     /// One unit's IR, with the runtime and the entry wrapper appended so that a test can
     /// look for anything the finished program contains.
     fn ir_of(u: &Unit) -> String {
-        let (text, needs) = emit_unit(
-            u,
-            &SourceMap::single("t.nz", "a source line\nand another\n"),
-        );
+        let map = SourceMap::single("t.nz", "a source line\nand another\n");
+        let (text, needs) = emit_unit(u, &SourceNames::only(&map));
         text + &emit_runtime(needs) + &emit_entry(&sym("main"), needs)
     }
 
@@ -2964,10 +2964,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        let (ir, _) = emit_unit(
-            &m,
-            &SourceMap::single("prog.nz", "line one\nline two\n    1 / 0\n"),
-        );
+        let map = SourceMap::single("prog.nz", "line one\nline two\n    1 / 0\n");
+        let (ir, _) = emit_unit(&m, &SourceNames::only(&map));
         assert!(ir.contains("prog.nz:3:7"), "{ir}");
         assert!(ir.contains("N0401"), "{ir}");
     }

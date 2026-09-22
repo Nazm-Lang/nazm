@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.build-report-1.json",
+  "title": "nazm.build-report/1",
+  "description": "What one `nazm build --build-report` did: what was checked, what was compiled into an object, what was reused, and whether the link ran. One object on stdout, before the executable's path. It reports on work, never on meaning — a program's diagnostics, its exit status and its behaviour are the same with the cache on, off, cold or warm.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "root", "semantic", "native", "link"],
+  "properties": {
+    "schema": { "const": "nazm.build-report/1" },
+    "root": {
+      "enum": ["given", "marker", "derived"],
+      "description": "How the source root was decided: named with `--source-root`, found as a `nazm.root` marker, or derived from the file named on the command line. It decides every module's durable identity, which is the name the generated code carries — so a marker is what lets two entry points share the objects of a module they both import."
+    },
+    "semantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checked", "reused"],
+      "description": "The front end. `reused` is structurally zero in `nazm build`: `nazm check` may skip a module's bodies because it needs only the interface afterwards, and a build needs the resolution those bodies produce, which nothing persists.",
+      "properties": {
+        "checked": { "type": "integer", "minimum": 0, "description": "Modules checked. Every module, every build." },
+        "reused": { "type": "integer", "minimum": 0, "description": "Modules whose bodies were not checked. Always zero here." }
+      }
+    },
+    "native": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["units", "compiled", "reused", "rejected", "stored"],
+      "description": "The object stage. `units` is always the whole program: one LLVM unit per module, plus the runtime and the entry wrapper. Emission is not cached, so every unit is emitted and fingerprinted on every build; only `clang -c` is skipped.",
+      "properties": {
+        "units": { "type": "integer", "minimum": 0, "description": "LLVM units emitted." },
+        "compiled": { "type": "integer", "minimum": 0, "description": "Units handed to the object compiler." },
+        "reused": { "type": "integer", "minimum": 0, "description": "Units whose object came from the store, validated. Zero with `--no-cache`." },
+        "rejected": { "type": "integer", "minimum": 0, "description": "Units compiled because what was filed could not be used: truncated, edited, from another backend, or an entry for something else. Never an error — a cache is derived data." },
+        "stored": { "type": "integer", "minimum": 0, "description": "Objects written to the store this run." }
+      }
+    },
+    "link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["performed"],
+      "description": "The link. Always performed: there is no executable cache, no link-result cache and no incremental linker.",
+      "properties": {
+        "performed": { "const": true, "description": "Always true. The report is printed after a successful link." }
+      }
+    }
+  }
+}
