@@ -150,7 +150,7 @@ whose source does not exist, and refuses the same module when that interface is 
 exports; imports are not transitive; every collision is a diagnostic naming both sides
 (`N0206`–`N0208`). Twenty cases in `crates/nazm-cli/tests/visibility.rs`, most of them run
 interpreted and compiled and required to agree. The self-hosted compiler was migrated
-rather than exempted: 80 of its 154 functions are `pub`, 74 are private.
+rather than exempted: 80 of its 215 functions are `pub`, 135 are private.
 
 **Limitation** · **Nothing is separately *compiled*.** A unit can be checked from
 interfaces; lowering and code generation still take the whole program and emit one LLVM
@@ -718,8 +718,8 @@ fixpoint claim itself is unaffected — C1 → C2 → C3 is about the compiler w
 and the reference check is explicitly not part of the chain — but *which front end built
 C1* was not what the record said it was.
 
-**Since N2** the compiler source states its own module boundaries: 80 of its 154 functions
-are `pub`, 74 are private, and `emit.nz`, `check.nz` and `parser.nz` gained the `use` lines
+**Since N2** the compiler source states its own module boundaries: 80 of its 215 functions
+are `pub`, 135 are private, and `emit.nz`, `check.nz` and `parser.nz` gained the `use` lines
 for modules they were reaching through someone else's import.
 
 **Next dependency** · None.

@@ -119,9 +119,11 @@ currently defines. It was not.
 
 ### Visibility, since N2 — 2026-09-22
 
-The compiler source states its own module boundaries. **80 of its 154 top-level functions
-are `pub`; 74 are private**, and the split was computed from which names are actually
-called across a file boundary rather than applied to everything. `emit.nz`, `check.nz` and
+The compiler source states its own module boundaries. **80 of its 215 top-level functions
+are `pub`; 135 are private**, and the split was computed from which names are actually
+called across a file boundary rather than applied to everything. Every export comes from
+three files — `lex.nz` 40, `parse.nz` 23, `analyse.nz` 16, `module.nz` 1 — and `emit.nz`,
+the largest at 58 functions, exports nothing at all, because nothing imports it. `emit.nz`, `check.nz` and
 `parser.nz` gained `use` lines for modules they were using and naming nowhere —
 `emit.nz` was calling into `lex.nz` and `parse.nz` through `analyse.nz`'s imports, which
 stopped working when imports stopped being transitive.
