@@ -11,6 +11,7 @@ against them — so these documents are tested rather than described.
 | `nazm.fix/1` | `nazm fix --json` | stdout | one object per line |
 | `nazm.capabilities/1` | `nazm capabilities --json` | stdout | one object |
 | `nazm.test/1` | `nazm test --json` | stdout | one object per case |
+| `nazm.check-report/1` | `nazm check --cache-report` | stdout | one object |
 
 Every object carries its own `schema` field. Not a header: the output is a stream of
 lines and a consumer may read, log or replay any single one of them, and a version that

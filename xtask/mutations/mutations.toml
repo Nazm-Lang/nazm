@@ -868,3 +868,71 @@ comparison built on the fingerprint then reports a change that did not happen
 file = "crates/nazm-iface/src/wire.rs"
 find = "        exports.sort_by(|a, b| a.name.cmp(&b.name));"
 replace = "        let _ = &mut exports;"
+
+[[mutation]]
+name = "the-check-key-forgets-the-source"
+why = """
+drops a module's own source from the key its checked result is filed under, so editing
+that module finds the entry written before the edit. The compiler then reports on a
+version of the file that no longer exists — a cache hit for a compilation that never
+happened, which is a wrong program accepted rather than a slow build
+"""
+file = "crates/nazm-cache/src/key.rs"
+find = "            .field(&source.to_string())"
+replace = "            .field(\"\")"
+
+[[mutation]]
+name = "the-check-key-forgets-its-dependencies"
+why = """
+drops what each imported module offers from the key, so a dependency's exported signature
+can change without invalidating anything that calls it. The importer keeps an answer the
+new signature contradicts, which is the stale accept the whole invalidation model exists
+to prevent
+"""
+file = "crates/nazm-cache/src/key.rs"
+find = "            f.field(d.module.as_str()).field(&d.interface.to_string());"
+replace = "            let _ = d;"
+
+[[mutation]]
+name = "the-check-key-forgets-which-compiler-it-was"
+why = """
+drops the checker's identity from the key, so a result produced under one set of checking
+rules is reused by a compiler with another. Adding a built-in, changing a signature or
+tightening a rule would then leave every previously written entry reachable and wrong
+"""
+file = "crates/nazm-cache/src/key.rs"
+find = "        f.field(&checker.to_string())"
+replace = "        f.field(\"\")"
+
+[[mutation]]
+name = "the-check-key-forgets-which-module-it-is"
+why = """
+drops the module's durable key, so two modules with the same source and the same imports
+share one entry. One module's checked interface is then published as another's, which is
+exactly the identity confusion `ModuleKey` was built to prevent
+"""
+file = "crates/nazm-cache/src/key.rs"
+find = "            .field(module.as_str())"
+replace = "            .field(\"\")"
+
+[[mutation]]
+name = "a-cache-entry-is-trusted-because-it-parsed"
+why = """
+stops recomputing the key from the inputs an entry records, so a file whose bytes were
+edited after it was written is believed. The name of an entry is a digest and a digest
+match is evidence, not proof; this is the check that turns it into proof
+"""
+file = "crates/nazm-cache/src/artifact.rs"
+find = "        if CheckKey::of(checker, &module, source, &deps) != filed {"
+replace = "        if false {"
+
+[[mutation]]
+name = "a-module-that-did-not-check-is-cached-anyway"
+why = """
+publishes an entry for a module that produced diagnostics, so a refusal becomes a cached
+acceptance. The next run finds it, skips the module, and reports nothing — a compiler that
+accepts a program it has already refused
+"""
+file = "crates/nazm-core/src/check.rs"
+find = "        if !unparsed && errors.len() == before && declared_cleanly.get(n) == Some(&true) {"
+replace = "        if true {"

@@ -129,37 +129,62 @@ be re-checked* and excludes bodies by design — using it as a codegen cache key
 back an object file compiled from a body that has since changed, which is why
 `architecture.md` §7.3 names an implementation fingerprint and a `BuildKey` it is not.
 
-### N4 — Reuse, and the inputs an artefact actually depends on
+### N4 — Sound incremental semantic reuse · **complete, 2026-09-22**
 
-**The next dependency, and not started.** Everything N3 built is an input to something that
-does not exist. The next milestone is the first one that *reuses* work, and it needs two
-things N3 deliberately did not build:
+**Done, in two commits** (`2565419` the keys and the store, `7b44b4f` the root and the
+reuse).
 
-* a **`BuildKey`** — compiler identity, target, flags, dependency fingerprints and a
-  module's own implementation fingerprint. `InterfaceHash` is not it and must not become
-  it;
-* somewhere to put the result, and a rule for when reading it back is sound. Anything
-  omitted from the key is a silent miscompilation waiting to happen, which
-  `architecture.md` §3 has said since before there was a compiler.
+| | |
+| --- | --- |
+| **N4A** | A **declared** source root, which had to come first: under a derived one a module's key depends on which file the compilation began at, so two compilations of one project never share anything. `nazm.root` is an empty marker — enforced empty, because the first field it carried would make it a manifest — and `--source-root DIR` names one without writing a file. With neither, nothing changes |
+| **N4B** | `nazm-cache`: `SourceFingerprint` over the exact source bytes with no normalisation at all, `CheckerIdentity` deriving the built-in table, the type set and both schemas with an explicit `SEMANTIC_EPOCH` for what cannot be derived, and `CheckKey` over both plus each direct import's `(ModuleKey, InterfaceHash)`. Every input tested by removing it |
+| **N4C** | `nazm.check/1` and a local store. Content-addressed, so entries are immutable and two compilers need no lock; published by `rename`; validated on read by recomputing the key from the inputs the entry records. Sixteen ways of damaging one, every one a miss |
+| **N4D** | One hook in `nazm-core`, `Reuse`. `check_unit` is still the only thing that decides what a body means; the driver only says which bodies it needs decided. Only a clean check is written, so no entry is ever a cached refusal |
+| **N4E** | `--no-cache`, `--cache-report` (one `nazm.check-report/1` object, off by default), `NAZM_CACHE_DIR`. The store's location is not part of any identity |
+| **N4F** | A **cache soundness** gate, proved by breaking it three ways; six mutations; twenty-nine end-to-end tests, all of them running the binary |
 
-**A decision that comes first, and is a build-system decision rather than a compiler one:**
-a **declared** source root. N3's is derived from the file named on the command line, so a
-module's key depends on which file that was. A project file would fix it, and it is the
-same decision as a manifest — `capability-matrix.md` area 26.
+**The acceptance test was met, three times.** A private body change re-checks its own module
+and leaves its importer alone. An exported signature change re-checks the importer and finds
+the error it now has. In `A → B → C`, a change to C that forces B to re-check but leaves B's
+interface unchanged **stops at B** — which is the difference between interface-driven
+invalidation and a reachability sweep, and the reason the design is worth the keys.
 
-### After N3, in dependency order
+**What N4 is not, and does not claim.** Incremental *native* compilation. What is reused is
+the second stage of checking one module — its bodies. Every module is still read, parsed and
+declared from source on every run, which is exactly what makes a skipped module invisible.
+`nazm run` and `nazm build` reuse nothing, because both need the resolution that only
+checking a body produces, and lowering is still whole-program. There is no object, IR or LIR
+cache, no query database, no scheduler and no eviction policy.
+
+### After N4, in dependency order
 
 | | Depends on | Why not before |
 | --- | --- | --- |
 | A persistable unit interface | durable identity ✓ | done — N3 |
-| Artefact reuse | a `BuildKey`, and somewhere to put results | `InterfaceHash` excludes bodies, so it cannot key an artefact |
-| Incremental / content-addressed compilation | reuse + a normalised form of a definition | nothing normalises or hashes a definition — `research-register.md` R2 |
-| A key independent of which file was named | a **declared** source root | today's is derived from it; the same decision as a manifest |
-| Separate *code generation* | units ✓ + a linking model | checking is per unit; emission is still whole-program |
-| A language server | units ✓ + durable identity ✓ + a lossless CST | it would re-implement the semantic engine otherwise |
+| A key independent of which file was named | a declared source root ✓ | done — N4 |
+| Semantic check reuse | that, plus a key covering every checking input ✓ | done — N4 |
+| Separate *code generation* | units ✓ + a linking model | checking is per unit; emission is still whole-program, so there is no per-unit artefact to key |
+| Native artefact reuse | separate code generation + a `CodegenKey` | `CheckKey` carries no target and reaches a body only through a source fingerprint; an object file keyed on one would be handed back for a different machine |
+| Content-addressed compilation | reuse ✓ + a normalised form of a definition | nothing normalises or hashes a definition — `research-register.md` R2 |
+| A language server | units ✓ + durable identity ✓ + reuse ✓ + a lossless CST | it would re-implement the semantic engine otherwise |
 | Ownership / the surface memory model | — | the largest open design question; `research-register.md` R1 |
 | Effects | a typed core IR | and *"is divergence an effect?"* is unanswered — `spec.md` *Open* |
 | Capabilities, information flow | effects | `architecture.md` §5 keeps the three separate |
+
+### N5 — Separate code generation, and the boundary it needs
+
+**The next milestone, and not started.** Everything about *checking* is now per module;
+everything about *emitting* is still whole-program. `crates/nazm-lir/src/lower.rs` takes the
+whole `Program` and produces one LLVM module, so there is no per-unit artefact for a cache
+to key, and inventing one to extend N4's architecture would be manufacturing a boundary to
+satisfy a name.
+
+What it needs, in order: a decision about what one module compiles *to*; a linking model,
+including how a private definition in two modules gets two symbols in separate objects
+rather than by the whole-program numbering that does it today; and only then a `CodegenKey`,
+which is `CheckKey` plus an implementation fingerprint, the target triple, CPU features, the
+backend, the optimisation level and the ABI. Each of those is an input `CheckKey` deliberately
+omits, and the omission is why it may not be reused as one.
 
 ---
 

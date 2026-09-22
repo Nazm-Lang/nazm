@@ -564,6 +564,165 @@ they do, by both declining durable identity exactly where they could disagree. I
 milestone gives the Nazm-written compiler an incremental path, it needs `realpath` first;
 `spec.md` records why.
 
+## 7.4 Semantic reuse, and the keys that make it sound — settled by N4, 2026-09-22
+
+N3 built identity and an interface fingerprint and reused nothing. N4 is the first
+milestone that *skips work*, which makes it the first one where being wrong is a
+correctness bug rather than a slow build.
+
+### What is reused, precisely
+
+**The second stage of checking one module: its bodies.** Not reading the file, not parsing
+it, not reading its declarations. Every module is read, parsed and declared from source on
+every run, which is what makes a skipped module invisible — the interface every other
+module's key depends on, and the compilation's own facts including whether there is a
+`main`, are recomputed rather than recalled.
+
+So the claim is **incremental semantic checking**, and it is not incremental compilation.
+Lowering and code generation still take the whole program (area 10); `nazm run` and `nazm
+build` reuse nothing, because both need the resolution that only checking a body produces.
+
+### A declared source root came first
+
+`spec.md` owns the rule. The reason it had to be settled before anything was stored: under
+a derived root a module's key depends on which file the compilation began at, so two
+compilations of one project disagree about what their modules are. That is sound — the keys
+differ, so nothing wrong is found — and it is useless, because nothing is ever shared.
+
+`nazm.root` is a marker with no content, and the emptiness is enforced. A configuration
+file is justified when it owns a responsibility; this one owns exactly one fact, and a
+manifest is what it must not be allowed to become.
+
+### Three fingerprints, and three keys
+
+N3's table stands; N4 adds the middle row of the second.
+
+| | Over | Answers |
+| --- | --- | --- |
+| `InterfaceHash` | a module's published interface | must its **dependents** be re-checked |
+| **`CheckKey`** | everything semantic checking of a module reads | may its **own check** be skipped |
+| `CodegenKey` | that, plus implementation, target, CPU features, backend, optimisation level, ABI | may its **object code** be reused — **not built** |
+
+`CheckKey` is the checker's identity, the module's `ModuleKey`, its `SourceFingerprint`,
+and the `(ModuleKey, InterfaceHash)` of each direct import. It is deliberately **not** a
+`CodegenKey`: it carries no target and reaches a body only through the module's own source
+fingerprint, so an object file keyed on one would be handed back for a different machine.
+
+**`SourceFingerprint` normalises nothing** — not newlines, not whitespace, not comments, not
+a BOM. A comment edit re-checks its own module and stops there, because the module then
+publishes the same interface. Normalising would mean deciding that two byte sequences check
+identically, and every such decision is somewhere the compiler and the normaliser can come
+to disagree.
+
+**What is deliberately excluded**, each checked against the implementation rather than
+assumed: the target triple, CPU features and ABI (no rule in `crates/nazm-core/src/check.rs`
+consults any of them, and `Int` is 64-bit in every configuration); the optimisation level
+and backend (`nazm build`'s subset refusals live after checking); the interpreter's
+iteration and depth budgets; the checkout directory and the working directory; the cache's
+own location; and whether the compilation is a program, because `N0204` is a fact about a
+compilation and is recomputed every run. The first row is right *today*, and a rule that
+became target-sensitive would have to join the key on the day it was added.
+
+### Compiler identity: derived where it can be, declared where it cannot
+
+A result produced under one set of checking rules must not be reused by a compiler with
+another. Nothing affordable computes "do these two binaries check identically" — a digest of
+the compiler's source changes when a comment does, and a digest of the binary changes with
+the optimisation level of the build that produced it. So `CheckerIdentity` derives the
+built-in table with its signatures, the type set, both schemas and the crate version, and
+names the rest as `SEMANTIC_EPOCH`, a counter bumped by hand.
+
+The maintenance rule is one sentence — *bump the epoch in the commit that changes what the
+checker accepts or refuses* — and it is made hard to forget rather than merely written down.
+`cargo xtask check`'s **cache soundness** gate fails when the set of diagnostic codes
+`nazm-core`'s checker can raise stops matching the list the identity is built from, and
+nearly every new rule brings a code. What it does not catch is a tightened rule reusing an
+existing code, or a parser that starts accepting a construct the checker then sees; that is
+what the epoch is for, and saying so is better than claiming an automatic identity this
+does not have.
+
+### The algorithm, and why it needs no ordering
+
+```text
+stage 1   every module's declarations, from source            → its UnitInterface
+          an interface depends on that module alone,
+          so every InterfaceHash exists at once — cycles included
+stage 2   per module: CheckKey → look it up
+          hit  → its bodies are not checked
+          miss → check, and if it produced no diagnostic at all, publish
+```
+
+There is no scheduler and no dependency order, because there is nothing to order. The one
+thing that would have needed one — a module's interface — was already local as of N2, which
+is the property that makes an import cycle legal and the same property that makes this
+work.
+
+### Invalidation, now implemented rather than described
+
+```text
+B's private body changes  → B's SourceFingerprint moves → B re-checked
+                          → B's InterfaceHash does not  → A's CheckKey holds → A reused
+B's exported signature    → B's InterfaceHash moves     → A's CheckKey moves → A re-checked
+                          → if A's own interface holds, A's importers are unaffected
+```
+
+Propagation is interface-driven, not reachability-driven: it stops where a re-checked
+module's interface turns out to be unchanged. `crates/nazm-cli/tests/incremental.rs` runs
+all three cases of `A → B → C` and requires the middle one to stop at B.
+
+### The cache is never authority
+
+Source under this compiler decides what a program means; an entry is derived data.
+
+* **only a clean check is written.** A module with a diagnostic in either stage publishes
+  nothing, so no entry is a cached refusal and no hit can suppress an error;
+* **reading validates.** The file name is a digest, and a digest match is evidence rather
+  than proof, so the entry repeats the inputs it was keyed on, the key is recomputed from
+  them, and the interface is revalidated through the reader that owns that format. A
+  truncated, edited, mis-filed or foreign entry is a **miss** — never a hit and never a
+  compilation error;
+* **publication is atomic.** Write, `fsync`, `rename`. An interrupted compiler leaves a
+  `.part` file that nothing looks for;
+* **entries are immutable**, because they are addressed by everything they depend on. Two
+  compilers racing to publish one result compute the same bytes, so the second rename lands
+  the same file and no lock is needed;
+* **deleting the store changes nothing** but the work done.
+
+### Where it lives, and where it declines
+
+`.nazm/check/` under the source root, overridable with `NAZM_CACHE_DIR`. Beside the tree
+because it is derived data about that tree: deleting the checkout deletes it, a second
+checkout does not inherit it, and no compiler writes to a home directory. The location is
+not part of any identity — the same entry computed anywhere is the same bytes under the
+same name.
+
+A module with no durable identity — outside the source root, or given two names by a
+symbolic link — is checked from source every time and publishes nothing. That is N3's
+principle applied rather than re-decided: decline where the two implementations could
+disagree, and never let a limit on an optimisation become a refusal to compile.
+
+### Lifecycle: there isn't one, and that is the design
+
+The store may be deleted at any moment, whole or in part, by anything. An entry nothing
+asks for is never read, so a store full of results for source that no longer exists costs
+disk and nothing else. **There is no pruning, no eviction, no size bound and no expiry**,
+because each of those is a thing that deletes files, and a compiler that deletes files
+under a directory a person chose needs a much better reason than tidiness. A size policy is
+a later decision with its own argument; until then `rm -rf .nazm` is the whole interface,
+and it is safe by construction.
+
+The one file the compiler removes is the temporary it just failed to write. Nothing scans
+the directory, nothing removes another process's leftovers, and nothing outside the store
+is touched.
+
+### What the self-hosted compiler does with all this
+
+Nothing, deliberately, as with N3. A cache is toolchain architecture: no Nazm program can
+observe a `CheckKey`, the bootstrap chain neither reads nor writes an entry, and porting a
+store into the Nazm-written compiler for symmetry would be building a second thing to keep
+correct. What the two implementations must agree on is the language, and that is what
+`bootstrap.md` measures.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

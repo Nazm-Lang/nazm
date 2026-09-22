@@ -69,8 +69,10 @@ mod exit {
                   concurrency (scope, spawn, Chan). No user-defined types, pattern \
                   matching, generics, effects or floats yet; programs using them are \
                   refused by name rather than misparsed. `nazm build` compiles a narrower \
-                  subset than `nazm run` — notably it refuses recursion. Run `nazm \
-                  capabilities` for this build's own answer. See docs/spec.md.",
+                  subset than `nazm run` — notably it refuses recursion. `nazm check` \
+                  reuses the result of checking an unchanged module; nothing else does, \
+                  and native compilation is not incremental. Run `nazm capabilities` for \
+                  this build's own answer. See docs/spec.md.",
     version
 )]
 struct Cli {

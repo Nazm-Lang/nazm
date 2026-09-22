@@ -79,7 +79,6 @@ struct Entry {
     published: Option<PersistentUnitInterface>,
     interface: Option<InterfaceHash>,
     dependencies: Option<Vec<Dependency>>,
-    check_key: Option<CheckKey>,
     must_check: bool,
 }
 
@@ -192,7 +191,6 @@ impl nazm_core::Reuse for Cache<'_> {
 
             if let Some(e) = self.entries.get_mut(m.index()) {
                 e.dependencies = Some(deps);
-                e.check_key = Some(check_key);
                 e.must_check = !reuse;
             }
         }
