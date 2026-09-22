@@ -305,7 +305,7 @@ for what each one's absence currently costs.
 | Phase | Crates | State |
 | --- | --- | --- |
 | 2 | `nazm-bench` · `xtask` | **exists** |
-| 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-core` · `nazm-cli` | **exists** (as an interpreter; `nazm-core` is checker + evaluator, not the Core IR below) |
+| 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-sema` · `nazm-core` · `nazm-cli` | **exists** (`nazm-core` is checker + evaluator, not the Core IR below; `nazm-sema` is not on this diagram at all — see §7.2) |
 | 4 | `nazm-hir` · `nazm-ty` · `nazm-mcp` | planned |
 | 6 | `nazm-db` · `nazm-mir` · `nazm-lsp` | planned |
 | 7 | **`nazm-lir`** | **exists** — named for this level, but a structured typed tree over numbered slots rather than SSA over a CFG of places. See the note below |
@@ -331,10 +331,10 @@ bar against this diagram is what produced four contradictory status claims in Se
 owning a semantic responsibility no existing level owns**, and matching the diagram is not
 such a reason.
 
-Roles, in dependency order: `span` (files, byte spans, interned identifiers — depends on
-nothing; the `FileId` this list used to promise **does not exist**, and
-`crates/nazm-cli/src/load.rs` merges every reachable file into one buffer instead, which is
-what currently blocks separate and incremental compilation) · `diag` (stable error codes, fixits, JSON schema, renderer) · `syntax`
+Roles, in dependency order: `span` (files, byte spans — depends on nothing; the `FileId`
+this list promised **exists** since N1, and a `Span` is a file and a range inside it) ·
+`sema` (types, built-in identity, module identity, unit interfaces, resolution — not a row
+in the table above, and §7.2 says why) · `diag` (stable error codes, fixits, JSON schema, renderer) · `syntax`
 (lexer, parser, CST, typed AST, canonical formatter, CST-preserving edits) · `hir` (`DefId`
 graph, modules, name resolution) · `ty` (types, effect rows, provenance, inference) · `core`
 (Core IR, normalisation, Merkle hashing, reference interpreter) · `db` (salsa queries +
@@ -382,6 +382,82 @@ What N1 did **not** settle: there is still no compilation unit — every file is
 separately but checked together — and every id in a `Resolution` is session-local, so it is
 not a cache key and not a definition identity that survives a process. `spec.md` *Open*
 carries both, and `research-register.md` R2 and R3 depend on them.
+
+## 7.2 Modules, interfaces, and the crate N2 created — settled by N2, 2026-09-22
+
+N1 left two things open and this milestone closed one of them: **what a compilation unit
+is.** `spec.md` owns the answer — one module, and today one module is one file — and this
+section owns where each part of it lives.
+
+### The passes, and what each may see
+
+```text
+load          the driver follows `use`, reads each file once by canonical path,
+              and produces a SourceMap *and* a ModuleGraph. The last time a path
+              is consulted.
+                  ↓
+parse         each file on its own text
+                  ↓
+declare_unit  per module: its declarations, their signatures, which are `pub`.
+              Reads no other module — which is why the stage needs no ordering
+              and an import cycle has none to violate.
+                  ↓  UnitInterface per module
+check_unit    per module: bodies, against its own definitions and the
+              *interfaces* of the modules it directly imports.
+                  ↓  one Resolution
+lower / eval  read it. Neither resolves a name; neither knows the rule.
+```
+
+`check(program, graph)` is a loop over the two stages and holds no resolution of its own,
+so a compilation of many modules and a compilation of one take the same path.
+
+### Where each thing lives
+
+| What | Where | Why there |
+| --- | --- | --- |
+| `ModuleId`, `ModuleGraph`, `Dependency` | `nazm-sema` | the semantic unit and the edges between units; built by the driver, read by everything after |
+| `UnitInterface`, `Export`, `Visibility` | `nazm-sema` | what one unit offers another. No bodies, no private definitions, no hashes |
+| `Resolution`, `FnDef { module, visibility, decl }`, `FnId` | `nazm-sema` | one answer, read by the evaluator and the backend |
+| `Type`, `Intrinsic` | `nazm-sema` | moved from `nazm-syntax`; see below |
+| the module graph's **construction** | `crates/nazm-cli/src/load.rs` | resolving a path reads the filesystem, which is an effect, and the front end performs none |
+| `declare_unit`, `check_unit`, `Env` | `nazm-core` | resolution is a pass, and the pass did not move |
+
+### Why a crate this time, when N1 declined one
+
+§7.1 declined `nazm-hir` because it would have held a copy of the checker's answer. This
+crate is a different case, and the evidence is in the source rather than in this diagram:
+**`nazm-syntax`'s lexer, parser, formatter and AST referred to `types`, `intrinsic` and
+`resolve` exactly zero times.** They sat there because N1 needed a place both consumers
+could reach, which was the right call for three types and the wrong one for eight.
+
+`nazm-sema` depends on `nazm-span` and nothing else — deliberately not on `nazm-syntax`,
+so the vocabulary a checker records its decisions in cannot begin describing the tree those
+decisions were read off. The AST carries `Function::pub_span`, which records **that `pub`
+was written and where**; what it *means* is `Visibility`, in `nazm-sema`, so visibility is
+decided in one place.
+
+It is not on §7's table, and that is the point rather than an omission. It owns a
+responsibility no row owns: `nazm-hir` on that list is a graph of definitions *with
+bodies*, and this holds no body at all.
+
+### Definition identity
+
+`FnId` is the definition identity, and it stays flat rather than becoming
+`DefId { module, index }`. A flat index already distinguishes every definition in the
+compilation; qualifying it by module would add a second indirection and no discriminating
+power. What N2 needed was an **owner**, and that is `FnDef::module`, so "which unit owns
+this definition" has an answer without changing what identifies one.
+
+It remains session-local, in the same sense as `FileId` and `ModuleId`. Nothing here is a
+cache key or survives a process; `research-register.md` R2 and R3 are unchanged by this.
+
+### What is still whole-program
+
+Lowering and code generation. `nazm_lir::lower` takes the whole `Program` and one
+`Resolution`, emits one LLVM module, and numbers its functions `@nz.fN` — which is why two
+modules' private `helper` needed no backend change at all. There are no per-module object
+files, no linker symbols and no cached interfaces, and `capability-matrix.md` says so
+rather than implying separate compilation from the existence of a unit.
 
 ## 8. Toolchain, and one real incompatibility
 

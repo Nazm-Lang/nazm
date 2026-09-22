@@ -38,7 +38,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 577 passed, 0 failed, 6 ignored, across 37 suites**, run through
+**Current suite: 611 passed, 0 failed, 6 ignored, across 41 suites**, run through
 `cargo xtask contained tests`. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -99,8 +99,9 @@ and every `(* @example *)` in it to parse with zero diagnostics. `docs/guide.md`
 section is generated from the same file by `xtask/src/guide.rs`.
 
 *Since N1, each file is parsed on its own text through `nazm_syntax::parse_map`, so the
-parser no longer requires a concatenated buffer. That is a prerequisite for separate
-compilation, not separate compilation.*
+parser no longer requires a concatenated buffer. Since N2 the grammar has one visibility
+bit — `function = [ visibility ] , "fn" , ...` — and the AST records `pub_span`, which is
+where the word was written and nothing about what it means.*
 
 **Limitation** · There is **no CST**. `crates/nazm-syntax/src/ast.rs` is a plain owned
 AST; comments are returned as a parallel span list consumed only by the formatter, and
@@ -121,31 +122,49 @@ and the parser produces a usable tree for a file with an error in the middle of 
 `crates/nazm-core/src/check.rs`. `use "relative/path.nz";` resolved by the driver,
 `crates/nazm-cli/src/load.rs` — canonical-path keyed, read-once, depth-first, cycles
 terminate rather than erroring. A second resolver written in Nazm, `compiler/module.nz`,
-serves the bootstrap stages. Codes `N0200`–`N0205` in `crates/nazm-diag/src/lib.rs`.
+serves the bootstrap stages. Codes `N0200`–`N0208` in `crates/nazm-diag/src/lib.rs`.
 
 **Resolution is singular as of N1 (2026-09-21).** `nazm_core::check` produces a
-`nazm_syntax::Resolution` — function definitions, call targets, and the slot every name
-mention refers to — and both the evaluator and `crates/nazm-lir/src/lower.rs` read it. The
-backend's own scope stack, slot allocator and name-keyed signature table are deleted;
-`crates/nazm-lir/src` declares no symbol table keyed by a name, and a `cargo xtask check`
-rule fails if one reappears.
+`nazm_sema::Resolution` — function definitions, call targets, and the slot every name
+mention refers to — and both the evaluator and `crates/nazm-lir/src/lower.rs` read it.
+Since N2 that is true of the **evaluator** as well: its `HashMap<String, usize>` over every
+function, and its own copy of the built-in-first rule, are gone. The backend's last two
+name lookups went with them — `crates/nazm-lir/src/lower.rs` pairs definitions with
+declarations through `FnDef::decl` and finds the entry point through `Resolution::entry`,
+so neither consumer knows the spelling `main`.
 
 **Source identity is real as of N1.** `nazm_span::Span` is `{ file, start, end }` with
 file-local offsets, and `crates/nazm-cli/src/load.rs` produces a `SourceMap` whose files
 are parsed separately. The merged buffer, and the binary search that recovered a file from
 an offset, are gone.
 
-**Limitation** · **No visibility** — every top-level function is visible to every importer,
-which already forced `compiler/lex.nz` to be split from `compiler/lexer.nz` so a library
-would not collide with its importer's `main`. **There is still no compilation unit**: all
-files are parsed into one `Program` and checked together, so nothing can be checked
-independently. Every id in the resolution is **session-local** — an index, not a name a
-cache may key on.
+**There is a compilation unit as of N2 (2026-09-22).** One module is one file.
+`crates/nazm-sema/src/module.rs` holds `ModuleId` and the `ModuleGraph` the driver builds
+while loading; `crates/nazm-sema/src/interface.rs` holds the `UnitInterface` a module
+offers. Checking is two stages, `declare_unit` then `check_unit`
+(`crates/nazm-core/src/check.rs`), and the second takes its dependencies as **interfaces**.
+`crates/nazm-core/tests/unit_checking.rs` checks a module against an interface for a module
+whose source does not exist, and refuses the same module when that interface is empty.
 
-**Next dependency** · A compilation unit: a decision about what can be checked on its own,
-which is what separate and incremental compilation both need.
+**Visibility exists as of N2.** Top-level definitions are private to their module; `pub`
+exports; imports are not transitive; every collision is a diagnostic naming both sides
+(`N0206`–`N0208`). Twenty cases in `crates/nazm-cli/tests/visibility.rs`, most of them run
+interpreted and compiled and required to agree. The self-hosted compiler was migrated
+rather than exempted: 80 of its 154 functions are `pub`, 74 are private.
 
-**Accepted when** · Two files can be checked independently and their results combined.
+**Limitation** · **Nothing is separately *compiled*.** A unit can be checked from
+interfaces; lowering and code generation still take the whole program and emit one LLVM
+module (area 10). There are no per-module artefacts, no cached interfaces and no linker
+symbols. Every id — `FileId`, `ModuleId`, `FnId` — is **session-local**: an index valid for
+one compilation in one process, never a name a build system or a cache may key on. A module
+cannot export a name under another one, re-export, or be named by anything but a relative
+path.
+
+**Next dependency** · A definition identity that survives a process
+(`research-register.md` R2), which is what a cached interface would have to be keyed on.
+
+**Accepted when** · A unit's interface can be written, read back in a later process, and a
+dependent checked against it without the dependency's source.
 
 ### 3. Type system — PARTIAL
 
@@ -263,11 +282,14 @@ polymorphic.
 
 **Limitation** · Not the absence of the levels — that is correct restraint.
 
-**Still MISSING after N1, and deliberately.** N1 produced a `Resolution`, and a resolution
-is **not an IR**: it holds no expressions and no control flow, only the answers to "what
-does this name refer to", keyed by where the name was written. Lowering still lowers from
-the AST. Nothing here moved, and reading the new type as an HIR would be exactly the
-progress-bar mistake `master-architecture.md` §3 warns about.
+**Still MISSING after N1 and N2, and deliberately.** N1 produced a `Resolution`, and a
+resolution is **not an IR**: it holds no expressions and no control flow, only the answers
+to "what does this name refer to", keyed by where the name was written. N2 added a
+`ModuleGraph` and a `UnitInterface`, and neither holds a body — an interface is a module's
+signatures, which is less than an AST rather than more. Lowering still lowers from the AST.
+`nazm-sema` is not `nazm-hir`: the crate on §7's table is a graph of definitions *with*
+bodies. Reading either new type as an HIR would be exactly the progress-bar mistake
+`master-architecture.md` §3 warns about.
 
 **Next dependency** · A responsibility no existing level owns. The duplicated one is gone;
 the next candidate has to be argued for on its own evidence.
@@ -289,8 +311,14 @@ tree over numbered slots, not SSA over a CFG of places. No optimisation, inlinin
 constant folding happens here.
 
 *The duplicate built-in table and the second resolver this row used to name were removed by
-N1; the forbidden dependency on `nazm-core` still holds, and is now satisfied by both
-crates depending on `nazm-syntax`, which owns the shared vocabulary.*
+N1; the forbidden dependency on `nazm-core` still holds, and is satisfied by both crates
+depending on `nazm-sema`, which owns the shared vocabulary since N2.*
+
+**Whole-program, and still whole-program after N2.** `lower` takes the entire `Program` and
+one `Resolution` and emits one LLVM module, numbering functions `@nz.fN` — which is why two
+modules each defining a private `helper` needed no change here at all. Modules exist in the
+front end and nowhere in the backend: no per-module object file, no linker symbol, no
+separate LLVM module. Anything describing this as separate compilation would be wrong.
 
 **Next dependency** · Only whatever a second backend or a real optimisation pass demands.
 
@@ -674,6 +702,20 @@ states what this does and does not establish, and the answer is narrower than it
 
 **Limitation** · A fixpoint establishes self-consistency, not correctness — a compiler with
 a bug that reproduces itself reaches a fixpoint too.
+
+**The reference compiler was stale until 2026-09-22.** `compiler/bootstrap.sh` requires
+`$nazm` to exist and does not build it, and inside the contained runner `CARGO_TARGET_DIR`
+is `/work/target` — which `docker/contained.Dockerfile` warms with a binary at *image build
+time*. Every contained bootstrap between the image's build and this date therefore used
+that binary for the reference check and for stage 1, whatever the tree said, and reported
+nothing about the discrepancy. The workload now runs `cargo build -p nazm-cli` first. The
+fixpoint claim itself is unaffected — C1 → C2 → C3 is about the compiler written in Nazm,
+and the reference check is explicitly not part of the chain — but *which front end built
+C1* was not what the record said it was.
+
+**Since N2** the compiler source states its own module boundaries: 80 of its 154 functions
+are `pub`, 74 are private, and `emit.nz`, `check.nz` and `parser.nz` gained the `use` lines
+for modules they were reaching through someone else's import.
 
 **Next dependency** · None.
 
