@@ -139,6 +139,7 @@ fn run_checks() -> ExitCode {
         ("doc claims", check_doc_claims()),
         ("capability matrix", check_capability_matrix()),
         ("one resolver", check_single_resolver()),
+        ("span identity", check_span_identity()),
         ("guide from grammar", guide::check()),
     ])
 }
@@ -654,6 +655,110 @@ fn check_single_resolver() -> Result<(), Vec<String>> {
     } else {
         Err(problems)
     }
+}
+
+/// A [`Span`](nazm_span::Span) may not be serialisable, because a serialisable one was
+/// lossy and nothing about that was visible at the call site.
+///
+/// # What went wrong, so it is not reinvented
+///
+/// `nazm.diagnostic/1` publishes `{ start, end }` with no file, at offsets into the
+/// concatenation of every source file. When spans gained a `FileId` on 2026-09-21, that
+/// compatibility requirement was met by giving `Span` a hand-written `Serialize` that
+/// dropped the file and a `Deserialize` that substituted `FileId::ROOT`. The published
+/// bytes were right. The hazard was everything else: any future serializer — a cache, an
+/// editor protocol, a module graph handed to an agent — would have silently discarded
+/// source identity, and the value read back would have been a confident lie rather than
+/// an error.
+///
+/// The conversion now lives in `nazm-diag`, which owns the wire format, and `nazm-span`
+/// has no serde dependency at all. This check is what keeps that true: it fails if the
+/// manifest gains serde or the source gains a derive, either of which would reopen the
+/// door. Adding serde back is allowed — it just cannot happen without editing this.
+fn check_span_identity() -> Result<(), Vec<String>> {
+    let Some(root) = workspace_root() else {
+        return Err(vec!["could not locate workspace root".to_owned()]);
+    };
+
+    let mut problems = Vec::new();
+    let manifest = root.join("crates/nazm-span/Cargo.toml");
+    match std::fs::read_to_string(&manifest) {
+        Ok(text) => problems.extend(serde_in_manifest(&text)),
+        Err(e) => problems.push(format!("could not read {}: {e}", manifest.display())),
+    }
+
+    let dir = root.join("crates/nazm-span/src");
+    match std::fs::read_dir(&dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_none_or(|x| x != "rs") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    problems.push(format!("could not read {}", path.display()));
+                    continue;
+                };
+                let name = path
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                problems.extend(
+                    serde_in_source(&text)
+                        .into_iter()
+                        .map(|(n, what)| format!("crates/nazm-span/src/{name}:{n} {what}")),
+                );
+            }
+        }
+        Err(e) => problems.push(format!("could not read {}: {e}", dir.display())),
+    }
+
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
+/// The manifest lines that would put serde back into `nazm-span`.
+fn serde_in_manifest(text: &str) -> Vec<String> {
+    text.lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim_start().starts_with('#'))
+        .filter(|(_, l)| l.split('=').next().is_some_and(|k| k.trim() == "serde"))
+        .map(|(n, _)| {
+            format!(
+                "crates/nazm-span/Cargo.toml:{} adds serde. A span is a file and a range \
+                 *in that file*; serialising one without the file is the lossy round trip \
+                 removed on 2026-09-22. The wire conversion belongs to nazm-diag, which \
+                 owns nazm.diagnostic/1.",
+                n + 1
+            )
+        })
+        .collect()
+}
+
+/// The source lines that would make something in `nazm-span` serialisable.
+///
+/// Doc comments are exempt: the crate documentation has to be able to *explain* why serde
+/// is absent, and a check that forbids naming the thing it forbids is a check nobody can
+/// document around.
+fn serde_in_source(text: &str) -> Vec<(usize, &'static str)> {
+    text.lines()
+        .enumerate()
+        .filter(|(_, l)| {
+            let t = l.trim_start();
+            !t.starts_with("//") && !t.starts_with("/*") && !t.starts_with('*')
+        })
+        .filter_map(|(n, l)| {
+            if l.contains("Serialize") || l.contains("Deserialize") {
+                Some((n + 1, "derives a serde trait"))
+            } else if l.contains("serde") {
+                Some((n + 1, "refers to serde"))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// No crate may **depend on** a code generator unless `rules.rs` says it can.
@@ -1251,7 +1356,9 @@ fn contained_probe(repo: &std::path::Path) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{absence_claims, cited_paths, verified_without_evidence};
+    use super::{
+        absence_claims, cited_paths, serde_in_manifest, serde_in_source, verified_without_evidence,
+    };
 
     #[test]
     fn a_path_is_cited_only_when_it_is_rooted_in_the_repository() {
@@ -1342,5 +1449,37 @@ mod tests {
         let wrapped = "# an interpreter: lexer, parser, checker, no IR and no\n\
                        # backend. Alongside it, the harness.\n";
         assert_eq!(absence_claims(wrapped), [1]);
+    }
+
+    #[test]
+    fn a_serde_dependency_in_the_span_manifest_is_a_finding() {
+        assert!(serde_in_manifest("[dependencies]\n").is_empty());
+        // The line the correction of 2026-09-22 removed.
+        assert_eq!(
+            serde_in_manifest("[dependencies]\nserde = { workspace = true }\n").len(),
+            1
+        );
+        // Commented out is not a dependency, and the comment explaining the absence has
+        // to be allowed to name it.
+        assert!(serde_in_manifest("# serde = { workspace = true }\n").is_empty());
+        // A different crate whose name merely starts the same way is not serde.
+        assert!(serde_in_manifest("serde_json = { workspace = true }\n").is_empty());
+    }
+
+    #[test]
+    fn a_serde_derive_in_the_span_source_is_a_finding() {
+        assert!(serde_in_source("pub struct Span { pub file: FileId }\n").is_empty());
+        assert_eq!(
+            serde_in_source("#[derive(Debug, Serialize)]\npub struct Span;\n"),
+            [(1, "derives a serde trait")]
+        );
+        assert_eq!(
+            serde_in_source("impl serde::Serializer for X {}\n").len(),
+            1
+        );
+        // The crate documentation says why serde is absent, at length. Explaining a rule
+        // must not break it.
+        let doc = "//! Between 2026-09-21 and 2026-09-22 `Span` carried a `Serialize`\n                   //! that dropped the file. This crate no longer depends on serde.\n";
+        assert!(serde_in_source(doc).is_empty());
     }
 }

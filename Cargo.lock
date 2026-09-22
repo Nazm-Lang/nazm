@@ -385,9 +385,6 @@ dependencies = [
 [[package]]
 name = "nazm-span"
 version = "0.0.1"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "nazm-syntax"

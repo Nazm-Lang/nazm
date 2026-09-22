@@ -14,8 +14,23 @@
 //!
 //! Offsets are **bytes**, not char indices: bytes are what the lexer produces and what
 //! slicing needs. Converting to a human-facing line and column happens once, at rendering.
-
-use serde::{Deserialize, Serialize};
+//!
+//! # Nothing here is serialisable, on purpose
+//!
+//! This crate **does not depend on serde**, and that is a design constraint rather than an
+//! omission. A [`Span`] is three fields, two of which are meaningless without the third:
+//! offset 106 in *which* file. Between 2026-09-21 and 2026-09-22 `Span` carried a
+//! hand-written `Serialize` that dropped [`FileId`] and a `Deserialize` that invented
+//! [`FileId::ROOT`] in its place. It existed to keep the published diagnostic shape
+//! unchanged, which was the right requirement solved in the wrong place: **any** future
+//! serializer — a cache, an editor protocol, a module graph dumped for an agent — would
+//! have silently destroyed source identity and round-tripped into a plausible lie.
+//!
+//! Publishing a span is now an explicit act performed by the consumer that owns a wire
+//! format. `nazm-diag` owns `nazm.diagnostic/1` and converts through [`SourceMap::global`]
+//! at the point of serialisation; `nazm fix` owns `nazm.fix/1` and publishes a file name
+//! beside file-local offsets. Adding `serde` back to this crate's manifest is the act a
+//! reviewer would have to see, and `cargo xtask check` fails if it appears.
 
 /// Which source a span belongs to.
 ///
@@ -30,7 +45,7 @@ use serde::{Deserialize, Serialize};
 /// telling an agent that an edit produced the same definition — needs a different thing
 /// that does not exist yet. See `docs/research-register.md` R2 and R3. Conflating the two
 /// is the mistake this comment exists to prevent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileId(u32);
 
 impl FileId {
@@ -60,46 +75,6 @@ pub struct Span {
     pub file: FileId,
     pub start: u32,
     pub end: u32,
-}
-
-/// The published shape of a span: `{ start, end }`, and **no file**.
-///
-/// `nazm.diagnostic/1` has always been exactly this, and `docs/diagnostics.md` promises
-/// the shape will not change inside a version. Source identity became internal on
-/// 2026-09-21; that is an improvement to the compiler, not a reason to move every existing
-/// consumer's offsets, so `file` is dropped here and the offsets are rebased to the
-/// concatenation the schema documents. See [`SourceMap::global`].
-#[derive(Serialize, Deserialize)]
-#[serde(rename = "Span")]
-struct WireSpan {
-    start: u32,
-    end: u32,
-}
-
-impl Serialize for Span {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        WireSpan {
-            start: self.start,
-            end: self.end,
-        }
-        .serialize(s)
-    }
-}
-
-impl<'de> Deserialize<'de> for Span {
-    /// A span read back from the wire has **no file identity**, because the wire does not
-    /// carry one. It deserialises against [`FileId::ROOT`], which is right for the
-    /// single-file case and is a placeholder otherwise. Round-tripping a multi-file
-    /// diagnostic through JSON and expecting the file back is not something the schema
-    /// supports, and this is the one place that could quietly pretend otherwise.
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let w = WireSpan::deserialize(d)?;
-        Ok(Self {
-            file: FileId::ROOT,
-            start: w.start,
-            end: w.end,
-        })
-    }
 }
 
 impl Span {
@@ -155,7 +130,7 @@ impl Span {
 }
 
 /// A 1-based position, as a human reads it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineCol {
     pub line: u32,
     pub column: u32,
@@ -297,19 +272,6 @@ impl SourceMap {
             base.saturating_add(span.start),
             base.saturating_add(span.end),
         )
-    }
-
-    /// The same span with its offsets rebased into the concatenation.
-    ///
-    /// Used only when writing the published diagnostic shape; see [`WireSpan`].
-    #[must_use]
-    pub fn rebased(&self, span: Span) -> Span {
-        let (start, end) = self.global(span);
-        Span {
-            file: span.file,
-            start,
-            end,
-        }
     }
 
     /// Resolve a span's start to a 1-based line and column **within its file**.
