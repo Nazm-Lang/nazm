@@ -42,7 +42,7 @@ jobs:
         run: cargo test --workspace --locked
 
       # `cargo test` does not run these: they drive nested cargo builds and kill real
-      # process groups, and `cargo xtask mutate` below would pay their cost 68 times
+      # process groups, and `cargo xtask mutate` below would pay their cost 73 times
       # over. Ignored by default and run here, so they are executed rather than merely
       # present.
       - name: mutation-runner lifecycle

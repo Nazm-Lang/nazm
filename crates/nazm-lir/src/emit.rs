@@ -47,7 +47,8 @@ use std::fmt::Write as _;
 
 use nazm_span::{SourceMap, Span};
 
-use crate::ir::{ArithOp, Block, Builtin, Expr, FuncId, Function, Lowering as _, Module, Stmt, Ty};
+use crate::ir::{ArithOp, Block, Builtin, Expr, Function, Lowering as _, Stmt, Ty, Unit};
+use crate::symbol::NativeSymbol;
 
 /// What this emitter has been verified against, recorded so a reader does not have to
 /// infer portability from silence.
@@ -329,6 +330,17 @@ impl Emitter<'_> {
         buf
     }
 
+    /// What this unit reached, for the driver to union with every other unit's.
+    fn needs(&self) -> Needs {
+        Needs {
+            tasks: self.needs_tasks,
+            channels: self.needs_channels,
+            sequences: self.needs_sequences,
+            io: self.needs_io,
+            join: self.needs_join,
+        }
+    }
+
     /// Intern a constant and return `(symbol, the number of bytes to write)`.
     ///
     /// The stored array is NUL-terminated because C string constants are, and the length
@@ -520,7 +532,7 @@ impl Emitter<'_> {
                     args,
                     ret,
                     span,
-                } => self.spawn(*callee, args, *ret, *span),
+                } => self.spawn(callee, args, *ret, *span),
             };
             if reach == Reach::Transferred {
                 return Reach::Transferred;
@@ -633,7 +645,7 @@ impl Emitter<'_> {
     /// pointer into it. One allocation per spawn carries the whole argument list, and its
     /// first eight bytes are the thread handle — so the list the scope joins holds one
     /// pointer per task and needs no second allocation.
-    fn spawn(&mut self, callee: FuncId, args: &[Expr], ret: Ty, span: Span) -> Reach {
+    fn spawn(&mut self, callee: &NativeSymbol, args: &[Expr], ret: Ty, span: Span) -> Reach {
         self.needs_sequences = true;
         self.needs_tasks = true;
 
@@ -734,7 +746,13 @@ impl Emitter<'_> {
     /// that site established. One per site rather than one per callee: two spawns of the
     /// same function are the same trampoline only if their argument types match, and
     /// generating per site makes that true without having to check it.
-    fn trampoline(&mut self, callee: FuncId, ret: Ty, types: &[Ty], offsets: &[u64]) -> String {
+    fn trampoline(
+        &mut self,
+        callee: &NativeSymbol,
+        ret: Ty,
+        types: &[Ty],
+        offsets: &[u64],
+    ) -> String {
         let name = format!("nz.task{}", self.taskno());
         let mut body = String::new();
         let _ = writeln!(&mut body, "\ndefine internal ptr @{name}(ptr %a) {{");
@@ -753,8 +771,7 @@ impl Emitter<'_> {
         let ret = ret.llvm();
         let _ = writeln!(
             &mut body,
-            "  %r = call {ret} {}({})",
-            callee.symbol(),
+            "  %r = call {ret} {callee}({})",
             passed.join(", ")
         );
         // A failure ends the *task*, not the process. The diagnostic is left in this
@@ -1028,12 +1045,7 @@ impl Emitter<'_> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 let out = self.fresh();
-                let _ = writeln!(
-                    self.out,
-                    "  %{out} = call {} {}({list})",
-                    ret.llvm(),
-                    callee.symbol()
-                );
+                let _ = writeln!(self.out, "  %{out} = call {} {callee}({list})", ret.llvm());
                 // A callee that failed has already unwound to its own `ret` and handed
                 // back a stand-in value. This is where that is noticed, so the failure
                 // keeps travelling outward instead of the caller carrying on with it.
@@ -1797,12 +1809,141 @@ impl Emitter<'_> {
     }
 }
 
-/// Emit a complete, self-contained LLVM IR module.
+/// Which runtime helper sets a compilation reaches.
 ///
-/// The result is text on purpose: `docs/architecture.md` §1 says not to link against LLVM
-/// in year one, and `clang` reads IR directly, so this needs no LLVM dependency at all.
+/// # Why this is a whole-program fact
+///
+/// The runtime is emitted **once**, so what it defines cannot be decided by one module.
+/// A unit records what it reached; the driver unions those and hands the answer to
+/// [`emit_runtime`]. That makes the runtime artefact a function of the program's feature
+/// use rather than of any module — the honest shape, and the one a future cache would
+/// have to key on.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Needs {
+    pub tasks: bool,
+    pub channels: bool,
+    pub sequences: bool,
+    pub io: bool,
+    pub join: bool,
+}
+
+impl Needs {
+    /// Everything either of them reaches.
+    #[must_use]
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            tasks: self.tasks || other.tasks,
+            channels: self.channels || other.channels,
+            sequences: self.sequences || other.sequences,
+            io: self.io || other.io,
+            join: self.join || other.join,
+        }
+    }
+
+    /// What the helper sets imply about each other.
+    ///
+    /// Both the task and the channel runtimes grow a sequence, so either one reaching
+    /// means the sequence runtime is reached too. Derived in one place rather than at each
+    /// use, so the two facts cannot drift apart.
+    #[must_use]
+    pub fn settled(self) -> Self {
+        Self {
+            sequences: self.sequences || self.tasks || self.channels,
+            ..self
+        }
+    }
+}
+
+/// Everything a Nazm unit may refer to and does not define.
+///
+/// Emitted into **every** unit, unconditionally. A `declare` costs nothing — LLVM emits no
+/// symbol reference for one that is never called — and the alternative is deciding, per
+/// unit, which declarations it happens to need, which is a class of bug ("the IR was
+/// rejected because something was not declared") for no benefit.
+fn declarations(out: &mut String) {
+    for d in [
+        "declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)",
+        "declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)",
+        "declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)",
+        "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)",
+        "declare i32 @printf(ptr noundef, ...)",
+        "declare i32 @snprintf(ptr noundef, i64, ptr noundef, ...)",
+        "declare ptr @malloc(i64)",
+        "declare ptr @realloc(ptr, i64)",
+        "declare i32 @memcmp(ptr, ptr, i64)",
+        "declare i64 @write(i32, ptr, i64)",
+        "declare void @exit(i32) noreturn",
+        "declare i64 @strlen(ptr)",
+        "declare ptr @fopen(ptr, ptr)",
+        "declare i32 @fseek(ptr, i64, i32)",
+        "declare i64 @ftell(ptr)",
+        "declare i64 @fread(ptr, i64, i64, ptr)",
+        "declare i64 @fwrite(ptr, i64, i64, ptr)",
+        "declare i32 @fclose(ptr)",
+        "declare i32 @pthread_create(ptr, ptr, ptr, ptr)",
+        "declare i32 @pthread_join(ptr, ptr)",
+        "declare i32 @pthread_mutex_init(ptr, ptr)",
+        "declare i32 @pthread_mutex_lock(ptr)",
+        "declare i32 @pthread_mutex_unlock(ptr)",
+        "declare i32 @pthread_cond_init(ptr, ptr)",
+        "declare i32 @pthread_cond_wait(ptr, ptr)",
+        "declare i32 @pthread_cond_broadcast(ptr)",
+    ] {
+        let _ = writeln!(out, "{d}");
+    }
+}
+
+/// The runtime's own surface, as a unit that does not define it sees it.
+///
+/// The globals are `external`: one definition lives in the runtime unit and every other
+/// object binds to it. Before N5 they were `internal` and there was only ever one module,
+/// so the question did not arise.
+fn runtime_declarations(out: &mut String) {
+    for d in [
+        "@nz.failed = external thread_local global i1",
+        "@nz.errmsg = external thread_local global ptr",
+        "@nz.errlen = external thread_local global i64",
+        "@nz.argc = external global i64",
+        "@nz.argv = external global ptr",
+        "declare void @nz.fail(ptr, i64)",
+        "declare void @nz.report() noreturn",
+        "declare {ptr, i64} @nz.str_join(ptr, ptr, i64)",
+        "declare i1 @nz.file_exists(ptr, i64)",
+        "declare {ptr, i64} @nz.read_file(ptr, i64)",
+        "declare i64 @nz.write_file(ptr, i64, ptr, i64)",
+        "declare ptr @nz.arr_new()",
+        "declare ptr @nz.arr_grow(ptr, i64)",
+        "declare i32 @nz.spawn(ptr, ptr, ptr)",
+        "declare {ptr, i64} @nz.scope_join(ptr)",
+        "declare ptr @nz.chan_new(i64)",
+        "declare i1 @nz.chan_send(ptr, i64)",
+        "declare i1 @nz.chan_recv(ptr, ptr, ptr, i64)",
+        "declare void @nz.chan_close(ptr)",
+    ] {
+        let _ = writeln!(out, "{d}");
+    }
+}
+
+/// The header every generated artefact carries.
+fn preamble(out: &mut String, source: &str) {
+    let _ = writeln!(out, "; Generated by nazm build. Do not edit.");
+    let _ = writeln!(out, "; {TARGET_NOTE}");
+    let _ = writeln!(out, "source_filename = \"{source}\"");
+    out.push('\n');
+}
+
+/// Emit one Nazm module as a complete, independently assemblable LLVM module.
+///
+/// # What it contains, and what it cannot
+///
+/// This module's functions, its own string and error constants, and **declarations** of
+/// everything it refers to and does not own. It contains no other module's body, and
+/// there is nothing here through which one could arrive: the only cross-module information
+/// that reaches emission is a symbol and a signature, decided in [`crate::lower`].
+///
+/// The returned [`Needs`] is what this unit reached, for the driver to union.
 #[must_use]
-pub fn emit_llvm(module: &Module, file: &str, map: &SourceMap) -> String {
+pub fn emit_unit(unit: &Unit, map: &SourceMap) -> (String, Needs) {
     let mut e = Emitter {
         out: String::new(),
         next: 0,
@@ -1823,145 +1964,47 @@ pub fn emit_llvm(module: &Module, file: &str, map: &SourceMap) -> String {
         needs_join: false,
     };
 
-    // One definition per function, in `FuncId` order so the IR reads in the order the
-    // signatures were collected.
-    for f in &module.functions {
+    for f in &unit.functions {
         emit_function(&mut e, f);
     }
 
-    // The platform entry point is a **wrapper**, separate from Nazm's `main`. Nazm's
-    // `main` is an ordinary `@nz.f<N>` like every other function, so a program can
-    // neither collide with `@main` nor with the runtime helper — and **only this wrapper
-    // prints**. A helper function returns a value and writes nothing.
-    let _ = writeln!(e.out, "define i32 @main(i32 %argc, ptr %argv) {{");
-    let _ = writeln!(e.out, "entry:");
-    if e.needs_io {
-        // Stashed in globals so `args_count` and `arg` need no parameter threaded
-        // through every Nazm function. One fewer than `argc`, because `argv[0]` is the
-        // program's own name and is deliberately not visible.
-        let _ = writeln!(e.out, "  %argc64 = sext i32 %argc to i64");
-        let _ = writeln!(e.out, "  %nargs = sub i64 %argc64, 1");
-        let _ = writeln!(e.out, "  store i64 %nargs, ptr @nz.argc");
-        let _ = writeln!(e.out, "  store ptr %argv, ptr @nz.argv");
-    }
-    let _ = writeln!(e.out, "  %result = call i64 {}()", module.entry.symbol());
-    // The single place a diagnostic is written. By the time control is here every scope
-    // `main` opened has been joined, so nothing is still running when the process ends —
-    // which is the difference between reporting a failure and abandoning the program
-    // where it happened.
-    let _ = writeln!(e.out, "  %failed = load i1, ptr @nz.failed");
-    let _ = writeln!(
-        e.out,
-        "  br i1 %failed, label %nz.reported, label %nz.finished"
-    );
-    let _ = writeln!(e.out, "nz.reported:");
-    let _ = writeln!(e.out, "  call void @nz.report()");
-    let _ = writeln!(e.out, "  unreachable");
-    let _ = writeln!(e.out, "nz.finished:");
-    let _ = writeln!(
-        e.out,
-        "  %print = call i32 (ptr, ...) @printf(ptr @.fmt, i64 %result)"
-    );
-    let _ = writeln!(e.out, "  ret i32 0");
-    let _ = writeln!(e.out, "}}");
-
-    // Both helper sets grow a sequence, so either one reaching means the sequence
-    // runtime is reached too. Deriving it here rather than at each use keeps the two
-    // facts from drifting apart.
-    if e.needs_tasks || e.needs_channels {
-        e.needs_sequences = true;
-    }
-
     let mut head = String::new();
-    let _ = writeln!(head, "; Generated by nazm build. Do not edit.");
-    let _ = writeln!(head, "; {TARGET_NOTE}");
-    let _ = writeln!(head, "source_filename = \"{file}\"");
+    preamble(&mut head, &unit.source);
+    declarations(&mut head);
+    runtime_declarations(&mut head);
     head.push('\n');
-    let _ = writeln!(
-        head,
-        "declare {{i64, i1}} @llvm.sadd.with.overflow.i64(i64, i64)"
-    );
-    let _ = writeln!(
-        head,
-        "declare {{i64, i1}} @llvm.ssub.with.overflow.i64(i64, i64)"
-    );
-    let _ = writeln!(
-        head,
-        "declare {{i64, i1}} @llvm.smul.with.overflow.i64(i64, i64)"
-    );
-    let _ = writeln!(head, "declare i32 @printf(ptr noundef, ...)");
-    let _ = writeln!(
-        head,
-        "declare i32 @snprintf(ptr noundef, i64, ptr noundef, ...)"
-    );
-    let _ = writeln!(head, "declare ptr @malloc(i64)");
-    let _ = writeln!(head, "declare i32 @memcmp(ptr, ptr, i64)");
-    if e.needs_sequences {
-        let _ = writeln!(head, "declare ptr @realloc(ptr, i64)");
+
+    // The Nazm definitions this module calls and does not own. One line each, in the
+    // order `lower` sorted them, so two builds of one module produce one text.
+    for x in &unit.externals {
+        let params = x
+            .params
+            .iter()
+            .map(|t| t.llvm())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(head, "declare {} {}({params})", x.ret.llvm(), x.symbol);
     }
-    if e.needs_io {
-        for d in [
-            "declare i64 @strlen(ptr)",
-            "declare ptr @fopen(ptr, ptr)",
-            "declare i32 @fseek(ptr, i64, i32)",
-            "declare i64 @ftell(ptr)",
-            "declare i64 @fread(ptr, i64, i64, ptr)",
-            "declare i64 @fwrite(ptr, i64, i64, ptr)",
-            "declare i32 @fclose(ptr)",
-        ] {
-            let _ = writeln!(head, "{d}");
-        }
-        let _ = writeln!(head, "@nz.argc = internal global i64 0");
-        let _ = writeln!(head, "@nz.argv = internal global ptr null");
-        let _ = writeln!(
-            head,
-            "@.rb = private unnamed_addr constant [3 x i8] c\"rb\\00\""
-        );
-        let _ = writeln!(
-            head,
-            "@.wb = private unnamed_addr constant [3 x i8] c\"wb\\00\""
-        );
+    if !unit.externals.is_empty() {
+        head.push('\n');
     }
-    let _ = writeln!(
-        head,
-        "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)"
-    );
-    let _ = writeln!(head, "declare i64 @write(i32, ptr, i64)");
-    let _ = writeln!(head, "declare void @exit(i32) noreturn");
-    if e.needs_tasks {
-        for d in [
-            "declare i32 @pthread_create(ptr, ptr, ptr, ptr)",
-            "declare i32 @pthread_join(ptr, ptr)",
-        ] {
-            let _ = writeln!(head, "{d}");
-        }
-    }
-    if e.needs_channels {
-        for d in [
-            "declare i32 @pthread_mutex_init(ptr, ptr)",
-            "declare i32 @pthread_mutex_lock(ptr)",
-            "declare i32 @pthread_mutex_unlock(ptr)",
-            "declare i32 @pthread_cond_init(ptr, ptr)",
-            "declare i32 @pthread_cond_wait(ptr, ptr)",
-            "declare i32 @pthread_cond_broadcast(ptr)",
-        ] {
-            let _ = writeln!(head, "{d}");
-        }
-    }
-    head.push('\n');
-    // `%lld\n`: the full signed 64-bit value in decimal. Encoding the result in the exit
-    // status instead would truncate it to 8 bits, which for a language whose `Int` is
-    // 64-bit would be a lie in the common case.
-    let _ = writeln!(
-        head,
-        "@.fmt = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\""
-    );
-    // `int_to_str`'s format. Separate from `@.fmt` because it has no newline: a `Str` is
-    // the digits and nothing else.
+
+    // `int_to_str`'s format, inlined at its call sites, so it belongs to whichever unit
+    // uses one. `private` linkage means the symbol is a local label rather than an entry
+    // in the object's symbol table, so every unit may have its own and none can collide —
+    // which is also why the numbered constants below need no qualification.
     let _ = writeln!(
         head,
         "@.dec = private unnamed_addr constant [5 x i8] c\"%lld\\00\""
     );
+    constants(&mut head, &e);
+    head.push('\n');
+
+    (head + &e.out + &e.tasks, e.needs())
+}
+
+/// The `Str` literals and failure messages one unit interned.
+fn constants(head: &mut String, e: &Emitter<'_>) {
     // `Str` literals: the bytes, and a constant pair naming them. An empty literal still
     // gets a byte of storage so that its pointer is valid to hand to `memcmp`.
     for (sym, bytes) in &e.blobs {
@@ -1986,68 +2029,158 @@ pub fn emit_llvm(module: &Module, file: &str, map: &SourceMap) -> String {
             escape(text)
         );
     }
-    head.push('\n');
+}
+
+/// Emit the program's runtime support: defined once, for the whole executable.
+///
+/// # Ownership, as a rule rather than as a sequence of renamings
+///
+/// Everything with a definition that must exist **exactly once per program** lives here
+/// and nowhere else: the failure state, the failure and reporting helpers, and each helper
+/// set the program reached. They are `hidden` rather than `internal` so the linker can
+/// bind another object's call to them, and `hidden` rather than external so the finished
+/// executable exports none of them — a Nazm program has no ABI and this is where that is
+/// enforced.
+#[must_use]
+pub fn emit_runtime(needs: Needs) -> String {
+    let needs = needs.settled();
+    let mut out = String::new();
+    preamble(&mut out, "<nazm runtime>");
+    declarations(&mut out);
+    out.push('\n');
+
+    // The process's arguments, stashed by the entry wrapper so that `args_count` and
+    // `arg` need no parameter threaded through every Nazm function. Only where the
+    // program reads them: a program that carries scaffolding it never reaches is the easy
+    // mistake here, and `tests/build.rs` has checked for it since before there were units.
+    if needs.io {
+        let _ = writeln!(out, "@nz.argc = hidden global i64 0");
+        let _ = writeln!(out, "@nz.argv = hidden global ptr null");
+        let _ = writeln!(
+            out,
+            "@.rb = private unnamed_addr constant [3 x i8] c\"rb\\00\""
+        );
+        let _ = writeln!(
+            out,
+            "@.wb = private unnamed_addr constant [3 x i8] c\"wb\\00\""
+        );
+    }
+
+    // The failure state is **thread-local**: two tasks can fail at once and neither may
+    // see the other's message. Only the *first* failure on a thread is kept, so a second
+    // one caused by continuing with the stand-in value of the first cannot overwrite it.
+    let _ = writeln!(out, "@nz.failed = hidden thread_local global i1 false");
+    let _ = writeln!(out, "@nz.errmsg = hidden thread_local global ptr null");
+    let _ = writeln!(out, "@nz.errlen = hidden thread_local global i64 0");
+    out.push('\n');
+
     // Not `llvm.trap`: a process killed by SIGILL is not "stops with a diagnostic".
-    // Named in the same reserved `@nz.` space as the generated functions, so a Nazm
-    // program cannot reach it and cannot collide with it.
     //
-    // **It records and returns; it does not exit.** `docs/spec.md` says a failure inside
-    // a `scope` is reported at the closing brace, after every task has been joined —
-    // so the thread that fails has to be able to walk back out to that brace. Writing
-    // the message and calling `@exit` here, which is what this did, ended the process
-    // wherever the failure happened and killed sibling tasks where they stood.
-    //
-    // The state is **thread-local**: two tasks can fail at once and neither may see the
-    // other's message. Only the *first* failure on a thread is kept, so a second one
-    // caused by continuing with the stand-in value of the first cannot overwrite it.
-    let _ = writeln!(head, "@nz.failed = internal thread_local global i1 false");
-    let _ = writeln!(head, "@nz.errmsg = internal thread_local global ptr null");
-    let _ = writeln!(head, "@nz.errlen = internal thread_local global i64 0");
-    head.push('\n');
-    let _ = writeln!(head, "define internal void @nz.fail(ptr %m, i64 %n) {{");
-    let _ = writeln!(head, "entry:");
-    let _ = writeln!(head, "  %had = load i1, ptr @nz.failed");
-    let _ = writeln!(head, "  br i1 %had, label %done, label %record");
-    let _ = writeln!(head, "record:");
-    let _ = writeln!(head, "  store i1 true, ptr @nz.failed");
-    let _ = writeln!(head, "  store ptr %m, ptr @nz.errmsg");
-    let _ = writeln!(head, "  store i64 %n, ptr @nz.errlen");
-    let _ = writeln!(head, "  br label %done");
-    let _ = writeln!(head, "done:");
-    let _ = writeln!(head, "  ret void");
-    let _ = writeln!(head, "}}");
-    head.push('\n');
+    // **It records and returns; it does not exit.** `docs/spec.md` says a failure inside a
+    // `scope` is reported at the closing brace, after every task has been joined — so the
+    // thread that fails has to be able to walk back out to that brace.
+    let _ = writeln!(out, "define hidden void @nz.fail(ptr %m, i64 %n) {{");
+    let _ = writeln!(out, "entry:");
+    let _ = writeln!(out, "  %had = load i1, ptr @nz.failed");
+    let _ = writeln!(out, "  br i1 %had, label %done, label %record");
+    let _ = writeln!(out, "record:");
+    let _ = writeln!(out, "  store i1 true, ptr @nz.failed");
+    let _ = writeln!(out, "  store ptr %m, ptr @nz.errmsg");
+    let _ = writeln!(out, "  store i64 %n, ptr @nz.errlen");
+    let _ = writeln!(out, "  br label %done");
+    let _ = writeln!(out, "done:");
+    let _ = writeln!(out, "  ret void");
+    let _ = writeln!(out, "}}");
+    out.push('\n');
     // The one place a diagnostic is written and the process ends: reached from the entry
     // wrapper, once every task has been joined.
-    let _ = writeln!(head, "define internal void @nz.report() noreturn {{");
-    let _ = writeln!(head, "entry:");
-    let _ = writeln!(head, "  %m = load ptr, ptr @nz.errmsg");
-    let _ = writeln!(head, "  %n = load i64, ptr @nz.errlen");
-    let _ = writeln!(head, "  %w = call i64 @write(i32 2, ptr %m, i64 %n)");
-    let _ = writeln!(head, "  call void @exit(i32 2)");
-    let _ = writeln!(head, "  unreachable");
-    let _ = writeln!(head, "}}");
-    if e.needs_sequences {
-        head.push_str(SEQUENCE_RUNTIME);
-    }
-    if e.needs_io {
-        head.push_str(IO_RUNTIME);
-    }
-    if e.needs_join {
-        head.push_str(JOIN_RUNTIME);
-    }
-    if e.needs_tasks {
-        head.push_str(TASK_RUNTIME);
-    }
-    if e.needs_channels {
-        head.push_str(CHANNEL_RUNTIME);
-    }
-    head.push('\n');
+    let _ = writeln!(out, "define hidden void @nz.report() noreturn {{");
+    let _ = writeln!(out, "entry:");
+    let _ = writeln!(out, "  %m = load ptr, ptr @nz.errmsg");
+    let _ = writeln!(out, "  %n = load i64, ptr @nz.errlen");
+    let _ = writeln!(out, "  %w = call i64 @write(i32 2, ptr %m, i64 %n)");
+    let _ = writeln!(out, "  call void @exit(i32 2)");
+    let _ = writeln!(out, "  unreachable");
+    let _ = writeln!(out, "}}");
 
-    // The trampolines last: they call the functions in `out`, and putting them after
-    // reads in the order a person would want them — the program, then the scaffolding
-    // that lets a thread enter it.
-    head + &e.out + &e.tasks
+    if needs.sequences {
+        out.push_str(SEQUENCE_RUNTIME);
+    }
+    if needs.io {
+        out.push_str(IO_RUNTIME);
+    }
+    if needs.join {
+        out.push_str(JOIN_RUNTIME);
+    }
+    if needs.tasks {
+        out.push_str(TASK_RUNTIME);
+    }
+    if needs.channels {
+        out.push_str(CHANNEL_RUNTIME);
+    }
+    out.push('\n');
+    out
+}
+
+/// Emit the platform entry point: one per executable, and the only thing that prints.
+///
+/// # Why this is its own unit
+///
+/// It is the one place where the language's world meets the operating system's. Nazm's
+/// `main` is an ordinary definition with an ordinary symbol derived from its `DefKey`;
+/// `@main` is a C entry point with a C signature. Keeping them in separate artefacts is
+/// what makes that separation visible rather than implied — and it is what stops an
+/// imported module's function named `main` from ever being a process entry, because the
+/// symbol this calls is the **root** module's, decided by [`crate::lower::plan`].
+#[must_use]
+pub fn emit_entry(entry: &NativeSymbol, needs: Needs) -> String {
+    let needs = needs.settled();
+    let mut out = String::new();
+    preamble(&mut out, "<nazm entry>");
+    declarations(&mut out);
+    runtime_declarations(&mut out);
+    let _ = writeln!(out, "declare i64 {entry}()");
+    out.push('\n');
+    // `%lld\n`: the full signed 64-bit value in decimal. Encoding the result in the exit
+    // status instead would truncate it to 8 bits, which for a language whose `Int` is
+    // 64-bit would be a lie in the common case.
+    let _ = writeln!(
+        out,
+        "@.fmt = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\""
+    );
+    out.push('\n');
+
+    let _ = writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{");
+    let _ = writeln!(out, "entry:");
+    if needs.io {
+        // One fewer than `argc`, because `argv[0]` is the program's own name and is
+        // deliberately not visible.
+        let _ = writeln!(out, "  %argc64 = sext i32 %argc to i64");
+        let _ = writeln!(out, "  %nargs = sub i64 %argc64, 1");
+        let _ = writeln!(out, "  store i64 %nargs, ptr @nz.argc");
+        let _ = writeln!(out, "  store ptr %argv, ptr @nz.argv");
+    }
+    let _ = writeln!(out, "  %result = call i64 {entry}()");
+    // The single place a diagnostic is written. By the time control is here every scope
+    // `main` opened has been joined, so nothing is still running when the process ends —
+    // which is the difference between reporting a failure and abandoning the program
+    // where it happened.
+    let _ = writeln!(out, "  %failed = load i1, ptr @nz.failed");
+    let _ = writeln!(
+        out,
+        "  br i1 %failed, label %nz.reported, label %nz.finished"
+    );
+    let _ = writeln!(out, "nz.reported:");
+    let _ = writeln!(out, "  call void @nz.report()");
+    let _ = writeln!(out, "  unreachable");
+    let _ = writeln!(out, "nz.finished:");
+    let _ = writeln!(
+        out,
+        "  %print = call i32 (ptr, ...) @printf(ptr @.fmt, i64 %result)"
+    );
+    let _ = writeln!(out, "  ret i32 0");
+    let _ = writeln!(out, "}}");
+    out
 }
 
 /// `str_join`, as generated LLVM.
@@ -2061,7 +2194,7 @@ pub fn emit_llvm(module: &Module, file: &str, map: &SourceMap) -> String {
 /// Signals allocation failure by returning a null pointer, which the call site turns
 /// into `N0406` at the right span.
 const JOIN_RUNTIME: &str = r"
-define internal { ptr, i64 } @nz.str_join(ptr %h, ptr %sp, i64 %sn) {
+define hidden { ptr, i64 } @nz.str_join(ptr %h, ptr %sp, i64 %sn) {
 entry:
   %n = load i64, ptr %h
   %dp = getelementptr i8, ptr %h, i64 16
@@ -2138,7 +2271,7 @@ fail:
 /// libc call sees it. Passing the bytes directly would truncate a path at the first
 /// zero, or read past the end of one that has none.
 const IO_RUNTIME: &str = r"
-define internal ptr @nz.cstr(ptr %p, i64 %n) {
+define hidden ptr @nz.cstr(ptr %p, i64 %n) {
 entry:
   %room = add i64 %n, 1
   %buf = call ptr @malloc(i64 %room)
@@ -2153,7 +2286,7 @@ ok:
   ret ptr %buf
 }
 
-define internal i1 @nz.file_exists(ptr %p, i64 %n) {
+define hidden i1 @nz.file_exists(ptr %p, i64 %n) {
 entry:
   %path = call ptr @nz.cstr(ptr %p, i64 %n)
   %nopath = icmp eq ptr %path, null
@@ -2169,7 +2302,7 @@ no:
   ret i1 false
 }
 
-define internal { ptr, i64 } @nz.read_file(ptr %p, i64 %n) {
+define hidden { ptr, i64 } @nz.read_file(ptr %p, i64 %n) {
 entry:
   %path = call ptr @nz.cstr(ptr %p, i64 %n)
   %nopath = icmp eq ptr %path, null
@@ -2210,7 +2343,7 @@ fail:
   ret { ptr, i64 } %z2
 }
 
-define internal i64 @nz.write_file(ptr %pp, i64 %pn, ptr %dp, i64 %dn) {
+define hidden i64 @nz.write_file(ptr %pp, i64 %pn, ptr %dp, i64 %dn) {
 entry:
   %path = call ptr @nz.cstr(ptr %pp, i64 %pn)
   %nopath = icmp eq ptr %path, null
@@ -2246,7 +2379,7 @@ fail:
 /// and never moves, which is what makes a sequence a reference: growth rewrites `data`
 /// and `cap` in place and every holder sees it.
 const SEQUENCE_RUNTIME: &str = r"
-define internal ptr @nz.arr_new() {
+define hidden ptr @nz.arr_new() {
 entry:
   %h = call ptr @malloc(i64 24)
   %bad = icmp eq ptr %h, null
@@ -2262,7 +2395,7 @@ ok:
   ret ptr %h
 }
 
-define internal ptr @nz.arr_grow(ptr %h, i64 %elem) {
+define hidden ptr @nz.arr_grow(ptr %h, i64 %elem) {
 entry:
   %len = load i64, ptr %h
   %capp = getelementptr i8, ptr %h, i64 8
@@ -2323,9 +2456,10 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
         .join(", ");
     let _ = writeln!(
         e.out,
-        "define internal {} {}({params}) {{   ; {}",
+        "define {}{} {}({params}) {{   ; {}",
+        f.linkage.llvm(),
         f.ret.llvm(),
-        f.id.symbol(),
+        f.symbol,
         f.name
     );
     let _ = writeln!(e.out, "entry:");
@@ -2412,7 +2546,7 @@ fn escape(s: &str) -> String {
 /// Returns `0` on success, `-1` when the list could not grow, and `1` when the thread
 /// could not be started. The call site turns those into `N0406` and `N0404`.
 const TASK_RUNTIME: &str = r"
-define internal i32 @nz.spawn(ptr %h, ptr %fn, ptr %blk) {
+define hidden i32 @nz.spawn(ptr %h, ptr %fn, ptr %blk) {
 entry:
   %data = call ptr @nz.arr_grow(ptr %h, i64 8)
   %oom = icmp eq ptr %data, null
@@ -2448,7 +2582,7 @@ ok:
 ; No lock is needed. A task writes its own diagnostic into its own argument block before
 ; its thread ends, and this reads that block only after `pthread_join` has returned for
 ; it, which is a happens-before edge.
-define internal { ptr, i64 } @nz.scope_join(ptr %h) {
+define hidden { ptr, i64 } @nz.scope_join(ptr %h) {
 entry:
   ; The count is read once. Nothing can be added while this runs: the scope's body has
   ; finished by every path that reaches here, and a task cannot spawn into its parent.
@@ -2508,7 +2642,7 @@ done:
 /// `pthread_cond_wait` may return without the condition holding. Every wait here is
 /// inside a loop that re-reads the state, which is the only correct way to use one.
 const CHANNEL_RUNTIME: &str = r"
-define internal ptr @nz.chan_new(i64 %cap) {
+define hidden ptr @nz.chan_new(i64 %cap) {
 entry:
   %c = call ptr @malloc(i64 56)
   %bad = icmp eq ptr %c, null
@@ -2550,7 +2684,7 @@ init:
   ret ptr %c
 }
 
-define internal i1 @nz.chan_send(ptr %c, i64 %v) {
+define hidden i1 @nz.chan_send(ptr %c, i64 %v) {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -2593,7 +2727,7 @@ store:
   ret i1 true
 }
 
-define internal i1 @nz.chan_recv(ptr %c, ptr %seq, ptr %msg, i64 %mn) {
+define hidden i1 @nz.chan_recv(ptr %c, ptr %seq, ptr %msg, i64 %mn) {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -2654,7 +2788,7 @@ push:
   ret i1 true
 }
 
-define internal void @nz.chan_close(ptr %c) {
+define hidden void @nz.chan_close(ptr %c) {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -2673,8 +2807,20 @@ entry:
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::ir::{Block, CmpOp, Expr, FuncId, Function, Local, Module, Stmt};
+    use crate::ir::{Block, CmpOp, Expr, Function, Local, Stmt, Unit};
+    use crate::symbol::{Linkage, NativeSymbol};
+    use nazm_sema::key::{DefKey, DefKind, ModuleKey};
+    use nazm_sema::ModuleId;
     use nazm_span::{SourceMap, Span};
+
+    /// The symbol a definition of `name` in `t.nz` gets.
+    fn sym(name: &str) -> NativeSymbol {
+        NativeSymbol::of_definition(&DefKey::new(
+            ModuleKey::relative("t.nz").expect("a key"),
+            DefKind::Function,
+            name,
+        ))
+    }
 
     fn block(result: Expr) -> Block {
         Block {
@@ -2683,54 +2829,58 @@ mod tests {
         }
     }
 
-    fn module(result: Expr, locals: Vec<Local>, stmts: Vec<Stmt>) -> Module {
-        Module {
-            functions: vec![Function {
-                id: FuncId(0),
+    fn unit(functions: Vec<Function>) -> Unit {
+        Unit {
+            module: ModuleId::ROOT,
+            source: "t.nz".to_owned(),
+            functions,
+            externals: Vec::new(),
+        }
+    }
+
+    fn module(result: Expr, locals: Vec<Local>, stmts: Vec<Stmt>) -> Unit {
+        unit(vec![Function {
+            symbol: sym("main"),
+            linkage: Linkage::Hidden,
+            name: "main".to_owned(),
+            locals,
+            params: 0,
+            ret: Ty::Int,
+            body: Block {
+                stmts,
+                result: Some(Box::new(result)),
+            },
+        }])
+    }
+
+    /// A two-function unit: `main` calls `helper(args)`.
+    fn calling(helper: Function, args: Vec<Expr>, ret: Ty) -> Unit {
+        let callee = helper.symbol.clone();
+        unit(vec![
+            Function {
+                symbol: sym("main"),
+                linkage: Linkage::Hidden,
                 name: "main".to_owned(),
-                locals,
+                locals: Vec::new(),
                 params: 0,
                 ret: Ty::Int,
                 body: Block {
-                    stmts,
-                    result: Some(Box::new(result)),
+                    stmts: Vec::new(),
+                    result: Some(Box::new(Expr::Call { callee, args, ret })),
                 },
-            }],
-            entry: FuncId(0),
-        }
+            },
+            helper,
+        ])
     }
 
-    /// A two-function module: `main` calls `helper(args)`.
-    fn calling(helper: Function, args: Vec<Expr>, ret: Ty) -> Module {
-        Module {
-            functions: vec![
-                Function {
-                    id: FuncId(0),
-                    name: "main".to_owned(),
-                    locals: Vec::new(),
-                    params: 0,
-                    ret: Ty::Int,
-                    body: Block {
-                        stmts: Vec::new(),
-                        result: Some(Box::new(Expr::Call {
-                            callee: FuncId(1),
-                            args,
-                            ret,
-                        })),
-                    },
-                },
-                helper,
-            ],
-            entry: FuncId(0),
-        }
-    }
-
-    fn ir_of(m: &Module) -> String {
-        emit_llvm(
-            m,
-            "t.nz",
+    /// One unit's IR, with the runtime and the entry wrapper appended so that a test can
+    /// look for anything the finished program contains.
+    fn ir_of(u: &Unit) -> String {
+        let (text, needs) = emit_unit(
+            u,
             &SourceMap::single("t.nz", "a source line\nand another\n"),
-        )
+        );
+        text + &emit_runtime(needs) + &emit_entry(&sym("main"), needs)
     }
 
     #[test]
@@ -2814,9 +2964,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        let ir = emit_llvm(
+        let (ir, _) = emit_unit(
             &m,
-            "prog.nz",
             &SourceMap::single("prog.nz", "line one\nline two\n    1 / 0\n"),
         );
         assert!(ir.contains("prog.nz:3:7"), "{ir}");
@@ -2932,7 +3081,8 @@ mod tests {
         // A source name in an LLVM identifier needs escaping rules, and the escaping is
         // the bug. There are none here because no name reaches a symbol.
         let helper = Function {
-            id: FuncId(1),
+            symbol: sym("helper"),
+            linkage: Linkage::Internal,
             // Deliberately hostile: spaces, quotes, an `@`, and the names of the C
             // functions this module declares.
             name: "printf\" @exit write".to_owned(),
@@ -2946,7 +3096,10 @@ mod tests {
         };
         let ir = ir_of(&calling(helper, Vec::new(), Ty::Int));
 
-        assert!(ir.contains("define internal i64 @nz.f1("), "{ir}");
+        assert!(
+            ir.contains(&format!("define internal i64 {}(", sym("helper"))),
+            "{ir}"
+        );
         // The name appears only after a comment marker, never as an identifier.
         for line in ir.lines().filter(|l| l.contains("printf\" @exit write")) {
             let before = line.split("printf").next().unwrap_or_default();
@@ -2959,10 +3112,12 @@ mod tests {
 
     #[test]
     fn the_platform_entry_is_a_wrapper_and_only_it_prints() {
-        // Nazm's `main` is an ordinary `@nz.fN`, so a program cannot collide with the C
-        // entry point. And a helper returns a value rather than printing one.
+        // Nazm's `main` is an ordinary definition with an ordinary symbol, so a program
+        // cannot collide with the C entry point. And a helper returns a value rather than
+        // printing one.
         let helper = Function {
-            id: FuncId(1),
+            symbol: sym("helper"),
+            linkage: Linkage::Internal,
             name: "helper".to_owned(),
             locals: Vec::new(),
             params: 0,
@@ -2981,21 +3136,25 @@ mod tests {
             "{ir}"
         );
         assert!(
-            ir.contains("define internal i64 @nz.f0("),
+            ir.contains(&format!("define hidden i64 {}(", sym("main"))),
             "nazm main is not a wrapper: {ir}"
         );
-        assert!(ir.contains("call i64 @nz.f0()"), "{ir}");
+        assert!(ir.contains(&format!("call i64 {}()", sym("main"))), "{ir}");
+        // **Called** once, by the wrapper. The declaration appears in every artefact
+        // since N5 — a `declare` costs nothing and deciding per unit which ones are
+        // needed is a class of bug — so counting mentions would count the wrong thing.
         assert_eq!(
-            ir.matches("@printf").count(),
-            2,
-            "printf declared once, called once:\n{ir}"
+            ir.matches("call i32 (ptr, ...) @printf").count(),
+            1,
+            "only the entry wrapper may print:\n{ir}"
         );
     }
 
     #[test]
     fn parameters_are_stored_into_their_slots_and_typed() {
         let helper = Function {
-            id: FuncId(1),
+            symbol: sym("helper"),
+            linkage: Linkage::Internal,
             name: "helper".to_owned(),
             locals: vec![
                 Local {
@@ -3024,12 +3183,18 @@ mod tests {
         ));
 
         assert!(
-            ir.contains("define internal i64 @nz.f1(i64 %p0, i1 %p1)"),
+            ir.contains(&format!(
+                "define internal i64 {}(i64 %p0, i1 %p1)",
+                sym("helper")
+            )),
             "{ir}"
         );
         assert!(ir.contains("store i64 %p0, ptr %slot0"), "{ir}");
         assert!(ir.contains("store i1 %p1, ptr %slot1"), "{ir}");
-        assert!(ir.contains("call i64 @nz.f1(i64 %"), "{ir}");
+        assert!(
+            ir.contains(&format!("call i64 {}(i64 %", sym("helper"))),
+            "{ir}"
+        );
         assert!(
             ir.contains(", i1 %"),
             "the Bool argument lost its type: {ir}"

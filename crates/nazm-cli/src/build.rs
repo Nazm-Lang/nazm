@@ -70,12 +70,12 @@ pub(crate) fn run(
     //
     // A program that does not type-check is not a question about the backend's coverage,
     // so those diagnostics are reported first and lowering never runs.
-    let ir = match nazm_core::on_checked_map(map, &loaded.graph, |program, resolution| {
-        nazm_lir::lower(program, resolution)
-            .map(|module| nazm_lir::emit_llvm(&module, &input.display().to_string(), map))
+    let artefacts = match nazm_core::on_checked_map(map, &loaded.graph, |program, resolution| {
+        nazm_lir::lower(program, resolution, &loaded.graph, map)
+            .map(|native| emit_artefacts(&native, map))
             .map_err(|e| e.diagnostics)
     }) {
-        Ok(ir) => ir,
+        Ok(a) => a,
         Err(diagnostics) => {
             // `N0101` is this backend's "not yet", and it reads differently from a
             // program being wrong. Distinguished for the summary line only; both are a
@@ -87,7 +87,8 @@ pub(crate) fn run(
             let n = diagnostics.len();
             if unsupported {
                 eprintln!(
-                    "nazm: {n} construct{} outside the native subset; nothing was compiled",
+                    "nazm: {n} construct{} outside `nazm build`'s subset. Nothing was \
+                     written; `nazm run` still executes this program.",
                     if n == 1 { "" } else { "s" }
                 );
             } else {
@@ -98,35 +99,142 @@ pub(crate) fn run(
     };
 
     // Temporaries beside the output, so the final move is a rename within one filesystem
-    // rather than a copy that can half-succeed.
+    // rather than a copy that can half-succeed. One directory for all of them, because
+    // there is one per module now and a program with forty modules should not put forty
+    // pairs of files beside somebody's binary.
     let stamp = std::process::id();
-    let tmp_ll = sibling(&output, &format!(".nazm-{stamp}.ll"));
+    let work = sibling(&output, &format!(".nazm-{stamp}"));
     let tmp_exe = sibling(&output, &format!(".nazm-{stamp}.out"));
-
-    if let Err(e) = std::fs::write(&tmp_ll, &ir) {
-        eprintln!("nazm: cannot write {}: {e}", tmp_ll.display());
+    if let Err(e) = std::fs::create_dir_all(&work) {
+        eprintln!("nazm: cannot create {}: {e}", work.display());
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
 
-    let status = Command::new("clang")
-        .arg(format!("-O{opt_level}"))
-        // The module carries no target triple, so clang supplies the host's and would
-        // otherwise warn about overriding nothing.
-        .arg("-Wno-override-module")
-        .arg("-o")
-        .arg(&tmp_exe)
-        .arg(&tmp_ll)
-        .output();
-
-    let cleanup = |keep_ir: bool| {
-        if !keep_ir {
-            let _ = std::fs::remove_file(&tmp_ll);
+    // Removes what this build made, and only that: the working directory it created and
+    // the executable it was assembling. Nothing else is scanned and nothing else is
+    // touched.
+    let cleanup = |keep: bool| {
+        if !keep {
+            let _ = std::fs::remove_dir_all(&work);
         }
         let _ = std::fs::remove_file(&tmp_exe);
     };
 
-    match status {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+    let mut objects: Vec<PathBuf> = Vec::new();
+    for artefact in &artefacts {
+        let ll = work.join(format!("{}.ll", artefact.name));
+        let obj = work.join(format!("{}.o", artefact.name));
+        if let Err(e) = std::fs::write(&ll, &artefact.ir) {
+            cleanup(false);
+            eprintln!("nazm: cannot write {}: {e}", ll.display());
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        }
+        // **Independently generated.** Each unit becomes an object on its own, with no
+        // other unit's IR in scope, which is what makes this separate code generation
+        // rather than concatenation with extra steps.
+        match clang(&["-c"], opt_level, &obj, std::slice::from_ref(&ll)) {
+            Outcome::Ran(o) if o.status.success() => objects.push(obj),
+            other => return report_clang(other, &ll, cleanup),
+        }
+    }
+
+    // Deterministic: the units are in load order and the support artefacts last, so the
+    // command line does not depend on anything the filesystem decided.
+    match clang(&[], opt_level, &tmp_exe, &objects) {
+        Outcome::Ran(o) if o.status.success() => {}
+        other => return report_clang(other, &work, cleanup),
+    }
+
+    if emit_ir {
+        // Beside the output, one file per unit, named as the artefacts are.
+        for artefact in &artefacts {
+            let beside = with_suffix(&output, &format!("{}.ll", artefact.name));
+            if let Err(e) = std::fs::write(&beside, &artefact.ir) {
+                eprintln!("nazm: cannot write {}: {e}", beside.display());
+            }
+        }
+    }
+    // The intermediates, and only them: the executable is still on its way into place.
+    let _ = std::fs::remove_dir_all(&work);
+
+    // Published last, so an existing executable survives every failure above.
+    if let Err(e) = std::fs::rename(&tmp_exe, &output) {
+        let _ = std::fs::remove_file(&tmp_exe);
+        eprintln!("nazm: cannot write {}: {e}", output.display());
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
+    println!("{}", output.display());
+    ExitCode::from(exit::OK)
+}
+
+/// One generated native unit, ready to be written down.
+struct Artefact {
+    /// The file name to use, without an extension.
+    ///
+    /// Derived from the module's position in load order rather than from its source path:
+    /// a path is not a filename — it has separators, it may not be relative, and it is
+    /// **not this compiler's to trust**. `docs/architecture.md` records it as build
+    /// plumbing, deliberately not as an identity.
+    name: String,
+    ir: String,
+}
+
+/// Lower a checked compilation into one artefact per module, plus the program's support.
+///
+/// The order is load order, then the runtime, then the entry. Nothing here reads a
+/// directory, so the same program produces the same artefacts in the same order.
+fn emit_artefacts(native: &nazm_lir::Native, map: &nazm_span::SourceMap) -> Vec<Artefact> {
+    let mut out = Vec::new();
+    let mut needs = nazm_lir::Needs::default();
+    for (i, unit) in native.units.iter().enumerate() {
+        let (ir, reached) = nazm_lir::emit_unit(unit, map);
+        needs = needs.union(reached);
+        out.push(Artefact {
+            name: format!("m{i}"),
+            ir,
+        });
+    }
+    // After every unit, because what the runtime must define is the union of what the
+    // modules reached — a whole-program fact, and the only one emission needs.
+    out.push(Artefact {
+        name: "runtime".to_owned(),
+        ir: nazm_lir::emit_runtime(needs),
+    });
+    out.push(Artefact {
+        name: "entry".to_owned(),
+        ir: nazm_lir::emit_entry(&native.entry, needs),
+    });
+    out
+}
+
+/// What running `clang` produced.
+enum Outcome {
+    Ran(std::process::Output),
+    Missing,
+    Failed(std::io::Error),
+}
+
+fn clang(extra: &[&str], opt_level: u8, output: &Path, inputs: &[PathBuf]) -> Outcome {
+    let mut c = Command::new("clang");
+    c.arg(format!("-O{opt_level}"))
+        // The modules carry no target triple, so clang supplies the host's and would
+        // otherwise warn about overriding nothing.
+        .arg("-Wno-override-module")
+        .args(extra)
+        .arg("-o")
+        .arg(output)
+        .args(inputs);
+    match c.output() {
+        Ok(o) => Outcome::Ran(o),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Outcome::Missing,
+        Err(e) => Outcome::Failed(e),
+    }
+}
+
+/// Explain a `clang` failure, keeping the IR when its complaint is about it.
+fn report_clang(outcome: Outcome, kept: &Path, cleanup: impl Fn(bool)) -> ExitCode {
+    match outcome {
+        Outcome::Missing => {
             cleanup(false);
             eprintln!(
                 "nazm: `clang` was not found on PATH, and `nazm build` needs it to \
@@ -136,12 +244,12 @@ pub(crate) fn run(
             );
             ExitCode::from(exit::TOOLCHAIN_FAILED)
         }
-        Err(e) => {
+        Outcome::Failed(e) => {
             cleanup(false);
             eprintln!("nazm: could not run `clang`: {e}");
             ExitCode::from(exit::TOOLCHAIN_FAILED)
         }
-        Ok(o) if !o.status.success() => {
+        Outcome::Ran(o) => {
             // Keep the IR: clang's complaint is about a file the user cannot see
             // otherwise, and a compiler bug is much easier to report with it in hand.
             cleanup(true);
@@ -151,27 +259,9 @@ pub(crate) fn run(
                  `nazm build`, not in your program — the IR has been kept at {} to \
                  report it with.",
                 o.status.code(),
-                tmp_ll.display()
+                kept.display()
             );
             ExitCode::from(exit::TOOLCHAIN_FAILED)
-        }
-        Ok(_) => {
-            if emit_ir {
-                let beside = with_suffix(&output, "ll");
-                if let Err(e) = std::fs::rename(&tmp_ll, &beside) {
-                    eprintln!("nazm: cannot write {}: {e}", beside.display());
-                }
-            } else {
-                let _ = std::fs::remove_file(&tmp_ll);
-            }
-            // Published last, so an existing executable survives every failure above.
-            if let Err(e) = std::fs::rename(&tmp_exe, &output) {
-                let _ = std::fs::remove_file(&tmp_exe);
-                eprintln!("nazm: cannot write {}: {e}", output.display());
-                return ExitCode::from(exit::TOOLCHAIN_FAILED);
-            }
-            println!("{}", output.display());
-            ExitCode::from(exit::OK)
         }
     }
 }

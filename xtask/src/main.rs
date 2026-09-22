@@ -31,6 +31,7 @@ fn main() -> ExitCode {
         Some("check-span") => report(&[("span identity", check_span_identity())]),
         Some("check-sema") => report(&[("sema purity", check_sema_purity())]),
         Some("check-cache") => report(&[("cache soundness", check_cache_soundness())]),
+        Some("check-symbols") => report(&[("native identity", check_native_identity())]),
         Some("check-guide") => report(&[("guide from grammar", guide::check())]),
         Some("bench") => {
             let rest: Vec<String> = args.collect();
@@ -129,6 +130,7 @@ fn help() {
            check-span      a span cannot be serialised without its file\n  \
            check-sema      no session-local id can reach a persistent interface\n  \
            check-cache     a check key still covers everything checking reads\n  \
+           check-symbols   a native symbol comes from identity, not from position\n  \
            check-guide     docs/guide.md is what docs/grammar.ebnf produces\n  \
            guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
            bench           measure; --save records a baseline, --check compares to one,\n  \
@@ -154,6 +156,7 @@ fn run_checks() -> ExitCode {
         ("span identity", check_span_identity()),
         ("sema purity", check_sema_purity()),
         ("cache soundness", check_cache_soundness()),
+        ("native identity", check_native_identity()),
         ("guide from grammar", guide::check()),
     ])
 }
@@ -889,6 +892,132 @@ fn serde_in_source(text: &str) -> Vec<(usize, &'static str)> {
             }
         })
         .collect()
+}
+
+/// **Native identity**: a symbol comes from what a definition *is*, not from where it sat.
+///
+/// # What this guards
+///
+/// N5 replaced `@nz.f<N>` — a position in one whole-program numbering — with a spelling of
+/// the definition's `DefKey`. Four things could quietly undo that, and none of them would
+/// fail a test on the day it was written:
+///
+/// 1. **a session id reaching a symbol.** `FnId` is an index into one `Resolution`. A
+///    symbol derived from one is a symbol that moves when an unrelated module gains a
+///    function, which is exactly what separate code generation cannot have;
+/// 2. **`pub` choosing a spelling.** Visibility decides *linkage* — whether the linker
+///    must be able to bind the name — and must not decide the name, because a native
+///    symbol is compiler-private and `pub` is a statement about Nazm modules. A symbol
+///    that changed when a definition was exported would be an ABI promise nobody made;
+/// 3. **a positional symbol coming back.** The literal shape that was removed;
+/// 4. **LLVM spelling reaching `nazm-sema`.** Semantic identity is backend-independent so
+///    that a second backend can spell the same `DefKey` its own way. A `@nz.` in the
+///    crate that owns identity is that boundary being crossed.
+///
+/// `ModuleId` is *permitted* in the symbol module and appears there deliberately: a module
+/// with no durable identity gets a compilation-local symbol, which `docs/architecture.md`
+/// records as an honest limitation rather than a durable-looking guess.
+fn check_native_identity() -> Result<(), Vec<String>> {
+    let Some(root) = workspace_root() else {
+        return Err(vec!["could not locate workspace root".to_owned()]);
+    };
+    let mut problems = Vec::new();
+
+    let symbol = root.join("crates/nazm-lir/src/symbol.rs");
+    match std::fs::read_to_string(&symbol) {
+        Ok(text) => {
+            for (n, line) in text.lines().enumerate() {
+                let t = line.trim_start();
+                if t.starts_with("//") || t.starts_with('*') {
+                    continue;
+                }
+                if line.contains("FnId") || line.contains("FuncId") {
+                    problems.push(format!(
+                        "crates/nazm-lir/src/symbol.rs:{} names a session-local function id. \
+                         A symbol derived from one moves when an unrelated module gains a \
+                         function, which is what N5 removed.",
+                        n + 1
+                    ));
+                }
+                for word in ["Visibility", "is_exported", "pub_span"] {
+                    if line.contains(word) {
+                        problems.push(format!(
+                            "crates/nazm-lir/src/symbol.rs:{} names `{word}`. `pub` chooses \
+                             linkage, never spelling: a symbol that changed when a \
+                             definition was exported would be a binary promise the language \
+                             does not make.",
+                            n + 1
+                        ));
+                    }
+                }
+            }
+        }
+        Err(e) => problems.push(format!("could not read {}: {e}", symbol.display())),
+    }
+
+    // The positional form, anywhere in the backend.
+    for rel in source_files(&root) {
+        if !rel.starts_with("crates/nazm-lir/") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(root.join(&rel)) else {
+            continue;
+        };
+        for (n, line) in text.lines().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with('*') {
+                continue;
+            }
+            if line.contains("@nz.f{") || line.contains("nz.f{") {
+                problems.push(format!(
+                    "{rel}:{} builds a symbol from a number. Whole-program positional \
+                     naming is what stops a module being generated on its own.",
+                    n + 1
+                ));
+            }
+        }
+    }
+
+    // And the boundary the other way: identity does not know how a backend spells it.
+    let dir = root.join("crates/nazm-sema/src");
+    match std::fs::read_dir(&dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_none_or(|x| x != "rs") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let name = path
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                for (n, line) in text.lines().enumerate() {
+                    let t = line.trim_start();
+                    if t.starts_with("//") || t.starts_with('*') {
+                        continue;
+                    }
+                    if line.contains("@nz.") || line.contains("NativeSymbol") {
+                        problems.push(format!(
+                            "crates/nazm-sema/src/{name}:{} carries a backend's spelling. A \
+                             `DefKey` says which definition this is; what a linker calls it \
+                             is `nazm-lir`'s, so that a second backend can answer \
+                             differently.",
+                            n + 1
+                        ));
+                    }
+                }
+            }
+        }
+        Err(e) => problems.push(format!("could not read {}: {e}", dir.display())),
+    }
+
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
 }
 
 /// **Cache soundness**: a check key cannot quietly stop covering what checking reads.

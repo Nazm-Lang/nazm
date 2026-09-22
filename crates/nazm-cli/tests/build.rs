@@ -623,7 +623,7 @@ fn the_generated_ir_can_be_kept_for_inspection() {
         .expect("run");
     assert_eq!(out.status.code(), Some(0));
 
-    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("the IR");
+    let ir = emitted_ir(dir.path());
     assert!(ir.contains("@llvm.sadd.with.overflow.i64"), "{ir}");
     assert!(!ir.contains(" nsw "), "emitted nsw: {ir}");
     assert!(!ir.contains("llvm.trap"), "emitted llvm.trap: {ir}");
@@ -1053,7 +1053,7 @@ fn the_emitted_ir_for_a_conditional_is_well_formed() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("the IR");
+    let ir = emitted_ir(dir.path());
     assert!(ir.contains("icmp sgt i64"), "{ir}");
     assert!(ir.contains("br i1 %"), "{ir}");
     assert!(ir.contains("phi i64"), "{ir}");
@@ -1698,7 +1698,7 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("the IR");
+    let ir = emitted_ir(dir.path());
     // Nazm functions are internal and carry generated symbols; the C entry point is a
     // separate, external one. Asserted by shape rather than by which id each function
     // happened to get — that depends on declaration order and is not a property worth
@@ -1710,9 +1710,14 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
         ir.contains("define i32 @main(i32 %argc, ptr %argv) {"),
         "{ir}"
     );
+    // Since N5 a symbol is a spelling of the definition's durable identity rather than a
+    // number, so the shape asked for is "a Nazm definition" rather than a prefix and an
+    // index. `prog.nz::main` is `hidden` — the entry wrapper is a separate artefact and
+    // has to be able to bind it — and `helper` is `internal`, because nothing outside its
+    // module can name it.
     let defs: Vec<&str> = ir
         .lines()
-        .filter(|l| l.starts_with("define internal i64 @nz.f"))
+        .filter(|l| l.starts_with("define ") && l.contains(" @nz.m."))
         .collect();
     assert_eq!(defs.len(), 2, "expected two Nazm functions:\n{ir}");
     assert!(
@@ -1726,7 +1731,7 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
         "nazm's main should take no parameters:\n{ir}"
     );
     assert!(
-        ir.contains("call i64 @nz.f") && ir.contains("(i64 %"),
+        ir.contains("call i64 @nz.m.") && ir.contains("(i64 %"),
         "no typed call emitted:\n{ir}"
     );
     // The runtime helper lives in the same reserved space, so nothing can collide.
@@ -2224,9 +2229,9 @@ fn many_iterations_with_body_locals_allocate_once_in_the_entry_block() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("emitted IR");
+    let ir = emitted_ir(dir.path());
     let body: &str = ir
-        .split("define internal i64 @nz.f0()")
+        .split("define hidden i64 @nz.m.prog_2Enz.main()")
         .nth(1)
         .expect("main's definition");
 
@@ -2824,7 +2829,7 @@ fn the_emitted_ir_for_nested_control_flow_is_well_formed() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("emitted IR");
+    let ir = emitted_ir(dir.path());
     let blocks = assert_control_flow_is_well_formed(&ir);
     assert!(
         blocks > 15,
@@ -2939,7 +2944,7 @@ fn an_early_return_leaves_the_function_not_the_loop() {
 
 #[test]
 fn a_return_in_main_is_still_printed_only_by_the_wrapper() {
-    // `main` is an ordinary `@nz.f<N>`; the platform wrapper prints what it returns. A
+    // `main` is an ordinary definition; the platform wrapper prints what it returns. A
     // `return` from a *helper* must therefore print nothing of its own.
     expect_program(
         "fn shout() -> Int { return 5; }\n\
@@ -3136,7 +3141,7 @@ fn the_emitted_ir_for_a_return_heavy_function_is_well_formed() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("emitted IR");
+    let ir = emitted_ir(dir.path());
     let blocks = assert_control_flow_is_well_formed(&ir);
     assert!(blocks > 10, "only {blocks} blocks");
 
@@ -3488,7 +3493,7 @@ fn the_emitted_ir_for_strings_is_well_formed() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("emitted IR");
+    let ir = emitted_ir(dir.path());
     assert_control_flow_is_well_formed(&ir);
     // A `Str` is an aggregate, so equality is a branch and a `phi`, never an `icmp` on
     // the pair — comparing buffers instead of bytes is the defect that would hide here.
@@ -3606,6 +3611,25 @@ fn every_sequence_bound_fails_at_its_own_position() {
     );
 }
 
+/// Every `.ll` a build with `--emit-ir` left beside `prog`, concatenated.
+///
+/// One file per module plus the runtime and the entry since N5, so a test asking what the
+/// program carries has to ask all of them. A **declaration** is not carrying something:
+/// every unit declares every external unconditionally, which costs nothing and removes a
+/// class of "it was not declared" bug, and LLVM emits no reference for one never used. So
+/// these tests ask about `define`.
+fn emitted_ir(dir: &Path) -> String {
+    let mut all = String::new();
+    for entry in std::fs::read_dir(dir).expect("read dir").flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|x| x == "ll") {
+            all.push_str(&std::fs::read_to_string(&path).expect("IR"));
+        }
+    }
+    assert!(!all.is_empty(), "no IR was emitted");
+    all
+}
+
 #[test]
 fn a_program_without_sequences_carries_none_of_their_runtime() {
     // The helpers are emitted only where they are reached. Dead scaffolding in every
@@ -3624,14 +3648,10 @@ fn a_program_without_sequences_carries_none_of_their_runtime() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("IR");
+    let ir = emitted_ir(dir.path());
     assert!(
-        !ir.contains("@nz.arr_new"),
+        !ir.contains("define hidden ptr @nz.arr_new"),
         "unused sequence runtime emitted:\n{ir}"
-    );
-    assert!(
-        !ir.contains("@realloc"),
-        "unused declaration emitted:\n{ir}"
     );
 
     // And a program that does use one carries it, with well-formed control flow.
@@ -3652,7 +3672,7 @@ fn a_program_without_sequences_carries_none_of_their_runtime() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let ir = std::fs::read_to_string(dir.path().join("seq.ll")).expect("IR");
+    let ir = emitted_ir(dir.path());
     assert!(ir.contains("@nz.arr_new"), "{ir}");
     assert!(ir.contains("@nz.arr_grow"), "{ir}");
     assert_control_flow_is_well_formed(&ir);
@@ -3894,8 +3914,13 @@ fn a_program_without_io_carries_none_of_its_runtime() {
         .expect("run")
         .status
         .success());
-    let ir = std::fs::read_to_string(dir.path().join("prog.ll")).expect("IR");
-    for absent in ["@nz.read_file", "@nz.cstr", "@fopen", "@nz.argv"] {
+    let ir = emitted_ir(dir.path());
+    for absent in [
+        "define hidden { ptr, i64 } @nz.read_file",
+        "define hidden ptr @nz.cstr",
+        "@nz.argv = hidden",
+        "@.rb = private",
+    ] {
         assert!(!ir.contains(absent), "unused {absent} emitted:\n{ir}");
     }
 }

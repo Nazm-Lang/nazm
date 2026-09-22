@@ -936,3 +936,61 @@ accepts a program it has already refused
 file = "crates/nazm-core/src/check.rs"
 find = "        if !unparsed && errors.len() == before && declared_cleanly.get(n) == Some(&true) {"
 replace = "        if true {"
+
+[[mutation]]
+name = "the-native-symbol-forgets-its-module"
+why = """
+drops the module from a definition's native symbol, so two modules' private `helper`
+become one symbol again. That is the miscompile this line of work began with: before N2
+both were `@nz.f0` and the linker saw one definition where the language had two
+"""
+file = "crates/nazm-lir/src/symbol.rs"
+find = "            encode(def.module().as_str()),"
+replace = "            \"\","
+
+[[mutation]]
+name = "the-native-symbol-follows-load-order"
+why = """
+makes every definition take the compilation-local form reserved for modules with no
+durable identity, so a symbol depends on the order files were loaded in. The same module
+then gets different symbols depending on which file the compilation began at, which is
+exactly what a durable identity exists to prevent
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = "    let symbol = match graph.key(def.module) {"
+replace = "    let symbol = match Option::<&nazm_sema::key::ModuleKey>::None {"
+
+[[mutation]]
+name = "the-runtime-is-emitted-into-every-unit"
+why = """
+puts the program's runtime support into each module's artefact rather than into one, so
+every definition that must exist exactly once exists as many times as there are modules.
+A two-module program then has two `@nz.fail`s and the link fails — which is the good case;
+the bad one is a language that quietly grew a per-module failure state
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = "    (head + &e.out + &e.tasks, e.needs())"
+replace = "    (head + &e.out + &e.tasks + &emit_runtime(e.needs()), e.needs())"
+
+[[mutation]]
+name = "native-linkage-ignores-visibility"
+why = """
+makes every definition internal to its own object, including the exported ones and the
+root module's entry. Nothing outside a module can then bind its definitions, so a
+cross-module call has no definition to reach and the platform wrapper cannot find `main`
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = "    let linkage = if def.visibility.is_exported() {"
+replace = "    let linkage = if false {"
+
+[[mutation]]
+name = "the-recursion-check-forgets-the-call-graph"
+why = """
+hands the cycle check no edges, so a recursive call is no longer refused and this backend
+emits a program whose stack it has no plan for. The check is whole-program on purpose —
+`A::f` through `B::g` back to `A::f` is a cycle no single module can see — and per-module
+code generation is not a reason to stop looking
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = "    report_cycles(res, &calls, &mut errors);"
+replace = "    report_cycles(res, &[], &mut errors);"

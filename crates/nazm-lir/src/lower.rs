@@ -52,10 +52,14 @@ use nazm_syntax::{
     Spawn as AstSpawn, Stmt as AstStmt,
 };
 
+use nazm_sema::key::{DefKey, DefKind};
+use nazm_sema::module::{ModuleGraph, ModuleId};
+
 use crate::ir::{
-    fits, ArithOp, Block, Builtin, CmpOp, Expr, FuncId, Function, Local, Lowering as _, Module,
-    Stmt, Ty,
+    fits, ArithOp, Block, Builtin, CmpOp, Expr, External, Function, Local, Lowering as _, Native,
+    Stmt, Ty, Unit,
 };
+use crate::symbol::{Linkage, NativeSymbol};
 
 /// What the subset is, in one sentence, for every refusal to point at.
 const SUBSET: &str = "`nazm build` currently compiles functions over `Int`, `Bool` and \
@@ -76,11 +80,33 @@ pub struct LowerError {
 }
 
 /// What is known about a function before any body is lowered.
-#[derive(Clone)]
+///
+/// Its symbol rather than a number: a call may cross a module boundary, and the thing on
+/// the other side of that boundary is a linker symbol. See [`crate::symbol`].
+#[derive(Debug, Clone)]
 struct Sig {
-    id: FuncId,
+    symbol: NativeSymbol,
+    /// Which module declares it, so a unit knows which of these it owns and which it
+    /// must declare.
+    module: ModuleId,
+    linkage: Linkage,
     params: Vec<Ty>,
     ret: Ty,
+}
+
+/// What the whole compilation settled before any module was lowered.
+///
+/// `docs/architecture.md` calls this **global backend admissibility**, and it is global
+/// because two of its questions are: whether this backend can represent a signature, which
+/// a caller in another module needs to know, and whether the call graph has a cycle, which
+/// can run through any number of modules. Per-module lowering reads it and adds nothing to
+/// it.
+#[derive(Debug)]
+pub struct Plan {
+    /// By [`FnId`], the signature this backend accepted — or `None` where it refused one,
+    /// which is what tells a refused user function apart from a built-in.
+    sig: Vec<Option<Sig>>,
+    entry: NativeSymbol,
 }
 
 struct Ctx<'a> {
@@ -93,17 +119,21 @@ struct Ctx<'a> {
     /// doc noted that "reproducing that is the point; inventing a shadowing rule here
     /// would make the two disagree". They cannot disagree now: there is one.
     res: &'a Resolution,
-    /// The backend's own numbering, by `FnId`. `None` where this backend refused a
-    /// signature — which is what tells a refused user function apart from a built-in it
-    /// does not lower, since both otherwise reach the same arm and deserve different
-    /// sentences.
-    sig_of: Vec<Option<Sig>>,
+    /// What the global pass settled. Read, never added to.
+    plan: &'a Plan,
+    /// The module being lowered. Everything a body names that this module does not own is
+    /// somebody else's definition, and becomes an external reference.
+    module: ModuleId,
+    /// Definitions this module calls and does not own, collected as they are found.
+    externals: Vec<External>,
     /// Locals of the function being lowered, in slot order, taken from the resolution.
     locals: Vec<Local>,
-    /// Which functions each function calls, for the cycle check.
-    calls: Vec<Vec<(FuncId, Span)>>,
+    /// Call edges, as **resolved definition identities**: the cycle check is a question
+    /// about the program's functions, not about one unit's numbering, and a cycle may run
+    /// through any number of modules.
+    calls: Vec<(FnId, FnId, Span)>,
     /// The function whose body is being lowered, for recording edges.
-    current: FuncId,
+    current: FnId,
     /// The declared return type of the function being lowered, for checking `return`.
     /// Reset per function, like everything else about a function's body.
     ret_ty: Ty,
@@ -132,15 +162,7 @@ impl Ctx<'_> {
     /// supplies the subset — a phrase carrying its own clause reads as two sentences
     /// spliced together, which is how the first version of these messages read.
     fn unsupported(&mut self, span: Span, what: &str) {
-        self.errors.push(
-            Diagnostic::error(
-                codes::UNSUPPORTED_CONSTRUCT,
-                span,
-                format!("{what} is not in `nazm build`'s subset yet"),
-            )
-            .primary_label("not in the native subset")
-            .help(SUBSET),
-        );
+        self.errors.push(unsupported_at(span, what));
     }
 
     /// Which slot the name written at `span` refers to, and its type.
@@ -155,75 +177,75 @@ impl Ctx<'_> {
 
     /// The backend's signature for a `FnId`, if it accepted one.
     fn sig(&self, id: FnId) -> Option<&Sig> {
-        self.sig_of.get(id.index()).and_then(Option::as_ref)
+        self.plan.sig.get(id.index()).and_then(Option::as_ref)
+    }
+
+    /// Record that this unit calls a definition, declaring it if another module owns it.
+    ///
+    /// The one place a cross-module reference is made, and what it makes is a **symbol**:
+    /// there is no name here to look up and nothing downstream that could.
+    fn refer_to(&mut self, sig: &Sig) {
+        if sig.module == self.module {
+            return;
+        }
+        let external = External {
+            symbol: sig.symbol.clone(),
+            params: sig.params.clone(),
+            ret: sig.ret,
+        };
+        if !self.externals.contains(&external) {
+            self.externals.push(external);
+        }
     }
 }
 
-/// Lower a checked program, or explain what stopped it.
+/// Settle what the backend can represent, for the whole compilation.
 ///
-/// # Two passes, and why
+/// # Why this is global when lowering is not
 ///
-/// Signatures for **every** function are collected first, then bodies are lowered. A
-/// forward reference is then ordinary: `main` may call a helper declared below it without
-/// the lowering having to guess a type it has not read yet. It also means a call resolves
-/// to a [`FuncId`] once, here — emission never looks a name up again, so there is only
-/// one place the two could disagree.
+/// Two questions cannot be answered inside one module. *Can this backend represent that
+/// signature* has to be answered before a caller in another module can emit a call to it;
+/// and *does the call graph contain a cycle* can run through any number of modules, so a
+/// per-module pass would have to rediscover a fact it cannot see. `docs/architecture.md`
+/// keeps both here rather than weakening the recursion policy to make lowering local.
 ///
 /// # Errors
 ///
-/// *Every* construct outside the subset, not just the first: one run of `nazm build`
-/// should say everything that would have to change, which is the same
-/// one-mistake-one-error discipline the rest of the front end holds to.
-pub fn lower(program: &Program, res: &Resolution) -> Result<Module, LowerError> {
-    let mut ctx = Ctx {
-        res,
-        sig_of: vec![None; res.functions().len()],
-        locals: Vec::new(),
-        calls: Vec::new(),
-        current: FuncId(0),
-        ret_ty: Ty::Int,
-        loop_depth: 0,
-        errors: Vec::new(),
-    };
+/// A `main` this backend refuses, or a program with none.
+pub fn plan(program: &Program, res: &Resolution, graph: &ModuleGraph) -> Result<Plan, LowerError> {
+    let mut errors = Vec::new();
+    let mut sig: Vec<Option<Sig>> = vec![None; res.functions().len()];
 
-    // Pass 1: which of the resolved functions this backend can represent.
-    //
-    // It no longer decides *which functions exist* or *what a name means* — the
-    // resolution did — only whether each one's types are in the native subset. Duplicates
-    // never reach here: the checker reports `N0203` and declares the first, so the
-    // "first of a repeated name wins" rule this loop used to implement is upstream now.
-    //
     // Driven by the **resolution**, not by the syntax tree: each definition says which
-    // declaration it came from, so pairing the two needs no name. The last two name
-    // lookups in this crate were here, and a name stopped being able to do the job when
-    // two modules became able to define the same one.
-    let mut order: Vec<(FnId, &AstFn)> = Vec::new();
+    // declaration it came from, so pairing the two needs no name. A name stopped being
+    // able to do the job when two modules became able to declare the same one.
     for (i, def) in res.functions().iter().enumerate() {
         let id = FnId::from_index(i);
         let Some(f) = program.functions.get(def.decl as usize) else {
             continue;
         };
-        let Some(sig) = signature(&mut ctx, id, f) else {
-            continue;
-        };
-        if let Some(slot) = ctx.sig_of.get_mut(id.index()) {
-            *slot = Some(sig);
+        if let Some(accepted) = signature(res, graph, id, f, &mut errors) {
+            if let Some(slot) = sig.get_mut(id.index()) {
+                *slot = Some(accepted);
+            }
         }
-        ctx.calls.push(Vec::new());
-        order.push((id, f));
     }
 
-    let entry = match res.entry().and_then(|id| ctx.sig(id)).map(|s| s.id) {
-        Some(id) => id,
+    let entry = match res
+        .entry()
+        .and_then(|id| sig.get(id.index()))
+        .and_then(Option::as_ref)
+    {
+        Some(s) => s.symbol.clone(),
         // `main` has no signature here for one of two reasons, and they are different
         // facts. Either the program genuinely has none — unreachable after a successful
         // check, which reports `N0204` itself — or this backend *refused* `main`'s
         // signature, in which case the refusal is already in `errors` and reporting a
         // missing `main` on top of it would be a second, false diagnostic about a
         // function the reader can see.
-        None if !ctx.errors.is_empty() => {
+        None if !errors.is_empty() => {
             return Err(LowerError {
-                diagnostics: ctx.errors,
+                diagnostics: errors,
             })
         }
         None => {
@@ -237,31 +259,141 @@ pub fn lower(program: &Program, res: &Resolution) -> Result<Module, LowerError> 
         }
     };
 
-    // Pass 2: bodies.
+    // The root module's `main` is reached from the entry wrapper, which lives in a unit of
+    // its own — so it must be bindable across objects even though the language keeps it
+    // private. The one place native linkage does not follow `pub`, and it is about where a
+    // process starts rather than about what a module offers.
+    if let Some(id) = res.entry() {
+        if let Some(Some(s)) = sig.get_mut(id.index()) {
+            s.linkage = Linkage::Hidden;
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(Plan { sig, entry })
+    } else {
+        Err(LowerError {
+            diagnostics: errors,
+        })
+    }
+}
+
+/// What lowering one module produced.
+#[derive(Debug)]
+pub struct Lowered {
+    pub unit: Unit,
+    /// Call edges found in this module's bodies, as resolved definition identities. The
+    /// cycle check is a question about the whole compilation and is answered once, after
+    /// every module has contributed.
+    pub calls: Vec<(FnId, FnId, Span)>,
+    pub errors: Vec<Diagnostic>,
+}
+
+/// Lower one module's bodies, and nothing else.
+///
+/// # What it may see
+///
+/// Its own functions' bodies, and every function's *signature* through [`Plan`]. It never
+/// reads another module's body, and there is nothing here through which it could: a call
+/// into another module becomes an [`External`] — a symbol and a signature — which is
+/// exactly what a linker needs and exactly what a dependency's implementation is not.
+pub fn lower_module(
+    program: &Program,
+    res: &Resolution,
+    plan: &Plan,
+    module: ModuleId,
+    source: &str,
+) -> Lowered {
+    let mut ctx = Ctx {
+        res,
+        plan,
+        module,
+        externals: Vec::new(),
+        locals: Vec::new(),
+        calls: Vec::new(),
+        current: FnId::from_index(0),
+        ret_ty: Ty::Int,
+        loop_depth: 0,
+        errors: Vec::new(),
+    };
+
     let mut functions = Vec::new();
-    for (id, f) in order {
+    for (i, def) in res.functions().iter().enumerate() {
+        if def.module != module {
+            continue;
+        }
+        let id = FnId::from_index(i);
+        let Some(f) = program.functions.get(def.decl as usize) else {
+            continue;
+        };
+        if ctx.sig(id).is_none() {
+            continue;
+        }
         if let Some(lowered) = lower_function(&mut ctx, id, f) {
             functions.push(lowered);
         }
     }
 
-    // The call graph is complete only now, so the cycle check comes last.
-    report_cycles(&mut ctx, &functions);
+    // Sorted, so the declarations a unit carries do not depend on the order its bodies
+    // happened to mention them. Two builds of one module produce one text.
+    ctx.externals.sort();
 
-    if ctx.errors.is_empty() && functions.len() == ctx.calls.len() {
-        Ok(Module { functions, entry })
-    } else if !ctx.errors.is_empty() {
-        Err(LowerError {
-            diagnostics: ctx.errors,
+    Lowered {
+        unit: Unit {
+            module,
+            source: source.to_owned(),
+            functions,
+            externals: ctx.externals,
+        },
+        calls: ctx.calls,
+        errors: ctx.errors,
+    }
+}
+
+/// Lower a checked program into one native unit per module, or explain what stopped it.
+///
+/// # The pipeline
+///
+/// ```text
+/// resolved compilation → plan (global) → lower each module → cycle check (global)
+/// ```
+///
+/// # Errors
+///
+/// *Every* construct outside the subset, not just the first: one run of `nazm build`
+/// should say everything that would have to change, which is the same
+/// one-mistake-one-error discipline the rest of the front end holds to.
+pub fn lower(
+    program: &Program,
+    res: &Resolution,
+    graph: &ModuleGraph,
+    map: &nazm_span::SourceMap,
+) -> Result<Native, LowerError> {
+    let settled = plan(program, res, graph)?;
+
+    let mut units = Vec::new();
+    let mut calls = Vec::new();
+    let mut errors = Vec::new();
+    for module in graph.ids() {
+        let source = graph.file(module).map_or("", |f| map.name(f));
+        let mut lowered = lower_module(program, res, &settled, module, source);
+        units.push(lowered.unit);
+        calls.append(&mut lowered.calls);
+        errors.append(&mut lowered.errors);
+    }
+
+    // The call graph is complete only now, so the cycle check comes last — and it is over
+    // every module at once, because `A::f → B::g → A::f` is a cycle no one module can see.
+    report_cycles(res, &calls, &mut errors);
+
+    if errors.is_empty() {
+        Ok(Native {
+            units,
+            entry: settled.entry,
         })
     } else {
         Err(LowerError {
-            diagnostics: vec![Diagnostic::error(
-                codes::UNSUPPORTED_CONSTRUCT,
-                Span::synthetic(),
-                "`nazm build` could not lower this program and did not say why",
-            )
-            .help("this is a bug in the compiler; `nazm run` still works")],
+            diagnostics: errors,
         })
     }
 }
@@ -273,30 +405,79 @@ pub fn lower(program: &Program, res: &Resolution) -> Result<Module, LowerError> 
 /// two would have produced a backend that disagreed with the checker about what a program
 /// said. The types come from the resolution; this only maps them into [`Ty`] and refuses
 /// what the native subset cannot represent.
-fn signature(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn) -> Option<Sig> {
-    let def = ctx.res.function(id)?;
+fn signature(
+    res: &Resolution,
+    graph: &ModuleGraph,
+    id: FnId,
+    f: &AstFn,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<Sig> {
+    let def = res.function(id)?;
     let params: Vec<Ty> = def.params.iter().map(|t| Ty::of(*t)).collect();
     let ret = Ty::of(def.ret);
     let mut ok = true;
 
-    if f.name == "main" {
+    // Only the **root** module's `main` is an entry point, and only a compilation has a
+    // root; an imported module's `main` is one of its definitions and nothing more. So the
+    // shape rules below are asked of the entry and not of every function spelled `main`,
+    // which is `docs/spec.md`'s rule expressed where the backend can act on it.
+    if res.entry() == Some(id) {
         if !f.params.is_empty() {
-            ctx.unsupported(f.span, "a `main` with parameters");
+            errors.push(unsupported_at(f.span, "a `main` with parameters"));
             ok = false;
         }
         if ret != Ty::Int {
-            ctx.unsupported(f.return_type.span, "a `main` that does not return `Int`");
+            errors.push(unsupported_at(
+                f.return_type.span,
+                "a `main` that does not return `Int`",
+            ));
             ok = false;
         }
     }
-    // The backend's own numbering, dense over the functions it accepted, because a
-    // `FuncId` becomes a symbol in the emitted module.
-    let native = FuncId(ctx.calls.len());
+
+    // The symbol comes from the definition's durable identity, and from nothing about
+    // this compilation. See [`crate::symbol`].
+    let symbol = match graph.key(def.module) {
+        Some(key) => NativeSymbol::of_definition(&DefKey::new(
+            key.clone(),
+            DefKind::Function,
+            def.name.clone(),
+        )),
+        None => NativeSymbol::of_unkeyed(def.module, &def.name),
+    };
+
+    // Linkage follows the language's own visibility and nothing else: a private
+    // definition cannot be named from another module, so nothing in another object can
+    // refer to it, so it need not be in a symbol table at all. `plan` makes the one
+    // exception, for the root entry the platform wrapper calls.
+    let linkage = if def.visibility.is_exported() {
+        Linkage::Hidden
+    } else {
+        Linkage::Internal
+    };
+
     ok.then_some(Sig {
-        id: native,
+        symbol,
+        module: def.module,
+        linkage,
         params,
         ret,
     })
+}
+
+/// This backend's "not yet", wherever it is raised.
+///
+/// One function rather than two so that a refusal from the global pass and one from a
+/// module's body are the same diagnostic — same code, same label, same help — instead of
+/// two that drift.
+fn unsupported_at(span: Span, what: &str) -> Diagnostic {
+    Diagnostic::error(
+        codes::UNSUPPORTED_CONSTRUCT,
+        span,
+        format!("{what} is not in `nazm build`'s subset yet"),
+    )
+    .primary_label("not in the native subset")
+    .help(SUBSET)
 }
 
 /// Lower one function body.
@@ -312,7 +493,10 @@ fn signature(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn) -> Option<Sig> {
 /// checker about which binding a name means.
 fn lower_function(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn) -> Option<Function> {
     let Sig {
-        id: native, ret, ..
+        symbol,
+        linkage,
+        ret,
+        ..
     } = ctx.sig(id)?.clone();
     let def = ctx.res.function(id)?;
     ctx.locals = def
@@ -323,14 +507,13 @@ fn lower_function(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn) -> Option<Function> {
             ty: Ty::of(l.ty),
         })
         .collect();
-    ctx.current = native;
+    ctx.current = id;
     ctx.ret_ty = ret;
     // No loop target crosses a function boundary, so the depth starts at zero here and
     // not wherever the previous function left it.
     ctx.loop_depth = 0;
 
     let params = f.params.len();
-    let id = native;
     let body = f.body.as_ref()?;
     let block = lower_block(ctx, body)?;
     // No tail is legitimate now: a body every path of which returns has nothing to fall
@@ -339,7 +522,8 @@ fn lower_function(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn) -> Option<Function> {
     // for such a body, because the `ret` is already there.
     let Some(result) = block.result.as_ref() else {
         return Some(Function {
-            id,
+            symbol,
+            linkage,
             name: f.name.clone(),
             locals: std::mem::take(&mut ctx.locals),
             params,
@@ -363,7 +547,8 @@ fn lower_function(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn) -> Option<Function> {
     }
 
     Some(Function {
-        id,
+        symbol,
+        linkage,
         name: f.name.clone(),
         locals: std::mem::take(&mut ctx.locals),
         params,
@@ -385,8 +570,25 @@ fn lower_function(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn) -> Option<Function> {
 ///
 /// Direct and mutual recursion are the same condition here, found the same way, rather
 /// than one being a special case of the other.
-fn report_cycles(ctx: &mut Ctx<'_>, functions: &[Function]) {
-    let n = ctx.calls.len();
+/// Refuse a call graph that can reach itself, anywhere in the compilation.
+///
+/// # Why this is whole-program and stays whole-program
+///
+/// `A::f → B::g → A::f` is a cycle no module can see, and per-module code generation does
+/// not make it stop being one. So this reads the edges every module contributed and
+/// answers once, over **resolved definition identities** rather than any unit's numbering
+/// — `docs/architecture.md` names it as the analysis that remains global, and weakening
+/// the recursion policy to make lowering local would have been trading a language rule
+/// for an implementation convenience.
+fn report_cycles(res: &Resolution, calls: &[(FnId, FnId, Span)], errors: &mut Vec<Diagnostic>) {
+    let n = res.functions().len();
+    let mut edges: Vec<Vec<(usize, Span)>> = vec![Vec::new(); n];
+    for (from, to, span) in calls {
+        if let Some(e) = edges.get_mut(from.index()) {
+            e.push((to.index(), *span));
+        }
+    }
+
     // Iterative depth-first search with an explicit stack: the graph is as deep as the
     // program has functions, and a recursive walk over it would be this compiler doing
     // the very thing it is about to refuse to compile.
@@ -410,9 +612,9 @@ fn report_cycles(ctx: &mut Ctx<'_>, functions: &[Function]) {
                     *m = Mark::Open;
                 }
             }
-            let edge = ctx.calls.get(node).and_then(|e| e.get(*next)).copied();
+            let edge = edges.get(node).and_then(|e| e.get(*next)).copied();
             match edge {
-                Some((FuncId(to), span)) => {
+                Some((to, span)) => {
                     *next += 1;
                     match mark.get(to).copied() {
                         // Back edge: `node` can reach itself through `to`.
@@ -421,16 +623,15 @@ fn report_cycles(ctx: &mut Ctx<'_>, functions: &[Function]) {
                                 if let Some(r) = reported.get_mut(to) {
                                     *r = true;
                                 }
-                                let name = functions
-                                    .iter()
-                                    .find(|f| f.id == FuncId(to))
+                                let name = res
+                                    .function(FnId::from_index(to))
                                     .map_or("this function", |f| f.name.as_str());
                                 let what = if to == node {
                                     format!("a call to `{name}` from inside itself")
                                 } else {
                                     format!("a call cycle through `{name}`")
                                 };
-                                ctx.errors.push(
+                                errors.push(
                                     Diagnostic::error(
                                         codes::UNSUPPORTED_CONSTRUCT,
                                         span,
@@ -925,7 +1126,7 @@ fn lower_spawn(ctx: &mut Ctx<'_>, sp: &AstSpawn) -> Option<Stmt> {
         ctx.unsupported(sp.callee_span, &format!("a task running `{}`", sp.callee));
         return None;
     };
-    let Some(Sig { id, params, ret }) = ctx.sig(fid).cloned() else {
+    let Some(sig) = ctx.sig(fid).cloned() else {
         ctx.unsupported(
             sp.callee_span,
             &format!(
@@ -936,12 +1137,18 @@ fn lower_spawn(ctx: &mut Ctx<'_>, sp: &AstSpawn) -> Option<Stmt> {
         return None;
     };
 
+    let Sig {
+        symbol,
+        params,
+        ret,
+        ..
+    } = sig.clone();
+    ctx.refer_to(&sig);
+
     // A task is an edge in the call graph like any other. `fn f() { scope { spawn f(); } }`
     // is recursion, and the fact that it goes through a thread does not make the stack
     // depth bounded.
-    if let Some(edges) = ctx.calls.get_mut(ctx.current.0) {
-        edges.push((id, sp.callee_span));
-    }
+    ctx.calls.push((ctx.current, fid, sp.callee_span));
 
     let args: Vec<Expr> = lowered.into_iter().collect::<Option<_>>()?;
     if args.len() != params.len() || !args.iter().zip(&params).all(|(a, want)| fits(a, *want)) {
@@ -977,7 +1184,7 @@ fn lower_spawn(ctx: &mut Ctx<'_>, sp: &AstSpawn) -> Option<Stmt> {
     }
 
     Some(Stmt::Spawn {
-        callee: id,
+        callee: symbol,
         args,
         ret,
         span: sp.span,
@@ -1073,7 +1280,7 @@ fn lower_call(
         Some(Callee::Function(fid)) => ctx.sig(fid).cloned(),
         _ => None,
     };
-    let Some(Sig { id, ret, params }) = resolved else {
+    let Some(sig) = resolved else {
         // The checker reports an unknown function (`N0201`) and a mismatched signature
         // (`N0303`, `N0300`) already. Reaching here means the callee resolved to a
         // function whose signature *this backend* refused — a different fact, and worth
@@ -1089,10 +1296,18 @@ fn lower_call(
         return None;
     };
 
+    let Sig {
+        symbol,
+        ret,
+        params,
+        ..
+    } = sig.clone();
+    ctx.refer_to(&sig);
+
     // Recorded whether or not the arguments lowered: the cycle check is about the call
     // graph, and an edge exists as soon as the source names one.
-    if let Some(edges) = ctx.calls.get_mut(ctx.current.0) {
-        edges.push((id, callee_span));
+    if let Some(Callee::Function(to)) = target {
+        ctx.calls.push((ctx.current, to, callee_span));
     }
 
     let args: Vec<Expr> = lowered.into_iter().collect::<Option<_>>()?;
@@ -1115,7 +1330,7 @@ fn lower_call(
     }
 
     Some(Expr::Call {
-        callee: id,
+        callee: symbol,
         args,
         ret,
     })
