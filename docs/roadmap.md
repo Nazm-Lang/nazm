@@ -128,13 +128,31 @@ durable identity plus interfaces would make possible. A language server needs bo
 *and* a lossless CST. Ownership and effects remain the largest open design questions and do
 not become next by being important.
 
-**One divergence N2 opened, tracked here.** The self-hosted compiler parses `pub` and does
-not enforce it: `compiler/lex.nz` tokenises the keyword and `compiler/parse.nz` accepts it,
-but the Nazm-written compiler still resolves names across the whole program. It therefore
-accepts programs the reference front end refuses. The chain is unaffected — it compiles
-sources that are valid under the stricter rule — but the two implementations no longer
-accept the same language, and `bootstrap.md` says so. Closing it is a milestone of its own
-and is not claimed.
+**The divergence N2 opened is closed.** See N2.1 below; it was a milestone of its own, as
+this paragraph said it would be, and it came before N3 rather than after.
+
+### N2.1 — Visibility and module-semantics parity · **complete, 2026-09-22**
+
+N2 left the two implementations accepting different languages: the Nazm-written compiler
+parsed `pub` and resolved every name across the whole program. **C2 = C3 throughout**,
+which is exactly why it needed catching some other way — a fixpoint is self-consistency,
+and a compiler that reproduces itself while accepting what the specification forbids
+reaches one too.
+
+The empirical parity table, taken before any edit, was **nine of fifteen rules diverging**:
+eight programs the reference refuses and the self-hosted compiler accepted, and one it
+accepted and **miscompiled** — two modules each defining a private `helper` both emitted
+`@nz.f0`, which clang rejected as an invalid redefinition.
+
+| | |
+| --- | --- |
+| **Representation** | `compiler/module.nz` returns the module graph beside the merged text: where each file begins, and which module each `use` names. The concatenation is a representation detail; ownership is answered from the boundaries |
+| **Decision** | `compiler/analyse.nz` alone. The parser records that `pub` was written, the module layer records relationships, the checker decides what a name means, and emission consumes a recorded resolution — the same "resolve once, consume downstream" N1 established in Rust |
+| **Deleted** | `load_program`, which returned a buffer and nothing else; `symbol(fnames, name)`, which turned a *name* into an LLVM symbol and was the miscompile; `refuse_recursion`'s name-keyed call graph and its positional function numbering |
+| **Evidence** | fifteen rules compared through both compilers; five multi-module conformance cases agreeing across the reference, C2 **and** C3; four new mutations on the self-hosted path, all caught |
+
+Every `pub` in the compiler is now justified by an actual cross-module call — four that
+were not were made private again — and nothing that needs one lacks it: 84 of 224.
 
 ### After N2, in dependency order
 

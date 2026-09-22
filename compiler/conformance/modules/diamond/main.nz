@@ -1,0 +1,6 @@
+use "left.nz";
+use "right.nz";
+
+// `shared.nz` is reached twice and is one module: its `s` has one definition and one
+// symbol.
+fn main() -> Int { l() + r() }

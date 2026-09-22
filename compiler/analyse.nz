@@ -25,6 +25,7 @@
 // if there were any, 0 if not.
 
 use "parse.nz";
+use "module.nz";
 
 // --- the child index -----------------------------------------------------------------
 //
@@ -278,7 +279,7 @@ fn scope_close(marks: Ints, names: Strs, ntypes: Ints, nmut: Ints, nslotof: Ints
 // truth for the front end. A test requires every built-in there to be present here, so
 // the two cannot drift silently.
 
-pub fn builtin_index(bnames: Strs, want: Str) -> Int {
+fn builtin_index(bnames: Strs, want: Str) -> Int {
     let mut i = 0;
     while i < strs_len(bnames) {
         if strs_get(bnames, i) == want { return i; }
@@ -340,29 +341,192 @@ pub fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: I
 // Collected before any body, so a forward reference resolves — the same two-pass shape
 // `nazm-lir::lower` uses, for the same reason.
 
-pub fn collect_signatures(nk: Ints, nar: Ints, ntx: Strs, kids: Ints, kid_first: Ints,
-        fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints) -> Int {
+/// Every top-level function, with **which module owns it** and whether it is exported.
+///
+/// `fowner[i]` is the module that wrote definition `i`, read from where the declaration
+/// sits in the buffer; `fpub[i]` is 1 when `pub` was written, which the parser recorded on
+/// the function node's auxiliary column. Both are needed before a single name can be
+/// resolved, because since N2 a name does not mean something — it means something *to
+/// somebody*.
+///
+/// Two refusals belong here, where a declaration is read, rather than at a use:
+///
+/// * a name defined twice **in one module** is `N0203`, and the first definition is kept
+///   so that one mistake stays one error. In two modules it is two definitions;
+/// * a definition taking a built-in's name is `N0203`, whatever its visibility. Built-ins
+///   are not a module's definitions and no visibility rule makes one legal.
+pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, ntx: Strs, naux: Ints,
+        kids: Ints, kid_first: Ints, mstart: Ints,
+        fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
+        fowner: Ints, fpub: Ints, bnames: Strs,
+        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
     let mut k = 0;
     while k < ints_len(nk) {
         if ints_get(nk, k) == n_fn() {
             let text = strs_get(ntx, k);
-            strs_push(fnames, before_colon(text));
-            ints_push(fret, type_of_name(after_colon(text)));
-            ints_push(ffirst, ints_len(fparams));
-            // Every child but the last is a parameter; the last is the body.
-            let arity = ints_get(nar, k);
-            let first = ints_get(kid_first, k);
-            let mut p = 0;
-            while p < arity - 1 {
-                let child = ints_get(kids, first + p);
-                ints_push(fparams, type_of_name(after_colon(strs_get(ntx, child))));
-                p = p + 1;
+            let name = before_colon(text);
+            let owner = module_at(mstart, ints_get(nst, k));
+
+            let mut refused = 0;
+            if builtin_index(bnames, name) >= 0 {
+                report(dcode, dstart, dend, dmsg, "N0203",
+                        ints_get(nst, k), ints_get(nst, k) + str_len(name),
+                        str_concat(str_concat("`", name),
+                        "` is a built-in and cannot be redefined"));
+                refused = 1;
             }
-            ints_push(fcount, arity - 1);
+            if refused == 0 {
+                if owned_index(fnames, fowner, owner, name) >= 0 {
+                    report(dcode, dstart, dend, dmsg, "N0203",
+                            ints_get(nst, k), ints_get(nst, k) + str_len(name),
+                            str_concat(str_concat("`", name),
+                            "` is defined more than once in this module"));
+                    refused = 1;
+                }
+            }
+
+            if refused == 0 {
+                strs_push(fnames, name);
+                ints_push(fret, type_of_name(after_colon(text)));
+                ints_push(ffirst, ints_len(fparams));
+                ints_push(fowner, owner);
+                ints_push(fpub, ints_get(naux, k));
+                // Every child but the last is a parameter; the last is the body.
+                let arity = ints_get(nar, k);
+                let first = ints_get(kid_first, k);
+                let mut p = 0;
+                while p < arity - 1 {
+                    let child = ints_get(kids, first + p);
+                    ints_push(fparams, type_of_name(after_colon(strs_get(ntx, child))));
+                    p = p + 1;
+                }
+                ints_push(fcount, arity - 1);
+            }
         }
         k = k + 1;
     }
     strs_len(fnames)
+}
+
+/// The definition `owner` makes under `name` — public or private, since a module sees all
+/// of its own. `-1` when it makes none.
+pub fn owned_index(fnames: Strs, fowner: Ints, owner: Int, name: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(fnames) {
+        if ints_get(fowner, i) == owner {
+            if strs_get(fnames, i) == name { return i; }
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+/// What each module's imports bring into it, and the two ways that can go wrong.
+///
+/// Built once, before any body is checked, because both refusals are about the **import**
+/// rather than about a use of the name: a program that imports two modules exporting
+/// `parse` is refused whether or not it ever writes `parse`. With no qualified path to
+/// write, deferring the error would only move the dead end further from its cause.
+///
+/// Fills a flat table of `(module, name, definition)` triples:
+///
+/// * `N0208` — the importing module defines that name itself. Nothing ranks the two;
+/// * `N0207` — an earlier import of this module already brought that name in.
+///
+/// Both point at the `use` that created the situation.
+pub fn check_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: Int,
+        fnames: Strs, fowner: Ints, fpub: Ints,
+        vmod: Ints, vname: Strs, vfn: Ints,
+        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+    let mut m = 0;
+    while m < modules {
+        let first = ints_get(mfirst, m);
+        let mut e = 0;
+        while e < ints_get(mcount, m) {
+            let target = ints_get(mto, first + e);
+            let at = ints_get(mat, first + e);
+            let mut f = 0;
+            while f < strs_len(fnames) {
+                let mut offered = 0;
+                if ints_get(fowner, f) == target {
+                    if ints_get(fpub, f) == 1 { offered = 1; }
+                }
+                if offered == 1 {
+                    let name = strs_get(fnames, f);
+                    let mut taken = 1;
+                    if owned_index(fnames, fowner, m, name) >= 0 {
+                        report(dcode, dstart, dend, dmsg, "N0208", at, at + 1,
+                                str_concat(str_concat("this import brings in `", name),
+                                "`, which this module defines"));
+                        taken = 0;
+                    }
+                    if taken == 1 {
+                        if visible_import(vmod, vname, vfn, m, name) >= 0 {
+                            report(dcode, dstart, dend, dmsg, "N0207", at, at + 1,
+                                    str_concat(str_concat("`", name),
+                                    "` is exported by two imported modules"));
+                            taken = 0;
+                        }
+                    }
+                    if taken == 1 {
+                        ints_push(vmod, m);
+                        strs_push(vname, name);
+                        ints_push(vfn, f);
+                    }
+                }
+                f = f + 1;
+            }
+            e = e + 1;
+        }
+        m = m + 1;
+    }
+    ints_len(vmod)
+}
+
+/// The definition an import brought into `here` under `name`, or `-1`.
+fn visible_import(vmod: Ints, vname: Strs, vfn: Ints, here: Int, name: Str) -> Int {
+    let mut i = 0;
+    while i < ints_len(vmod) {
+        if ints_get(vmod, i) == here {
+            if strs_get(vname, i) == name { return ints_get(vfn, i); }
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+/// What `name` means **to module `here`**: its own definitions, then what its direct
+/// imports brought in. `-1` when it means nothing here.
+///
+/// Built-ins are not in this: they belong to no module and are resolved before it, in
+/// `check_call`, exactly as `docs/spec.md` describes.
+fn resolve_fn(fnames: Strs, fowner: Ints, vmod: Ints, vname: Strs, vfn: Ints,
+        here: Int, name: Str) -> Int {
+    let own = owned_index(fnames, fowner, here, name);
+    if own >= 0 { return own; }
+    visible_import(vmod, vname, vfn, here, name)
+}
+
+/// Whether a module `here` directly imports defines `name` and keeps it to itself.
+///
+/// For one diagnostic and nothing else: "not defined" is true from the caller's position
+/// and useless when the definition is sitting in the file they just imported. Resolution
+/// must not consult this — a lookup that ignored visibility would be the global namespace
+/// this milestone removed.
+fn private_in_an_import(fnames: Strs, fowner: Ints, fpub: Ints,
+        mfirst: Ints, mcount: Ints, mto: Ints, here: Int, name: Str) -> Bool {
+    let mut i = 0;
+    while i < strs_len(fnames) {
+        if strs_get(fnames, i) == name {
+            if ints_get(fpub, i) == 0 {
+                if imports_directly(mfirst, mcount, mto, here, ints_get(fowner, i)) {
+                    return true;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    false
 }
 
 // --- checking -------------------------------------------------------------------------
@@ -402,9 +566,11 @@ fn scope_flags(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints, flags: Ints) ->
 }
 
 pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, nslot: Ints,
-        ntype: Ints,
+        ntype: Ints, ncallee: Ints,
         kids: Ints, kid_first: Ints, root: Int,
+        mstart: Ints, mfirst: Ints, mcount: Ints, mto: Ints,
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
+        fowner: Ints, fpub: Ints, vmod: Ints, vname: Strs, vfn: Ints,
         bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
         dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
     let work = ints_new();
@@ -423,6 +589,10 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
     // its value stack. Computing it twice, in two languages, is how the two would come
     // to disagree.
     while ints_len(ntype) < ints_len(nk) { ints_push(ntype, t_unknown()); }
+    // What each call resolved to, for emission to read. `-1` is "not a call", `-2` is a
+    // built-in, anything else is a definition's index. Recording it is the whole of
+    // "resolve once, consume downstream": a name is looked up here and nowhere later.
+    while ints_len(ncallee) < ints_len(nk) { ints_push(ncallee, 0 - 1); }
     // Slots are numbered per function, and the count is recorded on the `fn` node so
     // the emitter knows how many `alloca`s its entry block needs.
     let counter = ints_new();
@@ -477,8 +647,9 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             }
             if kind == n_call() {
                 ints_push(ts, check_call(text, arity, ts, from, to,
-                        kids, first, nst, nen,
+                        kids, first, nst, nen, ncallee, k, module_at(mstart, from),
                         fnames, fret, ffirst, fcount, fparams,
+                        fowner, fpub, vmod, vname, vfn, mfirst, mcount, mto,
                         bnames, bret, bfirst, bcount, bparams,
                         dcode, dstart, dend, dmsg));
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
@@ -592,8 +763,9 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // rules, one definition. A task's result is discarded, which the
                 // specification states outright: results travel through channels.
                 check_call(text, arity, ts, from, to,
-                        kids, first, nst, nen,
+                        kids, first, nst, nen, ncallee, k, module_at(mstart, from),
                         fnames, fret, ffirst, fcount, fparams,
+                        fowner, fpub, vmod, vname, vfn, mfirst, mcount, mto,
                         bnames, bret, bfirst, bcount, bparams,
                         dcode, dstart, dend, dmsg);
                 ints_push(ts, t_unknown());
@@ -780,9 +952,40 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int,
     t_int()
 }
 
+/// The program's entry point: `main` in the **root** module, which is module 0.
+///
+/// Another module's `main` is one of its definitions and nothing more — it is private
+/// unless exported, it is not a second entry point, and it does not satisfy this. A file
+/// that is also runnable on its own is an ordinary thing to write, and before N2 it was
+/// not expressible.
+///
+/// `main` need not be `pub`: being the entry point is not the same as being importable.
+pub fn entry_point(fnames: Strs, fowner: Ints, dcode: Strs, dstart: Ints, dend: Ints,
+        dmsg: Strs) -> Int {
+    let at = owned_index(fnames, fowner, 0, "main");
+    if at < 0 {
+        report(dcode, dstart, dend, dmsg, "N0204", 0, 0,
+                "this program has no `main` function");
+    }
+    at
+}
+
+/// Check one call, and **record what it resolved to** on the call node.
+///
+/// `here` is the module doing the calling, and it is what makes the lookup an answer
+/// rather than a guess: built-ins first, then this module's own definitions, then the
+/// exports its direct imports brought in. Nothing else is in reach, which is where
+/// non-transitivity is enforced — a name only reachable through a dependency's import was
+/// never put into `vname` for this module.
+///
+/// The resolution is written to `ncallee[k]`: `-2` for a built-in, otherwise the
+/// definition's index. Emission reads that and never looks a name up again, which is what
+/// keeps two modules' private `helper` from becoming one symbol.
 fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
-        kids: Ints, first: Int, nst: Ints, nen: Ints,
+        kids: Ints, first: Int, nst: Ints, nen: Ints, ncallee: Ints, node: Int, here: Int,
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
+        fowner: Ints, fpub: Ints, vmod: Ints, vname: Strs, vfn: Ints,
+        mfirst: Ints, mcount: Ints, mto: Ints,
         bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
         dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
     // The arguments' types are the top `argc` entries, oldest first. Taken off here and
@@ -804,17 +1007,28 @@ fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
         ret = ints_get(bret, bi);
         params = bparams;
         found = true;
+        ints_set(ncallee, node, 0 - 2);
     } else {
-        let fi = builtin_index(fnames, name);
+        let fi = resolve_fn(fnames, fowner, vmod, vname, vfn, here, name);
         if fi >= 0 {
             want_first = ints_get(ffirst, fi);
             want_count = ints_get(fcount, fi);
             ret = ints_get(fret, fi);
             found = true;
+            ints_set(ncallee, node, fi);
         }
     }
 
     if found == false {
+        // Defined, and private where it lives. Said as that rather than as "not defined",
+        // which is true from here and useless to a reader looking at the file they just
+        // imported.
+        if private_in_an_import(fnames, fowner, fpub, mfirst, mcount, mto, here, name) {
+            report(dcode, dstart, dend, dmsg, "N0206", from, from + str_len(name),
+                    str_concat(str_concat("`", name),
+                    "` is private to the module that defines it"));
+            return t_unknown();
+        }
         report(dcode, dstart, dend, dmsg, "N0201", from, from + str_len(name),
                 str_concat(str_concat("`", name), "` is not a function"));
         return t_unknown();

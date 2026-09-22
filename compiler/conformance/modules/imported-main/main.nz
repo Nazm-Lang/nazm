@@ -1,0 +1,5 @@
+use "tool.nz";
+
+// `tool.nz` has a `main` of its own and is runnable on its own. It is not this
+// program's entry point, and before N2 this program could not be written at all.
+fn main() -> Int { run() }

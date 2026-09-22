@@ -753,3 +753,61 @@ replace = """    let mut brought_in: HashMap<&str, Span> = HashMap::new();
         )
         .collect();
     for d in &reachable {"""
+
+[[mutation]]
+name = "selfhost-ignores-the-pub-bit"
+why = """
+makes the self-hosted compiler treat every definition as exported, which is the pre-N2.1
+language: an imported module's private helper becomes callable, and the two compilers stop
+accepting the same programs while both still bootstrap
+"""
+file = "compiler/analyse.nz"
+find = "                ints_push(fpub, ints_get(naux, k));"
+replace = "                ints_push(fpub, 1);"
+
+[[mutation]]
+name = "selfhost-resolves-across-every-module"
+why = """
+drops module ownership from the self-hosted compiler's name lookup, so any definition
+anywhere answers any call — the global namespace, restored in the one place that would make
+a diamond's private helper win a call in an unrelated file
+"""
+file = "compiler/analyse.nz"
+find = """    let own = owned_index(fnames, fowner, here, name);
+    if own >= 0 { return own; }
+    visible_import(vmod, vname, vfn, here, name)"""
+replace = """    let own = owned_index(fnames, fowner, here, name);
+    if own >= 0 { return own; }
+    let seen = visible_import(vmod, vname, vfn, here, name);
+    if seen >= 0 { return seen; }
+    builtin_index(fnames, name)"""
+
+[[mutation]]
+name = "selfhost-lets-the-first-import-win"
+why = """
+resolves an ambiguous import by load order instead of refusing it. Nothing observable
+changes for a program that never writes the contested name, which is exactly why the rule
+has to be checked where the ambiguity is created
+"""
+file = "compiler/analyse.nz"
+find = """                    if taken == 1 {
+                        if visible_import(vmod, vname, vfn, m, name) >= 0 {
+                            report(dcode, dstart, dend, dmsg, "N0207", at, at + 1,
+                                    str_concat(str_concat("`", name),
+                                    "` is exported by two imported modules"));
+                            taken = 0;
+                        }
+                    }"""
+replace = """                    if taken == 1 {
+                        if visible_import(vmod, vname, vfn, m, name) >= 0 { taken = 0; }
+                    }"""
+
+[[mutation]]
+name = "selfhost-accepts-any-main-as-the-entry-point"
+why = """
+lets an imported module's `main` be the program's entry point, so which file was named on
+the command line stops deciding what runs
+"""
+file = "compiler/analyse.nz"
+find = '    let at = owned_index(fnames, fowner, 0, "main");'
+replace = "    let at = builtin_index(fnames, \"main\");"

@@ -1,0 +1,3 @@
+pub fn run() -> Int { 5 }
+
+fn main() -> Int { run() * 100 }
