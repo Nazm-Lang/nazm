@@ -92,10 +92,10 @@ exercised the thing it was meant to prove.
 | --- | --- |
 | Host | **Linux aarch64**, inside `nazm-contained:1.98.1` — the configuration of record since containment became mandatory. Darwin arm64 remains *a* verified configuration, historically |
 | Toolchain | rustc 1.98.1 (pinned); Debian clang 19.1.7 in the container, Apple clang 21.0.0 on Darwin |
-| S | `compiler/{lex,parse,analyse,module,emit}.nz`, **4,662 lines** |
+| S | `compiler/{lex,parse,analyse,module,emit}.nz`, **5,041 lines** |
 | **C2 vs C3, emitted IR** | **byte-identical** |
 | **C2 vs C3, executables** | **byte-identical**, including the runnable form |
-| Conformance | 5 cases, each agreeing across C2, C3 **and the interpreter** |
+| Conformance | 10 cases, each agreeing across C2, C3 **and the reference** — 5 of them multi-module |
 
 The IR being identical is the fixpoint: compiling S with a compiler built by Rust and with
 a compiler built by itself produces the same output. That is what self-hosting means, and
@@ -119,27 +119,59 @@ currently defines. It was not.
 
 ### Visibility, since N2 — 2026-09-22
 
-The compiler source states its own module boundaries. **80 of its 215 top-level functions
-are `pub`; 135 are private**, and the split was computed from which names are actually
-called across a file boundary rather than applied to everything. Every export comes from
-three files — `lex.nz` 40, `parse.nz` 23, `analyse.nz` 16, `module.nz` 1 — and `emit.nz`,
-the largest at 58 functions, exports nothing at all, because nothing imports it. `emit.nz`, `check.nz` and
-`parser.nz` gained `use` lines for modules they were using and naming nowhere —
-`emit.nz` was calling into `lex.nz` and `parse.nz` through `analyse.nz`'s imports, which
-stopped working when imports stopped being transitive.
+The compiler source states its own module boundaries. **84 of its 224 top-level functions
+are `pub`; 140 are private**, and the split is computed from which names are actually
+called across a file boundary rather than applied to everything: `lex.nz` exports 40,
+`parse.nz` 23, `analyse.nz` 18, `module.nz` 3, and `emit.nz` — the largest at 58 functions
+— exports nothing at all, because nothing imports it. `emit.nz`, `check.nz` and `parser.nz`
+gained `use` lines for modules they were using and naming nowhere; `emit.nz` was calling
+into `lex.nz` and `parse.nz` through `analyse.nz`'s imports, which stopped working when
+imports stopped being transitive.
 
 That the compiler can express those boundaries cleanly, and that fewer than half its
 functions are part of any interface, is the useful evidence: a visibility model the real
 multi-file workload cannot express is a model that would have been worked around.
 
-**The self-hosted compiler reads `pub` and does not enforce it.** `compiler/lex.nz`
-tokenises the keyword — a word that is a keyword to one lexer and an identifier to the
-other is a divergence the differential test would have to excuse — and
-`compiler/parse.nz` accepts it before `fn`. Nothing downstream acts on it: the Nazm-written
-compiler still resolves names across the whole program, so it accepts sources the reference
-front end refuses. It compiles the sources it is given, which are valid under the stricter
-rule, so the chain is unaffected; enforcing visibility in it is a milestone of its own and
-is not claimed here.
+### Semantic parity, and why it is a separate claim — N2.1, 2026-09-22
+
+**C2 = C3 is a fixpoint.** It says the compiler written in Nazm reproduces itself, and a
+compiler that consistently accepts a program the specification forbids reaches a fixpoint
+too. It is not evidence that the two implementations agree about the language.
+
+For one day they did not. N2 taught the Nazm-written compiler to *parse* `pub` and nothing
+else: it still resolved every name across the whole program, so it accepted eight kinds of
+program the reference refuses and **miscompiled** a ninth — two modules each defining a
+private `helper` both emitted `@nz.f0`, and clang rejected the module as an invalid
+redefinition. The fixpoint was undisturbed throughout, which is the point.
+
+The evidence that replaced it has three parts, kept apart on purpose:
+
+| Claim | What runs | What it establishes |
+| --- | --- | --- |
+| **C2 = C3** | `compiler/bootstrap.sh` stages 2 and 3 | a fixpoint: the Nazm compiler reproduces itself, byte for byte |
+| **reference = C2 = C3** | the conformance corpus, `compiler/conformance/` including `modules/` | the three agree on what a program **means** |
+| **accept = accept, refuse = refuse** | `the_two_compilers_agree_on_every_module_and_visibility_rule` | the two agree on which programs are in the language at all, comparing the diagnostic code where both produce one |
+
+The third is the one that would have caught the divergence, and it is fifteen cases: every
+rule `spec.md` settles about modules, run through both compilers and required to give the
+same answer. The multi-module conformance cases are the second; they are directories rather
+than files because each compiler resolves `use` for itself, and a single-file corpus cannot
+exercise a module boundary.
+
+**How the Nazm compiler knows.** `compiler/module.nz` returns the merged text **and** the
+module graph: where each file's text begins, and which module each `use` names. That the
+text is concatenated is a representation detail of this compiler; the boundaries travel
+beside it, and every question about ownership is answered from those rather than from the
+text. `compiler/analyse.nz` reads a definition's owner from where its declaration sits and
+its `pub` bit from the function node, collects every module's interface before any body is
+checked — which is why an import cycle has no ordering to violate here either — and records
+what each call resolved to. Emission reads that and never looks a name up again. The last
+part is not tidiness: it is why two modules' private `helper` now get two symbols.
+
+**The remaining difference from the reference is not about visibility.** `load.rs` keys a
+file by its canonical path and this keys by a textually normalised one, so a file reached
+through a symbolic link is one module to the reference and two here. Recorded above, and
+unchanged by N2.1.
 
 ### What is normalised, and why it is narrow
 

@@ -1,0 +1,3 @@
+pub fn report() -> Int { size() }
+
+fn size() -> Int { 40 }
