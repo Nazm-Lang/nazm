@@ -675,12 +675,17 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **51** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **53** catalogued defects;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
 distinction added after an incident that produced 19 false survivors. Lifecycle behaviour
 is tested in `xtask/tests/lifecycle.rs`.
+
+*N2 added two and ran four contained on 2026-09-22 — `every-definition-is-exported` and
+`imports-become-transitive`, plus the two existing entries in the files N2 rewrote most, to
+confirm their patches still apply. All four were caught, by 8 to 18 tests each. That is a
+targeted run, not a catalogue run; the row below still stands.*
 
 **Limitation** · The **whole-catalogue run timed out unexplained** at its 3600 s deadline
 without reaching injection, and is recorded as incomplete rather than as a result; the
