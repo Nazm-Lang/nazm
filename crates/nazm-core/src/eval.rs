@@ -45,10 +45,16 @@ pub enum Value {
     /// visible through the other. `docs/spec.md` says so, and the native representation
     /// — a pointer to a header — behaves identically by construction.
     ///
-    /// This is emphatically **not** a claim of ownership safety. Nothing prevents
-    /// aliasing, nothing tracks lifetimes, and nothing is ever freed. The contract
-    /// forbids claiming otherwise, so it is written down here rather than left for a
-    /// reader to discover.
+    /// Aliasing is not prevented and is not meant to be: `docs/spec.md`'s memory
+    /// constitution calls this an **owned mutable handle**, two bindings on one are two
+    /// references to one storage, and a push through either is visible through both.
+    ///
+    /// What *is* claimed, since N7, is reclamation: the storage goes when the last
+    /// reference to it dies. That is [`Seq`]'s job here and a reference count on the
+    /// header's job in a compiled program, and the two are compared case by case in
+    /// `crates/nazm-cli/tests/memory.rs`. No ownership *safety* is claimed beyond it —
+    /// nothing tracks a lifetime, because in this language nothing needs to: a handle can
+    /// be stored only in a local binding, so there is nowhere for a dangling one to hide.
     /// `Arc<Mutex<…>>` rather than `Rc<RefCell<…>>` because the whole pipeline runs on
     /// a thread the interpreter owns (`on_interpreter_stack`), so a `Value` has to be
     /// `Send`. The lock is never contended — evaluation is single-threaded — and it is

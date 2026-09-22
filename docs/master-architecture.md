@@ -77,12 +77,21 @@ with no runtime process. But the interpreter's subset is **larger**: recursion r
 native path is primary by intent and second by coverage.
 
 **3 — Safety must not require a mandatory garbage collector.**
-*Honoured, but not yet earned.* There is no GC. There is also no reclamation of any kind:
-`@free` appears **zero** times in either emitter, against 11 `@malloc` and 2 `@realloc`
-sites in each. "No GC" is currently achieved by never freeing, which is not a memory
-strategy. `crates/nazm-core/src/eval.rs:47-48` says so in the source: *"emphatically not a
-claim of ownership safety. Nothing prevents aliasing, nothing tracks lifetimes, and
-nothing is ever freed."* The law is intact; the obligation behind it is unmet.
+*Honoured, and partly earned as of N7 (2026-09-22).* There is no GC and no tracing of any
+kind. Sequence storage is reclaimed by counting references to the handle, deterministically
+and on every exit edge including the one a failure takes; `docs/spec.md`'s *memory
+constitution* is the law and `architecture.md` §7.7 the implementation. A short-lived
+sequence workload that grew linearly with work done — 43.52 MiB for a live set of 400 bytes
+— is now flat at 1.86.
+
+Partly, and the part that is missing is named rather than rounded off. `Str` and `Chan`
+storage is still not reclaimed, and the self-hosted backend emits no reclamation at all, so
+a string-heavy program still grows. **Whole-language leak freedom is not claimed**, and
+`capability-matrix.md` area 4 states the scope per type.
+
+*Until N7 this paragraph read: "There is also no reclamation of any kind … 'No GC' is
+currently achieved by never freeing, which is not a memory strategy." That was accurate,
+and it is the sentence the milestone was written to retire.*
 
 **4 — Runtime cost is zero where possible and observable where it is not.**
 *Partial.* The costs that exist are observable and specified: checked arithmetic traps

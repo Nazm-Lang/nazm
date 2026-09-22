@@ -375,6 +375,53 @@ is evicted. For a project that builds at several optimisation levels and edits o
 store grows without bound until someone deletes it, which is an operational limitation and
 not a plan.
 
+### Reclamation — measured 2026-09-22, and the instrument matters
+
+N7 made `Ints` and `Strs` storage reclaimable. Two instruments, because they answer
+different questions and each is misleading about the other's.
+
+**Peak resident memory** answers *does this workload still grow*. Medians are not used
+here: peak is a maximum, and a maximum over repeated runs of a deterministic program does
+not move. Darwin arm64, `-O2`, against the commit before N7.
+
+| Workload | Live set | Before | After |
+| --- | --- | ---: | ---: |
+| 5,000 short-lived sequences | ~400 B | 4.38 MiB | **1.78 MiB** |
+| 20,000 | ~400 B | 12.28 MiB | **1.88 MiB** |
+| 80,000 | ~400 B | 43.52 MiB | **1.86 MiB** |
+| one 2,000,000-element sequence | 16 MiB | 19.08 MiB | 19.08 MiB |
+| string-heavy loop, no sequences | grows | 23.77 MiB | 23.78 MiB |
+| the self-hosted compiler on `emit.nz` | — | 46.81 MiB | 42.59 MiB |
+
+The first three rows are the result. Before, memory tracked **work done** — 1 : 3.9 : 15.6
+against iteration ratios of 1 : 4 : 16. After, it is flat, and the floor is an empty
+program's 1.69 MiB. The next two rows are the control: a sequence that is genuinely live
+is unchanged, and a workload whose allocation is `Str` is unchanged, which is what
+reclaiming exactly one kind of value should look like.
+
+The compiler's 9% is the honest one. Its memory is mostly `Str` bytes — it builds 2.15 MB
+of output by concatenation — and `Str` is outside this slice by the argument in
+`architecture.md` §7.7. A number that had moved further would have meant something else was
+going on.
+
+**Allocation and reclamation counts** answer *was this value reclaimed*, which peak
+resident memory cannot: `free` returns storage to the allocator, not to the operating
+system, so a program can reclaim everything and show no change at all. That is not a
+hypothetical — it is why the first measurement of this work appeared to show nothing until
+the counters existed. Both implementations report the same three numbers under
+`NAZM_MEMORY_REPORT`, and `crates/nazm-cli/tests/memory.rs` compares them case by case.
+
+**Runtime cost.** The traffic is at bindings, not at calls: passing a sequence to a
+function emits no instruction, which is rule 2 of the constitution turned into a number.
+`compiler/*.nz` creates 176 sequences and aliases **zero** of them with a `let`, so the
+self-hosted compiler pays for one retain per sequence returned — it returns one — and one
+release per binding at each of three exit edges. The bootstrap is unchanged at
+`e5779c70…`, and the contained suite is 823 tests against 806.
+
+**What is not claimed.** Peak memory bounded by live data for a whole program. `Str` and
+`Chan` storage is still not reclaimed, so the string-heavy row above still grows without
+bound, and `capability-matrix.md` area 4 states the scope per type rather than as one word.
+
 ## The optimisation pass, and what it was based on
 
 One pass, chosen from a profile rather than from intuition. `sample` on the release

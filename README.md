@@ -198,11 +198,18 @@ than just "generated programs pass tests".
 ## The design it is being built toward
 
 Documented in [`docs/architecture.md`](docs/architecture.md), and staged in
-[`docs/roadmap.md`](docs/roadmap.md). In brief: mutable value
-semantics so memory safety needs no lifetime annotations; effect rows, capabilities, and
-position-sensitive taint so untrusted data cannot reach a code-construction site;
-structured concurrency where data races are a compile error; and a four-tier compilation
-strategy where `nazm check` — no codegen at all — is the loop agents actually live in.
+[`docs/roadmap.md`](docs/roadmap.md). In brief: memory safety with no lifetime annotations
+and no garbage collector; effect rows, capabilities, and position-sensitive taint so
+untrusted data cannot reach a code-construction site; structured concurrency where data
+races are a compile error; and a four-tier compilation strategy where `nazm check` — no
+codegen at all — is the loop agents actually live in.
+
+*That first clause read "mutable value semantics so memory safety needs no lifetime
+annotations" until N7 (2026-09-22), when the memory model was settled from an audit rather
+than from the hypothesis. It is not mutable value semantics: sequences alias, observably
+and by specification, and `spec.md`'s memory constitution reclaims their storage without
+changing that. `research-register.md` R1 records what happened to the hypothesis and where
+it is still live.*
 
 The answer to "does this need a new compiler design?" is **new front end, new IR, new
 middle end, reused back end**. Code generation is decades of work with no novelty available
