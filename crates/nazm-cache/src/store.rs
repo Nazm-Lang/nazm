@@ -37,8 +37,16 @@ use std::path::{Path, PathBuf};
 use crate::artifact::{CheckArtifact, Invalid, Reusable};
 use crate::key::CheckKey;
 
-/// The directory name a project-local store takes.
+/// The derived-data directory a project keeps beside itself.
+///
+/// It holds one subdirectory per kind of derived artefact — [`CHECK`] and
+/// [`objects::DIRECTORY`](crate::objects::DIRECTORY) — because a semantic result and a
+/// native object answer different questions and an entry of one must never be reachable
+/// by a lookup of the other.
 pub const DIRECTORY: &str = ".nazm";
+
+/// The subdirectory holding semantic check results.
+pub const CHECK: &str = "check";
 
 /// What a lookup found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +88,13 @@ impl Store {
     /// same bytes under the same name; a directory holds entries, it does not name them.
     #[must_use]
     pub fn for_project(source_root: &Path) -> Self {
-        Self::at(source_root.join(DIRECTORY).join("check"))
+        Self::under(&source_root.join(DIRECTORY))
+    }
+
+    /// The store under an explicitly chosen derived-data root.
+    #[must_use]
+    pub fn under(root: &Path) -> Self {
+        Self::at(root.join(CHECK))
     }
 
     #[must_use]
