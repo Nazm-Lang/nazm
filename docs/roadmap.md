@@ -156,35 +156,74 @@ declared from source on every run, which is exactly what makes a skipped module 
 checking a body produces, and lowering is still whole-program. There is no object, IR or LIR
 cache, no query database, no scheduler and no eviction policy.
 
-### After N4, in dependency order
+### N5 — Separate code generation and internal linking · **complete, 2026-09-22**
+
+**Done, in three commits** (`0bf58be` a preflight correction, `41e0536` the symbol
+constitution, `d303571` the split).
+
+| | |
+| --- | --- |
+| **N5A** | A native symbol is a spelling of the definition's `DefKey`, not a position in a whole-program numbering. The encoding escapes every byte outside `[A-Za-z0-9]` including `_`, so it is injective and collisions are impossible **by construction** — no digest, no truncation, no probability. `pub` chooses linkage and never spelling |
+| **N5B** | Lowering splits into a global `plan` — signature admissibility and the recursion refusal, both of which span modules — and `lower_module`, which reads one module's bodies and every function's *signature*. No new IR |
+| **N5C** | `emit_unit` per module. A call across a boundary is a `declare` and a linker reference; a unit contains no other module's body and has no route to one |
+| **N5D** | Runtime and platform entry in artefacts of their own, defined once. Constants needed no qualification: `private` linkage makes them local labels, established by linking two objects that both define `@.s0` |
+| **N5E** | `clang -c` per artefact, then a link. Deterministic input order, a working directory this build created and removes, and nothing else touched |
+| **N5F** | A `native identity` gate, proved by breaking it three ways; five mutations; sixteen end-to-end cases; clean-build cost measured against the previous commit |
+
+**The acceptance tests were met.** Three modules each define a private `helper` and all
+three compile; a diamond generates the shared module once; a legal import cycle links; a
+cross-module *call* cycle is still refused; an imported `main` is not the process entry;
+two checkouts and two entry points give one library identical symbols.
+
+**A preflight found a live defect and fixed it first.** Every native runtime failure named
+the file `nazm build` was invoked on, so a division by zero in `lib.nz` printed
+`main.nz` with `lib.nz`'s line and column — a location that points somewhere real and
+wrong. The interpreter had been right all along and no assertion compared the two.
+
+**What N5 answered that N4 had assumed.** A's object names B in one `declare` and one
+`call`. Changing B's body, adding a private definition, or adding an export A does not call
+leave A's artefact byte-identical — so an object depends on its dependencies' **symbol
+identity and ABI signature**, not their implementations. N4's report said otherwise; it was
+reasoning ahead of an architecture that did not exist yet.
+
+**What N5 is not.** A cache. Every module is regenerated on every build, and the clean build
+is roughly twice as slow for a small program — almost entirely `clang` process startup,
+which `performance.md` measures rather than hides.
+
+### After N5, in dependency order
 
 | | Depends on | Why not before |
 | --- | --- | --- |
 | A persistable unit interface | durable identity ✓ | done — N3 |
 | A key independent of which file was named | a declared source root ✓ | done — N4 |
 | Semantic check reuse | that, plus a key covering every checking input ✓ | done — N4 |
-| Separate *code generation* | units ✓ + a linking model | checking is per unit; emission is still whole-program, so there is no per-unit artefact to key |
-| Native artefact reuse | separate code generation + a `CodegenKey` | `CheckKey` carries no target and reaches a body only through a source fingerprint; an object file keyed on one would be handed back for a different machine |
+| Separate *code generation* | units ✓ + a linking model ✓ | done — N5 |
+| Native artefact reuse | separate code generation ✓ + a `CodegenKey` | `CheckKey` carries no target and reaches a body only through a source fingerprint; an object keyed on one would be handed back for a different machine |
 | Content-addressed compilation | reuse ✓ + a normalised form of a definition | nothing normalises or hashes a definition — `research-register.md` R2 |
 | A language server | units ✓ + durable identity ✓ + reuse ✓ + a lossless CST | it would re-implement the semantic engine otherwise |
 | Ownership / the surface memory model | — | the largest open design question; `research-register.md` R1 |
 | Effects | a typed core IR | and *"is divergence an effect?"* is unanswered — `spec.md` *Open* |
 | Capabilities, information flow | effects | `architecture.md` §5 keeps the three separate |
 
-### N5 — Separate code generation, and the boundary it needs
+### N6 — Native artefact reuse
 
-**The next milestone, and not started.** Everything about *checking* is now per module;
-everything about *emitting* is still whole-program. `crates/nazm-lir/src/lower.rs` takes the
-whole `Program` and produces one LLVM module, so there is no per-unit artefact for a cache
-to key, and inventing one to extend N4's architecture would be manufacturing a boundary to
-satisfy a name.
+**The next milestone, and not started.** N5 produced the artefact a cache could key and
+deliberately did not key it. What N6 needs:
 
-What it needs, in order: a decision about what one module compiles *to*; a linking model,
-including how a private definition in two modules gets two symbols in separate objects
-rather than by the whole-program numbering that does it today; and only then a `CodegenKey`,
-which is `CheckKey` plus an implementation fingerprint, the target triple, CPU features, the
-backend, the optimisation level and the ABI. Each of those is an input `CheckKey` deliberately
-omits, and the omission is why it may not be reused as one.
+* a **`CodegenKey`** per unit: the emitter's identity (separate from the checker's
+  `SEMANTIC_EPOCH` — lowering rules change independently of checking rules), the target
+  triple, CPU features, the backend and its version, the optimisation level, the ABI, the
+  runtime artefact's identity, the module's own source, and **each called dependency's
+  symbol and signature** — which N5 measured and which is narrower than N4 assumed;
+* a store for objects, with the same discipline N4's has: content-addressed, validated on
+  read, atomic to publish, and never authority;
+* a rule for the **runtime artefact**, whose content is the union of what the modules
+  reached and is therefore a whole-program fact rather than a per-module one;
+* and an answer for the one thing that does depend on bodies: the recursion refusal is
+  whole-program, so it must re-run whenever any body changes even when no object does.
+
+The measured prize is specific rather than hoped for: an unchanged module's `clang -c`
+costs 80–190 ms and would not run at all.
 
 ---
 

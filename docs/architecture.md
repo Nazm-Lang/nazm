@@ -477,11 +477,17 @@ under one namespace and a miscompile under modules.
 
 ### What is still whole-program
 
-Lowering and code generation. `nazm_lir::lower` takes the whole `Program` and one
-`Resolution`, emits one LLVM module, and numbers its functions `@nz.fN` — which is why two
-modules' private `helper` needed no backend change at all. There are no per-module object
-files, no linker symbols and no cached interfaces, and `capability-matrix.md` says so
-rather than implying separate compilation from the existence of a unit.
+*Written at N2, and superseded by §7.5 on 2026-09-22. Kept because it is the statement N5
+had to make false.*
+
+> Lowering and code generation. `nazm_lir::lower` takes the whole `Program` and one
+> `Resolution`, emits one LLVM module, and numbers its functions `@nz.fN` — which is why two
+> modules' private `helper` needed no backend change at all. There are no per-module object
+> files, no linker symbols and no cached interfaces, and `capability-matrix.md` says so
+> rather than implying separate compilation from the existence of a unit.
+
+What remains whole-program after N5 is two *analyses* — signature admissibility and the
+recursion refusal — and not generation. §7.5 says why both stay.
 
 ## 7.3 Durable identity and persistent interfaces — settled by N3, 2026-09-22
 
@@ -722,6 +728,145 @@ observe a `CheckKey`, the bootstrap chain neither reads nor writes an entry, and
 store into the Nazm-written compiler for symmetry would be building a second thing to keep
 correct. What the two implementations must agree on is the language, and that is what
 `bootstrap.md` measures.
+
+## 7.5 Separate code generation and internal linking — settled by N5, 2026-09-22
+
+N2 gave the language a compilation unit and N4 made checking per-unit. Emission stayed
+whole-program: one LLVM module, functions named `@nz.f<N>` by their position in one
+numbering. N5 makes generation per-unit too.
+
+```text
+checked compilation
+        ↓ global backend admissibility
+lower each module            → one Unit per Nazm module
+        ↓
+emit each unit               → one LLVM module each, plus runtime and entry
+        ↓ clang -c, once per artefact
+objects
+        ↓ linker
+one executable
+```
+
+### A symbol is a spelling of a definition's identity
+
+`@nz.f<N>` could not survive this: the number depends on how many functions were collected
+before it, so a module's symbols would change when an unrelated module gained a function.
+So a symbol is derived from the `DefKey` N3 already settled:
+
+```text
+DefKey (nazm-sema)   which definition is this — backend-independent
+        ↓
+NativeSymbol (nazm-lir)   what the linker calls it
+```
+
+Each part is encoded byte by byte: alphanumerics stand for themselves and everything else,
+**including `_`, becomes `_XX`**. Because `_` is itself escaped it never appears literally,
+so the encoding is injective and `.` is free to separate fields. A symbol is therefore
+unique **by construction** — no digest, no truncation, no collision probability. That
+guarantee is available because the inputs are small, and it is why this scheme is preferred
+to hashing.
+
+```text
+@nz.m.lib_2Futil_2Enz.parse       lib/util.nz :: parse
+@nz.m.a_2Enz.helper               a.nz :: helper
+@nz.m.b_2Enz.helper               and b.nz's, which is a different definition
+@nz.u.2.helper                    a module with no durable identity: compilation-local
+```
+
+The kind is deliberately absent, which is the opposite of what `DefKey` does and right for
+the same reason: a durable identity that did not say what it identified would have to be
+*reinterpreted* when a second kind arrived, while a native symbol is regenerated on every
+build and read back by nothing.
+
+**A body edit cannot rename a symbol**, because a body is not an input to one. That is what
+makes a future native cache able to distinguish "B changed" from "what A calls changed".
+
+### `pub` chooses linkage, never spelling
+
+Source-level `pub` says which **Nazm modules** may name a definition. It is not an ELF
+export, not a C ABI, not a shared-library symbol and not a stability promise, and N5 must
+not quietly turn it into one.
+
+| | Linkage | Why |
+| --- | --- | --- |
+| a private definition | `internal` | nothing outside its module can name it, so nothing outside its object can refer to it — and LLVM may still inline, specialise and delete it |
+| an exported definition | `hidden` | the linker must bind it; the finished image exports it anyway never |
+| the root module's `main` | `hidden` | the entry wrapper is a separate artefact. The one place linkage does not follow visibility, and it is about where a process starts |
+
+The symbol string is the same either way. `cargo xtask check`'s **native identity** gate
+fails if visibility reaches the naming, if a session-local `FnId` reaches a symbol, if a
+positional symbol returns, or if LLVM spelling reaches `nazm-sema`.
+
+### What stays whole-program, and why that is not a defect
+
+Two analyses run once over the whole compilation, before any module is lowered:
+
+* **signature admissibility** — whether this backend can represent a function's types. A
+  caller in another module has to know before it can emit the call;
+* **the recursion refusal** — `A::f → B::g → A::f` is a cycle no single module can see.
+  Per-module code generation is not a reason to stop looking for one, and weakening the
+  policy to make lowering local would have traded a language rule for an implementation
+  convenience.
+
+Import cycles are unaffected and remain legal: a linker has no opinion about the order
+objects were produced in, which is exactly why separate generation needs no topological
+order. An import cycle and a call cycle are different things and only the second is refused.
+
+### Runtime ownership
+
+Every definition that must exist **exactly once per program** lives in one artefact: the
+thread-local failure state, `@nz.fail`, `@nz.report`, and each helper set the program
+reaches. Which sets those are is the union of what the modules reached — the one
+whole-program fact emission needs, and the thing a future runtime-artefact cache would key
+on.
+
+The platform entry is a third kind of artefact. Nazm's `main` is an ordinary definition
+with an ordinary symbol; `@main` is a C entry point with a C signature, in its own file.
+Keeping them apart is what makes the separation between language identity and operating-
+system identity visible rather than implied — and it is what stops an imported module's
+`main` from ever becoming a process entry.
+
+Constants needed no qualification at all. `private` linkage makes them local labels rather
+than symbol-table entries, so two units may both number theirs `@.s0` with no collision;
+that was established by linking two such objects rather than reasoned about. Declarations
+go into **every** unit unconditionally: a `declare` costs nothing, emits no reference when
+unused, and deciding per unit which are needed is a class of bug for no benefit.
+
+### What an object actually depends on — measured
+
+The question a native cache will have to answer, settled here with evidence rather than
+carried forward as an assumption. `a.nz`'s artefact says exactly two things about `b.nz`:
+
+```text
+declare i64 @nz.m.b_2Enz.twice(i64)
+%1 = call i64 @nz.m.b_2Enz.twice(i64 %0)
+```
+
+| B changes | A's object |
+| --- | --- |
+| a body, exported or private | **byte-identical** |
+| a private definition added or removed | **byte-identical** |
+| an export A does not call, added | **byte-identical** |
+| the signature of a definition A calls | changes — it is written into A's declaration |
+| a rename, which is a new `DefKey` | changes |
+
+So A's object depends on B's **symbol identity and ABI signature** and on nothing else,
+because there is no cross-module optimisation: each unit is assembled with no other unit's
+IR in scope. N4's report assumed a dependent object would need its dependency's
+implementation; on this architecture it does not, and a future `CodegenKey` for A may
+therefore use B's interface rather than B's bodies.
+
+**One thing does depend on bodies**: the recursion refusal, which is whole-program. A body
+edit cannot change any object's contents and can change whether the program is admissible
+at all.
+
+### What N5 is not
+
+Not a cache. Every module is regenerated on every build; there is no `CodegenKey`, no object
+store and no reuse. `capability-matrix.md` says so, and the clean-build cost is measured in
+`performance.md` rather than presented as a speed improvement — it is roughly twice as slow
+for a small program, almost entirely because there are now several `clang` processes where
+there was one.
 
 ## 8. Toolchain, and one real incompatibility
 

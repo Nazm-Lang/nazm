@@ -56,6 +56,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 | 8 | Core IR | MISSING |
 | 9 | MIR | MISSING |
 | 10 | LIR and the backend contract | PARTIAL |
+| 10a | Per-module code generation and linking | VERIFIED |
 | 11 | LLVM backend | VERIFIED |
 | 12 | Cranelift backend | DESIGNED |
 | 13 | Runtime | PARTIAL |
@@ -175,9 +176,9 @@ marker, or `--source-root DIR`, fixes the root a module's key is relative to, so
 neither, the root is derived from the named file exactly as before. The marker must be
 empty and is refused otherwise: it says where a project begins and owns nothing else.
 
-**Limitation** · **Nothing is separately *compiled*.** Lowering and code generation still
-take the whole program and emit one LLVM module (area 10). A module still cannot export a
-name under another one, re-export, or be named by anything but a relative path.
+**Limitation** · A module still cannot export a name under another one, re-export, or be
+named by anything but a relative path. *The sentence that stood here — that nothing is
+separately compiled — was true until N5 and is now area 10a.*
 
 **Next dependency** · Aliasing and re-export are language decisions; separate code
 generation needs a linking model (area 10).
@@ -210,9 +211,9 @@ compilation has a `main`, are recomputed rather than recalled.
 
 **Limitation** · **This is not incremental native compilation, and no such claim is made.**
 `nazm run` and `nazm build` reuse nothing: both need the resolution that only checking a
-body produces, and lowering is still whole-program. There is no object, IR or LIR cache, no
-query database, no scheduler and no eviction policy. A module with no durable identity is
-checked every time.
+body produces, and neither reuses anything even though N5 made generation per module. There
+is no object, IR or LIR cache, no query database, no scheduler and no eviction policy. A
+module with no durable identity is checked every time.
 
 **And the measured gain is about a millisecond.** On the compiler's own five modules,
 `performance.md` records 40.5 ms with the cache disabled against 38.9 ms warm — 18% of the
@@ -377,15 +378,56 @@ constant folding happens here.
 N1; the forbidden dependency on `nazm-core` still holds, and is satisfied by both crates
 depending on `nazm-sema`, which owns the shared vocabulary since N2.*
 
-**Whole-program, and still whole-program after N2.** `lower` takes the entire `Program` and
-one `Resolution` and emits one LLVM module, numbering functions `@nz.fN` — which is why two
-modules each defining a private `helper` needed no change here at all. Modules exist in the
-front end and nowhere in the backend: no per-module object file, no linker symbol, no
-separate LLVM module. Anything describing this as separate compilation would be wrong.
+*The paragraph that stood here until N5 said the backend was whole-program: one LLVM
+module, functions numbered `@nz.fN`, modules existing in the front end and nowhere below
+it. That was accurate, and it is no longer true — see area 10a.*
 
 **Next dependency** · Only whatever a second backend or a real optimisation pass demands.
 
 **Accepted when** · A second consumer exists that the contract serves unchanged.
+
+### 10a. Per-module code generation and linking — VERIFIED
+
+**Evidence** · As of N5 (2026-09-22) each Nazm module is lowered, emitted and assembled on
+its own, and the objects are linked. `crates/nazm-lir/src/lower.rs` splits into a global
+`plan` — signature admissibility and the recursion refusal, both of which span modules —
+and `lower_module`, which reads one module's bodies and every function's *signature*;
+`crates/nazm-lir/src/emit.rs` has `emit_unit`, `emit_runtime` and `emit_entry`;
+`crates/nazm-cli/src/build.rs` runs `clang -c` per artefact and links.
+
+A symbol is a spelling of the definition's `DefKey` (`crates/nazm-lir/src/symbol.rs`), not
+a position: `@nz.m.lib_2Futil_2Enz.parse`. The encoding escapes every byte outside
+`[A-Za-z0-9]` including `_`, so it is injective and collisions are impossible **by
+construction** rather than improbable.
+
+Sixteen cases in `crates/nazm-cli/tests/native_units.rs`, each running the compiler and the
+program: a cross-module call resolved by the linker, three modules with the same private
+`helper`, a diamond generated once, a legal import cycle, a cross-module call cycle still
+refused, an imported `main` that is not the process entry, per-unit constants that do not
+collide, a runtime defined exactly once, identical symbols across two checkouts and from
+two entry points, and `pub` changing linkage without changing spelling. A `native identity`
+gate covers what a test cannot: that no session id, no `pub` and no positional number
+reaches a symbol, and no LLVM spelling reaches `nazm-sema`.
+
+**What an object depends on, measured** · A's artefact names B in one `declare` and one
+`call`. Changing B's body, adding a private definition to B, or adding an export A does not
+call each leave A's artefact **byte-identical** — so an object depends on its dependencies'
+symbol identity and ABI signature, and not on their implementations.
+
+**Limitation** · **Nothing is reused, and no native cache exists.** Every module is
+regenerated on every build; there is no `CodegenKey`, no object store, no incremental
+linking. The clean build is roughly **twice as slow** for a small program, almost entirely
+because there are now several `clang` processes where there was one — measured in
+`performance.md` together with a 10% smaller optimised executable, which is cross-module
+inlining no longer happening. No LTO. `nazm build` still compiles a narrower subset than
+`nazm run`, and the recursion refusal is unchanged and still whole-program.
+
+**Next dependency** · A `CodegenKey` — emitter identity, target triple, CPU features,
+backend and version, optimisation level, ABI, the runtime's identity, and each dependency's
+signature — and somewhere to put objects keyed on it.
+
+**Accepted when** · Met for separate generation and linking. Native reuse is a separate row
+that does not exist.
 
 ### 11. LLVM backend — VERIFIED
 

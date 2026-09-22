@@ -262,6 +262,55 @@ rather than how large it is — `emit.nz` is the biggest file in the tree and ex
 nothing, so its interface is 124 bytes. Call this **context reduction**; converting it to
 a token claim would need a tokenizer and a stated model, and neither has been run.
 
+### Separate code generation — measured 2026-09-22, and it costs
+
+N5 gives each Nazm module its own LLVM module and object, and links them. Nothing is
+reused, so every artefact is regenerated on every build: this is an architecture change,
+and the numbers are what it cost. Medians of five, Darwin arm64, against a worktree at the
+commit immediately before N5 (`0bf58be`). Within-host, minutes apart, and not comparable to
+`bench/baseline-linux-aarch64.json`.
+
+| | before | after | |
+| --- | ---: | ---: | --- |
+| `sieve.nz` (1 module) build `-O0` | 121.7 ms | **249.6 ms** | +105% |
+| `sieve.nz` build `-O2` | 138.1 ms | 267.3 ms | +94% |
+| compiler (5 modules) build `-O0` | 335.7 ms | **658.2 ms** | +96% |
+| compiler build `-O2` | 1670.8 ms | 1705.8 ms | **+2%** |
+| `sieve` executable `-O2` | 50,440 B | 50,552 B | +112 B |
+| compiler executable `-O2` | 615,080 B | **554,648 B** | **−10%** |
+
+**The cost is `clang` processes, not code generation.** Timing each step of the five-module
+build at `-O0` separately:
+
+| artefact | IR | `clang -c` |
+| --- | ---: | ---: |
+| `m0` (`emit.nz`) | 1,556,038 B | 191.3 ms |
+| `m1` (`analyse.nz`) | 390,149 B | 114.0 ms |
+| `m2` (`parse.nz`) | 298,514 B | 106.1 ms |
+| `m3` (`module.nz`) | 65,446 B | 85.4 ms |
+| `m4` (`lex.nz`) | 75,867 B | 86.3 ms |
+| runtime | 8,100 B | 80.5 ms |
+| entry | 2,474 B | **79.4 ms** |
+| link | | 91.3 ms |
+
+The entry artefact is 2.4 kilobytes of IR and takes 79 ms, so **about 79 ms of each of the
+eight invocations is process startup** — roughly 630 ms of the 658 ms build. The marginal
+cost of actually generating code is 5–112 ms per artefact. At `-O2` on a real program that
+overhead is 2% of the total, because optimisation dominates.
+
+That is also the cost a cache removes: an unchanged module's `clang -c` does not run at
+all. N5 does not build one, and `capability-matrix.md` does not claim one.
+
+**The executable got 10% smaller at `-O2`, and that is the same fact from the other side.**
+Per-module objects mean LLVM cannot inline across a module boundary, so less code is
+duplicated into callers — and less is specialised. Measured against a possible runtime
+regression: eleven runs each, twice, put `sieve` at 35.9/35.5 ms minimum before and
+36.9/36.6 ms after, with overlapping medians. **About a millisecond on thirty-six, at the
+edge of what this method resolves** — reported rather than dismissed, and not called a
+regression on this evidence. Recovering cross-module inlining is what LTO is for; N5
+establishes the boundary and adds none, because adding it to recover a number would hide
+whether the boundary was affordable.
+
 ## The optimisation pass, and what it was based on
 
 One pass, chosen from a profile rather than from intuition. `sample` on the release
