@@ -295,12 +295,20 @@ because both do cross. Cleanup is on the three exit edges of a generated functio
 tail, each `return`, and the shared unwind block a failure takes — with parameter slots
 excluded, which *is* rule 2.
 
-**Tested.** 35 cases in `crates/nazm-cli/tests/memory.rs`, each run twice and each requiring
+**Tested.** 41 cases in `crates/nazm-cli/tests/memory.rs`, each run twice and each requiring
 the interpreter and the compiled program to agree on the value **and** on what they
 allocated and reclaimed, by class: slices outliving their buffers, slices of slices, empty
 strings, borrowed strings returned on both edges, strings stored in and read out of
-sequences, self-assignment of an element, embedded NUL bytes, the failure path, channel
-scaling, a returned channel, and a string and a channel crossing into two tasks at once.
+sequences, a string read out of a **temporary** sequence, self-assignment of an element,
+embedded NUL bytes, a process argument, the failure path, channel scaling, a returned
+channel, blocked senders and receivers woken by a close, a task that fails while holding a
+channel, and a string and a channel crossing into two tasks at once.
+
+One of those was written because a mutation survived. Removing `strs_get`'s own reference
+broke nothing the suite could see, because `let s = strs_get(xs, 0);` retains what it
+stores whether or not the built-in already did — every shape tested had a binding standing
+in for the missing reference. The shape that has none is a sequence with no binding, where
+the temporary is released before the binding's retain can run.
 
 **Measured.** 5,000 / 20,000 / 80,000 temporary heap strings against a constant live set:
 1.88 / 2.33 / 4.17 MiB → **1.73 / 1.77 / 1.77 MiB**. The accumulator shape from the

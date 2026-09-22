@@ -1370,6 +1370,25 @@ built by both compilers, run under `NAZM_MEMORY_REPORT`, required to print the s
 and then required to print `live=0` in all three classes, because a report that matched
 because both leaked would pass the first comparison and mean nothing.
 
+### Where a binding hides a missing reference
+
+One mutation survived the first run, and what it found is worth keeping. Removing
+`strs_get`'s own reference to the string it hands back broke nothing: `let s = strs_get(xs,
+0);` retains what it stores whether or not the built-in already did, and so does a `return`,
+and so does storing it back into a sequence. Every shape in the suite had a binding standing
+in for the missing reference.
+
+The shape that has none is a sequence with **no binding** — `strs_get(one(), 0)`, where the
+sequence is the result of a call. A built-in's arguments are released the moment it returns,
+so the order decides it: with the reference taken inside the built-in, the retain precedes
+the release; without it, the sequence and every string in it are freed first and the
+binding's retain then touches storage that is gone.
+
+The general lesson, and it applies to every rule in this section: **a compensating
+mechanism makes a defect invisible without making it absent.** Reference counting is full of
+them, because almost every value passes through a binding eventually. The test that finds
+one has to be the shape where nothing else is holding the value.
+
 ### What this still does not do
 
 - **Nothing about future types.** Leak freedom here is a claim about six built-in types and
