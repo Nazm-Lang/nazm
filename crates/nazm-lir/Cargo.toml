@@ -11,6 +11,7 @@ publish = false
 nazm-span = { workspace = true }
 nazm-diag = { workspace = true }
 nazm-syntax = { workspace = true }
+nazm-sema = { workspace = true }
 
 [lints]
 workspace = true

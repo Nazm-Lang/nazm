@@ -23,51 +23,51 @@
 // `crates/nazm-syntax/src/lexer.rs` in *meaning*, not in value: the differential test
 // maps one to the other in one place.
 
-fn k_int() -> Int { 1 }
-fn k_str() -> Int { 2 }
-fn k_ident() -> Int { 3 }
-fn k_fn() -> Int { 10 }
-fn k_let() -> Int { 11 }
-fn k_if() -> Int { 12 }
-fn k_else() -> Int { 13 }
-fn k_true() -> Int { 14 }
-fn k_false() -> Int { 15 }
-fn k_mut() -> Int { 16 }
-fn k_while() -> Int { 17 }
-fn k_break() -> Int { 18 }
-fn k_continue() -> Int { 19 }
-fn k_return() -> Int { 20 }
-fn k_use() -> Int { 21 }
+pub fn k_int() -> Int { 1 }
+pub fn k_str() -> Int { 2 }
+pub fn k_ident() -> Int { 3 }
+pub fn k_fn() -> Int { 10 }
+pub fn k_let() -> Int { 11 }
+pub fn k_if() -> Int { 12 }
+pub fn k_else() -> Int { 13 }
+pub fn k_true() -> Int { 14 }
+pub fn k_false() -> Int { 15 }
+pub fn k_mut() -> Int { 16 }
+pub fn k_while() -> Int { 17 }
+pub fn k_break() -> Int { 18 }
+pub fn k_continue() -> Int { 19 }
+pub fn k_return() -> Int { 20 }
+pub fn k_use() -> Int { 21 }
 // `scope` and `spawn` are reserved here. They were reserved before this compiler could
 // emit them, so that the two lexers would agree on every input; it emits them now., so
 // that the two lexers agree on every input. A word that is a keyword to one and an
 // identifier to the other is a divergence the differential test would have to excuse.
-fn k_scope() -> Int { 22 }
-fn k_spawn() -> Int { 23 }
+pub fn k_scope() -> Int { 22 }
+pub fn k_spawn() -> Int { 23 }
 // `pub` — the visibility keyword, added 2026-09-22. Same rule as above: a word that is
 // a keyword to one lexer and an identifier to the other is a divergence, so it is here
 // as soon as it is a keyword at all, whatever the later stages do with it.
-fn k_pub() -> Int { 24 }
-fn k_lparen() -> Int { 30 }
-fn k_rparen() -> Int { 31 }
-fn k_lbrace() -> Int { 32 }
-fn k_rbrace() -> Int { 33 }
-fn k_comma() -> Int { 34 }
-fn k_colon() -> Int { 35 }
-fn k_semi() -> Int { 36 }
-fn k_arrow() -> Int { 37 }
-fn k_eq() -> Int { 38 }
-fn k_plus() -> Int { 40 }
-fn k_minus() -> Int { 41 }
-fn k_star() -> Int { 42 }
-fn k_slash() -> Int { 43 }
-fn k_percent() -> Int { 44 }
-fn k_eqeq() -> Int { 45 }
-fn k_noteq() -> Int { 46 }
-fn k_lt() -> Int { 47 }
-fn k_lteq() -> Int { 48 }
-fn k_gt() -> Int { 49 }
-fn k_gteq() -> Int { 50 }
+pub fn k_pub() -> Int { 24 }
+pub fn k_lparen() -> Int { 30 }
+pub fn k_rparen() -> Int { 31 }
+pub fn k_lbrace() -> Int { 32 }
+pub fn k_rbrace() -> Int { 33 }
+pub fn k_comma() -> Int { 34 }
+pub fn k_colon() -> Int { 35 }
+pub fn k_semi() -> Int { 36 }
+pub fn k_arrow() -> Int { 37 }
+pub fn k_eq() -> Int { 38 }
+pub fn k_plus() -> Int { 40 }
+pub fn k_minus() -> Int { 41 }
+pub fn k_star() -> Int { 42 }
+pub fn k_slash() -> Int { 43 }
+pub fn k_percent() -> Int { 44 }
+pub fn k_eqeq() -> Int { 45 }
+pub fn k_noteq() -> Int { 46 }
+pub fn k_lt() -> Int { 47 }
+pub fn k_lteq() -> Int { 48 }
+pub fn k_gt() -> Int { 49 }
+pub fn k_gteq() -> Int { 50 }
 
 // --- byte classification -----------------------------------------------------------
 
@@ -133,7 +133,7 @@ fn push_token(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, kind: Int, fro
 }
 
 // Report and stop. Errors are located, which is the whole point of carrying byte offsets.
-fn fail(code: Str, at_offset: Int, detail: Str) -> Int {
+pub fn fail(code: Str, at_offset: Int, detail: Str) -> Int {
     eprint(str_concat("error ", code));
     eprint(str_concat(" at ", int_to_str(at_offset)));
     eprint(str_concat(": ", detail));
@@ -142,7 +142,7 @@ fn fail(code: Str, at_offset: Int, detail: Str) -> Int {
     0
 }
 
-fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int {
+pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int {
     let n = str_len(src);
     let mut i = 0;
     while i < n {

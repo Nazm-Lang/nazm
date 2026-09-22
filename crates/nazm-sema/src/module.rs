@@ -1,0 +1,243 @@
+//! Which modules a compilation contains, and which of them import which.
+//!
+//! # A graph, not an ordered bag of files
+//!
+//! Until N2 the driver produced a list: every reachable file, in load order. That is
+//! enough to parse and, when every top-level name is visible everywhere, enough to check.
+//! It is not enough to ask the question visibility makes unavoidable — *may **this**
+//! module name that definition?* — because the answer depends on an edge the list threw
+//! away.
+//!
+//! So loading produces this. The edges are the `use` items, resolved to the modules they
+//! name; everything after loading works on ids, and the filesystem is not consulted again.
+
+use nazm_span::{FileId, Span};
+
+/// One module of this compilation.
+///
+/// # Session-local, like everything else here
+///
+/// An index into one [`ModuleGraph`], valid for one compilation in one process. Two runs
+/// over the same tree may number modules differently and both are correct.
+///
+/// # Why this is not [`FileId`]
+///
+/// Today they correspond one to one: a module comes into existence by being a file that
+/// was loaded, and `ModuleId(n)` is the module of `FileId(n)`. They are still different
+/// questions, and the separation costs one newtype:
+///
+/// - a `FileId` answers *where did this text come from* — it indexes a
+///   [`SourceMap`](nazm_span::SourceMap), and a diagnostic uses it to name a file a reader
+///   can open;
+/// - a `ModuleId` answers *which unit owns this definition* — it indexes this graph, and
+///   the checker uses it to decide what a name means.
+///
+/// The two come apart as soon as a module has no file behind it (generated source, an
+/// editor's unsaved buffer) or a unit is more than one file (a package). Neither exists
+/// yet, and neither is what this milestone builds. What the newtype buys today is that
+/// nothing can silently use a file's position in load order as a semantic identity, which
+/// is precisely the conflation `docs/research-register.md` R2 warns about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ModuleId(u32);
+
+impl ModuleId {
+    /// The module the compilation started from: the file named on the command line.
+    ///
+    /// It owns `main`. See `docs/spec.md`, *The root module owns `main`*.
+    pub const ROOT: Self = Self(0);
+
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// One module named by another's `use`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dependency {
+    /// The module named.
+    pub on: ModuleId,
+    /// The quoted path that named it, so a diagnostic about this import can point at the
+    /// line that created it rather than at the module it brought in.
+    pub at: Span,
+}
+
+/// One module: where its source came from, and what it directly imports.
+#[derive(Debug, Clone)]
+struct Module {
+    file: FileId,
+    /// Modules named by this one's `use` items, deduplicated, in source order.
+    ///
+    /// **Direct only.** What they in turn import is not here and is not this module's
+    /// business — `docs/spec.md` states the rule and why it is the one with the largest
+    /// effect on how much a reader of one module has to know.
+    imports: Vec<Dependency>,
+}
+
+/// The modules of one compilation and the import edges between them.
+///
+/// Built by the driver while loading, because resolving `use "lib.nz"` means looking at
+/// the filesystem and that is the driver's job. Read by everything after, because by then
+/// a path is history.
+#[derive(Debug, Clone, Default)]
+pub struct ModuleGraph {
+    modules: Vec<Module>,
+}
+
+impl ModuleGraph {
+    /// A compilation of one module, with no imports.
+    ///
+    /// For the `&str` entry points — tests, mostly, and anything with genuinely one file.
+    #[must_use]
+    pub fn single() -> Self {
+        Self {
+            modules: vec![Module {
+                file: FileId::ROOT,
+                imports: Vec::new(),
+            }],
+        }
+    }
+
+    /// Add a module for `file`, in load order. The first one added is the root.
+    pub fn add(&mut self, file: FileId) -> ModuleId {
+        let id = ModuleId(u32::try_from(self.modules.len()).unwrap_or(u32::MAX));
+        self.modules.push(Module {
+            file,
+            imports: Vec::new(),
+        });
+        id
+    }
+
+    /// Record that `from` names `to` in a `use`.
+    ///
+    /// Importing the same module twice adds one edge, and a module importing itself adds
+    /// none: it already sees all of its own definitions, so the edge would only be a way
+    /// for a module to collide with itself. `docs/spec.md` says both.
+    pub fn import(&mut self, from: ModuleId, to: ModuleId, at: Span) {
+        if from == to {
+            return;
+        }
+        if let Some(m) = self.modules.get_mut(from.index()) {
+            if !m.imports.iter().any(|d| d.on == to) {
+                m.imports.push(Dependency { on: to, at });
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn root(&self) -> ModuleId {
+        ModuleId::ROOT
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.modules.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.modules.is_empty()
+    }
+
+    /// Every module, in load order.
+    pub fn ids(&self) -> impl Iterator<Item = ModuleId> + '_ {
+        (0..self.modules.len()).map(|i| ModuleId(u32::try_from(i).unwrap_or(u32::MAX)))
+    }
+
+    /// The source this module was read from.
+    #[must_use]
+    pub fn file(&self, m: ModuleId) -> Option<FileId> {
+        self.modules.get(m.index()).map(|x| x.file)
+    }
+
+    /// Which module owns the definitions written in this file.
+    ///
+    /// A linear scan, over a list that is one module per source file of one program. A
+    /// map would be faster and would have to be kept correct; this cannot disagree with
+    /// itself.
+    #[must_use]
+    pub fn module_of(&self, file: FileId) -> Option<ModuleId> {
+        self.modules
+            .iter()
+            .position(|m| m.file == file)
+            .map(|i| ModuleId(u32::try_from(i).unwrap_or(u32::MAX)))
+    }
+
+    /// The modules this one directly imports. Never transitive.
+    #[must_use]
+    pub fn imports(&self, m: ModuleId) -> &[Dependency] {
+        self.modules
+            .get(m.index())
+            .map_or(&[][..], |x| x.imports.as_slice())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn somewhere() -> Span {
+        Span::synthetic()
+    }
+
+    fn on(g: &ModuleGraph, m: ModuleId) -> Vec<ModuleId> {
+        g.imports(m).iter().map(|d| d.on).collect()
+    }
+
+    #[test]
+    fn a_module_that_imports_itself_gains_no_edge() {
+        let mut g = ModuleGraph::default();
+        let a = g.add(FileId::ROOT);
+        g.import(a, a, somewhere());
+        assert!(g.imports(a).is_empty());
+    }
+
+    #[test]
+    fn importing_the_same_module_twice_is_one_edge() {
+        let mut g = ModuleGraph::default();
+        let a = g.add(FileId::ROOT);
+        let b = g.add(FileId::from_index(1));
+        g.import(a, b, somewhere());
+        g.import(a, b, somewhere());
+        assert_eq!(on(&g, a), [b]);
+    }
+
+    #[test]
+    fn a_cycle_is_representable() {
+        // Not merely permitted by omission: the graph is built before anything is
+        // checked, so a cycle is a shape it has to be able to hold.
+        let mut g = ModuleGraph::default();
+        let a = g.add(FileId::ROOT);
+        let b = g.add(FileId::from_index(1));
+        g.import(a, b, somewhere());
+        g.import(b, a, somewhere());
+        assert_eq!(on(&g, a), [b]);
+        assert_eq!(on(&g, b), [a]);
+    }
+
+    #[test]
+    fn imports_are_direct_and_the_graph_offers_no_transitive_view() {
+        // A → B → C. The only question this type answers about A is which modules A
+        // itself named, which is what makes non-transitivity a property of the data
+        // rather than a rule the checker has to remember.
+        let mut g = ModuleGraph::default();
+        let a = g.add(FileId::ROOT);
+        let b = g.add(FileId::from_index(1));
+        let c = g.add(FileId::from_index(2));
+        g.import(a, b, somewhere());
+        g.import(b, c, somewhere());
+        assert_eq!(on(&g, a), [b]);
+        assert!(!on(&g, a).contains(&c));
+    }
+
+    #[test]
+    fn a_module_knows_its_file_and_a_file_its_module() {
+        let mut g = ModuleGraph::default();
+        let a = g.add(FileId::ROOT);
+        let b = g.add(FileId::from_index(7));
+        assert_eq!(g.file(b), Some(FileId::from_index(7)));
+        assert_eq!(g.module_of(FileId::from_index(7)), Some(b));
+        assert_eq!(g.module_of(FileId::ROOT), Some(a));
+        assert_eq!(g.module_of(FileId::from_index(3)), None);
+    }
+}

@@ -1509,14 +1509,16 @@ fn the_nazm_written_compiler_resolves_its_own_imports() {
 
     let root = dir.path();
     std::fs::create_dir_all(root.join("lib")).expect("lib");
+    // `pub` since N2, 2026-09-22: both of these are called from another module, which is
+    // now something a module has to say. The program is otherwise the one it always was.
     std::fs::write(
         root.join("lib/math.nz"),
-        "fn triple(n: Int) -> Int { n * 3 }\n",
+        "pub fn triple(n: Int) -> Int { n * 3 }\n",
     )
     .expect("math");
     std::fs::write(
         root.join("lib/util.nz"),
-        "use \"math.nz\";\nfn twice_tripled(n: Int) -> Int { triple(n) + triple(n) }\n",
+        "use \"math.nz\";\npub fn twice_tripled(n: Int) -> Int { triple(n) + triple(n) }\n",
     )
     .expect("util");
     let prog = root.join("prog.nz");
@@ -1859,11 +1861,14 @@ fn the_nazm_written_compiler_refuses_recursion_as_the_reference_does() {
         },
         Cycle {
             what: "a cycle that exists only across two files",
-            root:            "use \"cycle-b.nz\";\nfn ping(n: Int) -> Int {\n    if n == 0 { 7 } else { pong(n - 1) }\n}\n\
+            // Both halves are `pub` since N2: a call cycle across modules needs each
+            // module to export the name the other calls, and the case is about the
+            // backend's bound on recursion rather than about visibility.
+            root:            "use \"cycle-b.nz\";\npub fn ping(n: Int) -> Int {\n    if n == 0 { 7 } else { pong(n - 1) }\n}\n\
              fn main() -> Int { ping(4) }\n",
             extra: &[(
                 "cycle-b.nz",
-                "use \"cycle-a.nz\";\nfn pong(n: Int) -> Int {\n    if n == 0 { 9 } else { ping(n - 1) }\n}\n",
+                "use \"cycle-a.nz\";\npub fn pong(n: Int) -> Int {\n    if n == 0 { 9 } else { ping(n - 1) }\n}\n",
             )],
             phrase: "a call cycle through `ping`",
         },

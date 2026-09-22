@@ -149,7 +149,7 @@ which is what separate and incremental compilation both need.
 
 ### 3. Type system — PARTIAL
 
-**Evidence** · Six types, closed, `crates/nazm-syntax/src/types.rs`: `Int`, `Bool`, `Str`,
+**Evidence** · Six types, closed, `crates/nazm-sema/src/types.rs`: `Int`, `Bool`, `Str`,
 `Ints`, `Strs`, `Chan`. Local inference for `let`; parameters and returns always written.
 Completion analysis decides whether a block produces a value, which is what lets one `if`
 serve both statement and value position. Codes `N0300`–`N0314`. 114 behavioural tests in
@@ -186,7 +186,7 @@ times in `crates/nazm-lir/src/emit.rs` and zero times in `compiler/emit.nz`, aga
 `@malloc` and 2 `@realloc` sites in each. This is the defect behind the 2026-09-21
 resource incident and the reason `compiler/bootstrap.sh` refuses to run without an
 external memory ceiling. `str_join` was added to allocate *less*
-(`crates/nazm-syntax/src/intrinsic.rs`); nothing reclaims.
+(`crates/nazm-sema/src/intrinsic.rs`); nothing reclaims.
 
 **Next dependency** · The surface model decision — mutable value semantics against the
 full region calculus `architecture.md` §5 hedges with. It is the largest open design
@@ -215,7 +215,7 @@ effectful call refused where a pure one is accepted.
 ### 6. Capabilities, as a language feature — MISSING
 
 **Evidence of absence** · Authority is **ambient and labelled as such** in the source:
-`crates/nazm-syntax/src/intrinsic.rs` — *"These are callable from anywhere, and nothing in
+`crates/nazm-sema/src/intrinsic.rs` — *"These are callable from anywhere, and nothing in
 the language restricts which functions may reach the file system or the process arguments.
 That is a real limitation, not a design."*
 
@@ -388,7 +388,7 @@ implementation.
 ### 16. Standard library — MISSING
 
 **Evidence of absence** · No `.nz` library, no prelude. Thirty-one compiler built-ins in
-one table, `crates/nazm-syntax/src/intrinsic.rs`, mirrored by the backend in
+one table, `crates/nazm-sema/src/intrinsic.rs`, mirrored by the backend in
 `crates/nazm-lir/src/ir.rs`. Every built-in the front end has, the backend lowers — there
 is no coverage gap today, and a test enforces that.
 
@@ -498,7 +498,7 @@ are declared.
 silent degradation, and failures that are diagnostics rather than undefined behaviour.
 
 **Limitation** · Against that: authority is **ambient and labelled as such in the source**
-— `crates/nazm-syntax/src/intrinsic.rs` says nothing in the language restricts which
+— `crates/nazm-sema/src/intrinsic.rs` says nothing in the language restricts which
 functions may reach the filesystem.
 
 **Next dependency** · Areas 6 and 7 — capabilities and information flow — both MISSING,

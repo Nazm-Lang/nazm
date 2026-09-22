@@ -68,6 +68,19 @@ pub mod codes {
     pub const MISSING_MAIN: Code = Code::new("N0204");
     /// `use "path";` named a file that could not be read.
     pub const MODULE_NOT_FOUND: Code = Code::new("N0205");
+    /// A name that exists in an imported module, and is private there.
+    ///
+    /// Separate from [`UNDEFINED_FUNCTION`] on purpose. "Not defined" is true from the
+    /// caller's position and useless: the reader can see the definition in the file they
+    /// just imported. Saying that it exists and is private names the repair.
+    pub const PRIVATE_DEFINITION: Code = Code::new("N0206");
+    /// Two directly imported modules export the same name.
+    ///
+    /// Reported where the ambiguity is created — the second `use` — because the language
+    /// has no qualified path with which a later mention could say which one it meant.
+    pub const AMBIGUOUS_IMPORT: Code = Code::new("N0207");
+    /// An import brings in a name this module also defines.
+    pub const IMPORT_COLLIDES_WITH_DEFINITION: Code = Code::new("N0208");
 
     // Types
     pub const TYPE_MISMATCH: Code = Code::new("N0300");

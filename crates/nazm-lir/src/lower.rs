@@ -45,8 +45,8 @@
 //! place is refused rather than emitted somewhere plausible.
 
 use nazm_diag::{codes, Diagnostic};
+use nazm_sema::resolve::{Callee, FnId, Resolution};
 use nazm_span::Span;
-use nazm_syntax::resolve::{Callee, FnId, Resolution};
 use nazm_syntax::{
     BinOp as AstOp, Block as AstBlock, Expr as AstExpr, Function as AstFn, Program,
     Spawn as AstSpawn, Stmt as AstStmt,
@@ -192,14 +192,17 @@ pub fn lower(program: &Program, res: &Resolution) -> Result<Module, LowerError> 
     // resolution did — only whether each one's types are in the native subset. Duplicates
     // never reach here: the checker reports `N0203` and declares the first, so the
     // "first of a repeated name wins" rule this loop used to implement is upstream now.
+    //
+    // Driven by the **resolution**, not by the syntax tree: each definition says which
+    // declaration it came from, so pairing the two needs no name. The last two name
+    // lookups in this crate were here, and a name stopped being able to do the job when
+    // two modules became able to define the same one.
     let mut order: Vec<(FnId, &AstFn)> = Vec::new();
-    for f in &program.functions {
-        let Some(id) = res.function_id(&f.name) else {
+    for (i, def) in res.functions().iter().enumerate() {
+        let id = FnId::from_index(i);
+        let Some(f) = program.functions.get(def.decl as usize) else {
             continue;
         };
-        if ctx.sig(id).is_some() {
-            continue;
-        }
         let Some(sig) = signature(&mut ctx, id, f) else {
             continue;
         };
@@ -210,11 +213,7 @@ pub fn lower(program: &Program, res: &Resolution) -> Result<Module, LowerError> 
         order.push((id, f));
     }
 
-    let entry = match res
-        .function_id("main")
-        .and_then(|id| ctx.sig(id))
-        .map(|s| s.id)
-    {
+    let entry = match res.entry().and_then(|id| ctx.sig(id)).map(|s| s.id) {
         Some(id) => id,
         // `main` has no signature here for one of two reasons, and they are different
         // facts. Either the program genuinely has none — unreachable after a successful
@@ -1067,11 +1066,14 @@ fn lower_call(
         return lower_builtin(ctx, op, lowered, callee_span);
     }
 
-    let by_name = match target {
+    // By id. The name is not consulted here and could not be: two modules may define
+    // the same one, and this backend stopped being able to tell them apart by spelling on
+    // 2026-09-22.
+    let resolved = match target {
         Some(Callee::Function(fid)) => ctx.sig(fid).cloned(),
         _ => None,
     };
-    let Some(Sig { id, ret, params }) = by_name else {
+    let Some(Sig { id, ret, params }) = resolved else {
         // The checker reports an unknown function (`N0201`) and a mismatched signature
         // (`N0303`, `N0300`) already. Reaching here means the callee resolved to a
         // function whose signature *this backend* refused — a different fact, and worth

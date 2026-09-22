@@ -45,29 +45,29 @@ use "lex.nz";
 
 // --- node kinds --------------------------------------------------------------------
 
-fn n_int() -> Int { 1 }
-fn n_bool() -> Int { 2 }
-fn n_str() -> Int { 3 }
-fn n_var() -> Int { 4 }
-fn n_neg() -> Int { 5 }
-fn n_bin() -> Int { 6 }
-fn n_call() -> Int { 7 }
-fn n_block() -> Int { 8 }
-fn n_param() -> Int { 9 }
-fn n_fn() -> Int { 10 }
-fn n_program() -> Int { 11 }
-fn n_let() -> Int { 12 }
-fn n_assign() -> Int { 13 }
-fn n_while() -> Int { 14 }
-fn n_return() -> Int { 15 }
-fn n_break() -> Int { 16 }
-fn n_continue() -> Int { 17 }
-fn n_exprstmt() -> Int { 18 }
-fn n_if() -> Int { 19 }
-fn n_scope() -> Int { 20 }
-fn n_spawn() -> Int { 21 }
+pub fn n_int() -> Int { 1 }
+pub fn n_bool() -> Int { 2 }
+pub fn n_str() -> Int { 3 }
+pub fn n_var() -> Int { 4 }
+pub fn n_neg() -> Int { 5 }
+pub fn n_bin() -> Int { 6 }
+pub fn n_call() -> Int { 7 }
+pub fn n_block() -> Int { 8 }
+pub fn n_param() -> Int { 9 }
+pub fn n_fn() -> Int { 10 }
+pub fn n_program() -> Int { 11 }
+pub fn n_let() -> Int { 12 }
+pub fn n_assign() -> Int { 13 }
+pub fn n_while() -> Int { 14 }
+pub fn n_return() -> Int { 15 }
+pub fn n_break() -> Int { 16 }
+pub fn n_continue() -> Int { 17 }
+pub fn n_exprstmt() -> Int { 18 }
+pub fn n_if() -> Int { 19 }
+pub fn n_scope() -> Int { 20 }
+pub fn n_spawn() -> Int { 21 }
 
-fn node_name(k: Int) -> Str {
+pub fn node_name(k: Int) -> Str {
     if k == n_int() { return "int"; }
     if k == n_bool() { return "bool"; }
     if k == n_str() { return "str"; }
@@ -587,7 +587,7 @@ fn finish_if(ops: Ints, opat: Ints, vs: Ints, ve: Ints,
     0
 }
 
-fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
+pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints) -> Int {
     let fk = ints_new();
     let fstart = ints_new();

@@ -4,6 +4,8 @@
 // Output: one diagnostic per line, `CODE|start|end|message`. Exits 1 if there were any.
 
 use "analyse.nz";
+use "lex.nz";
+use "parse.nz";
 
 fn main() -> Int {
     if args_count() < 1 {

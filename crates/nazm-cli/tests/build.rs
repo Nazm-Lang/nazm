@@ -3954,11 +3954,11 @@ fn a_program_can_span_several_files_and_a_diamond_loads_once() {
         ),
         (
             "util.nz",
-            "fn twice(n: Int) -> Int { n * 2 }\nfn greet() -> Str { \"hello\" }\n",
+            "pub fn twice(n: Int) -> Int { n * 2 }\npub fn greet() -> Str { \"hello\" }\n",
         ),
         (
             "sub/deep.nz",
-            "use \"../util.nz\";\nfn quad(n: Int) -> Int { twice(twice(n)) }\n",
+            "use \"../util.nz\";\npub fn quad(n: Int) -> Int { twice(twice(n)) }\n",
         ),
     ]);
 
@@ -3978,7 +3978,7 @@ fn an_import_cycle_terminates_and_is_not_an_error() {
     // cycle has no meaning to get wrong, and refusing it would refuse a working program.
     let (dir, root) = write_tree(&[
         ("a.nz", "use \"b.nz\";\nfn main() -> Int { from_b() + 1 }\n"),
-        ("b.nz", "use \"a.nz\";\nfn from_b() -> Int { 41 }\n"),
+        ("b.nz", "use \"a.nz\";\npub fn from_b() -> Int { 41 }\n"),
     ]);
     let interp = run_root(&root);
     assert_eq!(interp.code, Some(0), "{}", interp.stderr);
@@ -4004,7 +4004,7 @@ fn a_diagnostic_in_an_imported_file_names_that_file_and_its_own_line() {
         ),
         (
             "lib.nz",
-            "fn unused() -> Int { 1 }\nfn helper() -> Int { \"oops\" }\n",
+            "fn unused() -> Int { 1 }\npub fn helper() -> Int { \"oops\" }\n",
         ),
     ]);
     let out = Command::new(NAZM)
@@ -4015,19 +4015,23 @@ fn a_diagnostic_in_an_imported_file_names_that_file_and_its_own_line() {
     assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("N0300"), "{stderr}");
     assert!(
-        stderr.contains("lib.nz:2:22"),
+        stderr.contains("lib.nz:2:26"),
         "wrong file or line: {stderr}"
     );
 }
 
 #[test]
-fn a_name_defined_in_two_files_is_reported_with_both() {
+fn a_name_defined_here_and_exported_there_is_reported_with_both() {
+    // Changed by N2, 2026-09-22. This was `a_name_defined_in_two_files_is_reported_with
+    // _both` and expected `N0203`, because every top-level name was in one namespace.
+    // Two files defining `helper` is now two definitions; what is still refused is one
+    // module **importing** a name it also defines, because nothing ranks the two.
     let (_dir, root) = write_tree(&[
         (
             "main.nz",
             "use \"lib.nz\";\nfn helper() -> Int { 2 }\nfn main() -> Int { helper() }\n",
         ),
-        ("lib.nz", "fn helper() -> Int { 1 }\n"),
+        ("lib.nz", "pub fn helper() -> Int { 1 }\n"),
     ]);
     let out = Command::new(NAZM)
         .args(["check", root.to_str().unwrap()])
@@ -4035,10 +4039,35 @@ fn a_name_defined_in_two_files_is_reported_with_both() {
         .expect("run");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("N0203"), "{stderr}");
-    // Both files named: a line number with no file is unusable across a program.
-    assert!(stderr.contains("lib.nz:1:4"), "{stderr}");
-    assert!(stderr.contains("main.nz:2:4"), "{stderr}");
+    assert!(stderr.contains("N0208"), "{stderr}");
+    // Both sides named, and the other file named *as a file*: a line number with no file
+    // is unusable across a program. The local definition's label carries no file because
+    // it is in the one the message already points at.
+    assert!(stderr.contains("main.nz:1:5"), "{stderr}");
+    assert!(stderr.contains("lib.nz:1:8"), "{stderr}");
+    assert!(stderr.contains("at 2:4: defined here"), "{stderr}");
+}
+
+#[test]
+fn the_same_name_defined_privately_in_two_files_is_not_a_conflict() {
+    // The other half, and the reason the case above needed a `pub` to be a case at all.
+    let (_dir, root) = write_tree(&[
+        (
+            "main.nz",
+            "use \"lib.nz\";\nfn helper() -> Int { 2 }\nfn main() -> Int { helper() + shown() }\n",
+        ),
+        (
+            "lib.nz",
+            "pub fn shown() -> Int { helper() }\nfn helper() -> Int { 40 }\n",
+        ),
+    ]);
+    let out = Command::new(NAZM)
+        .args(["run", root.to_str().unwrap()])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "42");
 }
 
 #[test]
@@ -4065,8 +4094,8 @@ fn imports_resolve_relative_to_the_importing_file_not_the_working_directory() {
             "app/main.nz",
             "use \"util.nz\";\nfn main() -> Int { answer() }\n",
         ),
-        ("app/util.nz", "fn answer() -> Int { 42 }\n"),
-        ("util.nz", "fn answer() -> Int { 0 - 1 }\n"),
+        ("app/util.nz", "pub fn answer() -> Int { 42 }\n"),
+        ("util.nz", "pub fn answer() -> Int { 0 - 1 }\n"),
     ]);
     let out = Command::new(NAZM)
         .args(["run", root.to_str().unwrap()])

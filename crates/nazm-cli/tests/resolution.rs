@@ -127,7 +127,7 @@ fn a_call_into_an_imported_file_resolves_in_both() {
             "main.nz",
             "use \"lib.nz\";\nfn main() -> Int { twice(3) }\n",
         ),
-        ("lib.nz", "fn twice(n: Int) -> Int { n + n }\n"),
+        ("lib.nz", "pub fn twice(n: Int) -> Int { n + n }\n"),
     ]);
     assert_eq!(out, "6");
 }
@@ -139,9 +139,12 @@ fn a_diamond_import_resolves_to_one_definition_in_both() {
             "main.nz",
             "use \"left.nz\";\nuse \"right.nz\";\nfn main() -> Int { l() + r() }\n",
         ),
-        ("left.nz", "use \"shared.nz\";\nfn l() -> Int { s() }\n"),
-        ("right.nz", "use \"shared.nz\";\nfn r() -> Int { s() }\n"),
-        ("shared.nz", "fn s() -> Int { 21 }\n"),
+        ("left.nz", "use \"shared.nz\";\npub fn l() -> Int { s() }\n"),
+        (
+            "right.nz",
+            "use \"shared.nz\";\npub fn r() -> Int { s() }\n",
+        ),
+        ("shared.nz", "pub fn s() -> Int { 21 }\n"),
     ]);
     assert_eq!(out, "42");
 }
@@ -198,14 +201,33 @@ fn two_lets_of_one_name_in_one_scope_are_refused() {
 }
 
 #[test]
-fn a_duplicate_function_across_files_is_still_one_conflict() {
-    let (stderr, code) = check(&[
+fn two_modules_may_each_own_a_private_function_of_the_same_name() {
+    // Changed by N2, 2026-09-22. This was `a_duplicate_function_across_files_is_still_one
+    // _conflict`, and it was right about the language it was written for: every top-level
+    // name was in one namespace, so `dup` in two files was `N0203`. Owning your names is
+    // the whole of what a module is, and a module system in which this failed would be a
+    // naming convention.
+    let out = both_ways(&[
         (
             "main.nz",
-            "use \"lib.nz\";\nfn dup() -> Int { 1 }\nfn main() -> Int { dup() }\n",
+            "use \"lib.nz\";\nfn dup() -> Int { 1 }\nfn main() -> Int { dup() + twice() }\n",
         ),
-        ("lib.nz", "fn dup() -> Int { 2 }\n"),
+        (
+            "lib.nz",
+            "pub fn twice() -> Int { dup() * 2 }\nfn dup() -> Int { 20 }\n",
+        ),
     ]);
+    // 1 from the root's `dup`, 40 from lib's — which is the point: `dup()` in lib.nz
+    // means lib.nz's, and the root's call means the root's.
+    assert_eq!(out, "41");
+}
+
+#[test]
+fn a_duplicate_function_within_one_module_is_still_one_conflict() {
+    let (stderr, code) = check(&[(
+        "main.nz",
+        "fn dup() -> Int { 1 }\nfn dup() -> Int { 2 }\nfn main() -> Int { dup() }\n",
+    )]);
     assert_eq!(code, 1, "{stderr}");
     assert!(stderr.contains("N0203"), "{stderr}");
 }
