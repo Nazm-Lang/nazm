@@ -195,6 +195,31 @@ fn a_returned_sequence_survives_the_function_that_made_it() {
 }
 
 #[test]
+fn an_explicit_return_of_a_sequence_transfers_it() {
+    // The same rule as the tail above, on a different edge — and they are different
+    // edges: the tail is emitted by `emit_function` and a `return` by the statement
+    // lowering. A mutation that broke only the second survived a suite that tested only
+    // the first, which is how this test came to exist.
+    //
+    // The noise allocation after the call is deliberate. If the callee released what it
+    // was returning, the caller would be reading storage the allocator has since handed
+    // out again, and a use-after-free that nothing reuses is a use-after-free that reads
+    // the right answer.
+    let r = reclaimed(
+        3,
+        "fn make() -> Ints {\n    let xs = ints_new();\n    let mut i = 0;\n    \
+         while i < 64 {\n        ints_push(xs, i + 100);\n        i = i + 1;\n    }\n    \
+         return xs;\n}\n\
+         fn noise() -> Int {\n    let ys = ints_new();\n    let mut i = 0;\n    \
+         while i < 64 {\n        ints_push(ys, 7);\n        i = i + 1;\n    }\n    \
+         ints_len(ys)\n}\n\
+         fn main() -> Int {\n    let got = make();\n    noise();\n    noise();\n    \
+         ints_get(got, 0) + ints_len(got)\n}\n",
+    );
+    assert_eq!(r.value, "164");
+}
+
+#[test]
 fn a_sequence_created_in_one_branch_is_reclaimed_from_either() {
     // Both arms allocate, only one runs, and the count says exactly one was ever made.
     let r = reclaimed(
