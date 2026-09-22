@@ -994,3 +994,74 @@ code generation is not a reason to stop looking
 file = "crates/nazm-lir/src/lower.rs"
 find = "    report_cycles(res, &calls, &mut errors);"
 replace = "    report_cycles(res, &[], &mut errors);"
+
+[[mutation]]
+name = "the-object-key-forgets-its-input"
+why = """
+drops the emitted LLVM from a native object's key, so every unit of a program asks for one
+entry and gets whichever object was stored first. The key exists to say *this exact input
+was already compiled*, and an input-free key says nothing at all
+"""
+file = "crates/nazm-cache/src/object.rs"
+find = "                .field(&input.to_string())"
+replace = "                .field(\"\")"
+
+[[mutation]]
+name = "the-object-key-forgets-the-backend"
+why = """
+makes an object produced by one compiler interchangeable with one produced by another.
+Identical IR and identical flags do not mean identical machine code — a different compiler
+is a different function — so this is the hit that would be silently wrong on a machine
+whose toolchain was replaced
+"""
+file = "crates/nazm-cache/src/object.rs"
+find = "                .field(&tool.to_string())"
+replace = "                .field(\"\")"
+
+[[mutation]]
+name = "the-object-key-forgets-the-configuration"
+why = """
+makes `-O0` and `-O2` — and, with them, every target, CPU feature and ABI the driver
+resolves — share one entry. The configuration is most of what decides an object and none
+of it is visible in the IR, so leaving it out is the widest wrong hit available here
+"""
+file = "crates/nazm-cache/src/object.rs"
+find = "                .field(&config.to_string())"
+replace = "                .field(\"\")"
+
+[[mutation]]
+name = "a-cached-object-is-trusted-because-its-name-matches"
+why = """
+believes an entry because it was found under the right file name, without recomputing the
+key from the inputs it records. A digest match is evidence and not proof, and a file is
+data: an edited, mis-filed or half-written entry then becomes a linked object
+"""
+file = "crates/nazm-cache/src/objects.rs"
+find = "        if ObjectKey::of(input, tool, config) != filed {"
+replace = "        if false {"
+
+[[mutation]]
+name = "a-cached-object-s-bytes-are-not-checked"
+why = """
+links a stored object without checking that it is the object the entry describes. Corruption
+then arrives as a linker failure somewhere else, or as a program — which is the whole reason
+the digest of the bytes is stored beside them rather than left to the linker to discover
+"""
+file = "crates/nazm-cache/src/objects.rs"
+find = "        if ObjectFingerprint::of(bytes) != object {"
+replace = "        if false {"
+
+[[mutation]]
+name = "the-object-key-approximates-the-whole-program"
+why = """
+keys each object on every unit's IR rather than on its own, which is what rebuilding the
+front end's dependency graph in a second key amounts to. It is sound and it throws the
+reuse away: a change anywhere invalidates everything, and the precision N5 measured — a
+dependency's body and its unused exports do not reach a caller's object — is gone
+"""
+file = "crates/nazm-cli/src/build.rs"
+find = "            .map(|s| ObjectKey::of(LlvmInput::of(artefact.ir.as_bytes()), s.identity, s.config));"
+replace = """            .map(|s| {
+                let whole: String = artefacts.iter().map(|a| a.ir.as_str()).collect();
+                ObjectKey::of(LlvmInput::of(whole.as_bytes()), s.identity, s.config)
+            });"""
