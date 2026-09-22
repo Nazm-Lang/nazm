@@ -38,7 +38,9 @@
 pub mod emit;
 pub mod ir;
 pub mod lower;
+pub mod symbol;
 
 pub use emit::{emit_llvm, TARGET_NOTE};
 pub use ir::{ArithOp, Block, CmpOp, Expr, Function, Local, Module, Stmt, Ty};
 pub use lower::{lower, LowerError};
+pub use symbol::{Linkage, NativeSymbol};
