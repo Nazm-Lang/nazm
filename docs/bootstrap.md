@@ -61,6 +61,23 @@ containment rules it produced.
 > exactly as dangerous as it was; and the compiler written in Nazm emits no reclamation at
 > all, so a program *it* compiles behaves as this paragraph describes in every respect. The
 > containment rules are unchanged and are not a milestone's to relax.
+>
+> **Both halves retired by N8, 2026-09-22.** `Str` storage is reclaimed — a `Str` carries
+> the allocation that owns its bytes, `architecture.md` §7.8 — and `compiler/emit.nz` emits
+> the same model, held to the Rust emitter's runtime by the `runtime parity` gate and to
+> its *decisions* by a differential test that compares what each compiler's programs
+> reclaimed. Measured on the shape this document is about: the accumulator loop at 8,000
+> iterations fell from **70.66 MiB to 2.23 MiB**.
+>
+> **The advice above is still the advice.** `str_concat` in a loop is quadratic in *time*
+> whatever happens to the memory, and `str_join` is still one pass and one allocation. What
+> changed is that getting it wrong now costs time rather than the machine.
+>
+> **The containment rules do not change, and the reason is not that they might still be
+> needed.** A leak that has been fixed is not evidence that the incident of 2026-09-21
+> cannot recur: an unbounded loop, a runaway recursion in a future language version, or a
+> defect in this very reclamation reaches the machine exactly as the original did.
+> Containment is operational law — `runbook.md` owns it — not a workaround with an expiry.
 
 ### What the design did not settle
 
@@ -240,8 +257,8 @@ declared root to change.
   `./x.nz`, `x.nz` and `a/../x.nz` are one file; two names reaching one file through a
   symbolic link are two, and it would be read twice. The Rust driver keys by the canonical
   path instead, because it can — the emitted runtime has no `realpath`.
-- **Nothing is freed.** See §1; the design stated it, and `capability-matrix.md` area 4
-  carries the current status and the acceptance condition.
+- **Nothing is freed** — *until N8, which closed it*. See §1; the design stated it, and
+  `capability-matrix.md` area 4 carries the current status and the acceptance condition.
 - **The chain cannot run uncontained**, by design. See §6.
 
 ## 6. Reproducing it

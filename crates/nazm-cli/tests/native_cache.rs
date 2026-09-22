@@ -217,6 +217,56 @@ fn a_dependency_body_change_leaves_the_caller_s_object_reusable() {
     assert_eq!(run(dir.path(), "prog").stdout, "420");
 }
 
+/// A change that moves **only** the ownership traffic still misses.
+///
+/// N8 made reclamation part of what a unit's IR says, so the question §54 of that
+/// milestone asks is whether a stale object from before such a change can be reused. It
+/// cannot, and the reason needs no rule of its own: `ObjectKey` is a digest of the exact
+/// `.ll` text `clang -c` is given, so IR that gained a retain is different input and
+/// different input is a different key.
+///
+/// The edit here is chosen to move nothing else. `let b = a;` on a sequence adds one
+/// `@nz.arr_retain` and one release and changes no signature, no constant and no call —
+/// so anything that reused this object would be reusing one compiled without them.
+#[test]
+fn a_change_that_moves_only_ownership_still_misses() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path(), A_CALLS_B);
+    // The baseline already uses a sequence, so the *runtime* unit is the same before and
+    // after and the only unit that can move is `b.nz`'s.
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn twice(n: Int) -> Int { n * 2 }\n\
+         fn helper() -> Int {\n    let a = ints_new();\n    ints_push(a, 1)\n}\n",
+    );
+    build(dir.path(), "a.nz");
+
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn twice(n: Int) -> Int { n * 2 }\n\
+         fn helper() -> Int {\n    let a = ints_new();\n    let b = a;\n    \
+         ints_push(b, 1)\n}\n",
+    );
+    let after = build(dir.path(), "a.nz");
+    assert_eq!(
+        after.compiled, 1,
+        "the unit whose ownership traffic changed was reused"
+    );
+    assert_eq!(after.reused, after.units - 1);
+    assert_eq!(after.rejected, 0, "a rejection is not the same as a miss");
+
+    // And the IR really does differ in the way the name claims, so the test is about
+    // ownership rather than about `b.nz` having changed at all.
+    let units = emitted(dir.path(), "a.nz", "prog");
+    let b = unit_of(&units, "b.nz");
+    assert!(
+        b.contains("@nz.arr_retain"),
+        "the edit did not add ownership traffic:\n{b}"
+    );
+}
+
 #[test]
 fn an_export_the_caller_never_calls_does_not_invalidate_it() {
     // The test that separates real backend dependency tracking from semantic

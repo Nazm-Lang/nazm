@@ -1047,6 +1047,12 @@ had been saved there.
 `docs/spec.md`'s *memory constitution* is the law. This is the evidence it was derived
 from, the implementation, and the parts that are deliberately not done.
 
+> **Two of those parts were done by N8, 2026-09-22.** *"`Str` and `Chan` storage is not
+> reclaimed"* was true when this section was written and the paragraphs below give the
+> reason it was. §7.8 is the answer to that reason and §7.9 is the shape it left the
+> backend in; everything else here still stands, including the audit, the counts and the
+> argument for a non-atomic count on a sequence.
+
 ### The audit came first, and it moved the design twice
 
 Read out of the two implementations rather than out of the documentation:
@@ -1176,8 +1182,8 @@ which is what a correct reclamation of exactly one kind of value should look lik
 
 ### What this does not do
 
-- **`Str` and `Chan` storage is not reclaimed.** The reasons are above and in the
-  specification, in those words.
+- **`Str` and `Chan` storage is not reclaimed** — *until N8, which is §7.8*. The reasons
+  are above and were good ones; the answer to them is a wider value, not a cleverer guess.
 - **`exit_with` reclaims nothing and reports nothing.** Found by measuring: the
   self-hosted compiler ends that way, so the entry wrapper is never reached. It is correct
   — a process that has ended returned everything — and there is a test so that nobody
@@ -1186,6 +1192,196 @@ which is what a correct reclamation of exactly one kind of value should look lik
   failing path cannot be followed by a release, and that path ends the program. Stated
   rather than papered over.
 - No destructors, no RAII, no user-visible ordering.
+
+## 7.8 What owns a string's bytes — settled by N8, 2026-09-22
+
+§7.7 stopped at `Ints` and `Strs` and named the obstacle exactly: **a `Str` has four
+provenances and does not say which.** Its bytes may live in a `private` constant, in the
+process's `argv`, in a `malloc`'d buffer — or *in the middle of any of those*, because
+`str_slice` is specified not to allocate and is emitted as a `getelementptr`. Given
+`{ pointer, length }`, `free(s.ptr)` is wrong in three cases out of four and there is no
+sound way to tell them apart.
+
+Every way of telling them apart *from the pointer* is a heuristic — a range test, a length
+test, a rule about which built-in produced it — and every one of them is wrong on a
+program somebody will write. So the value says.
+
+### The representation
+
+A `Str` is `{ pointer, length, owner }`, 24 bytes.
+
+| Field | What it is |
+| --- | --- |
+| `pointer` | the first byte of this **view**. Valid to read `length` bytes from |
+| `length` | bytes, not characters. An embedded zero is data; nothing here is NUL-terminated |
+| `owner` | the **allocation whose lifetime keeps `pointer` valid**, or null when nothing has to |
+
+`owner` is not language-visible. No Nazm expression can read it, `docs/spec.md` still
+specifies a `Str` as its bytes, and the type `nazm capabilities` reports is unchanged.
+
+The four origins become three answers and one of them is free:
+
+| Origin | `owner` | Cost of retaining or releasing |
+| --- | --- | --- |
+| a literal | `null` — it is in read-only data and outlives the process's work | one comparison |
+| `arg(i)` | `null` — the bytes are the operating system's | one comparison |
+| `str_concat`, `str_join`, `int_to_str`, `str_from_byte`, `read_file` | the backing that call allocated | one atomic add or subtract |
+| `str_slice` of any of those | **the same owner as its source** | the source's |
+
+Null being a valid owner is what makes *immortal* and *external* cost nothing and need no
+tag: they are simply strings that own nothing, and `@nz.str_retain(null)` is a branch.
+
+A backing is `{ i64 rc, i64 length, bytes… }` and the view's `pointer` is `owner + 16` or
+anywhere after it. **That separation is the whole idea**: the bytes a value names and the
+allocation that protects them are different addresses, so a slice moves one and keeps the
+other. `make()` below returns a value pointing into the middle of a buffer whose only
+binding died on the way out, and it is ordinary:
+
+```nazm
+fn make() -> Str {
+    let s = str_concat("ab", "cd");
+    str_slice(s, 1, 3)
+}
+```
+
+### Why this count is atomic and a sequence's is not
+
+Neither is a judgement about how likely sharing is. Each follows from a rule the language
+already had.
+
+`N0321` refuses to let a sequence cross into a task, so no two threads can hold one handle,
+so no two threads can touch one count: an ordinary `add`. A `Str` **may** cross, by
+immutable sharing, and a task can slice what it was handed and bind the slice — so two
+sibling tasks really do adjust one backing's count. Atomic, therefore, with the decrement
+released and an acquiring fence before the free, which is the standard pairing.
+
+The same argument makes a channel's count atomic: a `Chan` exists to cross.
+
+A consequence worth stating: if `N0321` were relaxed, the sequence count would have to
+become atomic **in the same commit**, and `crates/nazm-lir/src/emit.rs` says so where the
+count is written.
+
+### Containers own what they hold
+
+A `Strs` element is a 24-byte descriptor, and the sequence holds a reference to each
+element's backing. That is four rules, and the order in two of them is the correctness:
+
+| | |
+| --- | --- |
+| `strs_push(xs, s)` | takes a reference of its own. The caller's `s` is untouched and still valid |
+| `strs_get(xs, i)` | hands back a reference of its own. This is what makes *"a `Str` already read out of a sequence is unaffected by changing the sequence"* — promised since sequences existed — true by construction rather than true because nothing was freed |
+| `strs_set(xs, i, s)` | takes the new reference **before** releasing the old, so replacing an element with a view of the same backing cannot drop the count to zero in between |
+| a `Strs` dying | releases every element's backing, **then** the array, then the header. Freeing only the descriptors would turn a leaked string into a leaked string inside a sequence |
+| `strs_pop(xs)` | **transfers**: the sequence gives up its reference and the expression takes that same one over. No retain, no release |
+
+### Channels: what permits destruction
+
+A channel header carries a count like everything else, and at zero its condition variable
+and mutex are destroyed — `pthread_cond_destroy`, `pthread_mutex_destroy`, which release
+what the platform allocated behind an opaque handle — and then its ring and header are
+freed.
+
+**Closing is not destroying.** `chan_close` changes what the channel does and touches no
+storage; a closed channel with live references still answers, and still drains. The two
+events are kept apart on purpose.
+
+The safety argument is structural rather than hopeful. A reference is a binding holding the
+handle, a value on its way out of a `return`, or the argument block of a task that has not
+been joined. A thread blocked inside `chan_send` or `chan_recv` **reached it from a frame
+that holds the handle** — a built-in borrows its argument and the caller keeps its reference
+across the call — so a waiter implies a live reference, and therefore no reference implies
+no waiter. That is why `rc == 0` is a sufficient condition and no second one is needed.
+
+### What crosses into a task, and who holds it
+
+A `spawn` argument is **held for the task**, not borrowed from the statement that started
+it: the reference is taken at the spawn site, on the thread that already has one, and given
+back by the task's trampoline when the call returns — on both the succeeding and the failing
+path, because they meet. Without that,
+
+```nazm
+scope { spawn worker(s); s = other(); }
+```
+
+releases the bytes the task is still reading, and the window is not theoretical: the scope's
+body runs concurrently with the task by construction.
+
+### Four leaks that were nobody's feature
+
+Found by looking for `malloc` with no matching `free` rather than by a test failing.
+
+| | |
+| --- | --- |
+| a `spawn`'s argument block | one `malloc` per task, never freed. Freed at the join, after `pthread_join` and after its diagnostic has been read out |
+| `@nz.cstr`'s terminated path copy | one per file operation, never freed. Freed once `fopen` has returned |
+| a partly-built channel | four allocations, and a failure after the second left the first behind. One label per stage now, each freeing exactly what has been taken |
+| a task that never started | its arguments and its block, on the one path where the program is already out of resources |
+
+### Two defects in N7's own instrument
+
+**The counters were not atomic.** `@nz.seq_allocated` was an ordinary load-add-store, and a
+*task* can create a sequence — `N0321` stops a handle crossing, not a task allocating — so a
+concurrent program could under-report what it had allocated. A counter that is wrong in the
+direction of "less was allocated" is the worst direction for a leak check.
+
+**The report was emitted only into programs that used a sequence.** A string-heavy program
+printed nothing at all, which reads as *nothing to say* and meant *the instrument was not
+built in*. Six counters and the report are unconditional now: six words of data, and every
+program can be asked.
+
+## 7.9 One classification, and where cleanup goes — settled by N8, 2026-09-22
+
+N7 emitted cleanup for two types by testing `Ty::is_handle()` at each site. N8 makes four
+types reclaimable, and repeating that test would have put `if type == Ints { … }` in seven
+places across three files.
+
+`Ty::owns()` answers, once, what a value of a type owns: nothing, a sequence of `Int`, a
+sequence of `Str`, a string backing, or a channel. Every retain, every release, every frame
+slot, every container and every task boundary dispatches on that one answer. Adding a type
+to the language means answering it and nothing else.
+
+It is deliberately **not** a destructor system. Nazm has no user-defined destruction, no
+ordering a program can observe, and nothing a program can write runs at reclamation. Each
+variant names a runtime helper that already exists; none of them is a hook.
+
+Cleanup is on the **exit edges** of a generated function, as in N7 and for the same reason:
+the tail value, each `Stmt::Return`, and the shared `nz.unwind` block a failure takes.
+Parameter slots are excluded, and that exclusion *is* rule 2 — a callee borrows, so
+releasing a parameter would destroy storage its caller still holds. Every owning slot is
+zeroed at entry, and a zeroed slot releases to nothing, so a path that never reached a
+declaration costs one comparison.
+
+### The two compilers, held together by derivation
+
+`compiler/emit.nz` emits the same model. It did not, for a milestone: N7 taught the Rust
+emitter to reclaim and the Nazm-written one went on emitting a header with no reference
+count at all, and every behavioural test passed throughout — **a program that never frees
+computes the same answers as one that does.**
+
+Two hand-kept transcriptions of a memory model is the arrangement that produced that, so
+there is now one. Every line of the Nazm emitter's `runtime`, `task_runtime` and
+`channel_runtime` is a line of `crates/nazm-lir/src/emit.rs`'s runtime constants with
+`hidden` changed to `internal`, and `cargo xtask check`'s **`runtime parity`** gate performs
+the derivation again and refuses a difference by line number.
+
+What a textual gate cannot check is where each emitter *decides* to retain and release.
+`the_nazm_written_compiler_emits_the_same_memory_semantics` is for that: eight programs
+built by both compilers, run under `NAZM_MEMORY_REPORT`, required to print the same line —
+and then required to print `live=0` in all three classes, because a report that matched
+because both leaked would pass the first comparison and mean nothing.
+
+### What this still does not do
+
+- **Nothing about future types.** Leak freedom here is a claim about six built-in types and
+  rests on the cycle argument in `docs/spec.md`: `Ints` holds `Int`, `Strs` holds `Str`,
+  `Str` is a leaf, and a channel holds `Int`, so no value can refer to one that refers back.
+  The first recursive user-defined type ends that, and the constitution says in advance what
+  admitting one requires.
+- **`exit_with` reclaims nothing and reports nothing.** Unchanged from §7.7, and correct: a
+  process that has ended returned everything.
+- **A failure still leaks the temporary it was holding.** A `Val::Transferred` on a guard's
+  failing path cannot be followed by a release, and that path ends the program.
+- **No sanitizer result is claimed.** The language-level counters are the evidence here.
 
 ## 8. Toolchain, and one real incompatibility
 
