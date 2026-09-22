@@ -38,7 +38,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 823 passed, 0 failed, 6 ignored, across 54 suites**, run through
+**Current suite: 842 passed, 0 failed, 6 ignored, across 54 suites**, run through
 `cargo xtask contained tests`. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -49,7 +49,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 | 2 | Name resolution and modules | PARTIAL |
 | 2a | Incremental semantic checking | VERIFIED |
 | 3 | Type system | PARTIAL |
-| 4 | Memory model and reclamation | PARTIAL |
+| 4 | Memory model and reclamation | VERIFIED for the current type universe |
 | 5 | Effects | MISSING |
 | 6 | Capabilities (language) | MISSING |
 | 7 | Provenance and information flow (language) | MISSING |
@@ -258,46 +258,76 @@ arrays instead. `docs/roadmap.md`, *What M2 bypassed*, records why that matters.
 
 ## Semantic core
 
-### 4. Memory model and reclamation — PARTIAL
+### 4. Memory model and reclamation — VERIFIED for the current type universe
 
-*This row was "Ownership and resource semantics — MISSING" until N7 (2026-09-22). The
-paragraph it used to carry is kept below, because what it said was true and the numbers in
-it are what the work was measured against.*
+*This row was "Ownership and resource semantics — MISSING" until N7 (2026-09-22), and
+PARTIAL between N7 and N8 (the same day). The paragraph it used to carry is kept below,
+because what it said was true and the numbers in it are what the work was measured against.*
+
+**Read the status carefully.** VERIFIED here means: **every heap-backed type the language
+currently has is reclaimed, in both compiler implementations and in the reference
+interpreter, and that is tested rather than asserted.** It does **not** mean whole-language
+leak freedom, and it says nothing about types that do not exist. Records, variants and
+generics are not covered by anything in this row, and the first recursive user-defined type
+invalidates the argument the claim rests on — `docs/spec.md`'s *Cycles* says so in advance
+and says what admitting one requires.
 
 **Evidence** · `docs/spec.md`'s *memory constitution* settles assignment, parameters,
 returns, aliasing, mutation, reclamation, cross-task transfer, cycles and cost visibility
 as four kinds of value and five rules. `docs/architecture.md` §7.7 carries the audit it was
-derived from and the implementation. No program that was legal before changed its meaning:
-sequence aliasing is unchanged, specified and tested.
+derived from, §7.8 the string and channel model, §7.9 the one classification cleanup
+dispatches on. No program that was legal before changed its meaning.
 
-**Reclaimed: `Ints` and `Strs` storage — VERIFIED.** A reference count on the sequence
-header, non-atomic because `N0321` already refuses to let a handle cross into a task.
-Cleanup is on the three exit edges of a generated function — the tail, each `return`, and
-the shared unwind block a failure takes — not at the closing brace. Sixteen cases in
-`crates/nazm-cli/tests/memory.rs`, each asserting that the interpreter and the compiled
-program produce the same value **and** the same allocation, reclamation and live counts.
-Six mutations attack the rules.
+| Type | Storage | Status |
+| --- | --- | --- |
+| `Int`, `Bool` | none | — |
+| `Str` | a backing allocation, named by the value's third field; null for a literal or an `arg` | **VERIFIED** |
+| `Ints`, `Strs` | a reference-counted header; a `Strs` releases every element's backing first | **VERIFIED** |
+| `Chan` | a reference-counted header, with its ring, mutex and condition variable | **VERIFIED** |
+| a `spawn`'s argument block, a file path's terminated copy | runtime-internal | **VERIFIED** — freed since N8; each was one `malloc` per operation before |
+| a literal's constant, the process's `argv` | not this program's | **not reclaimed, correctly.** Nothing allocated them and nothing may free them |
 
-Measured: 5,000 / 20,000 / 80,000 short-lived sequences fell from 4.38 / 12.28 / 43.52 MiB
-to 1.78 / 1.88 / 1.86 MiB — flat in work where it was linear — while a genuinely live
-2,000,000-element sequence is unchanged and a string-heavy loop is unchanged.
+**How.** Reference counting, which `docs/spec.md` deliberately does **not** make the law —
+the rule is that storage stays valid while a reference exists, and an arena, an interning
+pass or an escape analysis would satisfy it. The count is non-atomic on a sequence because
+`N0321` refuses to let one cross into a task, and atomic on a string backing and a channel
+because both do cross. Cleanup is on the three exit edges of a generated function — the
+tail, each `return`, and the shared unwind block a failure takes — with parameter slots
+excluded, which *is* rule 2.
 
-**Not reclaimed: `Str` storage — MISSING.** A `Str` may point into a literal's constant,
-into the process's `argv`, into a `malloc`'d buffer, or into the *interior* of any of them,
-because `str_slice` is specified not to allocate. The value does not record which, so
-`free` is wrong for three of the four cases. §7.7 has the measurement.
+**Tested.** 35 cases in `crates/nazm-cli/tests/memory.rs`, each run twice and each requiring
+the interpreter and the compiled program to agree on the value **and** on what they
+allocated and reclaimed, by class: slices outliving their buffers, slices of slices, empty
+strings, borrowed strings returned on both edges, strings stored in and read out of
+sequences, self-assignment of an element, embedded NUL bytes, the failure path, channel
+scaling, a returned channel, and a string and a channel crossing into two tasks at once.
 
-**Not reclaimed: `Chan` storage — MISSING.**
+**Measured.** 5,000 / 20,000 / 80,000 temporary heap strings against a constant live set:
+1.88 / 2.33 / 4.17 MiB → **1.73 / 1.77 / 1.77 MiB**. The accumulator shape from the
+2026-09-21 incident, at 8,000 iterations: 70.66 MiB → **2.23 MiB**. 2,000 short-lived
+channels: 2.38 MiB → **1.80 MiB**. Sequences, a genuinely live 2,000,000-element sequence
+and a sieve are unchanged, which is the control. `performance.md` has the runtime cost:
+about 13–16 ns per string operation, and nothing measurable anywhere else.
 
-**Not migrated: the self-hosted backend.** `compiler/emit.nz` emits no reclamation, so
-programs it compiles still grow. Its own source needed no change — it aliases no sequence
-with `let` — and the bootstrap fixpoint is unchanged at `e5779c70…`.
+**Self-hosted parity — VERIFIED.** `compiler/emit.nz` emits the same model. Its runtime
+text is **derived** from `crates/nazm-lir/src/emit.rs` rather than transcribed, and
+`cargo xtask check`'s `runtime parity` gate re-derives it and refuses a difference; its
+*decisions* are held by `the_nazm_written_compiler_emits_the_same_memory_semantics`, which
+builds eight programs with both compilers and requires the same reclamation report from
+each. Between N7 and N8 the two disagreed for a whole milestone and every behavioural test
+passed throughout, which is what the gate exists to prevent.
+
+**Not claimed.** Whole-language leak freedom as a permanent property; anything about future
+types; deadlock freedom; user-visible destruction, RAII or any ordering a program can
+observe; a clean sanitizer run. `exit_with` reclaims nothing and reports nothing, which is
+correct and is tested so nobody later treats it as a bug.
 
 **Limitation, in the words this row carried before N7** · *"Compiled programs allocate and
 never release: `@free` appears zero times in `crates/nazm-lir/src/emit.rs` and zero times
-in `compiler/emit.nz`, against 11 `@malloc` and 2 `@realloc` sites in each."* Half of that
-is now false and half is still true: the Rust backend frees, the Nazm-written one does not.
-**Whole-language leak freedom is NOT VERIFIED and is not claimed.**
+in `compiler/emit.nz`, against 11 `@malloc` and 2 `@realloc` sites in each."* Both halves
+are false now, and the second was still true between N7 and N8. **Whole-language leak
+freedom is still NOT VERIFIED and is still not claimed** — the sentence above about types
+that do not exist is the reason, and it is not a formality.
 
 **Next dependency** · A `Str` representation that records its provenance, on the type that
 is copied in every hot loop.
@@ -863,7 +893,7 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **85** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **94** catalogued defects;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a

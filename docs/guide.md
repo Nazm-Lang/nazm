@@ -44,7 +44,7 @@ running anything, and `nazm test` runs a directory of programs against recorded 
 | `Int` | A 64-bit signed integer. Every operation on one is checked |
 | `Bool` | `true` or `false`. Not a number, and not convertible to one |
 | `Str` | Immutable **bytes**, by value. Not text: `str_len` counts bytes, and an embedded zero is an ordinary byte |
-| `Ints` | A growable sequence of `Int`, **by reference** and never freed |
+| `Ints` | A growable sequence of `Int`, **by reference** |
 | `Strs` | The same, of `Str` |
 | `Chan` | A bounded queue of `Int`, by reference. The one type designed to be shared between tasks |
 
@@ -52,6 +52,31 @@ running anything, and `nazm test` runs a directory of programs against recorded 
 and `==` is not offered on them, because it would have to mean either identity or
 contents and the language has not chosen. A sequence may **not** be passed to a task; a
 channel may, and its operations are the synchronisation.
+
+## Memory: what you do not have to do
+
+**Nothing.** There is no `free`, no `new`, no ownership annotation and no lifetime to
+write. Storage is reclaimed when the last reference to it dies — a binding going out of
+scope, a value being replaced, a sequence being released along with everything in it — and
+it happens on every way out of a function, including the one a runtime failure takes.
+
+Four things follow, and they are worth knowing because they are what makes the rest
+predictable:
+
+- **`let b = a;` shares.** For `Ints`, `Strs` and `Chan` that is visible: a push through
+  `b` is a push through `a`. For `Str` it is not visible at all — a `Str` is immutable, so
+  whether the bytes were shared or copied is something no program can ask.
+- **Passing a value to a function costs nothing.** The caller keeps it; the callee borrows
+  it and cannot keep it after it returns. A value you pass in is still yours afterwards.
+- **A slice does not copy.** `str_slice(s, 1, 3)` points into `s`'s bytes and keeps them
+  alive for as long as the slice lives — so a function may build a string, slice it, and
+  return the slice.
+- **What you put into a `Strs` stays valid**, independently of the binding it came from,
+  and what you read back out of one stays valid even if you then overwrite the element.
+
+`str_concat` in a loop is still quadratic in **time**, and `str_join(parts, sep)` is one
+pass and one allocation. That is now a performance note rather than the memory warning it
+used to be.
 
 ## Finding out what a build supports
 

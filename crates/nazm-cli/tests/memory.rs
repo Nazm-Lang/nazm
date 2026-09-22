@@ -468,6 +468,21 @@ fn an_empty_slice_and_an_empty_string_are_ordinary() {
 }
 
 #[test]
+fn joining_an_empty_sequence_still_owns_its_result() {
+    // §51. `str_join` allocates one byte more than it needs so that an empty result still
+    // owns storage and its pointer stays valid to compare — which means an empty join is
+    // an ordinary heap string with an ordinary owner, not a special case that later
+    // cannot be released coherently.
+    let r = strings(
+        1,
+        "fn main() -> Int {\n    let xs = strs_new();\n    \
+         let e = str_join(xs, \",\");\n    \
+         str_len(e) + if e == \"\" { 7 } else { 0 }\n}\n",
+    );
+    assert_eq!(r.value, "7");
+}
+
+#[test]
 fn a_returned_borrowed_string_survives_the_call_that_borrowed_it() {
     // Rule 2 and rule 3 meeting. The parameter is borrowed, so the caller's value stays
     // valid; the result is a reference the caller receives, so it must be taken **before**
@@ -658,6 +673,57 @@ fn a_channel_shared_with_tasks_outlives_every_one_of_them() {
          ints_get(buf, 0) + ints_get(buf, 1)\n}\n",
     );
     assert_eq!(r.value, "3");
+}
+
+#[test]
+fn a_blocked_receiver_woken_by_a_close_leaves_nothing_behind() {
+    // §44. The receiver is inside `chan_recv` with the channel empty when the parent
+    // closes it. It wakes, is told the channel is drained, and ends — and the channel is
+    // destroyed only after the scope has joined, which is what makes destroying its mutex
+    // and condition variable safe.
+    let r = channels(
+        1,
+        "fn drain(c: Chan) -> Int {\n    let buf = ints_new();\n    \
+         while chan_recv(c, buf) {\n    }\n    ints_len(buf)\n}\n\
+         fn main() -> Int {\n    let c = chan_new(2);\n    \
+         scope {\n        spawn drain(c);\n        chan_send(c, 1);\n        \
+         chan_send(c, 2);\n        chan_close(c);\n    }\n    0\n}\n",
+    );
+    assert_eq!(r.value, "0");
+}
+
+#[test]
+fn a_blocked_sender_woken_by_a_close_leaves_nothing_behind() {
+    // The other half. Capacity one, so the task blocks on its second send; the parent
+    // closes, the send refuses, and the task stops rather than queueing into something
+    // nobody will drain.
+    let r = channels(
+        1,
+        "fn feed(c: Chan) -> Int {\n    let mut i = 0;\n    \
+         while i < 50 {\n        if chan_send(c, i) == false { return i; }\n        \
+         i = i + 1;\n    }\n    i\n}\n\
+         fn main() -> Int {\n    let c = chan_new(1);\n    let buf = ints_new();\n    \
+         scope {\n        spawn feed(c);\n        chan_recv(c, buf);\n        \
+         chan_close(c);\n    }\n    ints_len(buf)\n}\n",
+    );
+    assert_eq!(r.value, "1");
+}
+
+#[test]
+fn a_task_that_fails_while_holding_a_channel_still_gives_it_back() {
+    // A failure inside a task is reported at the scope's closing brace, after every
+    // sibling has been joined — and on the way out the task's frame releases what it was
+    // holding, exactly as a function's does. A channel left behind here would be a leak on
+    // the one path where cleanup is hardest to reach.
+    let (r, text) = both_failing(
+        "fn bad(c: Chan) -> Int {\n    let xs = ints_new();\n    \
+         chan_send(c, 1);\n    ints_get(xs, 0)\n}\n\
+         fn main() -> Int {\n    let c = chan_new(2);\n    \
+         scope {\n        spawn bad(c);\n    }\n    0\n}\n",
+    );
+    assert!(text.contains("N0405"), "{text}");
+    assert_eq!(r.channels, expected(1), "{r:?}");
+    assert_eq!(r.sequences.live, 0, "{r:?}");
 }
 
 #[test]

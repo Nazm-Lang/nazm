@@ -76,6 +76,21 @@ design chosen is not a hypothesis tested. What changed is that it no longer bloc
 reclamation, and reclamation no longer waits on it — which was the dependency this item was
 carrying without being asked to.
 
+**N8 sharpened it once more, without answering it.** Completing reclamation for the current
+type universe removed the last reason to reach for MVS *defensively* — "peak RSS bounded by
+live data rather than total allocation", the evidence this item originally asked for, is now
+measured and true for every type the language has, and it was obtained by counting
+references rather than by changing what a value means. So the remaining question for records
+is a question about **ergonomics and expressiveness alone**, which is what it should always
+have been.
+
+One thing N8 did add to the terms. A record is the first type that can be made recursive,
+and the leak-freedom claim in `capability-matrix.md` area 4 rests on the fact that no
+current value can refer to one that refers back. Whichever way records go, the cycle policy
+is part of the design rather than a follow-up: `docs/spec.md`'s *Cycles* says so in advance.
+**This item is not resolved by N8 and must not be read as resolved** — strings and channels
+being reclaimed says nothing about whether value semantics suit a user-defined type.
+
 ---
 
 ## R2 · Content-addressed semantic IR pays for itself
