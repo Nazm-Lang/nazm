@@ -63,13 +63,18 @@ fn v(n: Int) -> Str { str_concat("%", int_to_str(n)) }
 
 // The LLVM type for one of the checker's type codes.
 //
-// `Str` is `{ pointer, byte length }` by value; a sequence is a pointer to its
-// `{ len, cap, data }` header, which is what gives sequences reference semantics. The
+// `Str` is `{ pointer, byte length, owner }` by value; a sequence is a pointer to its
+// `{ len, cap, data, rc }` header, which is what gives sequences reference semantics. The
 // codes are `compiler/analyse.nz`'s, so the two cannot disagree about what a node holds.
+//
+// The third field of a `Str` is the allocation whose lifetime keeps the pointer valid, or
+// null where nothing has to — a literal, or a process argument. It exists because
+// `str_slice` produces an interior pointer and two fields cannot say what owns one. See
+// `docs/architecture.md` §7.8; `crates/nazm-lir/src/ir.rs` says the same thing in Rust.
 fn llvm_type(t: Int) -> Str {
     if t == t_int() { return "i64"; }
     if t == t_bool() { return "i1"; }
-    if t == t_str() { return "{ ptr, i64 }"; }
+    if t == t_str() { return "{ ptr, i64, ptr }"; }
     if t == t_ints() { return "ptr"; }
     if t == t_strs() { return "ptr"; }
     if t == t_chan() { return "ptr"; }
@@ -217,6 +222,14 @@ fn emit_join(out: Strs, next: Ints, current: Strs, live: Ints, tids: Int) -> Int
             str_concat(str_concat(", i64 ", v(len)), ")")));
     add_line(out, str_concat("  br label %b", int_to_str(cont)));
     open_block(out, current, live, str_concat("b", int_to_str(cont)));
+    // The list of task ids is dead the moment the join returns: every task it named has
+    // ended, and the blocks it pointed at were freed by the join itself. It is not a Nazm
+    // value and no binding can hold it, so it goes through the **uncounted** release —
+    // counting it would answer a question about the program's sequences with a number
+    // that includes the runtime's own.
+    let freed = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(freed)),
+            str_concat(" = call i1 @nz.arr_release(ptr ", str_concat(v(tids), ")"))));
     0
 }
 
@@ -271,8 +284,8 @@ fn check_failed(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
 // no second allocation; the next sixteen are where this task leaves its diagnostic if it
 // fails, which the join reads after `pthread_join` — a happens-before edge, so no lock.
 fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, tasks: Strs,
-        vals: Ints, nar: Ints, ntype: Ints, kids: Ints, kid_first: Ints, fnames: Strs,
-        fret: Ints, k: Int, callee: Int, at: Str) -> Int {
+        owned: Ints, vals: Ints, nar: Ints, ntype: Ints, kids: Ints, kid_first: Ints,
+        fnames: Strs, fret: Ints, k: Int, callee: Int, at: Str) -> Int {
     let argc = ints_get(nar, k);
     // Popped in reverse, then read back in source order.
     let args = ints_new();
@@ -280,7 +293,7 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     while a < argc { ints_push(args, ints_pop(vals)); a = a + 1; }
 
     // The handle at 0, the diagnostic at 8 and 16, then each argument at its own offset.
-    // `Str` is sixteen bytes and everything else eight, which keeps every offset a
+    // `Str` is twenty-four bytes and everything else eight, which keeps every offset a
     // multiple of eight and so correctly aligned for whatever is stored there.
     let offs = ints_new();
     let mut size = 24;
@@ -288,7 +301,7 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     while i < argc {
         let t = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
         ints_push(offs, size);
-        if t == t_str() { size = size + 16; } else { size = size + 8; }
+        if t == t_str() { size = size + 24; } else { size = size + 8; }
         i = i + 1;
     }
 
@@ -312,15 +325,21 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
             str_concat(" = getelementptr i8, ptr ", str_concat(v(blk), ", i64 16"))));
     add_line(out, str_concat(str_concat("  store i64 0, ptr ", v(lp)), ""));
 
+    // The block **takes** each argument's reference and the trampoline gives it back when
+    // the task ends. Not ceremony: a task outlives the statement that started it, so a
+    // binding reassigned inside the scope would otherwise release storage the task is
+    // still reading. The reference is taken here, on the thread that already holds one.
     i = 0;
     while i < argc {
         let t = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
+        let value = ints_get(args, argc - 1 - i);
         let slot = take_number(next);
         add_line(out, str_concat(str_concat("  ", v(slot)),
                 str_concat(str_concat(" = getelementptr i8, ptr ", v(blk)),
                 str_concat(", i64 ", int_to_str(ints_get(offs, i))))));
+        own_keep(out, next, owned, value, t);
         add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(t)),
-                str_concat(" ", v(ints_get(args, argc - 1 - i)))),
+                str_concat(" ", v(value))),
                 str_concat(", ptr ", v(slot))));
         i = i + 1;
     }
@@ -368,6 +387,35 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     strs_push(t, "  store i64 %el, ptr %elp");
     strs_push(t, "  br label %finished");
     strs_push(t, "finished:");
+    // The callee **borrowed** these, exactly as an ordinary call does: the reference the
+    // spawn site packed is what kept them alive, and it is given back here, once the call
+    // has returned. Whether the task succeeded or failed does not change that, so the
+    // release is on the one path both take.
+    i = 0;
+    while i < argc {
+        let ty = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
+        let o = owns(ty);
+        if o == 1 {
+            strs_push(t, str_concat(str_concat("  call void @nz.seq_release(ptr %v",
+                    int_to_str(i)), ")"));
+        }
+        if o == 2 {
+            strs_push(t, str_concat(str_concat("  call void @nz.strs_release(ptr %v",
+                    int_to_str(i)), ")"));
+        }
+        if o == 3 {
+            strs_push(t, str_concat(str_concat(str_concat("  %o", int_to_str(i)),
+                    " = extractvalue { ptr, i64, ptr } %v"),
+                    str_concat(int_to_str(i), ", 2")));
+            strs_push(t, str_concat(str_concat("  call void @nz.str_release(ptr %o",
+                    int_to_str(i)), ")"));
+        }
+        if o == 4 {
+            strs_push(t, str_concat(str_concat("  call void @nz.chan_release(ptr %v",
+                    int_to_str(i)), ")"));
+        }
+        i = i + 1;
+    }
     strs_push(t, "  ret ptr null");
     strs_push(t, "}");
     strs_push(tasks, str_concat(str_join(t, nl()), nl()));
@@ -377,6 +425,7 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     add_line(out, str_concat(str_concat("  ", v(rc)),
             str_concat(str_concat(" = call i32 @nz.spawn(ptr ", v(tids)),
             str_concat(str_concat(", ptr ", name), str_concat(str_concat(", ptr ", v(blk)), ")")))));
+    unspawn(out, next, ntype, kids, kid_first, offs, blk, k, argc, rc, current, live);
     let oom = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(oom)),
             str_concat(" = icmp eq i32 ", str_concat(v(rc), ", -1"))));
@@ -385,6 +434,43 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     add_line(out, str_concat(str_concat("  ", v(nostart)),
             str_concat(" = icmp sgt i32 ", str_concat(v(rc), ", 0"))));
     guard(out, msgs, next, current, live, nostart, "N0404", "this task could not be started", at);
+    0
+}
+
+// Give back what a spawn packed for a task that never started.
+//
+// Emitted between `@nz.spawn` returning non-zero and the guard that reports it: the one
+// path where a program is already out of resources must not also be the path that leaks.
+fn unspawn(out: Strs, next: Ints, ntype: Ints, kids: Ints, kid_first: Ints,
+        offs: Ints, blk: Int, k: Int, argc: Int, rc: Int, current: Strs, live: Ints) -> Int {
+    let started = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(started)),
+            str_concat(" = icmp eq i32 ", str_concat(v(rc), ", 0"))));
+    let clean = take_label(next);
+    let after = take_label(next);
+    add_line(out, str_concat(str_concat("  br i1 ", v(started)),
+            str_concat(str_concat(", label %b", int_to_str(after)),
+            str_concat(", label %b", int_to_str(clean)))));
+    open_block(out, current, live, str_concat("b", int_to_str(clean)));
+    let mut i = 0;
+    while i < argc {
+        let t = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
+        if owns(t) != 0 {
+            let slot = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(slot)),
+                    str_concat(str_concat(" = getelementptr i8, ptr ", v(blk)),
+                    str_concat(", i64 ", int_to_str(ints_get(offs, i))))));
+            let held = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(held)),
+                    str_concat(str_concat(" = load ", llvm_type(t)),
+                    str_concat(", ptr ", v(slot)))));
+            emit_release(out, next, held, t);
+        }
+        i = i + 1;
+    }
+    add_line(out, str_concat(str_concat("  call void @free(ptr ", v(blk)), ")"));
+    add_line(out, str_concat("  br label %b", int_to_str(after)));
+    open_block(out, current, live, str_concat("b", int_to_str(after)));
     0
 }
 
@@ -513,23 +599,210 @@ fn predicate(op: Str) -> Str {
 fn field(out: Strs, next: Ints, s: Int, index: Str) -> Int {
     let n = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(n)),
-            str_concat(" = extractvalue { ptr, i64 } ",
+            str_concat(" = extractvalue { ptr, i64, ptr } ",
             str_concat(v(s), str_concat(", ", index)))));
     n
 }
 
-fn make_str(out: Strs, next: Ints, ptr: Int, len: Int) -> Int {
-    // `undef` is the standard way to build an aggregate, and **both** fields are written
-    // before it is read — not the poison-producing shortcut the architecture rules mean.
-    let half = take_number(next);
-    add_line(out, str_concat(str_concat("  ", v(half)),
-            str_concat(" = insertvalue { ptr, i64 } undef, ptr ",
+// `owner` is LLVM operand text, not a value number: `null` where nothing owns the bytes,
+// `%n` where something does. Immortal and external storage then need no tag of their own.
+fn make_str(out: Strs, next: Ints, ptr: Int, len: Int, owner: Str) -> Int {
+    // `undef` is the standard way to build an aggregate, and **all three** fields are
+    // written before it is read — not the poison-producing shortcut the architecture
+    // rules mean.
+    let a = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(a)),
+            str_concat(" = insertvalue { ptr, i64, ptr } undef, ptr ",
             str_concat(v(ptr), ", 0"))));
+    let b = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(b)),
+            str_concat(str_concat(" = insertvalue { ptr, i64, ptr } ", v(a)),
+            str_concat(", i64 ", str_concat(v(len), ", 1")))));
     let whole = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(whole)),
-            str_concat(str_concat(" = insertvalue { ptr, i64 } ", v(half)),
-            str_concat(", i64 ", str_concat(v(len), ", 1")))));
+            str_concat(str_concat(" = insertvalue { ptr, i64, ptr } ", v(b)),
+            str_concat(", ptr ", str_concat(owner, ", 2")))));
     whole
+}
+
+// --- ownership ------------------------------------------------------------------------
+//
+// The same five rules `docs/spec.md` states and `crates/nazm-lir/src/emit.rs` implements,
+// implemented again here because the compiler written in Nazm has to emit the same memory
+// semantics as the one written in Rust. Not *similar* semantics: the differential tests
+// run the same program through both and compare allocation counts.
+//
+// `owned` is the set of SSA value numbers holding a reference nobody has taken over yet.
+// A small `Ints` used as a set: entries arrive when an expression creates a reference and
+// leave the moment something consumes one, so it holds a handful at a time and a linear
+// scan is the right shape.
+
+// What a value of this type owns: 0 nothing, 1 an `Ints`, 2 a `Strs`, 3 a string backing,
+// 4 a channel. One classification, so adding a type means answering here rather than
+// finding every site that retains.
+fn owns(t: Int) -> Int {
+    if t == t_ints() { return 1; }
+    if t == t_strs() { return 2; }
+    if t == t_str() { return 3; }
+    if t == t_chan() { return 4; }
+    0
+}
+
+// Remove `n` from the set, answering whether it was there.
+fn own_take(owned: Ints, n: Int) -> Int {
+    let mut i = 0;
+    while i < ints_len(owned) {
+        if ints_get(owned, i) == n {
+            // Order does not matter in a set, so the last entry fills the hole.
+            ints_set(owned, i, ints_get(owned, ints_len(owned) - 1));
+            ints_pop(owned);
+            return 1;
+        }
+        i = i + 1;
+    }
+    0
+}
+
+fn own_add(owned: Ints, n: Int) -> Int {
+    ints_push(owned, n);
+    0
+}
+
+// Add a reference to whatever this value owns.
+fn emit_retain(out: Strs, next: Ints, value: Int, t: Int) -> Int {
+    let o = owns(t);
+    if o == 0 { return 0; }
+    if o == 3 {
+        let owner = field(out, next, value, "2");
+        add_line(out, str_concat(str_concat("  call void @nz.str_retain(ptr ", v(owner)), ")"));
+        return 0;
+    }
+    if o == 4 {
+        add_line(out, str_concat(str_concat("  call void @nz.chan_retain(ptr ", v(value)), ")"));
+        return 0;
+    }
+    add_line(out, str_concat(str_concat("  call void @nz.arr_retain(ptr ", v(value)), ")"));
+    0
+}
+
+// Drop a reference. The storage goes when the last one does.
+fn emit_release(out: Strs, next: Ints, value: Int, t: Int) -> Int {
+    let o = owns(t);
+    if o == 0 { return 0; }
+    if o == 1 {
+        add_line(out, str_concat(str_concat("  call void @nz.seq_release(ptr ", v(value)), ")"));
+        return 0;
+    }
+    if o == 2 {
+        // A `Strs` releases every element's backing before its own storage, which is why
+        // it cannot share the helper an `Ints` uses.
+        add_line(out, str_concat(str_concat("  call void @nz.strs_release(ptr ", v(value)), ")"));
+        return 0;
+    }
+    if o == 3 {
+        let owner = field(out, next, value, "2");
+        add_line(out, str_concat(str_concat("  call void @nz.str_release(ptr ", v(owner)), ")"));
+        return 0;
+    }
+    add_line(out, str_concat(str_concat("  call void @nz.chan_release(ptr ", v(value)), ")"));
+    0
+}
+
+// Make `value` a reference this code owns, retaining it if it was only borrowed.
+//
+// Called where something takes a reference over: a binding, a `return`, a sequence that
+// keeps what it is given. A value that was already owned is handed on unchanged, which is
+// what keeps `let xs = ints_new();` free of traffic.
+fn own_keep(out: Strs, next: Ints, owned: Ints, value: Int, t: Int) -> Int {
+    if owns(t) == 0 { return 0; }
+    if own_take(owned, value) == 1 { return 0; }
+    emit_retain(out, next, value, t)
+}
+
+// Release a reference nothing took over: a temporary a callee only borrowed, or a
+// statement whose value was discarded. Both are ordinary; neither is an error.
+fn own_drop(out: Strs, next: Ints, owned: Ints, value: Int, t: Int) -> Int {
+    if owns(t) == 0 { return 0; }
+    if own_take(owned, value) == 0 { return 0; }
+    emit_release(out, next, value, t)
+}
+
+// Release everything this frame is still holding.
+//
+// Emitted before **every** way out of a function — the tail value, each `return`, and the
+// shared unwind block a failure takes — because `docs/spec.md` reclaims on the semantic
+// event, and "the closing brace" is not one of them. `frame` holds one type per slot,
+// `t_int()` where the slot needs nothing; parameter slots are `t_int()` for that reason,
+// which *is* rule 2. A slot never written holds a zeroed value, and releasing a null owner
+// is a no-op, so a path that skipped a declaration costs one comparison.
+fn release_frame(out: Strs, next: Ints, frame: Ints) -> Int {
+    let mut i = 0;
+    while i < ints_len(frame) {
+        let t = ints_get(frame, i);
+        if owns(t) != 0 {
+            let n = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(n)),
+                    str_concat(str_concat(" = load ", llvm_type(t)),
+                    str_concat(", ptr %slot", int_to_str(i)))));
+            emit_release(out, next, n, t);
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// A string backing of `bytes` usable bytes. Answers the allocation; its first byte of text
+// is sixteen bytes further on, which `string_data` produces.
+fn string_backing(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
+        bytes: Int, at: Str) -> Int {
+    let own = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(own)),
+            str_concat(" = call ptr @nz.str_alloc(i64 ", str_concat(v(bytes), ")"))));
+    let null = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(null)),
+            str_concat(" = icmp eq ptr ", str_concat(v(own), ", null"))));
+    guard(out, msgs, next, current, live, null, "N0406", "out of memory", at);
+    own
+}
+
+fn string_data(out: Strs, next: Ints, own: Int) -> Int {
+    binop(out, next, "getelementptr", "i8,", str_concat("ptr ", v(own)), "i64 16")
+}
+
+// Store into a binding's slot, taking the new reference and letting go of the old.
+//
+// The order is the whole of the correctness: the new reference is taken **first**, so that
+// `a = a` — and the re-execution of a `let` in a loop with the same value — cannot drop the
+// count to zero between the two steps and free storage that is about to be stored again.
+fn store_binding(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: Int) -> Int {
+    if owns(vt) == 0 {
+        add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
+                str_concat(" ", v(value))),
+                str_concat(", ptr %slot", int_to_str(slot))));
+        return 0;
+    }
+    own_keep(out, next, owned, value, vt);
+    let old = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(old)),
+            str_concat(str_concat(" = load ", llvm_type(vt)),
+            str_concat(", ptr %slot", int_to_str(slot)))));
+    add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
+            str_concat(" ", v(value))),
+            str_concat(", ptr %slot", int_to_str(slot))));
+    emit_release(out, next, old, vt);
+    0
+}
+
+// Release every argument of a call that nothing took over.
+fn drop_arguments(out: Strs, next: Ints, owned: Ints, ordered: Ints, ntype: Ints,
+        kids: Ints, kid_first: Ints, k: Int, argc: Int) -> Int {
+    let mut d = 0;
+    while d < argc {
+        own_drop(out, next, owned, ints_get(ordered, d),
+                ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + d)));
+        d = d + 1;
+    }
+    0
 }
 
 fn require(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
@@ -597,18 +870,10 @@ fn seq_slot(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, handle
 
 fn string_equality(out: Strs, current: Strs, live: Ints, next: Ints,
         a: Int, b: Int, negate: Bool) -> Int {
-    let pa = take_number(next);
-    add_line(out, str_concat(str_concat("  ", v(pa)),
-            str_concat(" = extractvalue { ptr, i64 } ", str_concat(v(a), ", 0"))));
-    let la = take_number(next);
-    add_line(out, str_concat(str_concat("  ", v(la)),
-            str_concat(" = extractvalue { ptr, i64 } ", str_concat(v(a), ", 1"))));
-    let pb = take_number(next);
-    add_line(out, str_concat(str_concat("  ", v(pb)),
-            str_concat(" = extractvalue { ptr, i64 } ", str_concat(v(b), ", 0"))));
-    let lb = take_number(next);
-    add_line(out, str_concat(str_concat("  ", v(lb)),
-            str_concat(" = extractvalue { ptr, i64 } ", str_concat(v(b), ", 1"))));
+    let pa = field(out, next, a, "0");
+    let la = field(out, next, a, "1");
+    let pb = field(out, next, b, "0");
+    let lb = field(out, next, b, "1");
     let same = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(same)),
             str_concat(" = icmp eq i64 ", str_concat(v(la), str_concat(", ", v(lb))))));
@@ -690,23 +955,117 @@ fn slot_count(nk: Ints, nslot: Ints) -> Int {
 // Emitted into every module. The Rust backend gates each helper on being reached; this
 // one does not yet, so a program that uses no sequence still carries `@nz.arr_new`. That
 // is a size cost and not a correctness one, and it is written down rather than hidden.
+// The environment variable that asks for a memory report, and the line it prints.
+//
+// The same two strings `crates/nazm-lir/src/emit.rs` declares, so a program built by this
+// compiler and one built by the reference print the same line — which is what lets a
+// differential test compare them on reclamation rather than only on values. `cargo xtask
+// check`'s `runtime parity` gate holds the two copies together.
+fn memory_variable() -> Str {
+    "NAZM_MEMORY_REPORT"
+}
+
+fn memory_format() -> Str {
+    "nazm-memory: sequences allocated=%lld reclaimed=%lld live=%lld strings allocated=%lld reclaimed=%lld live=%lld channels allocated=%lld reclaimed=%lld live=%lld"
+}
+
+// The runtime every emitted program carries, as generated LLVM.
+//
+// **Derived, not transcribed.** Every line below is a line of `crates/nazm-lir/src/emit.rs`'s
+// runtime constants with `hidden` changed to `internal`, and `cargo xtask check`'s
+// `runtime parity` gate re-derives it and refuses a difference. Two hand-kept copies of a
+// memory model is how the Nazm-written compiler came to emit the pre-N7 runtime while the
+// Rust one reclaimed; one derivation makes that impossible rather than unlikely.
 fn runtime() -> Str {
-    let mut r = strs_new();
+    let r = strs_new();
     strs_push(r, "define internal ptr @nz.arr_new() {");
     strs_push(r, "entry:");
-    strs_push(r, "  %h = call ptr @malloc(i64 24)");
+    strs_push(r, "  %h = call ptr @malloc(i64 32)");
     strs_push(r, "  %bad = icmp eq ptr %h, null");
     strs_push(r, "  br i1 %bad, label %fail, label %ok");
     strs_push(r, "fail:");
     strs_push(r, "  ret ptr null");
     strs_push(r, "ok:");
     strs_push(r, "  store i64 0, ptr %h");
-    strs_push(r, "  %cp = getelementptr i8, ptr %h, i64 8");
-    strs_push(r, "  store i64 0, ptr %cp");
-    strs_push(r, "  %dp = getelementptr i8, ptr %h, i64 16");
-    strs_push(r, "  store ptr null, ptr %dp");
+    strs_push(r, "  %capp = getelementptr i8, ptr %h, i64 8");
+    strs_push(r, "  store i64 0, ptr %capp");
+    strs_push(r, "  %datap = getelementptr i8, ptr %h, i64 16");
+    strs_push(r, "  store ptr null, ptr %datap");
+    strs_push(r, "  ; Born with one reference: the expression that produced it. Whoever consumes that");
+    strs_push(r, "  ; expression either takes the reference over or releases it.");
+    strs_push(r, "  %rcp = getelementptr i8, ptr %h, i64 24");
+    strs_push(r, "  store i64 1, ptr %rcp");
     strs_push(r, "  ret ptr %h");
     strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal void @nz.arr_retain(ptr %h) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %none = icmp eq ptr %h, null");
+    strs_push(r, "  br i1 %none, label %done, label %bump");
+    strs_push(r, "bump:");
+    strs_push(r, "  %rcp = getelementptr i8, ptr %h, i64 24");
+    strs_push(r, "  %rc = load i64, ptr %rcp");
+    strs_push(r, "  %rc2 = add i64 %rc, 1");
+    strs_push(r, "  store i64 %rc2, ptr %rcp");
+    strs_push(r, "  br label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  ret void");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal i1 @nz.arr_release(ptr %h) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %none = icmp eq ptr %h, null");
+    strs_push(r, "  br i1 %none, label %kept, label %drop");
+    strs_push(r, "drop:");
+    strs_push(r, "  %rcp = getelementptr i8, ptr %h, i64 24");
+    strs_push(r, "  %rc = load i64, ptr %rcp");
+    strs_push(r, "  %rc2 = sub i64 %rc, 1");
+    strs_push(r, "  store i64 %rc2, ptr %rcp");
+    strs_push(r, "  %last = icmp sle i64 %rc2, 0");
+    strs_push(r, "  br i1 %last, label %free, label %kept");
+    strs_push(r, "free:");
+    strs_push(r, "  ; The data buffer first, then the header: after the header is freed its `data` field");
+    strs_push(r, "  ; may not be read, and reading it is how this would become a use-after-free of its own.");
+    strs_push(r, "  %datap = getelementptr i8, ptr %h, i64 16");
+    strs_push(r, "  %data = load ptr, ptr %datap");
+    strs_push(r, "  call void @free(ptr %data)");
+    strs_push(r, "  call void @free(ptr %h)");
+    strs_push(r, "  ret i1 true");
+    strs_push(r, "kept:");
+    strs_push(r, "  ret i1 false");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "; The counted pair. `@nz.arr_new` and `@nz.arr_release` are the allocator; these two are");
+    strs_push(r, "; the allocator plus the bookkeeping that makes reclamation checkable. The scope machinery");
+    strs_push(r, "; uses the uncounted pair for its list of task ids, which is not a Nazm value and must not");
+    strs_push(r, "; appear in a report about the program's sequences.");
+    strs_push(r, "define internal ptr @nz.seq_new() {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %h = call ptr @nz.arr_new()");
+    strs_push(r, "  %bad = icmp eq ptr %h, null");
+    strs_push(r, "  br i1 %bad, label %done, label %count");
+    strs_push(r, "count:");
+    strs_push(r, "  ; Atomic, unlike the reference count beside it: a *task* may create a sequence of its");
+    strs_push(r, "  ; own, so two threads can reach this counter even though `N0321` stops them reaching");
+    strs_push(r, "  ; one sequence. Until N8 this was an ordinary load-add-store and a concurrent program");
+    strs_push(r, "  ; could under-report what it had allocated.");
+    strs_push(r, "  %c = atomicrmw add ptr @nz.seq_allocated, i64 1 monotonic");
+    strs_push(r, "  br label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  ret ptr %h");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal void @nz.seq_release(ptr %h) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %freed = call i1 @nz.arr_release(ptr %h)");
+    strs_push(r, "  br i1 %freed, label %count, label %done");
+    strs_push(r, "count:");
+    strs_push(r, "  %c = atomicrmw add ptr @nz.seq_reclaimed, i64 1 monotonic");
+    strs_push(r, "  br label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  ret void");
+    strs_push(r, "}");
+    strs_push(r, "");
     strs_push(r, "define internal ptr @nz.arr_grow(ptr %h, i64 %elem) {");
     strs_push(r, "entry:");
     strs_push(r, "  %len = load i64, ptr %h");
@@ -716,6 +1075,8 @@ fn runtime() -> Str {
     strs_push(r, "  %full = icmp sge i64 %len, %cap");
     strs_push(r, "  br i1 %full, label %grow, label %done");
     strs_push(r, "grow:");
+    strs_push(r, "  ; Doubling, with a floor of four. `realloc(null, n)` is `malloc(n)`, so the first");
+    strs_push(r, "  ; growth needs no special case.");
     strs_push(r, "  %twice = mul i64 %cap, 2");
     strs_push(r, "  %tiny = icmp slt i64 %twice, 4");
     strs_push(r, "  %want = select i1 %tiny, i64 4, i64 %twice");
@@ -725,6 +1086,8 @@ fn runtime() -> Str {
     strs_push(r, "  %failed = icmp eq ptr %new, null");
     strs_push(r, "  br i1 %failed, label %oom, label %kept");
     strs_push(r, "kept:");
+    strs_push(r, "  ; The header is updated only after the allocation succeeded, so a failed growth");
+    strs_push(r, "  ; leaves the sequence exactly as it was rather than half-resized.");
     strs_push(r, "  store ptr %new, ptr %datap");
     strs_push(r, "  store i64 %want, ptr %capp");
     strs_push(r, "  br label %done");
@@ -734,6 +1097,99 @@ fn runtime() -> Str {
     strs_push(r, "  %data = load ptr, ptr %datap");
     strs_push(r, "  ret ptr %data");
     strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal ptr @nz.str_alloc(i64 %n) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  ; Checked, because a length that overflows here would allocate less than the caller is");
+    strs_push(r, "  ; about to write. `docs/spec.md` reports it as N0406 at the call site.");
+    strs_push(r, "  %r = call {i64, i1} @llvm.uadd.with.overflow.i64(i64 %n, i64 16)");
+    strs_push(r, "  %over = extractvalue {i64, i1} %r, 1");
+    strs_push(r, "  br i1 %over, label %fail, label %ask");
+    strs_push(r, "ask:");
+    strs_push(r, "  %room = extractvalue {i64, i1} %r, 0");
+    strs_push(r, "  %b = call ptr @malloc(i64 %room)");
+    strs_push(r, "  %bad = icmp eq ptr %b, null");
+    strs_push(r, "  br i1 %bad, label %fail, label %ok");
+    strs_push(r, "fail:");
+    strs_push(r, "  ret ptr null");
+    strs_push(r, "ok:");
+    strs_push(r, "  store i64 1, ptr %b");
+    strs_push(r, "  %lenp = getelementptr i8, ptr %b, i64 8");
+    strs_push(r, "  store i64 %n, ptr %lenp");
+    strs_push(r, "  %c = atomicrmw add ptr @nz.str_allocated, i64 1 monotonic");
+    strs_push(r, "  ret ptr %b");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal void @nz.str_retain(ptr %b) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  ; Null is immortal or external storage: a literal, or a process argument. Nothing to");
+    strs_push(r, "  ; count, and nothing this program may ever free.");
+    strs_push(r, "  %none = icmp eq ptr %b, null");
+    strs_push(r, "  br i1 %none, label %done, label %bump");
+    strs_push(r, "bump:");
+    strs_push(r, "  %old = atomicrmw add ptr %b, i64 1 monotonic");
+    strs_push(r, "  br label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  ret void");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal void @nz.str_release(ptr %b) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %none = icmp eq ptr %b, null");
+    strs_push(r, "  br i1 %none, label %done, label %drop");
+    strs_push(r, "drop:");
+    strs_push(r, "  %old = atomicrmw sub ptr %b, i64 1 release");
+    strs_push(r, "  %last = icmp eq i64 %old, 1");
+    strs_push(r, "  br i1 %last, label %free, label %done");
+    strs_push(r, "free:");
+    strs_push(r, "  fence acquire");
+    strs_push(r, "  call void @free(ptr %b)");
+    strs_push(r, "  %c = atomicrmw add ptr @nz.str_reclaimed, i64 1 monotonic");
+    strs_push(r, "  br label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  ret void");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "; A `Strs` owns a reference to every string in it, so its storage cannot be released by");
+    strs_push(r, "; the helper an `Ints` uses. Elements first, then the array, then the header — the order");
+    strs_push(r, "; matters, because reading an element out of a buffer that has already been freed is the");
+    strs_push(r, "; use-after-free this whole milestone exists to make impossible.");
+    strs_push(r, "define internal void @nz.strs_release(ptr %h) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %none = icmp eq ptr %h, null");
+    strs_push(r, "  br i1 %none, label %done, label %drop");
+    strs_push(r, "drop:");
+    strs_push(r, "  %rcp = getelementptr i8, ptr %h, i64 24");
+    strs_push(r, "  %rc = load i64, ptr %rcp");
+    strs_push(r, "  %rc2 = sub i64 %rc, 1");
+    strs_push(r, "  store i64 %rc2, ptr %rcp");
+    strs_push(r, "  %last = icmp sle i64 %rc2, 0");
+    strs_push(r, "  br i1 %last, label %contents, label %done");
+    strs_push(r, "contents:");
+    strs_push(r, "  %n = load i64, ptr %h");
+    strs_push(r, "  %dp = getelementptr i8, ptr %h, i64 16");
+    strs_push(r, "  %data = load ptr, ptr %dp");
+    strs_push(r, "  br label %test");
+    strs_push(r, "test:");
+    strs_push(r, "  %i = phi i64 [ 0, %contents ], [ %next, %body ]");
+    strs_push(r, "  %more = icmp slt i64 %i, %n");
+    strs_push(r, "  br i1 %more, label %body, label %storage");
+    strs_push(r, "body:");
+    strs_push(r, "  %e = getelementptr { ptr, i64, ptr }, ptr %data, i64 %i");
+    strs_push(r, "  %op = getelementptr i8, ptr %e, i64 16");
+    strs_push(r, "  %owner = load ptr, ptr %op");
+    strs_push(r, "  call void @nz.str_release(ptr %owner)");
+    strs_push(r, "  %next = add i64 %i, 1");
+    strs_push(r, "  br label %test");
+    strs_push(r, "storage:");
+    strs_push(r, "  call void @free(ptr %data)");
+    strs_push(r, "  call void @free(ptr %h)");
+    strs_push(r, "  %c = atomicrmw add ptr @nz.seq_reclaimed, i64 1 monotonic");
+    strs_push(r, "  br label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  ret void");
+    strs_push(r, "}");
+    strs_push(r, "");
     strs_push(r, "define internal ptr @nz.cstr(ptr %p, i64 %n) {");
     strs_push(r, "entry:");
     strs_push(r, "  %room = add i64 %n, 1");
@@ -748,126 +1204,84 @@ fn runtime() -> Str {
     strs_push(r, "  store i8 0, ptr %end");
     strs_push(r, "  ret ptr %buf");
     strs_push(r, "}");
+    strs_push(r, "");
     strs_push(r, "define internal i1 @nz.file_exists(ptr %p, i64 %n) {");
     strs_push(r, "entry:");
     strs_push(r, "  %path = call ptr @nz.cstr(ptr %p, i64 %n)");
-    strs_push(r, "  %np = icmp eq ptr %path, null");
-    strs_push(r, "  br i1 %np, label %no, label %open");
+    strs_push(r, "  %nopath = icmp eq ptr %path, null");
+    strs_push(r, "  br i1 %nopath, label %no, label %open");
     strs_push(r, "open:");
     strs_push(r, "  %f = call ptr @fopen(ptr %path, ptr @.rb)");
+    strs_push(r, "  ; The terminated copy has done its job the moment `fopen` returns. Until N8 every file");
+    strs_push(r, "  ; operation leaked one of these.");
+    strs_push(r, "  call void @free(ptr %path)");
     strs_push(r, "  %missing = icmp eq ptr %f, null");
     strs_push(r, "  br i1 %missing, label %no, label %yes");
     strs_push(r, "yes:");
-    strs_push(r, "  %ig = call i32 @fclose(ptr %f)");
+    strs_push(r, "  %ignored = call i32 @fclose(ptr %f)");
     strs_push(r, "  ret i1 true");
     strs_push(r, "no:");
     strs_push(r, "  ret i1 false");
     strs_push(r, "}");
-    strs_push(r, "define internal { ptr, i64 } @nz.read_file(ptr %p, i64 %n) {");
+    strs_push(r, "");
+    strs_push(r, "define internal { ptr, i64, ptr } @nz.read_file(ptr %p, i64 %n) {");
     strs_push(r, "entry:");
     strs_push(r, "  %path = call ptr @nz.cstr(ptr %p, i64 %n)");
-    strs_push(r, "  %np = icmp eq ptr %path, null");
-    strs_push(r, "  br i1 %np, label %fail, label %open");
+    strs_push(r, "  %nopath = icmp eq ptr %path, null");
+    strs_push(r, "  br i1 %nopath, label %fail, label %open");
     strs_push(r, "open:");
     strs_push(r, "  %f = call ptr @fopen(ptr %path, ptr @.rb)");
+    strs_push(r, "  call void @free(ptr %path)");
     strs_push(r, "  %missing = icmp eq ptr %f, null");
     strs_push(r, "  br i1 %missing, label %fail, label %measure");
     strs_push(r, "measure:");
+    strs_push(r, "  ; SEEK_END is 2 and SEEK_SET is 0 on every target this is verified against.");
     strs_push(r, "  %e = call i32 @fseek(ptr %f, i64 0, i32 2)");
     strs_push(r, "  %len = call i64 @ftell(ptr %f)");
-    strs_push(r, "  %un = icmp slt i64 %len, 0");
-    strs_push(r, "  br i1 %un, label %closefail, label %reserve");
+    strs_push(r, "  %unmeasurable = icmp slt i64 %len, 0");
+    strs_push(r, "  br i1 %unmeasurable, label %closefail, label %reserve");
     strs_push(r, "reserve:");
     strs_push(r, "  %s = call i32 @fseek(ptr %f, i64 0, i32 0)");
+    strs_push(r, "  ; One byte more than the file, so an empty file still owns storage and its pointer");
+    strs_push(r, "  ; stays valid to compare.");
     strs_push(r, "  %room = add i64 %len, 1");
-    strs_push(r, "  %buf = call ptr @malloc(i64 %room)");
-    strs_push(r, "  %nb = icmp eq ptr %buf, null");
-    strs_push(r, "  br i1 %nb, label %closefail, label %read");
+    strs_push(r, "  %own = call ptr @nz.str_alloc(i64 %room)");
+    strs_push(r, "  %nobuf = icmp eq ptr %own, null");
+    strs_push(r, "  br i1 %nobuf, label %closefail, label %read");
     strs_push(r, "read:");
+    strs_push(r, "  %buf = getelementptr i8, ptr %own, i64 16");
     strs_push(r, "  %got = call i64 @fread(ptr %buf, i64 1, i64 %len, ptr %f)");
     strs_push(r, "  %c = call i32 @fclose(ptr %f)");
     strs_push(r, "  %short = icmp ne i64 %got, %len");
-    strs_push(r, "  br i1 %short, label %fail, label %done");
+    strs_push(r, "  br i1 %short, label %partial, label %done");
+    strs_push(r, "partial:");
+    strs_push(r, "  ; A short read is a failure, and the storage it was going to fill is released rather");
+    strs_push(r, "  ; than abandoned.");
+    strs_push(r, "  call void @nz.str_release(ptr %own)");
+    strs_push(r, "  br label %fail");
     strs_push(r, "done:");
-    strs_push(r, "  %a = insertvalue { ptr, i64 } undef, ptr %buf, 0");
-    strs_push(r, "  %b = insertvalue { ptr, i64 } %a, i64 %len, 1");
-    strs_push(r, "  ret { ptr, i64 } %b");
+    strs_push(r, "  %a = insertvalue { ptr, i64, ptr } undef, ptr %buf, 0");
+    strs_push(r, "  %b = insertvalue { ptr, i64, ptr } %a, i64 %len, 1");
+    strs_push(r, "  %b2 = insertvalue { ptr, i64, ptr } %b, ptr %own, 2");
+    strs_push(r, "  ret { ptr, i64, ptr } %b2");
     strs_push(r, "closefail:");
     strs_push(r, "  %c2 = call i32 @fclose(ptr %f)");
     strs_push(r, "  br label %fail");
     strs_push(r, "fail:");
-    strs_push(r, "  %z = insertvalue { ptr, i64 } undef, ptr null, 0");
-    strs_push(r, "  %z2 = insertvalue { ptr, i64 } %z, i64 0, 1");
-    strs_push(r, "  ret { ptr, i64 } %z2");
+    strs_push(r, "  %z = insertvalue { ptr, i64, ptr } undef, ptr null, 0");
+    strs_push(r, "  %z2 = insertvalue { ptr, i64, ptr } %z, i64 0, 1");
+    strs_push(r, "  %z3 = insertvalue { ptr, i64, ptr } %z2, ptr null, 2");
+    strs_push(r, "  ret { ptr, i64, ptr } %z3");
     strs_push(r, "}");
-    strs_push(r, "define internal { ptr, i64 } @nz.str_join(ptr %h, ptr %sp, i64 %sn) {");
-    strs_push(r, "entry:");
-    strs_push(r, "  %n = load i64, ptr %h");
-    strs_push(r, "  %dp0 = getelementptr i8, ptr %h, i64 16");
-    strs_push(r, "  %data = load ptr, ptr %dp0");
-    strs_push(r, "  br label %sum");
-    strs_push(r, "sum:");
-    strs_push(r, "  %i = phi i64 [ 0, %entry ], [ %i2, %sumbody ]");
-    strs_push(r, "  %acc = phi i64 [ 0, %entry ], [ %acc2, %sumbody ]");
-    strs_push(r, "  %more = icmp slt i64 %i, %n");
-    strs_push(r, "  br i1 %more, label %sumbody, label %alloc");
-    strs_push(r, "sumbody:");
-    strs_push(r, "  %e = getelementptr { ptr, i64 }, ptr %data, i64 %i");
-    strs_push(r, "  %lp = getelementptr i8, ptr %e, i64 8");
-    strs_push(r, "  %li = load i64, ptr %lp");
-    strs_push(r, "  %acc2 = add i64 %acc, %li");
-    strs_push(r, "  %i2 = add i64 %i, 1");
-    strs_push(r, "  br label %sum");
-    strs_push(r, "alloc:");
-    strs_push(r, "  %less = sub i64 %n, 1");
-    strs_push(r, "  %neg = icmp slt i64 %less, 0");
-    strs_push(r, "  %gaps = select i1 %neg, i64 0, i64 %less");
-    strs_push(r, "  %sepbytes = mul i64 %gaps, %sn");
-    strs_push(r, "  %total = add i64 %acc, %sepbytes");
-    strs_push(r, "  %room = add i64 %total, 1");
-    strs_push(r, "  %buf = call ptr @malloc(i64 %room)");
-    strs_push(r, "  %bad = icmp eq ptr %buf, null");
-    strs_push(r, "  br i1 %bad, label %jfail, label %copy");
-    strs_push(r, "copy:");
-    strs_push(r, "  %j = phi i64 [ 0, %alloc ], [ %j2, %jtail ]");
-    strs_push(r, "  %off = phi i64 [ 0, %alloc ], [ %off3, %jtail ]");
-    strs_push(r, "  %more2 = icmp slt i64 %j, %n");
-    strs_push(r, "  br i1 %more2, label %jbody, label %jdone");
-    strs_push(r, "jbody:");
-    strs_push(r, "  %first = icmp eq i64 %j, 0");
-    strs_push(r, "  br i1 %first, label %jtail, label %gap");
-    strs_push(r, "gap:");
-    strs_push(r, "  %d1 = getelementptr i8, ptr %buf, i64 %off");
-    strs_push(r, "  call void @llvm.memcpy.p0.p0.i64(ptr %d1, ptr %sp, i64 %sn, i1 false)");
-    strs_push(r, "  %off1 = add i64 %off, %sn");
-    strs_push(r, "  br label %jtail");
-    strs_push(r, "jtail:");
-    strs_push(r, "  %off2 = phi i64 [ %off, %jbody ], [ %off1, %gap ]");
-    strs_push(r, "  %e2 = getelementptr { ptr, i64 }, ptr %data, i64 %j");
-    strs_push(r, "  %p2 = load ptr, ptr %e2");
-    strs_push(r, "  %l2p = getelementptr i8, ptr %e2, i64 8");
-    strs_push(r, "  %l2 = load i64, ptr %l2p");
-    strs_push(r, "  %d2 = getelementptr i8, ptr %buf, i64 %off2");
-    strs_push(r, "  call void @llvm.memcpy.p0.p0.i64(ptr %d2, ptr %p2, i64 %l2, i1 false)");
-    strs_push(r, "  %off3 = add i64 %off2, %l2");
-    strs_push(r, "  %j2 = add i64 %j, 1");
-    strs_push(r, "  br label %copy");
-    strs_push(r, "jdone:");
-    strs_push(r, "  %ja = insertvalue { ptr, i64 } undef, ptr %buf, 0");
-    strs_push(r, "  %jb = insertvalue { ptr, i64 } %ja, i64 %total, 1");
-    strs_push(r, "  ret { ptr, i64 } %jb");
-    strs_push(r, "jfail:");
-    strs_push(r, "  %jz = insertvalue { ptr, i64 } undef, ptr null, 0");
-    strs_push(r, "  %jz2 = insertvalue { ptr, i64 } %jz, i64 0, 1");
-    strs_push(r, "  ret { ptr, i64 } %jz2");
-    strs_push(r, "}");
+    strs_push(r, "");
     strs_push(r, "define internal i64 @nz.write_file(ptr %pp, i64 %pn, ptr %dp, i64 %dn) {");
     strs_push(r, "entry:");
     strs_push(r, "  %path = call ptr @nz.cstr(ptr %pp, i64 %pn)");
-    strs_push(r, "  %np = icmp eq ptr %path, null");
-    strs_push(r, "  br i1 %np, label %fail, label %open");
+    strs_push(r, "  %nopath = icmp eq ptr %path, null");
+    strs_push(r, "  br i1 %nopath, label %fail, label %open");
     strs_push(r, "open:");
     strs_push(r, "  %f = call ptr @fopen(ptr %path, ptr @.wb)");
+    strs_push(r, "  call void @free(ptr %path)");
     strs_push(r, "  %missing = icmp eq ptr %f, null");
     strs_push(r, "  br i1 %missing, label %fail, label %write");
     strs_push(r, "write:");
@@ -880,13 +1294,76 @@ fn runtime() -> Str {
     strs_push(r, "fail:");
     strs_push(r, "  ret i64 -1");
     strs_push(r, "}");
-    let mut text = "";
-    let mut i = 0;
-    while i < strs_len(r) {
-        text = str_concat(text, str_concat(strs_get(r, i), nl()));
-        i = i + 1;
-    }
-    text
+    strs_push(r, "");
+    strs_push(r, "define internal { ptr, i64, ptr } @nz.str_join(ptr %h, ptr %sp, i64 %sn) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %n = load i64, ptr %h");
+    strs_push(r, "  %dp = getelementptr i8, ptr %h, i64 16");
+    strs_push(r, "  %data = load ptr, ptr %dp");
+    strs_push(r, "  br label %sum");
+    strs_push(r, "sum:");
+    strs_push(r, "  %i = phi i64 [ 0, %entry ], [ %i2, %sumbody ]");
+    strs_push(r, "  %acc = phi i64 [ 0, %entry ], [ %acc2, %sumbody ]");
+    strs_push(r, "  %more = icmp slt i64 %i, %n");
+    strs_push(r, "  br i1 %more, label %sumbody, label %alloc");
+    strs_push(r, "sumbody:");
+    strs_push(r, "  %e = getelementptr { ptr, i64, ptr }, ptr %data, i64 %i");
+    strs_push(r, "  %lp = getelementptr i8, ptr %e, i64 8");
+    strs_push(r, "  %li = load i64, ptr %lp");
+    strs_push(r, "  %acc2 = add i64 %acc, %li");
+    strs_push(r, "  %i2 = add i64 %i, 1");
+    strs_push(r, "  br label %sum");
+    strs_push(r, "alloc:");
+    strs_push(r, "  ; One separator between each pair, so n-1 of them, and none for an empty sequence.");
+    strs_push(r, "  %less = sub i64 %n, 1");
+    strs_push(r, "  %neg = icmp slt i64 %less, 0");
+    strs_push(r, "  %gaps = select i1 %neg, i64 0, i64 %less");
+    strs_push(r, "  %sepbytes = mul i64 %gaps, %sn");
+    strs_push(r, "  %total = add i64 %acc, %sepbytes");
+    strs_push(r, "  ; One byte more, so an empty result still owns storage and its pointer stays valid.");
+    strs_push(r, "  %room = add i64 %total, 1");
+    strs_push(r, "  %own = call ptr @nz.str_alloc(i64 %room)");
+    strs_push(r, "  %bad = icmp eq ptr %own, null");
+    strs_push(r, "  br i1 %bad, label %fail, label %copy");
+    strs_push(r, "copy:");
+    strs_push(r, "  %buf = getelementptr i8, ptr %own, i64 16");
+    strs_push(r, "  br label %loop");
+    strs_push(r, "loop:");
+    strs_push(r, "  %j = phi i64 [ 0, %copy ], [ %j2, %tail ]");
+    strs_push(r, "  %off = phi i64 [ 0, %copy ], [ %off3, %tail ]");
+    strs_push(r, "  %more2 = icmp slt i64 %j, %n");
+    strs_push(r, "  br i1 %more2, label %body, label %done");
+    strs_push(r, "body:");
+    strs_push(r, "  %first = icmp eq i64 %j, 0");
+    strs_push(r, "  br i1 %first, label %tail, label %gap");
+    strs_push(r, "gap:");
+    strs_push(r, "  %d1 = getelementptr i8, ptr %buf, i64 %off");
+    strs_push(r, "  call void @llvm.memcpy.p0.p0.i64(ptr %d1, ptr %sp, i64 %sn, i1 false)");
+    strs_push(r, "  %off1 = add i64 %off, %sn");
+    strs_push(r, "  br label %tail");
+    strs_push(r, "tail:");
+    strs_push(r, "  %off2 = phi i64 [ %off, %body ], [ %off1, %gap ]");
+    strs_push(r, "  %e2 = getelementptr { ptr, i64, ptr }, ptr %data, i64 %j");
+    strs_push(r, "  %p2 = load ptr, ptr %e2");
+    strs_push(r, "  %l2p = getelementptr i8, ptr %e2, i64 8");
+    strs_push(r, "  %l2 = load i64, ptr %l2p");
+    strs_push(r, "  %d2 = getelementptr i8, ptr %buf, i64 %off2");
+    strs_push(r, "  call void @llvm.memcpy.p0.p0.i64(ptr %d2, ptr %p2, i64 %l2, i1 false)");
+    strs_push(r, "  %off3 = add i64 %off2, %l2");
+    strs_push(r, "  %j2 = add i64 %j, 1");
+    strs_push(r, "  br label %loop");
+    strs_push(r, "done:");
+    strs_push(r, "  %a = insertvalue { ptr, i64, ptr } undef, ptr %buf, 0");
+    strs_push(r, "  %b = insertvalue { ptr, i64, ptr } %a, i64 %total, 1");
+    strs_push(r, "  %b2 = insertvalue { ptr, i64, ptr } %b, ptr %own, 2");
+    strs_push(r, "  ret { ptr, i64, ptr } %b2");
+    strs_push(r, "fail:");
+    strs_push(r, "  %z = insertvalue { ptr, i64, ptr } undef, ptr null, 0");
+    strs_push(r, "  %z2 = insertvalue { ptr, i64, ptr } %z, i64 0, 1");
+    strs_push(r, "  %z3 = insertvalue { ptr, i64, ptr } %z2, ptr null, 2");
+    strs_push(r, "  ret { ptr, i64, ptr } %z3");
+    strs_push(r, "}");
+    str_concat(str_join(r, nl()), nl())
 }
 
 fn refuse(message: Str, at: Str) -> Int {
@@ -964,7 +1441,7 @@ fn symbol(index: Int) -> Str {
 fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
         nk: Ints, nar: Ints, nst: Ints, ntx: Strs, nslot: Ints, ntype: Ints,
         kids: Ints, kid_first: Ints, fnames: Strs, fowner: Ints, mstart: Ints,
-        k: Int, begin: Int, src: Str, path: Str) -> Int {
+        frame: Ints, owned: Ints, k: Int, begin: Int, src: Str, path: Str) -> Int {
     // Numbering restarts per function: LLVM requires a function's unnamed values to be
     // consecutive from zero, and `%p<n>`/`%slot<n>` are named so they consume none of it.
     ints_set(next, 0, 0);
@@ -1022,6 +1499,38 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     while sl < slots {
         add_line(out, str_concat(str_concat("  %slot", int_to_str(sl)),
                 str_concat(" = alloca ", llvm_type(ints_get(styp, sl)))));
+        sl = sl + 1;
+    }
+    // What this frame must release on the way out: one entry per slot, holding the slot's
+    // type or `Int` where nothing has to happen. **Parameter slots are `Int`**, and that
+    // exclusion *is* the specification's rule 2 — a callee borrows, so releasing a
+    // parameter would destroy storage its caller still holds.
+    //
+    // No reference number survives a function, so the owned set starts empty too.
+    while ints_len(frame) > 0 { ints_pop(frame); }
+    while ints_len(owned) > 0 { ints_pop(owned); }
+    sl = 0;
+    while sl < slots {
+        ints_push(frame, ints_get(styp, sl));
+        sl = sl + 1;
+    }
+    p = 0;
+    while p < params {
+        ints_set(frame, ints_get(nslot, ints_get(kids, first + p)), t_int());
+        p = p + 1;
+    }
+    // Every owning slot starts zeroed, and a zeroed slot releases to nothing: a null
+    // handle, or a string whose owner is null. So a path that never reached a declaration
+    // and the shared unwind block a failure takes can both release the whole frame
+    // without asking which slots were ever written.
+    sl = 0;
+    while sl < slots {
+        let st = ints_get(frame, sl);
+        if owns(st) != 0 {
+            add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(st)),
+                    str_concat(" ", unwind_value(st))),
+                    str_concat(", ptr %slot", int_to_str(sl))));
+        }
         sl = sl + 1;
     }
     // Parameters arrive as SSA values and are stored into their slots at once, so the
@@ -1246,6 +1755,11 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
     let live = ints_new();
     ints_push(live, 1);
     ints_push(live, 0);
+    // The current function's ownership state: what each slot must release on the way out,
+    // and which SSA values hold a reference nobody has taken over yet. Both are cleared at
+    // every `define`, because neither means anything across a function boundary.
+    let frame = ints_new();
+    let owned = ints_new();
     // One entry per `if`, holding the value and predecessor its branches contributed.
     let phi_val = ints_new();
     let phi_blk = strs_new();
@@ -1259,8 +1773,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         // A function's definition opens before its body, for the same reason.
         if ints_get(fn_at, k) >= 0 {
             open_function(out, current, live, next, vals, nk, nar, nst, ntx, nslot, ntype,
-                    kids, kid_first, fnames, fowner, mstart, ints_get(fn_at, k), k,
-                    src, path);
+                    kids, kid_first, fnames, fowner, mstart, frame, owned,
+                    ints_get(fn_at, k), k, src, path);
         }
 
         // A loop header opens before its condition, never after: `continue` and the back
@@ -1299,7 +1813,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             check_failed(out, next, current, live);
         } else {
             if kind == n_spawn() {
-                emit_spawn(out, msgs, next, current, live, tasks, vals, nar, ntype,
+                emit_spawn(out, msgs, next, current, live, tasks, owned, vals, nar, ntype,
                         kids, kid_first, fnames, fret, k, ints_get(ncallee, k),
                         position(src, path, from));
             } else {
@@ -1317,9 +1831,12 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                         let ordered = ints_new();
                         let mut o = argc - 1;
                         while o >= 0 { ints_push(ordered, ints_get(args, o)); o = o - 1; }
-                        let built = emit_builtin(text, ordered, out, msgs, next, current, live,
-                                position(src, path, from));
+                        let built = emit_builtin(text, ordered, owned, out, msgs, next, current,
+                                live, position(src, path, from));
                         if built >= 0 {
+                            // A built-in borrows its arguments, exactly as a function does,
+                            // so a temporary handed to one is nobody's after it returns.
+                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc);
                             ints_push(vals, built);
                         } else {
                             let mut list = "";
@@ -1342,6 +1859,12 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                             // never produced — which would run statements, print, and could loop
                             // forever on it.
                             check_failed(out, next, current, live);
+                            // Rule 3: returning transfers, so what came back is a reference
+                            // this expression now holds. Rule 2: the arguments were only
+                            // borrowed, so a temporary passed in is still nobody's and is
+                            // dropped here.
+                            if owns(ints_get(ntype, k)) != 0 { own_add(owned, n); }
+                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc);
                             ints_push(vals, n);
                         }
                     } else {
@@ -1351,7 +1874,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                             let idx = message_index(blobs, text);
                             let n = take_number(next);
                             add_line(out, str_concat(str_concat("  ", v(n)),
-                                    str_concat(" = load { ptr, i64 }, ptr @.sv",
+                                    str_concat(" = load { ptr, i64, ptr }, ptr @.sv",
                                     int_to_str(idx))));
                             ints_push(vals, n);
                         } else {
@@ -1379,6 +1902,12 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                 let a = strs_pop(phi_blk);
                                                 let av = ints_pop(phi_val);
                                                 let n = take_number(next);
+                                                // Each incoming branch handed one reference to the join,
+                                                // so the merged value holds exactly one however control
+                                                // arrived.
+                                                own_take(owned, av);
+                                                own_take(owned, bv);
+                                                if owns(ints_get(ntype, k)) != 0 { own_add(owned, n); }
                                                 add_line(out, str_concat(str_concat("  ", v(n)),
                                                         str_concat(str_concat(str_concat(" = phi ", llvm_type(ints_get(ntype, k))),
                                                         str_concat(" [ ", v(av))),
@@ -1402,6 +1931,13 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                     if kind == n_return() {
                                                         let value = ints_pop(vals);
                                                         let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+                                                        // Rule 3. The caller receives a reference that
+                                                        // outlives this frame, so it is taken over
+                                                        // **before** the frame lets go of everything else
+                                                        // — otherwise returning a local would release the
+                                                        // storage it is returning.
+                                                        own_keep(out, next, owned, value, vt);
+                                                        release_frame(out, next, frame);
                                                         add_line(out, str_concat(str_concat("  ret ", llvm_type(vt)), str_concat(" ", v(value))));
                                                         ints_set(live, 0, 0);
                                                     } else {
@@ -1416,25 +1952,23 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                 // The value is already on the stack: its subtree came first.
                                                                 let value = ints_pop(vals);
                                                                 let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                                add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
-                                                                        str_concat(" ", v(value))),
-                                                                        str_concat(", ptr %slot", int_to_str(ints_get(nslot, k)))));
+                                                                store_binding(out, next, owned, value, vt, ints_get(nslot, k));
                                                             } else {
                                                                 if kind == n_assign() {
                                                                     // The same store. A declaration and a reassignment differ in the source and
                                                                     // not once the slot is known, so there is one code path rather than two.
                                                                     let value = ints_pop(vals);
                                                                     let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                                    add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
-                                                                            str_concat(" ", v(value))),
-                                                                            str_concat(", ptr %slot", int_to_str(ints_get(nslot, k)))));
+                                                                    store_binding(out, next, owned, value, vt, ints_get(nslot, k));
                                                                 } else {
                                                                     if kind == n_exprstmt() {
                                                                         // Evaluated for its effects; the value is dropped, exactly as `nazm run`
                                                                         // drops it. **Only if there was one**: a statement-position `if` produces
                                                                         // nothing, and popping for it would take someone else's value.
                                                                         if ints_get(ntype, ints_get(kids, ints_get(kid_first, k))) != 0 {
-                                                                            ints_pop(vals);
+                                                                            let dropped = ints_pop(vals);
+                                                                            own_drop(out, next, owned, dropped,
+                                                                                    ints_get(ntype, ints_get(kids, ints_get(kid_first, k))));
                                                                         }
                                                                     } else {
                                                                         if kind == n_int() {
@@ -1499,15 +2033,25 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                                     refuse("a body that produces no value",
                                                                                                             position(src, path, from));
                                                                                                 }
+                                                                                                // The tail is a `return` without the keyword, and it obeys the same two
+                                                                                                // rules: take the reference the caller is about to receive, then let the
+                                                                                                // frame go.
+                                                                                                let tv = ints_pop(vals);
+                                                                                                own_keep(out, next, owned, tv, type_of_name(after_colon(text)));
+                                                                                                release_frame(out, next, frame);
                                                                                                 add_line(out, str_concat(str_concat("  ret ",
                                                                                                         llvm_type(type_of_name(after_colon(text)))),
-                                                                                                        str_concat(" ", v(ints_pop(vals)))));
+                                                                                                        str_concat(" ", v(tv))));
                                                                                             }
                                                                                             // The one exit every failure in this function leaves by,
                                                                                             // written only if something branched to it.
                                                                                             if ints_get(live, 1) == 1 {
                                                                                                 let rt = type_of_name(after_colon(text));
                                                                                                 add_line(out, "nz.unwind:");
+                                                                                                // A failure leaves through here from anywhere in the function, so this is
+                                                                                                // the one exit source indentation would never have found. A program that
+                                                                                                // failed still reclaims what it was holding.
+                                                                                                release_frame(out, next, frame);
                                                                                                 add_line(out, str_concat(str_concat("  ret ",
                                                                                                         llvm_type(rt)),
                                                                                                         str_concat(" ", unwind_value(rt))));
@@ -1586,9 +2130,17 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     // `if` or a checked-arithmetic guard, and the block a `phi` must
                     // name is the one emission ended in.
                     if ints_get(ntype, p) != 0 {
-                        ints_push(phi_val, ints_get(vals, ints_len(vals) - 1));
+                        // A `phi` merges two branches that may have arrived at ownership
+                        // differently — one side creating a reference, the other borrowing
+                        // one — and a single value cannot be both. Each branch is brought
+                        // to the same state here, **inside its own block and before its
+                        // jump**, which is the only place a retain can go: after the `phi`
+                        // there is no branch left to attribute it to.
+                        let bv = ints_pop(vals);
+                        own_keep(out, next, owned, bv, ints_get(ntype, p));
+                        own_add(owned, bv);
+                        ints_push(phi_val, bv);
                         strs_push(phi_blk, strs_get(current, 0));
-                        ints_pop(vals);
                     }
                     branch(out, live, blk("j", p));
                     if which == 1 {
@@ -1725,6 +2277,25 @@ fn main() -> Int {
             parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
             body, msgs, blobs, tasks);
 
+    // Whether this program can reach a channel. A `spawn` is not the only way: a program
+    // may create one, send to it and receive from it without ever starting a task, and
+    // until N8 such a program was emitted with no channel runtime at all and clang refused
+    // it. The reference compiler decides this from what emission reached; this scans for
+    // the call, which needs no state threaded through every emitter.
+    let mut uses_channels = false;
+    let mut ci = 0;
+    while ci < ints_len(nk) {
+        if ints_get(nk, ci) == n_call() {
+            let nm = strs_get(ntx, ci);
+            if str_len(nm) >= 5 {
+                if str_slice(nm, 0, 5) == "chan_" { uses_channels = true; }
+            }
+        }
+        ci = ci + 1;
+    }
+    let mut concurrent = uses_channels;
+    if strs_len(tasks) > 0 { concurrent = true; }
+
     // The header comes last because interning the messages is what discovers them.
     let head = strs_new();
     add_line(head, "; Generated by the Nazm compiler, written in Nazm. Do not edit.");
@@ -1732,12 +2303,14 @@ fn main() -> Int {
     add_line(head, "declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)");
     add_line(head, "declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)");
     add_line(head, "declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)");
+    add_line(head, "declare {i64, i1} @llvm.uadd.with.overflow.i64(i64, i64)");
+    add_line(head, "declare {i64, i1} @llvm.umul.with.overflow.i64(i64, i64)");
     add_line(head, "declare i32 @printf(ptr noundef, ...)");
     add_line(head, "declare i64 @write(i32, ptr, i64)");
     add_line(head, "declare void @exit(i32) noreturn");
-    // pthreads, declared only when a task or a channel reached them. A program with no
-    // `spawn` in it neither declares them nor needs to be linked against them.
-    if strs_len(tasks) > 0 {
+    // pthreads, declared only when a task or a channel reached them. A program with
+    // neither neither declares them nor needs to be linked against them.
+    if concurrent {
         add_line(head, "declare i32 @pthread_create(ptr, ptr, ptr, ptr)");
         add_line(head, "declare i32 @pthread_join(ptr, ptr)");
         add_line(head, "declare i32 @pthread_mutex_init(ptr, ptr)");
@@ -1746,11 +2319,15 @@ fn main() -> Int {
         add_line(head, "declare i32 @pthread_cond_init(ptr, ptr)");
         add_line(head, "declare i32 @pthread_cond_wait(ptr, ptr)");
         add_line(head, "declare i32 @pthread_cond_broadcast(ptr)");
+        add_line(head, "declare i32 @pthread_mutex_destroy(ptr)");
+        add_line(head, "declare i32 @pthread_cond_destroy(ptr)");
     }
     add_line(head, "declare i32 @memcmp(ptr, ptr, i64)");
     add_line(head, "declare i32 @snprintf(ptr noundef, i64, ptr noundef, ...)");
     add_line(head, "declare ptr @malloc(i64)");
     add_line(head, "declare ptr @realloc(ptr, i64)");
+    add_line(head, "declare void @free(ptr)");
+    add_line(head, "declare ptr @getenv(ptr)");
     add_line(head, "declare i64 @strlen(ptr)");
     add_line(head, "declare ptr @fopen(ptr, ptr)");
     add_line(head, "declare i32 @fseek(ptr, i64, i32)");
@@ -1761,6 +2338,15 @@ fn main() -> Int {
     add_line(head, "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)");
     add_line(head, "@nz.argc = internal global i64 0");
     add_line(head, "@nz.argv = internal global ptr null");
+    // The accounting. Six counters, unconditionally, so every emitted program can be
+    // asked what it allocated and what it reclaimed — which is how a test compares this
+    // compiler's output with the reference compiler's on memory and not only on values.
+    add_line(head, "@nz.seq_allocated = internal global i64 0");
+    add_line(head, "@nz.seq_reclaimed = internal global i64 0");
+    add_line(head, "@nz.str_allocated = internal global i64 0");
+    add_line(head, "@nz.str_reclaimed = internal global i64 0");
+    add_line(head, "@nz.chan_allocated = internal global i64 0");
+    add_line(head, "@nz.chan_reclaimed = internal global i64 0");
     add_line(head, str_concat(str_concat("@.dec = private unnamed_addr constant [5 x i8] c", dq()),
             str_concat("%lld", str_concat(str_concat(bs(), "00"), dq()))));
     add_line(head, str_concat(str_concat("@.rb = private unnamed_addr constant [3 x i8] c", dq()),
@@ -1772,6 +2358,23 @@ fn main() -> Int {
     add_line(head, str_concat(str_concat("@.fmt = private unnamed_addr constant [6 x i8] c", dq()),
             str_concat(str_concat("%lld", str_concat(bs(), "0A")),
             str_concat(str_concat(bs(), "00"), dq()))));
+    // The memory report's environment variable and format. The exact text
+    // `crates/nazm-lir/src/emit.rs` uses, so a program built by this compiler and one
+    // built by the reference print the same line and a differential test can compare
+    // them. Lengths are computed here rather than counted by hand, for the reason the
+    // reference computes them: a constant whose declared size disagrees with its bytes
+    // is rejected by clang at best and truncates at worst.
+    let memvar = memory_variable();
+    add_line(head, str_concat(str_concat(str_concat("@.memvar = private unnamed_addr constant [",
+            int_to_str(str_len(memvar) + 1)),
+            str_concat(str_concat(" x i8] c", dq()), memvar)),
+            str_concat(str_concat(bs(), "00"), dq())));
+    let memfmt = memory_format();
+    add_line(head, str_concat(str_concat(str_concat("@.memfmt = private unnamed_addr constant [",
+            int_to_str(str_len(memfmt) + 2)),
+            str_concat(str_concat(" x i8] c", dq()), memfmt)),
+            str_concat(str_concat(str_concat(bs(), "0A"), str_concat(bs(), "00")), dq())));
+    add_line(head, "@.membuf = private global [256 x i8] zeroinitializer");
     // `Str` literals: the bytes, and a constant pair naming them. An empty literal still
     // gets a byte of storage so its pointer stays valid to hand to `memcmp`.
     let mut sb = 0;
@@ -1784,10 +2387,13 @@ fn main() -> Int {
                 int_to_str(str_len(stored)))),
                 str_concat(str_concat(str_concat(" x i8] c", dq()), escaped(stored)),
                 dq())));
+        // The owner is `null`: a literal is immortal, so nothing has to keep it alive and
+        // nothing may free it. The cheapest case the third field has, decided here at
+        // compile time and costing no instruction.
         add_line(head, str_concat(str_concat(str_concat("@.sv", int_to_str(sb)),
-                str_concat(" = private unnamed_addr constant { ptr, i64 } { ptr @.s",
+                str_concat(" = private unnamed_addr constant { ptr, i64, ptr } { ptr @.s",
                 int_to_str(sb))),
-                str_concat(str_concat(", i64 ", int_to_str(str_len(text))), " }")));
+                str_concat(str_concat(", i64 ", int_to_str(str_len(text))), ", ptr null }")));
         sb = sb + 1;
     }
 
@@ -1847,6 +2453,29 @@ fn main() -> Int {
     // The **root** module's `main`, which the checker already located. An imported
     // module's `main` is one of its definitions and not an entry point.
     add_line(tail, str_concat("  %r = call i64 ", str_concat(symbol(entry), "()")));
+    // Before the failure is reported, not after: `@nz.report` ends the process and never
+    // returns, so a report on the success path alone would say nothing about exactly the
+    // runs where reclamation is hardest to get right. A runtime diagnostic, off unless
+    // asked for, and not a built-in: no Nazm program may observe how its own storage is
+    // managed.
+    add_line(tail, "  %want = call ptr @getenv(ptr @.memvar)");
+    add_line(tail, "  %quiet = icmp eq ptr %want, null");
+    add_line(tail, "  br i1 %quiet, label %nz.checked, label %nz.memreport");
+    add_line(tail, "nz.memreport:");
+    add_line(tail, "  %seqa = load i64, ptr @nz.seq_allocated");
+    add_line(tail, "  %seqr = load i64, ptr @nz.seq_reclaimed");
+    add_line(tail, "  %seql = sub i64 %seqa, %seqr");
+    add_line(tail, "  %stra = load i64, ptr @nz.str_allocated");
+    add_line(tail, "  %strr = load i64, ptr @nz.str_reclaimed");
+    add_line(tail, "  %strl = sub i64 %stra, %strr");
+    add_line(tail, "  %chana = load i64, ptr @nz.chan_allocated");
+    add_line(tail, "  %chanr = load i64, ptr @nz.chan_reclaimed");
+    add_line(tail, "  %chanl = sub i64 %chana, %chanr");
+    add_line(tail, "  %memout = call i32 (ptr, i64, ptr, ...) @snprintf(ptr @.membuf, i64 256, ptr @.memfmt, i64 %seqa, i64 %seqr, i64 %seql, i64 %stra, i64 %strr, i64 %strl, i64 %chana, i64 %chanr, i64 %chanl)");
+    add_line(tail, "  %memlen = sext i32 %memout to i64");
+    add_line(tail, "  %memwrote = call i64 @write(i32 2, ptr @.membuf, i64 %memlen)");
+    add_line(tail, "  br label %nz.checked");
+    add_line(tail, "nz.checked:");
     // The one place a diagnostic is written. By the time control is here every scope
     // `main` opened has been joined, so nothing is still running when the process ends.
     add_line(tail, "  %failed = load i1, ptr @nz.failed");
@@ -1859,11 +2488,15 @@ fn main() -> Int {
     add_line(tail, "  ret i32 0");
     add_line(tail, "}");
 
-    // The task and channel runtime is emitted only when a `spawn` reached it, so an
-    // ordinary program carries none of it and its IR is unchanged.
+    // The task and channel runtime is emitted only when something reached it, so an
+    // ordinary program carries none of it. A channel without a `spawn` needs the channel
+    // half and not the task half.
     let mut rt = runtime();
     if strs_len(tasks) > 0 {
-        rt = str_concat(rt, str_concat(task_runtime(), channel_runtime()));
+        rt = str_concat(rt, task_runtime());
+    }
+    if concurrent {
+        rt = str_concat(rt, channel_runtime());
     }
     print(str_concat(str_concat(str_concat(join(head), rt),
             str_concat(join(body), join(tasks))), join(tail)));
@@ -1882,7 +2515,7 @@ fn main() -> Int {
 // Returns the value number, or -1 when `name` is not a built-in — which is how the call
 // site tells a built-in from a user function without a second name table.
 
-fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
+fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next: Ints,
         current: Strs, live: Ints, at: Str) -> Int {
     let a0 = if ints_len(args) > 0 { ints_get(args, 0) } else { 0 }
     ;
@@ -1916,11 +2549,21 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         let x = binop(out, next, "or", "i1", v(neg), v(inv));
         let bad = binop(out, next, "or", "i1", v(x), v(past));
         require(out, msgs, next, current, live, bad, "this slice is not inside the `Str`", at);
-        // No copy: a slice of an immutable, never-freed buffer is a pointer and a length.
+        // No copy: a slice is a pointer, a length and **the same owner**. The view keeps
+        // the allocation it was cut from alive, which is what makes a slice that outlives
+        // its original ordinary rather than a dangling pointer.
         let start = binop(out, next, "getelementptr", "i8,", str_concat("ptr ", v(ptr)),
                 str_concat("i64 ", v(a1)));
         let n = binop(out, next, "sub", "i64", v(a2), v(a1));
-        return make_str(out, next, start, n);
+        let owner = field(out, next, a0, "2");
+        // Retained here rather than left to whoever binds the result, because the
+        // argument is released as a temporary the moment this built-in returns:
+        // `str_slice(str_concat(a, b), 1, 2)` would otherwise free the backing its own
+        // result points into.
+        add_line(out, str_concat(str_concat("  call void @nz.str_retain(ptr ", v(owner)), ")"));
+        let made = make_str(out, next, start, n, v(owner));
+        own_add(owned, made);
+        return made;
     }
 
     if name == "str_join" {
@@ -1928,12 +2571,14 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         let sn = field(out, next, a1, "1");
         let r = take_number(next);
         add_line(out, str_concat(str_concat("  ", v(r)),
-                str_concat(str_concat(" = call { ptr, i64 } @nz.str_join(ptr ", v(a0)),
+                str_concat(str_concat(" = call { ptr, i64, ptr } @nz.str_join(ptr ", v(a0)),
                 str_concat(str_concat(", ptr ", v(sp)),
                 str_concat(", i64 ", str_concat(v(sn), ")"))))));
         let got = field(out, next, r, "0");
         let bad = binop(out, next, "icmp eq", "ptr", v(got), "null");
         guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+        // One allocation, one reference, and this expression is holding it.
+        own_add(owned, r);
         return r;
     }
 
@@ -1946,7 +2591,8 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         // One byte more than needed, so an empty result still owns storage and its
         // pointer stays valid to compare.
         let room = binop(out, next, "add", "i64", v(n), "1");
-        let buf = allocate(out, msgs, next, current, live, room, at);
+        let own = string_backing(out, msgs, next, current, live, room, at);
+        let buf = string_data(out, next, own);
         add_line(out, str_concat(str_concat("  call void @llvm.memcpy.p0.p0.i64(ptr ", v(buf)),
                 str_concat(str_concat(", ptr ", v(pa)),
                 str_concat(str_concat(", i64 ", v(la)), ", i1 false)"))));
@@ -1955,7 +2601,9 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         add_line(out, str_concat(str_concat("  call void @llvm.memcpy.p0.p0.i64(ptr ", v(rest)),
                 str_concat(str_concat(", ptr ", v(pb)),
                 str_concat(str_concat(", i64 ", v(lb)), ", i1 false)"))));
-        return make_str(out, next, buf, n);
+        let made = make_str(out, next, buf, n, v(own));
+        own_add(owned, made);
+        return made;
     }
 
     if name == "str_from_byte" {
@@ -1964,23 +2612,29 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         let bad = binop(out, next, "or", "i1", v(low), v(high));
         require(out, msgs, next, current, live, bad, "this is not a byte value", at);
         let one = constant(out, next, "1");
-        let buf = allocate(out, msgs, next, current, live, one, at);
+        let own = string_backing(out, msgs, next, current, live, one, at);
+        let buf = string_data(out, next, own);
         let narrow = cast(out, next, "trunc", "i64", a0, "i8");
         add_line(out, str_concat(str_concat("  store i8 ", v(narrow)), str_concat(", ptr ", v(buf))));
         let n = constant(out, next, "1");
-        return make_str(out, next, buf, n);
+        let made = make_str(out, next, buf, n, v(own));
+        own_add(owned, made);
+        return made;
     }
 
     if name == "int_to_str" {
         // 20 digits is the widest `Int`, plus the NUL `snprintf` insists on writing.
         let room = constant(out, next, "21");
-        let buf = allocate(out, msgs, next, current, live, room, at);
+        let own = string_backing(out, msgs, next, current, live, room, at);
+        let buf = string_data(out, next, own);
         let written = take_number(next);
         add_line(out, str_concat(str_concat("  ", v(written)),
                 str_concat(str_concat(" = call i32 (ptr, i64, ptr, ...) @snprintf(ptr ", v(buf)),
                 str_concat(", i64 21, ptr @.dec, i64 ", str_concat(v(a0), ")")))));
         let n = cast(out, next, "sext", "i32", written, "i64");
-        return make_str(out, next, buf, n);
+        let made = make_str(out, next, buf, n, v(own));
+        own_add(owned, made);
+        return made;
     }
 
     if name == "chan_new" {
@@ -1996,6 +2650,9 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         add_line(out, str_concat(str_concat("  ", v(bad)),
                 str_concat(" = icmp eq ptr ", str_concat(v(c), ", null"))));
         guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+        // Born with one reference, held by this expression — the same rule a sequence
+        // follows. Whatever consumes the expression takes it over.
+        own_add(owned, c);
         return c;
     }
 
@@ -2033,8 +2690,8 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         return constant(out, next, "0");
     }
 
-    if name == "ints_new" { return new_sequence(out, msgs, next, current, live, at); }
-    if name == "strs_new" { return new_sequence(out, msgs, next, current, live, at); }
+    if name == "ints_new" { return new_sequence(out, msgs, next, current, live, owned, at); }
+    if name == "strs_new" { return new_sequence(out, msgs, next, current, live, owned, at); }
     if name == "ints_len" { return binop(out, next, "load", "i64,", str_concat("ptr ", v(a0)), ""); }
     if name == "strs_len" { return binop(out, next, "load", "i64,", str_concat("ptr ", v(a0)), ""); }
 
@@ -2043,8 +2700,15 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         return binop(out, next, "load", "i64,", str_concat("ptr ", v(slot)), "");
     }
     if name == "strs_get" {
-        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "{ ptr, i64 }", at);
-        return binop(out, next, "load", "{ ptr, i64 },", str_concat("ptr ", v(slot)), "");
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "{ ptr, i64, ptr }", at);
+        let got = binop(out, next, "load", "{ ptr, i64, ptr },", str_concat("ptr ", v(slot)), "");
+        // What comes out of a `Strs` gets **its own** reference to the backing, which is
+        // what makes the specification's promise — a `Str` already read out is unaffected
+        // by changing the sequence — true by construction rather than true because
+        // nothing was ever freed.
+        emit_retain(out, next, got, t_str());
+        own_add(owned, got);
+        return got;
     }
     if name == "ints_set" {
         let slot = seq_slot(out, msgs, next, current, live, a0, a1, "i64", at);
@@ -2054,15 +2718,31 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         return a1;
     }
     if name == "strs_set" {
-        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "{ ptr, i64 }", at);
-        add_line(out, str_concat(str_concat("  store { ptr, i64 } ", v(a2)),
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "{ ptr, i64, ptr }", at);
+        // The order is the correctness. The new element's reference is taken **before**
+        // the old one is released, so replacing an element with a string that shares its
+        // backing cannot drop the count to zero in between.
+        let old = binop(out, next, "load", "{ ptr, i64, ptr },", str_concat("ptr ", v(slot)), "");
+        emit_retain(out, next, a2, t_str());
+        add_line(out, str_concat(str_concat("  store { ptr, i64, ptr } ", v(a2)),
                 str_concat(", ptr ", v(slot))));
+        emit_release(out, next, old, t_str());
         return a1;
     }
-    if name == "ints_push" { return push_sequence(out, msgs, next, current, live, a0, a1, "i64", "8", at); }
-    if name == "strs_push" { return push_sequence(out, msgs, next, current, live, a0, a1, "{ ptr, i64 }", "16", at); }
-    if name == "ints_pop" { return pop_sequence(out, msgs, next, current, live, a0, "i64", at); }
-    if name == "strs_pop" { return pop_sequence(out, msgs, next, current, live, a0, "{ ptr, i64 }", at); }
+    if name == "ints_push" {
+        return push_sequence(out, msgs, next, current, live, a0, a1, "i64", "8", t_int(), at);
+    }
+    if name == "strs_push" {
+        return push_sequence(out, msgs, next, current, live, a0, a1, "{ ptr, i64, ptr }", "24",
+                t_str(), at);
+    }
+    if name == "ints_pop" {
+        return pop_sequence(out, msgs, next, current, live, owned, a0, "i64", t_int(), at);
+    }
+    if name == "strs_pop" {
+        return pop_sequence(out, msgs, next, current, live, owned, a0, "{ ptr, i64, ptr }",
+                t_str(), at);
+    }
 
     if name == "args_count" {
         return binop(out, next, "load", "i64,", "ptr @nz.argc", "");
@@ -2082,7 +2762,9 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         let len = take_number(next);
         add_line(out, str_concat(str_concat("  ", v(len)),
                 str_concat(" = call i64 @strlen(ptr ", str_concat(v(text), ")"))));
-        return make_str(out, next, text, len);
+        // **External.** The bytes are the process's, outliving every value in the program.
+        // Null owner: nothing this program may free and nothing it has to keep alive.
+        return make_str(out, next, text, len, "null");
     }
 
     if name == "print" { return write_bytes(out, next, "1", a0); }
@@ -2107,11 +2789,13 @@ fn emit_builtin(name: Str, args: Ints, out: Strs, msgs: Strs, next: Ints,
         let len = field(out, next, a0, "1");
         let r = take_number(next);
         add_line(out, str_concat(str_concat("  ", v(r)),
-                str_concat(str_concat(" = call { ptr, i64 } @nz.read_file(ptr ", v(ptr)),
+                str_concat(str_concat(" = call { ptr, i64, ptr } @nz.read_file(ptr ", v(ptr)),
                 str_concat(", i64 ", str_concat(v(len), ")")))));
         let got = field(out, next, r, "0");
         let bad = binop(out, next, "icmp eq", "ptr", v(got), "null");
         guard(out, msgs, next, current, live, bad, "N0407", "this file could not be read", at);
+        // A file's contents are the program's own storage: one allocation, one reference.
+        own_add(owned, r);
         return r;
     }
     if name == "write_file" {
@@ -2153,16 +2837,21 @@ fn write_bytes(out: Strs, next: Ints, fd: Str, s: Int) -> Int {
     n
 }
 
-fn new_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, at: Str) -> Int {
+fn new_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
+        owned: Ints, at: Str) -> Int {
     let h = take_number(next);
-    add_line(out, str_concat(str_concat("  ", v(h)), " = call ptr @nz.arr_new()"));
+    // The counted allocator: `@nz.arr_new` is the uncounted one, and a scope's list of
+    // task ids uses that so it never appears in a report about the program's sequences.
+    add_line(out, str_concat(str_concat("  ", v(h)), " = call ptr @nz.seq_new()"));
     let bad = binop(out, next, "icmp eq", "ptr", v(h), "null");
     guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+    // Born with one reference, held by this expression.
+    own_add(owned, h);
     h
 }
 
 fn push_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, handle: Int, value: Int,
-        elem: Str, size: Str, at: Str) -> Int {
+        elem: Str, size: Str, et: Int, at: Str) -> Int {
     let data = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(data)),
             str_concat(str_concat(" = call ptr @nz.arr_grow(ptr ", v(handle)),
@@ -2172,6 +2861,9 @@ fn push_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, h
     let len = binop(out, next, "load", "i64,", str_concat("ptr ", v(handle)), "");
     let slot = binop(out, next, "getelementptr", str_concat(elem, ","), str_concat("ptr ", v(data)),
             str_concat("i64 ", v(len)));
+    // The sequence keeps what it is given, so it takes a reference of its own. The
+    // caller's value is untouched and is still valid after the call.
+    emit_retain(out, next, value, et);
     add_line(out, str_concat(str_concat(str_concat("  store ", elem), str_concat(" ", v(value))),
             str_concat(", ptr ", v(slot))));
     let grown = binop(out, next, "add", "i64", v(len), "1");
@@ -2179,7 +2871,8 @@ fn push_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, h
     grown
 }
 
-fn pop_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, handle: Int, elem: Str, at: Str) -> Int {
+fn pop_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, owned: Ints,
+        handle: Int, elem: Str, et: Int, at: Str) -> Int {
     let len = binop(out, next, "load", "i64,", str_concat("ptr ", v(handle)), "");
     let empty = binop(out, next, "icmp sle", "i64", v(len), "0");
     require(out, msgs, next, current, live, empty, "this sequence is empty", at);
@@ -2192,12 +2885,14 @@ fn pop_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, ha
     // The length is written back *after* the value is read, so the item is still inside
     // the sequence while it is being fetched. Capacity is left alone.
     add_line(out, str_concat(str_concat("  store i64 ", v(last)), str_concat(", ptr ", v(handle))));
+    // A **transfer**: shortening the sequence gives up its reference and this expression
+    // takes that same one over. No retain, no release, and the count is unchanged.
+    if owns(et) != 0 { own_add(owned, value); }
     value
 }
 
-// The task runtime, as generated LLVM: start a thread, record it, join the list and
-// report the first failure any of them had. Transcribed from
-// `crates/nazm-lir/src/emit.rs`, which documents why each piece is the way it is.
+// The task runtime: start a thread, record it, join the list, free each block and report
+// the first failure any of them had. Derived, like `runtime` above.
 fn task_runtime() -> Str {
     let r = strs_new();
     strs_push(r, "define internal i32 @nz.spawn(ptr %h, ptr %fn, ptr %blk) {");
@@ -2256,6 +2951,9 @@ fn task_runtime() -> Str {
     strs_push(r, "  %blk = inttoptr i64 %raw to ptr");
     strs_push(r, "  %tid = load ptr, ptr %blk");
     strs_push(r, "  %rc = call i32 @pthread_join(ptr %tid, ptr null)");
+    strs_push(r, "  ; Joined, so the thread has ended and nothing will read this block again. Its arguments");
+    strs_push(r, "  ; were released by the trampoline on its way out; this is the block itself, one");
+    strs_push(r, "  ; `malloc` per `spawn` that until N8 nothing ever gave back.");
     strs_push(r, "  ; The task's own diagnostic, at a fixed offset in the block it was given.");
     strs_push(r, "  %emp = getelementptr i8, ptr %blk, i64 8");
     strs_push(r, "  %em = load ptr, ptr %emp");
@@ -2264,6 +2962,10 @@ fn task_runtime() -> Str {
     strs_push(r, "  %none = icmp eq ptr %msg, null");
     strs_push(r, "  %this = icmp ne ptr %em, null");
     strs_push(r, "  %take = and i1 %none, %this");
+    strs_push(r, "  ; Read before the block is freed, and the message itself is a constant in the object's");
+    strs_push(r, "  ; read-only data rather than anything the block owns — so what is carried out stays");
+    strs_push(r, "  ; valid after the free below.");
+    strs_push(r, "  call void @free(ptr %blk)");
     strs_push(r, "  br i1 %take, label %first, label %after");
     strs_push(r, "first:");
     strs_push(r, "  br label %after");
@@ -2280,33 +2982,55 @@ fn task_runtime() -> Str {
     str_concat(str_join(r, nl()), nl())
 }
 
-// The channel runtime: one mutex, one condition variable, one ring. Transcribed from
-// `crates/nazm-lir/src/emit.rs`.
+// The channel runtime: one mutex, one condition variable, one ring, one reference count.
+// Derived, like `runtime` above.
 fn channel_runtime() -> Str {
     let r = strs_new();
     strs_push(r, "define internal ptr @nz.chan_new(i64 %cap) {");
     strs_push(r, "entry:");
-    strs_push(r, "  %c = call ptr @malloc(i64 56)");
+    strs_push(r, "  %c = call ptr @malloc(i64 64)");
     strs_push(r, "  %bad = icmp eq ptr %c, null");
     strs_push(r, "  br i1 %bad, label %fail, label %ring");
     strs_push(r, "fail:");
     strs_push(r, "  ret ptr null");
+    strs_push(r, "; A channel is four allocations, and a failure part-way through must not leave the earlier");
+    strs_push(r, "; ones behind. One label per stage, each freeing exactly what has been taken by then —");
+    strs_push(r, "; which is `docs/spec.md`'s failure law applied to the runtime's own storage, not only to");
+    strs_push(r, "; the program's.");
+    strs_push(r, "freec:");
+    strs_push(r, "  call void @free(ptr %c)");
+    strs_push(r, "  ret ptr null");
+    strs_push(r, "freed:");
+    strs_push(r, "  call void @free(ptr %d)");
+    strs_push(r, "  call void @free(ptr %c)");
+    strs_push(r, "  ret ptr null");
+    strs_push(r, "freem:");
+    strs_push(r, "  call void @free(ptr %m)");
+    strs_push(r, "  call void @free(ptr %d)");
+    strs_push(r, "  call void @free(ptr %c)");
+    strs_push(r, "  ret ptr null");
     strs_push(r, "ring:");
-    strs_push(r, "  %bytes = mul i64 %cap, 8");
+    strs_push(r, "  ; Checked: a capacity large enough to overflow this product would allocate a ring");
+    strs_push(r, "  ; smaller than the channel then believes it has.");
+    strs_push(r, "  %r = call {i64, i1} @llvm.umul.with.overflow.i64(i64 %cap, i64 8)");
+    strs_push(r, "  %over = extractvalue {i64, i1} %r, 1");
+    strs_push(r, "  br i1 %over, label %freec, label %ask");
+    strs_push(r, "ask:");
+    strs_push(r, "  %bytes = extractvalue {i64, i1} %r, 0");
     strs_push(r, "  %d = call ptr @malloc(i64 %bytes)");
     strs_push(r, "  %badd = icmp eq ptr %d, null");
-    strs_push(r, "  br i1 %badd, label %fail, label %lock");
+    strs_push(r, "  br i1 %badd, label %freec, label %lock");
     strs_push(r, "lock:");
     strs_push(r, "  ; Sized generously on purpose: pthread_mutex_t and pthread_cond_t are opaque and");
     strs_push(r, "  ; differently sized on every platform, and there is no header to ask from here.");
     strs_push(r, "  ; Over-allocating is what makes this portable without a size to get wrong.");
     strs_push(r, "  %m = call ptr @malloc(i64 128)");
     strs_push(r, "  %badm = icmp eq ptr %m, null");
-    strs_push(r, "  br i1 %badm, label %fail, label %cond");
+    strs_push(r, "  br i1 %badm, label %freed, label %cond");
     strs_push(r, "cond:");
     strs_push(r, "  %v = call ptr @malloc(i64 128)");
     strs_push(r, "  %badv = icmp eq ptr %v, null");
-    strs_push(r, "  br i1 %badv, label %fail, label %init");
+    strs_push(r, "  br i1 %badv, label %freem, label %init");
     strs_push(r, "init:");
     strs_push(r, "  %mi = call i32 @pthread_mutex_init(ptr %m, ptr null)");
     strs_push(r, "  %vi = call i32 @pthread_cond_init(ptr %v, ptr null)");
@@ -2323,7 +3047,57 @@ fn channel_runtime() -> Str {
     strs_push(r, "  store ptr %m, ptr %mp");
     strs_push(r, "  %vp = getelementptr i8, ptr %c, i64 48");
     strs_push(r, "  store ptr %v, ptr %vp");
+    strs_push(r, "  ; Born with one reference, held by the expression that created it.");
+    strs_push(r, "  %rcp = getelementptr i8, ptr %c, i64 56");
+    strs_push(r, "  store i64 1, ptr %rcp");
+    strs_push(r, "  %n = atomicrmw add ptr @nz.chan_allocated, i64 1 monotonic");
     strs_push(r, "  ret ptr %c");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "define internal void @nz.chan_retain(ptr %c) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %none = icmp eq ptr %c, null");
+    strs_push(r, "  br i1 %none, label %done, label %bump");
+    strs_push(r, "bump:");
+    strs_push(r, "  %rcp = getelementptr i8, ptr %c, i64 56");
+    strs_push(r, "  %old = atomicrmw add ptr %rcp, i64 1 monotonic");
+    strs_push(r, "  br label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  ret void");
+    strs_push(r, "}");
+    strs_push(r, "");
+    strs_push(r, "; The whole of a channel goes at once: the condition variable, the mutex, the ring and the");
+    strs_push(r, "; header. Destroying the two primitives is not optional — `pthread_mutex_destroy` releases");
+    strs_push(r, "; what the platform allocated behind an opaque handle, and freeing the memory without it");
+    strs_push(r, "; leaks whatever that was. Neither can be in use: nothing holds a reference, so no thread");
+    strs_push(r, "; is inside a send, a receive or a close.");
+    strs_push(r, "define internal void @nz.chan_release(ptr %c) {");
+    strs_push(r, "entry:");
+    strs_push(r, "  %none = icmp eq ptr %c, null");
+    strs_push(r, "  br i1 %none, label %done, label %drop");
+    strs_push(r, "drop:");
+    strs_push(r, "  %rcp = getelementptr i8, ptr %c, i64 56");
+    strs_push(r, "  %old = atomicrmw sub ptr %rcp, i64 1 release");
+    strs_push(r, "  %last = icmp eq i64 %old, 1");
+    strs_push(r, "  br i1 %last, label %destroy, label %done");
+    strs_push(r, "destroy:");
+    strs_push(r, "  fence acquire");
+    strs_push(r, "  %vp = getelementptr i8, ptr %c, i64 48");
+    strs_push(r, "  %v = load ptr, ptr %vp");
+    strs_push(r, "  %dv = call i32 @pthread_cond_destroy(ptr %v)");
+    strs_push(r, "  call void @free(ptr %v)");
+    strs_push(r, "  %mp = getelementptr i8, ptr %c, i64 40");
+    strs_push(r, "  %m = load ptr, ptr %mp");
+    strs_push(r, "  %dm = call i32 @pthread_mutex_destroy(ptr %m)");
+    strs_push(r, "  call void @free(ptr %m)");
+    strs_push(r, "  %datap = getelementptr i8, ptr %c, i64 32");
+    strs_push(r, "  %data = load ptr, ptr %datap");
+    strs_push(r, "  call void @free(ptr %data)");
+    strs_push(r, "  call void @free(ptr %c)");
+    strs_push(r, "  %n = atomicrmw add ptr @nz.chan_reclaimed, i64 1 monotonic");
+    strs_push(r, "  br label %done");
+    strs_push(r, "done:");
+    strs_push(r, "  ret void");
     strs_push(r, "}");
     strs_push(r, "");
     strs_push(r, "define internal i1 @nz.chan_send(ptr %c, i64 %v) {");
