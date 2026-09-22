@@ -34,6 +34,7 @@ fn main() -> ExitCode {
         Some("check-symbols") => report(&[("native identity", check_native_identity())]),
         Some("check-objects") => report(&[("object cache", check_object_cache())]),
         Some("check-runtime") => report(&[("runtime parity", check_runtime_parity())]),
+        Some("check-mutations") => report(&[("mutations apply", check_mutations_apply())]),
         Some("check-guide") => report(&[("guide from grammar", guide::check())]),
         Some("bench") => {
             let rest: Vec<String> = args.collect();
@@ -161,6 +162,7 @@ fn run_checks() -> ExitCode {
         ("native identity", check_native_identity()),
         ("object cache", check_object_cache()),
         ("runtime parity", check_runtime_parity()),
+        ("mutations apply", check_mutations_apply()),
         ("guide from grammar", guide::check()),
     ])
 }
@@ -1358,6 +1360,79 @@ fn check_object_cache() -> Result<(), Vec<String>> {
 /// toolchain* — is [`check_emission_reach`], which looks at call sites instead. The two
 /// together are what `docs/architecture.md` §1 means by keeping Cranelift and LLVM behind
 /// the LIR contract; neither is sufficient alone.
+/// Every catalogued mutation still matches its file, exactly once.
+///
+/// A mutation whose pattern has drifted is reported `NOT INJECTED` — correctly, because a
+/// defect that was never applied says nothing about the tests. But the runner only
+/// discovers that after copying the tree, building the workspace and running the suite
+/// once, which is minutes per entry inside the contained environment; and until it gets
+/// there the catalogue's *size* is a claim about coverage that one of its entries is not
+/// keeping.
+///
+/// This found a real one. `an-absolute-path-reaches-the-module-key` had matched nothing
+/// since before N7: the line it names was rewritten to make both paths absolute, and the
+/// pattern went on naming the old spelling. The catalogue said 85 and meant 84.
+///
+/// Pure file reads, no build, so it belongs in `check` where the cost is a few
+/// milliseconds rather than in the run it protects.
+fn check_mutations_apply() -> Result<(), Vec<String>> {
+    const CATALOGUE: &str = "xtask/mutations/mutations.toml";
+    let text = match std::fs::read_to_string(CATALOGUE) {
+        Ok(t) => t,
+        Err(e) => return Err(vec![format!("{CATALOGUE}: {e}")]),
+    };
+    let catalogue: toml::Value = match toml::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => return Err(vec![format!("{CATALOGUE} is not valid TOML: {e}")]),
+    };
+    let Some(entries) = catalogue.get("mutation").and_then(toml::Value::as_array) else {
+        return Err(vec![format!("{CATALOGUE} has no `[[mutation]]` entries")]);
+    };
+
+    let mut bad = Vec::new();
+    // One read per file however many mutations name it: the catalogue is nearly a hundred
+    // entries over a dozen files.
+    let mut sources: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for entry in entries {
+        let field = |name: &str| entry.get(name).and_then(toml::Value::as_str);
+        let (Some(name), Some(file), Some(find)) = (field("name"), field("file"), field("find"))
+        else {
+            bad.push(format!(
+                "{CATALOGUE} has an entry missing `name`, `file` or `find`"
+            ));
+            continue;
+        };
+        let source = match sources.get(file) {
+            Some(s) => s,
+            None => match std::fs::read_to_string(file) {
+                Ok(s) => sources.entry(file.to_owned()).or_insert(s),
+                Err(e) => {
+                    bad.push(format!("{name}: cannot read {file}: {e}"));
+                    continue;
+                }
+            },
+        };
+        match source.matches(find).count() {
+            1 => {}
+            0 => bad.push(format!(
+                "{name}: its pattern is not in {file} any more, so the run would report it \
+                 NOT INJECTED after building the workspace to find out. Repoint it at the \
+                 line that carries the rule now, or retire it"
+            )),
+            n => bad.push(format!(
+                "{name}: its pattern appears {n} times in {file}, so the runner cannot say \
+                 which one it means. Widen it with enough context to be unique"
+            )),
+        }
+    }
+
+    if bad.is_empty() {
+        Ok(())
+    } else {
+        Err(bad)
+    }
+}
+
 /// The two compilers emit **the same runtime**, derived rather than transcribed.
 ///
 /// `compiler/emit.nz` writes the same helpers `crates/nazm-lir/src/emit.rs` writes, because
