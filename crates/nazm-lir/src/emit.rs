@@ -192,6 +192,14 @@ struct Emitter<'a> {
     /// Reading a variable is **not** in here. That is rule 2: a borrowed reference costs
     /// nothing, which is why passing a sequence to a function emits no traffic at all.
     owned: std::collections::BTreeSet<u32>,
+    /// The type of each value that has ever been in [`Self::owned`], in the order they
+    /// were created.
+    ///
+    /// `owned` is a set of numbers and a release needs a type. Kept beside it rather than
+    /// making it a map, because the common operations on `owned` are membership and
+    /// removal and this is read only where a failure is leaving. Cleared per function
+    /// with everything else.
+    outstanding: Vec<(u32, Ty)>,
     /// The type of every slot in the function being emitted, by slot.
     ///
     /// `frame` holds only the owning ones, because only those need releasing; a field
@@ -683,6 +691,15 @@ impl Emitter<'_> {
         self.needs_sequences = true;
     }
 
+    /// Record that `value` holds a reference nobody has taken over yet.
+    ///
+    /// The type travels with it because releasing needs one, and a failure leaving the
+    /// function is where that happens — see [`Self::release_temporaries`].
+    fn own(&mut self, value: u32, ty: Ty) {
+        self.owned.insert(value);
+        self.outstanding.push((value, ty));
+    }
+
     /// Make `value` a reference this code owns, retaining it if it was only borrowed.
     ///
     /// Called where something takes a reference over — a binding, a `return`. A value that
@@ -789,7 +806,7 @@ impl Emitter<'_> {
                     "  store {text} {}, ptr %slot{slot}",
                     ty.unwind_value()
                 );
-                self.owned.insert(whole);
+                self.own(whole, ty);
                 Val::Of { value: whole, ty }
             }
         }
@@ -959,9 +976,37 @@ impl Emitter<'_> {
     /// nesting. Written at each site rather than at one shared block because how many
     /// scopes are open is a property of where the failure happened.
     fn unwind(&mut self) {
+        self.release_temporaries();
         self.join_through(0);
         self.used_unwind = true;
         let _ = writeln!(self.out, "  br label %nz.unwind");
+    }
+
+    /// Release every reference this expression is still holding, on a path that is leaving.
+    ///
+    /// # What this closes, and why it was invisible
+    ///
+    /// The shared unwind block releases the frame's **slots**, which is right for
+    /// everything a binding holds and says nothing about a value still in a register.
+    /// `str_concat(str_concat(a, b), int_to_str(1 / z))` has the inner result in hand when
+    /// the division fails, and it is nobody's: the outer call that would have consumed it
+    /// is on a path control never takes.
+    ///
+    /// That is a defect of N8's, not of records — every ingredient existed then. What made
+    /// it invisible is that a failure ends the process, so nothing downstream could
+    /// observe the difference, and no test had this exact shape: an owned temporary
+    /// outstanding **across a sibling that fails**. A record projection made the shape
+    /// ordinary, and `a_record_is_released_on_the_failure_path_too` found it.
+    ///
+    /// The set is exactly right here and nowhere else: which temporaries are outstanding
+    /// is a property of the program point, which is why this is written at each failure
+    /// site rather than in the one block they all reach.
+    fn release_temporaries(&mut self) {
+        for (value, ty) in self.outstanding.clone() {
+            if self.owned.contains(&value) {
+                self.release(value, ty);
+            }
+        }
     }
 
     /// If this thread has failed, leave; otherwise carry on in a fresh block.
@@ -974,15 +1019,18 @@ impl Emitter<'_> {
         let flag = self.fresh();
         let cont = self.fresh_label();
         let _ = writeln!(self.out, "  %{flag} = load i1, ptr @nz.failed");
-        if self.scopes.is_empty() {
-            // Nothing is open to join, so the failure goes straight to the function's
-            // exit rather than through a block whose only instruction forwards to it.
-            //
-            // Worth writing down: this is emitted after *every* call, and the compiler's
-            // own source has about sixteen hundred of them. Each intermediate block cost
-            // clang far more at `-O0` than its two instructions suggest — building the
-            // compiler with itself went from 200 ms to 515 ms when this path did not
-            // exist, and 457 ms of that was clang rather than emission.
+        // Straight to the function's exit when there is nothing to join **and** nothing
+        // outstanding, rather than through a block whose only instruction forwards to it.
+        //
+        // Worth writing down: this is emitted after *every* call, and the compiler's own
+        // source has about sixteen hundred of them. Each intermediate block cost clang far
+        // more at `-O0` than its two instructions suggest — building the compiler with
+        // itself went from 200 ms to 515 ms when this path did not exist, and 457 ms of
+        // that was clang rather than emission. So the shortcut is kept, and narrowed by
+        // exactly the condition that makes it wrong: a temporary this expression is
+        // holding has to be released before the failure leaves, and there is nowhere to
+        // write that but a block of its own.
+        if self.scopes.is_empty() && self.owned.is_empty() {
             self.used_unwind = true;
             let _ = writeln!(
                 self.out,
@@ -1600,7 +1648,11 @@ impl Emitter<'_> {
             exit: exit.clone(),
             scope_depth: self.scopes.len(),
         });
+        // The body's temporaries do not dominate the exit, and every statement in it has
+        // already consumed or dropped its own. See `value_branch`.
+        let outer = self.owned.clone();
         let reach = self.stmts(body);
+        self.owned = outer;
         self.loops.pop();
         if reach == Reach::FallsThrough {
             let _ = writeln!(self.out, "  br label %{head}");
@@ -1634,10 +1686,12 @@ impl Emitter<'_> {
 
         let Some(else_body) = else_body else {
             let _ = writeln!(self.out, "  br i1 %{c}, label %{then_label}, label %{cont}");
+            let outer = self.owned.clone();
             self.open(&then_label);
             if self.stmts(then_body) == Reach::FallsThrough {
                 let _ = writeln!(self.out, "  br label %{cont}");
             }
+            self.owned = outer;
             self.open(&cont);
             return Reach::FallsThrough;
         };
@@ -1648,17 +1702,22 @@ impl Emitter<'_> {
             "  br i1 %{c}, label %{then_label}, label %{else_label}"
         );
 
+        // Neither branch's temporaries dominate the other's block or the continuation.
+        // See `value_branch`.
+        let outer = self.owned.clone();
         self.open(&then_label);
         let then_reach = self.stmts(then_body);
         if then_reach == Reach::FallsThrough {
             let _ = writeln!(self.out, "  br label %{cont}");
         }
+        self.owned.clone_from(&outer);
 
         self.open(&else_label);
         let else_reach = self.stmts(else_body);
         if else_reach == Reach::FallsThrough {
             let _ = writeln!(self.out, "  br label %{cont}");
         }
+        self.owned = outer;
 
         if then_reach == Reach::FallsThrough || else_reach == Reach::FallsThrough {
             self.open(&cont);
@@ -1698,13 +1757,29 @@ impl Emitter<'_> {
                 let Ty::Record(id) = *base_ty else {
                     return Val::Of { value: b, ty: *ty };
                 };
+                // **Whether the base was owned decides whether the field must be.**
+                //
+                // A projection out of a *borrowed* record is borrowed too: the record is
+                // in a slot, and nothing between here and the end of this expression can
+                // change it — assignment is a statement — so the slot is what keeps the
+                // field's storage alive, and taking a second reference would be the cost
+                // rule 2 exists to avoid. Whoever the value reaches takes it over if they
+                // keep it: a binding, a `return`, a container.
+                //
+                // A projection out of an owned *temporary* is the case `docs/spec.md`
+                // names: `make().name` outlives the record it came from only because it
+                // takes a reference **before** that record is dropped. The order of these
+                // three steps is the whole of it.
+                //
+                // Retaining unconditionally was wrong in a way only a failure could show:
+                // `ints_get(h.values, 0)` retained the sequence, the built-in failed, and
+                // the release that would have balanced it was on the path the program did
+                // not take. A borrowed projection has nothing to balance.
+                let borrowed = !self.owned.contains(&b);
                 let out = self.extract(b, id, *at, *ty);
-                // The order is the rule: retain first, then let the base go. Reversed, a
-                // projection out of a temporary would read storage the temporary had just
-                // released.
-                if owns_anything(self.records, *ty) {
+                if !borrowed && owns_anything(self.records, *ty) {
                     self.retain(out, *ty);
-                    self.owned.insert(out);
+                    self.own(out, *ty);
                 }
                 self.drop_temporary(b, *base_ty);
                 Val::Of {
@@ -1847,7 +1922,7 @@ impl Emitter<'_> {
                 // expression now holds. Rule 2: the arguments were only borrowed, so a
                 // temporary passed in is still nobody's and is dropped here.
                 if ret.owns().is_some() {
-                    self.owned.insert(out);
+                    self.own(out, *ret);
                 }
                 for (v, t) in &vals {
                     self.drop_temporary(*v, *t);
@@ -1979,7 +2054,7 @@ impl Emitter<'_> {
                 let _ = writeln!(self.out, "  call void @nz.str_retain(ptr %{owner})");
                 self.needs_strings = true;
                 let out = self.make_str(start, n, &format!("%{owner}"));
-                self.owned.insert(out);
+                self.own(out, Ty::Str);
                 out
             }
             Builtin::StrConcat => {
@@ -2008,7 +2083,7 @@ impl Emitter<'_> {
                     "  call void @llvm.memcpy.p0.p0.i64(ptr %{rest}, ptr %{pb}, i64 %{lb}, i1 false)"
                 );
                 let out = self.make_str(buf, n, &format!("%{owner}"));
-                self.owned.insert(out);
+                self.own(out, Ty::Str);
                 out
             }
             // --- the outside world ------------------------------------------------
@@ -2106,7 +2181,7 @@ impl Emitter<'_> {
                 );
                 // A file's contents are the program's own storage: one allocation, one
                 // reference, held by this expression.
-                self.owned.insert(out);
+                self.own(out, Ty::Str);
                 return Val::Of {
                     value: out,
                     ty: Ty::Str,
@@ -2172,7 +2247,7 @@ impl Emitter<'_> {
                 );
                 // Born with one reference, and this expression is holding it. Whatever
                 // consumes the expression takes it over; a discard releases it.
-                self.owned.insert(h);
+                self.own(h, op.lowered_ret());
                 return Val::Of {
                     value: h,
                     ty: op.lowered_ret(),
@@ -2203,7 +2278,7 @@ impl Emitter<'_> {
                 // N8 it was the second of those.
                 if elem.owns().is_some() {
                     self.take(v, elem);
-                    self.owned.insert(v);
+                    self.own(v, elem);
                 }
                 return Val::Of { value: v, ty: elem };
             }
@@ -2262,7 +2337,7 @@ impl Emitter<'_> {
                     span,
                 );
                 // One allocation, one reference, and this expression is holding it.
-                self.owned.insert(out);
+                self.own(out, Ty::Str);
                 return Val::Of {
                     value: out,
                     ty: Ty::Str,
@@ -2292,7 +2367,7 @@ impl Emitter<'_> {
                 // Born with one reference, held by this expression — the same rule a
                 // sequence follows. What consumes the expression takes it over, and a
                 // channel nothing binds is released as an ordinary temporary.
-                self.owned.insert(c);
+                self.own(c, Ty::Chan);
                 return Val::Of {
                     value: c,
                     ty: Ty::Chan,
@@ -2395,7 +2470,7 @@ impl Emitter<'_> {
                 // No retain, no release, and the count is unchanged — which is what makes
                 // popping in a loop cost nothing.
                 if elem.owns().is_some() {
-                    self.owned.insert(v);
+                    self.own(v, elem);
                 }
                 return Val::Of { value: v, ty: elem };
             }
@@ -2465,7 +2540,7 @@ impl Emitter<'_> {
                 let one = self.fresh();
                 let _ = writeln!(self.out, "  %{one} = add i64 1, 0");
                 let out = self.make_str(buf, one, &format!("%{owner}"));
-                self.owned.insert(out);
+                self.own(out, Ty::Str);
                 out
             }
             Builtin::IntToStr => {
@@ -2484,7 +2559,7 @@ impl Emitter<'_> {
                 let n = self.fresh();
                 let _ = writeln!(self.out, "  %{n} = sext i32 %{written} to i64");
                 let out = self.make_str(buf, n, &format!("%{owner}"));
-                self.owned.insert(out);
+                self.own(out, Ty::Str);
                 out
             }
         };
@@ -2599,7 +2674,7 @@ impl Emitter<'_> {
             for (v, _, _) in &incomings {
                 self.owned.remove(v);
             }
-            self.owned.insert(out);
+            self.own(out, ty);
         }
         Val::Of { value: out, ty }
     }
@@ -2612,6 +2687,23 @@ impl Emitter<'_> {
     /// one holding the jump to the join. Reading it here, next to the jump, is what keeps
     /// the two from drifting apart.
     fn value_branch(&mut self, b: &Block, join: &str) -> Incoming {
+        // What this branch creates is **not visible to its sibling**, and that is a
+        // dominance fact rather than a preference: a value defined inside the `then`
+        // block does not dominate the `else` block, so a failure over there may not
+        // release it. Releasing on a failure path is what made that matter — before it,
+        // the set was only read where the value was in hand anyway.
+        //
+        // Restoring is safe because nothing inside a branch can consume a temporary from
+        // outside it: an outer temporary has no name, so no statement in the branch can
+        // reach it. What the branch does create is either consumed inside it or becomes
+        // the branch's result, which the join takes over below.
+        let outer = self.owned.clone();
+        let incoming = self.value_branch_inner(b, join);
+        self.owned = outer;
+        incoming
+    }
+
+    fn value_branch_inner(&mut self, b: &Block, join: &str) -> Incoming {
         match self.block(b) {
             Val::Of { value, ty } => {
                 // A `phi` merges two branches that may have arrived at ownership
@@ -2622,7 +2714,7 @@ impl Emitter<'_> {
                 // after the `phi` there is no branch left to attribute it to.
                 self.take(value, ty);
                 if ty.owns().is_some() {
-                    self.owned.insert(value);
+                    self.own(value, ty);
                 }
                 let from = self.current.clone();
                 let _ = writeln!(self.out, "  br label %{join}");
@@ -2922,6 +3014,7 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         records: &unit.records,
         loops: Vec::new(),
         owned: std::collections::BTreeSet::new(),
+        outstanding: Vec::new(),
         slot_types: Vec::new(),
         frame: Vec::new(),
         scopes: Vec::new(),
@@ -3774,6 +3867,7 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
     e.current = "entry".to_owned();
     e.used_unwind = false;
     e.owned.clear();
+    e.outstanding.clear();
     // No loop target crosses a function boundary. Push and pop are balanced, so this is
     // already empty — clearing it says so rather than relying on it.
     e.loops.clear();

@@ -1215,7 +1215,7 @@ unaffected by changing the sequence; until N8 that was true because nothing was 
 file = "crates/nazm-lir/src/emit.rs"
 find = """                if elem.owns().is_some() {
                     self.take(v, elem);
-                    self.owned.insert(v);
+                    self.own(v, elem);
                 }
                 return Val::Of { value: v, ty: elem };"""
 replace = """                return Val::Of { value: v, ty: elem };"""
@@ -1305,7 +1305,7 @@ Only a differential test that compares what the two compilers' programs *reclaim
 it, which is what `the_nazm_written_compiler_emits_the_same_memory_semantics` is for
 """
 file = "compiler/emit.nz"
-find = """                                                                                                own_keep(out, next, owned, tv, ints_get(nrec, k), rowns);
+find = """                                                                                                own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);
                                                                                                 release_frame(out, next, frame, rowns);"""
-replace = """                                                                                                own_keep(out, next, owned, tv, ints_get(nrec, k), rowns);"""
+replace = """                                                                                                own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);"""
 

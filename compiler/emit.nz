@@ -180,7 +180,8 @@ fn failure_text(code: Str, message: Str, at: Str) -> Str {
 // it — which clang reports as "PHI node entries do not match predecessors", several
 // constructs away from the cause.
 fn guard(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
-        cond: Int, code: Str, message: Str, at: Str) -> Int {
+        cond: Int, code: Str, message: Str, at: Str,
+        owned: Ints, otype: Ints, rowns: Ints) -> Int {
     let text = failure_text(code, message, at);
     let idx = message_index(msgs, text);
     let fail = take_label(next);
@@ -194,7 +195,7 @@ fn guard(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
     // `@nz.fail` records and returns; it does not end the process. The failure leaves
     // this function by its own exit, so that a `scope` further out can join its tasks
     // before anything is reported — see `docs/spec.md`, *Error propagation*.
-    unwind(out, next, current, live);
+    unwind(out, next, current, live, owned, otype, rowns);
     open_block(out, current, live, str_concat("b", int_to_str(cont)));
     cont
 }
@@ -242,7 +243,9 @@ fn emit_join(out: Strs, next: Ints, current: Strs, live: Ints, tids: Int) -> Int
 // The open scopes are held from index 2 of `live`, innermost last — in the array already
 // threaded to every emitter rather than in a parameter added to eleven signatures and to
 // everything that calls them.
-fn unwind(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
+fn unwind(out: Strs, next: Ints, current: Strs, live: Ints,
+        owned: Ints, otype: Ints, rowns: Ints) -> Int {
+    release_temporaries(out, next, owned, otype, rowns);
     let mut i = ints_len(live) - 1;
     while i >= 2 {
         emit_join(out, next, current, live, ints_get(live, i));
@@ -254,25 +257,38 @@ fn unwind(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
 }
 
 // If this thread has failed, leave; otherwise carry on in a fresh block.
-fn check_failed(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
+fn check_failed(out: Strs, next: Ints, current: Strs, live: Ints,
+        owned: Ints, otype: Ints, rowns: Ints) -> Int {
     let flag = take_number(next);
     let ok = take_label(next);
     add_line(out, str_concat(str_concat("  ", v(flag)), " = load i1, ptr @nz.failed"));
-    // With nothing open to join, the failure goes straight to the function's exit rather
-    // than through a block whose only instruction forwards to it. This is emitted after
-    // every call, so the block it saves is worth more than it looks: at `-O0` clang's
-    // time tracks the block count, and this is the common case by far.
+    // With nothing open to join **and nothing outstanding**, the failure goes straight to
+    // the function's exit rather than through a block whose only instruction forwards to
+    // it. This is emitted after every call, so the block it saves is worth more than it
+    // looks: at `-O0` clang's time tracks the block count, and this is the common case by
+    // far. The shortcut is narrowed by exactly the condition that makes it wrong — a
+    // temporary this expression is holding has to be released before the failure leaves,
+    // and there is nowhere to write that but a block of its own.
     if ints_len(live) == 2 {
-        ints_set(live, 1, 1);
-        add_line(out, str_concat(str_concat("  br i1 ", v(flag)),
-                str_concat(", label %nz.unwind, label %b", int_to_str(ok))));
+        if ints_len(owned) == 0 {
+            ints_set(live, 1, 1);
+            add_line(out, str_concat(str_concat("  br i1 ", v(flag)),
+                    str_concat(", label %nz.unwind, label %b", int_to_str(ok))));
+        } else {
+            let held = take_label(next);
+            add_line(out, str_concat(str_concat("  br i1 ", v(flag)),
+                    str_concat(str_concat(", label %b", int_to_str(held)),
+                    str_concat(", label %b", int_to_str(ok)))));
+            open_block(out, current, live, str_concat("b", int_to_str(held)));
+            unwind(out, next, current, live, owned, otype, rowns);
+        }
     } else {
         let uw = take_label(next);
         add_line(out, str_concat(str_concat("  br i1 ", v(flag)),
                 str_concat(str_concat(", label %b", int_to_str(uw)),
                 str_concat(", label %b", int_to_str(ok)))));
         open_block(out, current, live, str_concat("b", int_to_str(uw)));
-        unwind(out, next, current, live);
+        unwind(out, next, current, live, owned, otype, rowns);
     }
     open_block(out, current, live, str_concat("b", int_to_str(ok)));
     0
@@ -289,7 +305,8 @@ fn check_failed(out: Strs, next: Ints, current: Strs, live: Ints) -> Int {
 // fails, which the join reads after `pthread_join` — a happens-before edge, so no lock.
 fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, tasks: Strs,
         owned: Ints, vals: Ints, nar: Ints, ntype: Ints, kids: Ints, kid_first: Ints,
-        fnames: Strs, fret: Ints, k: Int, callee: Int, at: Str, rowns: Ints) -> Int {
+        fnames: Strs, fret: Ints, k: Int, callee: Int, at: Str, rowns: Ints,
+        otype: Ints) -> Int {
     let argc = ints_get(nar, k);
     // Popped in reverse, then read back in source order.
     let args = ints_new();
@@ -315,7 +332,7 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     let bad = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(bad)),
             str_concat(" = icmp eq ptr ", str_concat(v(blk), ", null"))));
-    guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+    guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at, owned, otype, rowns);
 
     // `malloc` does not zero, and the join reads this slot for every task including the
     // ones that succeeded. Left as the allocator found it, a program that never failed
@@ -341,7 +358,7 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
         add_line(out, str_concat(str_concat("  ", v(slot)),
                 str_concat(str_concat(" = getelementptr i8, ptr ", v(blk)),
                 str_concat(", i64 ", int_to_str(ints_get(offs, i))))));
-        own_keep(out, next, owned, value, t, rowns);
+        own_keep(out, next, owned, value, t, rowns, otype);
         add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(t)),
                 str_concat(" ", v(value))),
                 str_concat(", ptr ", v(slot))));
@@ -433,11 +450,11 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     let oom = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(oom)),
             str_concat(" = icmp eq i32 ", str_concat(v(rc), ", -1"))));
-    guard(out, msgs, next, current, live, oom, "N0406", "out of memory", at);
+    guard(out, msgs, next, current, live, oom, "N0406", "out of memory", at, owned, otype, rowns);
     let nostart = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(nostart)),
             str_concat(" = icmp sgt i32 ", str_concat(v(rc), ", 0"))));
-    guard(out, msgs, next, current, live, nostart, "N0404", "this task could not be started", at);
+    guard(out, msgs, next, current, live, nostart, "N0404", "this task could not be started", at, owned, otype, rowns);
     0
 }
 
@@ -509,7 +526,8 @@ fn take_label(next: Ints) -> Int {
 // their operator is reached, which is what post-order means.
 
 fn checked(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
-        intrinsic: Str, noun: Str, a: Int, b: Int, at: Str) -> Int {
+        intrinsic: Str, noun: Str, a: Int, b: Int, at: Str,
+        owned: Ints, otype: Ints, rowns: Ints) -> Int {
     let r = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(r)),
             str_concat(str_concat(" = call {i64, i1} @llvm.", intrinsic),
@@ -518,7 +536,7 @@ fn checked(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
     let ov = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(ov)),
             str_concat(" = extractvalue {i64, i1} ", str_concat(v(r), ", 1"))));
-    guard(out, msgs, next, current, live, ov, "N0400", str_concat(str_concat("this ", noun), " overflows `Int`"), at);
+    guard(out, msgs, next, current, live, ov, "N0400", str_concat(str_concat("this ", noun), " overflows `Int`"), at, owned, otype, rowns);
     let res = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(res)),
             str_concat(" = extractvalue {i64, i1} ", str_concat(v(r), ", 0"))));
@@ -539,13 +557,14 @@ fn min_over_minus_one(out: Strs, next: Ints, a: Int, b: Int) -> Int {
     both
 }
 
-fn divide(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, a: Int, b: Int, at: Str) -> Int {
+fn divide(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, a: Int, b: Int, at: Str,
+        owned: Ints, otype: Ints, rowns: Ints) -> Int {
     let zero = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(zero)),
             str_concat(" = icmp eq i64 ", str_concat(v(b), ", 0"))));
-    guard(out, msgs, next, current, live, zero, "N0401", "division by zero", at);
+    guard(out, msgs, next, current, live, zero, "N0401", "division by zero", at, owned, otype, rowns);
     let bad = min_over_minus_one(out, next, a, b);
-    guard(out, msgs, next, current, live, bad, "N0400", "this division overflows `Int`", at);
+    guard(out, msgs, next, current, live, bad, "N0400", "this division overflows `Int`", at, owned, otype, rowns);
     let res = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(res)),
             str_concat(" = sdiv i64 ", str_concat(v(a), str_concat(", ", v(b))))));
@@ -556,11 +575,12 @@ fn divide(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, a: Int, 
 // zero and zero is representable, so `docs/spec.md` specifies it as `0` — and the `srem`
 // instruction faults on that pair anyway, because it computes the quotient. The pair is
 // answered with a constant and never reaches the instruction.
-fn remainder(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, a: Int, b: Int, at: Str) -> Int {
+fn remainder(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, a: Int, b: Int, at: Str,
+        owned: Ints, otype: Ints, rowns: Ints) -> Int {
     let zero = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(zero)),
             str_concat(" = icmp eq i64 ", str_concat(v(b), ", 0"))));
-    guard(out, msgs, next, current, live, zero, "N0401", "division by zero", at);
+    guard(out, msgs, next, current, live, zero, "N0401", "division by zero", at, owned, otype, rowns);
     let special = min_over_minus_one(out, next, a, b);
     let is_zero = take_label(next);
     let compute = take_label(next);
@@ -628,8 +648,8 @@ fn predicate(op: Str) -> Str {
 // backed by the same allocation as the old are both safe because of it.
 fn set_field(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: Int,
         root_t: Int, place: Str, rowns: Ints,
-        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
-    own_keep(out, next, owned, value, vt, rowns);
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, otype: Ints) -> Int {
+    own_keep(out, next, owned, value, vt, rowns, otype);
     let steps = path_length(place);
     // The aggregate at each level on the way in, so the way out can rebuild it.
     let levels = ints_new();
@@ -685,7 +705,7 @@ fn set_field(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: Int,
 fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
         nk: Ints, nar: Ints, ntx: Strs, ntype: Ints, nrec: Ints, nslot: Ints,
         kids: Ints, kid_first: Ints, k: Int,
-        rowns: Ints, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
+        rowns: Ints, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, otype: Ints) -> Int {
     let kind = ints_get(nk, k);
     // A declaration is not code. Neither is a field of one.
     if kind == n_record() { return 1; }
@@ -742,7 +762,7 @@ fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
             // The initialiser's reference moves into the record, which the frame now
             // owns. Taking it here is what makes the cleanup on a later failure a
             // release rather than a double release.
-            own_keep(out, next, owned, value, ft, rowns);
+            own_keep(out, next, owned, value, ft, rowns, otype);
             let held = take_number(next);
             add_line(out, str_concat(str_concat("  ", v(held)),
                     str_concat(str_concat(" = load ", ty),
@@ -768,7 +788,7 @@ fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
         add_line(out, str_concat(str_concat(str_concat("  store ", ty),
                 str_concat(" ", unwind_value(t))),
                 str_concat(", ptr %slot", int_to_str(slot))));
-        own_add(owned, whole);
+        own_add(owned, otype, whole, ints_get(ntype, k));
         ints_push(vals, whole);
         return 1;
     }
@@ -779,15 +799,21 @@ fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
         let t = ints_get(ntype, k);
         let r = record_of(bt);
         let at = layout_index(rfirst, rcount, rfname, r, ints_get(nrec, k));
+        // **Whether the base was owned decides whether the field must be.** A projection
+        // out of a borrowed record is borrowed too: the record is in a slot and nothing in
+        // this expression can change it — assignment is a statement — so the slot keeps
+        // the field's storage alive. A projection out of an owned temporary must take a
+        // reference **before** the temporary is dropped, which is what makes
+        // `make().name` valid; the order of these three steps is the whole of it.
+        let from_temporary = own_has(owned, base);
         let got = record_field(out, next, base, bt, at);
-        // The order is the rule: **retain first**, then let the base go. Reversed, a
-        // projection out of a temporary would read storage the temporary had just
-        // released — which is what makes `make().name` valid.
-        if owns(t, rowns) != 0 {
-            emit_retain(out, next, got, t, rowns);
-            own_add(owned, got);
+        if from_temporary {
+            if owns(t, rowns) != 0 {
+                emit_retain(out, next, got, t, rowns);
+                own_add(owned, otype, got, t);
+            }
         }
-        own_drop(out, next, owned, base, bt, rowns);
+        own_drop(out, next, owned, base, bt, rowns, otype);
         ints_push(vals, got);
         return 1;
     }
@@ -948,13 +974,19 @@ fn owns(t: Int, rowns: Ints) -> Int {
 }
 
 // Remove `n` from the set, answering whether it was there.
-fn own_take(owned: Ints, n: Int) -> Int {
+//
+// `otype` is each entry's type, kept in lockstep: a release needs one, and the place that
+// needs it has only the number.
+fn own_take(owned: Ints, otype: Ints, n: Int) -> Int {
     let mut i = 0;
     while i < ints_len(owned) {
         if ints_get(owned, i) == n {
-            // Order does not matter in a set, so the last entry fills the hole.
+            // Order does not matter in a set, so the last entry fills the hole. Both
+            // arrays move together, or the types stop describing the values.
             ints_set(owned, i, ints_get(owned, ints_len(owned) - 1));
+            ints_set(otype, i, ints_get(otype, ints_len(otype) - 1));
             ints_pop(owned);
+            ints_pop(otype);
             return 1;
         }
         i = i + 1;
@@ -962,8 +994,36 @@ fn own_take(owned: Ints, n: Int) -> Int {
     0
 }
 
-fn own_add(owned: Ints, n: Int) -> Int {
+// Whether the set holds `n`, without removing it.
+fn own_has(owned: Ints, n: Int) -> Bool {
+    let mut i = 0;
+    while i < ints_len(owned) {
+        if ints_get(owned, i) == n { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn own_add(owned: Ints, otype: Ints, n: Int, t: Int) -> Int {
     ints_push(owned, n);
+    ints_push(otype, t);
+    0
+}
+
+// Release every reference this expression is still holding, on a path that is leaving.
+//
+// The shared unwind block releases the frame's **slots**, which is right for everything a
+// binding holds and says nothing about a value still in a register.
+// `str_concat(str_concat(a, b), int_to_str(1 / z))` has the inner result in hand when the
+// division fails, and it is nobody's: the call that would have consumed it is on a path
+// control never takes. Written at each failure site rather than in the one block they all
+// reach, because which temporaries are outstanding is a property of the program point.
+fn release_temporaries(out: Strs, next: Ints, owned: Ints, otype: Ints, rowns: Ints) -> Int {
+    let mut i = 0;
+    while i < ints_len(owned) {
+        emit_release(out, next, ints_get(owned, i), ints_get(otype, i), rowns);
+        i = i + 1;
+    }
     0
 }
 
@@ -1029,17 +1089,17 @@ fn emit_release(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
 // Called where something takes a reference over: a binding, a `return`, a sequence that
 // keeps what it is given. A value that was already owned is handed on unchanged, which is
 // what keeps `let xs = ints_new();` free of traffic.
-fn own_keep(out: Strs, next: Ints, owned: Ints, value: Int, t: Int, rowns: Ints) -> Int {
+fn own_keep(out: Strs, next: Ints, owned: Ints, value: Int, t: Int, rowns: Ints, otype: Ints) -> Int {
     if owns(t, rowns) == 0 { return 0; }
-    if own_take(owned, value) == 1 { return 0; }
+    if own_take(owned, otype, value) == 1 { return 0; }
     emit_retain(out, next, value, t, rowns)
 }
 
 // Release a reference nothing took over: a temporary a callee only borrowed, or a
 // statement whose value was discarded. Both are ordinary; neither is an error.
-fn own_drop(out: Strs, next: Ints, owned: Ints, value: Int, t: Int, rowns: Ints) -> Int {
+fn own_drop(out: Strs, next: Ints, owned: Ints, value: Int, t: Int, rowns: Ints, otype: Ints) -> Int {
     if owns(t, rowns) == 0 { return 0; }
-    if own_take(owned, value) == 0 { return 0; }
+    if own_take(owned, otype, value) == 0 { return 0; }
     emit_release(out, next, value, t, rowns)
 }
 
@@ -1070,14 +1130,15 @@ fn release_frame(out: Strs, next: Ints, frame: Ints, rowns: Ints) -> Int {
 // A string backing of `bytes` usable bytes. Answers the allocation; its first byte of text
 // is sixteen bytes further on, which `string_data` produces.
 fn string_backing(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
-        bytes: Int, at: Str) -> Int {
+        bytes: Int, at: Str,
+        owned: Ints, otype: Ints, rowns: Ints) -> Int {
     let own = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(own)),
             str_concat(" = call ptr @nz.str_alloc(i64 ", str_concat(v(bytes), ")"))));
     let null = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(null)),
             str_concat(" = icmp eq ptr ", str_concat(v(own), ", null"))));
-    guard(out, msgs, next, current, live, null, "N0406", "out of memory", at);
+    guard(out, msgs, next, current, live, null, "N0406", "out of memory", at, owned, otype, rowns);
     own
 }
 
@@ -1090,14 +1151,14 @@ fn string_data(out: Strs, next: Ints, own: Int) -> Int {
 // The order is the whole of the correctness: the new reference is taken **first**, so that
 // `a = a` — and the re-execution of a `let` in a loop with the same value — cannot drop the
 // count to zero between the two steps and free storage that is about to be stored again.
-fn store_binding(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: Int, rowns: Ints) -> Int {
+fn store_binding(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: Int, rowns: Ints, otype: Ints) -> Int {
     if owns(vt, rowns) == 0 {
         add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
                 str_concat(" ", v(value))),
                 str_concat(", ptr %slot", int_to_str(slot))));
         return 0;
     }
-    own_keep(out, next, owned, value, vt, rowns);
+    own_keep(out, next, owned, value, vt, rowns, otype);
     let old = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(old)),
             str_concat(str_concat(" = load ", llvm_type(vt)),
@@ -1111,29 +1172,31 @@ fn store_binding(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: 
 
 // Release every argument of a call that nothing took over.
 fn drop_arguments(out: Strs, next: Ints, owned: Ints, ordered: Ints, ntype: Ints,
-        kids: Ints, kid_first: Ints, k: Int, argc: Int, rowns: Ints) -> Int {
+        kids: Ints, kid_first: Ints, k: Int, argc: Int, rowns: Ints, otype: Ints) -> Int {
     let mut d = 0;
     while d < argc {
         own_drop(out, next, owned, ints_get(ordered, d),
-                ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + d)), rowns);
+                ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + d)), rowns, otype);
         d = d + 1;
     }
     0
 }
 
 fn require(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
-        bad: Int, message: Str, at: Str) -> Int {
-    guard(out, msgs, next, current, live, bad, "N0405", message, at)
+        bad: Int, message: Str, at: Str,
+        owned: Ints, otype: Ints, rowns: Ints) -> Int {
+    guard(out, msgs, next, current, live, bad, "N0405", message, at, owned, otype, rowns)
 }
 
-fn allocate(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, bytes: Int, at: Str) -> Int {
+fn allocate(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, bytes: Int, at: Str,
+        owned: Ints, otype: Ints, rowns: Ints) -> Int {
     let buf = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(buf)),
             str_concat(" = call ptr @malloc(i64 ", str_concat(v(bytes), ")"))));
     let null = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(null)),
             str_concat(" = icmp eq ptr ", str_concat(v(buf), ", null"))));
-    guard(out, msgs, next, current, live, null, "N0406", "out of memory", at);
+    guard(out, msgs, next, current, live, null, "N0406", "out of memory", at, owned, otype, rowns);
     buf
 }
 
@@ -1172,12 +1235,13 @@ fn cast(out: Strs, next: Ints, op: Str, from: Str, value: Int, to: Str) -> Int {
     n
 }
 
-fn seq_slot(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, handle: Int, index: Int, elem: Str, at: Str) -> Int {
+fn seq_slot(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, handle: Int, index: Int, elem: Str, at: Str,
+        owned: Ints, otype: Ints, rowns: Ints) -> Int {
     let len = binop(out, next, "load", "i64,", str_concat("ptr ", v(handle)), "");
     let neg = binop(out, next, "icmp slt", "i64", v(index), "0");
     let past = binop(out, next, "icmp sge", "i64", v(index), v(len));
     let bad = binop(out, next, "or", "i1", v(neg), v(past));
-    require(out, msgs, next, current, live, bad, "this index is outside the sequence", at);
+    require(out, msgs, next, current, live, bad, "this index is outside the sequence", at, owned, otype, rowns);
     let df = binop(out, next, "getelementptr", "i8,", str_concat("ptr ", v(handle)), "i64 16");
     let data = binop(out, next, "load", "ptr,", str_concat("ptr ", v(df)), "");
     binop(out, next, "getelementptr", str_concat(elem, ","), str_concat("ptr ", v(data)),
@@ -1224,7 +1288,8 @@ fn string_equality(out: Strs, current: Strs, live: Ints, next: Ints,
     flipped
 }
 
-fn emit_binary(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, op: Str, a: Int, b: Int, at: Str, ot: Int) -> Int {
+fn emit_binary(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, op: Str, a: Int, b: Int, at: Str, ot: Int,
+        owned: Ints, otype: Ints, rowns: Ints) -> Int {
     let pred = predicate(op);
     if pred != "" {
         // No guard: no comparison can fail. `icmp` on two `i64`s or two `i1`s is total.
@@ -1235,11 +1300,11 @@ fn emit_binary(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, op:
                 str_concat(" ", str_concat(v(a), str_concat(", ", v(b))))))));
         return n;
     }
-    if op == "+" { return checked(out, msgs, next, current, live, "sadd", "addition", a, b, at); }
-    if op == "-" { return checked(out, msgs, next, current, live, "ssub", "subtraction", a, b, at); }
-    if op == "*" { return checked(out, msgs, next, current, live, "smul", "multiplication", a, b, at); }
-    if op == "/" { return divide(out, msgs, next, current, live, a, b, at); }
-    if op == "%" { return remainder(out, msgs, next, current, live, a, b, at); }
+    if op == "+" { return checked(out, msgs, next, current, live, "sadd", "addition", a, b, at, owned, otype, rowns); }
+    if op == "-" { return checked(out, msgs, next, current, live, "ssub", "subtraction", a, b, at, owned, otype, rowns); }
+    if op == "*" { return checked(out, msgs, next, current, live, "smul", "multiplication", a, b, at, owned, otype, rowns); }
+    if op == "/" { return divide(out, msgs, next, current, live, a, b, at, owned, otype, rowns); }
+    if op == "%" { return remainder(out, msgs, next, current, live, a, b, at, owned, otype, rowns); }
     0 - 1
 }
 
@@ -1758,7 +1823,7 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
         nk: Ints, nar: Ints, nst: Ints, ntx: Strs, nslot: Ints, ntype: Ints,
         kids: Ints, kid_first: Ints, fnames: Strs, fowner: Ints, mstart: Ints,
         frame: Ints, owned: Ints, k: Int, begin: Int, src: Str, path: Str, rowns: Ints,
-        nrec: Ints) -> Int {
+        nrec: Ints, otype: Ints) -> Int {
     // Numbering restarts per function: LLVM requires a function's unnamed values to be
     // consecutive from zero, and `%p<n>`/`%slot<n>` are named so they consume none of it.
     ints_set(next, 0, 0);
@@ -1834,6 +1899,9 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     // No reference number survives a function, so the owned set starts empty too.
     while ints_len(frame) > 0 { ints_pop(frame); }
     while ints_len(owned) > 0 { ints_pop(owned); }
+    // In lockstep with it, or every type after the first function describes the wrong
+    // value.
+    while ints_len(otype) > 0 { ints_pop(otype); }
     sl = 0;
     while sl < slots {
         ints_push(frame, ints_get(styp, sl));
@@ -2017,7 +2085,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         naux: Ints, nslot: Ints, ntype: Ints, ncallee: Ints,
         parent: Ints, childno: Ints, substart: Ints, kids: Ints, kid_first: Ints,
         fnames: Strs, fret: Ints, fowner: Ints, mstart: Ints,
-        out: Strs, msgs: Strs, blobs: Strs, tasks: Strs, nrec: Ints, rowns: Ints, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
+        out: Strs, msgs: Strs, blobs: Strs, tasks: Strs, nrec: Ints, rowns: Ints,
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
     let next = ints_new();
     ints_push(next, 0);
     // Slot 1 is the block-label counter, separate from slot 0 because the labels are
@@ -2085,6 +2154,13 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
     // every `define`, because neither means anything across a function boundary.
     let frame = ints_new();
     let owned = ints_new();
+    // The type of each entry in `owned`, in lockstep. A release needs a type, and the
+    // place that needs it — a failure leaving the function with a temporary in hand — has
+    // only the number.
+    let otype = ints_new();
+    // How long `owned` was when each branch opened, innermost last. See the boundary
+    // between two children below.
+    let own_base = ints_new();
     // One entry per `if`, holding the value and predecessor its branches contributed.
     let phi_val = ints_new();
     let phi_blk = strs_new();
@@ -2099,7 +2175,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         if ints_get(fn_at, k) >= 0 {
             open_function(out, current, live, next, vals, nk, nar, nst, ntx, nslot, ntype,
                     kids, kid_first, fnames, fowner, mstart, frame, owned,
-                    ints_get(fn_at, k), k, src, path, rowns, nrec);
+                    ints_get(fn_at, k), k, src, path, rowns, nrec, otype);
         }
 
         // A loop header opens before its condition, never after: `continue` and the back
@@ -2124,7 +2200,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             add_line(out, str_concat(str_concat("  ", v(nomem)),
                     str_concat(" = icmp eq ptr ", str_concat(v(tl), ", null"))));
             guard(out, msgs, next, current, live, nomem, "N0406", "out of memory",
-                    position(src, path, ints_get(nst, sc)));
+                    position(src, path, ints_get(nst, sc)), owned, otype, rowns);
             // Innermost last: `unwind` reads back from the end, and a `spawn` records into
             // whichever is on top.
             ints_push(live, tl);
@@ -2135,16 +2211,16 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             // them had, and only then decide whether this program carries on.
             let closed = ints_pop(live);
             emit_join(out, next, current, live, closed);
-            check_failed(out, next, current, live);
+            check_failed(out, next, current, live, owned, otype, rowns);
         } else {
             if kind == n_spawn() {
                 emit_spawn(out, msgs, next, current, live, tasks, owned, vals, nar, ntype,
                         kids, kid_first, fnames, fret, k, ints_get(ncallee, k),
-                        position(src, path, from), rowns);
+                        position(src, path, from), rowns, otype);
             } else {
                 if emit_record_node(out, next, vals, owned, nk, nar, ntx, ntype, nrec,
                         nslot, kids, kid_first, k, rowns, rfirst, rcount, rfname,
-                        rftype) == 1 {
+                        rftype, otype) == 1 {
                     // A record declaration, a construction or a projection.
                 } else {
                 if kind == n_param() {
@@ -2162,11 +2238,11 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                         let mut o = argc - 1;
                         while o >= 0 { ints_push(ordered, ints_get(args, o)); o = o - 1; }
                         let built = emit_builtin(text, ordered, owned, out, msgs, next, current,
-                                live, position(src, path, from), rowns);
+                                live, position(src, path, from), rowns, otype);
                         if built >= 0 {
                             // A built-in borrows its arguments, exactly as a function does,
                             // so a temporary handed to one is nobody's after it returns.
-                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc, rowns);
+                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc, rowns, otype);
                             ints_push(vals, built);
                         } else {
                             let mut list = "";
@@ -2188,13 +2264,13 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                             // outward instead of this function carrying on with a value that was
                             // never produced — which would run statements, print, and could loop
                             // forever on it.
-                            check_failed(out, next, current, live);
+                            check_failed(out, next, current, live, owned, otype, rowns);
                             // Rule 3: returning transfers, so what came back is a reference
                             // this expression now holds. Rule 2: the arguments were only
                             // borrowed, so a temporary passed in is still nobody's and is
                             // dropped here.
-                            if owns(ints_get(ntype, k), rowns) != 0 { own_add(owned, n); }
-                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc, rowns);
+                            if owns(ints_get(ntype, k), rowns) != 0 { own_add(owned, otype, n, ints_get(ntype, k)); }
+                            drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc, rowns, otype);
                             ints_push(vals, n);
                         }
                     } else {
@@ -2235,9 +2311,9 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                 // Each incoming branch handed one reference to the join,
                                                 // so the merged value holds exactly one however control
                                                 // arrived.
-                                                own_take(owned, av);
-                                                own_take(owned, bv);
-                                                if owns(ints_get(ntype, k), rowns) != 0 { own_add(owned, n); }
+                                                own_take(owned, otype, av);
+                                                own_take(owned, otype, bv);
+                                                if owns(ints_get(ntype, k), rowns) != 0 { own_add(owned, otype, n, ints_get(ntype, k)); }
                                                 add_line(out, str_concat(str_concat("  ", v(n)),
                                                         str_concat(str_concat(str_concat(" = phi ", llvm_type(ints_get(ntype, k))),
                                                         str_concat(" [ ", v(av))),
@@ -2266,7 +2342,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                         // **before** the frame lets go of everything else
                                                         // — otherwise returning a local would release the
                                                         // storage it is returning.
-                                                        own_keep(out, next, owned, value, vt, rowns);
+                                                        own_keep(out, next, owned, value, vt, rowns, otype);
                                                         release_frame(out, next, frame, rowns);
                                                         add_line(out, str_concat(str_concat("  ret ", llvm_type(vt)), str_concat(" ", v(value))));
                                                         ints_set(live, 0, 0);
@@ -2282,7 +2358,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                 // The value is already on the stack: its subtree came first.
                                                                 let value = ints_pop(vals);
                                                                 let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
-                                                                store_binding(out, next, owned, value, vt, ints_get(nslot, k), rowns);
+                                                                store_binding(out, next, owned, value, vt, ints_get(nslot, k), rowns, otype);
                                                             } else {
                                                                 if kind == n_assign() {
                                                                     // The same store as a `let`, when the place is a plain binding: a
@@ -2291,11 +2367,11 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                     let value = ints_pop(vals);
                                                                     let vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
                                                                     if path_length(text) == 0 {
-                                                                        store_binding(out, next, owned, value, vt, ints_get(nslot, k), rowns);
+                                                                        store_binding(out, next, owned, value, vt, ints_get(nslot, k), rowns, otype);
                                                                     } else {
                                                                         set_field(out, next, owned, value, vt, ints_get(nslot, k),
                                                                                 ints_get(nrec, k), text, rowns,
-                                                                                rfirst, rcount, rfname, rftype);
+                                                                                rfirst, rcount, rfname, rftype, otype);
                                                                     }
                                                                 } else {
                                                                     if kind == n_exprstmt() {
@@ -2305,7 +2381,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                         if ints_get(ntype, ints_get(kids, ints_get(kid_first, k))) != 0 {
                                                                             let dropped = ints_pop(vals);
                                                                             own_drop(out, next, owned, dropped,
-                                                                                    ints_get(ntype, ints_get(kids, ints_get(kid_first, k))), rowns);
+                                                                                    ints_get(ntype, ints_get(kids, ints_get(kid_first, k))), rowns, otype);
                                                                         }
                                                                     } else {
                                                                         if kind == n_int() {
@@ -2326,7 +2402,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                 let r = if ot == t_str() {
                                                                                     string_equality(out, current, live, next, a, b, text == "!=")
                                                                                 } else {
-                                                                                    emit_binary(out, msgs, next, current, live, text, a, b, at, ot)
+                                                                                    emit_binary(out, msgs, next, current, live, text, a, b, at, ot, owned, otype, rowns)
                                                                                 }
                                                                                 ;
                                                                                 if r < 0 { refuse(str_concat(str_concat("the operator `", text), "`"), at); }
@@ -2338,7 +2414,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                     add_line(out, str_concat(str_concat("  ", v(zero)), " = add i64 0, 0"));
                                                                                     let at = position(src, path, from);
                                                                                     // The only negation without a representable result is `-Int::MIN`.
-                                                                                    let r = checked(out, msgs, next, current, live, "ssub", "negation", zero, a, at);
+                                                                                    let r = checked(out, msgs, next, current, live, "ssub", "negation", zero, a, at, owned, otype, rowns);
                                                                                     ints_push(vals, r);
                                                                                 } else {
                                                                                     if kind == n_block() {
@@ -2374,7 +2450,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                                 // rules: take the reference the caller is about to receive, then let the
                                                                                                 // frame go.
                                                                                                 let tv = ints_pop(vals);
-                                                                                                own_keep(out, next, owned, tv, ints_get(nrec, k), rowns);
+                                                                                                own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);
                                                                                                 release_frame(out, next, frame, rowns);
                                                                                                 add_line(out, str_concat(str_concat("  ret ",
                                                                                                         llvm_type(ints_get(nrec, k))),
@@ -2446,9 +2522,17 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                             str_concat(str_concat(", label %", blk("y", p)),
                             str_concat(", label %", blk("x", p)))));
                     open_block(out, current, live, blk("y", p));
+                    // The body's temporaries do not dominate the exit either.
+                    ints_push(own_base, ints_len(owned));
                 } else {
                     // The back edge targets the header, so the condition runs again.
                     branch(out, live, blk("h", p));
+                    let base = ints_get(own_base, ints_len(own_base) - 1);
+                    while ints_len(owned) > base {
+                        ints_pop(owned);
+                        ints_pop(otype);
+                    }
+                    ints_pop(own_base);
                     open_block(out, current, live, blk("x", p));
                 }
             }
@@ -2462,6 +2546,12 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                             str_concat(str_concat(", label %", blk("t", p)),
                             str_concat(", label %", other))));
                     open_block(out, current, live, blk("t", p));
+                    // What a branch creates is **not visible to its sibling**, and that is
+                    // a dominance fact rather than a preference: a value defined in the
+                    // `then` block does not dominate the `else` block, so a failure over
+                    // there may not release it. This is where the set's length before the
+                    // branch is remembered; the boundary below restores it.
+                    ints_push(own_base, ints_len(owned));
                 } else {
                     // The predecessor is read **after** the branch was emitted, not
                     // before: a branch may have opened blocks of its own for a nested
@@ -2475,12 +2565,21 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                         // jump**, which is the only place a retain can go: after the `phi`
                         // there is no branch left to attribute it to.
                         let bv = ints_pop(vals);
-                        own_keep(out, next, owned, bv, ints_get(ntype, p), rowns);
-                        own_add(owned, bv);
+                        own_keep(out, next, owned, bv, ints_get(ntype, p), rowns, otype);
+                        own_add(owned, otype, bv, ints_get(ntype, p));
                         ints_push(phi_val, bv);
                         strs_push(phi_blk, strs_get(current, 0));
                     }
                     branch(out, live, blk("j", p));
+                    // Back to what was outstanding before the branch. The value this
+                    // branch produced already holds its reference — `own_keep` above saw
+                    // to that — and the `phi` at the join is what takes it over.
+                    let base = ints_get(own_base, ints_len(own_base) - 1);
+                    while ints_len(owned) > base {
+                        ints_pop(owned);
+                        ints_pop(otype);
+                    }
+                    if which == parity - 1 { ints_pop(own_base); }
                     if which == 1 {
                         if parity == 3 {
                             open_block(out, current, live, blk("e", p));
@@ -2937,7 +3036,8 @@ fn main() -> Int {
 // site tells a built-in from a user function without a second name table.
 
 fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next: Ints,
-        current: Strs, live: Ints, at: Str, rowns: Ints) -> Int {
+        current: Strs, live: Ints, at: Str, rowns: Ints,
+        otype: Ints) -> Int {
     let a0 = if ints_len(args) > 0 { ints_get(args, 0) } else { 0 }
     ;
     let a1 = if ints_len(args) > 1 { ints_get(args, 1) } else { 0 }
@@ -2953,7 +3053,7 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         let neg = binop(out, next, "icmp slt", "i64", v(a1), "0");
         let past = binop(out, next, "icmp sge", "i64", v(a1), v(len));
         let bad = binop(out, next, "or", "i1", v(neg), v(past));
-        require(out, msgs, next, current, live, bad, "this byte index is outside the `Str`", at);
+        require(out, msgs, next, current, live, bad, "this byte index is outside the `Str`", at, owned, otype, rowns);
         let slot = binop(out, next, "getelementptr", "i8,", str_concat("ptr ", v(ptr)),
                 str_concat("i64 ", v(a1)));
         let byte = binop(out, next, "load", "i8,", str_concat("ptr ", v(slot)), "");
@@ -2969,7 +3069,7 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         let past = binop(out, next, "icmp sgt", "i64", v(a2), v(len));
         let x = binop(out, next, "or", "i1", v(neg), v(inv));
         let bad = binop(out, next, "or", "i1", v(x), v(past));
-        require(out, msgs, next, current, live, bad, "this slice is not inside the `Str`", at);
+        require(out, msgs, next, current, live, bad, "this slice is not inside the `Str`", at, owned, otype, rowns);
         // No copy: a slice is a pointer, a length and **the same owner**. The view keeps
         // the allocation it was cut from alive, which is what makes a slice that outlives
         // its original ordinary rather than a dangling pointer.
@@ -2983,7 +3083,7 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         // result points into.
         add_line(out, str_concat(str_concat("  call void @nz.str_retain(ptr ", v(owner)), ")"));
         let made = make_str(out, next, start, n, v(owner));
-        own_add(owned, made);
+        own_add(owned, otype, made, t_str());
         return made;
     }
 
@@ -2997,9 +3097,9 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
                 str_concat(", i64 ", str_concat(v(sn), ")"))))));
         let got = field(out, next, r, "0");
         let bad = binop(out, next, "icmp eq", "ptr", v(got), "null");
-        guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+        guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at, owned, otype, rowns);
         // One allocation, one reference, and this expression is holding it.
-        own_add(owned, r);
+        own_add(owned, otype, r, t_str());
         return r;
     }
 
@@ -3012,7 +3112,7 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         // One byte more than needed, so an empty result still owns storage and its
         // pointer stays valid to compare.
         let room = binop(out, next, "add", "i64", v(n), "1");
-        let own = string_backing(out, msgs, next, current, live, room, at);
+        let own = string_backing(out, msgs, next, current, live, room, at, owned, otype, rowns);
         let buf = string_data(out, next, own);
         add_line(out, str_concat(str_concat("  call void @llvm.memcpy.p0.p0.i64(ptr ", v(buf)),
                 str_concat(str_concat(", ptr ", v(pa)),
@@ -3023,7 +3123,7 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
                 str_concat(str_concat(", ptr ", v(pb)),
                 str_concat(str_concat(", i64 ", v(lb)), ", i1 false)"))));
         let made = make_str(out, next, buf, n, v(own));
-        own_add(owned, made);
+        own_add(owned, otype, made, t_str());
         return made;
     }
 
@@ -3031,22 +3131,22 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         let low = binop(out, next, "icmp slt", "i64", v(a0), "0");
         let high = binop(out, next, "icmp sgt", "i64", v(a0), "255");
         let bad = binop(out, next, "or", "i1", v(low), v(high));
-        require(out, msgs, next, current, live, bad, "this is not a byte value", at);
+        require(out, msgs, next, current, live, bad, "this is not a byte value", at, owned, otype, rowns);
         let one = constant(out, next, "1");
-        let own = string_backing(out, msgs, next, current, live, one, at);
+        let own = string_backing(out, msgs, next, current, live, one, at, owned, otype, rowns);
         let buf = string_data(out, next, own);
         let narrow = cast(out, next, "trunc", "i64", a0, "i8");
         add_line(out, str_concat(str_concat("  store i8 ", v(narrow)), str_concat(", ptr ", v(buf))));
         let n = constant(out, next, "1");
         let made = make_str(out, next, buf, n, v(own));
-        own_add(owned, made);
+        own_add(owned, otype, made, t_str());
         return made;
     }
 
     if name == "int_to_str" {
         // 20 digits is the widest `Int`, plus the NUL `snprintf` insists on writing.
         let room = constant(out, next, "21");
-        let own = string_backing(out, msgs, next, current, live, room, at);
+        let own = string_backing(out, msgs, next, current, live, room, at, owned, otype, rowns);
         let buf = string_data(out, next, own);
         let written = take_number(next);
         add_line(out, str_concat(str_concat("  ", v(written)),
@@ -3054,7 +3154,7 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
                 str_concat(", i64 21, ptr @.dec, i64 ", str_concat(v(a0), ")")))));
         let n = cast(out, next, "sext", "i32", written, "i64");
         let made = make_str(out, next, buf, n, v(own));
-        own_add(owned, made);
+        own_add(owned, otype, made, t_str());
         return made;
     }
 
@@ -3063,17 +3163,17 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         add_line(out, str_concat(str_concat("  ", v(small)),
                 str_concat(" = icmp slt i64 ", str_concat(v(a0), ", 1"))));
         guard(out, msgs, next, current, live, small, "N0405",
-                "a channel needs a capacity of at least 1", at);
+                "a channel needs a capacity of at least 1", at, owned, otype, rowns);
         let c = take_number(next);
         add_line(out, str_concat(str_concat("  ", v(c)),
                 str_concat(" = call ptr @nz.chan_new(i64 ", str_concat(v(a0), ")"))));
         let bad = take_number(next);
         add_line(out, str_concat(str_concat("  ", v(bad)),
                 str_concat(" = icmp eq ptr ", str_concat(v(c), ", null"))));
-        guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+        guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at, owned, otype, rowns);
         // Born with one reference, held by this expression — the same rule a sequence
         // follows. Whatever consumes the expression takes it over.
-        own_add(owned, c);
+        own_add(owned, otype, c, t_chan());
         return c;
     }
 
@@ -3101,7 +3201,7 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         // A failed allocation is reported by recording it and returning `false`, which is
         // otherwise how the helper says the channel is closed and drained. Unchecked,
         // `while chan_recv(c, buf)` would read the one as the other.
-        check_failed(out, next, current, live);
+        check_failed(out, next, current, live, owned, otype, rowns);
         return ok;
     }
 
@@ -3111,35 +3211,35 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         return constant(out, next, "0");
     }
 
-    if name == "ints_new" { return new_sequence(out, msgs, next, current, live, owned, at); }
-    if name == "strs_new" { return new_sequence(out, msgs, next, current, live, owned, at); }
+    if name == "ints_new" { return new_sequence(out, msgs, next, current, live, owned, at, t_ints(), otype, rowns); }
+    if name == "strs_new" { return new_sequence(out, msgs, next, current, live, owned, at, t_strs(), otype, rowns); }
     if name == "ints_len" { return binop(out, next, "load", "i64,", str_concat("ptr ", v(a0)), ""); }
     if name == "strs_len" { return binop(out, next, "load", "i64,", str_concat("ptr ", v(a0)), ""); }
 
     if name == "ints_get" {
-        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "i64", at);
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "i64", at, owned, otype, rowns);
         return binop(out, next, "load", "i64,", str_concat("ptr ", v(slot)), "");
     }
     if name == "strs_get" {
-        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "{ ptr, i64, ptr }", at);
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "{ ptr, i64, ptr }", at, owned, otype, rowns);
         let got = binop(out, next, "load", "{ ptr, i64, ptr },", str_concat("ptr ", v(slot)), "");
         // What comes out of a `Strs` gets **its own** reference to the backing, which is
         // what makes the specification's promise — a `Str` already read out is unaffected
         // by changing the sequence — true by construction rather than true because
         // nothing was ever freed.
         emit_retain(out, next, got, t_str(), rowns);
-        own_add(owned, got);
+        own_add(owned, otype, got, t_str());
         return got;
     }
     if name == "ints_set" {
-        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "i64", at);
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "i64", at, owned, otype, rowns);
         add_line(out, str_concat(str_concat("  store i64 ", v(a2)), str_concat(", ptr ", v(slot))));
         // The index written: the language has no unit type, and the index is the one
         // answer that is always meaningful.
         return a1;
     }
     if name == "strs_set" {
-        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "{ ptr, i64, ptr }", at);
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, "{ ptr, i64, ptr }", at, owned, otype, rowns);
         // The order is the correctness. The new element's reference is taken **before**
         // the old one is released, so replacing an element with a string that shares its
         // backing cannot drop the count to zero in between.
@@ -3151,18 +3251,18 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         return a1;
     }
     if name == "ints_push" {
-        return push_sequence(out, msgs, next, current, live, a0, a1, "i64", "8", t_int(), at, rowns);
+        return push_sequence(out, msgs, next, current, live, a0, a1, "i64", "8", t_int(), at, rowns, owned, otype);
     }
     if name == "strs_push" {
         return push_sequence(out, msgs, next, current, live, a0, a1, "{ ptr, i64, ptr }", "24",
-                t_str(), at, rowns);
+                t_str(), at, rowns, owned, otype);
     }
     if name == "ints_pop" {
-        return pop_sequence(out, msgs, next, current, live, owned, a0, "i64", t_int(), at, rowns);
+        return pop_sequence(out, msgs, next, current, live, owned, a0, "i64", t_int(), at, rowns, otype);
     }
     if name == "strs_pop" {
         return pop_sequence(out, msgs, next, current, live, owned, a0, "{ ptr, i64, ptr }",
-                t_str(), at, rowns);
+                t_str(), at, rowns, otype);
     }
 
     if name == "args_count" {
@@ -3173,7 +3273,7 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
         let neg = binop(out, next, "icmp slt", "i64", v(a0), "0");
         let past = binop(out, next, "icmp sge", "i64", v(a0), v(argc));
         let bad = binop(out, next, "or", "i1", v(neg), v(past));
-        require(out, msgs, next, current, live, bad, "this index is outside the arguments", at);
+        require(out, msgs, next, current, live, bad, "this index is outside the arguments", at, owned, otype, rowns);
         // `argv[0]` is the program's own name and is deliberately not visible.
         let shifted = binop(out, next, "add", "i64", v(a0), "1");
         let base = binop(out, next, "load", "ptr,", "ptr @nz.argv", "");
@@ -3214,9 +3314,9 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
                 str_concat(", i64 ", str_concat(v(len), ")")))));
         let got = field(out, next, r, "0");
         let bad = binop(out, next, "icmp eq", "ptr", v(got), "null");
-        guard(out, msgs, next, current, live, bad, "N0407", "this file could not be read", at);
+        guard(out, msgs, next, current, live, bad, "N0407", "this file could not be read", at, owned, otype, rowns);
         // A file's contents are the program's own storage: one allocation, one reference.
-        own_add(owned, r);
+        own_add(owned, otype, r, t_str());
         return r;
     }
     if name == "write_file" {
@@ -3231,7 +3331,7 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
                 str_concat(str_concat(", ptr ", v(dp)),
                 str_concat(", i64 ", str_concat(v(dn), ")")))))));
         let bad = binop(out, next, "icmp slt", "i64", v(n), "0");
-        guard(out, msgs, next, current, live, bad, "N0407", "this file could not be written", at);
+        guard(out, msgs, next, current, live, bad, "N0407", "this file could not be written", at, owned, otype, rowns);
         return n;
     }
     if name == "file_exists" {
@@ -3259,26 +3359,30 @@ fn write_bytes(out: Strs, next: Ints, fd: Str, s: Int) -> Int {
 }
 
 fn new_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints,
-        owned: Ints, at: Str) -> Int {
+        owned: Ints, at: Str, kind: Int,
+        otype: Ints, rowns: Ints) -> Int {
     let h = take_number(next);
     // The counted allocator: `@nz.arr_new` is the uncounted one, and a scope's list of
     // task ids uses that so it never appears in a report about the program's sequences.
     add_line(out, str_concat(str_concat("  ", v(h)), " = call ptr @nz.seq_new()"));
     let bad = binop(out, next, "icmp eq", "ptr", v(h), "null");
-    guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
-    // Born with one reference, held by this expression.
-    own_add(owned, h);
+    guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at, owned, otype, rowns);
+    // Born with one reference, held by this expression. `kind` is which sequence: the
+    // allocation is the same for both and the **release** is not, so the type recorded
+    // here has to be the caller's rather than a default.
+    own_add(owned, otype, h, kind);
     h
 }
 
 fn push_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, handle: Int, value: Int,
-        elem: Str, size: Str, et: Int, at: Str, rowns: Ints) -> Int {
+        elem: Str, size: Str, et: Int, at: Str, rowns: Ints,
+        owned: Ints, otype: Ints) -> Int {
     let data = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(data)),
             str_concat(str_concat(" = call ptr @nz.arr_grow(ptr ", v(handle)),
             str_concat(", i64 ", str_concat(size, ")")))));
     let bad = binop(out, next, "icmp eq", "ptr", v(data), "null");
-    guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at);
+    guard(out, msgs, next, current, live, bad, "N0406", "out of memory", at, owned, otype, rowns);
     let len = binop(out, next, "load", "i64,", str_concat("ptr ", v(handle)), "");
     let slot = binop(out, next, "getelementptr", str_concat(elem, ","), str_concat("ptr ", v(data)),
             str_concat("i64 ", v(len)));
@@ -3293,10 +3397,11 @@ fn push_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, h
 }
 
 fn pop_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, owned: Ints,
-        handle: Int, elem: Str, et: Int, at: Str, rowns: Ints) -> Int {
+        handle: Int, elem: Str, et: Int, at: Str, rowns: Ints,
+        otype: Ints) -> Int {
     let len = binop(out, next, "load", "i64,", str_concat("ptr ", v(handle)), "");
     let empty = binop(out, next, "icmp sle", "i64", v(len), "0");
-    require(out, msgs, next, current, live, empty, "this sequence is empty", at);
+    require(out, msgs, next, current, live, empty, "this sequence is empty", at, owned, otype, rowns);
     let last = binop(out, next, "sub", "i64", v(len), "1");
     let df = binop(out, next, "getelementptr", "i8,", str_concat("ptr ", v(handle)), "i64 16");
     let data = binop(out, next, "load", "ptr,", str_concat("ptr ", v(df)), "");
@@ -3308,7 +3413,7 @@ fn pop_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, ow
     add_line(out, str_concat(str_concat("  store i64 ", v(last)), str_concat(", ptr ", v(handle))));
     // A **transfer**: shortening the sequence gives up its reference and this expression
     // takes that same one over. No retain, no release, and the count is unchanged.
-    if owns(et, rowns) != 0 { own_add(owned, value); }
+    if owns(et, rowns) != 0 { own_add(owned, otype, value, et); }
     value
 }
 

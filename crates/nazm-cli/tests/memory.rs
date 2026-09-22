@@ -897,3 +897,359 @@ fn a_program_that_calls_exit_with_reclaims_nothing_and_says_nothing() {
         "a process that exited should not have reached the entry wrapper"
     );
 }
+
+// --- records -------------------------------------------------------------------------
+//
+// A record allocates nothing of its own: it has no header, no count and no storage. What
+// these cases are about is its **fields** — that copying one takes a reference per owning
+// field, that destroying one gives every reference back, and that both happen at the same
+// moment in both implementations. `docs/spec.md`, *Records are values whose fields keep
+// their own semantics*.
+
+#[test]
+fn a_record_of_scalars_allocates_nothing() {
+    // The floor. If this ever reports an allocation, a record has acquired storage of its
+    // own and every case below is measuring something else.
+    let r = both(
+        "struct Point {\n    x: Int,\n    y: Int,\n}\n\
+         fn main() -> Int {\n    let mut p = Point(x: 1, y: 2);\n    \
+         let q = p;\n    p.x = 10;\n    p.x + q.x + p.y\n}\n",
+    );
+    assert_eq!(r.value, "13");
+    assert_eq!(r.strings, expected(0), "{r:?}");
+    assert_eq!(r.sequences, expected(0), "{r:?}");
+}
+
+#[test]
+fn a_record_holding_a_string_gives_the_backing_back() {
+    let r = strings(
+        1,
+        "struct Holder {\n    name: Str,\n}\n\
+         fn main() -> Int {\n    let h = Holder(name: str_concat(\"ab\", \"cd\"));\n    \
+         str_len(h.name)\n}\n",
+    );
+    assert_eq!(r.value, "4");
+}
+
+#[test]
+fn a_record_holding_a_slice_keeps_the_buffer_it_points_into() {
+    // A sliced `Str` in a field is a view: the field holds the *same* backing, so the
+    // record keeps alive what it is looking at rather than a copy of it. One allocation,
+    // one reclamation, and the slice outlives the binding it was cut from.
+    let r = strings(
+        1,
+        "struct Holder {\n    part: Str,\n}\n\
+         fn main() -> Int {\n    let h = Holder(part: str_slice(str_concat(\"abcd\", \"ef\"), 1, 4));\n    \
+         str_len(h.part) * 100 + str_byte(h.part, 0)\n}\n",
+    );
+    assert_eq!(r.value, "398");
+}
+
+#[test]
+fn copying_a_record_takes_one_reference_per_owning_field() {
+    // Two bindings on one record, and the string behind it reclaimed once. That the
+    // second copy did not allocate is the compositional claim; that it did not
+    // double-release is the one a missing retain would break.
+    let r = strings(
+        2,
+        "struct Two {\n    a: Str,\n    b: Str,\n}\n\
+         fn main() -> Int {\n    let x = Two(a: int_to_str(11), b: int_to_str(22));\n    \
+         let y = x;\n    let z = y;\n    str_len(x.a) + str_len(y.b) + str_len(z.a)\n}\n",
+    );
+    assert_eq!(r.value, "6");
+}
+
+#[test]
+fn a_record_field_is_another_reference_to_the_same_sequence() {
+    // `docs/spec.md`'s table, as a measurement: the `Ints` field is a handle, so both
+    // copies name one storage — one allocation for two records — and it goes when the
+    // last of them does.
+    let r = reclaimed(
+        1,
+        "struct Work {\n    values: Ints,\n}\n\
+         fn main() -> Int {\n    let a = Work(values: ints_new());\n    \
+         let b = a;\n    ints_push(a.values, 7);\n    \
+         ints_get(b.values, 0) + ints_len(b.values)\n}\n",
+    );
+    assert_eq!(r.value, "8");
+}
+
+#[test]
+fn a_record_field_of_strings_releases_its_contents() {
+    let r = both(
+        "struct Bag {\n    items: Strs,\n}\n\
+         fn main() -> Int {\n    let g = Bag(items: strs_new());\n    \
+         strs_push(g.items, int_to_str(1));\n    strs_push(g.items, int_to_str(2));\n    \
+         let h = g;\n    strs_len(h.items)\n}\n",
+    );
+    assert_eq!(r.value, "2");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+    assert_eq!(r.strings, expected(2), "{r:?}");
+}
+
+#[test]
+fn a_record_holding_a_channel_reclaims_it() {
+    let r = channels(
+        1,
+        "struct Line {\n    c: Chan,\n}\n\
+         fn main() -> Int {\n    let l = Line(c: chan_new(2));\n    \
+         let m = l;\n    chan_send(m.c, 5);\n    chan_close(l.c);\n    \
+         let got = ints_new();\n    while chan_recv(m.c, got) {\n    }\n    \
+         ints_get(got, 0)\n}\n",
+    );
+    assert_eq!(r.value, "5");
+}
+
+#[test]
+fn a_nested_record_releases_through_both_levels() {
+    // The composition, one level in: `Outer` owns nothing directly, and destroying one
+    // still gives back the string two levels down. A drop that did not recurse would
+    // leave it live.
+    let r = both(
+        "struct Inner {\n    text: Str,\n}\n\
+         struct Outer {\n    inner: Inner,\n    values: Ints,\n}\n\
+         fn main() -> Int {\n    let o = Outer(inner: Inner(text: int_to_str(77)), values: ints_new());\n    \
+         ints_push(o.values, 1);\n    str_len(o.inner.text) + ints_len(o.values)\n}\n",
+    );
+    assert_eq!(r.value, "3");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+}
+
+#[test]
+fn replacing_a_whole_record_releases_the_one_it_replaced() {
+    // Two strings allocated, one live at a time, both reclaimed — and the self-assignment
+    // in the middle must not free what it is about to store.
+    let r = strings(
+        2,
+        "struct Holder {\n    name: Str,\n}\n\
+         fn main() -> Int {\n    let mut h = Holder(name: int_to_str(111));\n    \
+         h = h;\n    h = Holder(name: int_to_str(2222));\n    str_len(h.name)\n}\n",
+    );
+    assert_eq!(r.value, "4");
+}
+
+#[test]
+fn replacing_one_field_releases_the_one_it_replaced() {
+    let r = strings(
+        3,
+        "struct Holder {\n    name: Str,\n    n: Int,\n}\n\
+         fn main() -> Int {\n    let mut h = Holder(name: int_to_str(1), n: 0);\n    \
+         h.name = int_to_str(22);\n    h.name = str_concat(h.name, \"x\");\n    \
+         str_len(h.name)\n}\n",
+    );
+    assert_eq!(r.value, "3");
+}
+
+#[test]
+fn replacing_a_field_with_something_backed_by_the_same_allocation_is_safe() {
+    // `p.name = p.name` and `p.name = str_slice(p.name, …)` both produce a new value that
+    // shares the old one's backing. Releasing the old field before taking the new one
+    // would free storage the new value points into — so the order is what this measures,
+    // and a wrong order is a use-after-free rather than a leak.
+    let r = strings(
+        1,
+        "struct Holder {\n    name: Str,\n}\n\
+         fn main() -> Int {\n    let mut h = Holder(name: str_concat(\"abcdef\", \"\"));\n    \
+         h.name = h.name;\n    h.name = str_slice(h.name, 1, 4);\n    \
+         str_len(h.name) * 100 + str_byte(h.name, 0)\n}\n",
+    );
+    assert_eq!(r.value, "398");
+}
+
+#[test]
+fn a_record_returned_as_a_tail_and_by_return_reclaims_the_same() {
+    // N7 and N8 both found these to be different implementation edges, so both are here.
+    let r = strings(
+        2,
+        "struct Holder {\n    name: Str,\n}\n\
+         fn tail() -> Holder { Holder(name: int_to_str(1)) }\n\
+         fn explicit() -> Holder {\n    let h = Holder(name: int_to_str(22));\n    return h;\n}\n\
+         fn main() -> Int { str_len(tail().name) + str_len(explicit().name) }\n",
+    );
+    assert_eq!(r.value, "3");
+}
+
+#[test]
+fn a_field_read_out_of_a_temporary_outlives_it() {
+    // The case `docs/spec.md` names: the record `make()` returned is destroyed on this
+    // line, and the string read out of it is still valid. A projection that borrowed
+    // rather than taking its own reference would leave `s` pointing at freed bytes — and
+    // because the binding retains what it stores, only a shape where *nothing else* holds
+    // the value can see it.
+    let r = strings(
+        1,
+        "struct Holder {\n    name: Str,\n}\n\
+         fn make() -> Holder { Holder(name: str_concat(\"ab\", \"cd\")) }\n\
+         fn main() -> Int {\n    let s = make().name;\n    \
+         str_len(s) * 100 + str_byte(s, 3)\n}\n",
+    );
+    assert_eq!(r.value, "500");
+}
+
+#[test]
+fn a_construction_that_fails_part_way_through_cleans_what_it_built() {
+    // §65's case. The first initialiser allocates a string, the second fails, and the
+    // record never exists — so the string is nobody's and must still be given back. A
+    // value held only in a register is not reachable from the frame's cleanup, which is
+    // why a construction with an owning field is assembled in a slot.
+    let (r, text) = both_failing(
+        "struct Two {\n    a: Str,\n    b: Int,\n}\n\
+         fn main() -> Int {\n    let n = 0;\n    \
+         let t = Two(a: str_concat(\"ab\", \"cd\"), b: 1 / n);\n    t.b\n}\n",
+    );
+    assert!(text.contains("N0401"), "{text}");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_nested_construction_that_fails_cleans_the_inner_record_too() {
+    // The same, one level in: the inner record was completed and moved into no outer one.
+    let (r, text) = both_failing(
+        "struct Inner {\n    text: Str,\n}\n\
+         struct Outer {\n    inner: Inner,\n    values: Ints,\n    n: Int,\n}\n\
+         fn main() -> Int {\n    let z = 0;\n    \
+         let o = Outer(inner: Inner(text: int_to_str(5)), values: ints_new(), n: 1 / z);\n    o.n\n}\n",
+    );
+    assert!(text.contains("N0401"), "{text}");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_failing_replacement_leaves_the_old_field_valid() {
+    // §66. The right-hand side fails, so nothing is stored — and the old field is still
+    // the record's and is released by the frame on the way out, exactly once.
+    let (r, text) = both_failing(
+        "struct Holder {\n    name: Str,\n}\n\
+         fn main() -> Int {\n    let mut h = Holder(name: str_concat(\"ab\", \"cd\"));\n    \
+         let z = 0;\n    h.name = int_to_str(1 / z);\n    str_len(h.name)\n}\n",
+    );
+    assert!(text.contains("N0401"), "{text}");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_record_is_released_on_the_failure_path_too() {
+    let (r, text) = both_failing(
+        "struct Holder {\n    name: Str,\n    values: Ints,\n}\n\
+         fn main() -> Int {\n    let h = Holder(name: int_to_str(9), values: ints_new());\n    \
+         ints_get(h.values, 0)\n}\n",
+    );
+    assert!(text.contains("N0405"), "{text}");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_task_safe_record_crosses_into_siblings_and_comes_back() {
+    // A record with a heap string and a channel, handed to two tasks at once. Each task
+    // slices what it was given, which is what makes the backing genuinely shared between
+    // threads — the reason the count on it is atomic.
+    let r = both(
+        "struct Message {\n    id: Int,\n    text: Str,\n    reply: Chan,\n}\n\
+         fn worker(m: Message) -> Int {\n    let t = str_slice(m.text, 0, 2);\n    \
+         chan_send(m.reply, m.id + str_len(t));\n    0\n}\n\
+         fn main() -> Int {\n    let c = chan_new(4);\n    \
+         let m = Message(id: 1, text: str_concat(\"ab\", \"cd\"), reply: c);\n    \
+         scope {\n        spawn worker(m);\n        spawn worker(m);\n    }\n    \
+         chan_close(c);\n    let got = ints_new();\n    \
+         while chan_recv(c, got) {\n    }\n    ints_get(got, 0) + ints_get(got, 1)\n}\n",
+    );
+    assert_eq!(r.value, "6");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+    assert_eq!(r.channels, expected(1), "{r:?}");
+}
+
+#[test]
+fn many_short_lived_records_hold_only_what_is_live() {
+    // The scaling claim, as a count rather than as resident memory: four hundred string
+    // backings created, four hundred reclaimed, and the live set constant. A record that
+    // leaked its fields would report a live count that grew with the loop.
+    let r = strings(
+        400,
+        "struct Pair {\n    a: Str,\n    b: Str,\n}\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    \
+         while i < 200 {\n        let p = Pair(a: int_to_str(i), b: int_to_str(i * 2));\n        \
+         total = total + str_len(p.a);\n        i = i + 1;\n    }\n    total\n}\n",
+    );
+    assert_eq!(r.value, "490");
+}
+
+// --- a temporary outstanding when a failure leaves ------------------------------------
+
+#[test]
+fn a_temporary_still_in_hand_when_something_fails_is_released() {
+    // Not about records at all, and found by a record case.
+    //
+    // The shared unwind block releases the frame's **slots**. The inner `str_concat` is
+    // not in a slot — it is a value this expression is holding, on its way into the outer
+    // one — and the operation that would have consumed it is on a path control never
+    // takes. So it was leaked by every failing program of this shape, from N8 until here.
+    //
+    // It stayed invisible because a failure ends the process, so nothing downstream could
+    // tell; because the two implementations were never compared on a *failing* program
+    // holding a temporary; and because no test had this exact shape. A record projection
+    // made the shape ordinary, and `a_record_is_released_on_the_failure_path_too` found it.
+    let (r, text) = both_failing(
+        "fn main() -> Int {\n    let z = 0;\n    \
+         str_len(str_concat(str_concat(\"a\", \"b\"), int_to_str(1 / z)))\n}\n",
+    );
+    assert!(text.contains("N0401"), "{text}");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_temporary_is_released_when_a_callee_fails_too() {
+    // The other failure edge: not a guard in this function, but the check after a call
+    // that found the failure flag set. It took the short path straight to the function's
+    // exit, which is right when nothing is outstanding and wrong when something is.
+    let (r, text) = both_failing(
+        "fn boom(n: Int) -> Int { 1 / n }\n\
+         fn main() -> Int {\n    let z = 0;\n    \
+         str_len(str_concat(str_concat(\"a\", \"b\"), int_to_str(boom(z))))\n}\n",
+    );
+    assert!(text.contains("N0401"), "{text}");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_sequence_temporary_is_released_when_a_failure_leaves() {
+    // The same, for a handle rather than a string backing: `ints_new()` is born with one
+    // reference and this expression is holding it when the division fails.
+    let (r, text) =
+        both_failing("fn main() -> Int {\n    let z = 0;\n    ints_len(ints_new()) + 1 / z\n}\n");
+    assert!(text.contains("N0401"), "{text}");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_failure_in_one_branch_does_not_reach_across_to_the_other() {
+    // The dominance half of the rule above. A value created in the `then` block does not
+    // dominate the `else` block, so a failure over there may not release it — and the
+    // first attempt at releasing outstanding temporaries did exactly that, which clang
+    // refused as `Instruction does not dominate all uses`. A refusal, rather than a wrong
+    // program, because the backend's output is checked by an assembler.
+    //
+    // The shape: a value-position `if` whose branches each produce a reference, and a
+    // failure after the join.
+    let (r, text) = both_failing(
+        "fn main() -> Int {\n    let z = 0;\n    let c = z == 0;\n    \
+         let xs = if c { ints_new() } else { ints_new() };\n    \
+         ints_push(xs, 1);\n    ints_get(xs, 0) / z\n}\n",
+    );
+    assert!(text.contains("N0401"), "{text}");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_record_built_in_a_branch_is_reclaimed_from_either() {
+    let r = strings(
+        1,
+        "struct Holder {\n    name: Str,\n}\n\
+         fn main() -> Int {\n    let c = 1 > 0;\n    \
+         let h = if c { Holder(name: int_to_str(11)) } else { Holder(name: int_to_str(2)) };\n    \
+         str_len(h.name)\n}\n",
+    );
+    assert_eq!(r.value, "2");
+}
