@@ -30,6 +30,7 @@ use nazm_span::Span;
 
 use crate::interface::Visibility;
 use crate::intrinsic::Intrinsic;
+use crate::key::{DefKey, DefKind, ModuleKey};
 use crate::module::ModuleId;
 use crate::types::Type;
 
@@ -140,6 +141,22 @@ impl Resolution {
     #[must_use]
     pub fn definition(&self, module: ModuleId, name: &str) -> Option<FnId> {
         self.by_module.get(module.index())?.get(name).copied()
+    }
+
+    /// Which logical definition this is, across processes.
+    ///
+    /// Needs the owning module's durable key, which the caller has and this does not: a
+    /// `Resolution` knows which module owns a definition and nothing about where that
+    /// module's source sits. `None` when the module has no durable identity, which is an
+    /// answer rather than a failure — see `docs/spec.md`, *Durable identity*.
+    #[must_use]
+    pub fn def_key(&self, id: FnId, module: &ModuleKey) -> Option<DefKey> {
+        let def = self.function(id)?;
+        Some(DefKey::new(
+            module.clone(),
+            DefKind::Function,
+            def.name.clone(),
+        ))
     }
 
     /// The program's entry point: `main` in the root module.

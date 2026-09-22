@@ -34,9 +34,39 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use nazm_core::sema::ModuleGraph;
+use nazm_core::sema::{ModuleGraph, ModuleKey};
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, SourceMap, Span};
+
+/// The durable identity of the module at `path`, relative to `root`.
+///
+/// Lexical, deliberately: `ModuleKey` is a position in a project, and asking the
+/// filesystem here would make the answer depend on where the project was checked out.
+/// `None` when the module sits outside the root, which is not an error — see
+/// `docs/spec.md`, *Durable identity*.
+fn module_key(root: &Path, path: &Path) -> Option<ModuleKey> {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    // One spelling on every platform. `Path` components are already `.`-free and
+    // separator-normalised; `ModuleKey::relative` folds what remains and refuses an
+    // escape.
+    let mut text = String::new();
+    for part in relative.components() {
+        use std::path::Component;
+        let piece = match part {
+            Component::Normal(s) => s.to_str()?,
+            Component::CurDir => continue,
+            Component::ParentDir => "..",
+            // An absolute path, a drive letter or a UNC prefix means this module is not
+            // under the root at all, whatever the rest of it says.
+            Component::RootDir | Component::Prefix(_) => return None,
+        };
+        if !text.is_empty() {
+            text.push('/');
+        }
+        text.push_str(piece);
+    }
+    ModuleKey::relative(&text)
+}
 
 /// The source of a compilation, and how its modules relate.
 ///
@@ -57,7 +87,19 @@ pub(crate) struct Loaded {
 /// On failure what was loaded **so far** comes back with the diagnostics, so a
 /// "cannot find" points at the `use` line that wrote it rather than at an empty file.
 pub(crate) fn load(root: &Path) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
+    // The source root: the directory the root module sits in, derived rather than
+    // declared. Every module's durable identity is its path relative to this, so a
+    // checkout moved from one directory to another keeps its identities — which is the
+    // property `docs/spec.md` asks for and the reason the absolute path below never
+    // reaches one.
+    let source_root = root
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+
     let mut parts: Vec<(String, String)> = Vec::new();
+    // Per module, in load order: its durable identity, or `None`.
+    let mut keys: Vec<Option<ModuleKey>> = Vec::new();
     // Canonical path to the position the file took in load order. Canonical, so a file
     // reached by two spellings is one module with one identity.
     let mut index: HashMap<PathBuf, usize> = HashMap::new();
@@ -72,8 +114,23 @@ pub(crate) fn load(root: &Path) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
     let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
 
     while let Some(path) = stack.pop() {
-        let key = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if visited.insert(key.clone(), ()).is_some() {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        let logical = module_key(&source_root, &path);
+        if let Some(&already) = index.get(&canonical) {
+            // One file, reached a second time. Ordinarily that is a diamond and the two
+            // spellings normalise to one key. When they do not, a symbolic link has made
+            // one file answer to two logical names — which the compiler written in Nazm
+            // would see as *two modules*, because it normalises text rather than asking
+            // the filesystem. The two implementations would compute different durable
+            // identities for the same source, so neither gets one.
+            if keys.get(already).is_some_and(|k| *k != logical) {
+                if let Some(k) = keys.get_mut(already) {
+                    *k = None;
+                }
+            }
+            continue;
+        }
+        if visited.insert(canonical.clone(), ()).is_some() {
             continue;
         }
 
@@ -132,7 +189,8 @@ pub(crate) fn load(root: &Path) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
             stack.push(child.clone());
         }
 
-        index.insert(key, parts.len());
+        index.insert(canonical, parts.len());
+        keys.push(logical);
         named.push(
             children
                 .into_iter()
@@ -147,7 +205,7 @@ pub(crate) fn load(root: &Path) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
     // error into two.
     let mut graph = ModuleGraph::default();
     for i in 0..parts.len() {
-        graph.add(FileId::from_index(i));
+        graph.add(FileId::from_index(i), keys.get(i).cloned().flatten());
     }
     for (i, imports) in named.iter().enumerate() {
         let Some(from) = graph.module_of(FileId::from_index(i)) else {

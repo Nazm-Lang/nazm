@@ -40,12 +40,14 @@
 
 pub mod interface;
 pub mod intrinsic;
+pub mod key;
 pub mod module;
 pub mod resolve;
 pub mod types;
 
 pub use interface::{Export, UnitInterface, Visibility};
 pub use intrinsic::Intrinsic;
+pub use key::{DefKey, DefKind, ModuleKey};
 pub use module::{Dependency, ModuleGraph, ModuleId};
 pub use resolve::{Callee, FnDef, FnId, LocalDef, Resolution};
 pub use types::Type;
