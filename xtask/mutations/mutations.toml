@@ -1191,8 +1191,10 @@ element — or releasing the sequence — invalidates a value the program is sti
 unaffected by changing the sequence; until N8 that was true because nothing was freed
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """                self.take(v, elem);
-                self.owned.insert(v);
+find = """                if elem.owns().is_some() {
+                    self.take(v, elem);
+                    self.owned.insert(v);
+                }
                 return Val::Of { value: v, ty: elem };"""
 replace = """                return Val::Of { value: v, ty: elem };"""
 

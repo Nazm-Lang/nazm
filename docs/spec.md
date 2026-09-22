@@ -516,9 +516,9 @@ language whose specification already promised aliasing.
 | Kind | Types | Assignment produces | Storage |
 | --- | --- | --- | --- |
 | **Immediate** | `Int`, `Bool` | an independent copy | none |
-| **Shared immutable value** | `Str` | a value with the same bytes | shared or copied, **unobservably** |
+| **Shared immutable value** | `Str` | a value with the same bytes | reclaimed when the last value naming it dies; shared or copied **unobservably** until then |
 | **Owned mutable handle** | `Ints`, `Strs` | another reference to the same storage | reclaimed when the last reference dies |
-| **Runtime-managed handle** | `Chan` | another reference to the same channel | the runtime's, bounded by its `scope` |
+| **Runtime-managed handle** | `Chan` | another reference to the same channel | the runtime's, reclaimed when the last reference dies |
 
 There are four because the language has four kinds of thing, not because four was a good
 number. A fifth would need a value that is none of: a number, an immutable byte string, a
@@ -622,10 +622,10 @@ would otherwise release storage the task is still reading.
 #### Cycles
 
 A reference cycle is impossible in the language as it stands, and not by luck: a `Ints`
-holds `Int`, a `Strs` holds `Str`, and `Str` is a leaf. **No value can refer to another
-value that can refer back.** So counting references reclaims everything, and the leak
-freedom claimed for sequence storage is a claim about this type system rather than about
-counting in general.
+holds `Int`, a `Strs` holds `Str`, `Str` is a leaf, and a `Chan` carries `Int`. **No value
+can refer to another value that can refer back.** So counting references reclaims
+everything, and the leak freedom claimed for every current heap-backed type is a claim
+about this type system rather than about counting in general.
 
 A recursive user-defined type would end that, and the constitution says in advance what
 admitting one requires: either the type system refuses ownership cycles, or the value kind
