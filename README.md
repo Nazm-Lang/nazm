@@ -209,7 +209,10 @@ annotations" until N7 (2026-09-22), when the memory model was settled from an au
 than from the hypothesis. It is not mutable value semantics: sequences alias, observably
 and by specification, and `spec.md`'s memory constitution reclaims their storage without
 changing that. `research-register.md` R1 records what happened to the hypothesis and where
-it is still live.*
+it is still live. **N8, the same day, finished the job for the types that exist**: strings
+and channels are reclaimed too, with no annotation, no collector and no source change to
+the compiler written in Nazm. It is not whole-language leak freedom and
+`capability-matrix.md` area 4 says exactly what it is.*
 
 The answer to "does this need a new compiler design?" is **new front end, new IR, new
 middle end, reused back end**. Code generation is decades of work with no novelty available

@@ -422,6 +422,88 @@ release per binding at each of three exit edges. The bootstrap is unchanged at
 `Chan` storage is still not reclaimed, so the string-heavy row above still grows without
 bound, and `capability-matrix.md` area 4 states the scope per type rather than as one word.
 
+*The last paragraph was true until N8, below, which is the same day. The rest of this
+section is unchanged and its numbers are what N8 was measured against.*
+
+### Strings and channels — measured 2026-09-22, and the incident's shape is gone
+
+N8 made `Str` and `Chan` storage reclaimable, which completes the current type universe.
+Same two instruments, same reason: peak resident memory answers *does this workload still
+grow*, and the runtime counters answer *was this value reclaimed*, which peak memory cannot.
+Darwin arm64, `-O2`, against the commit before N8. Peak is a maximum over a deterministic
+program, so no median is taken.
+
+| Workload | Live set | Before | After |
+| --- | --- | ---: | ---: |
+| 5,000 temporary heap strings | one string | 1.88 MiB | **1.73 MiB** |
+| 20,000 | one string | 2.33 MiB | **1.77 MiB** |
+| 80,000 | one string | 4.17 MiB | **1.77 MiB** |
+| accumulator loop, 2,000 `str_concat` | 4 KB | 6.28 MiB | **2.02 MiB** |
+| accumulator loop, 8,000 `str_concat` | 16 KB | **70.66 MiB** | **2.23 MiB** |
+| 200 short-lived channels | one | 1.83 MiB | **1.80 MiB** |
+| 2,000 short-lived channels | one | 2.38 MiB | **1.80 MiB** |
+| 64 channels of capacity 256 | one | 1.88 MiB | **1.75 MiB** |
+| 5,000 / 20,000 / 80,000 short-lived **sequences** | ~400 B | 1.72 / 1.77 / 1.77 MiB | 1.73 / 1.75 / 1.77 MiB |
+| one 2,000,000-element sequence, genuinely live | 16 MiB | 19.06 MiB | 19.06 MiB |
+| 20,000 values through one channel | one | 1.97 MiB | 1.95 MiB |
+| empty program | — | 1.70 MiB | 1.69 MiB |
+
+The fifth row is the one this work was for. That shape — `str_concat` in a loop, small live
+result — is what took the machine down on 2026-09-21 and what `bootstrap.md` §1 is about;
+at 8,000 iterations it is **31× smaller**, and what remains is the live string plus the
+floor. The three sequence rows are the N7 regression check: unchanged, which is what
+reclaiming a second kind of value should do to the first. The live sequence and the sieve
+are the control.
+
+**`str_concat` in a loop is still quadratic in time.** Nothing here changes that, and
+`str_join` is still one pass and one allocation. What changed is that getting it wrong now
+costs time rather than the machine.
+
+### What the counting costs
+
+Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
+
+| Workload | Before | After | |
+| --- | ---: | ---: | --- |
+| 1,000,000 short strings | 31.7 ms | 48.2 ms | **+16.5 ms**, ≈16 ns per string |
+| 1,000,000 slices of one string | 31.9 ms | 45.2 ms | **+13.3 ms**, ≈13 ns per slice |
+| 200,000 strings through a `Strs` | 45.9 ms | 50.3 ms | +4.4 ms |
+| 1,000,000 sequences | 63.5 ms | 64.3 ms | noise |
+| 4,000,000 pushes into one sequence | 46.0 ms | 46.0 ms | — |
+| 50,000 channels | 38.5 ms | 36.9 ms | noise |
+| 200,000 values through one channel | 49.8 ms | 48.6 ms | noise |
+| sieve to 2,000,000 | 47.0 ms | 48.1 ms | noise |
+
+The cost is where the ownership is and nowhere else. A string operation pays an atomic
+adjustment and, for a heap string, a `free`; a sequence pays nothing new; arithmetic and
+indexing pay nothing at all. **13 ns for a slice is the honest price of N8's central
+decision** — a slice retains the buffer it points into, and that is what lets a slice
+outlive the binding of the buffer it was cut from.
+
+Executable size: **+512 bytes** for a program that touches a string, +352 more for one that
+touches a channel, against ~50 KB.
+
+### The compiler process, and the programs it emits
+
+Two different questions, so two measurements. Both inside `nazm-contained:1.98.1`, Linux
+aarch64, so the two columns are comparable with each other and not with the table above.
+
+| | Before | After |
+| --- | ---: | ---: |
+| the **self-hosted** compiler compiling `emit.nz` — the compiler *process* | 52.61 MiB | **24.86 MiB** |
+| a program that compiler emitted: 80,000 temporary strings | 6.04 MiB | **1.17 MiB** |
+| the **reference** compiler compiling `emit.nz` | 98.82 MiB | 107.61 MiB |
+
+The first row is the milestone's own dogfood: the Nazm-written compiler is a string-heavy
+program, so reclaiming strings halves its peak. The second is the question §34 of the
+directive keeps separate from it — what the emitted program costs, which is not the same
+question and does not have the same answer.
+
+The third row went **up 8.9%**, and that is a real cost rather than noise. The reference
+compiler holds the whole LLVM text it is building, the emitted IR now carries retain and
+release calls and the string runtime, and a bigger text is a bigger buffer. It is the price
+of the emitted program's 5× and it is recorded rather than left for a reader to find.
+
 ## The optimisation pass, and what it was based on
 
 One pass, chosen from a profile rather than from intuition. `sample` on the release

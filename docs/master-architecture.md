@@ -84,14 +84,24 @@ constitution* is the law and `architecture.md` §7.7 the implementation. A short
 sequence workload that grew linearly with work done — 43.52 MiB for a live set of 400 bytes
 — is now flat at 1.86.
 
-Partly, and the part that is missing is named rather than rounded off. `Str` and `Chan`
-storage is still not reclaimed, and the self-hosted backend emits no reclamation at all, so
-a string-heavy program still grows. **Whole-language leak freedom is not claimed**, and
+*Earned for the current type universe as of N8 (2026-09-22).* `Str` and `Chan` storage is
+reclaimed too, in both compilers and in the reference interpreter — a `Str` carries the
+allocation that owns its bytes (`architecture.md` §7.8), a channel's ring, mutex and
+condition variable go with its last reference, and the self-hosted backend emits the same
+model. The string accumulator that took the machine down on 2026-09-21 fell from 70.66 MiB
+to 2.23 MiB at 8,000 iterations.
+
+**Whole-language leak freedom is still not claimed, and the reason is not modesty.** The
+claim covers six built-in types and rests on the fact that none of them can refer to a value
+that refers back. The first recursive user-defined type ends that argument, and
+`docs/spec.md`'s *Cycles* states in advance what admitting one requires.
 `capability-matrix.md` area 4 states the scope per type.
 
 *Until N7 this paragraph read: "There is also no reclamation of any kind … 'No GC' is
 currently achieved by never freeing, which is not a memory strategy." That was accurate,
-and it is the sentence the milestone was written to retire.*
+and it is the sentence the milestone was written to retire. Between N7 and N8 it read
+"`Str` and `Chan` storage is still not reclaimed, and the self-hosted backend emits no
+reclamation at all"; both halves were true and both are now closed.*
 
 **4 — Runtime cost is zero where possible and observable where it is not.**
 *Partial.* The costs that exist are observable and specified: checked arithmetic traps

@@ -275,26 +275,61 @@ live sequence and a string-heavy loop are both unchanged.
 | | Depends on | Why not before |
 | --- | --- | --- |
 | Reclaiming `Ints` and `Strs` | a memory constitution ✓ | done — N7 |
-| Reclaiming `Str` | a representation that records provenance | four provenances, one of them an interior pointer, on the type copied in every hot loop |
-| Reclaiming `Chan` | a rule for a value whose lifetime is a `scope`'s and whose holders are tasks | it is the one value designed to be shared across threads, so its count would have to be atomic |
-| Reclamation in the self-hosted backend | the above, and a migration | `compiler/emit.nz` emits no reclamation; its own source needed no change |
+| Reclaiming `Str` | a representation that records provenance | done — N8. Four provenances, one of them an interior pointer, answered by a third field naming the owner |
+| Reclaiming `Chan` | a rule for a value whose lifetime is a `scope`'s and whose holders are tasks | done — N8. The count is atomic, because it does cross; a waiter implies a live reference, which is what makes `rc == 0` sufficient |
+| Reclamation in the self-hosted backend | the above, and a migration | done — N8. No source change was needed; the runtime is derived from the Rust emitter's and a gate refuses drift |
 | User-defined records | a decision this milestone deliberately did not make | `research-register.md` R1, re-scoped: value semantics are a live question for a kind of value with no existing meaning to break |
 | Ownership cycles | a recursive type existing at all | impossible today: no value can refer to another that can refer back |
 
-### N8 — the next milestone, and not started
+### N8 — Complete current heap reclamation — **complete, 2026-09-22**
 
-**`Str` reclamation** is the largest remaining memory gap and the one with a measured
-number behind it: the self-hosted compiler's peak fell 9% in N7 and the rest of it is
-`Str`. It needs a representation that records where a string's bytes came from, which is a
-change to the type copied most often in the language, and the cost of that change has to be
-measured before it is chosen — a wider `Str` is paid for on every parameter, every
-`strs_get` and every literal.
+Every heap-backed type the language has is reclaimed, in the reference interpreter, in the
+Rust compiler's output, and in the output of the compiler written in Nazm.
 
-The alternative first step is **user-defined records**, which N7 deliberately did not touch
-and which the constitution says in advance what it requires: either the type system refuses
-ownership cycles, or the kind of value that can form them arrives with its own policy.
+| | |
+| --- | --- |
+| **N8A–C** | The `Str` backing model — `{ pointer, length, owner }`, four origins classified rather than guessed at — string and channel reclamation, container element ownership, task-boundary ownership, and four runtime leaks that were nobody's feature |
+| **N8D** | `compiler/emit.nz` migrated. Its runtime is **derived** from the Rust emitter's rather than transcribed, with a gate; its decisions are held by a differential memory test |
+| **N8E** | Nine mutations, and the scaling measurements |
+| **N8F** | The authorities |
 
-Neither is urgent, and the ordering between them is the first decision.
+The number that says what it was for: the accumulator shape from the 2026-09-21 incident,
+at 8,000 iterations, fell from **70.66 MiB to 2.23 MiB**. 80,000 temporary strings against a
+constant live set: 4.17 MiB → 1.77 MiB. 2,000 short-lived channels: 2.38 MiB → 1.80 MiB.
+Sequences, a genuinely live sequence and a sieve are unchanged, which is the control. The
+cost is about 13–16 ns per string operation and nothing measurable elsewhere.
+
+`compiler/*.nz` needed **no source change**, which was the test of whether the constitution
+is as ergonomic as it claims: memory semantics are transparent, and a milestone that had
+required manual lifetime management in the compiler's own source would have been evidence
+against the design rather than for it.
+
+### After N8, in dependency order
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| **User-defined records** | a decision about value semantics for a kind of value with no existing meaning to break | `research-register.md` R1. The first type that can be recursive also ends the cycle argument this milestone's leak-freedom claim rests on, and the constitution says in advance what admitting one requires |
+| Variants, pattern matching, `Option`, `Result` | records | the shape of a payload is a record's question first |
+| Generics | records and variants | nothing to be generic over yet |
+| A lossless CST | nothing in this list | the last AI-native item, and independent of all of it |
+| `nazm explain-cost` | the cost table in `spec.md` ✓ | the model is documented; the tool is not written, and is not urgent |
+
+### N9 — the next milestone, and not started
+
+**User-defined records.** It is the recommendation, and the argument is that everything else
+now waits behind it: variants, pattern matching, `Option`, `Result` and generics all need a
+payload shape first, and the memory model has just been completed for a type universe that
+records are the natural next member of.
+
+It is also where the current leak-freedom claim gets tested rather than extended. A record
+holding a record can be made recursive, and the constitution states the rule in advance:
+either the type system refuses ownership cycles, or the kind of value that can form them
+arrives with its own policy — a weak reference, a region, or a collector for that kind
+alone. **What may not happen is a recursive type being added and the reclamation claim left
+standing.**
+
+The alternative is a lossless CST, which is the last AI-native item and depends on nothing
+here. It is smaller, it is independent, and it would leave the language exactly where it is.
 
 ---
 

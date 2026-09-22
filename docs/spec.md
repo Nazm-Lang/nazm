@@ -480,8 +480,16 @@ above.
 > is reclaimed now, under the rule in *The memory constitution* below, and **none of the
 > meanings above changed** — which is what the last sentence promised. Everything else in
 > this section still holds: sequences are still shared, still mutable, still aliasable, and
-> a push through one binding is still visible through every other. `Str` storage and
-> channel storage are still not reclaimed, and the constitution says so in those words.
+> a push through one binding is still visible through every other.
+>
+> **Extended by N8, 2026-09-22.** The same rule now covers `Str` and `Chan` storage, so
+> *nothing* in the current type universe is left to the process's exit. Two entries in the
+> table above are worth reading again in that light. *Destruction* is no longer "there is
+> none": a sequence's storage goes when the last reference to it dies, and a `Strs`
+> releases every string in it first. And *element copying* — "changing the sequence
+> afterwards does not change a `Str` already read out of it" — used to be true because
+> nothing was ever freed. It is true now because `strs_get` hands back its own reference to
+> the bytes, which is the same promise resting on something that will go on being true.
 
 #### An expression may be a statement
 
@@ -549,9 +557,9 @@ This is where the milestone's scope is stated rather than implied:
 | | |
 | --- | --- |
 | `Ints`, `Strs` storage | reclaimed |
-| `Str` storage | **not reclaimed.** A `Str` may point into a literal, into the process's arguments, into a heap buffer, or into the middle of any of those, and the value does not say which. Reclaiming one needs a representation that knows, and that is not this milestone |
-| `Chan` storage | **not reclaimed** |
-| the interpreter | reclaims under the same rule, through the host's own reference counting |
+| `Str` storage | reclaimed **since N8**. The line above read *"not reclaimed"* and gave the reason: a `Str` may point into a literal, into the process's arguments, into a heap buffer, or into the middle of any of those, and the value did not say which. It says which now — `architecture.md` §7.8 — and the four origins are classified rather than guessed at |
+| `Chan` storage | reclaimed **since N8**, including its queue, its mutex and its condition variable |
+| the interpreter | reclaims under the same rule, and models the same backing rather than inheriting the host's |
 
 **5. What crosses a task boundary is decided by kind.** An immediate crosses by copy. A
 `Str` crosses by immutable sharing, which is safe precisely because nothing can mutate it.
@@ -559,9 +567,23 @@ A `Chan` crosses by runtime-managed sharing, which is what it is for. A handle *
 cross at all** — `N0321` refuses it, and that is unchanged.
 
 That refusal is load-bearing rather than incidental. Because a handle cannot reach a second
-task, its reference count is never touched by two threads at once, so reclamation needs no
-atomic operation and no lock. A language rule that existed for data-race safety pays for
+task, its reference count is never touched by two threads at once, so reclaiming one needs
+no atomic operation and no lock. A language rule that existed for data-race safety pays for
 itself a second time here.
+
+**And the converse, which N8 had to settle.** A `Str` and a `Chan` *do* cross, so whatever
+keeps their storage alive is reached by more than one thread and must be safe under that. A
+task can be handed a string, slice it, and bind the slice; two sibling tasks doing that to
+the same bytes are two threads adjusting one thing. So the implementation pays for a
+thread-safe mechanism there and does not pay for one on a sequence. Neither half is a
+judgement about how likely sharing is — each follows from a rule the language already had,
+and if `N0321` were ever relaxed the sequence half would have to change in the same commit.
+
+What the *language* says is only this: **immutable string bytes remain valid for every live
+`Str` value, and a channel's storage remains valid while any reference to it exists.** That
+is a rule about validity, not about counting. `architecture.md` §7.8 records that counting
+is what is implemented and why; a future arena, an interning pass, a small-string
+optimisation or an escape analysis would satisfy the same sentence.
 
 #### What this costs, stated so it can be checked
 
@@ -576,13 +598,26 @@ Nazm does not call something automatic and leave the reader to find out what it 
 | `f(xs)` | no | no | no | no | no |
 | `return xs;` | no | no | **yes** | no | no |
 | `ints_push(xs, v)` | **yes**, on growth | no | no | no | no |
-| a binding going out of scope | no | no | **yes**, if it holds a handle | no | no |
+| a binding going out of scope | no | no | **yes**, if it holds one | no | no |
 | `chan_send(c, v)` | no | no | no | **yes** | **yes** |
+| `let t = str_slice(s, 1, 3);` | no | no | **yes** | no | no |
+| `let b = a;` on a `Str` | no | **permitted, and not done** | **yes** | no | no |
+| `strs_push(xs, s)` | **yes**, on growth | no | **yes** | no | no |
+| `strs_get(xs, i)` | no | no | **yes** | no | no |
+| `let c2 = c;` on a `Chan` | no | no | **yes** | no | no |
+| `spawn f(s)` | **yes**, for the task's arguments | no | **yes** | **yes** | no |
 
-Two entries in that table deserve their emphasis. **Passing a handle to a function costs
+Two entries in that table deserve their emphasis. **Passing a value to a function costs
 nothing**, which is rule 2 turned into a number: the caller keeps its reference across the
-call, so nothing has to be counted. And **the count is adjusted only where a binding takes
-or loses a handle**, which is a place a reader can see and a tool can list.
+call, so nothing has to be counted. And **the work happens only where something takes a
+reference or lets one go** — a binding, a return, a container that keeps what it is given —
+which is a place a reader can see and a tool can list.
+
+Two rows say "yes" where a reader might expect "no". `str_slice` does no copying and still
+adjusts a count, because the view it produces has to keep the bytes it points into alive.
+And a `spawn` argument is held for the task rather than borrowed from the statement that
+started it, because the task outlives that statement: a binding reassigned inside the scope
+would otherwise release storage the task is still reading.
 
 #### Cycles
 
@@ -600,9 +635,16 @@ the reclamation claim left standing.**
 
 #### What is not promised
 
-- **Leak freedom for a whole program.** `Str` and `Chan` storage is not reclaimed, so a
-  program that concatenates in a loop still grows. `capability-matrix.md` states the scope
-  per type rather than as one word.
+- **Leak freedom for a whole program, as a permanent property.** Every heap-backed type
+  the language *currently has* is reclaimed, which is a claim about `Int`, `Bool`, `Str`,
+  `Ints`, `Strs` and `Chan` and about nothing else. It rests on the cycle argument below,
+  which is a fact about this type system rather than about counting in general: the first
+  recursive user-defined type ends it, and the paragraph after next says in advance what
+  admitting one requires. `capability-matrix.md` states the scope per type rather than as
+  one word.
+- **Reclamation of storage the program did not allocate.** A string literal lives in the
+  object's read-only data and a process argument belongs to the operating system. Neither
+  is freed, neither is counted, and neither is a leak.
 - **Deadlock freedom.** Unchanged, and still not promised.
 - **A destructor.** There is no user-visible destruction, no RAII and no ordering a program
   can observe, because nothing a program can write runs at reclamation.
@@ -1079,13 +1121,19 @@ a channel closes are still received — closing ends a channel, it does not disc
 
 #### Lifetime and cleanup
 
-A task's arguments are values or channels, so nothing it holds can dangle: values are
-copied, and a channel outlives every scope that uses it because nothing is ever freed.
-There are no destructors to run and nothing to reclaim — the same bootstrap memory model
-the rest of the language has (`docs/bootstrap.md` §1).
+A task's arguments are values or channels, so nothing it holds can dangle. Joining is
+guaranteed by the scope's closing brace, and there are no destructors to run — nothing a
+program can write runs at reclamation.
 
-Cleanup is therefore about *joining*, not about freeing, and joining is guaranteed by the
-scope's closing brace.
+> **Superseded in part by N8, 2026-09-22.** This section used to continue: *"a channel
+> outlives every scope that uses it because nothing is ever freed … cleanup is therefore
+> about joining, not about freeing"*. Freeing happens now. A channel's storage — its queue,
+> its mutex and its condition variable — goes when the last reference to it dies, under
+> rule 4 like everything else, and **closing a channel is still not destroying one**:
+> `chan_close` changes what the channel does and touches no storage at all. Nothing a
+> program can observe changed. What makes the two safe to keep apart is that a thread
+> blocked in `chan_send` or `chan_recv` reached it from a frame that holds the handle, so a
+> waiter implies a live reference and no reference implies no waiter.
 
 #### What this model does not promise
 
