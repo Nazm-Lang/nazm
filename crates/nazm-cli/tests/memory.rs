@@ -1058,6 +1058,36 @@ fn replacing_a_field_with_something_backed_by_the_same_allocation_is_safe() {
 }
 
 #[test]
+fn a_field_replaced_by_itself_survives_the_allocator_reusing_the_block() {
+    // The same rule as the case above, in the one shape that can *observe* it.
+    //
+    // Counting cannot: replacing a field with a value backed by the same allocation
+    // either releases the old one first — freeing storage the new value points into — or
+    // takes the new one first, and both orders end with the same two numbers. A premature
+    // free is not a counting error.
+    //
+    // What distinguishes them is whether the storage is still there afterwards, so this
+    // makes the allocator hand the block back out: three hundred small allocations
+    // between the replacement and the read. With the release first, the program does not
+    // return a wrong answer — it stops with a signal, which is the honest outcome for a
+    // use-after-free and is what `both` notices.
+    //
+    // `h.name = h.name` rather than `h.name = str_slice(h.name, …)`: a slice takes its own
+    // reference inside the built-in, so it would survive the wrong order by accident. A
+    // projection out of a borrowed record holds none, which is exactly the case where the
+    // replacement has to take one.
+    let r = strings(
+        301,
+        "struct Holder {\n    name: Str,\n}\n\
+         fn main() -> Int {\n    let mut h = Holder(name: str_concat(\"abcdefgh\", \"\"));\n    \
+         h.name = h.name;\n    let mut noise = \"\";\n    let mut i = 0;\n    \
+         while i < 300 {\n        noise = str_concat(noise, \"z\");\n        i = i + 1;\n    }\n    \
+         str_byte(h.name, 0) * 100 + str_len(h.name) * 10 + str_len(noise) % 10\n}\n",
+    );
+    assert_eq!(r.value, "9780");
+}
+
+#[test]
 fn a_record_returned_as_a_tail_and_by_return_reclaims_the_same() {
     // N7 and N8 both found these to be different implementation edges, so both are here.
     let r = strings(
