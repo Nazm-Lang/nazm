@@ -452,8 +452,9 @@ The fifth row is the one this work was for. That shape — `str_concat` in a loo
 result — is what took the machine down on 2026-09-21 and what `bootstrap.md` §1 is about;
 at 8,000 iterations it is **31× smaller**, and what remains is the live string plus the
 floor. The three sequence rows are the N7 regression check: unchanged, which is what
-reclaiming a second kind of value should do to the first. The live sequence and the sieve
-are the control.
+reclaiming two more kinds of value should do to the first. The genuinely live sequence, the
+channel handoff and the empty program are the controls — memory that is *in use* does not
+move, and neither does the floor.
 
 **`str_concat` in a loop is still quadratic in time.** Nothing here changes that, and
 `str_join` is still one pass and one allocation. What changed is that getting it wrong now
