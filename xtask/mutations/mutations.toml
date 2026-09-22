@@ -820,8 +820,8 @@ the path this machine happened to use. Two checkouts of one project then disagre
 what their modules are, and every persisted interface carries a host directory
 """
 file = "crates/nazm-cli/src/load.rs"
-find = "    let relative = path.strip_prefix(root).unwrap_or(path);"
-replace = "    let relative = path;"
+find = "    let relative = absolute.strip_prefix(root).unwrap_or(&absolute);"
+replace = "    let relative = absolute.as_path();"
 
 [[mutation]]
 name = "a-private-definition-reaches-the-interface"
@@ -1273,7 +1273,7 @@ Only a differential test that compares what the two compilers' programs *reclaim
 it, which is what `the_nazm_written_compiler_emits_the_same_memory_semantics` is for
 """
 file = "compiler/emit.nz"
-find = """                                                own_keep(out, next, owned, tv, type_of_name(after_colon(text)));
-                                                release_frame(out, next, frame);"""
-replace = """                                                own_keep(out, next, owned, tv, type_of_name(after_colon(text)));"""
+find = """                                                                                                own_keep(out, next, owned, tv, type_of_name(after_colon(text)));
+                                                                                                release_frame(out, next, frame);"""
+replace = """                                                                                                own_keep(out, next, owned, tv, type_of_name(after_colon(text)));"""
 
