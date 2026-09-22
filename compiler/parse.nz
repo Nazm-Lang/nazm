@@ -718,6 +718,13 @@ fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 continue;
             }
             let fn_start = start_at(starts, i);
+            // `pub`, optional, and accepted rather than acted on. The visibility rule is
+            // the front end's (`docs/spec.md`); what this compiler must not do is fail to
+            // parse a source file the language admits. `bootstrap.md` records that it
+            // reads visibility and does not enforce it.
+            if kind_at(kinds, i) == k_pub() {
+                i = i + 1;
+            }
             i = expect(kinds, starts, i, k_fn(), "expected `fn`");
             if kind_at(kinds, i) != k_ident() {
                 die("expected a function name", start_at(starts, i));

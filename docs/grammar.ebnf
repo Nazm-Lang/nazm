@@ -29,7 +29,16 @@ use_item = "use" , STRING , ";" ;
 
 (* @example fn main() -> Int { 0 } *)
 (* @example fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) } *)
-function = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block ;
+(* @example pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) } *)
+function = [ visibility ] , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block ;
+
+(* One bit, and one spelling for it. Absent means private to this module; `pub` exports
+ * it to the modules that directly import this one. There is no `private` keyword,
+ * because the default needs no word, and no package or friend visibility, because there
+ * are no packages and no friends. See `docs/spec.md`.
+ *)
+(* @example pub fn helper() -> Int { 1 } fn main() -> Int { helper() } *)
+visibility = "pub" ;
 
 (* @example fn f(a: Int, b: Str) -> Int { str_len(b) + a } fn main() -> Int { f(1, "x") } *)
 parameters = parameter , { "," , parameter } ;
