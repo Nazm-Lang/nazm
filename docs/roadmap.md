@@ -241,25 +241,60 @@ processes where a cache-disabled one runs eight.
 so does the link; there is no executable cache, no `LinkKey`, no incremental linker, no
 persistent LIR, no LTO. Nothing is evicted, so the store grows until it is deleted.
 
-### N7 — the next milestone, and not started
+### N7 — Memory constitution and the first reclamation — **complete, 2026-09-22**
 
-Two candidates, and the ordering between them is the first decision.
+The cache ladder stopped here on purpose. `architecture.md` §7.7 owns the design and the
+evidence; `spec.md`'s *memory constitution* owns the law.
 
-**The remaining per-build processes.** A warm build's cost is now two external processes: a
-`clang -###` probe at about 60 ms and the link at about 89 ms. The probe is a fact about a
-toolchain rather than about a program, so it is memoisable — and doing so means a second
-cache whose invalidation question is exactly the one the backend identity already struggles
-with, which is why it was not done here. The link is the larger number and reusing it needs a
-`LinkKey`: the linker, its version, its options, and the identity of every object in order.
-That is executable reuse, and it is a different soundness argument from this one.
+| | |
+| --- | --- |
+| **preflight** | A mutation verdict is measured the way the suite is authoritative — one job, one test thread. `nproc` reports 10 inside a container limited to one CPU, and the suite has wall-clock deadlines, so verdicts were a function of scheduling. The dangerous direction was never the one that was noticed: a spurious failure while measuring a **mutant** counts as CAUGHT and is invisible |
+| **N7A** | The audit. Every type across both implementations, every allocation site, the leak measured, and `compiler/*.nz` counted |
+| **N7B–C** | Five models compared against real Nazm code; the constitution settled in `spec.md` before anything was implemented |
+| **N7D** | Reference counting on the sequence header. Reclamation on the three exit edges of a generated function, and the same rule modelled in the interpreter rather than inherited from the host |
+| **N7E** | Sixteen cases, each run twice and compared; six mutations |
+| **N7F** | Measurement, and the authorities |
 
-**Or the front end.** `nazm build` cannot reuse a semantic check at all, because lowering
-reads the resolution that checking a body produces and nothing persists one. Persisting it
-means designing a written form for name resolution — which is `research-register.md` R2's
-neighbourhood and a larger piece of work than either cache above.
+**What the audit changed.** Two findings moved the design before a line was written. A
+`Str` has four provenances and does not say which — a literal's constant, `argv`, a heap
+buffer, or the **interior** of any of them, because `str_slice` is specified not to
+allocate — so `free` is wrong for three of the four. And the specification's `Str` value
+semantics are currently paid for *with the leak*. `Str` is therefore out of the slice, in
+the specification's own words.
 
-Neither is urgent. A 158 ms warm build of the whole self-hosted compiler is not the
-bottleneck in this project.
+**What did not change.** Any program's meaning. `let b = a;` still aliases a sequence, a
+push through one is still visible through the other, a parameter is still borrowed. A model
+that had to break that to be implementable would have been the wrong model.
+
+**Measured.** 5,000 / 20,000 / 80,000 short-lived sequences: 4.38 / 12.28 / 43.52 MiB
+before, **1.78 / 1.88 / 1.86 MiB** after. Flat in work where it was linear. A genuinely
+live sequence and a string-heavy loop are both unchanged.
+
+### After N7, in dependency order
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Reclaiming `Ints` and `Strs` | a memory constitution ✓ | done — N7 |
+| Reclaiming `Str` | a representation that records provenance | four provenances, one of them an interior pointer, on the type copied in every hot loop |
+| Reclaiming `Chan` | a rule for a value whose lifetime is a `scope`'s and whose holders are tasks | it is the one value designed to be shared across threads, so its count would have to be atomic |
+| Reclamation in the self-hosted backend | the above, and a migration | `compiler/emit.nz` emits no reclamation; its own source needed no change |
+| User-defined records | a decision this milestone deliberately did not make | `research-register.md` R1, re-scoped: value semantics are a live question for a kind of value with no existing meaning to break |
+| Ownership cycles | a recursive type existing at all | impossible today: no value can refer to another that can refer back |
+
+### N8 — the next milestone, and not started
+
+**`Str` reclamation** is the largest remaining memory gap and the one with a measured
+number behind it: the self-hosted compiler's peak fell 9% in N7 and the rest of it is
+`Str`. It needs a representation that records where a string's bytes came from, which is a
+change to the type copied most often in the language, and the cost of that change has to be
+measured before it is chosen — a wider `Str` is paid for on every parameter, every
+`strs_get` and every literal.
+
+The alternative first step is **user-defined records**, which N7 deliberately did not touch
+and which the constitution says in advance what it requires: either the type system refuses
+ownership cycles, or the kind of value that can form them arrives with its own policy.
+
+Neither is urgent, and the ordering between them is the first decision.
 
 ---
 

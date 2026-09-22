@@ -38,7 +38,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 806 passed, 0 failed, 6 ignored, across 53 suites**, run through
+**Current suite: 823 passed, 0 failed, 6 ignored, across 54 suites**, run through
 `cargo xtask contained tests`. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -49,7 +49,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 | 2 | Name resolution and modules | PARTIAL |
 | 2a | Incremental semantic checking | VERIFIED |
 | 3 | Type system | PARTIAL |
-| 4 | Ownership and resource semantics | MISSING |
+| 4 | Memory model and reclamation | PARTIAL |
 | 5 | Effects | MISSING |
 | 6 | Capabilities (language) | MISSING |
 | 7 | Provenance and information flow (language) | MISSING |
@@ -82,7 +82,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
 
-Nine VERIFIED, eleven PARTIAL, three DESIGNED, two RESEARCH, ten MISSING. The shape is
+Nine VERIFIED, twelve PARTIAL, three DESIGNED, two RESEARCH, nine MISSING. The shape is
 worth reading directly: **everything verified is either a front-end capability, a tooling
 interface, or an evidence mechanism.** Nothing in the semantic core — ownership, effects,
 capabilities, provenance — exists at all, and that is the accurate summary of where the
@@ -258,28 +258,53 @@ arrays instead. `docs/roadmap.md`, *What M2 bypassed*, records why that matters.
 
 ## Semantic core
 
-### 4. Ownership and resource semantics — MISSING
+### 4. Memory model and reclamation — PARTIAL
 
-**Evidence of absence** · No ownership, borrow, move, region or lifetime machinery exists
-in any language crate. The source says so: `crates/nazm-core/src/eval.rs` — *"This is
-emphatically **not** a claim of ownership safety. Nothing prevents aliasing, nothing tracks
-lifetimes, and nothing is ever freed."* Sequences are shared, mutable and never freed
-(`docs/spec.md`). `==` on a sequence is refused (`N0304`) because it would have to mean
-identity or contents and the language chose neither.
+*This row was "Ownership and resource semantics — MISSING" until N7 (2026-09-22). The
+paragraph it used to carry is kept below, because what it said was true and the numbers in
+it are what the work was measured against.*
 
-**Limitation** · Compiled programs allocate and never release: `@free` appears **zero**
-times in `crates/nazm-lir/src/emit.rs` and zero times in `compiler/emit.nz`, against 11
-`@malloc` and 2 `@realloc` sites in each. This is the defect behind the 2026-09-21
-resource incident and the reason `compiler/bootstrap.sh` refuses to run without an
-external memory ceiling. `str_join` was added to allocate *less*
-(`crates/nazm-sema/src/intrinsic.rs`); nothing reclaims.
+**Evidence** · `docs/spec.md`'s *memory constitution* settles assignment, parameters,
+returns, aliasing, mutation, reclamation, cross-task transfer, cycles and cost visibility
+as four kinds of value and five rules. `docs/architecture.md` §7.7 carries the audit it was
+derived from and the implementation. No program that was legal before changed its meaning:
+sequence aliasing is unchanged, specified and tested.
 
-**Next dependency** · The surface model decision — mutable value semantics against the
-full region calculus `architecture.md` §5 hedges with. It is the largest open design
-question in the project.
+**Reclaimed: `Ints` and `Strs` storage — VERIFIED.** A reference count on the sequence
+header, non-atomic because `N0321` already refuses to let a handle cross into a task.
+Cleanup is on the three exit edges of a generated function — the tail, each `return`, and
+the shared unwind block a failure takes — not at the closing brace. Sixteen cases in
+`crates/nazm-cli/tests/memory.rs`, each asserting that the interpreter and the compiled
+program produce the same value **and** the same allocation, reclamation and live counts.
+Six mutations attack the rules.
+
+Measured: 5,000 / 20,000 / 80,000 short-lived sequences fell from 4.38 / 12.28 / 43.52 MiB
+to 1.78 / 1.88 / 1.86 MiB — flat in work where it was linear — while a genuinely live
+2,000,000-element sequence is unchanged and a string-heavy loop is unchanged.
+
+**Not reclaimed: `Str` storage — MISSING.** A `Str` may point into a literal's constant,
+into the process's `argv`, into a `malloc`'d buffer, or into the *interior* of any of them,
+because `str_slice` is specified not to allocate. The value does not record which, so
+`free` is wrong for three of the four cases. §7.7 has the measurement.
+
+**Not reclaimed: `Chan` storage — MISSING.**
+
+**Not migrated: the self-hosted backend.** `compiler/emit.nz` emits no reclamation, so
+programs it compiles still grow. Its own source needed no change — it aliases no sequence
+with `let` — and the bootstrap fixpoint is unchanged at `e5779c70…`.
+
+**Limitation, in the words this row carried before N7** · *"Compiled programs allocate and
+never release: `@free` appears zero times in `crates/nazm-lir/src/emit.rs` and zero times
+in `compiler/emit.nz`, against 11 `@malloc` and 2 `@realloc` sites in each."* Half of that
+is now false and half is still true: the Rust backend frees, the Nazm-written one does not.
+**Whole-language leak freedom is NOT VERIFIED and is not claimed.**
+
+**Next dependency** · A `Str` representation that records its provenance, on the type that
+is copied in every hot loop.
 
 **Accepted when** · A compiled program's peak RSS is bounded by live data rather than by
-total allocation, demonstrated on the self-hosting compiler compiling itself.
+total allocation, demonstrated on the self-hosting compiler compiling itself. Not met: that
+workload fell from 46.81 MiB to 42.59 MiB, and the remainder is `Str`.
 
 ### 5. Effects — MISSING
 

@@ -54,6 +54,14 @@ That sentence is the one this project paid for. Three stage drivers were written
 never freeing took the machine down three times. `runbook.md` carries the incident and the
 containment rules it produced.
 
+> **Partly superseded by N7, 2026-09-22.** Sequence storage is reclaimed now, under
+> `docs/spec.md`'s *memory constitution*, and a workload whose live set is constant no
+> longer grows. **The sentence above still stands for this document's subject**, twice
+> over: `Str` storage is still not reclaimed, so the quadratic `str_concat` shape is
+> exactly as dangerous as it was; and the compiler written in Nazm emits no reclamation at
+> all, so a program *it* compiles behaves as this paragraph describes in every respect. The
+> containment rules are unchanged and are not a milestone's to relax.
+
 ### What the design did not settle
 
 - The public ABI and value layout stay unfrozen. `Str` and arrays are compiler-internal

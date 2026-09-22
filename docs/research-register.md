@@ -41,8 +41,40 @@ an escape hatch, and peak RSS bounded by live data rather than total allocation.
 cannot be expressed without exposing regions in the surface syntax. One would be enough;
 the compiler is the honest test case because it was written before the model existed.
 
-**Status: RESEARCH.** Nothing implemented — no ownership machinery exists in any language
-crate.
+**N7 answered this, and the answer was no — for a reason worth keeping.** The hypothesis
+was that mutable value semantics should be Nazm's *surface* model. The audit
+(`architecture.md` §7.7) established that Nazm's surface model is already the opposite and
+has been since sequences existed: `let b = a;` on an `Ints` aliases, a push through one is
+visible through the other, and `docs/spec.md` has specified that in those words. Adopting
+MVS would not have been choosing a surface model; it would have been **changing** one, and
+the measured programs that depend on the current one include every sequence parameter in
+the self-hosted compiler.
+
+So the question this item asks — *is MVS ergonomic enough to be the surface model* — turned
+out to be the wrong question to ask second. The right one was asked first: *what do values
+mean now*. The answer made the hypothesis moot for `Ints` and `Strs`, and **already true**
+for `Str`, which has value semantics with no observable copy and needed no machinery at
+all to get them.
+
+The prerequisite is also gone rather than met. It said a typed core IR was needed to carry
+places and regions, with copy elision as the sharp question. Reclamation arrived with no
+core IR, no regions, no places and no elision question, because counting references to a
+handle needs none of them.
+
+**What survives, narrower and sharper.** MVS remains a live hypothesis for a *future* kind
+of value — user-defined records, where there is no existing meaning to break and where the
+choice between value and reference semantics is genuinely open. The invalidating result is
+unchanged and is still the right test: a pattern in `compiler/*.nz` that cannot be
+expressed without exposing regions.
+
+**Evidence needed** (revised) · Not a rewrite of the compiler. A user-defined record type,
+and a demonstration that value semantics for it are ergonomic in the compiler's own
+patterns and implementable without regions in the surface syntax.
+
+**Status: RESEARCH, and re-scoped.** Not verified: no design was chosen for records, and a
+design chosen is not a hypothesis tested. What changed is that it no longer blocks
+reclamation, and reclamation no longer waits on it — which was the dependency this item was
+carrying without being asked to.
 
 ---
 
