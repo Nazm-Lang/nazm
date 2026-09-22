@@ -28,7 +28,16 @@ pub(crate) fn run(
     emit_ir: bool,
     opt_level: u8,
 ) -> ExitCode {
-    let loaded = match crate::load::load(input) {
+    // Discovered, never given. Native compilation reuses nothing and persists nothing
+    // keyed on a module, so the root is asked for only because the loader computes keys.
+    let source_root = match crate::root::decide(input, None) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("nazm: {e}");
+            return ExitCode::from(exit::NO_SUCH_FILE);
+        }
+    };
+    let loaded = match crate::load::load(input, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
             emit(&diagnostics, &partial.map, json);

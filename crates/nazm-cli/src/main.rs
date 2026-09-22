@@ -34,10 +34,12 @@ use std::process::ExitCode;
 
 mod build;
 mod capabilities;
+mod checking;
 mod fix;
 mod fmt;
 mod interface;
 mod load;
+mod root;
 mod test;
 
 use clap::{Parser, Subcommand};
@@ -121,6 +123,27 @@ enum Command {
         file: PathBuf,
         #[arg(long)]
         json: bool,
+        /// Where this project begins, for durable module identity.
+        ///
+        /// Normally discovered: the nearest `nazm.root` marker at or above the file, and
+        /// otherwise the file's own directory. Naming it here is for a tree that cannot
+        /// be written to, and for a caller that would rather state it than rely on a
+        /// search.
+        #[arg(long, value_name = "DIR")]
+        source_root: Option<PathBuf>,
+        /// Check every module, reusing nothing.
+        ///
+        /// The cache is derived data and deleting it changes no program's meaning, so
+        /// this exists to **establish** that rather than to work around it: the
+        /// equivalence tests compare a run with this flag against one without, and
+        /// require the same answer.
+        #[arg(long)]
+        no_cache: bool,
+        /// One `nazm.check-report/1` object on stdout: what was checked, and what was
+        /// reused. Off by default, because a compiler that reports on itself every time
+        /// is a compiler whose output has to be filtered.
+        #[arg(long)]
+        cache_report: bool,
     },
     /// Apply the repairs the compiler already knows about.
     ///
@@ -178,6 +201,9 @@ enum Command {
         /// Print the fingerprint instead of the interface: `blake3-256 <hex>`.
         #[arg(long)]
         hash: bool,
+        /// Where this project begins. As `nazm check --source-root`.
+        #[arg(long, value_name = "DIR")]
+        source_root: Option<PathBuf>,
     },
     /// Report what this build of the compiler actually supports.
     ///
@@ -252,8 +278,19 @@ fn main() -> ExitCode {
         return build::run(&file, out.as_deref(), json, emit_ir, opt_level);
     }
     match cli.command {
+        Command::Check {
+            file,
+            json,
+            source_root,
+            no_cache,
+            cache_report,
+        } => return checking::run(&file, json, source_root.as_deref(), !no_cache, cache_report),
         Command::Fix { file, apply, json } => return fix::run(&file, apply, json),
-        Command::Interface { file, hash } => return interface::run(&file, hash),
+        Command::Interface {
+            file,
+            hash,
+            source_root,
+        } => return interface::run(&file, hash, source_root.as_deref()),
         Command::Capabilities { json } => return capabilities::run(json),
         Command::Fmt { files, check } => return fmt::run(&files, check),
         Command::Test {
@@ -273,18 +310,18 @@ fn main() -> ExitCode {
         } => (
             file,
             json,
-            Some((
+            (
                 nazm_core::eval::Limits {
                     max_iterations,
                     max_depth,
                 },
                 args,
-            )),
+            ),
         ),
-        Command::Check { file, json } => (file, json, None),
         // Handled above; `main` keeps its original shape for the commands whose
         // behaviour these increments must not change.
         Command::Build { .. }
+        | Command::Check { .. }
         | Command::Fix { .. }
         | Command::Fmt { .. }
         | Command::Test { .. }
@@ -294,9 +331,21 @@ fn main() -> ExitCode {
         }
     };
 
+    // `nazm run` evaluates; it persists nothing and reuses nothing, so where the project
+    // begins is not its question. The root is discovered rather than given because the
+    // loader computes a durable key for every module whether or not this command has a
+    // use for one.
+    let source_root = match root::decide(&path, None) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("nazm: {e}");
+            return ExitCode::from(exit::NO_SUCH_FILE);
+        }
+    };
+
     // The root file and everything it imports, and how they relate. A program with no
     // `use` takes the same path and produces a graph of one module.
-    let loaded = match load::load(&path) {
+    let loaded = match load::load(&path, source_root.path()) {
         Ok(f) => f,
         // What was loaded comes back with the errors, so the caret lands on the `use`
         // that could not be resolved rather than on nothing.
@@ -309,18 +358,8 @@ fn main() -> ExitCode {
 
     // Checking always runs; evaluation only when it passed. Running a program known to be
     // ill-typed produces a second, less useful error about the same mistake.
-    let outcome = if let Some((limits, args)) = limits {
-        nazm_core::run_map(map, &loaded.graph, limits, args)
-    } else {
-        // Through `check_source`, which puts parsing and checking on the same
-        // interpreter-owned stack `run` uses. Both recurse with the shape of the tree, so
-        // `nazm check` on a deeply nested file needs the stack as much as `nazm run` does.
-        let diagnostics = nazm_core::check_map(map, &loaded.graph);
-        if diagnostics.is_empty() {
-            return report_ok("ok", None);
-        }
-        Outcome::CheckFailed(diagnostics)
-    };
+    let (limits, args) = limits;
+    let outcome = nazm_core::run_map(map, &loaded.graph, limits, args);
 
     match outcome {
         Outcome::Value(v) => report_ok(&v.to_string(), None),
