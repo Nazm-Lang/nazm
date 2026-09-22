@@ -56,5 +56,11 @@ jobs:
 
       # Last: it injects every catalogued defect in turn and is far slower than the rest.
       # A failure here means a defect the suite no longer detects.
+      #
+      # Each injection runs the suite with one job and one test thread, matching
+      # `cargo xtask contained tests`. That is slower than cargo's defaults and it is the
+      # only way the verdict means anything: a spurious failure while measuring a mutant
+      # is counted as CAUGHT and is invisible, so a nondeterministic suite manufactures
+      # coverage it does not have. See `run_tests` in xtask/src/mutate.rs.
       - name: mutation coverage
         run: cargo xtask mutate
