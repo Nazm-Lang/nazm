@@ -392,10 +392,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "nazm-cache"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "nazm-iface",
+ "nazm-sema",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "nazm-cli"
 version = "0.0.1"
 dependencies = [
  "clap",
+ "nazm-cache",
  "nazm-core",
  "nazm-diag",
  "nazm-iface",

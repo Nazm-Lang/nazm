@@ -1,0 +1,32 @@
+[package]
+name = "nazm-cache"
+description = "What semantic checking depends on, and a local store for results keyed on it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Durable identity, and the semantic vocabulary a check key has to cover.
+nazm-sema = { workspace = true }
+# What a module publishes, and its fingerprint. A check artefact carries one.
+nazm-iface = { workspace = true }
+# serde lives here for the same reason it lives in `nazm-iface` and not in `nazm-sema`:
+# the crate that holds session-local ids cannot serialise one by accident.
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The same digest `architecture.md` §8 chose, for the same reason. A non-cryptographic
+# checksum here would make a collision an invalid cache hit, which is a miscompilation
+# that arrives with a plausible explanation.
+blake3 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+nazm-sema = { workspace = true }
+nazm-iface = { workspace = true }
+
+[lints]
+workspace = true
