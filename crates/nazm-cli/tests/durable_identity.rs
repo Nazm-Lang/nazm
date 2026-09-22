@@ -477,3 +477,229 @@ fn changing_which_modules_are_imported_changes_the_interface() {
     let with = hash_of(&a.path().join("m.nz"));
     assert_ne!(without, with);
 }
+
+// --- records in the persisted interface ------------------------------------------------
+
+#[test]
+fn an_exported_record_is_published_with_its_fields_and_durable_identity() {
+    // The whole shape, asserted as bytes: a record is named by its `DefKey`, its fields
+    // are sorted by name, and a field whose type is a record is named by that record's
+    // identity rather than by the spelling it happens to have.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "m.nz",
+        "pub struct Point {\n    y: Int,\n    x: Str,\n}\n\
+         struct Hidden {\n    n: Int,\n}\n\
+         pub fn at(p: Point) -> Point { p }\n\
+         fn secret() -> Int { Hidden(n: 1).n }\n",
+    );
+    let json = interface_of(&dir.path().join("m.nz"));
+    assert_eq!(
+        json,
+        "{\"schema\":\"nazm.interface/2\",\"module\":\"m.nz\",\"dependencies\":[],\
+         \"records\":[{\"def\":\"m.nz::record Point\",\"name\":\"Point\",\
+         \"fields\":[{\"name\":\"x\",\"ty\":\"Str\"},{\"name\":\"y\",\"ty\":\"Int\"}]}],\
+         \"exports\":[{\"def\":\"m.nz::fn at\",\"name\":\"at\",\"kind\":\"fn\",\
+         \"params\":[\"m.nz::record Point\"],\"ret\":\"m.nz::record Point\"}]}"
+    );
+    // A private record is not offered, and its name is not in the bytes.
+    assert!(!json.contains("Hidden"), "{json}");
+}
+
+#[test]
+fn moving_two_field_declarations_does_not_move_the_interface() {
+    // `docs/spec.md` says field order is not semantic. This is that claim measured: the
+    // persisted form sorts by name, so the bytes — and therefore the fingerprint — cannot
+    // move for an edit the language calls meaningless.
+    let one = "pub struct Point {\n    x: Int,\n    y: Str,\n}\n";
+    let other = "pub struct Point {\n    y: Str,\n    x: Int,\n}\n";
+    assert_eq!(fingerprint_of_module(one), fingerprint_of_module(other));
+}
+
+#[test]
+fn the_record_invalidation_table_is_what_the_fingerprint_actually_does() {
+    // The same shape as the function table above, for records. Each row is an edit to a
+    // module, and the question is only ever whether its **dependents** must re-check.
+    let base = "pub struct Point {\n    x: Int,\n    y: Int,\n}\n\
+                struct Hidden {\n    n: Int,\n}\n\
+                pub fn at() -> Point { Point(x: 1, y: 2) }\n";
+    let unchanged: &[(&str, &str)] = &[
+        (
+            "a private record's fields change",
+            "pub struct Point {\n    x: Int,\n    y: Int,\n}\n\
+             struct Hidden {\n    n: Str,\n    extra: Int,\n}\n\
+             pub fn at() -> Point { Point(x: 1, y: 2) }\n",
+        ),
+        (
+            "a private record is added",
+            "pub struct Point {\n    x: Int,\n    y: Int,\n}\n\
+             struct Hidden {\n    n: Int,\n}\n\
+             struct Another {\n    m: Int,\n}\n\
+             pub fn at() -> Point { Point(x: 1, y: 2) }\n",
+        ),
+        (
+            "an exported record's fields are reordered",
+            "pub struct Point {\n    y: Int,\n    x: Int,\n}\n\
+             struct Hidden {\n    n: Int,\n}\n\
+             pub fn at() -> Point { Point(x: 1, y: 2) }\n",
+        ),
+    ];
+    let changed: &[(&str, &str)] = &[
+        (
+            "an exported field is added",
+            "pub struct Point {\n    x: Int,\n    y: Int,\n    z: Int,\n}\n\
+             struct Hidden {\n    n: Int,\n}\n\
+             pub fn at() -> Point { Point(x: 1, y: 2, z: 3) }\n",
+        ),
+        (
+            "an exported field is removed",
+            "pub struct Point {\n    x: Int,\n}\n\
+             struct Hidden {\n    n: Int,\n}\n\
+             pub fn at() -> Point { Point(x: 1) }\n",
+        ),
+        (
+            "an exported field changes type",
+            "pub struct Point {\n    x: Str,\n    y: Int,\n}\n\
+             struct Hidden {\n    n: Int,\n}\n\
+             pub fn at() -> Point { Point(x: \"a\", y: 2) }\n",
+        ),
+        (
+            "an exported record is renamed",
+            "pub struct Place {\n    x: Int,\n    y: Int,\n}\n\
+             struct Hidden {\n    n: Int,\n}\n\
+             pub fn at() -> Place { Place(x: 1, y: 2) }\n",
+        ),
+        (
+            "an exported record stops being exported",
+            "struct Point {\n    x: Int,\n    y: Int,\n}\n\
+             struct Hidden {\n    n: Int,\n}\n\
+             fn at() -> Point { Point(x: 1, y: 2) }\n",
+        ),
+    ];
+
+    let before = fingerprint_of_module(base);
+    for (what, after) in unchanged {
+        assert_eq!(
+            before,
+            fingerprint_of_module(after),
+            "the fingerprint moved when {what}, and it should not have"
+        );
+    }
+    for (what, after) in changed {
+        assert_ne!(
+            before,
+            fingerprint_of_module(after),
+            "the fingerprint did not move when {what}, and it should have"
+        );
+    }
+}
+
+#[test]
+fn an_exported_record_reaches_a_third_modules_shape_through_the_interface() {
+    // Closure over field types. `b.nz` exports a record whose field is a record declared
+    // in `c.nz`; an importer of `b.nz` alone has to understand that shape to project
+    // through it, and cannot go and read a module it never imported. So the definition
+    // travels — under **its own** module's identity, which is what says it is not `b`'s.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(dir.path(), "c.nz", "pub struct Inner {\n    n: Int,\n}\n");
+    write(
+        dir.path(),
+        "b.nz",
+        "use \"c.nz\";\npub struct Wrapper {\n    inner: Inner,\n}\n",
+    );
+    let json = interface_of(&dir.path().join("b.nz"));
+    assert!(json.contains("c.nz::record Inner"), "{json}");
+    assert!(json.contains("b.nz::record Wrapper"), "{json}");
+    // Carrying a shape is not carrying a name: nothing here makes `Inner` writable by an
+    // importer of `b.nz`, which is what the non-transitive import rule is about.
+    refused_import(&dir);
+}
+
+/// A module importing `b.nz` may not write `Inner`, whose shape its interface carries.
+fn refused_import(dir: &tempfile::TempDir) {
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main() -> Int { Inner(n: 1).n }\n",
+    );
+    let out = Command::new(NAZM)
+        .args(["check", dir.path().join("a.nz").to_str().unwrap()])
+        .output()
+        .expect("check");
+    assert_eq!(out.status.code(), Some(1));
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("N0305"), "{text}");
+}
+
+#[test]
+fn a_dependent_checks_records_against_a_deserialised_interface_with_the_dependency_deleted() {
+    // N2's strongest boundary, asked of records: construction, projection and a
+    // record-valued signature, checked from bytes alone with the dependency's source not
+    // on disk. Then the same source against an interface whose field was removed, which
+    // must be refused — otherwise the first half proves only that nothing was checked.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub struct Point {\n    x: Int,\n    label: Str,\n}\n\
+         pub fn at(n: Int) -> Point { Point(x: n, label: \"p\") }\n",
+    );
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\n\
+         fn size(p: Point) -> Int { p.x + str_len(p.label) }\n\
+         fn main() -> Int { size(at(3)) + Point(x: 1, label: \"\").x }\n",
+    );
+
+    let published = interface_of(&dir.path().join("b.nz"));
+    std::fs::remove_file(dir.path().join("b.nz")).expect("remove B");
+    assert!(!dir.path().join("b.nz").exists());
+
+    let interface = PersistentUnitInterface::from_json(&published).expect("a valid interface");
+    let a_source = std::fs::read_to_string(dir.path().join("a.nz")).expect("read A");
+    let (program, parse_errors) = nazm_core::__syntax::parse_source(&a_source);
+    assert!(parse_errors.is_empty(), "{parse_errors:#?}");
+
+    let mut graph = ModuleGraph::default();
+    let a = graph.add(FileId::ROOT, ModuleKey::relative("a.nz"));
+    let b = graph.add(FileId::from_index(1), interface.module_key());
+    graph.import(a, b, nazm_span::Span::synthetic());
+
+    let check_against = |json: &str| -> Vec<nazm_diag::Diagnostic> {
+        let iface = PersistentUnitInterface::from_json(json).expect("a valid interface");
+        let units = [nazm_core::Unit::of(&program, &graph, a)];
+        let mut res = Resolution::default();
+        let mut errors = Vec::new();
+        let rehydrated = iface.rehydrate(b, FnId::from_index(4096), res.records_mut());
+        nazm_core::declare_records(&units, &mut res, &mut errors);
+        nazm_core::declare_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+        nazm_core::check_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+        errors
+    };
+
+    assert!(
+        check_against(&published).is_empty(),
+        "A should check against B's persisted interface alone: {:#?}",
+        check_against(&published)
+    );
+
+    // The negative half: the same source, and an interface whose record lost the field
+    // `A` projects.
+    let narrowed = published.replace(",{\"name\":\"x\",\"ty\":\"Int\"}", "");
+    let narrowed = if narrowed == published {
+        published.replace("{\"name\":\"label\",\"ty\":\"Str\"},", "")
+    } else {
+        narrowed
+    };
+    assert_ne!(narrowed, published, "the interface was not narrowed");
+    let errors = check_against(&narrowed);
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.code == nazm_diag::codes::UNKNOWN_FIELD
+                || d.code == nazm_diag::codes::MISSING_FIELD),
+        "a removed field should be refused: {errors:#?}"
+    );
+}

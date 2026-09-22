@@ -2277,7 +2277,13 @@ impl Checker<'_> {
             // sequence**, where it would have to mean either "the same handle" or "the
             // same contents" and the language has chosen neither. Offering one silently
             // is how a program comes to depend on the wrong answer.
-            BinOp::Eq | BinOp::NotEq => lt == rt && !lt.is_sequence() && lt != Type::Chan,
+            //
+            // A record joins them rather than getting an exception, and for exactly that
+            // reason: one with an `Ints` field would force the same unmade choice, and a
+            // rule that held for some records and not others would be worse than no rule.
+            BinOp::Eq | BinOp::NotEq => {
+                lt == rt && !lt.is_sequence() && lt != Type::Chan && !lt.is_record()
+            }
         };
 
         if !ok {
