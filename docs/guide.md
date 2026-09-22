@@ -76,7 +76,8 @@ accepts.
 | --- | --- |
 | `program` | `{ use_item } , { function }` |
 | `use_item` | `"use" , STRING , ";"` |
-| `function` | `"fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block` |
+| `function` | `[ visibility ] , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block` |
+| `visibility` | `"pub"` |
 | `parameters` | `parameter , { "," , parameter }` |
 | `parameter` | `IDENT , ":" , type` |
 | `type` | `IDENT` |
@@ -128,7 +129,7 @@ use "lib/helpers.nz"; fn main() -> Int { 0 }
 ### `function`
 
 ```ebnf
-function = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block ;
+function = [ visibility ] , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block ;
 ```
 
 ```nazm
@@ -137,6 +138,25 @@ fn main() -> Int { 0 }
 
 ```nazm
 fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) }
+```
+
+```nazm
+pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) }
+```
+
+### `visibility`
+
+```ebnf
+visibility = "pub" ;
+```
+
+One bit, and one spelling for it. Absent means private to this module; `pub` exports
+it to the modules that directly import this one. There is no `private` keyword,
+because the default needs no word, and no package or friend visibility, because there
+are no packages and no friends. See `docs/spec.md`.
+
+```nazm
+pub fn helper() -> Int { 1 } fn main() -> Int { helper() }
 ```
 
 ### `parameters`
