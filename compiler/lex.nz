@@ -44,6 +44,10 @@ fn k_use() -> Int { 21 }
 // identifier to the other is a divergence the differential test would have to excuse.
 fn k_scope() -> Int { 22 }
 fn k_spawn() -> Int { 23 }
+// `pub` — the visibility keyword, added 2026-09-22. Same rule as above: a word that is
+// a keyword to one lexer and an identifier to the other is a divergence, so it is here
+// as soon as it is a keyword at all, whatever the later stages do with it.
+fn k_pub() -> Int { 24 }
 fn k_lparen() -> Int { 30 }
 fn k_rparen() -> Int { 31 }
 fn k_lbrace() -> Int { 32 }
@@ -111,6 +115,7 @@ fn keyword_kind(word: Str) -> Int {
     if word == "use" { return k_use(); }
     if word == "scope" { return k_scope(); }
     if word == "spawn" { return k_spawn(); }
+    if word == "pub" { return k_pub(); }
     k_ident()
 }
 

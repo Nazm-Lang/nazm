@@ -123,6 +123,7 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::Use => 21,
                 T::Scope => 22,
                 T::Spawn => 23,
+                T::Pub => 24,
                 T::LParen => 30,
                 T::RParen => 31,
                 T::LBrace => 32,

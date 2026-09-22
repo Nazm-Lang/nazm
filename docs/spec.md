@@ -547,33 +547,143 @@ fn main() -> Int { quad(5) }
 | --- | --- |
 | **Syntax** | `use "path";`, at the top level only. The path is a **quoted string**, not an identifier chain: a path is data, so there is no module-path grammar to design and nothing that could be mistaken for one |
 | **Resolution** | Relative to the **importing file's** directory, always. Never to the working directory, never to a search path, never to an environment variable — a build that depends on where it was started is not reproducible |
-| **Loading** | Every reachable file is read once, keyed by its canonical path, and concatenated into one buffer that is then checked as a single program |
+| **Loading** | Every reachable file is read once, keyed by its canonical path, and parsed on its own text. The result is a **graph**: modules, and which modules each one imports |
 | **Order** | The root first, then its imports depth-first in source order. Deterministic, and a function of the import graph alone |
-| **Diamonds** | A file imported twice is loaded once |
-| **Cycles** | **Allowed.** The second visit finds the file already loaded and stops. Nothing depends on order — signatures are collected before any body — so a cycle has no meaning to get wrong |
-| **Names** | All top-level functions from every loaded file share one namespace. A name defined twice is `N0203`, and the diagnostic names **both files** |
+| **Diamonds** | A file imported twice is **one module**, not two. Its definitions exist once and have one identity |
+| **Cycles** | **Allowed.** See below |
 | **Missing file** | `N0205`, pointing at the quoted path |
 | **Declarations** | There is no `mod`. A file is the module |
 
-#### Visibility is not expressible yet, and that has a cost
+#### One file is one module is one compilation unit
 
-**Every top-level function is visible to every file in the program.** There is no `pub`,
-no privacy, and no way to keep a helper to its own file.
+A module is not a namespace bolted onto a program that was really one file all along.
+**It is the unit of meaning**: a module owns its definitions, decides which of them
+anyone else may name, and is checked against the *interfaces* of the modules it imports
+rather than against their bodies.
 
-This is enough for the compiler this subset exists to bootstrap, which has no secrets from
-itself. It is recorded here rather than left implicit because the consequence is real:
-**adding private-by-default later would break every multi-file program that relies on
-today's behaviour.** Whatever visibility eventually arrives has to be added before this
-part of the language is called stable, and a program written now should not assume
-otherwise.
+That property is the point, and it is worth stating as a test rather than as an intention:
+*given module A's source and the interfaces of the modules A imports, A can be checked
+with no access to those modules' bodies.* Everything below follows from wanting that to
+be true, and `architecture.md` §7.2 says where each half of it lives.
 
-#### One buffer, and what that means for positions
+What one module is has a boundary today and will move: a package will eventually be able
+to present several files as one unit, and a generated or virtual source has no file at
+all. So the semantics below are written in terms of **modules**, and "one file is one
+module" is how modules currently come into existence rather than what a module is.
 
-The merged program is one byte buffer, so a `Span` stays a plain pair of offsets and
-means the same thing everywhere. Diagnostics name the file an offset falls in and report
-**line numbers within that file**, so a reader opens the file the message names and finds
-the line it gives. A cross-file secondary label names its file too; without that,
-"first defined here" would give a line number with no file to look it up in.
+#### Visibility: private by default, `pub` exports
+
+```nazm
+// lib.nz
+pub fn parse(s: Str) -> Int { digits(s) }   // exported
+fn digits(s: Str) -> Int { str_len(s) }     // private to lib.nz
+```
+
+| | |
+| --- | --- |
+| **Default** | A top-level definition is **private to its module**. Nothing outside the module may name it |
+| **`pub`** | Written before `fn`, it exports that definition: modules that directly import this one may name it. That is all it does — it does not change the definition's meaning, its type, or how its own module sees it |
+| **Granularity** | One bit. There is no `private`, no package visibility, no friend module, no export list, and no re-export |
+| **Within a module** | Private and public definitions are alike: a module sees everything it defines, in any order |
+| **Built-ins** | Unaffected. They are not a module's definitions and `pub` has nothing to say about them |
+
+**`pub` is about names, not about safety.** It says which names another module may write,
+and nothing about capabilities, effects, or what a definition may do. Confusing the two is
+how a visibility keyword ends up load-bearing for security in a language that never
+promised it.
+
+*Changed on 2026-09-22.* Until then every top-level function in a program was visible to
+every file in it. The old text recorded the consequence honestly — "adding private-by-default
+later would break every multi-file program that relies on today's behaviour" — and that is
+what happened: the multi-file programs in this repository, including the self-hosted
+compiler, were migrated by marking their genuine cross-module APIs `pub`. A program written
+against the old rule does not silently change meaning; it stops compiling, naming the
+definition and the module that cannot see it.
+
+#### `use` makes an interface visible, not a body
+
+`use "lib.nz";` means: **the names `lib.nz` exports may be written in this module,
+unqualified**. It is not textual inclusion, and it is not a request to compile anything —
+a module is part of the compilation because it is reachable, and `use` decides what this
+module may *see*, which is a different question.
+
+| | |
+| --- | --- |
+| **What it brings in** | Exactly the exported definitions of the named module. Its private definitions are not brought in, and neither is anything *it* imported |
+| **Spelling** | Unqualified. An imported `parse` is written `parse`, the same as a local one. There is no qualified path syntax and no alias |
+| **Direction** | One way. Importing a module does not let it see the importer |
+| **Self-import** | A module that imports itself already sees all its own definitions, so the import adds nothing and is not an error |
+| **Duplicate import** | Importing the same module twice adds its exports once |
+
+##### Imports are not transitive
+
+If `A` imports `B` and `B` imports `C`, then **`A` cannot name `C`'s exports.** `B`
+depending on `C` is `B`'s business; it is not an interface `B` offers, and a language in
+which it were would make every dependency's dependency part of every module's vocabulary.
+
+To use `C`, `A` imports `C`. That is one line, and it makes the dependency true in the
+source instead of accidental.
+
+This is the rule with the largest effect on how much context reading one module requires —
+the *reason* Nazm has module interfaces at all rather than one program-wide namespace. See
+`master-architecture.md` on context routing.
+
+#### Collisions are errors, not silent choices
+
+Import order decides nothing. Every one of these is refused, with both sides named:
+
+| Situation | Code | Where it points |
+| --- | --- | --- |
+| A module defines the same name twice | `N0203` | The second definition, with the first as a secondary label |
+| A module defines a name and imports a module exporting that name | `N0208` | The `use`, with the local definition as a secondary label |
+| Two directly imported modules export the same name | `N0207` | The second `use`, with the first as a secondary label |
+| A module names a definition that exists in an imported module but is private there | `N0206` | The name, with its private definition as a secondary label |
+| A definition uses the name of a built-in | `N0203` | The definition |
+
+**Two modules may each define a private `helper`.** They are different definitions and
+neither is in the other's way — that is what owning your names means, and a module system
+in which it were not true would be a naming convention.
+
+`N0207` is reported where the ambiguity is created, not where an ambiguous name is used.
+The alternative — allowing the import and refusing only a mention of the contested name —
+is defensible in a language with qualified paths, because there the program can say which
+one it means. This one cannot: with no way to write the distinction, a deferred error only
+moves the same dead end further from its cause.
+
+`N0206` exists so that privacy does not present as absence. "`digits` is not defined" is
+true from the caller's position and useless: the reader can see it defined in the file they
+just imported. Saying that it is defined and private names the actual repair, which is to
+export it or to stop calling it.
+
+#### Cycles remain legal
+
+`A` may import `B` while `B` imports `A`. Checking is two stages, and that is what makes it
+well defined:
+
+1. **Interfaces**, for every module in the graph: each module's declarations, their
+   signatures, and which are exported. Reading a declaration requires no other module.
+2. **Bodies**, each module against its own definitions plus the interfaces of the modules
+   it directly imports.
+
+Neither stage needs a module ordering, so there is no ordering for a cycle to violate. The
+language has no top-level initialisation — no globals, no static constructors, nothing that
+runs before `main` — so there is no initialisation order a cycle could make ambiguous
+either. A cycle would become a real question the moment either of those changed; until then
+outlawing it would be an implementation's convenience written into a language.
+
+#### The root module owns `main`
+
+The program's entry point is **`main` in the root module** — the file named on the command
+line. `N0204` is reported when *that module* has no `main`, whatever other modules contain.
+
+An imported module's `main` is an ordinary definition of that module. It is private unless
+exported, it does not become a second entry point, and it does not collide with the root's.
+A helper file with a `main` of its own — a module that is also runnable on its own — is a
+normal thing to write, and until 2026-09-22 it was not expressible: two `main`s in one
+compilation were a duplicate definition, so imported files had to rename theirs.
+
+`main` need not be `pub`. Being the entry point is not the same as being importable, and
+requiring the keyword would suggest the runtime resolves it by name from outside.
 
 ### Structured concurrency: scopes, tasks and channels
 
@@ -814,10 +924,13 @@ The original paragraph, unedited:
 *Added 2026-09-21. These are the questions the next milestone — `roadmap.md` N1 — has to
 answer, and they are semantic rather than merely structural, which is why they are here.*
 
-- **What is a compilation unit?** Today there is none: `use` is followed from a root file
-  and every reachable file is concatenated into one buffer, so the language has modules but
-  no separately meaningful unit. Deciding this decides whether two files can ever be
-  checked independently.
+- ~~**What is a compilation unit?**~~ **Settled by N2, 2026-09-22: one module, and today
+  one module is one file.** A module owns its definitions, exports the ones marked `pub`,
+  and is checked against the interfaces of the modules it directly imports rather than
+  against their bodies. What remains open is not what a unit *is* but what else may become
+  one: a package presenting several files as a single unit, and a generated or virtual
+  source with no file behind it. Both are additions to how a module comes into existence,
+  not revisions of what one means.
 - ~~**What does a span identify?**~~ **Settled by N1, 2026-09-21: a span identifies a file
   and a byte range within it.** `Span` is `{ file, start, end }`, offsets are file-local,
   and the file is carried from the lexer rather than recovered from a merged offset. The
@@ -827,8 +940,11 @@ answer, and they are semantic rather than merely structural, which is why they a
   implementation change and not a language one.
 - **What is the stable identity of a definition, and what changes it?** An answer is a
   prerequisite for incremental compilation, for caching, and for telling an agent that an
-  edit produced the same definition (`research-register.md` R2, R3). A name is not an
-  answer while two files may define the same name and visibility does not exist.
+  edit produced the same definition (`research-register.md` R2, R3). N2 made a definition's
+  *owner* explicit — every definition belongs to exactly one module, and a name is unique
+  within it — so `(module, name)` now identifies a definition **within one compilation**.
+  That is not the answer: a module is identified by a session-local id derived from load
+  order, and nothing here survives the process it was computed in.
 - **Do built-ins share that identity model?** They live in the ordinary function namespace
   and may not be redefined, but they are declared in a compiler table rather than in
   source. Whether they are definitions with identities, or something else the resolver
@@ -836,9 +952,10 @@ answer, and they are semantic rather than merely structural, which is why they a
   now **one** built-in inventory rather than two, and resolution answers "built-in or user
   function" once for every call site. Neither makes a built-in a definition.
 
-None of this changes what any current program means. It is listed here because the first
-answer that *does* change a meaning — visibility, most likely — has to be given
-deliberately rather than discovered.
+*Updated 2026-09-22.* This paragraph used to end "the first answer that *does* change a
+meaning — visibility, most likely — has to be given deliberately rather than discovered."
+It was given deliberately: see **Visibility: private by default, `pub` exports** above.
+What is left in this section changes no current program's meaning.
 
 ### Memory and values
 

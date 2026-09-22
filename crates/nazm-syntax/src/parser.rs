@@ -259,7 +259,7 @@ impl<'a> Parser<'a> {
     }
 
     fn recover_to_item(&mut self) {
-        while !self.at(&TokenKind::Eof) && !self.at(&TokenKind::Fn) {
+        while !self.at(&TokenKind::Eof) && !self.at(&TokenKind::Fn) && !self.at(&TokenKind::Pub) {
             self.pos += 1;
         }
     }
@@ -368,8 +368,19 @@ impl<'a> Parser<'a> {
     fn function(&mut self) -> Option<Function> {
         let start = self.peek_span();
 
+        // `pub`, if it is there. The parser records **that the word was written and
+        // where**, and stops: what it means — that this module exports the definition —
+        // is a semantic question, and a parser that answered it would be a second place
+        // visibility is decided. See `nazm_sema::Visibility`.
+        let pub_span = self.at(&TokenKind::Pub).then(|| {
+            let s = self.peek_span();
+            self.advance();
+            s
+        });
+
         if let TokenKind::Ident(name) = self.peek().clone() {
-            if self.reserved(&name, start) {
+            let at = self.peek_span();
+            if self.reserved(&name, at) {
                 self.advance();
                 return None;
             }
@@ -459,6 +470,7 @@ impl<'a> Parser<'a> {
         Some(Function {
             name,
             name_span,
+            pub_span,
             params,
             return_type,
             body,

@@ -32,6 +32,13 @@ pub struct Import {
 pub struct Function {
     pub name: String,
     pub name_span: Span,
+    /// Where `pub` was written, if it was.
+    ///
+    /// Syntax, not meaning: this records that the word appeared and where, so a
+    /// diagnostic about visibility can point at it. What it *does* — export the
+    /// definition to modules that directly import this one — is `nazm_sema`'s to decide,
+    /// because deciding it here would put visibility in two places.
+    pub pub_span: Option<Span>,
     pub params: Vec<Param>,
     /// Always written. Inference across a function boundary would make a signature
     /// change invisible at the definition, which is the opposite of what a reader needs.
