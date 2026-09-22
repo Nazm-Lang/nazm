@@ -30,8 +30,8 @@ pub use nazm_sema as sema;
 /// crate. The double underscore marks it as plumbing rather than interface.
 pub mod __syntax {
     pub use nazm_syntax::{
-        format, lex, lex_in, parse_file, parse_map, parse_source, Block, Expr, Function, Program,
-        Stmt, TokenKind,
+        format, lex, lex_in, parse_file, parse_map, parse_source, Block, Expr, Field, FieldInit,
+        Function, Place, PlaceField, Program, Record, Stmt, TokenKind,
     };
 }
 

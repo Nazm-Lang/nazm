@@ -1,0 +1,25 @@
+// A record exported across a module boundary, with an owning field and a private
+// companion that never reaches the interface.
+
+pub struct Point {
+    x: Int,
+    label: Str,
+}
+
+struct Hidden {
+    n: Int,
+}
+
+pub fn origin() -> Point {
+    Point(x: 0, label: "o")
+}
+
+// Returns a record built here, with a heap-backed field, to a caller in another module:
+// the callee's frame exits and the caller still holds a valid string.
+pub fn at(n: Int) -> Point {
+    Point(x: n, label: str_concat("p", int_to_str(n)))
+}
+
+fn secret(h: Hidden) -> Int { h.n }
+
+pub fn unused() -> Int { secret(Hidden(n: 1)) }

@@ -167,6 +167,15 @@ pub fn t_ints() -> Int { 4 }
 pub fn t_strs() -> Int { 5 }
 pub fn t_chan() -> Int { 6 }
 
+// A user-defined record is `t_record_base() + its index in the record table`. Encoded in
+// the same `Int` as a built-in rather than in a second column, so every place that already
+// carries a type — a binding, a signature, a node's recorded type — carries a record with
+// no change. The base is far above the built-ins so the two can never be confused.
+pub fn t_record_base() -> Int { 100 }
+pub fn t_record(i: Int) -> Int { t_record_base() + i }
+pub fn is_record(t: Int) -> Bool { t >= t_record_base() }
+pub fn record_of(t: Int) -> Int { t - t_record_base() }
+
 pub fn type_of_name(name: Str) -> Int {
     if name == "Int" { return t_int(); }
     if name == "Bool" { return t_bool(); }
@@ -177,6 +186,46 @@ pub fn type_of_name(name: Str) -> Int {
     t_unknown()
 }
 
+// A type name, against the built-ins and then the records `owner` may write.
+//
+// Built-ins first and unshadowable, which is why they are matched before the table is
+// consulted rather than being put in it.
+pub fn type_in(name: Str, owner: Int, rnames: Strs, rowner: Ints,
+        tmod: Ints, tname: Strs, trec: Ints) -> Int {
+    let built = type_of_name(name);
+    if built != t_unknown() { return built; }
+    let own = record_owned(rnames, rowner, owner, name);
+    if own >= 0 { return t_record(own); }
+    let brought = record_imported(tmod, tname, trec, owner, name);
+    if brought >= 0 { return t_record(brought); }
+    t_unknown()
+}
+
+// The record `owner` declares under `name` — public or private, since a module sees all
+// of its own. `-1` when it declares none.
+pub fn record_owned(rnames: Strs, rowner: Ints, owner: Int, name: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(rnames) {
+        if ints_get(rowner, i) == owner {
+            if strs_get(rnames, i) == name { return i; }
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// The record an import brings into `owner` under `name`, or -1.
+pub fn record_imported(tmod: Ints, tname: Strs, trec: Ints, owner: Int, name: Str) -> Int {
+    let mut i = 0;
+    while i < ints_len(tmod) {
+        if ints_get(tmod, i) == owner {
+            if strs_get(tname, i) == name { return ints_get(trec, i); }
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
 fn type_name(t: Int) -> Str {
     if t == t_int() { return "Int"; }
     if t == t_bool() { return "Bool"; }
@@ -185,6 +234,136 @@ fn type_name(t: Int) -> Str {
     if t == t_strs() { return "Strs"; }
     if t == t_chan() { return "Chan"; }
     "?"
+}
+
+// A type as a reader sees it. A record spells its declared name, which is not its
+// identity — two modules may each declare `Thing` — and is right for a message.
+pub fn show_type(t: Int, rnames: Strs) -> Str {
+    if is_record(t) {
+        if record_of(t) < strs_len(rnames) { return strs_get(rnames, record_of(t)); }
+        return "?";
+    }
+    type_name(t)
+}
+
+// --- the record table -----------------------------------------------------------------
+//
+// `rnames[r]`, `rowner[r]`, `rpub[r]` and `rat[r]` are a record's name, module,
+// visibility and where its name is written. `rfirst[r]` and `rcount[r]` index the flat
+// field arrays `rfname` and `rftype`.
+//
+// Field **declaration order** is what is stored, because that is what a reader wrote and
+// what a diagnostic shows. The layout order — canonical, by field name — is the emitter's
+// and is computed there, which is the layout boundary.
+
+// The field of record `r` called `name`, as an index into that record's own fields, or -1.
+pub fn field_index(rfirst: Ints, rcount: Ints, rfname: Strs, r: Int, name: Str) -> Int {
+    let mut i = 0;
+    while i < ints_get(rcount, r) {
+        if strs_get(rfname, ints_get(rfirst, r) + i) == name { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+pub fn field_type(rfirst: Ints, rftype: Ints, r: Int, at: Int) -> Int {
+    ints_get(rftype, ints_get(rfirst, r) + at)
+}
+
+// Whether a value of this type owns storage that has to be released.
+//
+// A record does exactly when some field does, recursively — which is the composition N9
+// is a test of. Iterative, with an explicit worklist, because the depth is a property of
+// the program rather than of this compiler.
+pub fn needs_cleanup(t: Int, rfirst: Ints, rcount: Ints, rftype: Ints) -> Bool {
+    if t == t_int() { return false; }
+    if t == t_bool() { return false; }
+    if t == t_unknown() { return false; }
+    if is_record(t) == false { return true; }
+    let work = ints_new();
+    let seen = ints_new();
+    ints_push(work, record_of(t));
+    while ints_len(work) > 0 {
+        let r = ints_pop(work);
+        if contains(seen, r) == false {
+            ints_push(seen, r);
+            let mut i = 0;
+            while i < ints_get(rcount, r) {
+                let ft = ints_get(rftype, ints_get(rfirst, r) + i);
+                if is_record(ft) {
+                    ints_push(work, record_of(ft));
+                } else {
+                    if ft != t_int() {
+                        if ft != t_bool() {
+                            if ft != t_unknown() { return true; }
+                        }
+                    }
+                }
+                i = i + 1;
+            }
+        }
+    }
+    false
+}
+
+pub fn contains(xs: Ints, want: Int) -> Bool {
+    let mut i = 0;
+    while i < ints_len(xs) {
+        if ints_get(xs, i) == want { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The field path that makes this type illegal to pass to a task, or `""` when there is
+// none. A record may cross exactly when every field may, recursively.
+//
+// Depth-first over declaration order, so the path reported is the first one a reader
+// would find. Iterative: the stack is the path.
+pub fn task_unsafe_path(t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Str {
+    if is_record(t) == false {
+        if t == t_ints() { return "."; }
+        if t == t_strs() { return "."; }
+        return "";
+    }
+    let at = ints_new();
+    let which = ints_new();
+    let path = strs_new();
+    ints_push(at, record_of(t));
+    ints_push(which, 0);
+    while ints_len(at) > 0 {
+        let r = ints_get(at, ints_len(at) - 1);
+        let i = ints_get(which, ints_len(which) - 1);
+        if i >= ints_get(rcount, r) {
+            ints_pop(at);
+            ints_pop(which);
+            if strs_len(path) > 0 { strs_pop(path); }
+        } else {
+            ints_set(which, ints_len(which) - 1, i + 1);
+            let ft = ints_get(rftype, ints_get(rfirst, r) + i);
+            let fname = strs_get(rfname, ints_get(rfirst, r) + i);
+            if is_record(ft) {
+                strs_push(path, fname);
+                ints_push(at, record_of(ft));
+                ints_push(which, 0);
+            } else {
+                if ft == t_ints() { return joined(path, fname); }
+                if ft == t_strs() { return joined(path, fname); }
+            }
+        }
+    }
+    ""
+}
+
+fn joined(path: Strs, last: Str) -> Str {
+    let mut out = "";
+    let mut i = 0;
+    while i < strs_len(path) {
+        out = str_concat(out, strs_get(path, i));
+        out = str_concat(out, ".");
+        i = i + 1;
+    }
+    str_concat(out, last)
 }
 
 // Two types are compatible when they agree, or when either is unknown — an expression
@@ -355,11 +534,385 @@ pub fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: I
 ///   so that one mistake stays one error. In two modules it is two definitions;
 /// * a definition taking a built-in's name is `N0203`, whatever its visibility. Built-ins
 ///   are not a module's definitions and no visibility rule makes one legal.
-pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, ntx: Strs, naux: Ints,
+// Stage 0a: declare every record's **name**, for the whole compilation.
+//
+// Names before field types, because a field's type may name a record declared later in
+// the file or in another module. Declaration order is not a dependency, and that is only
+// true if every name exists before any type is resolved — the same declare-then-check
+// shape the function stage uses, one stage earlier.
+// `Ty(a,b)` carries the record's name and the field names in the order written. The
+// name and the list are read back out here rather than kept in a second column, because
+// the node's text is already the thing both parsers agreed on in the differential dump.
+// The root of a place: everything before the first `.`.
+pub fn before_dot(s: Str) -> Str {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 46 { return str_slice(s, 0, i); }
+        i = i + 1;
+    }
+    s
+}
+
+// The field path of a place: everything after the first `.`.
+pub fn after_dot(s: Str) -> Str {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 46 { return str_slice(s, i + 1, str_len(s)); }
+        i = i + 1;
+    }
+    ""
+}
+
+pub fn path_length(s: Str) -> Int {
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 46 { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+// Step `n` of a place's field path, counting from zero after the root.
+pub fn path_step(s: Str, n: Int) -> Str {
+    let mut seen = 0 - 1;
+    let mut from = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 46 {
+            if seen == n { return str_slice(s, from, i); }
+            seen = seen + 1;
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    if seen == n { return str_slice(s, from, str_len(s)); }
+    ""
+}
+
+pub fn before_paren(s: Str) -> Str {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 40 { return str_slice(s, 0, i); }
+        i = i + 1;
+    }
+    s
+}
+
+// The `n`th field name in `Ty(a,b,c)`.
+pub fn field_name_at(s: Str, n: Int) -> Str {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 40 { i = i + 1; break; }
+        i = i + 1;
+    }
+    let mut seen = 0;
+    let mut from = i;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b == 44 {
+            if seen == n { return str_slice(s, from, i); }
+            seen = seen + 1;
+            from = i + 1;
+        }
+        if b == 41 {
+            if seen == n { return str_slice(s, from, i); }
+            return "";
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+// Read a field out of a record, or say why that cannot be done.
+//
+// Lookup starts from the **resolved type of the expression it is read from** and goes
+// nowhere else: there is no global field namespace, so a name that is a field of some
+// other record is not a field of this one.
+pub fn project(base: Int, name: Str, from: Int, to: Int,
+        rnames: Strs, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
+        nrec: Ints, k: Int, dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+    if base == t_unknown() { return t_unknown(); }
+    if is_record(base) == false {
+        let head = str_concat(str_concat("`", show_type(base, rnames)),
+                "` is not a record, so `.");
+        report(dcode, dstart, dend, dmsg, "N0335", to - str_len(name), to,
+                str_concat(str_concat(head, name), "` has nothing to read"));
+        return t_unknown();
+    }
+    let r = record_of(base);
+    let at = field_index(rfirst, rcount, rfname, r, name);
+    if at < 0 {
+        let head = str_concat(str_concat("`", strs_get(rnames, r)), "` has no field `");
+        report(dcode, dstart, dend, dmsg, "N0333", to - str_len(name), to,
+                str_concat(str_concat(head, name), "`"));
+        return t_unknown();
+    }
+    // `k < 0` means the caller is walking a place's path rather than a projection node,
+    // and has nowhere to record the answer — the emitter walks the same path from the
+    // node's text. Guarded rather than assumed: `ints_set` at -1 is `N0405`.
+    if k >= 0 { ints_set(nrec, k, at); }
+    field_type(rfirst, rftype, r, at)
+}
+
+pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
+        mstart: Ints, rnames: Strs, rowner: Ints, rpub: Ints, rat: Ints, rnode: Ints,
+        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+    let mut k = 0;
+    while k < ints_len(nk) {
+        if ints_get(nk, k) == n_record() {
+            let name = strs_get(ntx, k);
+            let owner = module_at(mstart, ints_get(nst, k));
+            let at = ints_get(nst, k);
+            let mut refused = 0;
+            if type_of_name(name) != t_unknown() {
+                report(dcode, dstart, dend, dmsg, "N0331", at, ints_get(nen, k),
+                        str_concat(str_concat("`", name),
+                        "` is a built-in type and cannot be redefined"));
+                refused = 1;
+            }
+            if refused == 0 {
+                if record_owned(rnames, rowner, owner, name) >= 0 {
+                    report(dcode, dstart, dend, dmsg, "N0330", at, ints_get(nen, k),
+                            str_concat(str_concat("`", name),
+                            "` is declared more than once in this module"));
+                    refused = 1;
+                }
+            }
+            if refused == 0 {
+                strs_push(rnames, name);
+                ints_push(rowner, owner);
+                ints_push(rpub, ints_get(naux, k));
+                ints_push(rat, at);
+                ints_push(rnode, k);
+            }
+        }
+        k = k + 1;
+    }
+    strs_len(rnames)
+}
+
+// What each module's imports bring into its **type** namespace, and the two ways that can
+// go wrong — the same rule, the same codes and the same reasoning as the function
+// namespace's, because it is the same rule.
+pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: Int,
+        rnames: Strs, rowner: Ints, rpub: Ints,
+        tmod: Ints, tname: Strs, trec: Ints,
+        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+    let mut m = 0;
+    while m < modules {
+        let first = ints_get(mfirst, m);
+        let mut e = 0;
+        while e < ints_get(mcount, m) {
+            let target = ints_get(mto, first + e);
+            let at = ints_get(mat, first + e);
+            let mut r = 0;
+            while r < strs_len(rnames) {
+                let mut offered = 0;
+                if ints_get(rowner, r) == target {
+                    if ints_get(rpub, r) == 1 { offered = 1; }
+                }
+                if offered == 1 {
+                    let name = strs_get(rnames, r);
+                    let mut taken = 1;
+                    if record_owned(rnames, rowner, m, name) >= 0 {
+                        report(dcode, dstart, dend, dmsg, "N0208", at, at + 1,
+                                str_concat(str_concat("this import brings in the type `", name),
+                                "`, which this module declares"));
+                        taken = 0;
+                    }
+                    if taken == 1 {
+                        if record_imported(tmod, tname, trec, m, name) >= 0 {
+                            report(dcode, dstart, dend, dmsg, "N0207", at, at + 1,
+                                    str_concat(str_concat("the type `", name),
+                                    "` is exported by two imported modules"));
+                            taken = 0;
+                        }
+                    }
+                    if taken == 1 {
+                        ints_push(tmod, m);
+                        strs_push(tname, name);
+                        ints_push(trec, r);
+                    }
+                }
+                r = r + 1;
+            }
+            e = e + 1;
+        }
+        m = m + 1;
+    }
+    ints_len(tmod)
+}
+
+// Stage 0b: resolve every record's field types, and refuse a record with none.
+pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
+        kids: Ints, kid_first: Ints,
+        rnames: Strs, rowner: Ints, rat: Ints, rnode: Ints,
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, rfat: Ints,
+        tmod: Ints, tname: Strs, trec: Ints,
+        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+    let mut r = 0;
+    while r < strs_len(rnames) {
+        let k = ints_get(rnode, r);
+        let owner = ints_get(rowner, r);
+        ints_push(rfirst, strs_len(rfname));
+        let arity = ints_get(nar, k);
+        let first = ints_get(kid_first, k);
+        let mut kept = 0;
+        let mut i = 0;
+        while i < arity {
+            let child = ints_get(kids, first + i);
+            let text = strs_get(ntx, child);
+            let fname = before_colon(text);
+            let tn = after_colon(text);
+            let at = ints_get(nst, child);
+            // `rcount` for this record is not pushed yet, so a duplicate is found by
+            // scanning what has been kept so far rather than by `field_index`.
+            let mut refused = 0;
+            let mut d = 0;
+            while d < kept {
+                if strs_get(rfname, ints_get(rfirst, r) + d) == fname {
+                    report(dcode, dstart, dend, dmsg, "N0332", at, ints_get(nen, child),
+                            str_concat(str_concat(str_concat(str_concat("`",
+                            strs_get(rnames, r)), "` has two fields called `"), fname), "`"));
+                    refused = 1;
+                }
+                d = d + 1;
+            }
+            if refused == 0 {
+                let ft = type_in(tn, owner, rnames, rowner, tmod, tname, trec);
+                if ft == t_unknown() {
+                    report(dcode, dstart, dend, dmsg, "N0305", at, ints_get(nen, child),
+                            str_concat(str_concat("`", tn), "` is not a type"));
+                }
+                strs_push(rfname, fname);
+                ints_push(rftype, ft);
+                ints_push(rfat, at);
+                kept = kept + 1;
+            }
+            i = i + 1;
+        }
+        ints_push(rcount, kept);
+        if kept == 0 {
+            report(dcode, dstart, dend, dmsg, "N0101", ints_get(rat, r),
+                    ints_get(rat, r) + str_len(strs_get(rnames, r)),
+                    str_concat(str_concat("`", strs_get(rnames, r)),
+                    "` has no fields, which is not supported yet"));
+        }
+        r = r + 1;
+    }
+    strs_len(rfname)
+}
+
+// Stage 0c: refuse records that cannot be laid out.
+//
+// A record holds its fields by value, so a chain of record-typed fields that returns to
+// where it started describes a value containing itself and has no finite size. Refused as
+// an impossible layout rather than as a safety problem, and reported before anything is
+// emitted — a backend complaining about a recursive type is a refusal arriving after the
+// compiler decided the program was fine.
+//
+// Depth-first with an explicit stack and a three-state mark: 0 unvisited, 1 on the current
+// path, 2 finished.
+pub fn check_record_layouts(rnames: Strs, rat: Ints, rfirst: Ints, rcount: Ints,
+        rftype: Ints, dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+    let state = ints_new();
+    let mut i = 0;
+    while i < strs_len(rnames) { ints_push(state, 0); i = i + 1; }
+    let mut found = 0;
+    let mut root = 0;
+    while root < strs_len(rnames) {
+        if ints_get(state, root) == 0 {
+            let at = ints_new();
+            let which = ints_new();
+            ints_push(at, root);
+            ints_push(which, 0);
+            ints_set(state, root, 1);
+            while ints_len(at) > 0 {
+                let r = ints_get(at, ints_len(at) - 1);
+                let f = ints_get(which, ints_len(which) - 1);
+                if f >= ints_get(rcount, r) {
+                    ints_set(state, r, 2);
+                    ints_pop(at);
+                    ints_pop(which);
+                } else {
+                    ints_set(which, ints_len(which) - 1, f + 1);
+                    let ft = ints_get(rftype, ints_get(rfirst, r) + f);
+                    if is_record(ft) {
+                        let inner = record_of(ft);
+                        if ints_get(state, inner) == 1 {
+                            report(dcode, dstart, dend, dmsg, "N0336",
+                                    ints_get(rat, inner),
+                                    ints_get(rat, inner) + str_len(strs_get(rnames, inner)),
+                                    str_concat(str_concat("`", strs_get(rnames, inner)),
+                                    "` contains itself"));
+                            // Every record on the current path belongs to this one cycle,
+                            // so none of them is reported again.
+                            let mut c = 0;
+                            while c < ints_len(at) { ints_set(state, ints_get(at, c), 2); c = c + 1; }
+                            ints_set(state, inner, 2);
+                            found = found + 1;
+                            while ints_len(at) > 0 { ints_pop(at); ints_pop(which); }
+                        } else {
+                            if ints_get(state, inner) == 0 {
+                                ints_set(state, inner, 1);
+                                ints_push(at, inner);
+                                ints_push(which, 0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        root = root + 1;
+    }
+    found
+}
+
+// A public item that names a private record would publish a type the importer cannot
+// resolve, so it is refused. Checked at each public item on its **direct** references:
+// an intermediate record must itself be public to appear in a public signature, and its
+// own declaration is checked the same way, so the recursion is distributed and one
+// mistake still produces one diagnostic.
+pub fn check_private_types(t: Int, at: Int, to: Int, kind: Str, who: Str,
+        rnames: Strs, rpub: Ints,
+        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+    if is_record(t) == false { return 0; }
+    let r = record_of(t);
+    if r >= strs_len(rnames) { return 0; }
+    if ints_get(rpub, r) == 1 { return 0; }
+    let head = str_concat(str_concat("this public ", kind), " exposes `");
+    report(dcode, dstart, dend, dmsg, "N0337", at, to,
+            str_concat(str_concat(head, strs_get(rnames, r)),
+            "`, which is private to this module"));
+    let unused = who;
+    1
+}
+
+pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
         kids: Ints, kid_first: Ints, mstart: Ints,
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
         fowner: Ints, fpub: Ints, bnames: Strs,
+        rnames: Strs, rowner: Ints, rpub: Ints, rat: Ints,
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, rfat: Ints,
+        tmod: Ints, tname: Strs, trec: Ints,
         dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+    // An exported record's own fields, first: the same refusal as a public signature's,
+    // at the place the private name is written.
+    let mut r = 0;
+    while r < strs_len(rnames) {
+        if ints_get(rpub, r) == 1 {
+            let mut i = 0;
+            while i < ints_get(rcount, r) {
+                let at = ints_get(rfat, ints_get(rfirst, r) + i);
+                check_private_types(ints_get(rftype, ints_get(rfirst, r) + i), at, at + 1,
+                        "record", strs_get(rnames, r), rnames, rpub,
+                        dcode, dstart, dend, dmsg);
+                i = i + 1;
+            }
+        }
+        r = r + 1;
+    }
     let mut k = 0;
     while k < ints_len(nk) {
         if ints_get(nk, k) == n_fn() {
@@ -386,18 +939,39 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, ntx: Strs, naux: Ints,
             }
 
             if refused == 0 {
+                let rt = type_in(after_colon(text), owner, rnames, rowner, tmod, tname, trec);
+                if rt == t_unknown() {
+                    report(dcode, dstart, dend, dmsg, "N0305",
+                            ints_get(nst, k), ints_get(nen, k),
+                            str_concat(str_concat("`", after_colon(text)), "` is not a type"));
+                }
                 strs_push(fnames, name);
-                ints_push(fret, type_of_name(after_colon(text)));
+                ints_push(fret, rt);
                 ints_push(ffirst, ints_len(fparams));
                 ints_push(fowner, owner);
                 ints_push(fpub, ints_get(naux, k));
+                if ints_get(naux, k) == 1 {
+                    check_private_types(rt, ints_get(nst, k), ints_get(nst, k) + str_len(name),
+                            "function", name, rnames, rpub, dcode, dstart, dend, dmsg);
+                }
                 // Every child but the last is a parameter; the last is the body.
                 let arity = ints_get(nar, k);
                 let first = ints_get(kid_first, k);
                 let mut p = 0;
                 while p < arity - 1 {
                     let child = ints_get(kids, first + p);
-                    ints_push(fparams, type_of_name(after_colon(strs_get(ntx, child))));
+                    let pn = after_colon(strs_get(ntx, child));
+                    let pt = type_in(pn, owner, rnames, rowner, tmod, tname, trec);
+                    if pt == t_unknown() {
+                        report(dcode, dstart, dend, dmsg, "N0305",
+                                ints_get(nst, child), ints_get(nen, child),
+                                str_concat(str_concat("`", pn), "` is not a type"));
+                    }
+                    if ints_get(naux, k) == 1 {
+                        check_private_types(pt, ints_get(nst, child), ints_get(nen, child),
+                                "function", name, rnames, rpub, dcode, dstart, dend, dmsg);
+                    }
+                    ints_push(fparams, pt);
                     p = p + 1;
                 }
                 ints_push(fcount, arity - 1);
@@ -566,12 +1140,14 @@ fn scope_flags(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints, flags: Ints) ->
 }
 
 pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, nslot: Ints,
-        ntype: Ints, ncallee: Ints,
+        ntype: Ints, ncallee: Ints, nrec: Ints,
         kids: Ints, kid_first: Ints, root: Int,
         mstart: Ints, mfirst: Ints, mcount: Ints, mto: Ints,
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
         fowner: Ints, fpub: Ints, vmod: Ints, vname: Strs, vfn: Ints,
         bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
+        rnames: Strs, rowner: Ints, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
+        tmod: Ints, tname: Strs, trec: Ints,
         dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
     let work = ints_new();
     let marks = ints_new();
@@ -593,6 +1169,27 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
     // built-in, anything else is a definition's index. Recording it is the whole of
     // "resolve once, consume downstream": a name is looked up here and nowhere later.
     while ints_len(ncallee) < ints_len(nk) { ints_push(ncallee, 0 - 1); }
+    // What each record node is about: for a construction, which record it builds; for a
+    // projection, which of that record's fields — by **declaration** index, which is what
+    // a field's identity is spelled as in one session. Emission reads it off the node and
+    // looks up nothing, which is the same division every other annotation here keeps.
+    while ints_len(nrec) < ints_len(nk) { ints_push(nrec, 0 - 1); }
+    // A declared type, on the node that declares it. `type_of_name` is enough for a
+    // built-in and not for a record — which name means which record depends on the
+    // module — so the answer is resolved here, once, and read off the node by emission.
+    // The same rule every other annotation in this array follows.
+    let mut d = 0;
+    while d < ints_len(nk) {
+        if ints_get(nk, d) == n_fn() {
+            ints_set(nrec, d, type_in(after_colon(strs_get(ntx, d)),
+                    module_at(mstart, ints_get(nst, d)), rnames, rowner, tmod, tname, trec));
+        }
+        if ints_get(nk, d) == n_param() {
+            ints_set(nrec, d, type_in(after_colon(strs_get(ntx, d)),
+                    module_at(mstart, ints_get(nst, d)), rnames, rowner, tmod, tname, trec));
+        }
+        d = d + 1;
+    }
     // Slots are numbered per function, and the count is recorded on the `fn` node so
     // the emitter knows how many `alloca`s its entry block needs.
     let counter = ints_new();
@@ -627,7 +1224,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // points `N0304` at the operator, and the node's span covers both
                 // operands instead.
                 let op_at = ints_get(naux, k);
-                ints_push(ts, check_binary(text, l, r, op_at, op_at + str_len(text),
+                ints_push(ts, check_binary(text, l, r, op_at, op_at + str_len(text), rnames,
                         dcode, dstart, dend, dmsg));
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
@@ -643,6 +1240,104 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 }
                 ints_push(ts, t_int());
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
+                continue;
+            }
+            if kind == n_construct() {
+                // `Ty(a,b)` — the type, then the field names in the order written.
+                let tn = before_paren(text);
+                let owner = module_at(mstart, from);
+                let t = type_in(tn, owner, rnames, rowner, tmod, tname, trec);
+                let mut r = 0 - 1;
+                if is_record(t) { r = record_of(t); }
+                if r < 0 {
+                    if type_of_name(tn) == t_unknown() {
+                        report(dcode, dstart, dend, dmsg, "N0305", from, from + str_len(tn),
+                                str_concat(str_concat("`", tn), "` is not a type"));
+                    } else {
+                        report(dcode, dstart, dend, dmsg, "N0333", from, from + str_len(tn),
+                                str_concat(str_concat("`", tn),
+                                "` is not a record, so it has no fields to name"));
+                    }
+                    let mut drop = 0;
+                    while drop < arity { ints_pop(ts); drop = drop + 1; }
+                    ints_push(ts, t_unknown());
+                    ints_set(ntype, k, t_unknown());
+                    continue;
+                }
+                ints_set(nrec, k, r);
+                // The given names, in the order written, against the declaration.
+                let given = ints_new();
+                let mut g = 0;
+                while g < ints_get(rcount, r) { ints_push(given, 0); g = g + 1; }
+                let mut a = 0;
+                while a < arity {
+                    let fname = field_name_at(text, a);
+                    let got = ints_get(ts, ints_len(ts) - arity + a);
+                    let c = ints_get(kids, first + a);
+                    let at = field_index(rfirst, rcount, rfname, r, fname);
+                    if at < 0 {
+                        report(dcode, dstart, dend, dmsg, "N0333",
+                                ints_get(nst, c), ints_get(nen, c),
+                                str_concat(str_concat(str_concat(str_concat("`",
+                                strs_get(rnames, r)), "` has no field `"), fname), "`"));
+                    } else {
+                        if ints_get(given, at) == 1 {
+                            report(dcode, dstart, dend, dmsg, "N0332",
+                                    ints_get(nst, c), ints_get(nen, c),
+                                    str_concat(str_concat("`", fname),
+                                    "` is given a value twice"));
+                        }
+                        ints_set(given, at, 1);
+                        let want = field_type(rfirst, rftype, r, at);
+                        if agrees(got, want) == false {
+                            let head = str_concat(str_concat("`", fname), "` is `");
+                            report(dcode, dstart, dend, dmsg, "N0300",
+                                    ints_get(nst, c), ints_get(nen, c),
+                                    str_concat(str_concat(str_concat(str_concat(head,
+                                    show_type(want, rnames)), "`, but this is `"),
+                                    show_type(got, rnames)), "`"));
+                        }
+                    }
+                    a = a + 1;
+                }
+                let mut missing = "";
+                let mut m = 0;
+                while m < ints_get(rcount, r) {
+                    if ints_get(given, m) == 0 {
+                        if missing != "" { missing = str_concat(missing, ", "); }
+                        missing = str_concat(str_concat(missing, "`"),
+                                str_concat(strs_get(rfname, ints_get(rfirst, r) + m), "`"));
+                    }
+                    m = m + 1;
+                }
+                if missing != "" {
+                    let head = str_concat(str_concat("this `", strs_get(rnames, r)),
+                            "` does not give a value for ");
+                    report(dcode, dstart, dend, dmsg, "N0334", from, to,
+                            str_concat(head, missing));
+                }
+                // A construction that owns something is assembled in a hidden slot, so
+                // that an initialiser failing after an earlier one produced a heap string
+                // releases it: a value held only in a register is not reachable from the
+                // frame's cleanup. A record whose fields own nothing gets no slot and
+                // pays for none of this. `docs/spec.md`, *partial construction*.
+                if needs_cleanup(t, rfirst, rcount, rftype) {
+                    let slot = ints_get(counter, 0);
+                    ints_set(counter, 0, slot + 1);
+                    ints_set(nslot, k, slot);
+                }
+                let mut drop2 = 0;
+                while drop2 < arity { ints_pop(ts); drop2 = drop2 + 1; }
+                ints_push(ts, t);
+                ints_set(ntype, k, t);
+                continue;
+            }
+            if kind == n_fieldread() {
+                let base = ints_pop(ts);
+                let t = project(base, text, from, to, rnames, rfirst, rcount, rfname, rftype,
+                        nrec, k, dcode, dstart, dend, dmsg);
+                ints_push(ts, t);
+                ints_set(ntype, k, t);
                 continue;
             }
             if kind == n_call() {
@@ -711,19 +1406,39 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             }
             if kind == n_assign() {
                 let t = ints_pop(ts);
-                let want = lookup_type(names, ntypes, text);
-                if lookup_mut(names, nmut, text) == 0 {
-                    // The name, not the whole statement: an assignment begins with its
-                    // target, and the name is as long as the text the node carries.
-                    report(dcode, dstart, dend, dmsg, "N0310", from, from + str_len(text),
-                            str_concat(str_concat("`", text), "` is not mutable"));
+                // The place is a root binding and a path of fields: `a.b.c`. Mutability
+                // is checked at the **root**, at any depth, because a record is a value
+                // and replacing part of what a binding holds is changing the binding.
+                let root = before_dot(text);
+                let want_root = lookup_type(names, ntypes, root);
+                if lookup_mut(names, nmut, root) == 0 {
+                    let mut said = str_concat(str_concat("`", root), "` is not mutable");
+                    if root != text {
+                        said = str_concat(said, str_concat(str_concat(
+                                ", so its `", after_dot(text)), "` cannot be replaced"));
+                    }
+                    report(dcode, dstart, dend, dmsg, "N0310", from, from + str_len(root),
+                            said);
                 }
-                ints_set(nslot, k, lookup_slot(names, nslotof, text));
+                ints_set(nslot, k, lookup_slot(names, nslotof, root));
+                ints_set(nrec, k, want_root);
+                // Walk the path to the type actually being written.
+                let mut want = want_root;
+                let mut step = 0;
+                while step < path_length(text) {
+                    want = project(want, path_step(text, step), from, from,
+                            rnames, rfirst, rcount, rfname, rftype, nrec, 0 - 1,
+                            dcode, dstart, dend, dmsg);
+                    step = step + 1;
+                }
                 if agrees(t, want) == false {
                     let value = ints_get(kids, first);
+                    let head = str_concat(str_concat("`", text), "` is `");
                     report(dcode, dstart, dend, dmsg, "N0300",
                             ints_get(nst, value), ints_get(nen, value),
-                            str_concat(str_concat("`", text), "` has a different type"));
+                            str_concat(str_concat(str_concat(str_concat(head,
+                            show_type(want, rnames)), "`, but this is `"),
+                            show_type(t, rnames)), "`"));
                 }
                 ints_push(ts, t_unknown());
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
@@ -744,18 +1459,23 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // synchronisation of any kind, so letting one cross into a task would be
                 // a data race the language had invited. `Int`, `Bool` and `Str` are
                 // values and `Chan` is the primitive designed to be shared.
+                // A record is answered by its **fields**, recursively, and the
+                // diagnostic names the field path that decided it — wrapping a sequence
+                // in a record does not launder it past this rule.
                 let mut a = 0;
                 while a < arity {
                     let at = ints_get(ts, ints_len(ts) - arity + a);
-                    let mut bad = 0;
-                    if at == t_ints() { bad = 1; }
-                    if at == t_strs() { bad = 1; }
-                    if bad == 1 {
+                    let why = task_unsafe_path(at, rfirst, rcount, rfname, rftype);
+                    if why != "" {
                         let c = ints_get(kids, first + a);
+                        let head = str_concat(str_concat("a `", show_type(at, rnames)), "`");
+                        let mut said = str_concat(head, " may not cross into a task");
+                        if why != "." {
+                            said = str_concat(str_concat(str_concat(head,
+                                    " may not cross into a task: its `"), why), "` is a sequence");
+                        }
                         report(dcode, dstart, dend, dmsg, "N0321",
-                                ints_get(nst, c), ints_get(nen, c),
-                                str_concat(str_concat("a `", type_name(at)),
-                                "` may not cross into a task"));
+                                ints_get(nst, c), ints_get(nen, c), said);
                     }
                     a = a + 1;
                 }
@@ -805,6 +1525,21 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 ints_set(nslot, k, ints_get(counter, 0));
                 ints_push(ts, t_unknown());
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
+                continue;
+            }
+            // A record declaration and its fields are checked in their own stages, before
+            // any body. They still take part in the type stack, because the program node
+            // pops one entry per child and a record is a child like a function.
+            if kind == n_structfield() {
+                ints_push(ts, t_unknown());
+                ints_set(ntype, k, t_unknown());
+                continue;
+            }
+            if kind == n_record() {
+                let mut d = 0;
+                while d < arity { ints_pop(ts); d = d + 1; }
+                ints_push(ts, t_unknown());
+                ints_set(ntype, k, t_unknown());
                 continue;
             }
             if kind == n_program() {
@@ -867,7 +1602,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             ints_set(counter, 0, slot + 1);
             ints_set(nslot, entry, slot);
             bind(names, ntypes, nmut, nslotof, before_colon(text),
-                    type_of_name(after_colon(text)), 0, slot);
+                    ints_get(nrec, entry), 0, slot);
             ints_push(ts, t_unknown());
             continue;
         }
@@ -916,7 +1651,7 @@ fn is_ordering(op: Str) -> Bool {
     false
 }
 
-fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int,
+fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int, rnames: Strs,
         dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
     let mut ok = true;
     if is_comparison(op) {
@@ -931,11 +1666,15 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int,
             if agrees(l, r) == false { ok = false; }
             if l == t_ints() { ok = false; }
             if l == t_strs() { ok = false; }
+            if l == t_chan() { ok = false; }
+            // A record joins them rather than getting an exception: equality would have
+            // to decide what a sequence field means, and the language has not chosen.
+            if is_record(l) { ok = false; }
         }
         if ok == false {
             report(dcode, dstart, dend, dmsg, "N0304", from, to,
                     str_concat(str_concat(str_concat("`", op), "` cannot compare `"),
-                    str_concat(type_name(l), "`")));
+                    str_concat(show_type(l, rnames), "`")));
             return t_bool();
         }
         return t_bool();
@@ -947,7 +1686,7 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int,
     if ok == false {
         report(dcode, dstart, dend, dmsg, "N0304", from, to,
                 str_concat(str_concat(str_concat("`", op), "` does not apply to `"),
-                str_concat(type_name(l), "`")));
+                str_concat(show_type(l, rnames), "`")));
     }
     t_int()
 }
