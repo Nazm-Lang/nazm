@@ -88,6 +88,16 @@ version, transitive dependency hashes, target and CPU features, optimisation fla
 The three-key separation in `architecture.md` §7.4 says which of those N4 has and which it
 deliberately does not.
 
+**N5 narrowed one of those inputs, with evidence.** This item and N4's report both assumed
+a dependent's *object* would have to be invalidated by its dependency's implementation.
+Measured on the architecture N5 actually built (`architecture.md` §7.5): it does not. An
+object names its dependencies in a `declare` and a `call`, so it depends on their symbol
+identity and ABI signature, and changing a dependency's body leaves it byte-identical —
+there is no cross-module optimisation for a body to reach through. A later key over
+normalised definitions would therefore need **fewer** transitive inputs than assumed, not
+more. Still nothing implemented: there is no normalised form of a definition, no hash of
+one, and no artefact store.
+
 **Invalidating result** · The key must cover so much that hits are rare in practice, or an
 omission produces a silent miscompile in testing. `architecture.md` already names the
 second as the failure mode: anything omitted from the key is a silent miscompile waiting to
