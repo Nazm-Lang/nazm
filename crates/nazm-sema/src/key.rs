@@ -100,14 +100,22 @@ impl fmt::Display for ModuleKey {
 
 /// What kind of thing a definition is.
 ///
-/// One variant, and a type rather than an implied constant, because a `DefKey` that did
-/// not say would have to be reinterpreted when there is a second kind — and reinterpreting
-/// a durable identity is the failure this whole layer exists to avoid. User-defined types
-/// and constants will each add a variant; adding one must not change what an existing key
-/// means, which is why the spelling is a word rather than a number.
+/// A type rather than an implied constant, because a `DefKey` that did not say would have
+/// to be reinterpreted when there is a second kind — and reinterpreting a durable identity
+/// is the failure this whole layer exists to avoid. N3 wrote that down when there was one
+/// variant; N9 is the milestone that added the second, and no key written before it
+/// changed meaning, which is what the design was for.
+///
+/// The spelling is a word rather than a number for the same reason. `record` and not
+/// `struct`: `docs/spec.md` uses `struct` for the source keyword and *record* for the
+/// semantic category, and this is a semantic identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DefKind {
     Function,
+    /// A user-defined record. One namespace apart from functions — see `docs/spec.md`,
+    /// *Types and functions are separate namespaces* — so `a.nz::fn Point` and
+    /// `a.nz::record Point` are two definitions and this is the field that says so.
+    Record,
 }
 
 impl DefKind {
@@ -115,6 +123,7 @@ impl DefKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Function => "fn",
+            Self::Record => "record",
         }
     }
 
@@ -122,6 +131,7 @@ impl DefKind {
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "fn" => Some(Self::Function),
+            "record" => Some(Self::Record),
             _ => None,
         }
     }

@@ -131,8 +131,39 @@ pub mod codes {
     /// `spawn` outside a `scope`.
     pub const SPAWN_OUTSIDE_SCOPE: Code = Code::new("N0320");
     /// A value that may not cross into a task: an `Ints` or a `Strs`, which are handles
-    /// to unsynchronised shared mutable storage.
+    /// to unsynchronised shared mutable storage — or a record that contains one, at any
+    /// depth, in which case the message names the field path that made it illegal.
     pub const ILLEGAL_TASK_CAPTURE: Code = Code::new("N0321");
+
+    // Records. N9 allocated nine codes from the unused range and renumbered none:
+    // `docs/diagnostics.md` makes a code permanent, and a shifted code is worse than an
+    // ugly one. Where a record failure is the same *semantic category* as an existing
+    // one, the existing code is reused rather than duplicated under a new number —
+    // assigning to an immutable binding is `N0310` whether or not a field is involved,
+    // an unknown type name is `N0305`, `==` on a record is `N0304`, and an ambiguous or
+    // colliding imported name is `N0207`/`N0208`. A code per syntax spelling would make
+    // the set larger and mean less.
+    /// Two records declared with one name in one module.
+    pub const DUPLICATE_TYPE: Code = Code::new("N0330");
+    /// A record declared with a built-in type's name. Built-ins may not be shadowed:
+    /// `Int` means the same thing in every module of every program.
+    pub const BUILTIN_TYPE_REDEFINED: Code = Code::new("N0331");
+    /// Two fields of one record with one name.
+    pub const DUPLICATE_FIELD: Code = Code::new("N0332");
+    /// A field named in a construction or a projection that the record does not have.
+    pub const UNKNOWN_FIELD: Code = Code::new("N0333");
+    /// A construction that does not give every field a value. There are no defaults.
+    pub const MISSING_FIELD: Code = Code::new("N0334");
+    /// `.field` on something that is not a record.
+    pub const INVALID_PROJECTION: Code = Code::new("N0335");
+    /// A record that contains itself by value, directly or through others. Not a safety
+    /// problem — a layout that does not exist.
+    pub const RECURSIVE_RECORD: Code = Code::new("N0336");
+    /// A public function or record whose signature or fields name a private record, which
+    /// an importer could not resolve.
+    pub const PRIVATE_TYPE_EXPOSED: Code = Code::new("N0337");
+    /// Records nested inside records past the stated bound.
+    pub const TYPE_NESTING_TOO_DEEP: Code = Code::new("N0338");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

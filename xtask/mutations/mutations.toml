@@ -832,8 +832,10 @@ then invalidate every dependent, and a persisted interface would publish names t
 deliberately kept
 """
 file = "crates/nazm-core/src/check.rs"
-find = "        if visibility.is_exported() {"
-replace = "        if true {"
+find = """        if visibility.is_exported() {
+            // A public signature naming a private record would publish a type the"""
+replace = """        if true {
+            // A public signature naming a private record would publish a type the"""
 
 [[mutation]]
 name = "the-signature-leaves-the-interface"
@@ -844,8 +846,16 @@ new signature contradicts — a stale accept, which is the failure a fingerprint
 prevent
 """
 file = "crates/nazm-iface/src/wire.rs"
-find = "                params: e.params.iter().map(|t| t.name().to_owned()).collect(),"
-replace = "                params: Vec::new(),"
+find = """            exports.push(PersistentExport {
+                def: DefKey::new(module.clone(), DefKind::Function, e.name.clone()).to_string(),
+                name: e.name.clone(),
+                kind: DefKind::Function.as_str().to_owned(),
+                params,"""
+replace = """            exports.push(PersistentExport {
+                def: DefKey::new(module.clone(), DefKind::Function, e.name.clone()).to_string(),
+                name: e.name.clone(),
+                kind: DefKind::Function.as_str().to_owned(),
+                params: Vec::new(),"""
 
 [[mutation]]
 name = "an-unknown-interface-version-is-read-as-this-one"
@@ -945,8 +955,10 @@ become one symbol again. That is the miscompile this line of work began with: be
 both were `@nz.f0` and the linker saw one definition where the language had two
 """
 file = "crates/nazm-lir/src/symbol.rs"
-find = "            encode(def.module().as_str()),"
-replace = "            \"\","
+find = """            "nz.m.{}.{}",
+            encode(def.module().as_str()),"""
+replace = """            "nz.m.{}.{}",
+            "","""
 
 [[mutation]]
 name = "the-native-symbol-follows-load-order"
@@ -969,8 +981,8 @@ A two-module program then has two `@nz.fail`s and the link fails — which is th
 the bad one is a language that quietly grew a per-module failure state
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = "    (head + &e.out + &e.tasks, e.needs())"
-replace = "    (head + &e.out + &e.tasks + &emit_runtime(e.needs()), e.needs())"
+find = "    (head + &e.out + &e.helpers + &e.tasks, e.needs())"
+replace = "    (head + &e.out + &e.helpers + &e.tasks + &emit_runtime(e.needs()), e.needs())"
 
 [[mutation]]
 name = "native-linkage-ignores-visibility"
@@ -1179,8 +1191,18 @@ dies — while the sequence goes on reporting a length that includes it
 """
 file = "crates/nazm-lir/src/emit.rs"
 find = """                self.retain(arg(1), elem);
-                let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(1));"""
-replace = """                let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(1));"""
+                let _ = writeln!(
+                    self.out,
+                    "  store {} %{}, ptr %{slot}",
+                    llvm_type(self.records, elem),
+                    arg(1)
+                );"""
+replace = """                let _ = writeln!(
+                    self.out,
+                    "  store {} %{}, ptr %{slot}",
+                    llvm_type(self.records, elem),
+                    arg(1)
+                );"""
 
 [[mutation]]
 name = "a-string-read-out-of-a-sequence-is-only-borrowed"
@@ -1206,9 +1228,11 @@ wearing a container as a disguise: a loop that writes the same slot a million ti
 million backings and reports a sequence of length one
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """                let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(2));
+find = """                    arg(2)
+                );
                 self.release(old, elem);"""
-replace = """                let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(2));"""
+replace = """                    arg(2)
+                );"""
 
 [[mutation]]
 name = "a-sequence-of-strings-does-not-release-its-contents"
@@ -1260,8 +1284,16 @@ the scope's body runs concurrently with the task by construction
 """
 file = "crates/nazm-lir/src/emit.rs"
 find = """            self.take(*value, *ty);
-            let _ = writeln!(self.out, "  store {} %{value}, ptr %{slot}", ty.llvm());"""
-replace = """            let _ = writeln!(self.out, "  store {} %{value}, ptr %{slot}", ty.llvm());"""
+            let _ = writeln!(
+                self.out,
+                "  store {} %{value}, ptr %{slot}",
+                llvm_type(self.records, *ty)
+            );"""
+replace = """            let _ = writeln!(
+                self.out,
+                "  store {} %{value}, ptr %{slot}",
+                llvm_type(self.records, *ty)
+            );"""
 
 [[mutation]]
 name = "the-self-hosted-emitter-skips-one-release-path"

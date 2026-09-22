@@ -32,6 +32,7 @@ use crate::interface::Visibility;
 use crate::intrinsic::Intrinsic;
 use crate::key::{DefKey, DefKind, ModuleKey};
 use crate::module::ModuleId;
+use crate::record::{RecordId, Records};
 use crate::types::Type;
 
 /// A function of this compilation, by position in declaration order.
@@ -104,10 +105,32 @@ pub struct FnDef {
     pub locals: Vec<LocalDef>,
 }
 
+/// Which field of which record a projection refers to.
+///
+/// **Not an offset.** `docs/architecture.md` requires field access to stay symbolic until
+/// the layout boundary, so what resolution decides is *which field* — a record identity
+/// and the field's index in declaration order — and the backend decides where that field
+/// sits. A semantic stage that recorded a byte offset here would have made the layout
+/// part of the language's meaning, and no later layout work could change it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldRef {
+    pub record: RecordId,
+    /// The field's index in the record's **declaration order**, which is the session-local
+    /// spelling of `(record definition, field name)`. Never persisted: a durable form
+    /// names the field, because declaration order is not part of what a record means.
+    pub field: u32,
+}
+
 /// Everything resolution decided about one compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Resolution {
     functions: Vec<FnDef>,
+    /// Every record declared in this compilation.
+    ///
+    /// Here rather than beside it, for N1's reason: a record's fields and the properties
+    /// derived from them are resolution's answers, and a backend that built its own table
+    /// would be a second resolver. `nazm-lir` reads this and never looks a type name up.
+    records: Records,
     /// Name to definition, **per module**.
     ///
     /// One map per module, indexed by [`ModuleId`]. Before N2 this was a single
@@ -119,12 +142,40 @@ pub struct Resolution {
     calls: HashMap<Span, Callee>,
     /// Keyed by the span of the variable mention, which is written once per use.
     vars: HashMap<Span, u32>,
+    /// Keyed by the span of the **field name** in a projection or a field assignment,
+    /// which is written once per access.
+    fields: HashMap<Span, FieldRef>,
+    /// Keyed by the span of the **type name** in a record construction.
+    constructions: HashMap<Span, RecordId>,
 }
 
 impl Resolution {
     #[must_use]
     pub fn functions(&self) -> &[FnDef] {
         &self.functions
+    }
+
+    /// Every record this compilation declared.
+    #[must_use]
+    pub fn records(&self) -> &Records {
+        &self.records
+    }
+
+    /// The record table, for the checker that is building it.
+    pub fn records_mut(&mut self) -> &mut Records {
+        &mut self.records
+    }
+
+    /// What the projection whose field name was written at `span` refers to.
+    #[must_use]
+    pub fn field(&self, span: Span) -> Option<FieldRef> {
+        self.fields.get(&span).copied()
+    }
+
+    /// Which record the construction whose type name was written at `span` builds.
+    #[must_use]
+    pub fn construction(&self, span: Span) -> Option<RecordId> {
+        self.constructions.get(&span).copied()
     }
 
     #[must_use]
@@ -141,6 +192,18 @@ impl Resolution {
     #[must_use]
     pub fn definition(&self, module: ModuleId, name: &str) -> Option<FnId> {
         self.by_module.get(module.index())?.get(name).copied()
+    }
+
+    /// Which logical record this is, across processes. The same rule as
+    /// [`Self::def_key`], with [`DefKind::Record`].
+    #[must_use]
+    pub fn record_key(&self, id: RecordId, module: &ModuleKey) -> Option<DefKey> {
+        let def = self.records.get(id)?;
+        Some(DefKey::new(
+            module.clone(),
+            DefKind::Record,
+            def.name.clone(),
+        ))
     }
 
     /// Which logical definition this is, across processes.
@@ -233,5 +296,13 @@ impl Resolution {
 
     pub fn record_var(&mut self, span: Span, slot: u32) {
         self.vars.insert(span, slot);
+    }
+
+    pub fn record_field(&mut self, span: Span, to: FieldRef) {
+        self.fields.insert(span, to);
+    }
+
+    pub fn record_construction(&mut self, span: Span, of: RecordId) {
+        self.constructions.insert(span, of);
     }
 }

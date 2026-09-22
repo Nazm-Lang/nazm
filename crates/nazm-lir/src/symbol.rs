@@ -124,6 +124,69 @@ impl std::fmt::Display for NativeSymbol {
     }
 }
 
+/// What a record's LLVM named type is called. Compiler-private.
+///
+/// # Derived from the durable identity, like a symbol
+///
+/// Two independently generated objects must agree on a record's layout (`docs/spec.md`,
+/// *Separate code generation*), so they must first agree on its **name** — and the only
+/// thing about a record that means the same in two compilations is its [`DefKey`]. A name
+/// derived from a session `RecordId`, a declaration order or a load index would differ
+/// between the two objects and LLVM would silently treat them as two types.
+///
+/// The encoding is [`encode`], exactly as for a symbol, so the same argument applies: `_`
+/// is escaped, so nothing else can produce a `_`, so the encoding is injective and two
+/// records cannot collide by construction. The field is `t` where a symbol's is `m`,
+/// which is what keeps a record and a function of one name apart — they are in separate
+/// namespaces in the language and must be in separate ones here.
+///
+/// ```text
+/// %"nz.t.model_2Enz.Point"      model.nz :: record Point
+/// %"nz.t.a_2Enz.Thing"          a.nz :: record Thing
+/// %"nz.t.b_2Enz.Thing"          b.nz :: record Thing — a different type, by construction
+/// ```
+///
+/// # Not an ABI
+///
+/// Nothing outside one build depends on this. `docs/spec.md` is explicit that `pub` on a
+/// record says which Nazm modules may name it and promises nothing about a layout, a field
+/// offset or a binary interface.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NativeTypeName(String);
+
+impl NativeTypeName {
+    /// The name for a record that has a durable identity.
+    #[must_use]
+    pub fn of_definition(def: &DefKey) -> Self {
+        Self(format!(
+            "nz.t.{}.{}",
+            encode(def.module().as_str()),
+            encode(def.name())
+        ))
+    }
+
+    /// The name for a record in a module that has no durable identity.
+    ///
+    /// Load-order based, deterministic within one compilation and meaningless outside it —
+    /// exactly like the module it names, and like [`NativeSymbol::of_unkeyed`].
+    #[must_use]
+    pub fn of_unkeyed(module: ModuleId, name: &str) -> Self {
+        Self(format!("nz.tu.{}.{}", module.index(), encode(name)))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Quoted, because the encoding contains characters LLVM does not accept bare.
+impl std::fmt::Display for NativeTypeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "%\"{}\"", self.0)
+    }
+}
+
 /// How much of the program may bind to a symbol.
 ///
 /// Derived from the language's own visibility rule and nothing else, which is what makes
