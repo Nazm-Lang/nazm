@@ -59,11 +59,22 @@ now carries a real file with every span and offsets that are local to it, and th
 rendering names the file directly rather than searching for it. The published shape is
 deliberately unmoved: `nazm.diagnostic/1` has always reported concatenation offsets with no
 `file` field, and improving the compiler's internals is not a reason to move every existing
-consumer's numbers. `SourceMap::global` rebases on the way out, in one place, and a test
-pins it. A future schema version could publish `{ file, start, end }` directly; that is a
-version decision, not a side effect. `nazm fix --json`
-resolves them: its `file`, `start` and `end` name a real file and an offset inside it,
-which is what an editing tool needs.
+consumer's numbers. A future schema version could publish `{ file, start, end }` directly;
+that is a version decision, not a side effect. `nazm fix --json` resolves them: its `file`,
+`start` and `end` name a real file and an offset inside it, which is what an editing tool
+needs.
+
+**Where the conversion happens, corrected 2026-09-22.** N1 met the compatibility
+requirement inside `Span` itself: a hand-written `Serialize` that dropped the file, and a
+`Deserialize` that put `FileId::ROOT` back. The published bytes were right and the design
+was wrong — *every* serialisation of a span was lossy, including future ones with no
+connection to this schema, and a span read back named the wrong file with no error. The
+conversion now belongs to `nazm-diag`, which owns this format: `Diagnostic::published`
+converts through `SourceMap::global` at the moment of serialisation into `wire::Published*`
+types that exist to be this schema and nothing else. `nazm-span` no longer depends on serde
+at all, so a span cannot be serialised by accident; `cargo xtask check`'s **span identity**
+gate fails if that changes. A test pins the exact bytes of a diagnostic in the second file
+of a two-file program.
 
 ## Fixes, and when to apply one
 

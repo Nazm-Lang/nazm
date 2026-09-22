@@ -138,20 +138,85 @@ pub enum Severity {
 /// document a tool author reads.
 pub const SCHEMA: &str = "nazm.diagnostic/1";
 
-/// One diagnostic as it goes over the wire: the diagnostic, and the shape it is in.
+/// The published form of a diagnostic: `nazm.diagnostic/1`, exactly.
 ///
-/// The version travels with **every object** rather than in a header, because the output
-/// is one JSON object per line and a consumer may read any single line of it — a header
-/// would be a version that half the readers never see.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Report {
-    pub schema: String,
-    #[serde(flatten)]
-    pub diagnostic: Diagnostic,
+/// # Why this is a separate set of types
+///
+/// The compiler's [`Diagnostic`] is a semantic value whose spans carry a
+/// [`FileId`](nazm_span::FileId) and offsets local to that file. The published shape is
+/// older than that representation: it carries `{ start, end }` with **no file**, at
+/// offsets into the concatenation of every source file in load order. Both are correct
+/// for their purpose, and they are not the same type.
+///
+/// Until 2026-09-22 the conversion lived in `Span`'s own `Serialize`, which made every
+/// serialisation of a span lossy — including serialisations that had nothing to do with
+/// this schema and no reason to discard a file. `nazm-span` no longer depends on serde at
+/// all, so the conversion has to happen here, at the boundary that actually owns the wire
+/// format, and it happens in one function: [`Diagnostic::published`].
+///
+/// A consumer sees no difference. That is the requirement.
+pub mod wire {
+    use serde::{Deserialize, Serialize};
+
+    /// A span as the schema publishes it: offsets into the concatenation, and no file.
+    ///
+    /// Named `Span` on the wire, because that is what it has always been called there.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename = "Span")]
+    pub struct PublishedSpan {
+        pub start: u32,
+        pub end: u32,
+    }
+
+    /// A [`Label`](super::Label) as published.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename = "Label")]
+    pub struct PublishedLabel {
+        pub span: PublishedSpan,
+        pub message: String,
+    }
+
+    /// A [`Fix`](super::Fix) as published.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename = "Fix")]
+    pub struct PublishedFix {
+        pub span: PublishedSpan,
+        pub replacement: String,
+        pub description: String,
+        pub applicability: super::Applicability,
+        pub precondition: String,
+    }
+
+    /// A [`Diagnostic`](super::Diagnostic) as published.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename = "Diagnostic")]
+    pub struct PublishedDiagnostic {
+        pub code: super::Code,
+        pub severity: super::Severity,
+        pub message: String,
+        pub primary: PublishedLabel,
+        pub secondary: Vec<PublishedLabel>,
+        pub help: Option<String>,
+        pub fixes: Vec<PublishedFix>,
+    }
+
+    /// One diagnostic as it goes over the wire: the diagnostic, and the shape it is in.
+    ///
+    /// The version travels with **every object** rather than in a header, because the
+    /// output is one JSON object per line and a consumer may read any single line of it —
+    /// a header would be a version that half the readers never see.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct Report {
+        pub schema: String,
+        #[serde(flatten)]
+        pub diagnostic: PublishedDiagnostic,
+    }
 }
 
+pub use wire::Report;
+
 /// A span with something to say about it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Label {
     pub span: Span,
     pub message: String,
@@ -177,7 +242,7 @@ pub enum Applicability {
 ///
 /// Machine-applicable: `replace this span with this text`. Not advice in prose, which a
 /// tool cannot act on without guessing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fix {
     pub span: Span,
     pub replacement: String,
@@ -192,7 +257,7 @@ pub struct Fix {
     pub precondition: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub code: Code,
     pub severity: Severity,
@@ -309,22 +374,28 @@ impl Diagnostic {
     pub fn to_json(&self, map: &SourceMap) -> Result<String, serde_json::Error> {
         serde_json::to_string(&Report {
             schema: SCHEMA.to_owned(),
-            diagnostic: self.rebased(map),
+            diagnostic: self.published(map),
         })
     }
 
-    /// This diagnostic with every span rebased to the offsets the schema publishes.
+    /// This diagnostic in the shape `nazm.diagnostic/1` publishes.
     ///
-    /// The one place the internal (file, local offset) representation is converted to the
-    /// external one. Keeping it to a single function is what stops the two drifting: a new
-    /// span added anywhere in a `Diagnostic` is rebased here or it is not published at all.
+    /// The **one** place the internal (file, file-local offset) representation becomes the
+    /// external (no file, concatenation offset) one. Keeping it to a single function is
+    /// what stops the two drifting: a span added anywhere in a `Diagnostic` is converted
+    /// here or it is not published at all — and since `Span` cannot be serialised, "or it
+    /// is not published at all" is enforced by the compiler rather than by review.
     #[must_use]
-    fn rebased(&self, map: &SourceMap) -> Self {
-        let label = |l: &Label| Label {
-            span: map.rebased(l.span),
+    pub fn published(&self, map: &SourceMap) -> wire::PublishedDiagnostic {
+        let span = |s: Span| {
+            let (start, end) = map.global(s);
+            wire::PublishedSpan { start, end }
+        };
+        let label = |l: &Label| wire::PublishedLabel {
+            span: span(l.span),
             message: l.message.clone(),
         };
-        Self {
+        wire::PublishedDiagnostic {
             code: self.code.clone(),
             severity: self.severity,
             message: self.message.clone(),
@@ -334,8 +405,8 @@ impl Diagnostic {
             fixes: self
                 .fixes
                 .iter()
-                .map(|f| Fix {
-                    span: map.rebased(f.span),
+                .map(|f| wire::PublishedFix {
+                    span: span(f.span),
                     replacement: f.replacement.clone(),
                     description: f.description.clone(),
                     applicability: f.applicability,
@@ -456,17 +527,80 @@ mod tests {
         let json = d.to_json(&map).unwrap();
         assert!(json.contains("N0200"), "{json}");
         // The version travels with the object, and the object still reads back as a
-        // plain `Diagnostic`: a consumer that does not care about the envelope is not
-        // made to parse one.
+        // plain diagnostic: a consumer that does not care about the envelope is not made
+        // to parse one.
         assert!(json.contains(SCHEMA), "{json}");
-        assert_eq!(serde_json::from_str::<Diagnostic>(&json).unwrap(), d);
+        let published = d.published(&map);
+        assert_eq!(
+            serde_json::from_str::<wire::PublishedDiagnostic>(&json).unwrap(),
+            published
+        );
         assert_eq!(
             serde_json::from_str::<Report>(&json).unwrap(),
             Report {
                 schema: SCHEMA.to_owned(),
-                diagnostic: d
+                diagnostic: published,
             }
         );
+    }
+
+    /// The bytes `nazm.diagnostic/1` has always emitted, for a diagnostic in the second
+    /// file of a two-file program.
+    ///
+    /// This is the test the preflight of 2026-09-22 exists for. The published span is
+    /// `{ start, end }` with **no file**, at offsets into the concatenation of every file
+    /// in load order — `helper.nz` begins at 17, so its byte 21 is published as 38. Moving
+    /// the conversion out of `Span::serialize` and into [`Diagnostic::published`] changed
+    /// where it happens and changed nothing a consumer can see.
+    #[test]
+    fn the_published_shape_is_unchanged_by_spans_knowing_their_file() {
+        let root = "use \"helper.nz\";\n";
+        let helper = "fn helper() -> Int { bogus }\n";
+        let map = SourceMap::from_parts(vec![
+            ("main.nz".to_owned(), root.to_owned()),
+            ("helper.nz".to_owned(), helper.to_owned()),
+        ]);
+        let helper_id = map.ids().nth(1).unwrap();
+        // Byte 21 of `helper.nz`: the `bogus` that is not defined.
+        let d = Diagnostic::error(
+            codes::UNDEFINED_VARIABLE,
+            Span::new(helper_id, 21, 26),
+            "`bogus` is not defined",
+        );
+        let json = d.to_json(&map).unwrap();
+        assert_eq!(
+            json,
+            r#"{"schema":"nazm.diagnostic/1","code":"N0200","severity":"error","message":"`bogus` is not defined","primary":{"span":{"start":38,"end":43},"message":"`bogus` is not defined"},"secondary":[],"help":null,"fixes":[]}"#
+        );
+        // The three ways this could have regressed, stated separately so a failure says
+        // which one it was.
+        assert!(!json.contains("\"file\""), "{json}");
+        assert!(json.contains(r#""start":38"#), "{json}");
+        assert_eq!(map.global(Span::new(helper_id, 21, 26)), (38, 43));
+    }
+
+    /// A span keeps its file **because it cannot be serialised at all**.
+    ///
+    /// The regression this guards against is not a wrong value, it is a plausible one: a
+    /// span that went out through a generic serializer as `{start, end}` and came back as
+    /// `FileId::ROOT`, naming the wrong file with complete confidence. `nazm-span` has no
+    /// serde dependency, so the mistake is now a compile error; what remains testable is
+    /// that publishing is explicit and that the internal value is untouched by it.
+    #[test]
+    fn publishing_a_diagnostic_does_not_move_the_diagnostic() {
+        let map = SourceMap::from_parts(vec![
+            ("a.nz".to_owned(), "fn a() -> Int { 1 }\n".to_owned()),
+            ("b.nz".to_owned(), "x\n".to_owned()),
+        ]);
+        let b = map.ids().nth(1).unwrap();
+        let d = Diagnostic::error(codes::UNDEFINED_VARIABLE, Span::new(b, 0, 1), "`x`");
+        let published = d.published(&map);
+        assert_eq!(published.primary.span.start, 20);
+        // The diagnostic still points where it pointed: file-local, in `b.nz`.
+        assert_eq!(d.primary.span, Span::new(b, 0, 1));
+        assert_eq!(map.name(d.primary.span.file), "b.nz");
+        // And publishing twice is publishing once, twice — not a rebase of a rebase.
+        assert_eq!(d.published(&map), published);
     }
 
     #[test]

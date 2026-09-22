@@ -9,8 +9,9 @@ repository.workspace = true
 authors.workspace = true
 publish.workspace = true
 
-[dependencies]
-serde = { workspace = true }
+# No dependencies, and `serde` in particular. A span is only meaningful together with the
+# file it names, so publishing one is a decision a wire format's owner makes explicitly
+# rather than something a derive does on its way past. See the crate documentation.
 
 [lints]
 workspace = true
