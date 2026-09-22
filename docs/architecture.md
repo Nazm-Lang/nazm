@@ -482,6 +482,87 @@ modules' private `helper` needed no backend change at all. There are no per-modu
 files, no linker symbols and no cached interfaces, and `capability-matrix.md` says so
 rather than implying separate compilation from the existence of a unit.
 
+## 7.3 Durable identity and persistent interfaces — settled by N3, 2026-09-22
+
+N2 gave a definition an owner and a module an identity, and both were **session-local**:
+indices into one compilation in one process. That is the right shape for a compilation and
+the wrong one for anything that outlives it. N3 adds a second layer beside it, and the two
+coexist on purpose.
+
+### Two layers, not a rename
+
+| | Answers | Shape | Lives |
+| --- | --- | --- | --- |
+| `FileId` | which source did this span come from, **here** | index into a `SourceMap` | one process |
+| `ModuleId` | which loaded module owns this, **here** | index into a `ModuleGraph` | one process |
+| `FnId` | which declaration does this reference mean, **here** | index into a `Resolution` | one process |
+| **`ModuleKey`** | which logical module is this | normalised source-root-relative path | across processes |
+| **`DefKey`** | which logical definition is this | `ModuleKey` + kind + name | across processes |
+
+The session ids are not deprecated and were not renamed. They are dense, cheap and exact
+within a compilation, which is what the checker and the backend need; a durable key is a
+string, computed once per module, which is what a file on disk needs. `spec.md` owns what
+the durable ones *mean*; this section owns where they live.
+
+`ModuleGraph::key(ModuleId)` and `Resolution::def_key(FnId)` are the mapping, and both
+return `Option` — a module outside the source root or reached under two names through a
+symbolic link has **no** durable key, and is refused one rather than given a guess.
+
+### The serialization boundary, again
+
+`Span` taught this: a semantic type and a wire representation are different
+responsibilities, and putting the second inside the first makes every use of the first
+lossy. So `nazm-sema` still depends on `nazm-span` and nothing else — **no serde** — and a
+separate crate owns what a module publishes:
+
+```text
+nazm-sema    semantic, session-local, and durable *identities*      → span
+nazm-iface   the persisted form of a module's interface, and its
+             fingerprint                                            → sema, span, serde, blake3
+```
+
+`nazm-iface` converts explicitly. `UnitInterface` (in-memory, holds `FnId` and `Span`)
+becomes `PersistentUnitInterface` (durable keys, canonical type names, no spans) by a
+function that takes the module's `ModuleKey` and fails without one. Nothing derives
+`Serialize` on a session-local type, because the crate that holds them cannot: `cargo xtask
+check`'s **sema purity** gate fails if `nazm-sema` gains a serde dependency, in the same way
+and for the same reason as the span-identity gate.
+
+### Three fingerprints, kept apart
+
+| | Over | Used for |
+| --- | --- | --- |
+| **`InterfaceHash`** | the canonical bytes of a module's persisted interface | deciding whether a module's *dependents* must be re-checked |
+| Implementation fingerprint | a module's own bodies | deciding whether a module's *own* output can be reused — **not built in N3** |
+| `BuildKey` | compiler identity, target, flags, dependency hashes | reusing a generated artefact — **not built in N3** |
+
+Collapsing them is the mistake worth naming: an `InterfaceHash` used as a codegen cache key
+would reuse an object file after a body change, because a body is deliberately not in it.
+N3 builds the first and states the other two so the first cannot be quietly promoted.
+
+### Invalidation, as a consequence rather than an engine
+
+The fingerprint exists so that this holds, and it is tested:
+
+```text
+B's private body changes   → B's InterfaceHash unchanged → A need not be re-checked
+B's exported signature      → B's InterfaceHash changes   → A must be re-checked
+```
+
+Propagation stops where it stops being true: re-checking A produces A's interface, and if
+*that* is unchanged, A's own importers are unaffected. That is the intended model and it is
+written down here; **no scheduler, cache or query engine implements it**, and
+`capability-matrix.md` says incremental compilation is absent.
+
+### What the self-hosted compiler does with all this
+
+Nothing, deliberately. Persistent interfaces are toolchain architecture, not language
+semantics: no Nazm program can observe a `ModuleKey`, and the bootstrap chain neither writes
+nor reads an interface file. What the two implementations must agree on is the *rule* — and
+they do, by both declining durable identity exactly where they could disagree. If a later
+milestone gives the Nazm-written compiler an incremental path, it needs `realpath` first;
+`spec.md` records why.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

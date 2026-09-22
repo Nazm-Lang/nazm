@@ -685,6 +685,100 @@ compilation were a duplicate definition, so imported files had to rename theirs.
 `main` need not be `pub`. Being the entry point is not the same as being importable, and
 requiring the keyword would suggest the runtime resolves it by name from outside.
 
+### Durable identity: what makes this the same module, or the same definition
+
+*Added by N3, 2026-09-22.* Everything above is about one compilation. This is about two.
+
+A compiler that wants to reuse work has to answer a question no single compilation ever
+asks: **is this the same thing it was last time?** Load order cannot answer it — the ids a
+compilation mints are positions in that compilation — and neither can a file's path, which
+says where a checkout happens to live. So the language settles what continuity means, and
+an implementation encodes it.
+
+Identity is not content. *Which* definition this is and *what it currently says* are two
+questions, and collapsing them would make every edit create a new definition, which is the
+opposite of what durable identity is for.
+
+#### The source root
+
+A compilation has a **source root**: the directory containing the root module — the file
+named on the command line. It is derived, not declared. There is no manifest, no project
+file and no package, and inventing one to obtain a namespace would be building a package
+system for a naming problem.
+
+Every module's durable identity is its path **relative to that root**, normalised: `/`
+between components, `.` removed, `..` folded away where it can be, and no leading or
+trailing separator. A checkout moved from one directory to another has the same roots and
+the same relative paths, so it has the same identities.
+
+#### Module identity
+
+> **Two modules are the same module when their normalised source-root-relative paths are
+> equal.**
+
+That is all of it. Not the absolute path, which differs per machine; not the canonical
+path, which differs per checkout and leaks the layout above the root; not a content hash,
+which would make every edit a different module.
+
+Two situations have **no** durable module identity, and are refused one rather than given a
+guess:
+
+| Situation | Why |
+| --- | --- |
+| The module sits **outside** the source root — its relative path still begins with `..` after folding | Its identity would depend on the directory the root happens to sit in, which is the thing a durable identity must not depend on |
+| Two different import paths reach **one file** through a symbolic link | The implementations disagree about how many modules that is (see below), and an identity the two cannot both compute is not an identity |
+
+Such a compilation is correct and complete — session-local identity is untouched, the
+program checks, runs and compiles exactly as before. What it does not get is a durable key,
+and anything built on durable keys declines rather than guesses.
+
+#### Symbolic links, and the one place the two implementations differ
+
+The reference loader reads each file once keyed by its **canonical** path, so two spellings
+that reach one file through a symbolic link are one module. The compiler written in Nazm
+keys by a **textually normalised** path — its runtime has no `realpath` — so the same two
+spellings are two modules to it. That difference predates durable identity and is recorded
+in `bootstrap.md`.
+
+Durable identity does not resolve it in favour of either. It **declines** where they could
+disagree: a module reached under two different normalised paths has no `ModuleKey`, in
+either implementation. Where no alias exists the two agree by construction, because textual
+normalisation and canonicalisation give the same answer for a path with no symbolic link in
+it.
+
+Making them agree in the aliased case would require the Nazm-written compiler to obtain
+filesystem identity — a `realpath` built-in and a runtime symbol it does not have. That is
+a language and runtime change, deliberately not made for a case no real program has, and
+`roadmap.md` records it as a known consequence rather than a plan.
+
+#### Definition identity
+
+> **A definition is identified by its module, its kind, and the name it is declared
+> under.**
+
+Top-level functions do not overload, so a name identifies at most one definition in a
+module, and `N0203` is what keeps that true. What follows is therefore decidable:
+
+| The edit | Same definition? |
+| --- | --- |
+| The body changes | **Yes.** A function whose body changed is that function, changed |
+| The signature changes | **Yes.** Its contract changed; the definition did not become another one |
+| `pub` is added or removed | **Yes.** What may name it changed; which definition it is did not |
+| It moves within its module | **Yes.** Identity is a position in a namespace, not a position in a file |
+| It is renamed | **No.** A different name is a different definition, and the old one was removed |
+| It is deleted, and later a definition of that name is added | **The same identity.** This models continuity of a *name in a module*, not the history of an author's intent |
+
+The last row is the honest limitation and is stated rather than hidden. Identity here
+answers "which definition does this name in this module refer to", which is what a cache
+key and a dependency edge need. It does not answer "is this the same definition the author
+was thinking of", which is lineage — a different question, for a tool that tracks edits
+rather than for the language.
+
+**Built-ins are not definitions under this model.** They belong to no module, so they have
+no module to be identified by; they keep the separate, stable identity they already have.
+Nothing about a module's exported interface mentions them, because a call to `str_len`
+inside a body is not part of what that module offers.
+
 ### Structured concurrency: scopes, tasks and channels
 
 This is the **initial** model. It is deliberately small, and what it does not claim is as
@@ -938,13 +1032,11 @@ answer, and they are semantic rather than merely structural, which is why they a
   into the concatenation of all files, because `diagnostics.md` promises the shape will not
   move inside a version. That a program's *meaning* is unaffected is why this was an
   implementation change and not a language one.
-- **What is the stable identity of a definition, and what changes it?** An answer is a
-  prerequisite for incremental compilation, for caching, and for telling an agent that an
-  edit produced the same definition (`research-register.md` R2, R3). N2 made a definition's
-  *owner* explicit — every definition belongs to exactly one module, and a name is unique
-  within it — so `(module, name)` now identifies a definition **within one compilation**.
-  That is not the answer: a module is identified by a session-local id derived from load
-  order, and nothing here survives the process it was computed in.
+- ~~**What is the stable identity of a definition, and what changes it?**~~ **Settled by
+  N3, 2026-09-22.** A definition is identified by the module that owns it, the kind of
+  definition it is, and the name it is declared under; a module is identified by where its
+  source sits relative to the compilation's source root. Both survive the process. See
+  **Durable identity** below.
 - **Do built-ins share that identity model?** They live in the ordinary function namespace
   and may not be redefined, but they are declared in a compiler table rather than in
   source. Whether they are definitions with identities, or something else the resolver
