@@ -61,28 +61,41 @@ dependencies' interfaces (`crates/nazm-core/tests/unit_checking.rs`); a module h
 checkouts; and a module's interface has a deterministic persisted form with a BLAKE3
 fingerprint (`crates/nazm-cli/tests/durable_identity.rs`).
 
-**The hypothesis itself is untouched, and the status does not move.** What N3 built is
-identity and an *interface* fingerprint — enough to answer "must this module's dependents
-be re-checked", which is a dependency question. R2 is about **content addressing**:
-normalising each definition after type checking, hashing the result, and keying compilation
-*results* on the Merkle DAG. None of that exists. There is no normalised form of a
-definition, no hash of one, no store and no cache, and `InterfaceHash` is deliberately not
-a cache key — it excludes bodies, so an artefact keyed on it would be reused after a body
-changed (`architecture.md` §7.3).
+**A store keyed on semantic inputs exists as of N4 (2026-09-22), and it is not this.**
+`nazm-cache` computes `SourceFingerprint`, `CheckerIdentity` and `CheckKey`, and `nazm
+check` reuses the result of checking a module whose inputs are unchanged
+(`crates/nazm-cli/tests/incremental.rs`). That answers the *dependency* question — which
+modules must be re-checked — and it does so from a module's **source bytes** and its
+imports' interfaces.
 
-What changed is that the prerequisites are no longer the obstacle. What remains to be shown
-is the hypothesis: that keying results this way pays for itself.
+R2 is about **content addressing**: normalising each definition after type checking so that
+two definitions which mean the same thing hash the same, and keying compilation *results*
+on the resulting Merkle DAG. None of that exists. There is no normalised form of a
+definition and no hash of one; `SourceFingerprint` is deliberately the opposite of one, and
+its documentation says so — it normalises nothing, so a re-indent moves it. `InterfaceHash`
+is deliberately not a cache key for an artefact, because it excludes bodies. What N4 built
+is the *architecture* R2 would slot into, not the hypothesis.
 
-**Evidence needed** · A measured rebuild saving on a real edit, against the cache key
-covering compiler identity, schema version, transitive dependency hashes, target and CPU
-features, optimisation flags and ABI.
+**The one measurement R2 asked for now has a first data point, and it is narrow.** A real
+edit to one module of a real graph re-checks that module and reuses the rest; the saving is
+in `performance.md`. It is a saving on semantic checking, against a key over source bytes —
+not a rebuild saving against a key over normalised definitions, which is what would move
+this hypothesis.
+
+**Evidence needed** · A measured rebuild saving on a real edit, against a key over
+normalised definitions rather than source bytes, and covering compiler identity, schema
+version, transitive dependency hashes, target and CPU features, optimisation flags and ABI.
+The three-key separation in `architecture.md` §7.4 says which of those N4 has and which it
+deliberately does not.
 
 **Invalidating result** · The key must cover so much that hits are rare in practice, or an
 omission produces a silent miscompile in testing. `architecture.md` already names the
 second as the failure mode: anything omitted from the key is a silent miscompile waiting to
-happen.
+happen. N4's six mutations remove one input each and require the suite to catch it; that is
+the method the eventual content-addressed key would be held to.
 
-**Status: RESEARCH.**
+**Status: RESEARCH.** Unchanged. The prerequisites are met and one neighbouring result
+exists; the hypothesis is untested.
 
 ---
 

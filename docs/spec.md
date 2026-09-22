@@ -701,24 +701,38 @@ opposite of what durable identity is for.
 
 #### The source root
 
-A compilation has a **source root**: the directory containing the root module — the file
-named on the command line. It is derived, not declared. There is no manifest, no project
-file and no package, and inventing one to obtain a namespace would be building a package
-system for a naming problem.
+A compilation has a **source root**, and every module's durable identity is its path
+**relative to that root**, normalised: `/` between components, `.` removed, `..` folded
+away where it can be, and no leading or trailing separator. A checkout moved from one
+directory to another has the same root and the same relative paths, so it has the same
+identities. The shell's working directory is not one of them: a relative path is resolved
+against it to make the comparison possible, and what remains after the root is removed is
+all that survives.
 
-Every module's durable identity is its path **relative to that root**, normalised: `/`
-between components, `.` removed, `..` folded away where it can be, and no leading or
-trailing separator. A checkout moved from one directory to another has the same roots and
-the same relative paths, so it has the same identities.
+There are two ways a compilation gets one.
 
-**A consequence, stated because it is easy to be surprised by.** The root is the *named*
-file's directory, so a module has the identity its compilation gives it: `lib/util.nz`
-when the compilation started from `main.nz` beside `lib/`, and `util.nz` when it started
-from `lib/util.nz` itself. Those are two compilations of two different shapes, and a key is
-meaningful within one. What would make the key independent of which file was named is a
-**declared** root — a project file — and that is a build-system feature this language does
-not have and will not grow one for a naming problem. Anything comparing keys across
-compilations compares them within one declared root or not at all.
+> **Declared.** A file named `nazm.root` marks the directory that contains it as a source
+> root. The nearest one at or above the root module wins. `nazm check` and `nazm interface`
+> also accept `--source-root DIR`, which names one without writing a file.
+>
+> **Derived.** With neither, the root is the directory containing the root module — the
+> file named on the command line.
+
+*Declared roots were added by N4, 2026-09-22. Derived ones are unchanged, and a project
+with no marker behaves exactly as it did.*
+
+**The marker must be empty.** It answers one question and owns nothing else. The moment it
+is allowed to carry a field it is a manifest, and a manifest is a package system's front
+door — versions, dependencies, a registry, a resolver. None of those is needed to say where
+a project begins, and a marker with content is refused rather than read.
+
+**Why the distinction matters.** Under a derived root the identity a module gets depends on
+which file the compilation started from: `lib/util.nz` when it started at `main.nz` beside
+`lib/`, and `util.nz` when it started at `lib/util.nz` itself. Both are correct within their
+own compilation, and neither can be compared with the other. Under one declared root they
+are the same key, which is what lets two compilations of one project agree about what their
+modules are. Anything comparing keys across compilations compares them within one declared
+root or not at all.
 
 #### Module identity
 

@@ -188,6 +188,25 @@ is a function of the content — so the normalisation removes a difference that 
 arise. It is kept because it *can* arise, and finding out by having the check fail would be
 worse.
 
+### The cache is not part of this chain — N4, 2026-09-22
+
+N4 gave `nazm check` a store of semantic results. **The bootstrap neither reads nor writes
+one**, and that is a decision rather than an omission.
+
+`compiler/bootstrap.sh` runs `nazm check` on the compiler source as its reference leg, and
+the stages it builds are `nazm build` invocations, which reuse nothing. Each stage works in
+its own directory, so no `.nazm` store from one run is visible to another, and the fixpoint
+is a comparison of emitted IR — a thing no cache is involved in producing. **A cache hit is
+therefore not a prerequisite for self-host success, and could not become one.**
+
+Nor is the cache ported into the compiler written in Nazm. It is toolchain architecture,
+not language semantics: no Nazm program can observe a `CheckKey`, and a second store
+written in a language with no `realpath` would be a second thing to keep correct in
+exchange for symmetry nobody needs. What the two implementations must agree on is the
+language, which is what §3 measures. `nazm.root` changes nothing for either — the
+Nazm-written compiler computes no durable identity at all, so there is nothing for a
+declared root to change.
+
 ## 4. What this does **not** establish
 
 - **It is not evidence that the compiler is correct.** A compiler that miscompiles S in a

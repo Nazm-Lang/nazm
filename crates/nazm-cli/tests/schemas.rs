@@ -303,6 +303,56 @@ fn every_test_case_matches_the_published_schema() {
 }
 
 #[test]
+fn the_cache_report_matches_the_published_schema() {
+    // Twice, because the interesting fields only move on the second run: a report whose
+    // `reused` was always zero would validate against the schema and describe nothing.
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("nazm.root"), "").expect("marker");
+    std::fs::write(
+        dir.path().join("b.nz"),
+        "pub fn twice(n: Int) -> Int { n * 2 }\n",
+    )
+    .expect("b");
+    std::fs::write(
+        dir.path().join("a.nz"),
+        "use \"b.nz\";\nfn main() -> Int { twice(21) }\n",
+    )
+    .expect("a");
+
+    let run = || {
+        let out = Command::new(NAZM)
+            .args(["check", "a.nz", "--cache-report"])
+            .current_dir(dir.path())
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        lines(&String::from_utf8_lossy(&out.stdout))
+    };
+
+    let field = |objects: &[Value], name: &str| {
+        objects
+            .first()
+            .and_then(|o| o.get(name))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+
+    let cold = run();
+    assert_eq!(cold.len(), 1, "one object, not a stream");
+    check_against("nazm.check-report-1.json", &cold);
+    assert_eq!(field(&cold, "reused"), Value::from(0));
+
+    let warm = run();
+    check_against("nazm.check-report-1.json", &warm);
+    assert_eq!(field(&warm, "reused"), Value::from(2));
+    assert_eq!(field(&warm, "checked"), Value::from(0));
+}
+
+#[test]
 fn the_schema_identifier_is_the_one_the_compiler_emits() {
     // The constant in `nazm-diag` and the `const` in the schema document are two places
     // one string is written. This is what stops them being two strings.

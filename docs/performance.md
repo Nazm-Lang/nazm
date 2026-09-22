@@ -192,6 +192,76 @@ is `clang` assembling and linking, which is a fixed cost this compiler pays per
 invocation and has done nothing about. That is the honest answer to "is it fast to
 compile": the part written here is fast, and it is a small part of the wall clock.
 
+### Incremental semantic checking — measured 2026-09-22, and smaller than it sounds
+
+N4 lets `nazm check` skip checking the bodies of a module whose semantic inputs are
+unchanged. Measured on the largest module graph this repository has — the compiler written
+in Nazm, five modules and 5,041 lines — with the release binary, medians of seven runs,
+Darwin arm64. **These are within-host comparisons taken minutes apart, which is the only
+kind this method supports**; they are not comparable to `bench/baseline-linux-aarch64.json`
+and no cross-host claim is made.
+
+| | wall clock | modules checked | reused | entries written |
+| --- | ---: | ---: | ---: | ---: |
+| `--no-cache` | 40.5 ms | 5 | 0 | 0 |
+| cold, store empty | **64.8 ms** | 5 | 0 | 5 |
+| warm, nothing changed | 38.9 ms | 0 | 5 | 0 |
+| a private definition added to `lex.nz` | 39.0 ms | 1 | 4 | 1 |
+| an exported definition added to `lex.nz` | 39.3 ms | 4 | 1 | 4 |
+
+**The reuse decisions are exactly right and the time saved is about a millisecond.** That
+is the finding, and it is stated first because the opposite is what a reader expects from a
+cache.
+
+The reason is arithmetic rather than a defect. A `nazm check` of a one-line program takes
+**31.7 ms** on this machine — process start, dynamic linking, and the interpreter-owned
+thread `spec.md` requires. So the whole of this graph's *work* is about 8.8 ms, and what
+N4 reuses is the body-checking stage of it:
+
+| | |
+| --- | ---: |
+| process floor | 31.7 ms |
+| work, `--no-cache` | 8.8 ms |
+| work, warm | 7.2 ms |
+| **saved** | **1.6 ms — 18% of the work, 3.9% of the wall clock** |
+
+Fifteen runs each, twice, put the minima at 39.8/39.9 ms disabled and 38.8/38.8 ms warm,
+so the ordering is stable; the magnitude is near this method's noise floor and is reported
+as an order of magnitude, not a figure.
+
+**The first run is slower, by 24 ms.** Publishing five entries costs an `fsync` each.
+That is the price of a `rename` that cannot expose a half-written file, and it is paid once
+per changed module rather than per run — but a build that checks once and never again is
+worse off, and saying so is more useful than averaging it away.
+
+**What this says about the next lever.** Parsing and declaring every module happens on
+every run and is *most* of the 8.8 ms; body checking is the minority. Making reuse pay
+would mean reusing the front of the pipeline too, which needs either an incremental parse
+over a lossless CST or a second cache keyed on source alone. Both are real milestones, and
+neither is what N4 built. `capability-matrix.md` area 2a states the bound rather than the
+hope.
+
+### What a consumer of an interface does not have to read
+
+Not a token measurement: bytes, and no tokenizer has been run. For the same five modules,
+what each one's implementation weighs against what its published `nazm.interface/1`
+interface weighs:
+
+| | source | interface |
+| --- | ---: | ---: |
+| `lex.nz` | 9,921 B | 3,344 B |
+| `parse.nz` | 40,538 B | 2,090 B |
+| `analyse.nz` | 45,536 B | 2,474 B |
+| `module.nz` | 11,034 B | 468 B |
+| `emit.nz` | 129,467 B | 124 B |
+| **total** | **236,496 B** | **8,500 B** |
+
+A consumer that needs only what these modules *offer* reads **3.6%** of what a consumer
+that reads their implementations does. The ratio tracks how much of a module is exported
+rather than how large it is — `emit.nz` is the biggest file in the tree and exports
+nothing, so its interface is 124 bytes. Call this **context reduction**; converting it to
+a token claim would need a tokenizer and a stated model, and neither has been run.
+
 ## The optimisation pass, and what it was based on
 
 One pass, chosen from a profile rather than from intuition. `sample` on the release

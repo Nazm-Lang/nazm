@@ -274,13 +274,19 @@ business raising the floor for the crates that ship.
 | | |
 | --- | --- |
 | `nazm run FILE` | Check and evaluate, printing the value of `main` |
-| `nazm check FILE` | Check without evaluating |
+| `nazm check FILE` | Check without evaluating. Reuses the result of checking a module whose source and dependencies' interfaces are unchanged; `--no-cache` checks everything, `--cache-report` says what it did |
 | `nazm build FILE` | Compile to a native executable |
 | `nazm test PATH…` | Run every `NAME.nz` with a `NAME.expected` beside it, interpreted **and** compiled |
 | `nazm fmt FILE…` | Lay files out canonically. `--check` writes nothing and fails if any would change |
 | `nazm fix FILE` | Apply the repairs the compiler already knows about. Nothing is written without `--apply`, and only fixes marked `automatic` are ever applied |
 | `nazm capabilities` | What this build supports, read from the compiler's own tables |
 | `nazm interface FILE` | Write what that module offers, durably — `nazm.interface/1`, or its fingerprint with `--hash`. Not a cache: it reuses nothing |
+
+An empty `nazm.root` file marks the directory it sits in as the project's source root, so a
+module keeps one identity whichever file a compilation started from. `--source-root DIR`
+says the same thing without writing a file. With neither, the root is the directory of the
+file you named. The marker must be empty: it says where a project begins and owns nothing
+else.
 
 `--json` on any of them emits machine-readable output under a **named, versioned
 schema**; the schemas are in [`schema/`](schema) and the compatibility rules are in

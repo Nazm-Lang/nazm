@@ -198,6 +198,21 @@ Two consequences worth naming, because both are dependencies rather than complai
   design for a whole-program compiler and a hard stop for separate compilation, incremental
   compilation, content-addressed definitions and any language server.
 
+> **Both bullets were closed between 2026-09-21 and 2026-09-22, and are kept above because
+> the argument they make is the reason the work happened.**
+>
+> N1 ended the double resolution: `crates/nazm-core/src/check.rs` produces one
+> `nazm_sema::Resolution` and both the evaluator and `crates/nazm-lir/src/lower.rs` read
+> it, with a `cargo xtask check` rule failing if the backend declares a name-keyed table.
+> N1 also gave `nazm_span::Span` a `FileId` and replaced the merged buffer with a
+> `SourceMap`. N2 added a compilation unit and per-unit checking, N3 durable identity and a
+> persisted interface, and **N4 incremental semantic checking** — so of the four things the
+> second bullet called blocked, three now exist and the fourth, a language server, is
+> blocked on a lossless CST rather than on identity.
+>
+> The paragraph below still holds, and the level it pointed at was built: the
+> responsibility it named was owned twice, and now is not.
+
 **An IR level earns its existence by owning a semantic responsibility no existing level
 owns.** Matching the diagram is not such a reason. By that test, the next level is the one
 that would end the double resolution — and that is an argument from the tree, not from §2.

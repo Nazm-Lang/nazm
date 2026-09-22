@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.check-report-1.json",
+  "title": "nazm.check-report/1",
+  "description": "What one `nazm check --cache-report` did: which modules were checked, which were reused, and why the rest were not. One object on stdout. It reports on work, never on meaning — a program's diagnostics and its exit status are the same with the cache on, off, cold or warm.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "root",
+    "modules",
+    "checked",
+    "reused",
+    "missed",
+    "rejected",
+    "declined",
+    "stored"
+  ],
+  "properties": {
+    "schema": { "const": "nazm.check-report/1" },
+    "root": {
+      "enum": ["given", "marker", "derived"],
+      "description": "How the source root was decided: named with `--source-root`, found as a `nazm.root` marker, or derived from the file named on the command line. Only the first two make a module's identity independent of which file a compilation started from."
+    },
+    "modules": { "type": "integer", "minimum": 0, "description": "Modules in the compilation." },
+    "checked": { "type": "integer", "minimum": 0, "description": "Modules whose bodies were checked. `modules` minus `reused`." },
+    "reused": { "type": "integer", "minimum": 0, "description": "Modules whose bodies were not checked, because a valid entry recorded the same inputs. Zero with `--no-cache`." },
+    "missed": { "type": "integer", "minimum": 0, "description": "Checked because nothing was filed under their key." },
+    "rejected": { "type": "integer", "minimum": 0, "description": "Checked because what was filed could not be used: damaged, from another compiler, or an entry for something else. Never an error — a cache is derived data." },
+    "declined": { "type": "integer", "minimum": 0, "description": "Checked because the module has no durable identity to file anything under: outside the source root, or given two names by a symbolic link." },
+    "stored": { "type": "integer", "minimum": 0, "description": "Entries written this run. A module that produced any diagnostic writes none." }
+  }
+}
