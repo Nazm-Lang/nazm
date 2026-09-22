@@ -367,7 +367,7 @@ to hold a record is what would end it.
 | a failure releases the temporaries it was holding — §7.9's last open limitation | §7.10 |
 | `nazm.interface/2`, closed over the field types its public surface mentions | `architecture.md` §7.3, extended |
 
-Evidence: 1,038 tests over 56 suites contained, 22/22 selfhost, C2 = C3 over 12 conformance
+Evidence: 936 tests over 55 suites contained, 22/22 selfhost, C2 = C3 over 12 conformance
 cases with 6 multi-module, 15 new mutations all caught, and the compiler written in Nazm
 now uses a record of its own.
 
