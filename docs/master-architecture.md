@@ -297,6 +297,21 @@ document**: `nazm capabilities --json` answers construct-level questions from th
 implementation. **A document's own status line is not evidence**; `capability-matrix.md`
 cites paths, and `cargo xtask check` fails when one of them stops existing.
 
+### The same rule, applied to source — the structural half, since N2
+
+Routing documents is the half this repository can do by writing things down. The half that
+needs the language is routing **source**, and N2 built its prerequisite rather than its
+mechanism: a module is now private by default, exports an explicit interface, and does not
+pass its dependencies on to its importers. So "what does a reader of module A need" has an
+answer that is not "everything reachable" — A's source, and the *interfaces* of what A
+directly imports.
+
+`nazm_core::check_unit` takes exactly that and no more, which is the property being relied
+on rather than a description of an intention. What does **not** exist is anything that
+hands an agent that subset: no context packet, no semantic delta, no language server, and
+no interface that can be written to a file. `capability-matrix.md` area 2 says so. The
+structure is a precondition for those; it is not a smaller version of them.
+
 ---
 
 ## 7. What this document deliberately does not decide

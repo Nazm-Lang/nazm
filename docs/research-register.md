@@ -54,13 +54,18 @@ results on the resulting Merkle DAG makes incremental compilation and cross-mach
 correct by construction. `architecture.md` §3 carries the design and the cache-key
 correctness conditions.
 
-**Required prerequisite** · A compilation unit. **Partly unblocked by N1, and not
-mistakenly so.** A span now names its file and a `Resolution` addresses definitions
-individually, so there *is* definition granularity to hash — but every id it produces is
-**session-local**: an index into one compilation in one process, not derived from content
-and explicitly not a cache key. The prerequisite that remains is a unit that can be checked
-on its own and an identity that survives a process; `roadmap.md` N2 owns the first,
-`spec.md` *Open* the second.
+**Required prerequisite** · A compilation unit and an identity that survives a process.
+**The first is met as of N2 (2026-09-22); the second is untouched.** A module can be
+checked from its own source and its dependencies' interfaces
+(`crates/nazm-core/tests/unit_checking.rs`), so there is now a unit of the right
+granularity, and a definition has an owner — `(module, name)` identifies one within a
+compilation.
+
+Nothing about that is content-derived. `ModuleId`, `FnId` and `FileId` are all indices into
+one compilation in one process, and an interface written to disk today would be numbers
+meaningless to the run that read it. The remaining prerequisite is therefore sharper than
+it was rather than smaller: not *what is a unit*, but **what identifies a definition such
+that two builds agree**. `roadmap.md` N3 owns it.
 
 **Evidence needed** · A measured rebuild saving on a real edit, against the cache key
 covering compiler identity, schema version, transitive dependency hashes, target and CPU
@@ -83,8 +88,10 @@ one class of no-op edit and shortening a class of agent loop. `architecture.md` 
 both the idea's origin (Unison) and the contribution claimed here, which is the
 agent-facing use rather than the hashing.
 
-**Required prerequisite** · R2. N1 changed nothing here: it produced no content-derived
-identity, and `nazm_syntax::FnId` must not be read as one.
+**Required prerequisite** · R2. Neither N1 nor N2 changed anything here: both produced
+session-local indices and no content-derived identity, and `nazm_sema::FnId` must not be
+read as one. That a definition now has a module and a visibility makes it easier to *say*
+which definition is meant within one run; it says nothing across two.
 
 **Evidence needed** · A measured reduction in wasted agent effort, under the protocol in
 `docs/research/evaluation.md` — whose thresholds are frozen and may not be relaxed — rather than an

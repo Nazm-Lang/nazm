@@ -92,7 +92,7 @@ exercised the thing it was meant to prove.
 | --- | --- |
 | Host | **Linux aarch64**, inside `nazm-contained:1.98.1` — the configuration of record since containment became mandatory. Darwin arm64 remains *a* verified configuration, historically |
 | Toolchain | rustc 1.98.1 (pinned); Debian clang 19.1.7 in the container, Apple clang 21.0.0 on Darwin |
-| S | `compiler/{lex,parse,analyse,module,emit}.nz`, **4,647 lines** |
+| S | `compiler/{lex,parse,analyse,module,emit}.nz`, **4,662 lines** |
 | **C2 vs C3, emitted IR** | **byte-identical** |
 | **C2 vs C3, executables** | **byte-identical**, including the runnable form |
 | Conformance | 5 cases, each agreeing across C2, C3 **and the interpreter** |
@@ -100,6 +100,44 @@ exercised the thing it was meant to prove.
 The IR being identical is the fixpoint: compiling S with a compiler built by Rust and with
 a compiler built by itself produces the same output. That is what self-hosting means, and
 it is checked rather than asserted.
+
+### The reference compiler, and a correction — 2026-09-22
+
+This script does not build `$nazm`; it requires it to exist. Inside the contained runner
+`CARGO_TARGET_DIR` is `/work/target`, and `docker/contained.Dockerfile` warms that
+directory with a build of the whole workspace when the **image** is built. So every
+contained bootstrap from the image's build date until this one used that binary — for the
+reference check at the top, and for stage 1 — regardless of what was in the tree mounted at
+`/src`, and said nothing about the substitution. `cargo xtask contained bootstrap` now runs
+`cargo build -p nazm-cli` first.
+
+What this does and does not change: the fixpoint is C1 → C2 → C3, and C2 vs C3 is a
+statement about the compiler written in Nazm, which the substitution does not touch. What
+was wrong is narrower and still worth correcting — *which* front end produced C1, and
+whether the reference check at the top of the script was checking the language the tree
+currently defines. It was not.
+
+### Visibility, since N2 — 2026-09-22
+
+The compiler source states its own module boundaries. **80 of its 154 top-level functions
+are `pub`; 74 are private**, and the split was computed from which names are actually
+called across a file boundary rather than applied to everything. `emit.nz`, `check.nz` and
+`parser.nz` gained `use` lines for modules they were using and naming nowhere —
+`emit.nz` was calling into `lex.nz` and `parse.nz` through `analyse.nz`'s imports, which
+stopped working when imports stopped being transitive.
+
+That the compiler can express those boundaries cleanly, and that fewer than half its
+functions are part of any interface, is the useful evidence: a visibility model the real
+multi-file workload cannot express is a model that would have been worked around.
+
+**The self-hosted compiler reads `pub` and does not enforce it.** `compiler/lex.nz`
+tokenises the keyword — a word that is a keyword to one lexer and an identifier to the
+other is a divergence the differential test would have to excuse — and
+`compiler/parse.nz` accepts it before `fn`. Nothing downstream acts on it: the Nazm-written
+compiler still resolves names across the whole program, so it accepts sources the reference
+front end refuses. It compiles the sources it is given, which are valid under the stricter
+rule, so the chain is unaffected; enforcing visibility in it is a milestone of its own and
+is not claimed here.
 
 ### What is normalised, and why it is narrow
 
