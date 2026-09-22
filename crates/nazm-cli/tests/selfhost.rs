@@ -1265,6 +1265,176 @@ fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_in
     }
 }
 
+/// The compiler written in Nazm emits the **same memory semantics** as the one written in
+/// Rust.
+///
+/// Not "it compiles and the answer is right": both programs are asked what they allocated
+/// and what they reclaimed, and the two reports must be the same line. That is the
+/// distinction N8 exists to make — for a milestone the Nazm-written compiler emitted a
+/// runtime with no reference count at all, and every behavioural test still passed, because
+/// a program that never frees anything computes the same answers as one that does.
+///
+/// The runtime *text* the two emit is held together by `cargo xtask check`'s `runtime
+/// parity` gate. What that gate cannot check is where each emitter decides to retain and
+/// release, which is what this test is for.
+#[test]
+fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+
+    // Each case: the program, and what it must print. The counts are not written down
+    // here — they are compared between the two compilers, because an expectation written
+    // by hand can be wrong in the same direction twice.
+    let cases: &[(&str, &str)] = &[
+        // A sequence created, left behind, and reclaimed.
+        (
+            "fn main() -> Int {\n    let xs = ints_new();\n    ints_push(xs, 7)\n}\n",
+            "1",
+        ),
+        // Short-lived heap strings: the workload that used to grow without bound.
+        (
+            "fn main() -> Int {\n    let mut s = \"\";\n    let mut i = 0;\n    \
+             while i < 40 {\n        s = str_concat(s, \"x\");\n        i = i + 1;\n    }\n    \
+             str_len(s)\n}\n",
+            "40",
+        ),
+        // A slice outliving the binding of the buffer it points into.
+        (
+            "fn make() -> Str {\n    let s = str_concat(\"ab\", \"cd\");\n    \
+             str_slice(s, 1, 3)\n}\n\
+             fn main() -> Int {\n    let x = make();\n    let mut i = 0;\n    \
+             let mut noise = \"\";\n    while i < 20 {\n        \
+             noise = str_concat(noise, \"zz\");\n        i = i + 1;\n    }\n    \
+             str_byte(x, 0)\n}\n",
+            "98",
+        ),
+        // A string stored in a sequence, read back after its own binding was rebound,
+        // and the sequence's contents released with the sequence.
+        (
+            "fn build() -> Int {\n    let xs = strs_new();\n    let mut i = 0;\n    \
+             while i < 12 {\n        strs_push(xs, int_to_str(i));\n        i = i + 1;\n    }\n    \
+             let got = strs_get(xs, 3);\n    strs_set(xs, 3, \"\");\n    str_byte(got, 0)\n}\n\
+             fn main() -> Int { build() }\n",
+            "51",
+        ),
+        // A borrowed string returned, on both edges.
+        (
+            "fn same(s: Str) -> Str { s }\n\
+             fn same_returned(s: Str) -> Str { return s; }\n\
+             fn main() -> Int {\n    let s = str_concat(\"ab\", \"cd\");\n    \
+             str_len(same(s)) + str_len(same_returned(s))\n}\n",
+            "8",
+        ),
+        // Reclamation on the failure path.
+        (
+            "fn main() -> Int {\n    let s = str_concat(\"ab\", \"cd\");\n    \
+             let xs = ints_new();\n    ints_get(xs, 0)\n}\n",
+            "",
+        ),
+        // Channels: created, used and destroyed, many times over.
+        (
+            "fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    \
+             while i < 10 {\n        let c = chan_new(1);\n        chan_send(c, i);\n        \
+             let buf = ints_new();\n        chan_recv(c, buf);\n        \
+             total = total + ints_get(buf, 0);\n        i = i + 1;\n    }\n    total\n}\n",
+            "45",
+        ),
+        // A channel shared with tasks, reclaimed after the scope has joined.
+        (
+            "fn feed(c: Chan, n: Int) -> Int { chan_send(c, n); 0 }\n\
+             fn main() -> Int {\n    let c = chan_new(4);\n    \
+             scope {\n        spawn feed(c, 1);\n        spawn feed(c, 2);\n    }\n    \
+             chan_close(c);\n    let buf = ints_new();\n    \
+             while chan_recv(c, buf) {\n    }\n    ints_len(buf)\n}\n",
+            "2",
+        ),
+    ];
+
+    /// The `nazm-memory:` line, which both compilers' programs print under the same
+    /// variable because both take its text from one place.
+    fn report(stderr: &str) -> String {
+        stderr
+            .lines()
+            .find(|l| l.starts_with("nazm-memory:"))
+            .unwrap_or_else(|| panic!("no memory report in: {stderr}"))
+            .to_owned()
+    }
+
+    for (source, expected) in cases {
+        let file = dir.path().join("mem.nz");
+        std::fs::write(&file, source).expect("write");
+
+        // The Nazm-written compiler: IR out, clang in, then run it.
+        let (rc, ir, ir_err) = run_stage(&emitter, &file);
+        assert_eq!(
+            rc,
+            Some(0),
+            "the Nazm compiler refused:\n{source}\n{ir_err}"
+        );
+        let ll = dir.path().join("mem.ll");
+        std::fs::write(&ll, &ir).expect("write IR");
+        let theirs = dir.path().join("mem-selfhost");
+        let built = Command::new("clang")
+            .args(["-Wno-override-module", "-lpthread", "-o"])
+            .arg(&theirs)
+            .arg(&ll)
+            .output()
+            .expect("run clang");
+        assert!(
+            built.status.success(),
+            "clang rejected IR from the Nazm compiler:\n{}\n{ir}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+
+        // The reference compiler, from the same source.
+        let ours = dir.path().join("mem-reference");
+        let out = Command::new(NAZM)
+            .args(["build", file.to_str().unwrap(), "-o"])
+            .arg(&ours)
+            .output()
+            .expect("run nazm build");
+        assert!(
+            out.status.success(),
+            "the reference compiler refused:\n{source}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let run = |exe: &Path| {
+            run_bounded(
+                common::bounded_exe(exe).env(nazm_lir::MEMORY_VARIABLE, "1"),
+                std::time::Duration::from_secs(60),
+            )
+            .expect("the compiled program hung")
+        };
+        let (their_code, their_out, their_err) = run(&theirs);
+        let (our_code, our_out, our_err) = run(&ours);
+
+        assert_eq!(their_code, our_code, "exit status differs for:\n{source}");
+        assert_eq!(
+            their_out.trim(),
+            our_out.trim(),
+            "value differs for:\n{source}"
+        );
+        assert_eq!(their_out.trim(), *expected, "{source}");
+        assert_eq!(
+            report(&their_err),
+            report(&our_err),
+            "the two compilers' programs disagree about what they reclaimed:\n{source}"
+        );
+        // And what they reclaimed is everything: a report that matched because both
+        // leaked would pass the comparison above and fail here.
+        let line = report(&their_err);
+        for class in ["sequences", "strings", "channels"] {
+            let live = line
+                .split_whitespace()
+                .skip_while(|w| *w != class)
+                .nth(3)
+                .unwrap_or("live=?");
+            assert_eq!(live, "live=0", "{class} left behind:\n{line}\n{source}");
+        }
+    }
+}
+
 #[test]
 fn the_nazm_compiler_handles_several_functions_and_calls() {
     // Whole programs rather than one expression: forward references, parameters,
