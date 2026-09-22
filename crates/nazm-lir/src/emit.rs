@@ -1705,8 +1705,10 @@ impl Emitter<'_> {
                 // of a sequence is unaffected by changing the sequence — true by
                 // construction rather than true because nothing was ever freed. Before
                 // N8 it was the second of those.
-                self.take(v, elem);
-                self.owned.insert(v);
+                if elem.owns().is_some() {
+                    self.take(v, elem);
+                    self.owned.insert(v);
+                }
                 return Val::Of { value: v, ty: elem };
             }
             Builtin::IntsSet | Builtin::StrsSet => {

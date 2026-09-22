@@ -534,6 +534,34 @@ fn a_string_read_out_of_a_sequence_survives_being_overwritten() {
 }
 
 #[test]
+fn a_string_read_out_of_a_temporary_sequence_outlives_it() {
+    // The case a mutation found, and the only one where `strs_get`'s own reference is
+    // load-bearing.
+    //
+    // Everywhere else the binding compensates: `let s = strs_get(xs, 0);` retains what it
+    // stores whether or not the built-in already did, so removing the retain from
+    // `strs_get` changed nothing a test could see. It does not compensate here, and the
+    // reason is the order. The sequence has **no binding** — it is the result of a call,
+    // and a built-in's arguments are released as temporaries the moment it returns — so
+    // without a reference taken *inside* `strs_get`, the sequence and every string in it
+    // are freed first and the binding's retain then touches storage that is gone.
+    //
+    // The churn afterwards is so that a use-after-free reads reused storage rather than
+    // the right answer by luck.
+    let r = strings(
+        21,
+        "fn one() -> Strs {\n    let xs = strs_new();\n    \
+         strs_push(xs, str_concat(\"ab\", \"cd\"));\n    xs\n}\n\
+         fn main() -> Int {\n    let s = strs_get(one(), 0);\n    let mut i = 0;\n    \
+         let mut noise = \"\";\n    while i < 20 {\n        \
+         noise = str_concat(noise, \"qq\");\n        i = i + 1;\n    }\n    \
+         str_len(s) * 100 + str_byte(s, 0)\n}\n",
+    );
+    assert_eq!(r.value, "497");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+}
+
+#[test]
 fn replacing_an_element_with_itself_is_safe() {
     // §16's ordering case. If `strs_set` released the old element before taking the new
     // one, this would free the backing and then store a pointer into it.
