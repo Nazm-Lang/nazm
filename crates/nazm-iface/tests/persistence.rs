@@ -171,7 +171,7 @@ fn the_schema_is_an_input_to_the_fingerprint() {
     let g = graph();
     let mut p = publish(&g, &[("f", &[], Type::Int)]);
     let before = InterfaceHash::of(&p).unwrap();
-    p.schema = "nazm.interface/2".to_owned();
+    p.schema = "nazm.interface/3".to_owned();
     assert_ne!(before, InterfaceHash::of(&p).unwrap());
 }
 
@@ -199,13 +199,25 @@ fn refuse(json: &str) -> ReadError {
 
 #[test]
 fn a_future_schema_is_refused_and_never_read_as_this_one() {
-    let e =
-        refuse(r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[]}"#);
-    assert_eq!(e, ReadError::UnknownSchema("nazm.interface/2".to_owned()));
+    // `/3` is a version this build does not have. `/1` would do as well and says
+    // something different — the rule is that *unknown* means refused, in either
+    // direction, and a newer file is the case that matters because it is the one whose
+    // extra meaning this reader would otherwise drop.
+    let e = refuse(
+        r#"{"schema":"nazm.interface/3","module":"a.nz","dependencies":[],"records":[],"exports":[]}"#,
+    );
+    assert_eq!(e, ReadError::UnknownSchema("nazm.interface/3".to_owned()));
     // The message names both, because a reader holding a newer file needs to know it is
     // newer rather than broken.
-    assert!(e.to_string().contains("nazm.interface/2"));
+    assert!(e.to_string().contains("nazm.interface/3"));
     assert!(e.to_string().contains(SCHEMA));
+
+    // And the version this build replaced: a `/1` file describes a language with no
+    // records, so reading it as a `/2` would be believing a module offers less than it
+    // does — the failure the major number exists to prevent.
+    let old =
+        refuse(r#"{"schema":"nazm.interface/1","module":"a.nz","dependencies":[],"exports":[]}"#);
+    assert_eq!(old, ReadError::UnknownSchema("nazm.interface/1".to_owned()));
 }
 
 #[test]
@@ -229,12 +241,14 @@ fn malformed_and_truncated_bytes_are_refused() {
 #[test]
 fn a_key_that_is_not_canonical_is_refused() {
     assert!(matches!(
-        refuse(r#"{"schema":"nazm.interface/2","module":"./a.nz","dependencies":[],"exports":[]}"#),
+        refuse(
+            r#"{"schema":"nazm.interface/2","module":"./a.nz","dependencies":[],"records":[],"exports":[]}"#
+        ),
         ReadError::BadKey(_)
     ));
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":["../b.nz"],"exports":[]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":["../b.nz"],"records":[],"exports":[]}"#
         ),
         ReadError::BadKey(_)
     ));
@@ -243,7 +257,7 @@ fn a_key_that_is_not_canonical_is_refused() {
 #[test]
 fn a_duplicate_export_is_refused() {
     let e = refuse(
-        r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"},{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Str"}]}"#,
+        r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"records":[],"exports":[{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"},{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Str"}]}"#,
     );
     assert_eq!(e, ReadError::DuplicateExport("f".to_owned()));
 }
@@ -252,13 +266,13 @@ fn a_duplicate_export_is_refused() {
 fn an_unknown_type_or_kind_is_refused() {
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn f","name":"f","kind":"fn","params":["Widget"],"ret":"Int"}]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"records":[],"exports":[{"def":"a.nz::fn f","name":"f","kind":"fn","params":["Widget"],"ret":"Int"}]}"#
         ),
         ReadError::UnknownType(_)
     ));
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::record f","name":"f","kind":"record","params":[],"ret":"Int"}]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"records":[],"exports":[{"def":"a.nz::record f","name":"f","kind":"record","params":[],"ret":"Int"}]}"#
         ),
         ReadError::UnknownKind(_)
     ));
@@ -268,7 +282,7 @@ fn an_unknown_type_or_kind_is_refused() {
 fn an_export_belonging_to_another_module_is_refused() {
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"b.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"records":[],"exports":[{"def":"b.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
         ),
         ReadError::ForeignExport(_)
     ));
@@ -278,7 +292,7 @@ fn an_export_belonging_to_another_module_is_refused() {
 fn an_identity_disagreeing_with_the_name_beside_it_is_refused() {
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn g","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"records":[],"exports":[{"def":"a.nz::fn g","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
         ),
         ReadError::NameMismatch(_)
     ));
@@ -289,13 +303,13 @@ fn a_file_not_in_canonical_order_is_refused() {
     // Two spellings of one interface would be two fingerprints for one meaning.
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn g","name":"g","kind":"fn","params":[],"ret":"Int"},{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"records":[],"exports":[{"def":"a.nz::fn g","name":"g","kind":"fn","params":[],"ret":"Int"},{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
         ),
         ReadError::NotCanonical(_)
     ));
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":["c.nz","b.nz"],"exports":[]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":["c.nz","b.nz"],"records":[],"exports":[]}"#
         ),
         ReadError::NotCanonical(_)
     ));

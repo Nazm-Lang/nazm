@@ -465,3 +465,33 @@ fn wrapping_a_sequence_two_levels_deep_does_not_launder_it() {
     assert_eq!(c, codes::ILLEGAL_TASK_CAPTURE);
     assert!(message.contains("inner.values"), "{message}");
 }
+
+#[test]
+fn records_nested_past_the_bound_are_refused_by_name() {
+    // `docs/spec.md` states the bound rather than letting it be discovered: each level
+    // multiplies the copy and cleanup code generated for the outer record, so the limit
+    // is on the emitted program. A chain longer than it is refused, with a diagnostic,
+    // rather than met as a stack overflow in whichever consumer recursed first.
+    let depth = 40;
+    let mut src = String::from("struct R0 { n: Int, }\n");
+    for i in 1..=depth {
+        src.push_str(&format!("struct R{i} {{ inner: R{}, }}\n", i - 1));
+    }
+    src.push_str(&format!(
+        "fn main() -> Int {{ let r = R{depth}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R{}(inner: R0(n: 1)))))))))))))))))))))))))))))))))))))))); r.inner.inner.n }}\n",
+        depth - 1, depth - 2, depth - 3, depth - 4, depth - 5, depth - 6, depth - 7,
+        depth - 8, depth - 9, depth - 10, depth - 11, depth - 12, depth - 13, depth - 14,
+        depth - 15, depth - 16, depth - 17, depth - 18, depth - 19, depth - 20, depth - 21,
+        depth - 22, depth - 23, depth - 24, depth - 25, depth - 26, depth - 27, depth - 28,
+        depth - 29, depth - 30, depth - 31, depth - 32, depth - 33, depth - 34, depth - 35,
+        depth - 36, depth - 37, depth - 38,
+    ));
+    let codes: Vec<nazm_diag::Code> = match run(&src) {
+        Outcome::CheckFailed(ds) => ds.into_iter().map(|d| d.code).collect(),
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    assert!(
+        codes.contains(&codes::TYPE_NESTING_TOO_DEEP),
+        "expected N0338, got {codes:?}"
+    );
+}

@@ -1305,7 +1305,239 @@ Only a differential test that compares what the two compilers' programs *reclaim
 it, which is what `the_nazm_written_compiler_emits_the_same_memory_semantics` is for
 """
 file = "compiler/emit.nz"
-find = """                                                                                                own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);
-                                                                                                release_frame(out, next, frame, rowns);"""
-replace = """                                                                                                own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);"""
+find = """                                                                                                    own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);
+                                                                                                    release_frame(out, next, frame, rowns);"""
+replace = """                                                                                                    own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);"""
 
+
+# --- N9: records -----------------------------------------------------------------------
+#
+# A record owns nothing of its own, so every one of these is about *composition*: a copy
+# that forgets a field, a drop that does not recurse, a rule derived from the fields that
+# stops looking at all of them. That is the property the milestone claims, so it is the
+# property these try to break.
+
+[[mutation]]
+name = "a-record-copy-forgets-a-field"
+why = """
+generates a retain helper that takes a reference to nothing, so copying a record leaves
+every owning field counted once while two values name it. The first of the two to die
+frees storage the other is still reading
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """            if retain {
+                self.retain(v, ty);
+            } else {
+                self.release(v, ty);
+            }"""
+replace = """            if retain {
+            } else {
+                self.release(v, ty);
+            }"""
+
+[[mutation]]
+name = "a-record-drop-omits-its-fields"
+why = """
+generates a release helper that releases nothing, so a record that goes out of scope keeps
+every backing, sequence and channel it held. The counts say so; nothing else does
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """            if retain {
+                self.retain(v, ty);
+            } else {
+                self.release(v, ty);
+            }"""
+replace = """            if retain {
+                self.retain(v, ty);
+            } else {
+            }"""
+
+[[mutation]]
+name = "a-record-drop-does-not-recurse"
+why = """
+answers `does this record own anything` by looking at its immediate fields only, so a
+record whose only owning thing is two levels down is treated as owning nothing: no helper,
+no frame slot, and every string inside it leaked
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = "                Some(Owns::Record(inner)) => work.push(inner),"
+replace = "                Some(Owns::Record(_)) => {}"
+
+[[mutation]]
+name = "a-field-replacement-releases-before-it-takes"
+why = """
+releases the old field before the new value is taken, so `p.name = p.name` and any
+replacement whose new value shares the old one's backing free storage they are about to
+store. A use-after-free rather than a leak, and the order of two lines is all of it
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                    Val::Of { value: v, ty } => {
+                        self.take(v, ty);
+                        self.set_field(*slot, path, v, ty);"""
+replace = """                    Val::Of { value: v, ty } => {
+                        self.set_field(*slot, path, v, ty);
+                        self.take(v, ty);"""
+
+[[mutation]]
+name = "a-projection-out-of-a-temporary-is-only-borrowed"
+why = """
+reads a field out of a record without taking a reference to what backs it, so
+`let s = make().name;` holds a view of storage the temporary released on the same line.
+Invisible in every shape where something else keeps the record alive, which is why the
+test that finds it uses a temporary that dies immediately
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                if !borrowed && owns_anything(self.records, *ty) {
+                    self.retain(out, *ty);
+                    self.own(out, *ty);
+                }"""
+replace = """                if false && owns_anything(self.records, *ty) {
+                    self.retain(out, *ty);
+                    self.own(out, *ty);
+                }"""
+
+[[mutation]]
+name = "a-partly-built-record-is-not-cleaned"
+why = """
+assembles a construction in registers rather than in a frame slot, so an initialiser that
+fails after an earlier one produced a heap string leaves it unreachable from the frame's
+cleanup. The one path where the program was already failing becomes the one that leaks
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = """    let slot = ctx
+        .res
+        .records()
+        .needs_cleanup(nazm_sema::Type::Record(id))
+        .then(|| ctx.hidden(ty, "record"));"""
+replace = "    let slot = None;"
+
+[[mutation]]
+name = "task-safety-stops-at-the-first-level"
+why = """
+derives a record's task safety from its immediate fields only, so `Outer { inner: Inner {
+values: Ints } }` crosses into a task. `N0321` exists because a sequence is unsynchronised
+shared mutable storage; wrapping one twice does not make it safe, and this says it does
+"""
+file = "crates/nazm-sema/src/record.rs"
+find = """                Type::Record(inner) => {
+                    path.push(f.name.clone());
+                    stack.push((inner, 0));
+                }"""
+replace = """                Type::Record(_) => {}"""
+
+[[mutation]]
+name = "an-exported-record-is-left-out-of-the-interface"
+why = """
+publishes a module's functions and not its records, so an importer checking against the
+persisted interface alone cannot resolve a type its signatures name. N3's boundary held
+because an interface was sufficient; this makes it insufficient and silent
+"""
+file = "crates/nazm-sema/src/interface.rs"
+find = "        self.records"
+replace = "        &self.records[..0]"
+
+[[mutation]]
+name = "a-published-field-loses-its-type"
+why = """
+writes every field's type as `Int` in the persisted interface, so an exported record's
+shape no longer moves the fingerprint when a field's type changes. A dependent keeps an
+answer the new shape contradicts, which is the stale accept a fingerprint exists to stop
+"""
+file = "crates/nazm-iface/src/wire.rs"
+find = """                fields.push(PersistentField {
+                    name: f.name.clone(),
+                    ty,
+                });"""
+replace = """                let _ = ty;
+                fields.push(PersistentField {
+                    name: f.name.clone(),
+                    ty: "Int".to_owned(),
+                });"""
+
+[[mutation]]
+name = "a-published-record-is-named-by-its-spelling"
+why = """
+names a record in the persisted interface by its source name rather than by its durable
+identity, so two modules' `Point` become one type across a build. The same collision N5
+removed for function symbols, in the layer above it
+"""
+file = "crates/nazm-iface/src/wire.rs"
+find = """            let key = graph.key(def.module)?;
+            Some(DefKey::new(key.clone(), DefKind::Record, def.name.clone()).to_string())"""
+replace = "            Some(def.name.clone())"
+
+[[mutation]]
+name = "the-native-layout-follows-the-declaration"
+why = """
+lays a record's fields out in declaration order rather than canonically by name, so moving
+two field declarations changes the object file. `docs/spec.md` says that edit means
+nothing; this makes the compiler and the linker disagree about whether anything happened
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = """            let fields: Vec<Ty> = def.in_layout_order().map(|(_, f)| Ty::of(f.ty)).collect();"""
+replace = """            let fields: Vec<Ty> = def.fields.iter().map(|f| Ty::of(f.ty)).collect();"""
+
+[[mutation]]
+name = "a-field-is-read-from-the-wrong-position"
+why = """
+maps every field to layout position zero, so a projection reads whichever field sorts
+first whatever was written. A record of one field still works, which is why the case that
+finds it uses several of different widths
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = """                if let Some(slot) = of_declaration.get_mut(declared as usize) {
+                    *slot = u32::try_from(position).unwrap_or(u32::MAX);
+                }"""
+replace = """                if let Some(slot) = of_declaration.get_mut(declared as usize) {
+                    let _ = position;
+                    *slot = 0;
+                }"""
+
+[[mutation]]
+name = "a-record-that-contains-itself-is-accepted"
+why = """
+finds no containment cycle, so `struct Node { next: Node, }` reaches the backend — where
+LLVM reports a recursive type, after the compiler has already decided the program is fine.
+A refusal that arrives after the output is one nobody can act on
+"""
+file = "crates/nazm-sema/src/record.rs"
+find = "    pub fn layout_cycle(&self, start: RecordId) -> Option<LayoutCycle> {"
+replace = """    pub fn layout_cycle(&self, start: RecordId) -> Option<LayoutCycle> {
+        if true {
+            let _ = start;
+            return None;
+        }"""
+
+[[mutation]]
+name = "a-private-type-leaks-through-a-public-signature"
+why = """
+stops refusing a public item that names a private record, so a module publishes an
+interface referring to a type its importer cannot resolve. Without opaque types there is
+no reading of that which works
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """    if def.visibility.is_exported() {
+        return;
+    }"""
+replace = """    if true {
+        return;
+    }"""
+
+[[mutation]]
+name = "the-self-hosted-emitter-forgets-a-record-field"
+why = """
+takes the retain out of the **Nazm-written** compiler's record helper, so a program it
+emits counts each owning field once however many copies of the record exist. Only a
+differential test that compares what the two compilers' programs reclaimed can see it,
+which is what `the_nazm_written_compiler_emits_the_same_memory_semantics` is for
+"""
+file = "compiler/emit.nz"
+find = """            if retain {
+                emit_retain(out, next, n, ft, rowns);
+            } else {
+                emit_release(out, next, n, ft, rowns);
+            }"""
+replace = """            if retain {
+            } else {
+                emit_release(out, next, n, ft, rowns);
+            }"""
