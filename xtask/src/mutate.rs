@@ -897,6 +897,12 @@ fn builds(root: &Path) -> bool {
         .arg("--workspace")
         .arg("--tests")
         .arg("--quiet")
+        // One job, for the same reason the suite runs on one thread: a build that
+        // oversubscribes the container competes with nothing here, but it is the same
+        // resource contract and keeping the two consistent is cheaper than remembering
+        // which one was allowed to differ.
+        .arg("--jobs")
+        .arg("1")
         .current_dir(root)
         .status()
         .is_ok_and(|s| s.success())
@@ -944,16 +950,40 @@ fn crash_signature(stdout: &str, stderr: &str) -> Option<&'static str> {
 
 /// Run the suite. `baseline_results` is how many binaries reported when nothing was
 /// injected; pass 0 to measure the baseline itself.
+///
+/// # Why this is the same invocation `cargo xtask contained tests` uses
+///
+/// A mutation verdict is a claim about **the suite**, so it has to be measured under the
+/// execution model the suite is authoritative in. Until 2026-09-22 this ran with cargo's
+/// defaults, and inside the container that meant ten test threads on one CPU: `nproc`
+/// reports the host's core count and the cgroup quota is `100000 100000`, so the harness
+/// oversubscribes by ten while several tests carry wall-clock deadlines — `STAGE_LIMIT` is
+/// 120 seconds, and `tests/selfhost.rs` has 30- and 60-second bounds.
+///
+/// That makes a verdict a function of scheduling luck, and the dangerous direction is not
+/// the one that was noticed. A spurious failure while measuring the **baseline** aborts the
+/// run and is visible; a spurious failure while measuring a **mutant** is counted as
+/// CAUGHT, and is not visible at all. One N6 run reported a pre-existing failure that three
+/// further runs of the identical environment did not reproduce, which is exactly the
+/// frequency at which the second kind would go unnoticed.
+///
+/// Serial costs wall time and nothing else. The catalogue could not be run in full inside
+/// one contained deadline either way.
 fn run_tests(root: &Path, baseline_results: usize) -> TestRun {
     let out = match Command::new(cargo())
         .arg("test")
         .arg("--workspace")
+        .arg("--jobs")
+        .arg("1")
         // Without this, cargo stops after the first test binary that fails — so a
         // *caught* mutation reports fewer result lines than the baseline and the
         // completeness check below misclassifies it as a runner error. Found by the
         // negative control for that very check, which reported RUNNER ERROR for
         // mutations that were in fact being caught correctly.
         .arg("--no-fail-fast")
+        .arg("--")
+        .arg("--test-threads")
+        .arg("1")
         .current_dir(root)
         .output()
     {
