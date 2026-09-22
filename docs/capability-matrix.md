@@ -38,7 +38,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 746 passed, 0 failed, 6 ignored, across 51 suites**, run through
+**Current suite: 806 passed, 0 failed, 6 ignored, across 53 suites**, run through
 `cargo xtask contained tests`. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -57,6 +57,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 | 9 | MIR | MISSING |
 | 10 | LIR and the backend contract | PARTIAL |
 | 10a | Per-module code generation and linking | VERIFIED |
+| 10b | Native object reuse | VERIFIED |
 | 11 | LLVM backend | VERIFIED |
 | 12 | Cranelift backend | DESIGNED |
 | 13 | Runtime | PARTIAL |
@@ -81,7 +82,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
 
-Seven VERIFIED, eleven PARTIAL, three DESIGNED, two RESEARCH, ten MISSING. The shape is
+Nine VERIFIED, eleven PARTIAL, three DESIGNED, two RESEARCH, ten MISSING. The shape is
 worth reading directly: **everything verified is either a front-end capability, a tooling
 interface, or an evidence mechanism.** Nothing in the semantic core — ownership, effects,
 capabilities, provenance — exists at all, and that is the accurate summary of where the
@@ -210,10 +211,11 @@ module is invisible — the interface other modules' keys depend on, and whether
 compilation has a `main`, are recomputed rather than recalled.
 
 **Limitation** · **This is not incremental native compilation, and no such claim is made.**
-`nazm run` and `nazm build` reuse nothing: both need the resolution that only checking a
-body produces, and neither reuses anything even though N5 made generation per module. There
-is no object, IR or LIR cache, no query database, no scheduler and no eviction policy. A
-module with no durable identity is checked every time.
+`nazm run` and `nazm build` reuse *this* cache not at all: both need the resolution that
+only checking a body produces, and nothing persists one. (`nazm build` reuses objects as of
+N6 — a different cache, a different key, area 10b — and a build that reused every object
+still checked every module.) There is no IR, LIR or resolution cache, no query database, no
+scheduler and no eviction policy. A module with no durable identity is checked every time.
 
 **And the measured gain is about a millisecond.** On the compiler's own five modules,
 `performance.md` records 40.5 ms with the cache disabled against 38.9 ms warm — 18% of the
@@ -223,9 +225,10 @@ the saving is small because parsing and declaring happen every run and are most 
 cost. Recorded rather than averaged away: a reader deciding whether to depend on this
 should know it buys correctness of invalidation, not speed.
 
-**Next dependency** · A `CodegenKey` — implementation fingerprint, target, CPU features,
-backend, optimisation level, ABI — and a per-unit code-generation boundary to key on
-(area 10). `CheckKey` is not it and must not become it.
+**Next dependency** · A written form for name resolution, which is what would let a build
+skip a module's bodies the way a check can. Not a `CodegenKey`: N6 found that native reuse
+needed no semantic key at all (area 10b), so the dependency this row once named is gone
+rather than met.
 
 **Accepted when** · Met for semantic checking. Native reuse is a separate row that does not
 exist.
@@ -414,20 +417,67 @@ reaches a symbol, and no LLVM spelling reaches `nazm-sema`.
 call each leave A's artefact **byte-identical** — so an object depends on its dependencies'
 symbol identity and ABI signature, and not on their implementations.
 
-**Limitation** · **Nothing is reused, and no native cache exists.** Every module is
-regenerated on every build; there is no `CodegenKey`, no object store, no incremental
-linking. The clean build is roughly **twice as slow** for a small program, almost entirely
-because there are now several `clang` processes where there was one — measured in
+**Limitation** · The clean build is roughly **twice as slow** for a small program, almost
+entirely because there are now several `clang` processes where there was one — measured in
 `performance.md` together with a 10% smaller optimised executable, which is cross-module
 inlining no longer happening. No LTO. `nazm build` still compiles a narrower subset than
 `nazm run`, and the recursion refusal is unchanged and still whole-program.
 
-**Next dependency** · A `CodegenKey` — emitter identity, target triple, CPU features,
-backend and version, optimisation level, ABI, the runtime's identity, and each dependency's
-signature — and somewhere to put objects keyed on it.
+*Until N6 this row also read "nothing is reused, and no native cache exists". That was
+accurate and is no longer true — see area 10b.*
 
-**Accepted when** · Met for separate generation and linking. Native reuse is a separate row
-that does not exist.
+**Next dependency** · None for this row.
+
+**Accepted when** · Met for separate generation and linking. Native reuse is area 10b.
+
+### 10b. Native object reuse — VERIFIED
+
+**Evidence** · As of N6 (2026-09-22) an emitted LLVM unit whose object was compiled before
+is not compiled again. `crates/nazm-cache/src/object.rs` defines `ObjectKey` over three
+things and nothing else — a digest of the exact bytes handed to the object compiler, the
+identity of that compiler, and the configuration it resolves for the run — and
+`crates/nazm-cache/src/objects.rs` is the store. `crates/nazm-cli/src/backend.rs` is the
+single place the object compiler is invoked: one `clang -###` per build reads the resolved
+command line, so the triple, the CPU features, the relocation model and the ABI are in the
+key without anyone having enumerated them, and the invocation runs with an environment
+built from nothing plus ten named variables, because `CCC_OVERRIDE_OPTIONS`, `SDKROOT` and
+`MACOSX_DEPLOYMENT_TARGET` were each measured to change the object.
+
+Twenty-two cases in `crates/nazm-cli/tests/native_cache.rs` and eighteen in
+`crates/nazm-cache/tests/objects.rs`. The precision ones: a dependency's body change and an
+export the caller never calls each recompile one unit of seven; a comment that moves no
+emitted position recompiles nothing, and one above a fallible operation recompiles the unit
+it moved. The safety ones: two optimisation levels share nothing, a backend that reports a
+different version shares nothing, a truncated, edited, mis-filed or wrongly-headed entry is
+a miss rather than a link failure, eight concurrent writers of one key leave one valid
+entry, deleting the whole store changes only the time, and cold, warm and `--no-cache`
+builds produce the same program. An `object cache` gate covers what a test cannot: that the
+key still has all three fields, that a lookup still recomputes the key and the object's
+digest, that nothing semantic is imported into the key, that an entry carries no field
+nothing validates, and that the arguments hashed and the arguments executed come from one
+function.
+
+**Measured** · On the five-module compiler, `-O0`: 665.4 ms with `--no-cache`, 730.7 ms
+cold, **157.6 ms** warm; `-O2`: 1693.0 ms, 1755.4 ms, **157.6 ms**. A one-module edit costs
+198–218 ms whether the edit is a private body, a called export's body, or an export nobody
+calls — the three are indistinguishable, which is the point of the key. A warm build runs
+**two** external processes where a cache-disabled one runs eight.
+
+**Limitation** · This is object reuse, not incremental native compilation. Reading,
+parsing, checking, backend admissibility, lowering, emission and fingerprinting run on every
+build, and so does the final link. No executable cache, no `LinkKey`, no incremental linker,
+no persistent LIR or LLVM, no remote cache, no LTO. Cold builds pay about 65 ms more than a
+cache-disabled build for hashing, `fsync` and publication. Nothing is evicted: the store
+grows until it is deleted, 852 KiB for this workload's seven units at `-O0`. A backend that
+reports one version and behaves differently is indistinguishable, which is a stated limit
+rather than a missing check.
+
+**Next dependency** · A `LinkKey` if executable reuse is ever justified, and a decision
+about whether the per-build `clang -###` probe — 60 ms of a 158 ms warm build — is worth
+memoising, which is a cache of a toolchain fact with an invalidation question of its own.
+
+**Accepted when** · Met for per-unit object reuse. Executable and link-result reuse are not
+claimed anywhere.
 
 ### 11. LLVM backend — VERIFIED
 
@@ -788,7 +838,7 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **73** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **79** catalogued defects;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
