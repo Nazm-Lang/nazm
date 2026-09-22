@@ -32,6 +32,10 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // cannot serialise a session-local id by accident, and the `sema purity` gate
         // makes that a build failure rather than a convention.
         "nazm-iface" => &["nazm-span", "nazm-sema"],
+        // What semantic checking depends on, and a store for results keyed on it.
+        // Deliberately **not** `nazm-core`: it cannot check anything, so it cannot become
+        // a second place where checking happens. The driver joins the two.
+        "nazm-cache" => &["nazm-sema", "nazm-iface"],
         "nazm-core" => &["nazm-span", "nazm-diag", "nazm-syntax", "nazm-sema"],
         // Level 7 of the table in `docs/architecture.md` §2, and the only level built.
         // It reads the syntax tree and produces LLVM IR *as text*, so it needs no
@@ -46,6 +50,7 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
             "nazm-core",
             "nazm-lir",
             "nazm-iface",
+            "nazm-cache",
         ],
 
         // The measurement instrument answers to nothing. It must stay usable — and
@@ -93,6 +98,7 @@ pub(crate) fn emission_allowlist() -> &'static [(&'static str, &'static [&'stati
         ("crates/nazm-syntax", &[]),
         // The checker and evaluator. Empty on purpose: this is the check-only path.
         ("crates/nazm-core", &[]),
+        ("crates/nazm-cache", &[]),
         ("crates/nazm-lir", &["emits LLVM IR"]),
         (
             "crates/nazm-cli",

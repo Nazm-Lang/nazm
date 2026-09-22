@@ -30,6 +30,7 @@ fn main() -> ExitCode {
         Some("check-resolver") => report(&[("one resolver", check_single_resolver())]),
         Some("check-span") => report(&[("span identity", check_span_identity())]),
         Some("check-sema") => report(&[("sema purity", check_sema_purity())]),
+        Some("check-cache") => report(&[("cache soundness", check_cache_soundness())]),
         Some("check-guide") => report(&[("guide from grammar", guide::check())]),
         Some("bench") => {
             let rest: Vec<String> = args.collect();
@@ -127,6 +128,7 @@ fn help() {
            check-resolver  the backend reads name resolution, it does not redo it\n  \
            check-span      a span cannot be serialised without its file\n  \
            check-sema      no session-local id can reach a persistent interface\n  \
+           check-cache     a check key still covers everything checking reads\n  \
            check-guide     docs/guide.md is what docs/grammar.ebnf produces\n  \
            guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
            bench           measure; --save records a baseline, --check compares to one,\n  \
@@ -151,6 +153,7 @@ fn run_checks() -> ExitCode {
         ("one resolver", check_single_resolver()),
         ("span identity", check_span_identity()),
         ("sema purity", check_sema_purity()),
+        ("cache soundness", check_cache_soundness()),
         ("guide from grammar", guide::check()),
     ])
 }
@@ -886,6 +889,159 @@ fn serde_in_source(text: &str) -> Vec<(usize, &'static str)> {
             }
         })
         .collect()
+}
+
+/// **Cache soundness**: a check key cannot quietly stop covering what checking reads.
+///
+/// # The failure this exists to catch
+///
+/// A cache entry says *this module checked cleanly under these inputs*. If an input stops
+/// reaching the key, the entry is found for a compilation that should not have found it,
+/// and the compiler accepts a program it would otherwise refuse — silently, reproducibly,
+/// and with an explanation that sounds right. `docs/architecture.md` §3 names it as the
+/// failure mode; this is the part of it a file read can see.
+///
+/// Three rules, each a thing no test can notice until the day it is wrong:
+///
+/// 1. **the checker's diagnostic codes are in its identity.** Almost every new checking
+///    rule brings a code, so this makes adding one fail the build until
+///    `nazm-cache`'s `CHECKER_CODES` is updated — and that list sits beside
+///    `SEMANTIC_EPOCH`, which is the constant a person has to remember to bump;
+/// 2. **every field of a check key is still computed into it.** Deleting one compiles,
+///    passes a careless review, and is a wrong-answer bug;
+/// 3. **no session-local id may reach `nazm-cache`.** The same rule as the span and sema
+///    gates, one layer further out: a `FnId` written into a cache entry is a number that
+///    means nothing to the run that reads it.
+fn check_cache_soundness() -> Result<(), Vec<String>> {
+    let Some(root) = workspace_root() else {
+        return Err(vec!["could not locate workspace root".to_owned()]);
+    };
+    let mut problems = Vec::new();
+
+    let read = |rel: &str| std::fs::read_to_string(root.join(rel)).ok();
+
+    // 1. The codes the checker can raise, against the list the identity is built from.
+    match (
+        read("crates/nazm-core/src/check.rs"),
+        read("crates/nazm-cache/src/identity.rs"),
+    ) {
+        (Some(checker), Some(identity)) => {
+            let mut raised: Vec<String> = checker
+                .match_indices("codes::")
+                .map(|(at, _)| {
+                    checker
+                        .get(at + "codes::".len()..)
+                        .unwrap_or("")
+                        .chars()
+                        .take_while(|c| c.is_ascii_uppercase() || *c == '_')
+                        .collect::<String>()
+                })
+                .filter(|c| !c.is_empty())
+                .collect();
+            raised.sort();
+            raised.dedup();
+
+            let mut listed: Vec<String> = identity
+                .lines()
+                .skip_while(|l| !l.contains("pub const CHECKER_CODES"))
+                .take_while(|l| !l.contains("];"))
+                .filter_map(|l| l.trim().strip_prefix('"'))
+                .filter_map(|l| l.split('"').next())
+                .map(str::to_owned)
+                .collect();
+            listed.sort();
+            listed.dedup();
+
+            for code in raised.iter().filter(|c| !listed.contains(c)) {
+                problems.push(format!(
+                    "the checker can raise `{code}` and `nazm-cache`'s CHECKER_CODES does \
+                     not list it. A new rule changes what a cached result means: add it \
+                     there, and bump SEMANTIC_EPOCH in the same commit."
+                ));
+            }
+            for code in listed.iter().filter(|c| !raised.contains(c)) {
+                problems.push(format!(
+                    "CHECKER_CODES lists `{code}` and the checker no longer raises it. The \
+                     identity must describe the checker that exists."
+                ));
+            }
+        }
+        _ => problems.push(
+            "could not read the checker or the cache identity; the cache-soundness gate \
+             cannot be vacuous"
+                .to_owned(),
+        ),
+    }
+
+    // 2. Every input still reaches the key.
+    match read("crates/nazm-cache/src/key.rs") {
+        Some(text) => {
+            let body = text
+                .split("pub fn of(")
+                .nth(1)
+                .and_then(|t| t.split("\n    }").next())
+                .unwrap_or("");
+            for (what, needle) in [
+                ("the checker's identity", "checker.to_string()"),
+                ("the module's durable key", "module.as_str()"),
+                ("the source fingerprint", "source.to_string()"),
+                ("each dependency's key", "d.module.as_str()"),
+                ("each dependency's interface", "d.interface.to_string()"),
+            ] {
+                if !body.contains(needle) {
+                    problems.push(format!(
+                        "a check key no longer covers {what}. An input left out of the key \
+                         is a cache hit for a compilation whose answer may differ — which \
+                         is a wrong program accepted, not a slow build."
+                    ));
+                }
+            }
+        }
+        None => problems.push("could not read crates/nazm-cache/src/key.rs".to_owned()),
+    }
+
+    // 3. Nothing session-local may reach the crate that writes cache entries.
+    let dir = root.join("crates/nazm-cache/src");
+    match std::fs::read_dir(&dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_none_or(|x| x != "rs") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let name = path
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                for (n, line) in text.lines().enumerate() {
+                    let t = line.trim_start();
+                    // Documentation has to be able to explain what is absent and why.
+                    if t.starts_with("//") || t.starts_with('*') {
+                        continue;
+                    }
+                    for id in ["FileId", "ModuleId", "FnId", "Span"] {
+                        if line.contains(id) {
+                            problems.push(format!(
+                                "crates/nazm-cache/src/{name}:{} names `{id}`. It is an index \
+                                 into one compilation, and an entry holding one says a number \
+                                 that means nothing to the run that reads it.",
+                                n + 1
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => problems.push(format!("could not read {}: {e}", dir.display())),
+    }
+
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
 }
 
 /// No crate may **depend on** a code generator unless `rules.rs` says it can.

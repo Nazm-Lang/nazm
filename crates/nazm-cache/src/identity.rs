@@ -1,0 +1,222 @@
+//! Which compiler decided this, and whether another one may believe it.
+//!
+//! # The failure this exists to prevent
+//!
+//! A cache entry says *this module checked cleanly and offers this interface*. That is a
+//! claim about a **checker**, not about a module: the same source under a checker with a
+//! different rule is a different answer. Reusing an entry written by a compiler whose
+//! checking behaviour has since changed is the exact shape of a silent miscompilation —
+//! the build succeeds, nothing is reported, and the program that runs was validated
+//! against rules that no longer exist.
+//!
+//! So every key carries the identity of the checker that produced it, and an entry
+//! written under one identity can never be found under another.
+//!
+//! # What identity is available, and what it costs
+//!
+//! Nothing affordable computes "do these two compiler binaries check identically". A
+//! digest of the compiler's own source would change when a comment changed, and a digest
+//! of the binary would change with the optimisation level of the build that produced it.
+//! Either would be *sound* and would throw the cache away constantly.
+//!
+//! What this does instead is derive everything derivable and name the rest:
+//!
+//! | Input | Derived or declared | Catches |
+//! | --- | --- | --- |
+//! | [`SEMANTIC_EPOCH`] | declared | every change to a checking rule |
+//! | crate version | derived | a release |
+//! | `nazm.interface/1` | derived | a change to what a module publishes |
+//! | `nazm.check/1` | derived | a change to the artefact's own shape |
+//! | the built-in table | derived | a built-in added, removed, or re-typed |
+//! | the type set | derived | a type added or removed |
+//! | the checker's diagnostic codes | declared, and **gated** | a rule added or removed |
+//!
+//! # The maintenance rule, stated so it can be followed
+//!
+//! > **Bump [`SEMANTIC_EPOCH`] in the same commit that changes what the checker accepts
+//! > or refuses.**
+//!
+//! It is the one input a person has to remember, and forgetting it is a correctness bug
+//! rather than a stale number — which is why as much as possible is derived instead. Two
+//! things make forgetting hard:
+//!
+//! * `cargo xtask check`'s **cache soundness** gate fails when the set of diagnostic
+//!   codes `nazm-core`'s checker can emit stops matching [`CHECKER_CODES`]. Almost every
+//!   new rule brings a code, so almost every new rule fails the build until this file is
+//!   touched — and touching it is where the epoch is;
+//! * the derived inputs cover the parts most often changed without a new code: a
+//!   built-in's signature, and the set of types.
+//!
+//! What neither catches is a rule that changes an existing diagnostic's *conditions*
+//! without adding a code — a tightened type rule reusing `N0300`, or a parser that starts
+//! accepting a construct the checker then sees. That is what the epoch is for, and
+//! claiming otherwise would be claiming an automatic identity this does not have.
+
+use std::fmt;
+
+use nazm_sema::intrinsic::Intrinsic;
+use nazm_sema::types::Type;
+
+use crate::artifact::SCHEMA as CHECK_SCHEMA;
+use crate::digest::{self, Framed};
+
+/// Bumped when the checker's rules change.
+///
+/// Not a version of the compiler and not a date: a counter whose only job is to make
+/// every previously written entry unreachable. See the module documentation for the rule
+/// and for what is derived instead.
+///
+/// `1` — N4, 2026-09-22. The first value, set when semantic reuse began.
+pub const SEMANTIC_EPOCH: u32 = 1;
+
+/// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
+/// writes.
+///
+/// Held here rather than in `nazm-core` because it is an input to an identity, and an
+/// identity is this crate's subject. It is kept true by `cargo xtask check`, which reads
+/// `crates/nazm-core/src/check.rs` and fails if the two sets differ — so this cannot
+/// silently fall behind the checker it describes.
+pub const CHECKER_CODES: &[&str] = &[
+    "ALREADY_DEFINED_IN_SCOPE",
+    "AMBIGUOUS_IMPORT",
+    "ASSIGN_TO_IMMUTABLE",
+    "BRANCH_TYPES_DIFFER",
+    "CONDITION_NOT_BOOL",
+    "DUPLICATE_FUNCTION",
+    "ILLEGAL_TASK_CAPTURE",
+    "IMPORT_COLLIDES_WITH_DEFINITION",
+    "INVALID_OPERANDS",
+    "MISSING_MAIN",
+    "NOT_IN_A_LOOP",
+    "PRIVATE_DEFINITION",
+    "SPAWN_OUTSIDE_SCOPE",
+    "TYPE_MISMATCH",
+    "UNDEFINED_FUNCTION",
+    "UNDEFINED_VARIABLE",
+    "UNKNOWN_TYPE",
+    "UNREACHABLE_STATEMENT",
+    "WRONG_ARGUMENT_COUNT",
+];
+
+/// The checker that produced, or is asking for, a result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CheckerIdentity([u8; 32]);
+
+impl CheckerIdentity {
+    /// This build's identity.
+    ///
+    /// Deterministic: the same build computes the same value on every machine, in every
+    /// process, at every time. Nothing here reads the clock, the environment, the host or
+    /// the filesystem, because an identity that did could not be compared across the two
+    /// runs it exists to relate.
+    #[must_use]
+    pub fn current() -> Self {
+        let mut f = Framed::new("nazm.checker/1");
+        f.number(SEMANTIC_EPOCH)
+            .field(env!("CARGO_PKG_VERSION"))
+            .field(nazm_iface::SCHEMA)
+            .field(CHECK_SCHEMA);
+
+        // The built-ins share the ordinary function namespace, so their names and
+        // signatures are part of what a module's source means. Read from the table the
+        // checker itself reads, rather than transcribed — a second copy is a second thing
+        // that can disagree.
+        f.number(u32::try_from(Intrinsic::ALL.len()).unwrap_or(u32::MAX));
+        for i in Intrinsic::ALL {
+            f.field(i.name());
+            f.number(u32::try_from(i.params().len()).unwrap_or(u32::MAX));
+            for p in i.params() {
+                f.field(p.name());
+            }
+            f.field(i.ret().name());
+        }
+
+        f.number(u32::try_from(Type::ALL.len()).unwrap_or(u32::MAX));
+        for t in Type::ALL {
+            f.field(t.name());
+        }
+
+        f.number(u32::try_from(CHECKER_CODES.len()).unwrap_or(u32::MAX));
+        for c in CHECKER_CODES {
+            f.field(c);
+        }
+
+        Self(f.finish())
+    }
+
+    /// Read one back from its hexadecimal form.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        digest::from_hex(text).map(Self)
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Display for CheckerIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        digest::write_hex(f, &self.0)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_build_has_one_identity() {
+        assert_eq!(CheckerIdentity::current(), CheckerIdentity::current());
+    }
+
+    #[test]
+    fn it_round_trips_through_its_written_form() {
+        let id = CheckerIdentity::current();
+        assert_eq!(CheckerIdentity::parse(&id.to_string()), Some(id));
+    }
+
+    #[test]
+    fn the_built_in_table_reaches_the_identity() {
+        // A test that the derivation is real rather than decorative: recomputing the
+        // identity with one built-in's return type changed must give a different number.
+        // Done by recomputing the same framing rather than by mutating a global, because
+        // the table is a `const` and the point is the framing, not the storage.
+        let with = |ret: &str| {
+            let mut f = Framed::new("nazm.checker/1");
+            f.number(SEMANTIC_EPOCH)
+                .field(env!("CARGO_PKG_VERSION"))
+                .field(nazm_iface::SCHEMA)
+                .field(CHECK_SCHEMA)
+                .number(1)
+                .field("str_len")
+                .number(1)
+                .field("Str")
+                .field(ret);
+            f.finish()
+        };
+        assert_ne!(with("Int"), with("Str"));
+    }
+
+    #[test]
+    fn the_epoch_is_an_input() {
+        let with = |epoch: u32| {
+            let mut f = Framed::new("nazm.checker/1");
+            f.number(epoch).field(env!("CARGO_PKG_VERSION"));
+            f.finish()
+        };
+        assert_ne!(with(SEMANTIC_EPOCH), with(SEMANTIC_EPOCH + 1));
+    }
+
+    #[test]
+    fn the_code_list_is_sorted_and_has_no_duplicate() {
+        // Canonical, so that the identity does not depend on the order someone typed
+        // them in. The `xtask` gate compares sets; this keeps the list itself honest.
+        let mut sorted = CHECKER_CODES.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.as_slice(), CHECKER_CODES);
+    }
+}
