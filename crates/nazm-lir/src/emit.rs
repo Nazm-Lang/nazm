@@ -57,6 +57,17 @@ use crate::symbol::NativeSymbol;
 pub const TARGET_NOTE: &str = "verified on aarch64-apple-darwin with Apple clang; other \
                                targets are unverified rather than unsupported";
 
+/// The environment variable that asks a compiled program to report what it reclaimed.
+///
+/// A diagnostic and not a language feature: it is read by `getenv` in the entry wrapper,
+/// written to standard error, and invisible to every Nazm program. `docs/spec.md` states
+/// *when* storage is reclaimed and deliberately not *how*, so a counter a program could
+/// read would put the how into the language.
+pub const MEMORY_VARIABLE: &str = "NAZM_MEMORY_REPORT";
+
+/// What that report says. One line, three numbers, read back by the tests.
+pub const MEMORY_FORMAT: &str = "nazm-memory: sequences allocated=%lld reclaimed=%lld live=%lld";
+
 /// The diagnostic a failing operation reports, matching the interpreter's wording.
 struct Failure {
     code: &'static str,
@@ -90,6 +101,23 @@ struct Emitter<'a> {
     /// language's rule (`docs/spec.md`, *Where a loop target binds*). Cleared at every
     /// function boundary, so no target can leak from one function into another.
     loops: Vec<Targets>,
+    /// SSA values holding a **+1 reference** to sequence storage that nobody has taken
+    /// over yet.
+    ///
+    /// `docs/spec.md`'s memory constitution says storage is reclaimed when the last
+    /// reference dies; this is how the emitter knows which references exist. A value is in
+    /// here when the expression that produced it created a reference — `ints_new`, or a
+    /// call whose callee transferred one on return — and it leaves when something consumes
+    /// it: a binding takes it over, a `return` carries it out, or a discard releases it.
+    ///
+    /// Reading a variable is **not** in here. That is rule 2: a borrowed reference costs
+    /// nothing, which is why passing a sequence to a function emits no traffic at all.
+    owned: std::collections::BTreeSet<u32>,
+    /// Slots holding a handle that this frame must release on the way out, in order.
+    ///
+    /// Parameters are excluded, and that exclusion *is* rule 2: a callee borrows, so
+    /// releasing a parameter would destroy storage its caller still holds.
+    frame: Vec<(usize, Ty)>,
     /// Open `scope` blocks, innermost last, each as the SSA value of its list of tasks.
     ///
     /// A list rather than a counter because the join has to be emitted on **every** way
@@ -332,6 +360,74 @@ impl Emitter<'_> {
         buf
     }
 
+    /// Add a reference to sequence storage.
+    fn retain(&mut self, value: u32) {
+        let _ = writeln!(self.out, "  call void @nz.arr_retain(ptr %{value})");
+        self.needs_sequences = true;
+    }
+
+    /// Drop a reference to a **Nazm sequence**. The storage goes when the last one does.
+    fn release(&mut self, value: u32) {
+        let _ = writeln!(self.out, "  call void @nz.seq_release(ptr %{value})");
+        self.needs_sequences = true;
+    }
+
+    /// Drop a reference to something the runtime allocated for itself.
+    ///
+    /// Same allocator, deliberately different counter: a scope's list of task ids is not a
+    /// value any program can name, and a report about *the program's* sequences that
+    /// counted one would be answering a different question from the one it was asked.
+    fn release_internal(&mut self, value: u32) {
+        // The result is named even though nothing reads it: an unnamed non-void result
+        // still consumes a slot in LLVM's per-function numbering, and skipping one is how
+        // a module stops parsing three hundred instructions later.
+        let freed = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{freed} = call i1 @nz.arr_release(ptr %{value})"
+        );
+        self.needs_sequences = true;
+    }
+
+    /// Make `value` a reference this code owns, retaining it if it was only borrowed.
+    ///
+    /// Called where something takes a reference over — a binding, a `return`. A value that
+    /// was already owned is handed on unchanged, which is what keeps `let xs = ints_new()`
+    /// free of traffic.
+    fn take(&mut self, value: u32, ty: Ty) {
+        if !ty.is_handle() {
+            return;
+        }
+        if !self.owned.remove(&value) {
+            self.retain(value);
+        }
+    }
+
+    /// Release a reference nothing took over.
+    ///
+    /// A temporary handed to a function that only borrowed it, or a statement whose value
+    /// was discarded. Both are ordinary; neither is an error.
+    fn drop_temporary(&mut self, value: u32, ty: Ty) {
+        if ty.is_handle() && self.owned.remove(&value) {
+            self.release(value);
+        }
+    }
+
+    /// Release every handle this frame is still holding.
+    ///
+    /// Emitted before **every** way out of a function — the tail value, each `return`, and
+    /// the shared unwind block a failure takes — because `docs/spec.md` reclaims on the
+    /// semantic event, and "the closing brace" is not one of them. A slot never assigned
+    /// holds null, and releasing null is a no-op, so a path that skipped a declaration
+    /// costs one comparison and nothing else.
+    fn release_frame(&mut self) {
+        for (slot, ty) in self.frame.clone() {
+            let v = self.fresh();
+            let _ = writeln!(self.out, "  %{v} = load {}, ptr %slot{slot}", ty.llvm());
+            self.release(v);
+        }
+    }
+
     /// What this unit reached, for the driver to union with every other unit's.
     fn needs(&self) -> Needs {
         Needs {
@@ -485,8 +581,32 @@ impl Emitter<'_> {
                 Stmt::Let { slot, value } | Stmt::Assign { slot, value } => {
                     match self.expr(value) {
                         Val::Of { value: v, ty } => {
-                            let _ =
-                                writeln!(self.out, "  store {} %{v}, ptr %slot{slot}", ty.llvm());
+                            if ty.is_handle() {
+                                // The order is the whole of the correctness here. Take the
+                                // new reference **first**, so that `a = a` — and the
+                                // re-execution of a `let` in a loop with the same handle —
+                                // cannot drop the count to zero between the two steps and
+                                // free storage that is about to be stored again.
+                                self.take(v, ty);
+                                let old = self.fresh();
+                                let _ = writeln!(
+                                    self.out,
+                                    "  %{old} = load {}, ptr %slot{slot}",
+                                    ty.llvm()
+                                );
+                                let _ = writeln!(
+                                    self.out,
+                                    "  store {} %{v}, ptr %slot{slot}",
+                                    ty.llvm()
+                                );
+                                self.release(old);
+                            } else {
+                                let _ = writeln!(
+                                    self.out,
+                                    "  store {} %{v}, ptr %slot{slot}",
+                                    ty.llvm()
+                                );
+                            }
                             Reach::FallsThrough
                         }
                         Val::Transferred => Reach::Transferred,
@@ -495,7 +615,10 @@ impl Emitter<'_> {
                 // Evaluated for its effects; the value is dropped, exactly as `nazm run`
                 // drops it. What is not dropped is a transfer raised inside it.
                 Stmt::Discard(e) => match self.expr(e) {
-                    Val::Of { .. } => Reach::FallsThrough,
+                    Val::Of { value, ty } => {
+                        self.drop_temporary(value, ty);
+                        Reach::FallsThrough
+                    }
                     Val::Transferred => Reach::Transferred,
                 },
                 Stmt::While { cond, body } => self.while_loop(cond, body),
@@ -516,6 +639,12 @@ impl Emitter<'_> {
                 Stmt::Return(e) => {
                     if let Val::Of { value, ty } = self.expr(e) {
                         self.join_through(0);
+                        // Rule 3. The caller receives a reference that outlives this
+                        // frame, so it is taken over **before** the frame lets go of
+                        // everything else — otherwise returning a local would release the
+                        // storage on the way out of the function that is returning it.
+                        self.take(value, ty);
+                        self.release_frame();
                         let _ = writeln!(self.out, "  ret {} %{value}", ty.llvm());
                     }
                     Reach::Transferred
@@ -597,6 +726,12 @@ impl Emitter<'_> {
         let _ = writeln!(self.out, "  call void @nz.fail(ptr %{msg}, i64 %{len})");
         let _ = writeln!(self.out, "  br label %b{cont}");
         self.open(&format!("b{cont}"));
+        // The list of task ids is allocated by the same allocator as a sequence and is
+        // dead the moment the join returns: every task it named has ended. It is not a
+        // Nazm value and no binding can hold it, so it is released here rather than
+        // through the frame — and it is released on **every** way out of the scope,
+        // because `join_through` is what runs on each of them.
+        self.release_internal(tids);
     }
 
     /// `scope { body }` — a list of tasks, the body, and the wait.
@@ -1052,6 +1187,15 @@ impl Emitter<'_> {
                 // back a stand-in value. This is where that is noticed, so the failure
                 // keeps travelling outward instead of the caller carrying on with it.
                 self.check_failed();
+                // Rule 3: returning transfers, so what came back is a reference this
+                // expression now holds. Rule 2: the arguments were only borrowed, so a
+                // temporary passed in is still nobody's and is dropped here.
+                if ret.is_handle() {
+                    self.owned.insert(out);
+                }
+                for (v, t) in &vals {
+                    self.drop_temporary(*v, *t);
+                }
                 Val::Of {
                     value: out,
                     ty: *ret,
@@ -1083,12 +1227,31 @@ impl Emitter<'_> {
     /// before it starts.
     fn builtin(&mut self, op: Builtin, args: &[Expr], span: Span) -> Val {
         let mut vals = Vec::new();
+        let mut types = Vec::new();
         for a in args {
             match self.expr(a) {
-                Val::Of { value, .. } => vals.push(value),
+                Val::Of { value, ty } => {
+                    vals.push(value);
+                    types.push(ty);
+                }
                 Val::Transferred => return Val::Transferred,
             }
         }
+        // A built-in borrows its arguments, exactly as a function does. So a temporary
+        // handed to one — `ints_len(ints_new())` — is nobody's after it returns, and this
+        // is where that reference is dropped. Rare, and the rule is the same as
+        // everywhere else rather than an exception.
+        let out = self.builtin_op(op, &vals, span);
+        if let Val::Of { .. } = out {
+            for (v, t) in vals.iter().zip(&types) {
+                self.drop_temporary(*v, *t);
+            }
+        }
+        out
+    }
+
+    /// One built-in, with its arguments already evaluated.
+    fn builtin_op(&mut self, op: Builtin, vals: &[u32], span: Span) -> Val {
         let arg = |i: usize| vals.get(i).copied().unwrap_or_default();
 
         let value = match op {
@@ -1314,7 +1477,7 @@ impl Emitter<'_> {
             Builtin::IntsNew | Builtin::StrsNew => {
                 self.needs_sequences = true;
                 let h = self.fresh();
-                let _ = writeln!(self.out, "  %{h} = call ptr @nz.arr_new()");
+                let _ = writeln!(self.out, "  %{h} = call ptr @nz.seq_new()");
                 let null = self.fresh();
                 let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{h}, null");
                 self.guard(
@@ -1325,6 +1488,9 @@ impl Emitter<'_> {
                     },
                     span,
                 );
+                // Born with one reference, and this expression is holding it. Whatever
+                // consumes the expression takes it over; a discard releases it.
+                self.owned.insert(h);
                 return Val::Of {
                     value: h,
                     ty: op.lowered_ret(),
@@ -1676,6 +1842,14 @@ impl Emitter<'_> {
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(self.out, "  %{out} = phi {} {list}", ty.llvm());
+        if ty.is_handle() {
+            // Each incoming branch handed one reference to the join, so the merged value
+            // holds exactly one however control arrived.
+            for (v, _, _) in &incomings {
+                self.owned.remove(v);
+            }
+            self.owned.insert(out);
+        }
         Val::Of { value: out, ty }
     }
 
@@ -1689,6 +1863,16 @@ impl Emitter<'_> {
     fn value_branch(&mut self, b: &Block, join: &str) -> Incoming {
         match self.block(b) {
             Val::Of { value, ty } => {
+                // A `phi` merges two branches that may have arrived at ownership
+                // differently — `if c { ints_new() } else { xs }` creates a reference on
+                // one side and borrows on the other — and a single value cannot be both.
+                // So each branch is brought to the same state here, **inside its own
+                // block and before its jump**, which is the only place a retain can go:
+                // after the `phi` there is no branch left to attribute it to.
+                self.take(value, ty);
+                if ty.is_handle() {
+                    self.owned.insert(value);
+                }
                 let from = self.current.clone();
                 let _ = writeln!(self.out, "  br label %{join}");
                 Incoming::Value { value, ty, from }
@@ -1872,6 +2056,8 @@ fn declarations(out: &mut String) {
         "declare i32 @snprintf(ptr noundef, i64, ptr noundef, ...)",
         "declare ptr @malloc(i64)",
         "declare ptr @realloc(ptr, i64)",
+        "declare void @free(ptr)",
+        "declare ptr @getenv(ptr)",
         "declare i32 @memcmp(ptr, ptr, i64)",
         "declare i64 @write(i32, ptr, i64)",
         "declare void @exit(i32) noreturn",
@@ -1907,6 +2093,8 @@ fn runtime_declarations(out: &mut String) {
         "@nz.errlen = external thread_local global i64",
         "@nz.argc = external global i64",
         "@nz.argv = external global ptr",
+        "@nz.seq_allocated = external global i64",
+        "@nz.seq_reclaimed = external global i64",
         "declare void @nz.fail(ptr, i64)",
         "declare void @nz.report() noreturn",
         "declare {ptr, i64} @nz.str_join(ptr, ptr, i64)",
@@ -1915,6 +2103,10 @@ fn runtime_declarations(out: &mut String) {
         "declare i64 @nz.write_file(ptr, i64, ptr, i64)",
         "declare ptr @nz.arr_new()",
         "declare ptr @nz.arr_grow(ptr, i64)",
+        "declare void @nz.arr_retain(ptr)",
+        "declare i1 @nz.arr_release(ptr)",
+        "declare ptr @nz.seq_new()",
+        "declare void @nz.seq_release(ptr)",
         "declare i32 @nz.spawn(ptr, ptr, ptr)",
         "declare {ptr, i64} @nz.scope_join(ptr)",
         "declare ptr @nz.chan_new(i64)",
@@ -1955,6 +2147,8 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         blobs: Vec::new(),
         names,
         loops: Vec::new(),
+        owned: std::collections::BTreeSet::new(),
+        frame: Vec::new(),
         scopes: Vec::new(),
         used_unwind: false,
         tasks: String::new(),
@@ -2150,6 +2344,24 @@ pub fn emit_entry(entry: &NativeSymbol, needs: Needs) -> String {
         out,
         "@.fmt = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\""
     );
+    if needs.sequences {
+        // Lengths are computed, never counted by hand: a constant whose declared size
+        // disagrees with its bytes is rejected by clang at best and truncates at worst.
+        let name = MEMORY_VARIABLE;
+        let _ = writeln!(
+            out,
+            "@.memvar = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
+            name.len() + 1,
+            escape(name)
+        );
+        let _ = writeln!(
+            out,
+            "@.memfmt = private unnamed_addr constant [{} x i8] c\"{}\\0A\\00\"",
+            MEMORY_FORMAT.len() + 2,
+            escape(MEMORY_FORMAT)
+        );
+        let _ = writeln!(out, "@.membuf = private global [128 x i8] zeroinitializer");
+    }
     out.push('\n');
 
     let _ = writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{");
@@ -2163,6 +2375,38 @@ pub fn emit_entry(entry: &NativeSymbol, needs: Needs) -> String {
         let _ = writeln!(out, "  store ptr %argv, ptr @nz.argv");
     }
     let _ = writeln!(out, "  %result = call i64 {entry}()");
+    if needs.sequences {
+        // Before the failure is reported, not after: `@nz.report` ends the process and
+        // never returns, so a report emitted on the success path alone would say nothing
+        // about exactly the runs where reclamation is hardest to get right. `main` has
+        // already returned by here, so the counts are final either way.
+        //
+        // It is a runtime diagnostic, off unless asked for. It is not a built-in because
+        // no Nazm program should be able to observe how its own storage is managed:
+        // `docs/spec.md` states *when* storage is reclaimed and deliberately not *how*.
+        let _ = writeln!(out, "  %want = call ptr @getenv(ptr @.memvar)");
+        let _ = writeln!(out, "  %quiet = icmp eq ptr %want, null");
+        let _ = writeln!(
+            out,
+            "  br i1 %quiet, label %nz.checked, label %nz.memreport"
+        );
+        let _ = writeln!(out, "nz.memreport:");
+        let _ = writeln!(out, "  %alloc = load i64, ptr @nz.seq_allocated");
+        let _ = writeln!(out, "  %recl = load i64, ptr @nz.seq_reclaimed");
+        let _ = writeln!(out, "  %live = sub i64 %alloc, %recl");
+        let _ = writeln!(
+            out,
+            "  %memout = call i32 (ptr, i64, ptr, ...) @snprintf(ptr @.membuf, i64 128, \
+             ptr @.memfmt, i64 %alloc, i64 %recl, i64 %live)"
+        );
+        let _ = writeln!(out, "  %memlen = sext i32 %memout to i64");
+        let _ = writeln!(
+            out,
+            "  %memwrote = call i64 @write(i32 2, ptr @.membuf, i64 %memlen)"
+        );
+        let _ = writeln!(out, "  br label %nz.checked");
+        let _ = writeln!(out, "nz.checked:");
+    }
     // The single place a diagnostic is written. By the time control is here every scope
     // `main` opened has been joined, so nothing is still running when the process ends —
     // which is the difference between reporting a failure and abandoning the program
@@ -2377,13 +2621,37 @@ fail:
 /// here is allocation and growth, which have no position to report — both signal failure
 /// by returning null, and the call site turns that into `N0406`.
 ///
-/// The header is `{ i64 len, i64 cap, ptr data }`, 24 bytes. The handle is its address
-/// and never moves, which is what makes a sequence a reference: growth rewrites `data`
-/// and `cap` in place and every holder sees it.
+/// The header is `{ i64 len, i64 cap, ptr data, i64 rc }`, 32 bytes. The handle is its
+/// address and never moves, which is what makes a sequence a reference: growth rewrites
+/// `data` and `cap` in place and every holder sees it.
+///
+/// # The reference count, and why it needs no atomic
+///
+/// `rc` is the number of live references, as `docs/spec.md`'s *memory constitution* counts
+/// them: the bindings holding this handle, plus the one it is travelling in. When it
+/// reaches zero the data and the header are freed, which is the whole of reclamation.
+///
+/// It is an ordinary `add`, not an atomic one, and that is a consequence of a rule the
+/// language already had rather than an optimisation taken on trust. `N0321` refuses to let
+/// a sequence cross into a task, so **no two threads can ever hold the same handle**, so
+/// no two threads can ever touch the same count. A rule written for data-race safety pays
+/// for itself a second time here; if it were ever relaxed, this would have to become an
+/// atomic in the same commit.
+///
+/// # The counters
+///
+/// `@nz.seq_allocated` and `@nz.seq_reclaimed` exist so that a test can assert reclamation
+/// happened rather than infer it from resident memory, which is an allocator's opinion. The
+/// entry wrapper prints them when `NAZM_MEMORY_REPORT` is set in the environment and says
+/// nothing otherwise. They are a runtime diagnostic, not a language feature: no Nazm
+/// program can read them, and `docs/spec.md` does not mention them.
 const SEQUENCE_RUNTIME: &str = r"
+@nz.seq_allocated = hidden global i64 0
+@nz.seq_reclaimed = hidden global i64 0
+
 define hidden ptr @nz.arr_new() {
 entry:
-  %h = call ptr @malloc(i64 24)
+  %h = call ptr @malloc(i64 32)
   %bad = icmp eq ptr %h, null
   br i1 %bad, label %fail, label %ok
 fail:
@@ -2394,7 +2662,79 @@ ok:
   store i64 0, ptr %capp
   %datap = getelementptr i8, ptr %h, i64 16
   store ptr null, ptr %datap
+  ; Born with one reference: the expression that produced it. Whoever consumes that
+  ; expression either takes the reference over or releases it.
+  %rcp = getelementptr i8, ptr %h, i64 24
+  store i64 1, ptr %rcp
   ret ptr %h
+}
+
+define hidden void @nz.arr_retain(ptr %h) {
+entry:
+  %none = icmp eq ptr %h, null
+  br i1 %none, label %done, label %bump
+bump:
+  %rcp = getelementptr i8, ptr %h, i64 24
+  %rc = load i64, ptr %rcp
+  %rc2 = add i64 %rc, 1
+  store i64 %rc2, ptr %rcp
+  br label %done
+done:
+  ret void
+}
+
+define hidden i1 @nz.arr_release(ptr %h) {
+entry:
+  %none = icmp eq ptr %h, null
+  br i1 %none, label %kept, label %drop
+drop:
+  %rcp = getelementptr i8, ptr %h, i64 24
+  %rc = load i64, ptr %rcp
+  %rc2 = sub i64 %rc, 1
+  store i64 %rc2, ptr %rcp
+  %last = icmp sle i64 %rc2, 0
+  br i1 %last, label %free, label %kept
+free:
+  ; The data buffer first, then the header: after the header is freed its `data` field
+  ; may not be read, and reading it is how this would become a use-after-free of its own.
+  %datap = getelementptr i8, ptr %h, i64 16
+  %data = load ptr, ptr %datap
+  call void @free(ptr %data)
+  call void @free(ptr %h)
+  ret i1 true
+kept:
+  ret i1 false
+}
+
+; The counted pair. `@nz.arr_new` and `@nz.arr_release` are the allocator; these two are
+; the allocator plus the bookkeeping that makes reclamation checkable. The scope machinery
+; uses the uncounted pair for its list of task ids, which is not a Nazm value and must not
+; appear in a report about the program's sequences.
+define hidden ptr @nz.seq_new() {
+entry:
+  %h = call ptr @nz.arr_new()
+  %bad = icmp eq ptr %h, null
+  br i1 %bad, label %done, label %count
+count:
+  %n = load i64, ptr @nz.seq_allocated
+  %n2 = add i64 %n, 1
+  store i64 %n2, ptr @nz.seq_allocated
+  br label %done
+done:
+  ret ptr %h
+}
+
+define hidden void @nz.seq_release(ptr %h) {
+entry:
+  %freed = call i1 @nz.arr_release(ptr %h)
+  br i1 %freed, label %count, label %done
+count:
+  %n = load i64, ptr @nz.seq_reclaimed
+  %n2 = add i64 %n, 1
+  store i64 %n2, ptr @nz.seq_reclaimed
+  br label %done
+done:
+  ret void
 }
 
 define hidden ptr @nz.arr_grow(ptr %h, i64 %elem) {
@@ -2444,6 +2784,7 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
     e.next = 0;
     e.current = "entry".to_owned();
     e.used_unwind = false;
+    e.owned.clear();
     // No loop target crosses a function boundary. Push and pop are balanced, so this is
     // already empty — clearing it says so rather than relying on it.
     e.loops.clear();
@@ -2474,11 +2815,31 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
             local.ty.name()
         );
     }
+    // Every handle slot starts null, and null is what a release ignores. So a path that
+    // never reached a declaration, and the shared unwind block a failure takes, can both
+    // release the whole frame without asking which slots were ever written.
+    e.frame.clear();
+    for (i, local) in f.locals.iter().enumerate() {
+        if !local.ty.is_handle() {
+            continue;
+        }
+        let _ = writeln!(e.out, "  store ptr null, ptr %slot{i}");
+        // Parameters are excluded, and that exclusion is rule 2: a callee borrows, so
+        // releasing one would destroy storage the caller is still holding.
+        if i >= f.params {
+            e.frame.push((i, local.ty));
+        }
+    }
+
     for (i, local) in f.locals.iter().take(f.params).enumerate() {
         let _ = writeln!(e.out, "  store {} %p{i}, ptr %slot{i}", local.ty.llvm());
     }
     match e.block(&f.body) {
         Val::Of { value, .. } => {
+            // The tail is a `return` without the keyword, and it obeys the same two rules:
+            // take the reference the caller is about to receive, then let the frame go.
+            e.take(value, f.ret);
+            e.release_frame();
             let _ = writeln!(e.out, "  ret {} %{value}", f.ret.llvm());
         }
         // The body transferred, which since M1f is ordinary: every path returned, so the
@@ -2497,6 +2858,10 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
     // reports rather than using the value.
     if e.used_unwind {
         let _ = writeln!(e.out, "nz.unwind:");
+        // A failure leaves through here from anywhere in the function, so this is the one
+        // exit that source indentation would never have found. The frame is released on
+        // the way out: a program that failed still reclaims what it was holding.
+        e.release_frame();
         let _ = writeln!(e.out, "  ret {} {}", f.ret.llvm(), f.ret.unwind_value());
     }
     let _ = writeln!(e.out, "}}");

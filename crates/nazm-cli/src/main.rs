@@ -387,6 +387,19 @@ fn main() -> ExitCode {
     let (limits, args) = limits;
     let outcome = nazm_core::run_map(map, &loaded.graph, limits, args);
 
+    // After evaluation, so every environment frame and every value it held has been
+    // dropped. The same line a compiled program writes, from the same environment
+    // variable, so the two implementations can be compared on reclamation and not only on
+    // the value they produce. `docs/spec.md` says when storage is reclaimed; this is how a
+    // test checks that both of them did it.
+    if std::env::var_os(nazm_lir::MEMORY_VARIABLE).is_some() {
+        let (allocated, reclaimed) = nazm_core::eval::sequence_counts();
+        eprintln!(
+            "nazm-memory: sequences allocated={allocated} reclaimed={reclaimed} live={}",
+            allocated - reclaimed
+        );
+    }
+
     match outcome {
         Outcome::Value(v) => report_ok(&v.to_string(), None),
         Outcome::CheckFailed(ds) => {
