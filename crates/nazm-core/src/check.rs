@@ -245,6 +245,61 @@ pub struct Checker<'a> {
     loop_depth: u32,
 }
 
+/// Which modules' bodies actually have to be checked.
+///
+/// # Why the decision is a parameter
+///
+/// A driver that holds a cache can know that a module's inputs are unchanged, and
+/// therefore that checking its bodies would reach the conclusion it reached last time.
+/// That is a decision about **reuse**, which needs a filesystem and a store; checking is a
+/// decision about **meaning**, which must not. Splitting them here keeps one checking
+/// authority — [`check_unit`] stays the only thing that decides what a body means — while
+/// letting the driver say which bodies it needs decided.
+///
+/// The default, [`CheckEverything`], is what every caller but the cache uses, and what
+/// `--no-cache` restores. Nothing downstream can tell the difference: a compilation that
+/// skipped work and one that did not produce the same diagnostics, because a module is
+/// only ever skippable when its answer is already known.
+///
+/// # The contract an implementor must keep
+///
+/// [`Reuse::must_check`] may return `false` for a module **only** if every input to
+/// checking that module is identical to one whose check produced no diagnostics. What
+/// those inputs are is `nazm_cache::CheckKey`'s subject; getting the set wrong is a wrong
+/// answer, not a slow one.
+pub trait Reuse {
+    /// Every module's declared interface, before any body is checked.
+    ///
+    /// Called once. This is where an implementor computes whatever it needs to answer
+    /// [`Reuse::must_check`] — notably each module's `InterfaceHash`, which is a function
+    /// of its own declarations and therefore available for every module at once, cycles
+    /// included.
+    fn plan(&mut self, graph: &ModuleGraph, interfaces: &[UnitInterface]);
+
+    /// Whether this module's bodies must be checked.
+    fn must_check(&self, module: ModuleId) -> bool;
+
+    /// This module's bodies were checked, and the module produced no diagnostic at all.
+    ///
+    /// Only then: an artefact means *this checked cleanly*, so a module with a diagnostic
+    /// produces none and a refusal can never be cached.
+    fn checked_clean(&mut self, module: ModuleId);
+}
+
+/// Check every module. The behaviour every caller but the cache has.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CheckEverything;
+
+impl Reuse for CheckEverything {
+    fn plan(&mut self, _graph: &ModuleGraph, _interfaces: &[UnitInterface]) {}
+
+    fn must_check(&self, _module: ModuleId) -> bool {
+        true
+    }
+
+    fn checked_clean(&mut self, _module: ModuleId) {}
+}
+
 /// Check a compilation. Returns what resolution decided and every diagnostic found.
 ///
 /// # Two stages, and why they are two
@@ -262,6 +317,30 @@ pub struct Checker<'a> {
 /// whole-program case.
 #[must_use]
 pub fn check(program: &Program, graph: &ModuleGraph) -> (Resolution, Vec<Diagnostic>) {
+    check_reusing(program, graph, &mut CheckEverything, &[])
+}
+
+/// As [`check`], letting a driver skip the bodies of modules whose answer it already has.
+///
+/// `unparsable` names the modules whose source did not parse cleanly. They are always
+/// checked and never reported as clean: a tree built from a file with a syntax error is a
+/// partial tree, and an interface derived from one is a partial interface that no later
+/// run should inherit.
+///
+/// # What stage 1 still does for every module
+///
+/// Everything. Declarations are read, definitions are registered, duplicates and unknown
+/// types are reported, and the root module is asked for `main` — all of it from source,
+/// every time. Reuse applies to stage 2 only, which is where the bodies are and where the
+/// work is. That is what makes a skipped module invisible: the facts every other module
+/// and the compilation itself depend on were recomputed anyway.
+#[must_use]
+pub fn check_reusing(
+    program: &Program,
+    graph: &ModuleGraph,
+    reuse: &mut dyn Reuse,
+    unparsable: &[ModuleId],
+) -> (Resolution, Vec<Diagnostic>) {
     let mut res = Resolution::default();
     let mut errors = Vec::new();
 
@@ -269,21 +348,41 @@ pub fn check(program: &Program, graph: &ModuleGraph) -> (Resolution, Vec<Diagnos
 
     // Stage 1, for the whole graph before any body is checked. A cycle needs this: A's
     // body may call B while B's calls A, and neither ordering of the two would work.
+    //
+    // `declared_cleanly` is per module, because "this module checked" has to mean both
+    // stages. A module whose declarations collide and whose bodies are fine is not a
+    // module that checked.
+    let mut declared_cleanly: Vec<bool> = Vec::with_capacity(units.len());
     let interfaces: Vec<UnitInterface> = units
         .iter()
-        .map(|u| declare_unit(u, &mut res, &mut errors))
+        .map(|u| {
+            let before = errors.len();
+            let interface = declare_unit(u, &mut res, &mut errors);
+            declared_cleanly.push(errors.len() == before);
+            interface
+        })
         .collect();
+
+    reuse.plan(graph, &interfaces);
 
     // Stage 2, module by module. `deps` is the *direct* imports and nothing else, so a
     // name only reachable transitively is not in scope — by construction rather than by a
     // rule someone has to remember.
-    for u in &units {
+    for (n, u) in units.iter().enumerate() {
+        let unparsed = unparsable.contains(&u.module);
+        if !unparsed && !reuse.must_check(u.module) {
+            continue;
+        }
         let deps: Vec<&UnitInterface> = u
             .imports
             .iter()
             .filter_map(|d| interfaces.get(d.on.index()))
             .collect();
+        let before = errors.len();
         check_unit(u, &deps, &mut res, &mut errors);
+        if !unparsed && errors.len() == before && declared_cleanly.get(n) == Some(&true) {
+            reuse.checked_clean(u.module);
+        }
     }
 
     // The **root** module owns `main`. Another module's `main` is one of its definitions

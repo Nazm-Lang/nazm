@@ -26,8 +26,15 @@ use nazm_iface::{InterfaceHash, PersistentUnitInterface};
 
 use crate::{exit, load};
 
-pub(crate) fn run(path: &Path, with_hash: bool) -> ExitCode {
-    let loaded = match load::load(path) {
+pub(crate) fn run(path: &Path, with_hash: bool, declared: Option<&Path>) -> ExitCode {
+    let source_root = match crate::root::decide(path, declared) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("nazm: {e}");
+            return ExitCode::from(exit::NO_SUCH_FILE);
+        }
+    };
+    let loaded = match load::load(path, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
             crate::emit(&diagnostics, &partial.map, false);
