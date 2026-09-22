@@ -10,6 +10,28 @@
 //! and an optimisation level change nothing about whether a program type-checks. The key
 //! covers exactly what checking reads, which is why what it **excludes** is stated as
 //! carefully as what it includes.
+//!
+//! # What is deliberately **not** in it, and why
+//!
+//! An omission is the failure mode: `docs/architecture.md` §3 has said since before there
+//! was a compiler that anything left out of a cache key is a silent miscompile waiting to
+//! happen. Each of these was checked against the implementation rather than assumed.
+//!
+//! | Left out | Why it cannot affect checking this module |
+//! | --- | --- |
+//! | target triple, CPU features, ABI | `crates/nazm-core/src/check.rs` mentions none of them. `Int` is 64-bit in every configuration and no rule consults the host. **A codegen key is a different key and will need all of them** |
+//! | optimisation level, backend | `nazm build`'s subset refusals live in `nazm-lir`, after checking, and are not cached |
+//! | `--max-iterations`, `--max-depth` | interpreter budgets. `docs/spec.md` places them in the interpreter rather than in the language |
+//! | the source root, the checkout directory, the working directory | they decide what a [`ModuleKey`] *is*; once it exists they are gone, which is what lets two checkouts share an entry |
+//! | the cache's own location | a store holds entries; it does not name them |
+//! | whether the compilation is a program | `N0204` is a fact about a *compilation*, not about a module, and it is recomputed from declarations every run — never cached, never skipped |
+//! | a dependency's source, body, or private definitions | none is readable from `check_unit`, which is the property N2 established |
+//! | a dependency's own dependencies | imports are not transitive |
+//! | load order, session ids, spans, timestamps | not semantics |
+//!
+//! The one that will be wrong first is the first row: it is right **today**, and a rule
+//! that depended on a target would have to be added to the key on the day it was added to
+//! the checker.
 
 use std::fmt;
 
@@ -88,31 +110,6 @@ impl fmt::Display for CheckKey {
         digest::write_hex(f, &self.0)
     }
 }
-
-/// What is deliberately **not** in a check key, and why.
-///
-/// Documentation rather than code, and here rather than in a design note, because an
-/// omission is the failure mode: `docs/architecture.md` §3 has said since before there
-/// was a compiler that anything left out of a cache key is a silent miscompile waiting to
-/// happen. Each of these was checked against the implementation rather than assumed.
-///
-/// | Left out | Why it cannot affect checking this module |
-/// | --- | --- |
-/// | target triple, CPU features, ABI | `crates/nazm-core/src/check.rs` mentions none of them. `Int` is 64-bit in every configuration and no rule consults the host. **A codegen key is a different key and will need all of them** |
-/// | optimisation level, backend | `nazm build`'s subset refusals live in `nazm-lir`, after checking, and are not cached |
-/// | `--max-iterations`, `--max-depth` | interpreter budgets. `docs/spec.md` places them in the interpreter rather than in the language |
-/// | the source root, the checkout directory, the working directory | they decide what a [`ModuleKey`] *is*; once it exists they are gone, which is what lets two checkouts share an entry |
-/// | the cache's own location | a store holds entries; it does not name them |
-/// | whether the compilation is a program | `N0204` is a fact about a *compilation*, not about a module, and it is recomputed from declarations every run — never cached, never skipped |
-/// | a dependency's source, body, or private definitions | none is readable from `check_unit`, which is the property N2 established |
-/// | a dependency's own dependencies | imports are not transitive |
-/// | load order, session ids, spans, timestamps | not semantics |
-///
-/// The one that will be wrong first is the first row: it is right **today**, and a rule
-/// that depended on a target would have to be added to the key on the day it was added to
-/// the checker.
-#[derive(Debug)]
-pub struct Exclusions;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
