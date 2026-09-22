@@ -711,6 +711,15 @@ between components, `.` removed, `..` folded away where it can be, and no leadin
 trailing separator. A checkout moved from one directory to another has the same roots and
 the same relative paths, so it has the same identities.
 
+**A consequence, stated because it is easy to be surprised by.** The root is the *named*
+file's directory, so a module has the identity its compilation gives it: `lib/util.nz`
+when the compilation started from `main.nz` beside `lib/`, and `util.nz` when it started
+from `lib/util.nz` itself. Those are two compilations of two different shapes, and a key is
+meaningful within one. What would make the key independent of which file was named is a
+**declared** root — a project file — and that is a build-system feature this language does
+not have and will not grow one for a naming problem. Anything comparing keys across
+compilations compares them within one declared root or not at all.
+
 #### Module identity
 
 > **Two modules are the same module when their normalised source-root-relative paths are

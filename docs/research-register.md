@@ -55,17 +55,23 @@ correct by construction. `architecture.md` §3 carries the design and the cache-
 correctness conditions.
 
 **Required prerequisite** · A compilation unit and an identity that survives a process.
-**The first is met as of N2 (2026-09-22); the second is untouched.** A module can be
-checked from its own source and its dependencies' interfaces
-(`crates/nazm-core/tests/unit_checking.rs`), so there is now a unit of the right
-granularity, and a definition has an owner — `(module, name)` identifies one within a
-compilation.
+**Both are met as of N3 (2026-09-22).** A module can be checked from its own source and its
+dependencies' interfaces (`crates/nazm-core/tests/unit_checking.rs`); a module has a
+`ModuleKey` and a definition a `DefKey` that are equal across processes and across
+checkouts; and a module's interface has a deterministic persisted form with a BLAKE3
+fingerprint (`crates/nazm-cli/tests/durable_identity.rs`).
 
-Nothing about that is content-derived. `ModuleId`, `FnId` and `FileId` are all indices into
-one compilation in one process, and an interface written to disk today would be numbers
-meaningless to the run that read it. The remaining prerequisite is therefore sharper than
-it was rather than smaller: not *what is a unit*, but **what identifies a definition such
-that two builds agree**. `roadmap.md` N3 owns it.
+**The hypothesis itself is untouched, and the status does not move.** What N3 built is
+identity and an *interface* fingerprint — enough to answer "must this module's dependents
+be re-checked", which is a dependency question. R2 is about **content addressing**:
+normalising each definition after type checking, hashing the result, and keying compilation
+*results* on the Merkle DAG. None of that exists. There is no normalised form of a
+definition, no hash of one, no store and no cache, and `InterfaceHash` is deliberately not
+a cache key — it excludes bodies, so an artefact keyed on it would be reused after a body
+changed (`architecture.md` §7.3).
+
+What changed is that the prerequisites are no longer the obstacle. What remains to be shown
+is the hypothesis: that keying results this way pays for itself.
 
 **Evidence needed** · A measured rebuild saving on a real edit, against the cache key
 covering compiler identity, schema version, transitive dependency hashes, target and CPU
@@ -88,10 +94,12 @@ one class of no-op edit and shortening a class of agent loop. `architecture.md` 
 both the idea's origin (Unison) and the contribution claimed here, which is the
 agent-facing use rather than the hashing.
 
-**Required prerequisite** · R2. Neither N1 nor N2 changed anything here: both produced
-session-local indices and no content-derived identity, and `nazm_sema::FnId` must not be
-read as one. That a definition now has a module and a visibility makes it easier to *say*
-which definition is meant within one run; it says nothing across two.
+**Required prerequisite** · R2. N3 gives a definition an identity that survives a process,
+which is the part an agent needs to be *told* which definition is meant — `DefKey` names
+one across runs and across checkouts. It is not the part this hypothesis is about:
+`DefKey` says *which* definition, and the claim here is about telling an agent that an edit
+produced **the same** definition, which needs a content identity R2 does not have yet.
+Nothing here is implemented, and `DefKey` existing is not an agent protocol.
 
 **Evidence needed** · A measured reduction in wasted agent effort, under the protocol in
 `docs/research/evaluation.md` — whose thresholds are frozen and may not be relaxed — rather than an

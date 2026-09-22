@@ -27,6 +27,11 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // the tree those decisions were read off. See the crate documentation for the
         // source-level evidence that moved these types out of the syntax crate in N2.
         "nazm-sema" => &["nazm-span"],
+        // What a module publishes, durably. It sits above `nazm-sema` and holds the serde
+        // this project deliberately keeps out of it: a crate with no serde dependency
+        // cannot serialise a session-local id by accident, and the `sema purity` gate
+        // makes that a build failure rather than a convention.
+        "nazm-iface" => &["nazm-span", "nazm-sema"],
         "nazm-core" => &["nazm-span", "nazm-diag", "nazm-syntax", "nazm-sema"],
         // Level 7 of the table in `docs/architecture.md` §2, and the only level built.
         // It reads the syntax tree and produces LLVM IR *as text*, so it needs no
@@ -35,7 +40,13 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         "nazm-lir" => &["nazm-span", "nazm-diag", "nazm-syntax", "nazm-sema"],
         // The CLI deliberately does NOT depend on nazm-syntax: it goes through nazm-core,
         // so there is one entry point into the front end rather than two that can drift.
-        "nazm-cli" => &["nazm-span", "nazm-diag", "nazm-core", "nazm-lir"],
+        "nazm-cli" => &[
+            "nazm-span",
+            "nazm-diag",
+            "nazm-core",
+            "nazm-lir",
+            "nazm-iface",
+        ],
 
         // The measurement instrument answers to nothing. It must stay usable — and
         // auditable — with no compiler present, because it has to run against arms A1 and

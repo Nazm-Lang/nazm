@@ -1,0 +1,26 @@
+[package]
+name = "nazm-iface"
+description = "What a module publishes: the persisted form of its interface, and its fingerprint."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The semantic vocabulary, and the durable identities it defines.
+nazm-sema = { workspace = true }
+nazm-span = { workspace = true }
+# serde lives *here* and not in `nazm-sema`, which is the whole point of the split: a
+# crate with no serde dependency cannot accidentally serialise a session-local id.
+serde = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+
+[dev-dependencies]
+nazm-span = { workspace = true }
+
+[lints]
+workspace = true
