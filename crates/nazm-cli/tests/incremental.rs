@@ -708,6 +708,40 @@ fn without_a_declared_root_the_two_entry_points_share_nothing() {
     assert!(second.accepted);
 }
 
+#[test]
+fn two_modules_with_identical_source_do_not_share_an_entry() {
+    // Which module this is, is an input. Two modules can have byte-identical source and
+    // the same (empty) dependency set; if the key did not say which module it was for,
+    // the first one's result would be handed to the second. They are different modules
+    // with different durable identities, and one's checked interface is not the other's.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    let same = "pub fn v() -> Int { 1 }\n";
+    write(dir.path(), "a/m.nz", same);
+    write(dir.path(), "b/m.nz", same);
+    write(
+        dir.path(),
+        "one.nz",
+        "use \"a/m.nz\";\nfn main() -> Int { v() }\n",
+    );
+    write(
+        dir.path(),
+        "two.nz",
+        "use \"b/m.nz\";\nfn main() -> Int { v() }\n",
+    );
+
+    let first = check(dir.path(), "one.nz");
+    assert_eq!((first.checked, first.stored), (2, 2));
+
+    let second = check(dir.path(), "two.nz");
+    assert_eq!(
+        (second.checked, second.reused, second.rejected),
+        (2, 0, 0),
+        "`b/m.nz` has the same bytes as `a/m.nz` and is not the same module"
+    );
+    assert!(second.accepted);
+}
+
 // --- §40: where durable identity declines -------------------------------------------------
 
 #[test]

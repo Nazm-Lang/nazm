@@ -38,7 +38,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 649 passed, 0 failed, 6 ignored, across 45 suites**, run through
+**Current suite: 720 passed, 0 failed, 6 ignored, across 50 suites**, run through
 `cargo xtask contained tests`. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -47,6 +47,7 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 | --- | --- | --- |
 | 1 | Syntax, parser, CST | PARTIAL |
 | 2 | Name resolution and modules | PARTIAL |
+| 2a | Incremental semantic checking | VERIFIED |
 | 3 | Type system | PARTIAL |
 | 4 | Ownership and resource semantics | MISSING |
 | 5 | Effects | MISSING |
@@ -167,21 +168,66 @@ deserialised interface with the dependency's source deleted.** A module outside 
 root, or one a symbolic link gave two names, is refused a durable key rather than given a
 guess.
 
-**Limitation** · **Nothing is separately *compiled*, and nothing is cached.** A unit can be
-checked from interfaces and an interface can be written down; lowering and code generation
-still take the whole program and emit one LLVM module (area 10), and nothing reads an
-interface back to decide to skip work. There is no build cache, no query database and no
-scheduler — `InterfaceHash` answers *would a dependent have to be re-checked*, and the
-thing that would act on the answer does not exist. A module still cannot export a name
-under another one, re-export, or be named by anything but a relative path, and the source
-root is derived from the file named on the command line rather than declared.
+**A project can declare where it begins, as of N4 (2026-09-22).** An empty `nazm.root`
+marker, or `--source-root DIR`, fixes the root a module's key is relative to, so
+`lib/common.nz` is the same module whichever entry file named it
+(`crates/nazm-cli/src/root.rs`, ten cases in `crates/nazm-cli/tests/source_root.rs`). With
+neither, the root is derived from the named file exactly as before. The marker must be
+empty and is refused otherwise: it says where a project begins and owns nothing else.
 
-**Next dependency** · Something that reuses work: a store keyed on these identities, and a
-`BuildKey` covering the inputs an artefact depends on — which `InterfaceHash` deliberately
-is not (`architecture.md` §7.3).
+**Limitation** · **Nothing is separately *compiled*.** Lowering and code generation still
+take the whole program and emit one LLVM module (area 10). A module still cannot export a
+name under another one, re-export, or be named by anything but a relative path.
 
-**Accepted when** · Met for identity and interfaces. Incremental compilation is a separate
-row that does not exist yet.
+**Next dependency** · Aliasing and re-export are language decisions; separate code
+generation needs a linking model (area 10).
+
+**Accepted when** · Met for identity, interfaces and a declared root.
+
+### 2a. Incremental semantic checking — VERIFIED
+
+**Evidence** · `nazm check` reuses the result of checking a module whose semantic inputs
+are unchanged, as of N4 (2026-09-22). `crates/nazm-cache/` computes what those inputs are —
+`SourceFingerprint` over the exact source bytes, `CheckerIdentity` over the checker's own
+tables plus an explicit `SEMANTIC_EPOCH`, and `CheckKey` over both plus each direct
+import's `(ModuleKey, InterfaceHash)` — and stores a `nazm.check/1` entry per module in
+`.nazm/check/`, published by `rename` and validated on read.
+`crates/nazm-core/src/check.rs` gained one hook, `Reuse`; `check_unit` is still the only
+thing that decides what a body means.
+
+Twenty-nine tests in `crates/nazm-cli/tests/incremental.rs`, each running the binary
+repeatedly, establish the model: a private body change re-checks its own module and leaves
+its importer alone; an exported signature change re-checks the importer and finds the error
+it now has; in `A → B → C`, a change to C that leaves B's interface unchanged stops at B.
+Sixteen more in `crates/nazm-cache/tests/store.rs` break one thing about a stored entry —
+truncation, a future schema, an edited fingerprint, an edited interface, a valid entry
+under the wrong name — and every one is a miss.
+
+**What is reused, exactly** · The second stage of checking a module: its bodies. Every
+module is still read, parsed and declared from source on every run, which is why a skipped
+module is invisible — the interface other modules' keys depend on, and whether the
+compilation has a `main`, are recomputed rather than recalled.
+
+**Limitation** · **This is not incremental native compilation, and no such claim is made.**
+`nazm run` and `nazm build` reuse nothing: both need the resolution that only checking a
+body produces, and lowering is still whole-program. There is no object, IR or LIR cache, no
+query database, no scheduler and no eviction policy. A module with no durable identity is
+checked every time.
+
+**And the measured gain is about a millisecond.** On the compiler's own five modules,
+`performance.md` records 40.5 ms with the cache disabled against 38.9 ms warm — 18% of the
+work above a 31.7 ms process floor, and 3.9% of the wall clock. The first run is **24 ms
+slower**, because publishing five entries costs an `fsync` each. The decisions are right;
+the saving is small because parsing and declaring happen every run and are most of the
+cost. Recorded rather than averaged away: a reader deciding whether to depend on this
+should know it buys correctness of invalidation, not speed.
+
+**Next dependency** · A `CodegenKey` — implementation fingerprint, target, CPU features,
+backend, optimisation level, ABI — and a per-unit code-generation boundary to key on
+(area 10). `CheckKey` is not it and must not become it.
+
+**Accepted when** · Met for semantic checking. Native reuse is a separate row that does not
+exist.
 
 ### 3. Type system — PARTIAL
 
@@ -700,12 +746,18 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **62** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **68** catalogued defects;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
 distinction added after an incident that produced 19 false survivors. Lifecycle behaviour
 is tested in `xtask/tests/lifecycle.rs`.
+
+*N4 added six on 2026-09-22 and ran all six contained: four remove one input each from a
+check key — the module's own source, its dependencies' interfaces, the checker's identity,
+and which module it is — one stops an entry's recorded inputs being checked against the key
+it is filed under, and one publishes an entry for a module that did not check cleanly. Each
+is a wrong answer rather than a slow build, which is why they were worth the run.*
 
 *N2 added two and ran four contained on 2026-09-22 — `every-definition-is-exported` and
 `imports-become-transitive`, plus the two existing entries in the files N2 rewrote most, to
