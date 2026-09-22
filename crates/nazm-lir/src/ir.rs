@@ -24,7 +24,7 @@
 use nazm_sema::ModuleId;
 use nazm_span::Span;
 
-use crate::symbol::{Linkage, NativeSymbol};
+use crate::symbol::{Linkage, NativeSymbol, NativeTypeName};
 
 /// The value types this backend can represent. Not the language's — `Str` exists and is
 /// refused by name in [`crate::lower`].
@@ -67,6 +67,68 @@ pub enum Ty {
     /// to be shared between tasks, and every one of its operations is a
     /// synchronisation point. See `docs/spec.md`, *Structured concurrency*.
     Chan,
+    /// A user-defined record: an **LLVM aggregate, by value**.
+    ///
+    /// Not a pointer, and that is the semantic decision rather than a representation
+    /// choice: `docs/spec.md` gives a record no object identity, so two bindings of one
+    /// record are two values and nothing may be visible through both. A pointer would have
+    /// made every assignment an alias.
+    ///
+    /// What it *contains* is another matter: a `Str` field carries an owner, a sequence
+    /// field carries a handle, and copying the aggregate copies those — which is why a
+    /// record copy retains field by field rather than not at all. The id indexes the
+    /// unit's [`RecordLayout`] table.
+    Record(RecordTy),
+}
+
+/// A record type of this compilation, by declaration order.
+///
+/// Session-local, like every id in `nazm-sema`. What crosses a compilation boundary is
+/// the [`NativeTypeName`] derived from the record's durable identity, which is what makes
+/// two independently generated objects agree about a record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RecordTy(pub u32);
+
+impl RecordTy {
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// How one record is laid out, and what its fields own.
+///
+/// # The layout boundary, on this side of it
+///
+/// The front end knows a record identity and a field identity — `docs/architecture.md`
+/// requires field access to stay symbolic until here — and this is where that becomes a
+/// position. [`Self::of_declaration`] is the map, and it is the only place a field's index
+/// is decided.
+///
+/// # Why the order is by name
+///
+/// `docs/spec.md` makes declaration order non-semantic: moving two field declarations is
+/// not a change to the type. Laying fields out in **canonical field-name order** makes
+/// that true of the object file as well — an edit the language says means nothing also
+/// changes no byte of the emitted code. Laying them out in declaration order would have
+/// created an ABI difference from an edit with no meaning, which is the worst kind: the
+/// compiler would be right that nothing changed and the linker would disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordLayout {
+    pub id: RecordTy,
+    /// What LLVM calls this type, derived from the record's durable identity.
+    pub name: NativeTypeName,
+    /// The source name, for comments in `--emit-ir`. Never resolved against.
+    pub source: String,
+    /// The field types **in layout order**, which is the order of the LLVM struct.
+    pub fields: Vec<Ty>,
+    /// For each field in **declaration** order, its index in [`Self::fields`].
+    ///
+    /// The whole of the translation. A consumer holding a
+    /// [`FieldRef`](nazm_sema::FieldRef) — which names a declaration index, because that
+    /// is what a field's semantic identity is spelled as in one session — comes through
+    /// here and gets a position.
+    pub of_declaration: Vec<u32>,
 }
 
 /// What a value of a given type owns, and therefore what has to happen when a binding
@@ -92,6 +154,14 @@ pub enum Owns {
     Backing,
     /// A channel header, with its queue, its mutex and its condition variable.
     Channel,
+    /// Whatever its fields own, **recursively**.
+    ///
+    /// The variant that makes this enum a classification rather than a list: a record
+    /// does not own a thing of its own — it has no header, no count and no allocation —
+    /// and what happens when one is taken on or let go is entirely its fields' rules,
+    /// applied in turn. Adding a record type to a program therefore adds no case here,
+    /// which is the property `docs/architecture.md` §7.9 asked for before records existed.
+    Record(RecordTy),
 }
 
 impl Ty {
@@ -108,6 +178,11 @@ impl Ty {
             Self::Ints => Some(Owns::Ints),
             Self::Strs => Some(Owns::Strs),
             Self::Chan => Some(Owns::Channel),
+            // Unconditional, even for a record whose every field is an `Int`: answering
+            // truthfully would need the layout table, which this does not have. The
+            // emitter asks the table before it registers a frame slot, so a record that
+            // owns nothing still costs nothing — it simply costs nothing one level later.
+            Self::Record(id) => Some(Owns::Record(id)),
         }
     }
 
@@ -147,14 +222,25 @@ impl Ty {
 }
 
 impl Ty {
-    /// The LLVM type name.
+    /// The LLVM type name of a **built-in** type.
+    ///
+    /// Not total, and deliberately named so: a record's spelling is its
+    /// [`NativeTypeName`], which lives in the unit's layout table and is not static.
+    /// Every site that can meet a record goes through the emitter's own `llvm_type`,
+    /// and this arm exists so that one which does not produces text LLVM rejects rather
+    /// than text it silently accepts.
     #[must_use]
-    pub fn llvm(self) -> &'static str {
+    pub fn builtin_llvm(self) -> &'static str {
         match self {
             Self::Int => "i64",
             Self::Bool => "i1",
             Self::Str => "{ ptr, i64, ptr }",
             Self::Ints | Self::Strs | Self::Chan => "ptr",
+            // A record's spelling is its name, which is not static. Every site goes
+            // through the emitter's own `ty`, which has the table; this arm exists so
+            // that a site which has not been converted is a visible wrong answer in the
+            // IR rather than a silent one.
+            Self::Record(_) => "<record>",
         }
     }
 
@@ -170,7 +256,10 @@ impl Ty {
         match self {
             Self::Int => "0",
             Self::Bool => "false",
-            Self::Str => "zeroinitializer",
+            // Valid for any aggregate, and it is also the value a record slot holds
+            // before anything is stored in it: every owning field null, so releasing it
+            // is a no-op. That is what makes a partially built record safe to clean.
+            Self::Str | Self::Record(_) => "zeroinitializer",
             Self::Ints | Self::Strs | Self::Chan => "null",
         }
     }
@@ -184,6 +273,7 @@ impl Ty {
             Self::Ints => "Ints",
             Self::Strs => "Strs",
             Self::Chan => "Chan",
+            Self::Record(_) => "a record",
         }
     }
 }
@@ -191,10 +281,10 @@ impl Ty {
 impl Ty {
     /// The backend's representation of a front-end [`Type`](nazm_sema::Type).
     ///
-    /// One-to-one today, and written as a total match rather than a default arm so that
-    /// adding a type to the language is a compile error here instead of a silent `Int`.
+    /// One-to-one, and written as a total match rather than a default arm so that adding a
+    /// type to the language is a compile error here instead of a silent `Int`.
     #[must_use]
-    pub const fn of(t: nazm_sema::Type) -> Self {
+    pub fn of(t: nazm_sema::Type) -> Self {
         match t {
             nazm_sema::Type::Int => Self::Int,
             nazm_sema::Type::Bool => Self::Bool,
@@ -202,6 +292,16 @@ impl Ty {
             nazm_sema::Type::Ints => Self::Ints,
             nazm_sema::Type::Strs => Self::Strs,
             nazm_sema::Type::Chan => Self::Chan,
+            // The id carries across unchanged: both sides index the same session's
+            // records, and the backend's table is built from the checker's rather than
+            // being a second one. `docs/architecture.md`'s single-resolution rule.
+            // Not `const` since N9: a record carries an id, and converting one without
+            // an `as` cast needs `try_from`. Saturating is the answer every other id
+            // conversion gives, and a compilation with four billion record declarations
+            // has other problems.
+            nazm_sema::Type::Record(id) => {
+                Self::Record(RecordTy(u32::try_from(id.index()).unwrap_or(u32::MAX)))
+            }
         }
     }
 }
@@ -228,6 +328,14 @@ pub struct Unit {
     ///
     /// Sorted and deduplicated, so two builds of one module produce one text.
     pub externals: Vec<External>,
+    /// The record types this unit's own code mentions, closed over field types, sorted by
+    /// name.
+    ///
+    /// **Only the ones it uses.** A unit that never names a record carries none, and one
+    /// that names `Point` does not acquire every other record in the program — which is
+    /// what keeps N6's object cache precise: a record added elsewhere changes no byte of
+    /// this unit's text, so its object stays reusable.
+    pub records: Vec<RecordLayout>,
 }
 
 /// A definition another unit owns, as this one needs to see it.
@@ -330,6 +438,22 @@ pub enum Stmt {
     /// assignment to an immutable binding (`N0310`) before lowering runs, and re-deciding
     /// it here would be a second mutability rule to keep in agreement.
     Assign { slot: usize, value: Expr },
+    /// Replace a field reached from a slot by a projection path.
+    ///
+    /// `a.b.c = v`. A separate variant from [`Self::Assign`] because it is a different
+    /// operation: an assignment stores a value, and this one reads a record out of a slot,
+    /// replaces one field inside it, and stores the record back. The value semantics are
+    /// what force that shape — a record is not a handle, so there is nothing to write
+    /// through.
+    ///
+    /// `path` is one step per field, outermost first, each the **LLVM field index** and
+    /// the type it selects. The index is decided in [`crate::lower`] from the layout,
+    /// which is the only place it may be.
+    SetField {
+        slot: usize,
+        path: Vec<(u32, Ty)>,
+        value: Expr,
+    },
     /// `while cond { body }`.
     ///
     /// The condition is an expression evaluated **on every iteration**, including the
@@ -447,6 +571,38 @@ pub enum Expr {
         args: Vec<Expr>,
         ret: Ty,
     },
+    /// Build a record value.
+    ///
+    /// `fields` is in **evaluation order** — the order the initialisers were written,
+    /// which `docs/spec.md` fixes as the order side effects happen in — and each carries
+    /// the LLVM field index it fills. The two orders are deliberately different things,
+    /// and keeping both here is what lets the layout be canonical without the evaluation
+    /// order following it.
+    ///
+    /// `slot` is a hidden local to assemble into, present exactly when some field owns
+    /// something. It exists for one reason: an initialiser that fails after an earlier one
+    /// has produced a heap string must not leak it. Assembling in a slot that the frame
+    /// cleans means the partially built record is released by the ordinary exit path, and
+    /// the "which fields are initialised" bookkeeping `docs/spec.md` asks for is the
+    /// zeroed value itself — an unwritten field is null, and releasing null is a no-op.
+    Record {
+        ty: Ty,
+        fields: Vec<(u32, Expr)>,
+        slot: Option<usize>,
+    },
+    /// Read a field out of a record value.
+    ///
+    /// The result takes its **own** reference to whatever backs it, before the record it
+    /// came from is dropped — which is what makes `make().name` valid after the temporary
+    /// `make()` returned is gone. `docs/spec.md`, *A projection produces a value*.
+    Field {
+        base: Box<Expr>,
+        /// The base's type, carried so emission needs no second lookup.
+        base_ty: Ty,
+        /// The **LLVM field index**, decided at lowering from the layout.
+        at: u32,
+        ty: Ty,
+    },
     /// A built-in operation.
     ///
     /// Separate from [`Expr::Call`] because it resolves to emitted instructions rather
@@ -492,6 +648,7 @@ impl Expr {
             Self::Builtin { op, .. } => Some(op.lowered_ret()),
             Self::Load { ty, .. } => Some(*ty),
             Self::Call { ret, .. } => Some(*ret),
+            Self::Record { ty, .. } | Self::Field { ty, .. } => Some(*ty),
             Self::If { ty, .. } => *ty,
         }
     }

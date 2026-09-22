@@ -99,6 +99,275 @@ Parameter and return types are always written. Local `let` bindings infer from t
 initialiser. Both branches of an `if` must have the same type, and a condition must be
 `Bool` — there is no truthiness.
 
+
+### Records — the first user-defined type
+
+Settled by N9, 2026-09-23. A **record** is a nominal product type with named fields. The
+source keyword is `struct`; the word *record* names the category everywhere else.
+
+```nazm
+pub struct Point {
+    x: Int,
+    y: Int,
+}
+```
+
+#### One concept, two words, and why that is not two spellings
+
+`struct` was reserved by name from the beginning — `crates/nazm-syntax/src/parser.rs`
+refused it with *"there are no user-defined types yet"* — so the keyword was chosen before
+this milestone and N9 only stopped refusing it. There is no `record` keyword and never
+will be: a language with two spellings for one thing has two things to explain. The word
+*record* is used for the semantic category (`DefKind::Record`, `docs/architecture.md`,
+this section) precisely because it is **not** a keyword, so it can name the idea without
+being mistaken for syntax.
+
+#### Nominal, always
+
+Two records with identical fields are different types.
+
+```nazm
+struct A { x: Int, }
+struct B { x: Int, }
+```
+
+There is no conversion between `A` and `B`, implicit or explicit, and no structural
+subtyping. A record's identity is its **declaration**: the module it is declared in and
+the name it is declared under, which is the same rule a function's identity follows and is
+spelled the same way — `model.nz::record Point`. Two modules may each declare `Thing`, and
+they are two types.
+
+#### Types and functions are separate namespaces
+
+A module may declare a record `Point` and a function `Point`. Which one a name means is
+decided by where it is written: a type position (`: T`, `-> T`) means the type, and a call
+means the function. The grammar always knows, and that is the condition under which two
+namespaces are worth having.
+
+Built-in type names are **not** in the type namespace and cannot be shadowed: `struct Int`
+is `N0331`. `Int` means the same thing in every module of every program.
+
+Collisions between two imported types, or between an imported type and a local one, are
+refused where they are created — the same rule and the same codes as the function
+namespace, `N0207` and `N0208`. A name is never silently shadowed.
+
+#### A record is a value, and its fields keep their own semantics
+
+**Assignment creates another record value.** A record has no object identity: there is no
+address-of, no reference equality, and no operation through which two bindings of one
+record could be observed to be the same object. What each field does when the record is
+copied is **that field type's existing law**, unchanged:
+
+```nazm
+struct Box {
+    count: Int,
+    name: Str,
+    values: Ints,
+}
+
+let mut a = Box(count: 1, name: "n", values: ints_new());
+let b = a;
+```
+
+| Field | After `let b = a` |
+| --- | --- |
+| `count` | two independent `Int`s. `a.count = 7` does not change `b.count` |
+| `name` | two `Str` values with the same bytes. Whether they share a backing is unobservable, exactly as *Strings are bytes* already promised |
+| `values` | **two references to one sequence.** `ints_push(a.values, 7)` is visible through `b.values` |
+
+That last row is the design, not a concession. A record is a value; an `Ints` is an owned
+mutable handle; a record *containing* one contains the handle, so copying the record copies
+the handle and both name one storage. Making `Ints` copy because it sits inside a record
+would have given the same type two meanings depending on where it was written.
+
+Consequently the memory constitution needs **no fifth kind of value** for records. A record
+is a composition of kinds, and every rule below is derived from its fields rather than
+declared for it:
+
+| | |
+| --- | --- |
+| **copy** | copy or share each field, by that field's rule |
+| **destroy** | release each field, by that field's rule, in an order no program can observe |
+| **needs cleanup** | some field does, recursively |
+| **may cross into a task** | every field may, recursively |
+
+#### Construction names every field
+
+```nazm
+let p = Point(x: 1, y: 2);
+```
+
+Named, never positional, so field order is never an implicit API. Every field is given
+exactly one value: a missing one is `N0334`, an unknown one `N0333`, a repeated one
+`N0332`. There are no default values, no positional fallback, and no update or spread form.
+
+**Why the parenthesised form and not `Point { x: 1 }`.** The braced form is more familiar
+and it collides with the language's own grammar: `if p { … }` is an `if` whose condition is
+a bare name, and `p { … }` would be a record literal, and no amount of parser lookahead
+turns that into a decision rather than a guess. The parenthesised form is told from a call
+by two tokens — `IDENT "(" IDENT ":"` — and that *is* a decision, because no argument
+expression can begin with a name followed by a colon. The smallest grammar with the fewest
+contextual exceptions won.
+
+**Initialisers evaluate in the order written.** `Point(x: f(), y: g())` calls `f` before
+`g`, whatever order the fields were declared in and wherever the backend puts them. Physical
+layout is unrelated to evaluation order, and a backend that filled fields in layout order
+would have made field order observable through side effects.
+
+**A construction that fails part way through cleans up.** If an initialiser fails after an
+earlier one has produced a heap string or a sequence, that value is released. A record is
+either fully initialised or it does not exist; there is no partially initialised record a
+program can reach.
+
+**A record with no fields is refused** (`N0101`), because `Marker()` is exactly how a call
+to a function named `Marker` is written, and types and functions are separate namespaces,
+so neither reading could be preferred. If a later milestone gives constructions a form that
+cannot be a call, the refusal can be lifted without changing anything else.
+
+#### Field order is not part of what a record means
+
+Moving two field declarations changes nothing: not the type, not what constructs it, not
+the module's interface fingerprint, and not the native layout. Construction is by name and
+the persisted interface sorts fields by name, so the fingerprint cannot move; the backend
+lays fields out in **canonical field-name order**, so the object file cannot either. An
+edit the language says means nothing also *does* nothing — which is the only honest way to
+make the claim, since the alternative is an ABI difference produced by an edit the compiler
+itself calls meaningless.
+
+#### Reading a field
+
+`p.field` produces a value according to the field type's own law: an `Int` copies, a `Str`
+is a value with the same bytes, an `Ints` or a `Chan` is another reference to the same
+storage, and a nested record is another record value whose fields follow these rules again.
+
+Field lookup starts from the **resolved type of the expression it is read from**, and goes
+nowhere else. There is no global field namespace: `value.y` where `value` is an `A` that
+has no `y` is `N0333`, whatever other record has a `y`.
+
+**A projection out of a temporary is valid.** In
+
+```nazm
+let s = make().name;
+```
+
+`s` is a valid `Str` after the record `make()` returned has been destroyed. The value read
+out holds whatever reference it needs before the record it came from is released; this is
+rule 3 of the memory constitution applied to a projection.
+
+#### Binding mutability reaches every field
+
+```nazm
+let p = Point(x: 1, y: 2);
+p.x = 2;                      // N0310 — `p` is not mutable
+```
+
+```nazm
+let mut p = Point(x: 1, y: 2);
+p.x = 2;                      // fine
+```
+
+Mutability is checked at the **root binding** of the place being written, at any depth:
+`a.inner.count = 3` needs `let mut a`. A record is a value, so replacing part of what a
+binding holds is changing the binding — the same act as `p = q`, and it needs the same
+permission.
+
+Parameters remain immutable bindings, so a `struct` parameter's field cannot be replaced
+either. There is no `inout`.
+
+**Mutating a field and mutating what a field refers to are different things.** Given
+`w: Work` with a field `values: Ints`, `w.values = other` is refused and
+`ints_push(w.values, 1)` is not — the second changes the sequence, not the record. This
+distinction already existed for sequence parameters; records inherit it rather than
+introduce it.
+
+**Replacement secures the new value before releasing the old.** `p.name = e` evaluates `e`,
+takes whatever reference the new value needs, releases the old field, and stores. So
+`p.name = p.name` is safe, a new value backed by the same allocation as the old one is
+safe, and a failing `e` leaves the old field intact and valid.
+
+#### Parameters, returns and tasks
+
+A record parameter is **borrowed**, like every other parameter: calling `size(p)` neither
+consumes nor duplicates the caller's record, and the callee cannot keep it. Returning a
+record **transfers**, like every other return: each owning field survives into the caller,
+on both the tail-expression edge and the explicit `return` edge.
+
+Whether a record may cross into a task is **derived, not declared**: a record may cross
+exactly when every field may, recursively. There is no marker to write and none to forget.
+
+```nazm
+struct Message { id: Int, text: Str, reply: Chan, }   // may cross
+struct Work { values: Ints, }                          // may not — N0321
+```
+
+A record containing an `Ints` at any depth may not cross, and the diagnostic names the
+field path that decided it — `Outer.inner.values` rather than "this record cannot cross".
+Wrapping a sequence in a record does not launder it past `N0321`.
+
+#### Visibility, and the API being closed
+
+Record declarations follow the existing law: private by default, `pub` exports, imports
+non-transitive. N9 records are **transparent** — a module that can see a record can
+construct it and project its fields — so there are no private fields, no opaque records and
+no accessors.
+
+Because there are no opaque types, a public item may not name a private one:
+
+```nazm
+struct Secret { value: Int, }
+pub fn get() -> Secret { … }              // N0337
+pub struct Public { secret: Secret, }     // N0337
+```
+
+An importer would have to name the type to use the item and cannot, so the interface would
+be one nobody could consume. The diagnostic names both the public item and the private type
+it exposes.
+
+A module's persisted interface carries every record definition its public surface mentions,
+closed over field types — including one declared in a third module, because an importer has
+to understand a shape it can project through and cannot go and read a module it never
+imported. Carrying the *shape* is not carrying the *name*: nothing extra becomes writable,
+and the non-transitive import rule is unchanged.
+
+#### Recursion is refused as an impossible layout
+
+```nazm
+struct Node { next: Node, }        // N0336
+struct A { b: B, }                 // N0336, including across modules
+struct B { a: A, }
+```
+
+A record contains its fields **by value**, so a chain of record-typed fields that returns to
+where it started describes a value that contains itself, and no finite layout exists. This
+is not a memory-safety refusal and it is not converted into a pointer behind the reader's
+back: it is an impossible layout, stated as one.
+
+The rule is written over **inline value containment**, deliberately, so that a future type
+which holds its contents somewhere else makes the same shape expressible without this rule
+changing. A module import cycle remains legal and is a different thing entirely; only a
+layout cycle is refused.
+
+Records nested inside records are bounded at 32 levels (`N0338`). The bound is on the
+emitted program rather than on the compiler — each level multiplies the copy and cleanup
+code generated for the outer record — and it is stated rather than discovered.
+
+#### What records are not, in N9
+
+No variants, no pattern matching, no generics, no traits, no methods, no `impl`, no
+closures, no `Option` or `Result`, no user-defined destructors, no operator overloading, no
+inheritance, no field-level visibility, no default values, no update syntax.
+
+**No derived equality.** `a == b` on records is `N0304`. Equality would have to decide what
+a sequence field means — the same storage or the same contents — and the language has not
+chosen; sequences and channels are refused by `==` for the same reason and records join
+them rather than get an exception.
+
+**`pub` still promises nothing about a binary.** A record's layout, its field offsets, its
+size and its calling convention are compiler-private and may change between builds. `pub`
+says which *Nazm modules* may name the type. There is no `repr`, no FFI layout, no
+serialisation format and no storage layout; each of those needs an explicit contract and
+none is made here.
+
 ## Settled for v0.2 — mutation and iteration
 
 ### Mutation is opt-in and visible at the binding
@@ -606,6 +875,11 @@ Nazm does not call something automatic and leave the reader to find out what it 
 | `strs_get(xs, i)` | no | no | **yes** | no | no |
 | `let c2 = c;` on a `Chan` | no | no | **yes** | no | no |
 | `spawn f(s)` | **yes**, for the task's arguments | no | **yes** | **yes** | no |
+| `let p = Point(x: 1, y: 2);` | no | no | no | no | no |
+| `let q = p;` on a record with owning fields | no | no | **yes, one per owning field** | no | no |
+| `p.x` where `x` is an `Int` | no | no | no | no | no |
+| `p.name` where `name` is a `Str` | no | no | **yes** | no | no |
+| `p.name = s;` | no | no | **yes**, one taken and one released | no | no |
 
 Two entries in that table deserve their emphasis. **Passing a value to a function costs
 nothing**, which is rule 2 turned into a number: the caller keeps its reference across the
@@ -633,11 +907,20 @@ that can form them arrives with its own policy — a weak reference, a region, o
 collector for that kind alone. **What may not happen is a recursive type being added and
 the reclamation claim left standing.**
 
+**N9 took the first option, 2026-09-23.** A record holds its fields by value, so a
+containment cycle has no finite layout and is refused outright (`N0336`) — which means the
+paragraph above is satisfied by the type system rather than by a new policy, and the
+argument is unchanged: a record adds no new *kind* of value, only a composition of existing
+ones, and a composition of leaves is a leaf. The claim therefore now covers `Int`, `Bool`,
+`Str`, `Ints`, `Strs`, `Chan` **and every record built from them**. What would end it is a
+type that can refer to another value indirectly — a pointer, a reference, or a generic
+container able to hold a record — and none of those exists.
+
 #### What is not promised
 
 - **Leak freedom for a whole program, as a permanent property.** Every heap-backed type
   the language *currently has* is reclaimed, which is a claim about `Int`, `Bool`, `Str`,
-  `Ints`, `Strs` and `Chan` and about nothing else. It rests on the cycle argument below,
+  `Ints`, `Strs`, `Chan` and records composed of them, and about nothing else. It rests on the cycle argument below,
   which is a fact about this type system rather than about counting in general: the first
   recursive user-defined type ends it, and the paragraph after next says in advance what
   admitting one requires. `capability-matrix.md` states the scope per type rather than as
@@ -647,7 +930,14 @@ the reclamation claim left standing.**
   is freed, neither is counted, and neither is a leak.
 - **Deadlock freedom.** Unchanged, and still not promised.
 - **A destructor.** There is no user-visible destruction, no RAII and no ordering a program
-  can observe, because nothing a program can write runs at reclamation.
+  can observe, because nothing a program can write runs at reclamation. A record is
+  destroyed by releasing each of its fields, and the order between fields is deliberately
+  unspecified — no program can observe it, and fixing it in the specification would be
+  promising something the language has no way to let anyone use.
+- **Zero-cost record copying.** A record with many owning fields costs one reference
+  adjustment per owning field, per copy. The design leaves that optimisable — a copy whose
+  source dies immediately after needs no traffic at all — and until it is measured, nothing
+  here claims it is free. `docs/performance.md` carries the numbers.
 
 ### What the outside-world built-ins do and do not promise
 
@@ -1191,8 +1481,12 @@ were never built would be claims about the parser's guess, not about the program
 ### Not in v0.3, and unsupported rather than half-present
 
 Valueless `return`, labelled break, `for`, `loop`, mutable parameters, effects, generics,
-user-defined types, floating point. A program using any of them is rejected by name rather
-than misparsed into something else.
+floating point. A program using any of them is rejected by name rather than misparsed into
+something else.
+
+**Corrected 2026-09-23.** This list also named **user-defined types**, which N9 added:
+`struct` declares a record, and the section *Records* above is the law. Variants, pattern
+matching, generics, traits and methods remain absent and remain refused by name.
 
 **Corrected 2026-09-21.** This list also named **I/O, modules and string concatenation**,
 and the paragraph below it said there was deliberately no `print` — while all three are

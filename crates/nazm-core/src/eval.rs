@@ -10,10 +10,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use nazm_diag::{codes, Diagnostic};
-use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Program, Stmt, While};
+use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Place, Program, Stmt, While};
 
 use nazm_sema::intrinsic::Intrinsic;
 use nazm_sema::module::ModuleId;
+use nazm_sema::record::RecordId;
 use nazm_sema::resolve::{Callee, FnId, Resolution};
 
 /// A runtime value.
@@ -77,6 +78,48 @@ pub enum Value {
     /// synchronisation, which is why `docs/spec.md` lets it cross a `spawn` while a
     /// sequence may not.
     Chan(Arc<Channel>),
+    /// A user-defined record: an **inline aggregate**, by value.
+    ///
+    /// Not an `Arc`, and that is the semantic decision rather than a representation
+    /// choice. `docs/spec.md` gives a record no object identity: assignment produces
+    /// another record value whose fields are copied or shared according to **each field
+    /// type's own law**, and a shared cell would have made every copy alias.
+    ///
+    /// Cloning a [`Rec`] clones its `Vec<Value>`, which clones each field — and every one
+    /// of those clones is already the language's rule for that type: an `Int` copies, a
+    /// `Str` shares its backing, a sequence handle and a channel take another reference.
+    /// So composition is not implemented here; it *is* the field types' behaviour, which
+    /// is exactly the property N9 exists to test.
+    Record(Rec),
+}
+
+/// A record value: which record it is, and its fields in **declaration order**.
+///
+/// Declaration order rather than the canonical layout order, because this is the
+/// interpreter and a field index here answers the same question
+/// [`FieldRef`](nazm_sema::FieldRef) does. Where the fields physically sit is the native
+/// backend's decision and nothing here knows it — which is the layout boundary,
+/// respected by the reference implementation as well.
+#[derive(Debug, Clone)]
+pub struct Rec {
+    def: RecordId,
+    fields: Vec<Value>,
+}
+
+impl Rec {
+    #[must_use]
+    pub fn new(def: RecordId, fields: Vec<Value>) -> Self {
+        Self { def, fields }
+    }
+
+    #[must_use]
+    pub fn field(&self, at: u32) -> Option<&Value> {
+        self.fields.get(at as usize)
+    }
+
+    fn field_mut(&mut self, at: u32) -> Option<&mut Value> {
+        self.fields.get_mut(at as usize)
+    }
 }
 
 /// A bounded queue with a close flag.
@@ -167,6 +210,10 @@ impl PartialEq for Value {
             (Self::Ints(a), Self::Ints(b)) => Arc::ptr_eq(a, b),
             (Self::Strs(a), Self::Strs(b)) => Arc::ptr_eq(a, b),
             (Self::Chan(a), Self::Chan(b)) => Arc::ptr_eq(a, b),
+            // Field by field. Never observable from a program — `docs/spec.md` does not
+            // offer `==` on a record, and `N0304` refuses it — and defined so that the
+            // rest of `Value` can still be compared.
+            (Self::Record(a), Self::Record(b)) => a.def == b.def && a.fields == b.fields,
             _ => false,
         }
     }
@@ -390,6 +437,9 @@ impl std::fmt::Display for Value {
                 Err(_) => f.write_str("Strs(unreadable)"),
             },
             Self::Chan(_) => f.write_str("Chan"),
+            // A record is never a program's result — `main` returns `Int` — so this is
+            // for diagnostics, and says what it is rather than dumping it.
+            Self::Record(r) => write!(f, "record({} fields)", r.fields.len()),
         }
     }
 }
@@ -1380,20 +1430,72 @@ impl Interpreter {
     /// one rather than creating a shadow that vanishes each iteration — which would make
     /// every accumulator silently do nothing.
     fn assign(&mut self, a: &Assign, env: &mut Env) -> Result<Flow, RuntimeError> {
+        // **The new value first, always.** `docs/spec.md` requires a replacement to be
+        // secured before the old one is let go, so that `p.name = p.name` and a failing
+        // right-hand side are both safe. Evaluating here rather than after the walk is
+        // what makes that true: by the time anything is overwritten, `v` already holds
+        // its own reference to whatever backs it.
         let v = take!(self, &a.value, env);
+        let place = &a.place;
+        // Cloned handle rather than a borrow: `env` is borrowed mutably below, and the
+        // resolution is behind the same `self`.
+        let res = Arc::clone(&self.res);
         for frame in env.iter_mut().rev() {
-            if let Some(slot) = frame.get_mut(&a.name) {
-                *slot = v;
-                return Ok(Flow::Fell(None));
+            if let Some(slot) = frame.get_mut(&place.name) {
+                return Self::replace(&res, slot, place, &v).map(|()| Flow::Fell(None));
             }
         }
         Err(RuntimeError {
             diagnostic: Box::new(Diagnostic::error(
                 codes::UNDEFINED_VARIABLE,
-                a.name_span,
-                format!("`{}` is not defined", a.name),
+                place.name_span,
+                format!("`{}` is not defined", place.name),
             )),
         })
+    }
+
+    /// Write `v` at the end of `place`'s projection path, starting from the binding.
+    ///
+    /// The old value at that position is dropped by the store, which is where a `Str`
+    /// backing, a sequence or a channel loses the reference this record held — the same
+    /// event, at the same moment, as the compiled program's release.
+    ///
+    /// Iterative: a path is a list, and walking it with a loop keeps the depth of a
+    /// projection out of the host's stack.
+    ///
+    /// Which field each step names is **read from the resolution**, not looked up by
+    /// name here. The checker already decided it, and deciding it again would be the
+    /// second resolver N1 removed.
+    fn replace(
+        res: &Resolution,
+        mut slot: &mut Value,
+        place: &Place,
+        v: &Value,
+    ) -> Result<(), RuntimeError> {
+        for step in &place.path {
+            // Unreachable if checking ran: the checker resolved this path and refused
+            // anything it could not. A diagnostic rather than a panic, so a checker bug
+            // surfaces as a report.
+            let (Value::Record(r), Some(at)) = (&mut *slot, res.field(step.name_span)) else {
+                return Err(Self::no_such_place(place));
+            };
+            let Some(next) = r.field_mut(at.field) else {
+                return Err(Self::no_such_place(place));
+            };
+            slot = next;
+        }
+        *slot = v.clone();
+        Ok(())
+    }
+
+    fn no_such_place(place: &Place) -> RuntimeError {
+        RuntimeError {
+            diagnostic: Box::new(Diagnostic::error(
+                codes::UNDEFINED_VARIABLE,
+                place.span,
+                "this is not a place that can be written to",
+            )),
+        }
     }
 
     fn while_loop(&mut self, w: &While, env: &mut Env) -> Result<Flow, RuntimeError> {
@@ -1504,6 +1606,94 @@ impl Interpreter {
                 let l = take!(self, lhs, env);
                 let r = take!(self, rhs, env);
                 self.binary(*op, &l, &r, *op_span)?
+            }
+
+            Expr::Construct {
+                ty_span, fields, ..
+            } => {
+                // **In the order written**, which `docs/spec.md` fixes as the evaluation
+                // order and which physical layout has nothing to do with. A failure part
+                // way through drops what has been built so far — the `Vec` goes with the
+                // error — and that drop is what releases a string backing or a sequence
+                // reference an earlier initialiser had taken. The counters observe it, so
+                // the cleanup is evidence rather than an assumption about the host.
+                let Some(def) = self.res.construction(*ty_span) else {
+                    return Err(RuntimeError {
+                        diagnostic: Box::new(Diagnostic::error(
+                            codes::UNKNOWN_TYPE,
+                            *ty_span,
+                            "this record was not resolved",
+                        )),
+                    });
+                };
+                let arity = self.res.records().get(def).map_or(0, |d| d.fields.len());
+                let mut built: Vec<Option<Value>> = vec![None; arity];
+                for f in fields {
+                    let v = take!(self, &f.value, env);
+                    // Placed by **declaration** index, taken by name, so the order the
+                    // author wrote the initialisers in cannot change the record's shape.
+                    let at = self
+                        .res
+                        .records()
+                        .get(def)
+                        .and_then(|d| d.field(&f.name).map(|(i, _)| i as usize));
+                    if let Some(slot) = at.and_then(|i| built.get_mut(i)) {
+                        *slot = Some(v);
+                    }
+                }
+                // Checking guarantees every field was given exactly one value, so an
+                // absent one is a checker bug rather than a program's mistake.
+                let mut values = Vec::with_capacity(arity);
+                for (i, v) in built.into_iter().enumerate() {
+                    match v {
+                        Some(v) => values.push(v),
+                        None => {
+                            let name = self
+                                .res
+                                .records()
+                                .get(def)
+                                .and_then(|d| d.fields.get(i))
+                                .map_or_else(|| "a field".to_owned(), |f| format!("`{}`", f.name));
+                            return Err(RuntimeError {
+                                diagnostic: Box::new(Diagnostic::error(
+                                    codes::MISSING_FIELD,
+                                    *ty_span,
+                                    format!("{name} was given no value"),
+                                )),
+                            });
+                        }
+                    }
+                }
+                Value::Record(Rec::new(def, values))
+            }
+
+            Expr::Field {
+                base, name_span, ..
+            } => {
+                let base = take!(self, base, env);
+                // The field's value is **cloned out**, which is the whole of rule 3 for a
+                // projection: what comes out holds its own reference to whatever backs
+                // it, so it survives the record it came from — including when that record
+                // was a temporary that dies on this very line.
+                let (Value::Record(r), Some(at)) = (&base, self.res.field(*name_span)) else {
+                    return Err(RuntimeError {
+                        diagnostic: Box::new(Diagnostic::error(
+                            codes::INVALID_PROJECTION,
+                            *name_span,
+                            "this is not a record",
+                        )),
+                    });
+                };
+                let Some(v) = r.field(at.field) else {
+                    return Err(RuntimeError {
+                        diagnostic: Box::new(Diagnostic::error(
+                            codes::UNKNOWN_FIELD,
+                            *name_span,
+                            "this record has no such field",
+                        )),
+                    });
+                };
+                v.clone()
             }
 
             Expr::Call {
@@ -1705,5 +1895,8 @@ fn type_name(v: &Value) -> &'static str {
         Value::Ints(_) => "Ints",
         Value::Strs(_) => "Strs",
         Value::Chan(_) => "Chan",
+        // Only reached by a built-in handed the wrong type, which checking has already
+        // refused — and no built-in takes a record, so no message can name one usefully.
+        Value::Record(_) => "a record",
     }
 }

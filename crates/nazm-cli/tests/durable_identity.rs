@@ -289,14 +289,19 @@ fn a_dependent_checks_against_a_deserialised_interface_with_the_dependency_delet
     let b = graph.add(FileId::from_index(1), interface.module_key());
     graph.import(a, b, nazm_span::Span::synthetic());
 
-    let unit = nazm_core::Unit::of(&program, &graph, a);
+    let units = [nazm_core::Unit::of(&program, &graph, a)];
+    let unit = &units[0];
     let mut res = Resolution::default();
     let mut errors = Vec::new();
-    nazm_core::declare_unit(&unit, &mut res, &mut errors);
+    // B's records are materialised into this session's table before anything that could
+    // name one, which is the order a compilation uses too.
+    let rehydrated = interface.rehydrate(b, FnId::from_index(4096), res.records_mut());
+    let own = nazm_core::declare_records(&units, &mut res, &mut errors);
+    let _ = own;
+    nazm_core::declare_unit(unit, &[&rehydrated], &mut res, &mut errors);
     assert!(errors.is_empty(), "{errors:#?}");
 
-    let rehydrated = interface.rehydrate(b, FnId::from_index(4096));
-    nazm_core::check_unit(&unit, &[&rehydrated], &mut res, &mut errors);
+    nazm_core::check_unit(unit, &[&rehydrated], &mut res, &mut errors);
     assert!(
         errors.is_empty(),
         "A should check against B's persisted interface alone: {errors:#?}"
@@ -305,16 +310,13 @@ fn a_dependent_checks_against_a_deserialised_interface_with_the_dependency_delet
     // And the negative half, so the pass above is not something else succeeding: with an
     // interface that offers nothing, the same source is refused.
     let empty = PersistentUnitInterface::from_json(
-        r#"{"schema":"nazm.interface/1","module":"b.nz","dependencies":[],"exports":[]}"#,
+        r#"{"schema":"nazm.interface/2","module":"b.nz","dependencies":[],"records":[],"exports":[]}"#,
     )
     .expect("valid");
     let mut errors = Vec::new();
-    nazm_core::check_unit(
-        &unit,
-        &[&empty.rehydrate(b, FnId::from_index(4096))],
-        &mut Resolution::default(),
-        &mut errors,
-    );
+    let mut empty_res = Resolution::default();
+    let rehydrated_empty = empty.rehydrate(b, FnId::from_index(4096), empty_res.records_mut());
+    nazm_core::check_unit(unit, &[&rehydrated_empty], &mut empty_res, &mut errors);
     assert_eq!(errors.len(), 1, "{errors:#?}");
     assert_eq!(errors[0].code, nazm_diag::codes::UNDEFINED_FUNCTION);
 

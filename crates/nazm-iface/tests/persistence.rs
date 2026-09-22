@@ -11,6 +11,7 @@ use nazm_iface::{InterfaceHash, SCHEMA};
 use nazm_sema::interface::{Export, UnitInterface};
 use nazm_sema::key::ModuleKey;
 use nazm_sema::module::ModuleGraph;
+use nazm_sema::record::Records;
 use nazm_sema::resolve::FnId;
 use nazm_sema::types::Type;
 use nazm_span::{FileId, Span};
@@ -45,12 +46,14 @@ fn interface(g: &ModuleGraph, exports: &[(&str, &[Type], Type)]) -> UnitInterfac
                 }
             })
             .collect(),
+        Vec::new(),
         g.imports(root).to_vec(),
     )
 }
 
 fn publish(g: &ModuleGraph, exports: &[(&str, &[Type], Type)]) -> PersistentUnitInterface {
-    PersistentUnitInterface::published(&interface(g, exports), g).expect("publishable")
+    PersistentUnitInterface::published(&interface(g, exports), g, &Records::default())
+        .expect("publishable")
 }
 
 #[test]
@@ -61,7 +64,7 @@ fn the_published_form_carries_durable_keys_and_nothing_session_local() {
 
     assert_eq!(
         json,
-        r#"{"schema":"nazm.interface/1","module":"a.nz","dependencies":["lib/b.nz"],"exports":[{"def":"a.nz::fn parse","name":"parse","kind":"fn","params":["Str"],"ret":"Int"}]}"#
+        r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":["lib/b.nz"],"records":[],"exports":[{"def":"a.nz::fn parse","name":"parse","kind":"fn","params":["Str"],"ret":"Int"}]}"#
     );
     // The ways a session-local value could have leaked, asserted separately so a failure
     // says which. `17` is the FnId; the spans above would show as small integers.
@@ -74,8 +77,8 @@ fn the_published_form_carries_durable_keys_and_nothing_session_local() {
 fn a_module_without_a_durable_key_is_refused_rather_than_guessed() {
     let mut g = ModuleGraph::default();
     g.add(FileId::ROOT, None);
-    let i = UnitInterface::new(g.root(), Vec::new(), Vec::new());
-    assert!(PersistentUnitInterface::published(&i, &g).is_err());
+    let i = UnitInterface::new(g.root(), Vec::new(), Vec::new(), Vec::new());
+    assert!(PersistentUnitInterface::published(&i, &g, &Records::default()).is_err());
 }
 
 #[test]
@@ -86,8 +89,8 @@ fn a_dependency_without_a_durable_key_is_refused_too() {
     let a = g.add(FileId::ROOT, ModuleKey::relative("a.nz"));
     let b = g.add(FileId::from_index(1), None);
     g.import(a, b, Span::synthetic());
-    let i = UnitInterface::new(a, Vec::new(), g.imports(a).to_vec());
-    assert!(PersistentUnitInterface::published(&i, &g).is_err());
+    let i = UnitInterface::new(a, Vec::new(), Vec::new(), g.imports(a).to_vec());
+    assert!(PersistentUnitInterface::published(&i, &g, &Records::default()).is_err());
 }
 
 #[test]
@@ -218,7 +221,7 @@ fn malformed_and_truncated_bytes_are_refused() {
     ));
     // Right schema, missing the rest.
     assert!(matches!(
-        refuse(r#"{"schema":"nazm.interface/1"}"#),
+        refuse(r#"{"schema":"nazm.interface/2"}"#),
         ReadError::Malformed(_)
     ));
 }
@@ -226,12 +229,12 @@ fn malformed_and_truncated_bytes_are_refused() {
 #[test]
 fn a_key_that_is_not_canonical_is_refused() {
     assert!(matches!(
-        refuse(r#"{"schema":"nazm.interface/1","module":"./a.nz","dependencies":[],"exports":[]}"#),
+        refuse(r#"{"schema":"nazm.interface/2","module":"./a.nz","dependencies":[],"exports":[]}"#),
         ReadError::BadKey(_)
     ));
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/1","module":"a.nz","dependencies":["../b.nz"],"exports":[]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":["../b.nz"],"exports":[]}"#
         ),
         ReadError::BadKey(_)
     ));
@@ -240,7 +243,7 @@ fn a_key_that_is_not_canonical_is_refused() {
 #[test]
 fn a_duplicate_export_is_refused() {
     let e = refuse(
-        r#"{"schema":"nazm.interface/1","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"},{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Str"}]}"#,
+        r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"},{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Str"}]}"#,
     );
     assert_eq!(e, ReadError::DuplicateExport("f".to_owned()));
 }
@@ -249,13 +252,13 @@ fn a_duplicate_export_is_refused() {
 fn an_unknown_type_or_kind_is_refused() {
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/1","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn f","name":"f","kind":"fn","params":["Widget"],"ret":"Int"}]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn f","name":"f","kind":"fn","params":["Widget"],"ret":"Int"}]}"#
         ),
         ReadError::UnknownType(_)
     ));
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/1","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::record f","name":"f","kind":"record","params":[],"ret":"Int"}]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::record f","name":"f","kind":"record","params":[],"ret":"Int"}]}"#
         ),
         ReadError::UnknownKind(_)
     ));
@@ -265,7 +268,7 @@ fn an_unknown_type_or_kind_is_refused() {
 fn an_export_belonging_to_another_module_is_refused() {
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/1","module":"a.nz","dependencies":[],"exports":[{"def":"b.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"b.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
         ),
         ReadError::ForeignExport(_)
     ));
@@ -275,7 +278,7 @@ fn an_export_belonging_to_another_module_is_refused() {
 fn an_identity_disagreeing_with_the_name_beside_it_is_refused() {
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/1","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn g","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn g","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
         ),
         ReadError::NameMismatch(_)
     ));
@@ -286,13 +289,13 @@ fn a_file_not_in_canonical_order_is_refused() {
     // Two spellings of one interface would be two fingerprints for one meaning.
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/1","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn g","name":"g","kind":"fn","params":[],"ret":"Int"},{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":[],"exports":[{"def":"a.nz::fn g","name":"g","kind":"fn","params":[],"ret":"Int"},{"def":"a.nz::fn f","name":"f","kind":"fn","params":[],"ret":"Int"}]}"#
         ),
         ReadError::NotCanonical(_)
     ));
     assert!(matches!(
         refuse(
-            r#"{"schema":"nazm.interface/1","module":"a.nz","dependencies":["c.nz","b.nz"],"exports":[]}"#
+            r#"{"schema":"nazm.interface/2","module":"a.nz","dependencies":["c.nz","b.nz"],"exports":[]}"#
         ),
         ReadError::NotCanonical(_)
     ));
