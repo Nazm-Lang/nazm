@@ -24,6 +24,7 @@
 )]
 
 use nazm_core::sema::interface::{Export, UnitInterface, Visibility};
+use nazm_core::sema::key::ModuleKey;
 use nazm_core::sema::module::ModuleGraph;
 use nazm_core::sema::resolve::{FnId, Resolution};
 use nazm_core::sema::types::Type;
@@ -36,8 +37,8 @@ use nazm_span::{FileId, Span};
 /// produced both. Its **text** is not: nothing below ever reads it, which is the point.
 fn two_modules() -> ModuleGraph {
     let mut g = ModuleGraph::default();
-    let a = g.add(FileId::ROOT);
-    let b = g.add(FileId::from_index(1));
+    let a = g.add(FileId::ROOT, ModuleKey::relative("a.nz"));
+    let b = g.add(FileId::from_index(1), ModuleKey::relative("b.nz"));
     g.import(a, b, Span::new(FileId::ROOT, 4, 12));
     g
 }

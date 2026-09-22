@@ -13,6 +13,8 @@
 
 use nazm_span::{FileId, Span};
 
+use crate::key::ModuleKey;
+
 /// One module of this compilation.
 ///
 /// # Session-local, like everything else here
@@ -66,6 +68,14 @@ pub struct Dependency {
 #[derive(Debug, Clone)]
 struct Module {
     file: FileId,
+    /// Which logical module this is, across processes — when it has one.
+    ///
+    /// `None` for a module whose path escapes the source root, and for one reached under
+    /// two different names through a symbolic link. The loader decides, because only it
+    /// sees the second name. Neither case is an error: the compilation is complete and
+    /// correct, and the module simply has no durable identity for something else to key
+    /// on. See `docs/spec.md`, *Durable identity*.
+    key: Option<ModuleKey>,
     /// Modules named by this one's `use` items, deduplicated, in source order.
     ///
     /// **Direct only.** What they in turn import is not here and is not this module's
@@ -93,19 +103,38 @@ impl ModuleGraph {
         Self {
             modules: vec![Module {
                 file: FileId::ROOT,
+                // A compilation assembled from a string has no source root to be relative
+                // to, so the one module it contains has no durable identity. The `&str`
+                // entry points are for tests and for programs with genuinely one file;
+                // anything that came from disk goes through the loader, which does.
+                key: None,
                 imports: Vec::new(),
             }],
         }
     }
 
     /// Add a module for `file`, in load order. The first one added is the root.
-    pub fn add(&mut self, file: FileId) -> ModuleId {
+    ///
+    /// `key` is its durable identity, or `None` when it has none.
+    pub fn add(&mut self, file: FileId, key: Option<ModuleKey>) -> ModuleId {
         let id = ModuleId(u32::try_from(self.modules.len()).unwrap_or(u32::MAX));
         self.modules.push(Module {
             file,
+            key,
             imports: Vec::new(),
         });
         id
+    }
+
+    /// Withdraw a module's durable identity.
+    ///
+    /// For the loader, which discovers that a file has two names only when it reaches it
+    /// the second time — by which point the module already exists. An identity the two
+    /// compiler implementations could compute differently is worse than none.
+    pub fn withdraw_key(&mut self, m: ModuleId) {
+        if let Some(x) = self.modules.get_mut(m.index()) {
+            x.key = None;
+        }
     }
 
     /// Record that `from` names `to` in a `use`.
@@ -150,6 +179,16 @@ impl ModuleGraph {
         self.modules.get(m.index()).map(|x| x.file)
     }
 
+    /// Which logical module this is, across processes.
+    ///
+    /// `None` is an answer, not a failure: see [`Module::key`]. A caller that needs one
+    /// declines the work rather than substituting the session-local id, which would be a
+    /// durable-looking identity that is not one.
+    #[must_use]
+    pub fn key(&self, m: ModuleId) -> Option<&ModuleKey> {
+        self.modules.get(m.index()).and_then(|x| x.key.as_ref())
+    }
+
     /// Which module owns the definitions written in this file.
     ///
     /// A linear scan, over a list that is one module per source file of one program. A
@@ -187,7 +226,7 @@ mod tests {
     #[test]
     fn a_module_that_imports_itself_gains_no_edge() {
         let mut g = ModuleGraph::default();
-        let a = g.add(FileId::ROOT);
+        let a = g.add(FileId::ROOT, None);
         g.import(a, a, somewhere());
         assert!(g.imports(a).is_empty());
     }
@@ -195,8 +234,8 @@ mod tests {
     #[test]
     fn importing_the_same_module_twice_is_one_edge() {
         let mut g = ModuleGraph::default();
-        let a = g.add(FileId::ROOT);
-        let b = g.add(FileId::from_index(1));
+        let a = g.add(FileId::ROOT, None);
+        let b = g.add(FileId::from_index(1), None);
         g.import(a, b, somewhere());
         g.import(a, b, somewhere());
         assert_eq!(on(&g, a), [b]);
@@ -207,8 +246,8 @@ mod tests {
         // Not merely permitted by omission: the graph is built before anything is
         // checked, so a cycle is a shape it has to be able to hold.
         let mut g = ModuleGraph::default();
-        let a = g.add(FileId::ROOT);
-        let b = g.add(FileId::from_index(1));
+        let a = g.add(FileId::ROOT, None);
+        let b = g.add(FileId::from_index(1), None);
         g.import(a, b, somewhere());
         g.import(b, a, somewhere());
         assert_eq!(on(&g, a), [b]);
@@ -221,9 +260,9 @@ mod tests {
         // itself named, which is what makes non-transitivity a property of the data
         // rather than a rule the checker has to remember.
         let mut g = ModuleGraph::default();
-        let a = g.add(FileId::ROOT);
-        let b = g.add(FileId::from_index(1));
-        let c = g.add(FileId::from_index(2));
+        let a = g.add(FileId::ROOT, None);
+        let b = g.add(FileId::from_index(1), None);
+        let c = g.add(FileId::from_index(2), None);
         g.import(a, b, somewhere());
         g.import(b, c, somewhere());
         assert_eq!(on(&g, a), [b]);
@@ -233,8 +272,8 @@ mod tests {
     #[test]
     fn a_module_knows_its_file_and_a_file_its_module() {
         let mut g = ModuleGraph::default();
-        let a = g.add(FileId::ROOT);
-        let b = g.add(FileId::from_index(7));
+        let a = g.add(FileId::ROOT, None);
+        let b = g.add(FileId::from_index(7), None);
         assert_eq!(g.file(b), Some(FileId::from_index(7)));
         assert_eq!(g.module_of(FileId::from_index(7)), Some(b));
         assert_eq!(g.module_of(FileId::ROOT), Some(a));
