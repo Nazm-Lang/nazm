@@ -32,12 +32,25 @@ use crate::symbol::{Linkage, NativeSymbol};
 pub enum Ty {
     Int,
     Bool,
-    /// An immutable byte sequence, as `{ pointer, byte length }` by value.
+    /// An immutable byte sequence, as `{ pointer, byte length, owner }` by value.
     ///
     /// Not NUL-terminated: `docs/spec.md` makes an embedded zero an ordinary byte, so
     /// the length is the length. The pointer is always valid to read `length` bytes
     /// from, and for an empty string it still points at real storage — which is what
     /// lets `memcmp` be called without a special case.
+    ///
+    /// # The third field, and why it is not optional
+    ///
+    /// `owner` names **the allocation whose lifetime keeps `pointer` valid**, or null
+    /// when nothing has to. It was added in N8 for one reason: a `Str` may point at a
+    /// literal, at a process argument, at a heap buffer, or at the *interior* of any of
+    /// those — `str_slice` is a `getelementptr` and produces no copy — and
+    /// `{ pointer, length }` cannot tell them apart. Any rule for reclaiming a string
+    /// written over two fields would have had to guess from the pointer, which is the
+    /// class of heuristic `docs/architecture.md` §7.8 rules out.
+    ///
+    /// It is not language-visible. No Nazm expression can read it, and `docs/spec.md`
+    /// still specifies a `Str` as its bytes.
     Str,
     /// A growable sequence of `Int`: a **pointer to a header**, `{ len, cap, data }`.
     ///
@@ -46,7 +59,7 @@ pub enum Ty {
     /// so every holder of the handle sees it. See `docs/spec.md`, *Sequences are shared,
     /// mutable, and never freed*.
     Ints,
-    /// The same, with 16-byte `{ ptr, i64 }` elements.
+    /// The same, with 24-byte `{ ptr, i64, ptr }` elements, each owning its backing.
     Strs,
     /// A bounded queue of `Int`, as a **pointer to a runtime header**.
     ///
@@ -56,15 +69,55 @@ pub enum Ty {
     Chan,
 }
 
+/// What a value of a given type owns, and therefore what has to happen when a binding
+/// takes one on or lets one go.
+///
+/// One classification for the whole backend, rather than a test of the type at each place
+/// cleanup is emitted. That is the shape `docs/architecture.md` §7.9 asks for: adding a
+/// type to the language means answering this enum once, and every exit edge, every
+/// binding and every container follows from the answer. It is deliberately **not** a
+/// destructor system — Nazm has no user-defined destruction, and each variant names a
+/// runtime operation that already exists rather than a hook a program could install.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Owns {
+    /// A sequence header holding `Int`s, and its data buffer.
+    Ints,
+    /// A sequence header holding `Str`s. Releasing it releases **every element's
+    /// backing** first: a container that freed only its array of descriptors would turn
+    /// a leaked string into a leaked string inside a sequence.
+    Strs,
+    /// A string's backing allocation, named by the value's third field, which may be
+    /// null — a literal and a process argument own nothing, and releasing null is what
+    /// says so.
+    Backing,
+    /// A channel header, with its queue, its mutex and its condition variable.
+    Channel,
+}
+
 impl Ty {
+    /// What a value of this type owns, if anything.
+    ///
+    /// `Int` and `Bool` own nothing and never will. Everything else does, since N8:
+    /// `docs/spec.md`'s memory constitution reclaims storage when the last reference to
+    /// it dies, and this is the list of things that have a reference to count.
+    #[must_use]
+    pub fn owns(self) -> Option<Owns> {
+        match self {
+            Self::Int | Self::Bool => None,
+            Self::Str => Some(Owns::Backing),
+            Self::Ints => Some(Owns::Ints),
+            Self::Strs => Some(Owns::Strs),
+            Self::Chan => Some(Owns::Channel),
+        }
+    }
+
     /// Whether a value of this type is a **handle** to storage with a reference count.
     ///
-    /// `docs/spec.md`'s memory constitution calls these *owned mutable handles*: they are
-    /// the only values whose storage is reclaimed, and the only ones a binding can hold a
-    /// reference to. `Chan` is a handle in the ordinary sense and deliberately not one
-    /// here — it is runtime-managed, its lifetime is the enclosing `scope`'s, and counting
-    /// references to it would be a different mechanism with a different soundness
-    /// argument.
+    /// `docs/spec.md`'s memory constitution calls these *owned mutable handles*: two
+    /// bindings on one are two references to one storage, and a mutation through either
+    /// is visible through both. Narrower than [`Self::owns`] on purpose — a `Str` owns a
+    /// backing and is still a value, and a `Chan` is runtime-managed — and used only
+    /// where *aliasing* is what matters rather than reclamation.
     #[must_use]
     pub fn is_handle(self) -> bool {
         matches!(self, Self::Ints | Self::Strs)
@@ -75,7 +128,9 @@ impl Ty {
     pub fn element_size(self) -> Option<u32> {
         match self {
             Self::Ints => Some(8),
-            Self::Strs => Some(16),
+            // `{ ptr, i64, ptr }`: N8's `Str`, which is one pointer wider than the
+            // `{ ptr, i64 }` this was written for.
+            Self::Strs => Some(24),
             _ => None,
         }
     }
@@ -98,7 +153,7 @@ impl Ty {
         match self {
             Self::Int => "i64",
             Self::Bool => "i1",
-            Self::Str => "{ ptr, i64 }",
+            Self::Str => "{ ptr, i64, ptr }",
             Self::Ints | Self::Strs | Self::Chan => "ptr",
         }
     }

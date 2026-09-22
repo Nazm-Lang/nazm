@@ -3498,18 +3498,23 @@ fn the_emitted_ir_for_strings_is_well_formed() {
     // A `Str` is an aggregate, so equality is a branch and a `phi`, never an `icmp` on
     // the pair — comparing buffers instead of bytes is the defect that would hide here.
     assert!(
-        !ir.contains("icmp eq { ptr, i64 }"),
+        !ir.contains("icmp eq { ptr, i64, ptr }"),
         "two strings were compared as pairs rather than as bytes:\n{ir}"
     );
     assert!(
         ir.contains("@memcmp"),
         "no byte comparison was emitted:\n{ir}"
     );
-    // Every literal gets a constant pair, so nothing is assembled from `undef` for a
-    // value known at compile time.
+    // Every literal gets a constant triple, so nothing is assembled from `undef` for a
+    // value known at compile time — and its owner is `null`, which is how the IR says a
+    // literal is immortal storage this program must never free.
     assert!(
-        ir.contains(".v = private unnamed_addr constant { ptr, i64 }"),
+        ir.contains(".v = private unnamed_addr constant { ptr, i64, ptr }"),
         "{ir}"
+    );
+    assert!(
+        ir.contains(", ptr null }"),
+        "a literal claimed an owner:\n{ir}"
     );
 
     let interp = interpret(src);

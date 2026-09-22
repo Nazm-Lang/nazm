@@ -49,7 +49,7 @@ use nazm_span::Span;
 
 use crate::names::SourceNames;
 
-use crate::ir::{ArithOp, Block, Builtin, Expr, Function, Lowering as _, Stmt, Ty, Unit};
+use crate::ir::{ArithOp, Block, Builtin, Expr, Function, Lowering as _, Owns, Stmt, Ty, Unit};
 use crate::symbol::NativeSymbol;
 
 /// What this emitter has been verified against, recorded so a reader does not have to
@@ -65,8 +65,16 @@ pub const TARGET_NOTE: &str = "verified on aarch64-apple-darwin with Apple clang
 /// read would put the how into the language.
 pub const MEMORY_VARIABLE: &str = "NAZM_MEMORY_REPORT";
 
+/// Bytes between a string backing's address and its first byte of text.
+///
+/// `{ i64 rc, i64 length }`, so sixteen — which also keeps the text itself sixteen-byte
+/// aligned, the alignment `memcpy` wants without being asked.
+const STRING_HEADER: u32 = 16;
+
 /// What that report says. One line, three numbers, read back by the tests.
-pub const MEMORY_FORMAT: &str = "nazm-memory: sequences allocated=%lld reclaimed=%lld live=%lld";
+pub const MEMORY_FORMAT: &str = "nazm-memory: sequences allocated=%lld reclaimed=%lld \
+                                 live=%lld strings allocated=%lld reclaimed=%lld live=%lld \
+                                 channels allocated=%lld reclaimed=%lld live=%lld";
 
 /// The diagnostic a failing operation reports, matching the interpreter's wording.
 struct Failure {
@@ -101,8 +109,7 @@ struct Emitter<'a> {
     /// language's rule (`docs/spec.md`, *Where a loop target binds*). Cleared at every
     /// function boundary, so no target can leak from one function into another.
     loops: Vec<Targets>,
-    /// SSA values holding a **+1 reference** to sequence storage that nobody has taken
-    /// over yet.
+    /// SSA values holding a **+1 reference** to storage that nobody has taken over yet.
     ///
     /// `docs/spec.md`'s memory constitution says storage is reclaimed when the last
     /// reference dies; this is how the emitter knows which references exist. A value is in
@@ -113,7 +120,7 @@ struct Emitter<'a> {
     /// Reading a variable is **not** in here. That is rule 2: a borrowed reference costs
     /// nothing, which is why passing a sequence to a function emits no traffic at all.
     owned: std::collections::BTreeSet<u32>,
-    /// Slots holding a handle that this frame must release on the way out, in order.
+    /// Slots holding something this frame must release on the way out, in order.
     ///
     /// Parameters are excluded, and that exclusion *is* rule 2: a callee borrows, so
     /// releasing a parameter would destroy storage its caller still holds.
@@ -147,6 +154,8 @@ struct Emitter<'a> {
     /// Whether the sequence helpers are reached. They are emitted only when they are —
     /// a program that never touches a sequence carries none of this.
     needs_sequences: bool,
+    /// Whether a string backing is allocated, retained or released.
+    needs_strings: bool,
 }
 
 /// Where `break` and `continue` go for one loop.
@@ -253,7 +262,7 @@ impl Emitter<'_> {
         (at.line as usize, at.column as usize)
     }
 
-    /// Intern a `Str` literal, and return the symbol of a **constant `{ptr, i64}`** for
+    /// Intern a `Str` literal, and return the symbol of a **constant `{ptr, i64, ptr}`** for
     /// it.
     ///
     /// A whole constant rather than a pointer the emitter then assembles: building the
@@ -273,31 +282,58 @@ impl Emitter<'_> {
         format!("{sym}.v")
     }
 
-    /// Build a `{ ptr, i64 }` from a pointer and a length already in registers.
-    fn make_str(&mut self, ptr: u32, len: u32) -> u32 {
-        // `undef` here is the standard way to build an aggregate, and **both** fields are
-        // written before the value is read — this is not the poison-producing shortcut
+    /// Build a `{ ptr, i64, ptr }` from a pointer, a length and an owner already in
+    /// registers.
+    ///
+    /// `owner` is the literal text of an LLVM pointer operand — `null` for a string whose
+    /// backing nothing has to keep alive, `%n` for one that does. Passing it as text
+    /// rather than as a register is what lets the immortal cases say `null` without
+    /// materialising a value that means nothing.
+    fn make_str(&mut self, ptr: u32, len: u32, owner: &str) -> u32 {
+        // `undef` here is the standard way to build an aggregate, and **all three** fields
+        // are written before the value is read — this is not the poison-producing shortcut
         // the architecture rules forbid, which is about arithmetic whose overflow an
         // optimiser may then assume away.
-        let half = self.fresh();
+        let a = self.fresh();
         let _ = writeln!(
             self.out,
-            "  %{half} = insertvalue {{ ptr, i64 }} undef, ptr %{ptr}, 0"
+            "  %{a} = insertvalue {{ ptr, i64, ptr }} undef, ptr %{ptr}, 0"
+        );
+        let b = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{b} = insertvalue {{ ptr, i64, ptr }} %{a}, i64 %{len}, 1"
         );
         let whole = self.fresh();
         let _ = writeln!(
             self.out,
-            "  %{whole} = insertvalue {{ ptr, i64 }} %{half}, i64 %{len}, 1"
+            "  %{whole} = insertvalue {{ ptr, i64, ptr }} %{b}, ptr {owner}, 2"
         );
         whole
     }
 
     fn str_parts(&mut self, s: u32) -> (u32, u32) {
         let ptr = self.fresh();
-        let _ = writeln!(self.out, "  %{ptr} = extractvalue {{ ptr, i64 }} %{s}, 0");
+        let _ = writeln!(
+            self.out,
+            "  %{ptr} = extractvalue {{ ptr, i64, ptr }} %{s}, 0"
+        );
         let len = self.fresh();
-        let _ = writeln!(self.out, "  %{len} = extractvalue {{ ptr, i64 }} %{s}, 1");
+        let _ = writeln!(
+            self.out,
+            "  %{len} = extractvalue {{ ptr, i64, ptr }} %{s}, 1"
+        );
         (ptr, len)
+    }
+
+    /// The allocation that keeps this string's bytes valid, or null.
+    fn str_owner(&mut self, s: u32) -> u32 {
+        let owner = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{owner} = extractvalue {{ ptr, i64, ptr }} %{s}, 2"
+        );
+        owner
     }
 
     /// Fail unless `ok`, with the out-of-bounds diagnostic.
@@ -342,13 +378,21 @@ impl Emitter<'_> {
         slot
     }
 
-    /// `malloc`, with the failure the specification names rather than a null pointer
-    /// loose in the program.
-    fn allocate(&mut self, bytes: u32, span: Span) -> u32 {
-        let buf = self.fresh();
-        let _ = writeln!(self.out, "  %{buf} = call ptr @malloc(i64 %{bytes})");
+    /// A string backing of `bytes` usable bytes, as `(owner, data)`.
+    ///
+    /// The owner is the allocation; the data pointer is inside it. They are two values
+    /// rather than one because that is exactly the distinction N8 exists to make: the
+    /// bytes a `Str` names and the allocation whose lifetime protects them are not the
+    /// same address, and a slice changes one without changing the other.
+    fn string_backing(&mut self, bytes: u32, span: Span) -> (u32, u32) {
+        self.needs_strings = true;
+        let owner = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{owner} = call ptr @nz.str_alloc(i64 %{bytes})"
+        );
         let null = self.fresh();
-        let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{buf}, null");
+        let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{owner}, null");
         self.guard(
             null,
             &Failure {
@@ -357,19 +401,63 @@ impl Emitter<'_> {
             },
             span,
         );
-        buf
+        let data = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{data} = getelementptr i8, ptr %{owner}, i64 {STRING_HEADER}"
+        );
+        (owner, data)
     }
 
-    /// Add a reference to sequence storage.
-    fn retain(&mut self, value: u32) {
-        let _ = writeln!(self.out, "  call void @nz.arr_retain(ptr %{value})");
-        self.needs_sequences = true;
+    /// Add a reference to whatever `value` owns.
+    ///
+    /// One function for every owning type, dispatched on [`Ty::owns`]: a type that owns
+    /// nothing costs nothing, and adding a type to the language means answering `owns`
+    /// rather than finding every site that retains.
+    fn retain(&mut self, value: u32, ty: Ty) {
+        match ty.owns() {
+            None => {}
+            Some(Owns::Ints | Owns::Strs) => {
+                let _ = writeln!(self.out, "  call void @nz.arr_retain(ptr %{value})");
+                self.needs_sequences = true;
+            }
+            Some(Owns::Backing) => {
+                let owner = self.str_owner(value);
+                let _ = writeln!(self.out, "  call void @nz.str_retain(ptr %{owner})");
+                self.needs_strings = true;
+            }
+            Some(Owns::Channel) => {
+                let _ = writeln!(self.out, "  call void @nz.chan_retain(ptr %{value})");
+                self.needs_channels = true;
+            }
+        }
     }
 
-    /// Drop a reference to a **Nazm sequence**. The storage goes when the last one does.
-    fn release(&mut self, value: u32) {
-        let _ = writeln!(self.out, "  call void @nz.seq_release(ptr %{value})");
-        self.needs_sequences = true;
+    /// Drop a reference to whatever `value` owns. The storage goes when the last one does.
+    fn release(&mut self, value: u32, ty: Ty) {
+        match ty.owns() {
+            None => {}
+            Some(Owns::Ints) => {
+                let _ = writeln!(self.out, "  call void @nz.seq_release(ptr %{value})");
+                self.needs_sequences = true;
+            }
+            // A `Strs` releases its elements' backings before its own storage, which is
+            // why it cannot share `@nz.seq_release`.
+            Some(Owns::Strs) => {
+                let _ = writeln!(self.out, "  call void @nz.strs_release(ptr %{value})");
+                self.needs_sequences = true;
+                self.needs_strings = true;
+            }
+            Some(Owns::Backing) => {
+                let owner = self.str_owner(value);
+                let _ = writeln!(self.out, "  call void @nz.str_release(ptr %{owner})");
+                self.needs_strings = true;
+            }
+            Some(Owns::Channel) => {
+                let _ = writeln!(self.out, "  call void @nz.chan_release(ptr %{value})");
+                self.needs_channels = true;
+            }
+        }
     }
 
     /// Drop a reference to something the runtime allocated for itself.
@@ -395,11 +483,11 @@ impl Emitter<'_> {
     /// was already owned is handed on unchanged, which is what keeps `let xs = ints_new()`
     /// free of traffic.
     fn take(&mut self, value: u32, ty: Ty) {
-        if !ty.is_handle() {
+        if ty.owns().is_none() {
             return;
         }
         if !self.owned.remove(&value) {
-            self.retain(value);
+            self.retain(value, ty);
         }
     }
 
@@ -408,8 +496,8 @@ impl Emitter<'_> {
     /// A temporary handed to a function that only borrowed it, or a statement whose value
     /// was discarded. Both are ordinary; neither is an error.
     fn drop_temporary(&mut self, value: u32, ty: Ty) {
-        if ty.is_handle() && self.owned.remove(&value) {
-            self.release(value);
+        if ty.owns().is_some() && self.owned.remove(&value) {
+            self.release(value, ty);
         }
     }
 
@@ -424,7 +512,7 @@ impl Emitter<'_> {
         for (slot, ty) in self.frame.clone() {
             let v = self.fresh();
             let _ = writeln!(self.out, "  %{v} = load {}, ptr %slot{slot}", ty.llvm());
-            self.release(v);
+            self.release(v, ty);
         }
     }
 
@@ -436,6 +524,7 @@ impl Emitter<'_> {
             sequences: self.needs_sequences,
             io: self.needs_io,
             join: self.needs_join,
+            strings: self.needs_strings,
         }
     }
 
@@ -581,7 +670,7 @@ impl Emitter<'_> {
                 Stmt::Let { slot, value } | Stmt::Assign { slot, value } => {
                     match self.expr(value) {
                         Val::Of { value: v, ty } => {
-                            if ty.is_handle() {
+                            if ty.owns().is_some() {
                                 // The order is the whole of the correctness here. Take the
                                 // new reference **first**, so that `a = a` — and the
                                 // re-execution of a `let` in a loop with the same handle —
@@ -599,7 +688,7 @@ impl Emitter<'_> {
                                     "  store {} %{v}, ptr %slot{slot}",
                                     ty.llvm()
                                 );
-                                self.release(old);
+                                self.release(old, ty);
                             } else {
                                 let _ = writeln!(
                                     self.out,
@@ -795,9 +884,9 @@ impl Emitter<'_> {
         }
 
         // The handle first, then this task's diagnostic — message pointer at 8, length at
-        // 16 — then each argument at its own offset. `Str` is sixteen bytes; everything
-        // else is eight, which keeps every offset a multiple of eight and so correctly
-        // aligned for whatever is stored there.
+        // 16 — then each argument at its own offset. `Str` is twenty-four bytes since N8;
+        // everything else is eight, which keeps every offset a multiple of eight and so
+        // correctly aligned for whatever is stored there.
         //
         // The diagnostic lives here rather than in a slot the scope owns because each
         // task then writes only to memory nobody else touches, and the join reads it
@@ -807,7 +896,7 @@ impl Emitter<'_> {
         let mut size = TASK_HEADER;
         for (_, ty) in &vals {
             offsets.push(size);
-            size += if *ty == Ty::Str { 16 } else { 8 };
+            size += if *ty == Ty::Str { 24 } else { 8 };
         }
 
         let blk = self.fresh();
@@ -833,12 +922,24 @@ impl Emitter<'_> {
         let _ = writeln!(self.out, "  %{el} = getelementptr i8, ptr %{blk}, i64 16");
         let _ = writeln!(self.out, "  store i64 0, ptr %{el}");
 
+        // The block **takes** each argument's reference, and the trampoline releases it
+        // when the task ends. That is not ceremony: a task outlives the statement that
+        // started it, so
+        //
+        // ```nazm
+        // scope { spawn worker(s); s = other(); }
+        // ```
+        //
+        // would otherwise release `s`'s backing while the task was still reading it. The
+        // reference is taken here, on the thread that already holds one, and it is the
+        // reason a string may cross a task boundary at all.
         for ((value, ty), offset) in vals.iter().zip(&offsets) {
             let slot = self.fresh();
             let _ = writeln!(
                 self.out,
                 "  %{slot} = getelementptr i8, ptr %{blk}, i64 {offset}"
             );
+            self.take(*value, *ty);
             let _ = writeln!(self.out, "  store {} %{value}, ptr %{slot}", ty.llvm());
         }
 
@@ -850,6 +951,32 @@ impl Emitter<'_> {
             self.out,
             "  %{rc} = call i32 @nz.spawn(ptr %{tids}, ptr @{trampoline}, ptr %{blk})"
         );
+        // A task that never started owns nothing, so what was packed for it is given
+        // back before the failure is reported. Without this, the one path where a program
+        // is *already* out of resources would be the path that leaked.
+        let started = self.fresh();
+        let cleanup = self.fresh_label();
+        let after = self.fresh_label();
+        let _ = writeln!(self.out, "  %{started} = icmp eq i32 %{rc}, 0");
+        let _ = writeln!(
+            self.out,
+            "  br i1 %{started}, label %b{after}, label %b{cleanup}"
+        );
+        self.open(&format!("b{cleanup}"));
+        for ((_, ty), offset) in vals.iter().zip(&offsets) {
+            let slot = self.fresh();
+            let _ = writeln!(
+                self.out,
+                "  %{slot} = getelementptr i8, ptr %{blk}, i64 {offset}"
+            );
+            let held = self.fresh();
+            let _ = writeln!(self.out, "  %{held} = load {}, ptr %{slot}", ty.llvm());
+            self.release(held, *ty);
+        }
+        let _ = writeln!(self.out, "  call void @free(ptr %{blk})");
+        let _ = writeln!(self.out, "  br label %b{after}");
+        self.open(&format!("b{after}"));
+
         let oom = self.fresh();
         let _ = writeln!(self.out, "  %{oom} = icmp eq i32 %{rc}, -1");
         self.guard(
@@ -903,6 +1030,22 @@ impl Emitter<'_> {
             let _ = writeln!(&mut body, "  %v{i} = load {}, ptr %p{i}", ty.llvm());
             passed.push(format!("{} %v{i}", ty.llvm()));
         }
+        // The callee **borrows** these, exactly as an ordinary call does: the reference
+        // the spawn site packed is what keeps them alive, and it is given back below,
+        // once the call has returned. Whether the task succeeded or failed does not
+        // change that, so the release is on the one path both take.
+        for ty in types {
+            match ty.owns() {
+                None => {}
+                Some(Owns::Ints) => self.needs_sequences = true,
+                Some(Owns::Strs) => {
+                    self.needs_sequences = true;
+                    self.needs_strings = true;
+                }
+                Some(Owns::Backing) => self.needs_strings = true,
+                Some(Owns::Channel) => self.needs_channels = true,
+            }
+        }
         // The task's return value is discarded, which `docs/spec.md` says outright:
         // results travel through channels, so there is one mechanism rather than two.
         let ret = ret.llvm();
@@ -930,6 +1073,27 @@ impl Emitter<'_> {
         let _ = writeln!(&mut body, "  store i64 %el, ptr %elp");
         let _ = writeln!(&mut body, "  br label %finished");
         let _ = writeln!(&mut body, "finished:");
+        for (i, ty) in types.iter().enumerate() {
+            match ty.owns() {
+                None => {}
+                Some(Owns::Ints) => {
+                    let _ = writeln!(&mut body, "  call void @nz.seq_release(ptr %v{i})");
+                }
+                Some(Owns::Strs) => {
+                    let _ = writeln!(&mut body, "  call void @nz.strs_release(ptr %v{i})");
+                }
+                Some(Owns::Backing) => {
+                    let _ = writeln!(
+                        &mut body,
+                        "  %o{i} = extractvalue {{ ptr, i64, ptr }} %v{i}, 2"
+                    );
+                    let _ = writeln!(&mut body, "  call void @nz.str_release(ptr %o{i})");
+                }
+                Some(Owns::Channel) => {
+                    let _ = writeln!(&mut body, "  call void @nz.chan_release(ptr %v{i})");
+                }
+            }
+        }
         let _ = writeln!(&mut body, "  ret ptr null");
         let _ = writeln!(&mut body, "}}");
         self.tasks.push_str(&body);
@@ -1190,7 +1354,7 @@ impl Emitter<'_> {
                 // Rule 3: returning transfers, so what came back is a reference this
                 // expression now holds. Rule 2: the arguments were only borrowed, so a
                 // temporary passed in is still nobody's and is dropped here.
-                if ret.is_handle() {
+                if ret.owns().is_some() {
                     self.owned.insert(out);
                 }
                 for (v, t) in &vals {
@@ -1202,9 +1366,12 @@ impl Emitter<'_> {
                 }
             }
             Expr::Str(bytes) => {
+                // **Immortal.** The constant is in the object's read-only data and lives
+                // as long as the process; its owner is null, and every retain and release
+                // of it is a no-op that costs one comparison.
                 let sym = self.blob(bytes);
                 let n = self.fresh();
-                let _ = writeln!(self.out, "  %{n} = load {{ ptr, i64 }}, ptr {sym}");
+                let _ = writeln!(self.out, "  %{n} = load {{ ptr, i64, ptr }}, ptr {sym}");
                 Val::Of {
                     value: n,
                     ty: Ty::Str,
@@ -1299,8 +1466,11 @@ impl Emitter<'_> {
                 let bad = self.fresh();
                 let _ = writeln!(self.out, "  %{bad} = or i1 %{a}, %{past}");
                 self.require(bad, "this slice is not inside the `Str`", span);
-                // No copy: a slice of an immutable, never-freed buffer is a pointer and
-                // a length. See `docs/bootstrap.md` §1, *the memory model*.
+                // No copy: a slice is a pointer, a length, and **the same owner**. That
+                // last field is the whole of N8's slice rule — the view keeps the
+                // allocation it was cut from alive, so `str_slice` of a heap string
+                // outliving the string it came from is ordinary rather than a dangling
+                // pointer (`docs/architecture.md` §7.8).
                 let start = self.fresh();
                 let _ = writeln!(
                     self.out,
@@ -1309,7 +1479,16 @@ impl Emitter<'_> {
                 let n = self.fresh();
                 // Cannot overflow: the guard above establishes `0 <= from <= to`.
                 let _ = writeln!(self.out, "  %{n} = sub i64 %{to}, %{from}");
-                self.make_str(start, n)
+                let owner = self.str_owner(arg(0));
+                // Retained here rather than left to whoever binds the result, because the
+                // argument is released as a temporary the moment this built-in returns:
+                // `str_slice(str_concat(a, b), 1, 2)` would otherwise free the backing
+                // its own result points into.
+                let _ = writeln!(self.out, "  call void @nz.str_retain(ptr %{owner})");
+                self.needs_strings = true;
+                let out = self.make_str(start, n, &format!("%{owner}"));
+                self.owned.insert(out);
+                out
             }
             Builtin::StrConcat => {
                 let (pa, la) = self.str_parts(arg(0));
@@ -1322,7 +1501,7 @@ impl Emitter<'_> {
                 // its pointer stays valid to compare.
                 let room = self.fresh();
                 let _ = writeln!(self.out, "  %{room} = add i64 %{n}, 1");
-                let buf = self.allocate(room, span);
+                let (owner, buf) = self.string_backing(room, span);
                 let _ = writeln!(
                     self.out,
                     "  call void @llvm.memcpy.p0.p0.i64(ptr %{buf}, ptr %{pa}, i64 %{la}, i1 false)"
@@ -1336,7 +1515,9 @@ impl Emitter<'_> {
                     self.out,
                     "  call void @llvm.memcpy.p0.p0.i64(ptr %{rest}, ptr %{pb}, i64 %{lb}, i1 false)"
                 );
-                self.make_str(buf, n)
+                let out = self.make_str(buf, n, &format!("%{owner}"));
+                self.owned.insert(out);
+                out
             }
             // --- the outside world ------------------------------------------------
             //
@@ -1380,7 +1561,10 @@ impl Emitter<'_> {
                 let _ = writeln!(self.out, "  %{text} = load ptr, ptr %{slot}");
                 let len = self.fresh();
                 let _ = writeln!(self.out, "  %{len} = call i64 @strlen(ptr %{text})");
-                self.make_str(text, len)
+                // **External.** The bytes are the process's, handed over by the operating
+                // system and outliving every value in the program. Null owner: there is
+                // nothing this program may free and nothing it has to keep alive.
+                self.make_str(text, len, "null")
             }
             Builtin::Print | Builtin::EPrint => {
                 let (ptr, len) = self.str_parts(arg(0));
@@ -1411,10 +1595,13 @@ impl Emitter<'_> {
                 let out = self.fresh();
                 let _ = writeln!(
                     self.out,
-                    "  %{out} = call {{ ptr, i64 }} @nz.read_file(ptr %{ptr}, i64 %{len})"
+                    "  %{out} = call {{ ptr, i64, ptr }} @nz.read_file(ptr %{ptr}, i64 %{len})"
                 );
                 let got = self.fresh();
-                let _ = writeln!(self.out, "  %{got} = extractvalue {{ ptr, i64 }} %{out}, 0");
+                let _ = writeln!(
+                    self.out,
+                    "  %{got} = extractvalue {{ ptr, i64, ptr }} %{out}, 0"
+                );
                 let bad = self.fresh();
                 let _ = writeln!(self.out, "  %{bad} = icmp eq ptr %{got}, null");
                 self.guard(
@@ -1425,6 +1612,9 @@ impl Emitter<'_> {
                     },
                     span,
                 );
+                // A file's contents are the program's own storage: one allocation, one
+                // reference, held by this expression.
+                self.owned.insert(out);
                 return Val::Of {
                     value: out,
                     ty: Ty::Str,
@@ -1510,12 +1700,27 @@ impl Emitter<'_> {
                 let slot = self.sequence_slot(arg(0), arg(1), elem, span);
                 let v = self.fresh();
                 let _ = writeln!(self.out, "  %{v} = load {}, ptr %{slot}", elem.llvm());
+                // What comes out of a `Strs` gets **its own** reference to the backing.
+                // That is what makes `docs/spec.md`'s promise — a `Str` already read out
+                // of a sequence is unaffected by changing the sequence — true by
+                // construction rather than true because nothing was ever freed. Before
+                // N8 it was the second of those.
+                self.take(v, elem);
+                self.owned.insert(v);
                 return Val::Of { value: v, ty: elem };
             }
             Builtin::IntsSet | Builtin::StrsSet => {
                 let elem = op.sequence().and_then(Ty::element).unwrap_or(Ty::Int);
                 let slot = self.sequence_slot(arg(0), arg(1), elem, span);
+                // The order is the correctness. The new element's reference is taken
+                // **before** the old one is released, so replacing an element with a
+                // string that shares its backing — `strs_set(xs, 0, strs_get(xs, 0))` —
+                // cannot drop the count to zero in between.
+                let old = self.fresh();
+                let _ = writeln!(self.out, "  %{old} = load {}, ptr %{slot}", elem.llvm());
+                self.retain(arg(2), elem);
                 let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(2));
+                self.release(old, elem);
                 // The index written. The language has no unit type, and the index is
                 // the one answer that is always meaningful.
                 return Val::Of {
@@ -1530,11 +1735,15 @@ impl Emitter<'_> {
                 let out = self.fresh();
                 let _ = writeln!(
                     self.out,
-                    "  %{out} = call {{ ptr, i64 }} @nz.str_join(ptr %{}, ptr %{sp}, i64 %{sn})",
+                    "  %{out} = call {{ ptr, i64, ptr }} @nz.str_join(ptr %{}, ptr %{sp}, \
+                     i64 %{sn})",
                     arg(0)
                 );
                 let got = self.fresh();
-                let _ = writeln!(self.out, "  %{got} = extractvalue {{ ptr, i64 }} %{out}, 0");
+                let _ = writeln!(
+                    self.out,
+                    "  %{got} = extractvalue {{ ptr, i64, ptr }} %{out}, 0"
+                );
                 let bad = self.fresh();
                 let _ = writeln!(self.out, "  %{bad} = icmp eq ptr %{got}, null");
                 self.guard(
@@ -1545,6 +1754,8 @@ impl Emitter<'_> {
                     },
                     span,
                 );
+                // One allocation, one reference, and this expression is holding it.
+                self.owned.insert(out);
                 return Val::Of {
                     value: out,
                     ty: Ty::Str,
@@ -1571,6 +1782,10 @@ impl Emitter<'_> {
                     },
                     span,
                 );
+                // Born with one reference, held by this expression — the same rule a
+                // sequence follows. What consumes the expression takes it over, and a
+                // channel nothing binds is released as an ordinary temporary.
+                self.owned.insert(c);
                 return Val::Of {
                     value: c,
                     ty: Ty::Chan,
@@ -1664,6 +1879,13 @@ impl Emitter<'_> {
                 // still inside the sequence while it is being fetched. Capacity is left
                 // alone: a stack that shrinks and grows should not reallocate.
                 let _ = writeln!(self.out, "  store i64 %{last}, ptr %{}", arg(0));
+                // A **transfer**, not a copy: shortening the sequence gives up its
+                // reference to the element, and this expression takes that same one over.
+                // No retain, no release, and the count is unchanged — which is what makes
+                // popping in a loop cost nothing.
+                if elem.owns().is_some() {
+                    self.owned.insert(v);
+                }
                 return Val::Of { value: v, ty: elem };
             }
             Builtin::IntsPush | Builtin::StrsPush => {
@@ -1695,6 +1917,11 @@ impl Emitter<'_> {
                     "  %{slot} = getelementptr {}, ptr %{data}, i64 %{len}",
                     elem.llvm()
                 );
+                // The sequence keeps what it is given, so it takes a reference of its
+                // own. The caller's value is untouched and is still valid after the call,
+                // which is `docs/spec.md`'s rule 2 — a built-in borrows its arguments —
+                // combined with the fact that this one *stores* one.
+                self.retain(arg(1), elem);
                 let _ = writeln!(self.out, "  store {} %{}, ptr %{slot}", elem.llvm(), arg(1));
                 let grown = self.fresh();
                 let _ = writeln!(self.out, "  %{grown} = add i64 %{len}, 1");
@@ -1715,20 +1942,22 @@ impl Emitter<'_> {
                 self.require(bad, "this is not a byte value", span);
                 let room = self.fresh();
                 let _ = writeln!(self.out, "  %{room} = add i64 1, 0");
-                let buf = self.allocate(room, span);
+                let (owner, buf) = self.string_backing(room, span);
                 let narrow = self.fresh();
                 let _ = writeln!(self.out, "  %{narrow} = trunc i64 %{b} to i8");
                 let _ = writeln!(self.out, "  store i8 %{narrow}, ptr %{buf}");
                 let one = self.fresh();
                 let _ = writeln!(self.out, "  %{one} = add i64 1, 0");
-                self.make_str(buf, one)
+                let out = self.make_str(buf, one, &format!("%{owner}"));
+                self.owned.insert(out);
+                out
             }
             Builtin::IntToStr => {
                 // 20 digits is the widest `Int` (`-9223372036854775808`), plus the NUL
                 // `snprintf` insists on writing.
                 let room = self.fresh();
                 let _ = writeln!(self.out, "  %{room} = add i64 21, 0");
-                let buf = self.allocate(room, span);
+                let (owner, buf) = self.string_backing(room, span);
                 let written = self.fresh();
                 let _ = writeln!(
                     self.out,
@@ -1738,7 +1967,9 @@ impl Emitter<'_> {
                 );
                 let n = self.fresh();
                 let _ = writeln!(self.out, "  %{n} = sext i32 %{written} to i64");
-                self.make_str(buf, n)
+                let out = self.make_str(buf, n, &format!("%{owner}"));
+                self.owned.insert(out);
+                out
             }
         };
         Val::Of { value, ty: Ty::Str }
@@ -1842,7 +2073,7 @@ impl Emitter<'_> {
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(self.out, "  %{out} = phi {} {list}", ty.llvm());
-        if ty.is_handle() {
+        if ty.owns().is_some() {
             // Each incoming branch handed one reference to the join, so the merged value
             // holds exactly one however control arrived.
             for (v, _, _) in &incomings {
@@ -1870,7 +2101,7 @@ impl Emitter<'_> {
                 // block and before its jump**, which is the only place a retain can go:
                 // after the `phi` there is no branch left to attribute it to.
                 self.take(value, ty);
-                if ty.is_handle() {
+                if ty.owns().is_some() {
                     self.owned.insert(value);
                 }
                 let from = self.current.clone();
@@ -2011,6 +2242,7 @@ pub struct Needs {
     pub sequences: bool,
     pub io: bool,
     pub join: bool,
+    pub strings: bool,
 }
 
 impl Needs {
@@ -2023,6 +2255,7 @@ impl Needs {
             sequences: self.sequences || other.sequences,
             io: self.io || other.io,
             join: self.join || other.join,
+            strings: self.strings || other.strings,
         }
     }
 
@@ -2035,6 +2268,12 @@ impl Needs {
     pub fn settled(self) -> Self {
         Self {
             sequences: self.sequences || self.tasks || self.channels,
+            // `str_join` builds a string and the I/O helpers return one, so either of
+            // them reaching means the string helpers are reached too. A `Strs` needs them
+            // as well, and says so at the site that retains or releases an element rather
+            // than by implication from the sequence flag — an `Ints`-only program carries
+            // no string runtime at all.
+            strings: self.strings || self.join || self.io,
             ..self
         }
     }
@@ -2051,6 +2290,7 @@ fn declarations(out: &mut String) {
         "declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)",
         "declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)",
         "declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)",
+        "declare {i64, i1} @llvm.uadd.with.overflow.i64(i64, i64)",
         "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)",
         "declare i32 @printf(ptr noundef, ...)",
         "declare i32 @snprintf(ptr noundef, i64, ptr noundef, ...)",
@@ -2076,6 +2316,9 @@ fn declarations(out: &mut String) {
         "declare i32 @pthread_cond_init(ptr, ptr)",
         "declare i32 @pthread_cond_wait(ptr, ptr)",
         "declare i32 @pthread_cond_broadcast(ptr)",
+        "declare i32 @pthread_mutex_destroy(ptr)",
+        "declare i32 @pthread_cond_destroy(ptr)",
+        "declare {i64, i1} @llvm.umul.with.overflow.i64(i64, i64)",
     ] {
         let _ = writeln!(out, "{d}");
     }
@@ -2095,11 +2338,15 @@ fn runtime_declarations(out: &mut String) {
         "@nz.argv = external global ptr",
         "@nz.seq_allocated = external global i64",
         "@nz.seq_reclaimed = external global i64",
+        "@nz.str_allocated = external global i64",
+        "@nz.str_reclaimed = external global i64",
+        "@nz.chan_allocated = external global i64",
+        "@nz.chan_reclaimed = external global i64",
         "declare void @nz.fail(ptr, i64)",
         "declare void @nz.report() noreturn",
-        "declare {ptr, i64} @nz.str_join(ptr, ptr, i64)",
+        "declare {ptr, i64, ptr} @nz.str_join(ptr, ptr, i64)",
         "declare i1 @nz.file_exists(ptr, i64)",
-        "declare {ptr, i64} @nz.read_file(ptr, i64)",
+        "declare {ptr, i64, ptr} @nz.read_file(ptr, i64)",
         "declare i64 @nz.write_file(ptr, i64, ptr, i64)",
         "declare ptr @nz.arr_new()",
         "declare ptr @nz.arr_grow(ptr, i64)",
@@ -2107,12 +2354,18 @@ fn runtime_declarations(out: &mut String) {
         "declare i1 @nz.arr_release(ptr)",
         "declare ptr @nz.seq_new()",
         "declare void @nz.seq_release(ptr)",
+        "declare void @nz.strs_release(ptr)",
+        "declare ptr @nz.str_alloc(i64)",
+        "declare void @nz.str_retain(ptr)",
+        "declare void @nz.str_release(ptr)",
         "declare i32 @nz.spawn(ptr, ptr, ptr)",
         "declare {ptr, i64} @nz.scope_join(ptr)",
         "declare ptr @nz.chan_new(i64)",
         "declare i1 @nz.chan_send(ptr, i64)",
         "declare i1 @nz.chan_recv(ptr, ptr, ptr, i64)",
         "declare void @nz.chan_close(ptr)",
+        "declare void @nz.chan_retain(ptr)",
+        "declare void @nz.chan_release(ptr)",
     ] {
         let _ = writeln!(out, "{d}");
     }
@@ -2158,6 +2411,7 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         needs_sequences: false,
         needs_io: false,
         needs_join: false,
+        needs_strings: false,
     };
 
     for f in &unit.functions {
@@ -2211,9 +2465,13 @@ fn constants(head: &mut String, e: &Emitter<'_>) {
             stored.len(),
             escape_bytes(stored)
         );
+        // The owner is `null`: a literal is immortal, so nothing has to keep it alive
+        // and nothing may free it. That is the third field doing its job in the cheapest
+        // case there is — a constant, decided at compile time, costing no instruction.
         let _ = writeln!(
             head,
-            "{sym}.v = private unnamed_addr constant {{ ptr, i64 }} {{ ptr {sym}, i64 {} }}",
+            "{sym}.v = private unnamed_addr constant {{ ptr, i64, ptr }} \
+             {{ ptr {sym}, i64 {}, ptr null }}",
             bytes.len()
         );
     }
@@ -2270,6 +2528,23 @@ pub fn emit_runtime(needs: Needs) -> String {
     let _ = writeln!(out, "@nz.errlen = hidden thread_local global i64 0");
     out.push('\n');
 
+    // The accounting, unconditionally. Six counters cost six words in the data segment
+    // and buy one thing: **every** program can be asked what it allocated and what it
+    // reclaimed, including one that allocates nothing. Until N8 these lived inside the
+    // sequence runtime, so a program with no sequence printed no report at all — which
+    // reads as "nothing to say" and means "the instrument was not built in".
+    for c in [
+        "@nz.seq_allocated",
+        "@nz.seq_reclaimed",
+        "@nz.str_allocated",
+        "@nz.str_reclaimed",
+        "@nz.chan_allocated",
+        "@nz.chan_reclaimed",
+    ] {
+        let _ = writeln!(out, "{c} = hidden global i64 0");
+    }
+    out.push('\n');
+
     // Not `llvm.trap`: a process killed by SIGILL is not "stops with a diagnostic".
     //
     // **It records and returns; it does not exit.** `docs/spec.md` says a failure inside a
@@ -2301,6 +2576,9 @@ pub fn emit_runtime(needs: Needs) -> String {
 
     if needs.sequences {
         out.push_str(SEQUENCE_RUNTIME);
+    }
+    if needs.strings {
+        out.push_str(STRING_RUNTIME);
     }
     if needs.io {
         out.push_str(IO_RUNTIME);
@@ -2344,24 +2622,27 @@ pub fn emit_entry(entry: &NativeSymbol, needs: Needs) -> String {
         out,
         "@.fmt = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\""
     );
-    if needs.sequences {
-        // Lengths are computed, never counted by hand: a constant whose declared size
-        // disagrees with its bytes is rejected by clang at best and truncates at worst.
-        let name = MEMORY_VARIABLE;
-        let _ = writeln!(
-            out,
-            "@.memvar = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
-            name.len() + 1,
-            escape(name)
-        );
-        let _ = writeln!(
-            out,
-            "@.memfmt = private unnamed_addr constant [{} x i8] c\"{}\\0A\\00\"",
-            MEMORY_FORMAT.len() + 2,
-            escape(MEMORY_FORMAT)
-        );
-        let _ = writeln!(out, "@.membuf = private global [128 x i8] zeroinitializer");
-    }
+    // Unconditional since N8. Three classes of storage are reclaimable now and a program
+    // with none of them is still a program whose accounting can be asked for — and an
+    // instrument that is absent exactly where there is nothing to report is an instrument
+    // that cannot distinguish "nothing" from "not measured".
+    //
+    // Lengths are computed, never counted by hand: a constant whose declared size
+    // disagrees with its bytes is rejected by clang at best and truncates at worst.
+    let name = MEMORY_VARIABLE;
+    let _ = writeln!(
+        out,
+        "@.memvar = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
+        name.len() + 1,
+        escape(name)
+    );
+    let _ = writeln!(
+        out,
+        "@.memfmt = private unnamed_addr constant [{} x i8] c\"{}\\0A\\00\"",
+        MEMORY_FORMAT.len() + 2,
+        escape(MEMORY_FORMAT)
+    );
+    let _ = writeln!(out, "@.membuf = private global [256 x i8] zeroinitializer");
     out.push('\n');
 
     let _ = writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{");
@@ -2375,7 +2656,7 @@ pub fn emit_entry(entry: &NativeSymbol, needs: Needs) -> String {
         let _ = writeln!(out, "  store ptr %argv, ptr @nz.argv");
     }
     let _ = writeln!(out, "  %result = call i64 {entry}()");
-    if needs.sequences {
+    {
         // Before the failure is reported, not after: `@nz.report` ends the process and
         // never returns, so a report emitted on the success path alone would say nothing
         // about exactly the runs where reclamation is hardest to get right. `main` has
@@ -2391,13 +2672,22 @@ pub fn emit_entry(entry: &NativeSymbol, needs: Needs) -> String {
             "  br i1 %quiet, label %nz.checked, label %nz.memreport"
         );
         let _ = writeln!(out, "nz.memreport:");
-        let _ = writeln!(out, "  %alloc = load i64, ptr @nz.seq_allocated");
-        let _ = writeln!(out, "  %recl = load i64, ptr @nz.seq_reclaimed");
-        let _ = writeln!(out, "  %live = sub i64 %alloc, %recl");
+        let mut fields = Vec::new();
+        for (kind, allocated, reclaimed) in [
+            ("seq", "@nz.seq_allocated", "@nz.seq_reclaimed"),
+            ("str", "@nz.str_allocated", "@nz.str_reclaimed"),
+            ("chan", "@nz.chan_allocated", "@nz.chan_reclaimed"),
+        ] {
+            let _ = writeln!(out, "  %{kind}a = load i64, ptr {allocated}");
+            let _ = writeln!(out, "  %{kind}r = load i64, ptr {reclaimed}");
+            let _ = writeln!(out, "  %{kind}l = sub i64 %{kind}a, %{kind}r");
+            fields.push(format!("i64 %{kind}a, i64 %{kind}r, i64 %{kind}l"));
+        }
         let _ = writeln!(
             out,
-            "  %memout = call i32 (ptr, i64, ptr, ...) @snprintf(ptr @.membuf, i64 128, \
-             ptr @.memfmt, i64 %alloc, i64 %recl, i64 %live)"
+            "  %memout = call i32 (ptr, i64, ptr, ...) @snprintf(ptr @.membuf, i64 256, \
+             ptr @.memfmt, {})",
+            fields.join(", ")
         );
         let _ = writeln!(out, "  %memlen = sext i32 %memout to i64");
         let _ = writeln!(
@@ -2440,7 +2730,7 @@ pub fn emit_entry(entry: &NativeSymbol, needs: Needs) -> String {
 /// Signals allocation failure by returning a null pointer, which the call site turns
 /// into `N0406` at the right span.
 const JOIN_RUNTIME: &str = r"
-define hidden { ptr, i64 } @nz.str_join(ptr %h, ptr %sp, i64 %sn) {
+define hidden { ptr, i64, ptr } @nz.str_join(ptr %h, ptr %sp, i64 %sn) {
 entry:
   %n = load i64, ptr %h
   %dp = getelementptr i8, ptr %h, i64 16
@@ -2452,7 +2742,7 @@ sum:
   %more = icmp slt i64 %i, %n
   br i1 %more, label %sumbody, label %alloc
 sumbody:
-  %e = getelementptr { ptr, i64 }, ptr %data, i64 %i
+  %e = getelementptr { ptr, i64, ptr }, ptr %data, i64 %i
   %lp = getelementptr i8, ptr %e, i64 8
   %li = load i64, ptr %lp
   %acc2 = add i64 %acc, %li
@@ -2467,12 +2757,15 @@ alloc:
   %total = add i64 %acc, %sepbytes
   ; One byte more, so an empty result still owns storage and its pointer stays valid.
   %room = add i64 %total, 1
-  %buf = call ptr @malloc(i64 %room)
-  %bad = icmp eq ptr %buf, null
+  %own = call ptr @nz.str_alloc(i64 %room)
+  %bad = icmp eq ptr %own, null
   br i1 %bad, label %fail, label %copy
 copy:
-  %j = phi i64 [ 0, %alloc ], [ %j2, %tail ]
-  %off = phi i64 [ 0, %alloc ], [ %off3, %tail ]
+  %buf = getelementptr i8, ptr %own, i64 16
+  br label %loop
+loop:
+  %j = phi i64 [ 0, %copy ], [ %j2, %tail ]
+  %off = phi i64 [ 0, %copy ], [ %off3, %tail ]
   %more2 = icmp slt i64 %j, %n
   br i1 %more2, label %body, label %done
 body:
@@ -2485,7 +2778,7 @@ gap:
   br label %tail
 tail:
   %off2 = phi i64 [ %off, %body ], [ %off1, %gap ]
-  %e2 = getelementptr { ptr, i64 }, ptr %data, i64 %j
+  %e2 = getelementptr { ptr, i64, ptr }, ptr %data, i64 %j
   %p2 = load ptr, ptr %e2
   %l2p = getelementptr i8, ptr %e2, i64 8
   %l2 = load i64, ptr %l2p
@@ -2493,15 +2786,17 @@ tail:
   call void @llvm.memcpy.p0.p0.i64(ptr %d2, ptr %p2, i64 %l2, i1 false)
   %off3 = add i64 %off2, %l2
   %j2 = add i64 %j, 1
-  br label %copy
+  br label %loop
 done:
-  %a = insertvalue { ptr, i64 } undef, ptr %buf, 0
-  %b = insertvalue { ptr, i64 } %a, i64 %total, 1
-  ret { ptr, i64 } %b
+  %a = insertvalue { ptr, i64, ptr } undef, ptr %buf, 0
+  %b = insertvalue { ptr, i64, ptr } %a, i64 %total, 1
+  %b2 = insertvalue { ptr, i64, ptr } %b, ptr %own, 2
+  ret { ptr, i64, ptr } %b2
 fail:
-  %z = insertvalue { ptr, i64 } undef, ptr null, 0
-  %z2 = insertvalue { ptr, i64 } %z, i64 0, 1
-  ret { ptr, i64 } %z2
+  %z = insertvalue { ptr, i64, ptr } undef, ptr null, 0
+  %z2 = insertvalue { ptr, i64, ptr } %z, i64 0, 1
+  %z3 = insertvalue { ptr, i64, ptr } %z2, ptr null, 2
+  ret { ptr, i64, ptr } %z3
 }
 ";
 
@@ -2539,6 +2834,9 @@ entry:
   br i1 %nopath, label %no, label %open
 open:
   %f = call ptr @fopen(ptr %path, ptr @.rb)
+  ; The terminated copy has done its job the moment `fopen` returns. Until N8 every file
+  ; operation leaked one of these.
+  call void @free(ptr %path)
   %missing = icmp eq ptr %f, null
   br i1 %missing, label %no, label %yes
 yes:
@@ -2548,13 +2846,14 @@ no:
   ret i1 false
 }
 
-define hidden { ptr, i64 } @nz.read_file(ptr %p, i64 %n) {
+define hidden { ptr, i64, ptr } @nz.read_file(ptr %p, i64 %n) {
 entry:
   %path = call ptr @nz.cstr(ptr %p, i64 %n)
   %nopath = icmp eq ptr %path, null
   br i1 %nopath, label %fail, label %open
 open:
   %f = call ptr @fopen(ptr %path, ptr @.rb)
+  call void @free(ptr %path)
   %missing = icmp eq ptr %f, null
   br i1 %missing, label %fail, label %measure
 measure:
@@ -2568,25 +2867,33 @@ reserve:
   ; One byte more than the file, so an empty file still owns storage and its pointer
   ; stays valid to compare.
   %room = add i64 %len, 1
-  %buf = call ptr @malloc(i64 %room)
-  %nobuf = icmp eq ptr %buf, null
+  %own = call ptr @nz.str_alloc(i64 %room)
+  %nobuf = icmp eq ptr %own, null
   br i1 %nobuf, label %closefail, label %read
 read:
+  %buf = getelementptr i8, ptr %own, i64 16
   %got = call i64 @fread(ptr %buf, i64 1, i64 %len, ptr %f)
   %c = call i32 @fclose(ptr %f)
   %short = icmp ne i64 %got, %len
-  br i1 %short, label %fail, label %done
+  br i1 %short, label %partial, label %done
+partial:
+  ; A short read is a failure, and the storage it was going to fill is released rather
+  ; than abandoned.
+  call void @nz.str_release(ptr %own)
+  br label %fail
 done:
-  %a = insertvalue { ptr, i64 } undef, ptr %buf, 0
-  %b = insertvalue { ptr, i64 } %a, i64 %len, 1
-  ret { ptr, i64 } %b
+  %a = insertvalue { ptr, i64, ptr } undef, ptr %buf, 0
+  %b = insertvalue { ptr, i64, ptr } %a, i64 %len, 1
+  %b2 = insertvalue { ptr, i64, ptr } %b, ptr %own, 2
+  ret { ptr, i64, ptr } %b2
 closefail:
   %c2 = call i32 @fclose(ptr %f)
   br label %fail
 fail:
-  %z = insertvalue { ptr, i64 } undef, ptr null, 0
-  %z2 = insertvalue { ptr, i64 } %z, i64 0, 1
-  ret { ptr, i64 } %z2
+  %z = insertvalue { ptr, i64, ptr } undef, ptr null, 0
+  %z2 = insertvalue { ptr, i64, ptr } %z, i64 0, 1
+  %z3 = insertvalue { ptr, i64, ptr } %z2, ptr null, 2
+  ret { ptr, i64, ptr } %z3
 }
 
 define hidden i64 @nz.write_file(ptr %pp, i64 %pn, ptr %dp, i64 %dn) {
@@ -2596,6 +2903,7 @@ entry:
   br i1 %nopath, label %fail, label %open
 open:
   %f = call ptr @fopen(ptr %path, ptr @.wb)
+  call void @free(ptr %path)
   %missing = icmp eq ptr %f, null
   br i1 %missing, label %fail, label %write
 write:
@@ -2646,9 +2954,6 @@ fail:
 /// nothing otherwise. They are a runtime diagnostic, not a language feature: no Nazm
 /// program can read them, and `docs/spec.md` does not mention them.
 const SEQUENCE_RUNTIME: &str = r"
-@nz.seq_allocated = hidden global i64 0
-@nz.seq_reclaimed = hidden global i64 0
-
 define hidden ptr @nz.arr_new() {
 entry:
   %h = call ptr @malloc(i64 32)
@@ -2716,9 +3021,11 @@ entry:
   %bad = icmp eq ptr %h, null
   br i1 %bad, label %done, label %count
 count:
-  %n = load i64, ptr @nz.seq_allocated
-  %n2 = add i64 %n, 1
-  store i64 %n2, ptr @nz.seq_allocated
+  ; Atomic, unlike the reference count beside it: a *task* may create a sequence of its
+  ; own, so two threads can reach this counter even though `N0321` stops them reaching
+  ; one sequence. Until N8 this was an ordinary load-add-store and a concurrent program
+  ; could under-report what it had allocated.
+  %c = atomicrmw add ptr @nz.seq_allocated, i64 1 monotonic
   br label %done
 done:
   ret ptr %h
@@ -2729,9 +3036,7 @@ entry:
   %freed = call i1 @nz.arr_release(ptr %h)
   br i1 %freed, label %count, label %done
 count:
-  %n = load i64, ptr @nz.seq_reclaimed
-  %n2 = add i64 %n, 1
-  store i64 %n2, ptr @nz.seq_reclaimed
+  %c = atomicrmw add ptr @nz.seq_reclaimed, i64 1 monotonic
   br label %done
 done:
   ret void
@@ -2767,6 +3072,127 @@ oom:
 done:
   %data = load ptr, ptr %datap
   ret ptr %data
+}
+";
+
+/// A string's backing allocation, as generated LLVM.
+///
+/// The layout is `{ i64 rc, i64 length, bytes… }`, and the **owner** field of a `Str` is
+/// this block's address while its **pointer** field is `owner + 16` or anywhere after it.
+/// That separation is the whole of N8's string model: the bytes a value names and the
+/// allocation that keeps them valid are different addresses, so a slice can move one
+/// without losing the other.
+///
+/// # Null is a backing
+///
+/// A literal's owner and a process argument's owner are both null, and every operation
+/// here starts by testing for it. So *immortal* and *external* need no tag of their own
+/// and no branch anywhere else in the compiler: they are simply strings that own nothing,
+/// and retaining or releasing one costs a comparison.
+///
+/// # Why this count is atomic and a sequence's is not
+///
+/// `docs/spec.md` lets a `Str` cross into a task and refuses to let a sequence cross
+/// (`N0321`). A task can therefore be handed a string, slice it, bind the slice — and two
+/// sibling tasks doing that to the same backing really are two threads adjusting one
+/// count. A sequence's count cannot be reached by two threads at all, which is why that
+/// one stays an ordinary `add`. Neither choice is a guess: each follows from a rule the
+/// language already had.
+///
+/// The decrement is `release` and the free is preceded by an `acquire` fence, which is the
+/// standard pairing: it is what makes every other thread's writes to the buffer visible to
+/// the thread that frees it.
+const STRING_RUNTIME: &str = r"
+define hidden ptr @nz.str_alloc(i64 %n) {
+entry:
+  ; Checked, because a length that overflows here would allocate less than the caller is
+  ; about to write. `docs/spec.md` reports it as N0406 at the call site.
+  %r = call {i64, i1} @llvm.uadd.with.overflow.i64(i64 %n, i64 16)
+  %over = extractvalue {i64, i1} %r, 1
+  br i1 %over, label %fail, label %ask
+ask:
+  %room = extractvalue {i64, i1} %r, 0
+  %b = call ptr @malloc(i64 %room)
+  %bad = icmp eq ptr %b, null
+  br i1 %bad, label %fail, label %ok
+fail:
+  ret ptr null
+ok:
+  store i64 1, ptr %b
+  %lenp = getelementptr i8, ptr %b, i64 8
+  store i64 %n, ptr %lenp
+  %c = atomicrmw add ptr @nz.str_allocated, i64 1 monotonic
+  ret ptr %b
+}
+
+define hidden void @nz.str_retain(ptr %b) {
+entry:
+  ; Null is immortal or external storage: a literal, or a process argument. Nothing to
+  ; count, and nothing this program may ever free.
+  %none = icmp eq ptr %b, null
+  br i1 %none, label %done, label %bump
+bump:
+  %old = atomicrmw add ptr %b, i64 1 monotonic
+  br label %done
+done:
+  ret void
+}
+
+define hidden void @nz.str_release(ptr %b) {
+entry:
+  %none = icmp eq ptr %b, null
+  br i1 %none, label %done, label %drop
+drop:
+  %old = atomicrmw sub ptr %b, i64 1 release
+  %last = icmp eq i64 %old, 1
+  br i1 %last, label %free, label %done
+free:
+  fence acquire
+  call void @free(ptr %b)
+  %c = atomicrmw add ptr @nz.str_reclaimed, i64 1 monotonic
+  br label %done
+done:
+  ret void
+}
+
+; A `Strs` owns a reference to every string in it, so its storage cannot be released by
+; the helper an `Ints` uses. Elements first, then the array, then the header — the order
+; matters, because reading an element out of a buffer that has already been freed is the
+; use-after-free this whole milestone exists to make impossible.
+define hidden void @nz.strs_release(ptr %h) {
+entry:
+  %none = icmp eq ptr %h, null
+  br i1 %none, label %done, label %drop
+drop:
+  %rcp = getelementptr i8, ptr %h, i64 24
+  %rc = load i64, ptr %rcp
+  %rc2 = sub i64 %rc, 1
+  store i64 %rc2, ptr %rcp
+  %last = icmp sle i64 %rc2, 0
+  br i1 %last, label %contents, label %done
+contents:
+  %n = load i64, ptr %h
+  %dp = getelementptr i8, ptr %h, i64 16
+  %data = load ptr, ptr %dp
+  br label %test
+test:
+  %i = phi i64 [ 0, %contents ], [ %next, %body ]
+  %more = icmp slt i64 %i, %n
+  br i1 %more, label %body, label %storage
+body:
+  %e = getelementptr { ptr, i64, ptr }, ptr %data, i64 %i
+  %op = getelementptr i8, ptr %e, i64 16
+  %owner = load ptr, ptr %op
+  call void @nz.str_release(ptr %owner)
+  %next = add i64 %i, 1
+  br label %test
+storage:
+  call void @free(ptr %data)
+  call void @free(ptr %h)
+  %c = atomicrmw add ptr @nz.seq_reclaimed, i64 1 monotonic
+  br label %done
+done:
+  ret void
 }
 ";
 
@@ -2820,10 +3246,19 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
     // release the whole frame without asking which slots were ever written.
     e.frame.clear();
     for (i, local) in f.locals.iter().enumerate() {
-        if !local.ty.is_handle() {
+        if local.ty.owns().is_none() {
             continue;
         }
-        let _ = writeln!(e.out, "  store ptr null, ptr %slot{i}");
+        // Zeroed, so a slot never written holds a value whose owner is null — and
+        // releasing null is a no-op. That is what lets a path that skipped a declaration,
+        // and the shared unwind block a failure takes, release the whole frame without
+        // asking which slots were ever reached.
+        let _ = writeln!(
+            e.out,
+            "  store {} {}, ptr %slot{i}",
+            local.ty.llvm(),
+            local.ty.unwind_value()
+        );
         // Parameters are excluded, and that exclusion is rule 2: a callee borrows, so
         // releasing one would destroy storage the caller is still holding.
         if i >= f.params {
@@ -2969,6 +3404,9 @@ body:
   %blk = inttoptr i64 %raw to ptr
   %tid = load ptr, ptr %blk
   %rc = call i32 @pthread_join(ptr %tid, ptr null)
+  ; Joined, so the thread has ended and nothing will read this block again. Its arguments
+  ; were released by the trampoline on its way out; this is the block itself, one
+  ; `malloc` per `spawn` that until N8 nothing ever gave back.
   ; The task's own diagnostic, at a fixed offset in the block it was given.
   %emp = getelementptr i8, ptr %blk, i64 8
   %em = load ptr, ptr %emp
@@ -2977,6 +3415,10 @@ body:
   %none = icmp eq ptr %msg, null
   %this = icmp ne ptr %em, null
   %take = and i1 %none, %this
+  ; Read before the block is freed, and the message itself is a constant in the object's
+  ; read-only data rather than anything the block owns — so what is carried out stays
+  ; valid after the free below.
+  call void @free(ptr %blk)
   br i1 %take, label %first, label %after
 first:
   br label %after
@@ -2994,7 +3436,22 @@ done:
 
 /// A bounded channel, as generated LLVM: one mutex, one condition variable, one ring.
 ///
-/// The header is `{ i64 cap, i64 len, i64 head, i64 closed, ptr data, ptr mutex, ptr cond }`.
+/// The header is
+/// `{ i64 cap, i64 len, i64 head, i64 closed, ptr data, ptr mutex, ptr cond, i64 rc }`.
+///
+/// # When a channel may be destroyed, and why no waiter can be left
+///
+/// At `rc == 0`, and the argument is structural rather than hopeful. A reference is a
+/// binding that holds the handle, a value on its way out of a `return`, or the argument
+/// block of a task that has not been joined. A thread blocked in `chan_send` or
+/// `chan_recv` reached it **from a frame that holds the handle**, because a built-in
+/// borrows its argument and the caller keeps the reference across the call — so a waiter
+/// implies a live reference, and `rc == 0` implies no waiter. The count is also why
+/// closing is not destruction: `chan_close` changes what the channel does and touches no
+/// storage at all.
+///
+/// The count is atomic for the reason a string backing's is: `docs/spec.md` lets a `Chan`
+/// cross into a task, so two tasks really can bind the same channel at once.
 ///
 /// # One condition variable, broadcast every time
 ///
@@ -3011,27 +3468,49 @@ done:
 const CHANNEL_RUNTIME: &str = r"
 define hidden ptr @nz.chan_new(i64 %cap) {
 entry:
-  %c = call ptr @malloc(i64 56)
+  %c = call ptr @malloc(i64 64)
   %bad = icmp eq ptr %c, null
   br i1 %bad, label %fail, label %ring
 fail:
   ret ptr null
+; A channel is four allocations, and a failure part-way through must not leave the earlier
+; ones behind. One label per stage, each freeing exactly what has been taken by then —
+; which is `docs/spec.md`'s failure law applied to the runtime's own storage, not only to
+; the program's.
+freec:
+  call void @free(ptr %c)
+  ret ptr null
+freed:
+  call void @free(ptr %d)
+  call void @free(ptr %c)
+  ret ptr null
+freem:
+  call void @free(ptr %m)
+  call void @free(ptr %d)
+  call void @free(ptr %c)
+  ret ptr null
 ring:
-  %bytes = mul i64 %cap, 8
+  ; Checked: a capacity large enough to overflow this product would allocate a ring
+  ; smaller than the channel then believes it has.
+  %r = call {i64, i1} @llvm.umul.with.overflow.i64(i64 %cap, i64 8)
+  %over = extractvalue {i64, i1} %r, 1
+  br i1 %over, label %freec, label %ask
+ask:
+  %bytes = extractvalue {i64, i1} %r, 0
   %d = call ptr @malloc(i64 %bytes)
   %badd = icmp eq ptr %d, null
-  br i1 %badd, label %fail, label %lock
+  br i1 %badd, label %freec, label %lock
 lock:
   ; Sized generously on purpose: pthread_mutex_t and pthread_cond_t are opaque and
   ; differently sized on every platform, and there is no header to ask from here.
   ; Over-allocating is what makes this portable without a size to get wrong.
   %m = call ptr @malloc(i64 128)
   %badm = icmp eq ptr %m, null
-  br i1 %badm, label %fail, label %cond
+  br i1 %badm, label %freed, label %cond
 cond:
   %v = call ptr @malloc(i64 128)
   %badv = icmp eq ptr %v, null
-  br i1 %badv, label %fail, label %init
+  br i1 %badv, label %freem, label %init
 init:
   %mi = call i32 @pthread_mutex_init(ptr %m, ptr null)
   %vi = call i32 @pthread_cond_init(ptr %v, ptr null)
@@ -3048,7 +3527,57 @@ init:
   store ptr %m, ptr %mp
   %vp = getelementptr i8, ptr %c, i64 48
   store ptr %v, ptr %vp
+  ; Born with one reference, held by the expression that created it.
+  %rcp = getelementptr i8, ptr %c, i64 56
+  store i64 1, ptr %rcp
+  %n = atomicrmw add ptr @nz.chan_allocated, i64 1 monotonic
   ret ptr %c
+}
+
+define hidden void @nz.chan_retain(ptr %c) {
+entry:
+  %none = icmp eq ptr %c, null
+  br i1 %none, label %done, label %bump
+bump:
+  %rcp = getelementptr i8, ptr %c, i64 56
+  %old = atomicrmw add ptr %rcp, i64 1 monotonic
+  br label %done
+done:
+  ret void
+}
+
+; The whole of a channel goes at once: the condition variable, the mutex, the ring and the
+; header. Destroying the two primitives is not optional — `pthread_mutex_destroy` releases
+; what the platform allocated behind an opaque handle, and freeing the memory without it
+; leaks whatever that was. Neither can be in use: nothing holds a reference, so no thread
+; is inside a send, a receive or a close.
+define hidden void @nz.chan_release(ptr %c) {
+entry:
+  %none = icmp eq ptr %c, null
+  br i1 %none, label %done, label %drop
+drop:
+  %rcp = getelementptr i8, ptr %c, i64 56
+  %old = atomicrmw sub ptr %rcp, i64 1 release
+  %last = icmp eq i64 %old, 1
+  br i1 %last, label %destroy, label %done
+destroy:
+  fence acquire
+  %vp = getelementptr i8, ptr %c, i64 48
+  %v = load ptr, ptr %vp
+  %dv = call i32 @pthread_cond_destroy(ptr %v)
+  call void @free(ptr %v)
+  %mp = getelementptr i8, ptr %c, i64 40
+  %m = load ptr, ptr %mp
+  %dm = call i32 @pthread_mutex_destroy(ptr %m)
+  call void @free(ptr %m)
+  %datap = getelementptr i8, ptr %c, i64 32
+  %data = load ptr, ptr %datap
+  call void @free(ptr %data)
+  call void @free(ptr %c)
+  %n = atomicrmw add ptr @nz.chan_reclaimed, i64 1 monotonic
+  br label %done
+done:
+  ret void
 }
 
 define hidden i1 @nz.chan_send(ptr %c, i64 %v) {

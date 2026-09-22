@@ -37,7 +37,11 @@ pub enum Value {
     /// replacement character `from_utf8_lossy` substituted) where the specification
     /// requires 195. The host's text type was acting as an unstated specification,
     /// which is exactly what the spec section warns against.
-    Str(Vec<u8>),
+    ///
+    /// A [`Str`] rather than a `Vec<u8>` since N8: a view over a backing allocation,
+    /// which is what the native representation is, so the two agree about *when* string
+    /// storage is reclaimed and not only about what the bytes are.
+    Str(Str),
     /// A growable sequence of `Int`, **by reference**.
     ///
     /// `Rc<RefCell<…>>` is the reference semantics, stated rather than incidental: two
@@ -61,7 +65,12 @@ pub enum Value {
     /// not a concurrency mechanism.
     Ints(Arc<Seq<Vec<i64>>>),
     /// The same, for `Str`.
-    Strs(Arc<Seq<Vec<Vec<u8>>>>),
+    ///
+    /// Each element is a `Str` **value**, which since N8 means each element holds its own
+    /// reference to whatever backs it. That is `docs/spec.md`'s rule 3 applied to a
+    /// container: what is stored survives the binding it came from, and what is read out
+    /// survives being overwritten.
+    Strs(Arc<Seq<Vec<Str>>>),
     /// A bounded channel of `Int`, by reference.
     ///
     /// The one value designed to be shared between tasks: its operations *are* the
@@ -90,6 +99,7 @@ struct ChannelState {
 
 impl Channel {
     fn new(capacity: usize) -> Self {
+        CHANNELS_ALLOCATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Self {
             state: Mutex::new(ChannelState::default()),
             changed: std::sync::Condvar::new(),
@@ -138,6 +148,16 @@ impl Channel {
     }
 }
 
+/// Counted for the same reason [`Seq`] is: the host reclaims the mutex, the condition
+/// variable and the queue when the last `Arc` goes, and *"the host does the right thing"*
+/// is not evidence that the **language** reclaims a channel. The compiled program counts
+/// the same event at the same moment, and `crates/nazm-cli/tests/memory.rs` compares them.
+impl Drop for Channel {
+    fn drop(&mut self) {
+        CHANNELS_RECLAIMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -162,6 +182,121 @@ impl Eq for Value {}
 fn seq<T>(lock: &Mutex<T>) -> Option<std::sync::MutexGuard<'_, T>> {
     lock.lock().ok()
 }
+
+/// What a `Str` points into, and whether reclaiming it means anything.
+///
+/// N8's central problem, from `docs/architecture.md` §7.8: a `Str` may name a literal, a
+/// process argument, a buffer the program allocated, or the interior of any of those, and
+/// `{ pointer, length }` cannot tell them apart. So the *backing* is named separately from
+/// the view, here and in the compiled program, and the two implementations classify the
+/// same four origins the same way.
+#[derive(Debug)]
+pub enum Backing {
+    /// Storage the program did not allocate and cannot reclaim: a literal, or a process
+    /// argument. Uncounted on purpose — `docs/spec.md` reclaims what a program allocated,
+    /// and counting storage nobody allocated as a leak would make every program leak.
+    Immortal(Vec<u8>),
+    /// Storage the program allocated. Counted, and released when the last view dies.
+    Heap(Vec<u8>),
+}
+
+impl Backing {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Immortal(b) | Self::Heap(b) => b,
+        }
+    }
+}
+
+impl Drop for Backing {
+    fn drop(&mut self) {
+        if matches!(self, Self::Heap(_)) {
+            STRINGS_RECLAIMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// A `Str`: a view of `len` bytes starting at `start` inside a backing allocation.
+///
+/// This is the interpreter's half of the representation `docs/architecture.md` §7.8
+/// settles. The native value is `{ pointer, length, owner }` and this is
+/// `{ backing, start, length }` — the same three facts, because the same rule has to hold
+/// in both: **the backing stays valid for every live view of it**, and a slice is a view,
+/// not a copy.
+///
+/// Cloning shares the backing and copies nothing, which is rule 1: assignment never
+/// observably copies a `Str`.
+#[derive(Debug, Clone)]
+pub struct Str {
+    backing: Arc<Backing>,
+    start: usize,
+    len: usize,
+}
+
+impl Str {
+    /// A literal, an argument, or anything else the program did not allocate.
+    #[must_use]
+    pub fn immortal(bytes: Vec<u8>) -> Self {
+        Self::whole(Backing::Immortal(bytes))
+    }
+
+    /// Storage the program allocated: a concatenation, a join, a file's contents.
+    #[must_use]
+    pub fn heap(bytes: Vec<u8>) -> Self {
+        STRINGS_ALLOCATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self::whole(Backing::Heap(bytes))
+    }
+
+    fn whole(backing: Backing) -> Self {
+        let len = backing.bytes().len();
+        Self {
+            backing: Arc::new(backing),
+            start: 0,
+            len,
+        }
+    }
+
+    /// The bytes this view names.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        self.backing
+            .bytes()
+            .get(self.start..self.start + self.len)
+            .unwrap_or(&[])
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// `str_slice`: a new view of the **same** backing, which is what keeps the backing
+    /// alive for exactly as long as the slice is. `from` and `to` are already checked.
+    #[must_use]
+    pub fn slice(&self, from: usize, to: usize) -> Self {
+        Self {
+            backing: Arc::clone(&self.backing),
+            start: self.start + from,
+            len: to.saturating_sub(from),
+        }
+    }
+}
+
+impl PartialEq for Str {
+    /// Bytes, never identity. `docs/spec.md`'s *Strings are bytes* makes two strings with
+    /// the same bytes equal however they were built, and whether they share a backing is
+    /// exactly the thing an implementation may decide for itself.
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes() == other.bytes()
+    }
+}
+
+impl Eq for Str {}
 
 /// Sequence storage, and the two counters that prove it is reclaimed.
 ///
@@ -201,19 +336,38 @@ impl<T> std::ops::Deref for Seq<T> {
 
 static ALLOCATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static RECLAIMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static STRINGS_ALLOCATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static STRINGS_RECLAIMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CHANNELS_ALLOCATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CHANNELS_RECLAIMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// How many sequences this process created, and how many it reclaimed.
+/// What one class of storage did: created, reclaimed.
+///
+/// Three classes rather than one total, because they answer different questions and N8
+/// makes them independently reclaimable. A slice is **not** an allocation: it takes a
+/// reference to a backing that already exists, and counting it as one would report a leak
+/// where nothing was allocated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Counts {
+    pub sequences: (u64, u64),
+    pub strings: (u64, u64),
+    pub channels: (u64, u64),
+}
+
+/// What this process allocated and reclaimed, by class.
 ///
 /// For the driver's `NAZM_MEMORY_REPORT` line and for the tests that compare the two
 /// implementations. Not reachable from a Nazm program, for the reason the compiled
 /// counters are not: the specification states *when* storage is reclaimed and deliberately
 /// not *how*.
 #[must_use]
-pub fn sequence_counts() -> (u64, u64) {
-    (
-        ALLOCATED.load(std::sync::atomic::Ordering::Relaxed),
-        RECLAIMED.load(std::sync::atomic::Ordering::Relaxed),
-    )
+pub fn memory_counts() -> Counts {
+    let n = |c: &std::sync::atomic::AtomicU64| c.load(std::sync::atomic::Ordering::Relaxed);
+    Counts {
+        sequences: (n(&ALLOCATED), n(&RECLAIMED)),
+        strings: (n(&STRINGS_ALLOCATED), n(&STRINGS_RECLAIMED)),
+        channels: (n(&CHANNELS_ALLOCATED), n(&CHANNELS_RECLAIMED)),
+    }
 }
 
 impl std::fmt::Display for Value {
@@ -224,7 +378,7 @@ impl std::fmt::Display for Value {
             // Rendering, not semantics: a `Str` that is not valid UTF-8 has no text
             // form, and showing the replacement character is a display decision. No
             // operation on `Str` goes through here.
-            Self::Str(v) => write!(f, "{}", String::from_utf8_lossy(v)),
+            Self::Str(v) => write!(f, "{}", String::from_utf8_lossy(v.bytes())),
             // A sequence is never a program's result — `main` returns `Int` — so this
             // is for diagnostics only, and says what it is rather than dumping it.
             Self::Ints(v) => match v.lock() {
@@ -816,7 +970,7 @@ impl Interpreter {
                         format!("asked for byte {at} of a `Str` {} bytes long", s.len()),
                     ));
                 };
-                s.get(index).map_or_else(
+                s.bytes().get(index).map_or_else(
                     || Err(bug("an index that passed its own bounds check")),
                     |b| Ok(Value::Int(i64::from(*b))),
                 )
@@ -835,19 +989,23 @@ impl Interpreter {
                     usize::try_from(*to).unwrap_or(0),
                 );
                 // Bytes, not characters: slicing is allowed to land inside a multi-byte
-                // sequence, and `docs/spec.md` says what that produces. Rust's `String`
-                // will not hold invalid UTF-8, so the bytes are carried as lossy text
-                // here — the *native* representation has no such constraint, and the
-                // specification is written to what both can do.
-                Ok(Value::Str(s.get(a..b).unwrap_or(&[]).to_vec()))
+                // sequence, and `docs/spec.md` says what that produces.
+                //
+                // A **view**, not a copy, and not an allocation: the result shares the
+                // backing it was cut from and keeps it alive for exactly as long as it
+                // lives. That is the property N8 exists to establish, and it is the same
+                // property `getelementptr` gives the compiled program.
+                Ok(Value::Str(s.slice(a, b)))
             }
             (Intrinsic::StrConcat, [Value::Str(a), Value::Str(b)]) => {
                 let mut out = Vec::with_capacity(a.len() + b.len());
-                out.extend_from_slice(a);
-                out.extend_from_slice(b);
-                Ok(Value::Str(out))
+                out.extend_from_slice(a.bytes());
+                out.extend_from_slice(b.bytes());
+                Ok(Value::Str(Str::heap(out)))
             }
-            (Intrinsic::IntToStr, [Value::Int(n)]) => Ok(Value::Str(n.to_string().into_bytes())),
+            (Intrinsic::IntToStr, [Value::Int(n)]) => {
+                Ok(Value::Str(Str::heap(n.to_string().into_bytes())))
+            }
             (Intrinsic::IntsNew, []) => Ok(Value::Ints(Arc::new(Seq::new(Vec::new())))),
             (Intrinsic::StrsNew, []) => Ok(Value::Strs(Arc::new(Seq::new(Vec::new())))),
             (Intrinsic::IntsLen, [Value::Ints(a)]) => seq(a)
@@ -878,6 +1036,9 @@ impl Interpreter {
                         format!("asked for item {at} of a `Strs` holding {}", a.len()),
                     ));
                 };
+                // The element's own reference, cloned. What comes back keeps the
+                // backing alive on its own, which is why overwriting the element
+                // afterwards cannot invalidate it (`docs/spec.md`, rule 4).
                 Ok(Value::Str(v.clone()))
             }
             (Intrinsic::IntsSet, [Value::Ints(a), Value::Int(at), Value::Int(v)]) => {
@@ -905,6 +1066,10 @@ impl Interpreter {
                         format!("asked to write item {at} of a `Strs` holding {len}"),
                     ));
                 };
+                // The new element takes its own reference **before** the old one is
+                // dropped, which the assignment does in that order. Replacing an element
+                // with a view of the same backing is therefore safe rather than a
+                // release followed by a use.
                 slot.clone_from(v);
                 Ok(Value::Int(*at))
             }
@@ -982,16 +1147,16 @@ impl Interpreter {
                 let Some(parts) = seq(parts) else {
                     return Err(bug("a sequence that could not be read"));
                 };
-                let total: usize = parts.iter().map(Vec::len).sum::<usize>()
+                let total: usize = parts.iter().map(Str::len).sum::<usize>()
                     + sep.len() * parts.len().saturating_sub(1);
                 let mut out = Vec::with_capacity(total);
                 for (i, part) in parts.iter().enumerate() {
                     if i > 0 {
-                        out.extend_from_slice(sep);
+                        out.extend_from_slice(sep.bytes());
                     }
-                    out.extend_from_slice(part);
+                    out.extend_from_slice(part.bytes());
                 }
-                Ok(Value::Str(out))
+                Ok(Value::Str(Str::heap(out)))
             }
             (Intrinsic::StrsPop, [Value::Strs(a)]) => {
                 let Some(mut a) = seq(a) else {
@@ -1018,25 +1183,29 @@ impl Interpreter {
                         format!("asked for argument {at} of {} given", self.args.len()),
                     ));
                 };
-                Ok(Value::Str(a.clone().into_bytes()))
+                // The process's arguments are the operating system's storage, not
+                // this program's: **external**, so nothing counts them and nothing
+                // reclaims them. The compiled program says the same thing by giving an
+                // `arg` no owner at all.
+                Ok(Value::Str(Str::immortal(a.clone().into_bytes())))
             }
             (Intrinsic::ReadFile, [Value::Str(path)]) => {
-                let name = String::from_utf8_lossy(path).into_owned();
+                let name = String::from_utf8_lossy(path.bytes()).into_owned();
                 match std::fs::read(&name) {
-                    Ok(bytes) => Ok(Value::Str(bytes)),
+                    Ok(bytes) => Ok(Value::Str(Str::heap(bytes))),
                     Err(e) => Err(io_failed("this file could not be read", &name, &e)),
                 }
             }
             (Intrinsic::WriteFile, [Value::Str(path), Value::Str(data)]) => {
-                let name = String::from_utf8_lossy(path).into_owned();
-                match std::fs::write(&name, data) {
+                let name = String::from_utf8_lossy(path.bytes()).into_owned();
+                match std::fs::write(&name, data.bytes()) {
                     Ok(()) => index_fits(data.len())
                         .map_or_else(|| Err(bug("a file longer than `Int` can measure")), Ok),
                     Err(e) => Err(io_failed("this file could not be written", &name, &e)),
                 }
             }
             (Intrinsic::FileExists, [Value::Str(path)]) => {
-                let name = String::from_utf8_lossy(path).into_owned();
+                let name = String::from_utf8_lossy(path.bytes()).into_owned();
                 // Openable for reading, which is what the native side tests. "Exists"
                 // and "can be opened" differ for a directory or an unreadable file, and
                 // the built-in is named for the question a program actually asks.
@@ -1045,9 +1214,13 @@ impl Interpreter {
             (Intrinsic::Print, [Value::Str(data)]) | (Intrinsic::EPrint, [Value::Str(data)]) => {
                 use std::io::Write as _;
                 let written = if i == Intrinsic::Print {
-                    std::io::stdout().write_all(data).map(|()| data.len())
+                    std::io::stdout()
+                        .write_all(data.bytes())
+                        .map(|()| data.len())
                 } else {
-                    std::io::stderr().write_all(data).map(|()| data.len())
+                    std::io::stderr()
+                        .write_all(data.bytes())
+                        .map(|()| data.len())
                 };
                 match written {
                     Ok(n) => index_fits(n)
@@ -1071,7 +1244,7 @@ impl Interpreter {
                         format!("asked for byte {b}, which is outside 0..=255"),
                     ));
                 };
-                Ok(Value::Str(vec![byte]))
+                Ok(Value::Str(Str::heap(vec![byte])))
             }
             _ => Err(bug("arguments of the wrong shape")),
         }
@@ -1274,7 +1447,10 @@ impl Interpreter {
             Expr::Bool { value, .. } => Value::Bool(*value),
             // A literal's bytes are the source's bytes, which are valid UTF-8 because
             // the source is. Nothing downstream may assume that of every `Str`.
-            Expr::Str { value, .. } => Value::Str(value.clone().into_bytes()),
+            // A literal is **immortal**: the compiled program puts it in a constant and
+            // the interpreter must not pretend it allocated one, or the two would
+            // disagree about what a program with no allocation did.
+            Expr::Str { value, .. } => Value::Str(Str::immortal(value.clone().into_bytes())),
 
             Expr::Var { name, span } => env
                 .iter()

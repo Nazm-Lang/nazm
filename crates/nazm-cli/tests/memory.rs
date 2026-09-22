@@ -25,31 +25,57 @@ use nazm_lir::MEMORY_VARIABLE;
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 
-/// What one run reported: its value, and what it did with sequence storage.
-#[derive(Debug, PartialEq, Eq)]
-struct Ran {
-    value: String,
+/// What one class of storage did in one run.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Class {
     allocated: u64,
     reclaimed: u64,
     live: u64,
 }
 
+/// What one run reported: its value, and what it did with each class of storage.
+#[derive(Debug, PartialEq, Eq)]
+struct Ran {
+    value: String,
+    sequences: Class,
+    strings: Class,
+    channels: Class,
+}
+
+/// Read `<class> allocated=… reclaimed=… live=…`, three times, in order.
+///
+/// Positional rather than by-name search, because the three classes use the same three
+/// field names — the class word is what tells them apart, and a parser that looked for
+/// the first `allocated=` would answer every question with the sequence count.
 fn counts(stderr: &str, value: String) -> Ran {
     let line = stderr
         .lines()
         .find(|l| l.starts_with("nazm-memory:"))
         .unwrap_or_else(|| panic!("no memory report in: {stderr}"));
-    let field = |name: &str| {
-        line.split_whitespace()
-            .find_map(|w| w.strip_prefix(name))
-            .and_then(|n| n.parse::<u64>().ok())
-            .unwrap_or_else(|| panic!("no `{name}` in: {line}"))
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let class = |name: &str| {
+        let at = words
+            .iter()
+            .position(|w| *w == name)
+            .unwrap_or_else(|| panic!("no `{name}` in: {line}"));
+        let field = |offset: usize, prefix: &str| {
+            words
+                .get(at + offset)
+                .and_then(|w| w.strip_prefix(prefix))
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or_else(|| panic!("no `{prefix}` after `{name}` in: {line}"))
+        };
+        Class {
+            allocated: field(1, "allocated="),
+            reclaimed: field(2, "reclaimed="),
+            live: field(3, "live="),
+        }
     };
     Ran {
         value,
-        allocated: field("allocated="),
-        reclaimed: field("reclaimed="),
-        live: field("live="),
+        sequences: class("sequences"),
+        strings: class("strings"),
+        channels: class("channels"),
     }
 }
 
@@ -135,12 +161,34 @@ fn both_failing(source: &str) -> (Ran, String) {
     (a, native_err)
 }
 
+/// Run it, and require exactly `n` sequences created and every one of them reclaimed.
 fn reclaimed(n: u64, source: &str) -> Ran {
     let r = both(source);
-    assert_eq!(r.allocated, n, "{r:?}");
-    assert_eq!(r.reclaimed, n, "{r:?}");
-    assert_eq!(r.live, 0, "{r:?}");
+    assert_eq!(r.sequences, expected(n), "{r:?}");
     r
+}
+
+/// The same, for string backings.
+fn strings(n: u64, source: &str) -> Ran {
+    let r = both(source);
+    assert_eq!(r.strings, expected(n), "{r:?}");
+    r
+}
+
+/// The same, for channels.
+fn channels(n: u64, source: &str) -> Ran {
+    let r = both(source);
+    assert_eq!(r.channels, expected(n), "{r:?}");
+    r
+}
+
+/// `n` created, `n` reclaimed, nothing left.
+const fn expected(n: u64) -> Class {
+    Class {
+        allocated: n,
+        reclaimed: n,
+        live: 0,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -281,9 +329,7 @@ fn a_failed_operation_reclaims_on_its_way_out() {
          ints_len(xs) / 0\n}\n\
          fn main() -> Int {\n    let xs = ints_new();\n    ints_push(xs, 2);\n    inner(xs)\n}\n",
     );
-    assert_eq!(r.allocated, 2, "{r:?}");
-    assert_eq!(r.reclaimed, 2, "{r:?}");
-    assert_eq!(r.live, 0, "{r:?}");
+    assert_eq!(r.sequences, expected(2), "{r:?}");
     assert!(rendered.contains("N0401"), "{rendered}");
 }
 
@@ -347,41 +393,289 @@ fn a_sequence_still_may_not_cross_into_a_task() {
 }
 
 // ---------------------------------------------------------------------------
-// What the slice does not cover, stated as a test so the claim cannot drift
+// Strings: the four origins, and what each one owns
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_program_with_no_sequences_reports_nothing_and_reclaims_nothing() {
-    // `Str` storage is outside this slice, and the constitution says so. A string-heavy
-    // program is not reported on at all rather than reported as clean.
-    let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        dir.path().join("m.nz"),
+fn a_string_heavy_loop_holds_one_string_at_a_time() {
+    // The N7 boundary this replaces. Until N8 a program with no sequence printed no
+    // report at all, and this exact loop — fifty concatenations for one live result — was
+    // the thing the constitution said it could not account for. It accounts for it now:
+    // fifty backings created, fifty reclaimed, nothing live at the end.
+    let r = strings(
+        50,
         "fn main() -> Int {\n    let mut s = \"\";\n    let mut i = 0;\n    \
          while i < 50 {\n        s = str_concat(s, \"x\");\n        i = i + 1;\n    }\n    \
          str_len(s)\n}\n",
-    )
-    .expect("write");
-    let built = Command::new(NAZM)
-        .args(["build", "m.nz", "-o", "prog"])
-        .current_dir(dir.path())
-        .output()
-        .expect("build");
-    assert!(built.status.success(), "{:?}", built);
-    let native = Command::new(dir.path().join("prog"))
-        .env(MEMORY_VARIABLE, "1")
-        .current_dir(dir.path())
-        .output()
-        .expect("execute");
-    assert_eq!(
-        String::from_utf8_lossy(&native.stdout).trim(),
-        "50",
-        "the program should still work"
     );
-    assert!(
-        !String::from_utf8_lossy(&native.stderr).contains("nazm-memory:"),
-        "a program with no sequences should report nothing"
+    assert_eq!(r.value, "50");
+}
+
+#[test]
+fn a_literal_owns_nothing_and_is_never_counted() {
+    // **Immortal.** A literal is in the object's read-only data; binding, slicing and
+    // comparing one allocates nothing, and counting it would make every program leak.
+    let r = strings(
+        0,
+        "fn main() -> Int {\n    let a = \"hello\";\n    let b = a;\n    \
+         str_len(str_slice(b, 1, 4))\n}\n",
     );
+    assert_eq!(r.value, "3");
+}
+
+#[test]
+fn a_slice_keeps_its_backing_alive_after_the_original_is_gone() {
+    // The case `{ pointer, length }` could not express. `make` allocates, slices, and
+    // returns the slice — so the value that leaves the function points into the middle of
+    // a buffer whose only binding died on the way out. The churn afterwards is there to
+    // make a use-after-free read reused storage rather than the right answer by luck.
+    let r = strings(
+        21,
+        "fn make() -> Str {\n    let s = str_concat(\"ab\", \"cd\");\n    \
+         str_slice(s, 1, 3)\n}\n\
+         fn main() -> Int {\n    let x = make();\n    let mut i = 0;\n    \
+         let mut noise = \"\";\n    while i < 20 {\n        \
+         noise = str_concat(noise, \"zz\");\n        i = i + 1;\n    }\n    \
+         str_byte(x, 0) * 1000 + str_byte(x, 1)\n}\n",
+    );
+    // `bc`, still, after the buffer it points into lost its only binding.
+    assert_eq!(r.value, "98099");
+}
+
+#[test]
+fn a_slice_of_a_slice_of_a_heap_string_is_safe() {
+    let r = strings(
+        1,
+        "fn main() -> Int {\n    let s = str_concat(\"abcdef\", \"\");\n    \
+         let a = str_slice(s, 1, 5);\n    let b = str_slice(a, 1, 3);\n    \
+         str_byte(b, 0)\n}\n",
+    );
+    assert_eq!(r.value, "99");
+}
+
+#[test]
+fn an_empty_slice_and_an_empty_string_are_ordinary() {
+    // `docs/spec.md` gives an empty `Str` real storage so its pointer stays valid. An
+    // empty *slice* of an immortal string owns nothing, and an empty concatenation owns a
+    // backing like any other.
+    let r = strings(
+        1,
+        "fn main() -> Int {\n    let e = str_slice(\"abc\", 1, 1);\n    \
+         let f = str_concat(\"\", \"\");\n    str_len(e) + str_len(f) + \
+         str_len(str_slice(f, 0, 0))\n}\n",
+    );
+    assert_eq!(r.value, "0");
+}
+
+#[test]
+fn a_returned_borrowed_string_survives_the_call_that_borrowed_it() {
+    // Rule 2 and rule 3 meeting. The parameter is borrowed, so the caller's value stays
+    // valid; the result is a reference the caller receives, so it must be taken **before**
+    // the callee's frame lets go. Both edges, because N7 proved they are different code.
+    let r = strings(
+        1,
+        "fn same(s: Str) -> Str { s }\n\
+         fn same_returned(s: Str) -> Str { return s; }\n\
+         fn main() -> Int {\n    let s = str_concat(\"ab\", \"cd\");\n    \
+         let a = same(s);\n    let b = same_returned(s);\n    \
+         str_len(a) + str_len(b) + str_len(s)\n}\n",
+    );
+    assert_eq!(r.value, "12");
+}
+
+#[test]
+fn a_string_stored_in_a_sequence_outlives_the_binding_it_came_from() {
+    // §14. `strs_push` borrows its argument and keeps what it was given, so the stored
+    // element needs a reference of its own. `s` is rebound afterwards, which releases
+    // what it held — and the sequence's element must not go with it.
+    let r = strings(
+        21,
+        "fn main() -> Int {\n    let xs = strs_new();\n    \
+         let mut s = str_concat(\"ab\", \"cd\");\n    strs_push(xs, s);\n    \
+         s = \"\";\n    let mut i = 0;\n    while i < 20 {\n        \
+         s = str_concat(s, \"z\");\n        i = i + 1;\n    }\n    \
+         str_len(strs_get(xs, 0)) + str_byte(strs_get(xs, 0), 0)\n}\n",
+    );
+    assert_eq!(r.value, "101");
+}
+
+#[test]
+fn a_string_read_out_of_a_sequence_survives_being_overwritten() {
+    // §15, and the behaviour `docs/spec.md` has promised since sequences existed: a `Str`
+    // already read out of a sequence is unaffected by changing the sequence. It used to
+    // be true because nothing was ever freed. It is true now because `strs_get` hands
+    // back its own reference and `strs_set` releases the old element only after taking
+    // the new one.
+    let r = strings(
+        22,
+        "fn main() -> Int {\n    let xs = strs_new();\n    \
+         strs_push(xs, str_concat(\"ab\", \"cd\"));\n    let s = strs_get(xs, 0);\n    \
+         strs_set(xs, 0, str_concat(\"wx\", \"yz\"));\n    let mut i = 0;\n    \
+         let mut noise = \"\";\n    while i < 20 {\n        \
+         noise = str_concat(noise, \"q\");\n        i = i + 1;\n    }\n    \
+         str_byte(s, 0)\n}\n",
+    );
+    assert_eq!(r.value, "97");
+}
+
+#[test]
+fn replacing_an_element_with_itself_is_safe() {
+    // §16's ordering case. If `strs_set` released the old element before taking the new
+    // one, this would free the backing and then store a pointer into it.
+    let r = strings(
+        1,
+        "fn main() -> Int {\n    let xs = strs_new();\n    \
+         strs_push(xs, str_concat(\"ab\", \"cd\"));\n    \
+         strs_set(xs, 0, strs_get(xs, 0));\n    str_byte(strs_get(xs, 0), 0)\n}\n",
+    );
+    assert_eq!(r.value, "97");
+}
+
+#[test]
+fn a_sequence_of_strings_releases_its_contents_when_it_goes() {
+    // §17. Freeing only the array of descriptors would turn a leaked string into a leaked
+    // string inside a sequence, which is the same leak with a longer name.
+    let r = strings(
+        20,
+        "fn build() -> Int {\n    let xs = strs_new();\n    let mut i = 0;\n    \
+         while i < 20 {\n        strs_push(xs, int_to_str(i));\n        i = i + 1;\n    }\n    \
+         strs_len(xs)\n}\n\
+         fn main() -> Int { build() }\n",
+    );
+    assert_eq!(r.value, "20");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_popped_string_transfers_out_of_the_sequence() {
+    // Popping shortens the sequence, so the sequence gives up its reference and the
+    // expression takes that same one over. No retain, no release, and the value is still
+    // valid after the sequence it came from is gone.
+    let r = strings(
+        4,
+        "fn last() -> Str {\n    let xs = strs_new();\n    \
+         strs_push(xs, int_to_str(11));\n    strs_push(xs, int_to_str(22));\n    \
+         strs_pop(xs)\n}\n\
+         fn main() -> Int { str_len(last()) + str_byte(last(), 0) }\n",
+    );
+    assert_eq!(r.value, "52");
+}
+
+#[test]
+fn a_string_is_released_on_the_failure_path_too() {
+    // §21. The shared unwind block is an exit edge like any other, and a program that
+    // failed still gives back what it was holding.
+    let (r, text) = both_failing(
+        "fn main() -> Int {\n    let s = str_concat(\"ab\", \"cd\");\n    \
+         let xs = ints_new();\n    ints_get(xs, 0)\n}\n",
+    );
+    assert!(text.contains("N0405"), "{text}");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+}
+
+#[test]
+fn an_embedded_zero_is_still_an_ordinary_byte() {
+    // §52. Ownership metadata must not quietly turn a `Str` into a C string: the length
+    // is the length, and a NUL in the middle is data.
+    let r = strings(
+        3,
+        "fn main() -> Int {\n    let z = str_from_byte(0);\n    \
+         let s = str_concat(str_concat(\"a\", z), \"b\");\n    \
+         str_len(s) * 1000 + str_byte(s, 1) * 10 + str_byte(str_slice(s, 1, 3), 1)\n}\n",
+    );
+    assert_eq!(r.value, "3098");
+}
+
+// ---------------------------------------------------------------------------
+// Channels
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_channel_is_reclaimed_when_its_last_binding_goes() {
+    let r = channels(
+        1,
+        "fn main() -> Int {\n    let c = chan_new(2);\n    chan_send(c, 7);\n    \
+         let buf = ints_new();\n    chan_recv(c, buf);\n    ints_get(buf, 0)\n}\n",
+    );
+    assert_eq!(r.value, "7");
+}
+
+#[test]
+fn closing_a_channel_is_not_destroying_it() {
+    // §20. A closed channel still has live references and still answers; it is destroyed
+    // when the last one goes, which is a different event.
+    let r = channels(
+        1,
+        "fn main() -> Int {\n    let c = chan_new(2);\n    chan_send(c, 3);\n    \
+         chan_close(c);\n    let buf = ints_new();\n    \
+         let first = chan_recv(c, buf);\n    let second = chan_recv(c, buf);\n    \
+         ints_get(buf, 0) + ints_len(buf)\n}\n",
+    );
+    assert_eq!(r.value, "4");
+}
+
+#[test]
+fn many_short_lived_channels_hold_one_at_a_time() {
+    // §43. Live count tracks simultaneously live channels, not total channels ever made.
+    let r = channels(
+        30,
+        "fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    \
+         while i < 30 {\n        let c = chan_new(1);\n        chan_send(c, i);\n        \
+         let buf = ints_new();\n        chan_recv(c, buf);\n        \
+         total = total + ints_get(buf, 0);\n        i = i + 1;\n    }\n    total\n}\n",
+    );
+    assert_eq!(r.value, "435");
+}
+
+#[test]
+fn a_returned_channel_keeps_a_surviving_reference() {
+    // §25, on both edges.
+    let r = channels(
+        2,
+        "fn make() -> Chan { let c = chan_new(1); c }\n\
+         fn made() -> Chan { let c = chan_new(1); return c; }\n\
+         fn same(c: Chan) -> Chan { c }\n\
+         fn main() -> Int {\n    let a = same(make());\n    let b = made();\n    \
+         chan_send(a, 4);\n    chan_send(b, 5);\n    let buf = ints_new();\n    \
+         chan_recv(a, buf);\n    chan_recv(b, buf);\n    \
+         ints_get(buf, 0) + ints_get(buf, 1)\n}\n",
+    );
+    assert_eq!(r.value, "9");
+}
+
+#[test]
+fn a_channel_shared_with_tasks_outlives_every_one_of_them() {
+    // §26. The parent's binding and each task's argument are separate references, and the
+    // channel goes when the last of them does — after the scope has joined.
+    let r = channels(
+        1,
+        "fn feed(c: Chan, n: Int) -> Int { chan_send(c, n); 0 }\n\
+         fn main() -> Int {\n    let c = chan_new(4);\n    \
+         scope {\n        spawn feed(c, 1);\n        spawn feed(c, 2);\n    }\n    \
+         chan_close(c);\n    let buf = ints_new();\n    \
+         while chan_recv(c, buf) {\n    }\n    \
+         ints_get(buf, 0) + ints_get(buf, 1)\n}\n",
+    );
+    assert_eq!(r.value, "3");
+}
+
+#[test]
+fn a_string_crossing_into_a_task_keeps_its_backing() {
+    // §32. The task reads bytes the parent allocated, and the parent rebinds while the
+    // task is running — so the reference the spawn site took is the only thing keeping
+    // them valid.
+    let r = both(
+        "fn use_it(c: Chan, s: Str) -> Int { chan_send(c, str_byte(s, 0)); 0 }\n\
+         fn main() -> Int {\n    let c = chan_new(4);\n    \
+         let mut s = str_concat(\"ab\", \"cd\");\n    \
+         scope {\n        spawn use_it(c, s);\n        spawn use_it(c, str_slice(s, 1, 3));\n        \
+         s = \"\";\n    }\n    chan_close(c);\n    let buf = ints_new();\n    \
+         while chan_recv(c, buf) {\n    }\n    ints_len(buf)\n}\n",
+    );
+    assert_eq!(r.value, "2");
+    assert_eq!(r.strings.live, 0, "{r:?}");
+    assert_eq!(r.channels, expected(1), "{r:?}");
 }
 
 #[test]
