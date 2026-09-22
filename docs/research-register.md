@@ -98,14 +98,33 @@ normalised definitions would therefore need **fewer** transitive inputs than ass
 more. Still nothing implemented: there is no normalised form of a definition, no hash of
 one, and no artefact store.
 
+**N6 built an artefact store, and it took the opposite approach on purpose.** There is one
+now — objects, keyed and validated (`architecture.md` §7.6) — and its key is not over
+normalised definitions and not over source. It is a digest of the **exact bytes handed to
+the object compiler**, plus that compiler's identity and the configuration it resolves.
+
+That is worth stating as a result against this hypothesis rather than as progress towards
+it. R2's argument is that normalising definitions is how a key becomes both complete and
+precise. N6 got completeness and precision at that one stage without normalising anything,
+because the boundary it caches at consumes a byte string, and hashing what is actually
+handed over cannot omit an input by construction. A dependency's body change and an export
+the caller never calls both leave the caller's object reusable — the precision R2 promises —
+with no semantic fact in the key at all.
+
+What that does **not** settle: the same trick is unavailable anywhere the input is not a
+byte string. Reusing a *semantic check*, or a lowering, or a resolution needs a key over
+something structured, and that is still R2's territory. So the hypothesis is narrower than
+it was, and more clearly aimed: content addressing has to earn its place above the backend
+boundary, because below it the bytes are already the address.
+
 **Invalidating result** · The key must cover so much that hits are rare in practice, or an
 omission produces a silent miscompile in testing. `architecture.md` already names the
 second as the failure mode: anything omitted from the key is a silent miscompile waiting to
-happen. N4's six mutations remove one input each and require the suite to catch it; that is
-the method the eventual content-addressed key would be held to.
+happen. N4's six mutations and N6's six remove one input each and require the suite to catch
+it; that is the method the eventual content-addressed key would be held to.
 
-**Status: RESEARCH.** Unchanged. The prerequisites are met and one neighbouring result
-exists; the hypothesis is untested.
+**Status: RESEARCH.** Unchanged. The prerequisites are met and two neighbouring results
+exist; the hypothesis is untested, and N6 narrowed where it would have to be tested.
 
 ---
 

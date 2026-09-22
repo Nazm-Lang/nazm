@@ -311,6 +311,70 @@ regression on this evidence. Recovering cross-module inlining is what LTO is for
 establishes the boundary and adds none, because adding it to recover a number would hide
 whether the boundary was affordable.
 
+### Native object reuse — measured 2026-09-22, and it pays for the section above
+
+N6 keys each emitted LLVM unit's object on the bytes handed to the object compiler, that
+compiler's identity and the configuration it resolves, and links the recorded object instead
+of compiling again. The workload is the same five-module compiler, on the same host, with
+the same method: medians of five runs, and **the cache state each row names is
+re-established before every one of those runs** — a row that cleared the store once and then
+timed four warm builds would be reporting a number nobody experiences.
+
+| | wall | units / compiled / reused |
+| --- | ---: | --- |
+| `--no-cache` clean, `-O0` | 665.4 ms | 7 / 7 / 0 |
+| cold store, `-O0` | 730.7 ms | 7 / 7 / 0 |
+| **warm unchanged, `-O0`** | **157.6 ms** | 7 / 0 / 7 |
+| private body edit, `-O0` | 198.5 ms | 7 / 1 / 6 |
+| called export's body edit, `-O0` | 211.2 ms | 7 / 1 / 6 |
+| an export nobody calls, `-O0` | 217.7 ms | 7 / 1 / 6 |
+| `--no-cache` clean, `-O2` | 1693.0 ms | 7 / 7 / 0 |
+| cold store, `-O2` | 1755.4 ms | 7 / 7 / 0 |
+| **warm unchanged, `-O2`** | **157.6 ms** | 7 / 0 / 7 |
+| private body edit, `-O2` | 255.7 ms | 7 / 1 / 6 |
+| called export's body edit, `-O2` | 259.1 ms | 7 / 1 / 6 |
+| an export nobody calls, `-O2` | 257.3 ms | 7 / 1 / 6 |
+
+**The three edits are indistinguishable, and that is the result.** A private body, the body
+of an export every other module calls, and an export nobody calls all cost one unit of
+seven. Nothing in the compiler says so; it follows from keying on the emitted bytes, which
+N5 measured to contain a dependency only as a `declare` and a `call`.
+
+**Warm builds are the same at both optimisation levels** — 157.6 ms — because no code is
+generated in either. The `-O2` speedup is larger only because the work avoided was.
+
+**The cold build pays about 65 ms**, at both levels: fingerprinting seven units, writing
+seven entries and `fsync`ing each. That is 9.8% at `-O0` and 3.7% at `-O2`, and it is
+reported rather than optimised away, because the durability is what makes a half-written
+entry impossible.
+
+**What is left in a warm build.** Two external processes, against eight with the cache off:
+
+| | |
+| --- | ---: |
+| `nazm`'s own process, measured on a one-line program | ~36 ms |
+| `clang -###`, the probe that reads the resolved configuration | 60.0 ms |
+| the link, 7 objects | 89.1 ms |
+| everything else — parse, check, admit, lower, emit, hash, look up | the remainder |
+
+Those three do not sum to 157.6 ms; measured standalone from a shell each pays a spawn the
+build does not, so they are an ordering rather than an addition. What they do establish is
+that **the front end is not the cost** — `nazm check --no-cache` on all five modules is
+45.0 ms, of which 36 ms is the process starting.
+
+**Why the backend is identified by its version report and not by its bytes.** Hashing the
+driver would be stronger and was measured: `/usr/bin/clang` on this host is a 200 KB shim in
+front of a 124 MB executable, so it identifies the wrong file; reading the right one costs
+146 ms and digesting it 61 ms. Two hundred milliseconds to protect a 158 ms build is not a
+trade, and the limit that leaves — a toolchain replaced in place without changing what it
+calls itself — is written down in `architecture.md` §7.6 rather than papered over.
+
+**Store size.** 852 KiB in seven entries at `-O0`, 596 KiB at `-O2`; the largest entry is
+562 KB, which is `emit.nz`, and the smallest is 1.6 KB, which is the entry wrapper. Nothing
+is evicted. For a project that builds at several optimisation levels and edits often the
+store grows without bound until someone deletes it, which is an operational limitation and
+not a plan.
+
 ## The optimisation pass, and what it was based on
 
 One pass, chosen from a profile rather than from intuition. `sample` on the release

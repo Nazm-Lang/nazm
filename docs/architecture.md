@@ -868,6 +868,180 @@ store and no reuse. `capability-matrix.md` says so, and the clean-build cost is 
 for a small program, almost entirely because there are now several `clang` processes where
 there was one.
 
+> **Superseded in part by N6, 2026-09-22.** This section says "a future native cache" in
+> three places; it exists, and §7.6 is it. The last paragraph above describes what was true
+> only between N5 and N6.
+>
+> The measured dependency table is what N6 was built on and is unchanged. One sentence in
+> it was written as a prediction and is worth correcting: a key for A's object does **not**
+> use B's interface. It uses the bytes of A's own emitted unit, which already contain the
+> part of B's interface that A depends on and nothing else — so the key needed no semantic
+> input at all, which is less than this section expected.
+
+## 7.6 Native object reuse — settled by N6, 2026-09-22
+
+### The claim, stated narrowly
+
+> If the exact LLVM text a unit would be compiled from, the configuration the object
+> compiler resolves for the run, and the object compiler itself are all the ones a previous
+> build recorded, the recorded object is linked instead of being compiled again.
+
+Per-unit object reuse exists. **Incremental native compilation does not**, and the
+difference is worth stating in the same breath: lowering and emission run on every build,
+the final link runs on every build, there is no executable cache, no link-result cache and
+no incremental linker. What is skipped is `clang -c`, which N5 measured as the expensive
+part.
+
+### Keyed on the backend's input, not on a model of the front end
+
+The obvious design is a second dependency graph: this module's source fingerprint, each
+dependency's exported signatures, an emitter epoch, the target. Every one of those is an
+*approximation* of what the object compiler reads, and every approximation has the same
+failure — something reaches the object that nobody remembered to add.
+
+The emitted IR is not an approximation. It **is** the input. So
+
+```text
+ObjectKey = BLAKE3(
+    "nazm.object-key/1"
+  ‖ LlvmInput       = BLAKE3("nazm.llvm-input/1"      ‖ the exact bytes written for clang)
+  ‖ BackendIdentity = BLAKE3("nazm.backend-tool/1"    ‖ driver ‖ its own version report)
+  ‖ CodegenConfig   = BLAKE3("nazm.codegen-config/1"  ‖ the arguments the driver resolved)
+)
+```
+
+with the same length-prefixed framing every digest in `nazm-cache` uses, so no field
+boundary can move. N5's measured table then falls out rather than being encoded:
+
+| Edit | The caller's emitted unit | Its object |
+| --- | --- | --- |
+| a dependency's body | unchanged | **reused** |
+| an export it never calls | unchanged | **reused** |
+| the signature of something it calls | the `declare` moves | recompiled |
+| a comment that moves no emitted position | unchanged | **reused** |
+| a comment above a fallible operation | the failure message's position moves | recompiled |
+| the emitter, emitting the same text | unchanged | **reused** |
+
+None of those rows is a rule anywhere in the compiler.
+
+### What is deliberately not in the key
+
+| Left out | Why it cannot affect the object |
+| --- | --- |
+| `ModuleKey` | two units with identical IR are identical inputs. Module identity already reaches the IR as a native symbol; adding it again would only refuse valid reuse |
+| a dependency's `InterfaceHash` | the part of an interface an object depends on is in its own `declare` lines. Including the whole thing would invalidate a caller when an export it never mentions changes — over-invalidation, and a mutation tests for it |
+| the module's source fingerprint | an edit that does not reach the IR does not reach the object |
+| the input path, the output path, the working directory | measured: identical object bytes under three spellings of the first two and from two directories for the third |
+| the linker, its version, its options | a linker does not produce an object. That belongs to a `LinkKey`, which does not exist |
+
+### Asking the compiler what it is going to do
+
+`nazm build` passes three arguments. The driver resolves about two hundred, and almost none
+of the ones that decide the object are among the three: the triple with its deployment
+version, `-target-cpu` and thirty `-target-feature` flags, the relocation model, the ABI,
+the resource directory. A configuration built from what was *asked for* would leave every
+one of them out, so two machines with one clang version and different processors would
+share entries they must not.
+
+So one `clang -###` per build reads what the compiler says it will actually run — the
+version banner and the resolved command line — and only the arguments naming **this
+invocation's own files** are removed from it: the job's directory, `-main-file-name`, `-o`,
+the input and output paths, and the debug and coverage compilation directories. Each was
+measured not to change a byte of the object. Everything else is kept, including arguments
+this compiler has never heard of, because an argument wrongly kept costs a miss and an
+argument wrongly removed is a wrong hit.
+
+**The identity is the report, not the executable.** Hashing the driver's own bytes was
+considered and rejected with numbers: `/usr/bin/clang` on this machine is a 200 KB shim
+with 78 hard links in front of a 124 MB executable, so it would identify the wrong file,
+and reading and digesting the right one costs about 200 ms — more than the entire 158 ms
+warm build it would be protecting. The stated limit is therefore that two builds of a
+compiler reporting one version and behaving differently are indistinguishable, and that is
+when `.nazm/native` should be deleted.
+
+### A controlled environment rather than a hashed one
+
+Measured on 2026-09-22:
+
+| Variable | Effect on the object of a pure LLVM input |
+| --- | --- |
+| `CCC_OVERRIDE_OPTIONS=+-O2` | an `-O0` invocation produced the `-O2` object, byte for byte |
+| `SDKROOT` | moved `LC_BUILD_VERSION`'s `minos` from 27.0 to 27.2 |
+| `MACOSX_DEPLOYMENT_TARGET` | moved it to whatever was asked for |
+| the working directory | none |
+| the input and output paths | none |
+
+Hashing the environment would answer the first three with a set nobody can finish
+enumerating and a key that moves when an unrelated variable does. The invocation is made
+hermetic instead: the child's environment is built from nothing and ten named variables are
+put into it — `PATH` and `LD_LIBRARY_PATH` so the driver can be found and started,
+`TMPDIR` for a crash report, and `DEVELOPER_DIR`, `SDKROOT` and the deployment targets
+because a platform build legitimately needs them. Everything passed through is still
+covered, because the probe runs in the same environment as the compilations it describes:
+a deployment target arrives in the key as `-triple arm64-apple-macosx12.0.0`.
+
+### A generated artefact names a module by its durable identity
+
+A preflight correction, and the thing that makes an object reusable between checkouts at
+all. Two strings used to reach a native artefact as the path the command line spelled: the
+`source_filename` and the location inside every runtime failure message. So
+
+```text
+nazm build app.nz              lib/util.nz:3:5
+nazm build /tmp/a/app.nz       /tmp/a/lib/util.nz:3:5
+```
+
+were two programs, byte for byte, differing in nothing a reader of the source could see.
+They are named by the module's `ModuleKey` now — the same name the symbols carry and the
+same name a check entry is filed under. A module with no durable identity keeps the name
+the loader gave it, consistently with everything else about such a module.
+
+### The store
+
+`.nazm/` became a derived-data root with one subdirectory per kind: `check/` for
+`nazm.check/1`, `native/` for `nazm.object/1`. `NAZM_CACHE_DIR` moves the root rather than
+one store.
+
+An entry is **one file** — a line of JSON, a newline, then the object's exact bytes — so
+there is no window in which a reader can see half of a two-file entry as complete. Six
+things must hold before it is a hit: the header parses, its schema is known, every digest
+is in canonical form, the inputs it records reproduce the key it is filed under, that key is
+the one asked for, and the object's length and digest are the ones it claims. A file name is
+how an entry is found and never why it is believed. Every failure is a miss.
+
+Entries are immutable because the key covers every input, so two compilers racing on one key
+both write and one rename lands second, with identical bytes either way. No lock, no index,
+no sweep.
+
+### Why a warm store cannot skip anything it must not
+
+A key is a digest of an artefact. So the artefact must exist before the key does, which
+means everything required to produce it has already run: the files were read, parsed and
+checked; global backend admissibility ran; lowering ran; emission ran. The whole-program
+recursion refusal is one of those, and a fully warm store is never reached before it.
+
+That is not a rule this code follows. It is the shape of the pipeline, and it is why N6
+needed no "run the analyses first" guard:
+
+```text
+checked compilation → admissibility → lower → emit → hash → look up → compile misses → link
+```
+
+### What still runs on every build
+
+Reading, parsing, checking, admissibility, lowering, emission, fingerprinting, the store
+lookups, one `clang -###` and one link. `performance.md` measures which of those matter: on
+the five-module compiler a warm build is 157.6 ms against 665.4 ms with the cache off, and
+what remains is dominated by the two external processes — the probe and the link — plus
+about 36 ms of `nazm`'s own startup.
+
+### What N6 is not
+
+No executable cache, no `LinkKey`, no incremental linker, no persistent LIR or LLVM, no
+remote or distributed cache, no LTO. The link runs every time and the report says so in a
+field that is always `true`, because a report that omitted it would read as though something
+had been saved there.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
