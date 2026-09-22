@@ -578,9 +578,10 @@ fn pub_chooses_linkage_and_never_spelling() {
 
 #[test]
 fn a_native_build_is_unaffected_by_the_semantic_cache() {
-    // `nazm build` reuses nothing: it needs the resolution only checking a body produces.
-    // Asserted rather than assumed, because "the cache changed a native build" is exactly
-    // the sort of thing that would be discovered late.
+    // The two caches are keyed on different things and answer different questions, so
+    // neither may reach the other. `nazm build` does not read a check result at all — it
+    // needs the resolution only checking a body produces, and nothing persists one — and a
+    // warm semantic store must therefore change nothing about what is emitted.
     let dir = tempfile::tempdir().expect("tempdir");
     write(dir.path(), "nazm.root", "");
     let files = &[
@@ -588,7 +589,10 @@ fn a_native_build_is_unaffected_by_the_semantic_cache() {
         ("b.nz", "pub fn twice(n: Int) -> Int { n + n }\n"),
     ];
     let cold = artefacts(dir.path(), files);
-    assert!(!dir.path().join(".nazm").exists(), "a build wrote a cache");
+    assert!(
+        !dir.path().join(".nazm").join("check").exists(),
+        "a build wrote a semantic entry"
+    );
 
     // Warm the semantic cache, then build again.
     let checked = Command::new(NAZM)
@@ -598,12 +602,15 @@ fn a_native_build_is_unaffected_by_the_semantic_cache() {
         .expect("check");
     assert!(checked.status.success());
     assert!(
-        dir.path().join(".nazm").exists(),
+        dir.path().join(".nazm").join("check").exists(),
         "check should have cached"
     );
 
     let warm = artefacts(dir.path(), files);
     assert_eq!(nazm_symbols(&cold), nazm_symbols(&warm));
+    for ((name, a), (_, b)) in cold.iter().zip(&warm) {
+        assert_eq!(a, b, "{name} changed when the semantic store was warm");
+    }
     assert_eq!(build_and_run(dir.path(), files).stdout, "12");
 }
 
@@ -659,5 +666,110 @@ fn a_backend_refusal_inside_an_imported_module_names_that_module() {
         at >= app.len() as u64,
         "the offset should be inside `lib.nz`, past the {} bytes of `app.nz`: {at}",
         app.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The name a generated artefact carries
+// ---------------------------------------------------------------------------
+
+/// Build the same project from an absolute path, and return the IR of every artefact.
+fn artefacts_from_elsewhere(dir: &Path, files: &[(&str, &str)]) -> Vec<(String, String)> {
+    for (name, text) in files {
+        write(dir, name, text);
+    }
+    // The root marker, so that the compilation begun from outside still measures
+    // identities from the project rather than from wherever the shell happens to be.
+    write(dir, "nazm.root", "");
+    let out = dir.join("out");
+    let built = Command::new(NAZM)
+        .args(["build"])
+        .arg(dir.join(files[0].0))
+        .args(["-o"])
+        .arg(&out)
+        .arg("--emit-ir")
+        .current_dir(std::env::temp_dir())
+        .output()
+        .expect("build");
+    assert!(
+        built.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(dir).expect("read dir").flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|x| x == "ll") {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .replace("out.", "prog.");
+            found.push((name, std::fs::read_to_string(&path).expect("read ir")));
+        }
+    }
+    found.sort();
+    found
+}
+
+const TWO: &[(&str, &str)] = &[
+    (
+        "app.nz",
+        "use \"lib/util.nz\";\nfn main() -> Int { parse(7) }\n",
+    ),
+    ("lib/util.nz", "pub fn parse(n: Int) -> Int { n / 0 }\n"),
+];
+
+#[test]
+fn a_generated_artefact_names_a_module_by_its_durable_identity() {
+    // Until 2026-09-22 the `source_filename` and every failure message carried the path
+    // the command line spelled, so the same project built from two directories produced
+    // two different programs that no reader of the source could tell apart. The position
+    // was right in both; what moved was the shell's opinion of where the project is.
+    let here = tempfile::tempdir().expect("tempdir");
+    let there = tempfile::tempdir().expect("tempdir");
+
+    let near = artefacts(here.path(), TWO);
+    let far = artefacts_from_elsewhere(there.path(), TWO);
+
+    assert_eq!(
+        near.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+        far.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()
+    );
+    for ((name, a), (_, b)) in near.iter().zip(&far) {
+        assert_eq!(a, b, "{name} differs between checkouts");
+    }
+    // And the name it carries is the logical one, not either directory's.
+    let all = near.iter().map(|(_, ir)| ir.as_str()).collect::<String>();
+    assert!(all.contains("source_filename = \"lib/util.nz\""), "{all}");
+    assert!(!all.contains(&here.path().display().to_string()), "{all}");
+}
+
+#[test]
+fn a_runtime_failure_from_an_absolute_build_names_the_logical_module() {
+    // The other half: the message a person reads is still a location they can open,
+    // stated relative to the project rather than to whoever invoked the compiler.
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (name, text) in TWO {
+        write(dir.path(), name, text);
+    }
+    write(dir.path(), "nazm.root", "");
+    let out = dir.path().join("prog");
+    let built = Command::new(NAZM)
+        .args(["build"])
+        .arg(dir.path().join("app.nz"))
+        .args(["-o"])
+        .arg(&out)
+        .current_dir(std::env::temp_dir())
+        .output()
+        .expect("build");
+    assert!(built.status.success(), "{:?}", built);
+
+    let r = ran(&Command::new(&out).output().expect("run"));
+    assert_eq!(r.code, Some(2));
+    assert_eq!(
+        r.stderr,
+        "nazm: error[N0401]: division by zero at lib/util.nz:1:33"
     );
 }

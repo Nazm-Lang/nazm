@@ -368,3 +368,67 @@ fn the_schema_identifier_is_the_one_the_compiler_emits() {
         "the title and the identifier should be the same string"
     );
 }
+
+#[test]
+fn the_build_report_matches_the_published_schema() {
+    // Cold and warm, because the counters are the whole content and a schema that only
+    // ever saw zeros would not be describing the interesting case.
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("nazm.root"), "").expect("marker");
+    std::fs::write(
+        dir.path().join("b.nz"),
+        "pub fn twice(n: Int) -> Int { n * 2 }\n",
+    )
+    .expect("b");
+    std::fs::write(
+        dir.path().join("a.nz"),
+        "use \"b.nz\";\nfn main() -> Int { twice(21) }\n",
+    )
+    .expect("a");
+
+    let run = |extra: &[&str]| {
+        let out = Command::new(NAZM)
+            .args(["build", "a.nz", "-o", "prog", "--build-report"])
+            .args(extra)
+            .current_dir(dir.path())
+            .output()
+            .expect("run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        let line = text
+            .lines()
+            .find(|l| l.contains("nazm.build-report/1"))
+            .expect("a report")
+            .to_owned();
+        vec![serde_json::from_str::<Value>(&line).expect("a report")]
+    };
+
+    let native = |objects: &[Value], name: &str| {
+        objects
+            .first()
+            .and_then(|o| o.get("native"))
+            .and_then(|n| n.get(name))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+
+    let cold = run(&[]);
+    check_against("nazm.build-report-1.json", &cold);
+    assert_eq!(native(&cold, "reused"), Value::from(0));
+    assert_eq!(native(&cold, "compiled"), native(&cold, "units"));
+
+    let warm = run(&[]);
+    check_against("nazm.build-report-1.json", &warm);
+    assert_eq!(native(&warm, "compiled"), Value::from(0));
+    assert_eq!(native(&warm, "reused"), native(&warm, "units"));
+
+    // And with the cache off, which must read as a cold build that stored nothing.
+    let off = run(&["--no-cache"]);
+    check_against("nazm.build-report-1.json", &off);
+    assert_eq!(native(&off, "reused"), Value::from(0));
+    assert_eq!(native(&off, "stored"), Value::from(0));
+}
