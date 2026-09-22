@@ -26,6 +26,7 @@ members = [
     "crates/nazm-diag",
     "crates/nazm-syntax",
     "crates/nazm-sema",
+    "crates/nazm-iface",
     "crates/nazm-core",
     "crates/nazm-lir",
     "crates/nazm-cli",
@@ -68,6 +69,7 @@ nazm-span = { path = "crates/nazm-span" }
 nazm-diag = { path = "crates/nazm-diag" }
 nazm-syntax = { path = "crates/nazm-syntax" }
 nazm-sema = { path = "crates/nazm-sema" }
+nazm-iface = { path = "crates/nazm-iface" }
 nazm-core = { path = "crates/nazm-core" }
 nazm-lir = { path = "crates/nazm-lir" }
 nazm-bench = { path = "crates/nazm-bench" }
@@ -81,6 +83,14 @@ toml = "1"
 # happens in R or Python, not here. Rust's job is to produce records that are
 # complete, ordered, and impossible to silently lose.
 serde = { version = "1", features = ["derive"] }
+# The fingerprint over a module's persisted interface. `architecture.md` §8 records BLAKE3
+# as this project's choice and says why: it keeps the bootstrap chain free of C
+# dependencies. `default-features = false` is what makes that true — the default build
+# uses `cc` for SIMD, and the pure-Rust path costs three transitive crates
+# (`arrayref`, `arrayvec`, `constant_time_eq`) and no toolchain. A non-cryptographic
+# checksum is not an option: an accidental collision in a durable semantic fingerprint is
+# an invalid cache hit, which is a miscompilation with a plausible explanation.
+blake3 = { version = "1", default-features = false, features = ["std"] }
 serde_json = "1"
 # Preserves insertion order. Run records are diffed and reviewed by hand; map
 # iteration order leaking into output would make every diff noise.

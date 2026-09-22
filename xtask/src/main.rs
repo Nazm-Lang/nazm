@@ -29,6 +29,7 @@ fn main() -> ExitCode {
         Some("check-matrix") => report(&[("capability matrix", check_capability_matrix())]),
         Some("check-resolver") => report(&[("one resolver", check_single_resolver())]),
         Some("check-span") => report(&[("span identity", check_span_identity())]),
+        Some("check-sema") => report(&[("sema purity", check_sema_purity())]),
         Some("check-guide") => report(&[("guide from grammar", guide::check())]),
         Some("bench") => {
             let rest: Vec<String> = args.collect();
@@ -125,6 +126,7 @@ fn help() {
            check-matrix    every VERIFIED row in the capability matrix cites a real path\n  \
            check-resolver  the backend reads name resolution, it does not redo it\n  \
            check-span      a span cannot be serialised without its file\n  \
+           check-sema      no session-local id can reach a persistent interface\n  \
            check-guide     docs/guide.md is what docs/grammar.ebnf produces\n  \
            guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
            bench           measure; --save records a baseline, --check compares to one,\n  \
@@ -148,6 +150,7 @@ fn run_checks() -> ExitCode {
         ("capability matrix", check_capability_matrix()),
         ("one resolver", check_single_resolver()),
         ("span identity", check_span_identity()),
+        ("sema purity", check_sema_purity()),
         ("guide from grammar", guide::check()),
     ])
 }
@@ -778,18 +781,48 @@ fn source_files(root: &std::path::Path) -> Vec<String> {
 /// manifest gains serde or the source gains a derive, either of which would reopen the
 /// door. Adding serde back is allowed — it just cannot happen without editing this.
 fn check_span_identity() -> Result<(), Vec<String>> {
+    check_unserialisable(
+        "nazm-span",
+        "A span is a file and a range *in that file*; serialising one without the file is \
+         the lossy round trip removed on 2026-09-22. The wire conversion belongs to \
+         nazm-diag, which owns nazm.diagnostic/1.",
+    )
+}
+
+/// The same rule, one layer up: **`nazm-sema` may not be serialisable either.**
+///
+/// `FileId`, `ModuleId` and `FnId` are indices into one compilation. A file holding one of
+/// them says `3` and means nothing to the run that reads it — the same failure as a span
+/// that lost its file, in a form that would be harder to notice because `3` is a perfectly
+/// good number. So the crate that holds them has no serde dependency, and `nazm-iface`
+/// converts explicitly through durable keys instead.
+///
+/// `ModuleKey` and `DefKey` live in `nazm-sema` too and are perfectly persistable; they
+/// travel as the strings they are, written by the crate that owns the format. Their being
+/// there is not a reason to relax this.
+fn check_sema_purity() -> Result<(), Vec<String>> {
+    check_unserialisable(
+        "nazm-sema",
+        "Its ids are indices into one compilation, and a file holding one says a number \
+         that means nothing to the run that reads it. `nazm-iface` owns nazm.interface/1 \
+         and converts through durable keys; that is where serde belongs.",
+    )
+}
+
+/// No serde in this crate's manifest, and no serde derive in its source.
+fn check_unserialisable(crate_name: &str, why: &str) -> Result<(), Vec<String>> {
     let Some(root) = workspace_root() else {
         return Err(vec!["could not locate workspace root".to_owned()]);
     };
 
     let mut problems = Vec::new();
-    let manifest = root.join("crates/nazm-span/Cargo.toml");
+    let manifest = root.join(format!("crates/{crate_name}/Cargo.toml"));
     match std::fs::read_to_string(&manifest) {
-        Ok(text) => problems.extend(serde_in_manifest(&text)),
+        Ok(text) => problems.extend(serde_in_manifest(crate_name, &text, why)),
         Err(e) => problems.push(format!("could not read {}: {e}", manifest.display())),
     }
 
-    let dir = root.join("crates/nazm-span/src");
+    let dir = root.join(format!("crates/{crate_name}/src"));
     match std::fs::read_dir(&dir) {
         Ok(entries) => {
             for entry in entries.flatten() {
@@ -805,9 +838,9 @@ fn check_span_identity() -> Result<(), Vec<String>> {
                     .file_name()
                     .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
                 problems.extend(
-                    serde_in_source(&text)
-                        .into_iter()
-                        .map(|(n, what)| format!("crates/nazm-span/src/{name}:{n} {what}")),
+                    serde_in_source(&text).into_iter().map(|(n, what)| {
+                        format!("crates/{crate_name}/src/{name}:{n} {what}. {why}")
+                    }),
                 );
             }
         }
@@ -821,25 +854,17 @@ fn check_span_identity() -> Result<(), Vec<String>> {
     }
 }
 
-/// The manifest lines that would put serde back into `nazm-span`.
-fn serde_in_manifest(text: &str) -> Vec<String> {
+/// The manifest lines that would put serde back into a crate that must not have it.
+fn serde_in_manifest(crate_name: &str, text: &str, why: &str) -> Vec<String> {
     text.lines()
         .enumerate()
         .filter(|(_, l)| !l.trim_start().starts_with('#'))
         .filter(|(_, l)| l.split('=').next().is_some_and(|k| k.trim() == "serde"))
-        .map(|(n, _)| {
-            format!(
-                "crates/nazm-span/Cargo.toml:{} adds serde. A span is a file and a range \
-                 *in that file*; serialising one without the file is the lossy round trip \
-                 removed on 2026-09-22. The wire conversion belongs to nazm-diag, which \
-                 owns nazm.diagnostic/1.",
-                n + 1
-            )
-        })
+        .map(|(n, _)| format!("crates/{crate_name}/Cargo.toml:{} adds serde. {why}", n + 1))
         .collect()
 }
 
-/// The source lines that would make something in `nazm-span` serialisable.
+/// The source lines that would make something in one of those crates serialisable.
 ///
 /// Doc comments are exempt: the crate documentation has to be able to *explain* why serde
 /// is absent, and a check that forbids naming the thing it forbids is a check nobody can
@@ -1567,17 +1592,26 @@ mod tests {
 
     #[test]
     fn a_serde_dependency_in_the_span_manifest_is_a_finding() {
-        assert!(serde_in_manifest("[dependencies]\n").is_empty());
+        assert!(serde_in_manifest("nazm-span", "[dependencies]\n", "why").is_empty());
         // The line the correction of 2026-09-22 removed.
         assert_eq!(
-            serde_in_manifest("[dependencies]\nserde = { workspace = true }\n").len(),
+            serde_in_manifest(
+                "nazm-span",
+                "[dependencies]\nserde = { workspace = true }\n",
+                "why"
+            )
+            .len(),
             1
         );
         // Commented out is not a dependency, and the comment explaining the absence has
         // to be allowed to name it.
-        assert!(serde_in_manifest("# serde = { workspace = true }\n").is_empty());
+        assert!(
+            serde_in_manifest("nazm-sema", "# serde = { workspace = true }\n", "why").is_empty()
+        );
         // A different crate whose name merely starts the same way is not serde.
-        assert!(serde_in_manifest("serde_json = { workspace = true }\n").is_empty());
+        assert!(
+            serde_in_manifest("nazm-span", "serde_json = { workspace = true }\n", "why").is_empty()
+        );
     }
 
     #[test]
