@@ -443,6 +443,44 @@ that is the scope of the claim. The bare block of N2 is unchanged.
 C2 = C3 with the reference over 20 conformance cases, 7 of them multi-module, at 9,194
 source lines.
 
+### Generics, and a refusal corpus — N11, 2026-09-23
+
+The compiler written in Nazm implements N11: type parameters and applications in its parser,
+parametric checking and inference in its checker, and an instance planner and `Vec[T]` in its
+emitter (`architecture.md` §7.12, *The compiler written in Nazm*). It remains a program with
+no recursion — substitution is a post-order walk with an explicit stack, and interning only
+enqueues, because `apply → settle → complete → substitute → apply` is a call cycle the
+native backend refuses and did refuse, the first time.
+
+**What the chain now carries.** Two generic programs (`compiler/conformance/generics.nz` and
+`vectors.nz`) and two generic module cases — a library exporting a generic record, enum and
+function that only the importer instantiates, and one instance requested from two modules —
+join the corpus. And the chain gained a half it never had: **refusals**.
+`compiler/conformance/refused/` holds programs every compiler must refuse, each naming its
+code on its first line — an ownership cycle through a `Vec` (`N0359`), an impossible inline
+layout through a generic record (`N0336`), conflicting inference (`N0355`) and an instance
+family that never ends (`N0357`) — and C2, C3 and the reference must each refuse each one with
+that code. Agreement about what is accepted says nothing about agreement about what is not.
+
+**The compiler uses what it compiles.** Its diagnostics were four parallel arrays and are a
+`Vec[Diag]` now, so the chain compiles a `Vec` of records at every stage — C1 built by the
+reference, C2 and C3 by the compiler itself.
+
+**The digest moved a seventh time**, twice within the milestone: `37785cef…` (N10.2) →
+`4e473d4a…` with generics → `c58b91dd…` with the dogfood migration. `ir: identical`,
+executables byte-identical once the linker UUID is removed, 24 conformance cases (9 of them
+multi-module) and 4 refusals agreeing across C2, C3 and the reference, at 11,877 source
+lines. Fixpoint is not semantic proof; the parity tests in `crates/nazm-cli/tests/selfhost.rs`
+are what compare the two compilers on meaning, and they are recorded in
+`capability-matrix.md`.
+
+**What is still not the same.** The Nazm compiler emits one LLVM module and numbers its
+instances `@nz.g<n>` by the planner's worklist; the reference emits one object per instance
+named from the canonical key. That is a difference in decomposition, not in meaning. Spans of
+declaration-level diagnostics that are not compared — a record declared twice, a built-in
+type name redeclared — still point at the whole declaration in this checker and at the name
+in the reference.
+
 ## 6. Reproducing it
 
 ```sh

@@ -1948,8 +1948,8 @@ different one, the emitter's stack.
 
 ### What this still does not do
 
-- **No generics**, so no `Option`, no `Result`, and no generic enum of any kind. A
-  monomorphic `enum MaybeInt { None, Some(value: Int) }` is an ordinary user declaration.
+- **No generics** — *superseded by N11, §7.12*: a generic enum is expressible now, and
+  `Option` and `Result` are still not built in.
 - **No wildcard arm**, no guards, no or-patterns, no literal or record patterns, no `let`
   destructuring. N10 is variant selection with named payload bindings.
 - **No space promise.** The representation is one slot per variant, which is larger than a
@@ -1959,6 +1959,215 @@ different one, the emitter's stack.
 - **A bare block is still not an expression in the self-hosted parser**, so an arm body
   there may be `n + 1` but not `{ let n = …; n }`. That limitation is N2's and is unchanged;
   N10 only made it reachable in one more position.
+
+## 7.12 Generics: parametric checking, concrete code — settled by N11, 2026-09-23
+
+N9 asked whether ownership composes from field types, and N10 whether that composition can
+be chosen at runtime. N11 asks whether it survives **substitution**: whether a definition
+checked once, with its parameters unknown, can be given concrete types later without any
+law in §7.7–§7.11 learning that it happened. `docs/spec.md`, *Generics*, is the language;
+this section is how both compilers implement it and why.
+
+### The type representation
+
+`Type` stays one small `Copy` value. It gained two variants, and nothing else:
+
+| | |
+| --- | --- |
+| `Type::Param(TypeParam { owner, index })` | a type parameter: its owner — `Function(FnId)`, `Record(RecordId)`, `Enum(EnumId)` or `Builtin(Intrinsic)` — and its **position** in the owner's list |
+| `Type::Vec(VecId)` | `Vec[T]`, an interned element type |
+
+An **applied** record or enum — `Pair[Int, Str]` — is not a new variant. It is an entry of
+the record or enum table of its own, whose `instance` is `Some(Instance { template, args })`
+and whose fields are the definition's with the parameters substituted, done once, when the
+application is interned (`crates/nazm-sema/src/generic.rs`). So `Type::Record(id)` still
+names one entry with concrete fields, and every consumer that reads fields — copy and
+cleanup derivation, task safety, layout, construction, projection, the emitters' helpers —
+was written, tested and mutation-tested against exactly that, and did not change. This is
+the decision the milestone turned on: a new `Type::Applied` would have given every one of
+those consumers a case to get wrong.
+
+**Interning is what keeps `==` the language's type equality.** One definition applied to one
+argument list is one entry — `apply_record`/`apply_enum` look it up before creating it — so
+two modules writing `Pair[Int, Str]` for the same `Pair` get the same `Type`, and
+`a.nz::Box[Int]` and `b.nz::Box[Int]` do not, because their templates differ. Nothing
+compares shapes.
+
+**Completion is deferred and iterative.** A field may name a generic type declared later or
+in another module, which has no fields yet while stage 0b is resolving them. So an
+application is interned at once and **completed** later, from a worklist, when
+`UserTypes::settle` runs; completing substitutes, which may intern more, which join the same
+worklist. No completion recurses into another. A definition that would expand without bound —
+`Strange[T] { next: Vec[Strange[Vec[T]]] }` — is refused by the ownership rule below before
+it matters, and cannot keep the checker busy regardless: an application nested deeper than
+`HARD_NESTING` (256) is interned and never completed, and there is a total
+`INSTANCE_BUDGET` (100,000). Those are the last line, not the rule.
+
+### Checking a generic definition, once
+
+`declare_unit` reserves a function's id before resolving its signature, because the
+parameters' types name their owner. The body is checked **once** with `T` a `Type::Param`,
+and every rule that asks a type what it supports gets the answer an unknown type deserves:
+`==` refuses it (`N0304`), a projection refuses it (`N0335`), a `match` refuses it, and task
+safety says no — `may_cross_into_a_task` excludes parameters, so a generic body cannot
+launder a `Vec` into a task through a `T`. What a `T` may do is what every value may do:
+be bound, copied by its own law, passed, returned, stored, pushed and popped.
+
+### Calling one, and inference
+
+`check_generic_call` is the whole rule. Each parameter is `solved` from an argument by
+`unify`, which is structural through applications and `Vec` and nothing else, or taken from
+the written type arguments when there are exactly as many as the callee declares. An
+argument whose declared type is already known — it mentions no parameter, or every one was
+written — is checked against it as a monomorphic argument is. **The expected result type is
+never consulted**, so `fn make[T]() -> T` needs `make[Int]()` (`N0354`), and a conflict
+between two arguments is its own diagnostic (`N0355`) rather than the second argument read
+against what the first happened to say. One mistake is one error: a parameter an argument
+already failed on is *excused* from `N0354`. What the call settled is recorded on its site,
+for the planner below.
+
+### What an importer reads: `nazm.interface/4`
+
+`crates/nazm-iface/src/wire.rs`. A type is an untagged `PersistentType` — a built-in's name,
+`{ param }` (a **position**), `{ vec }`, or `{ def, args }` — and every generic definition
+and export carries `generics`, its arity. **No parameter name appears anywhere**, so
+alpha-renaming changes no byte and no `InterfaceHash`
+(`a_generic_interface_carries_positions_and_no_parameter_names`), while reordering,
+adding a parameter or changing a public generic signature, field or variant does
+(`the_generic_invalidation_table_is_what_the_fingerprint_actually_does`). A body edit
+changes nothing an importer reads. Reading validates every parameter position against its
+owner's arity and every application against its definition's, bounds nesting at 64, and
+refuses bytes that do not re-serialise to themselves (`NotCanonical`); rehydrating defers
+and settles like stage 0b does. A dependent type-checks `Box[Int]`, `Maybe[Str]` and
+`identity[Int]` against the deserialised interface **with the dependency's source deleted**.
+`SEMANTIC_EPOCH` is 4: `[` and `]` stopped being unknown characters, a generic body is held
+to old codes under new rules, and the interface a fingerprint is taken over changed shape —
+the reasons are in `crates/nazm-cache/src/identity.rs`.
+
+### Native code: parametric semantics, concrete LLVM
+
+`nazm check` and `nazm run` are parametric — the interpreter runs a generic body once for
+every type. `nazm build` **monomorphises**: one native function per generic function and
+concrete argument list the program reaches. That is a property of this backend, not of the
+language (`docs/spec.md`, *What a program cannot observe*), and the reason is concrete:
+LLVM needs a layout and a copy/drop sequence per value, and an instance knows both at
+compile time for free. Dictionary passing — a runtime description of `T`'s size and helpers
+— would let one body serve every type and is the natural design for a future development
+tier that trades code quality for build speed — the Cranelift tier of §1; nothing in the
+semantic layers assumes monomorphisation, so it remains possible.
+
+**Instance identity** is a `GenericInstanceKey { def: FnId, args: Vec<Type> }` inside one
+compilation and, durably, the definition's `DefKey` plus each argument's **canonical type
+key** (`crates/nazm-lir/src/symbol.rs`, `type_key`): a built-in is its name, a definition is
+`R.m.<module key>.<name>` or `E.…` (each component encoded), an application appends its
+arguments' keys in parentheses, a `Vec` is `Vec(…)`, and a module with no durable key is
+`u.<index>`. The key contains no `RecordId`, `TypeId`, span or absolute path. An instance's
+symbol is `nz.m.<module>.<name>.g.<encode(keys, ",")>`, so `identity[Int]` and
+`identity[Str]` are different symbols by construction and the same instance requested from
+two modules is one.
+
+**Planning** (`crates/nazm-lir/src/instance.rs`) is global and deterministic. The
+expanding-cycle rule runs first: nodes are (function, parameter position), a call passing a
+type built from the caller's parameter to a callee's parameter adds an edge — *expanding*
+when the argument is more than the parameter itself — and an expanding edge inside a
+strongly connected component is polymorphic recursion, refused with the call that expands
+(`N0357`). Then a breadth-first worklist starts from the calls non-generic functions make
+and adds every call each instance's body makes under its substitution; everything an
+instance's body mentions is interned then, so the table is complete before a layout is
+written. `MAX_INSTANCES` (10,000) and `MAX_INSTANCE_NESTING` (64) are stated bounds
+(`N0358`). The planned list is sorted by symbol. Ordinary recursion through a generic
+function is recursion, and the definition-level recursion check refuses it as it refuses any
+(`N0101`).
+
+**Artefacts.** Each instance is lowered, from its definition's own nodes, into a unit of its
+own — artefacts `g0`, `g1`, … — never into a caller's. A caller declares the instance by
+symbol and signature; a declaration now carries the types its signature names into the
+caller's unit, which the conformance corpus found missing (`<enum>` in a declaration of
+`or_else[Str]`). A private function a generic body calls gets hidden linkage, because the
+instance that calls it is another object. The object cache needed nothing new: an
+instance's key is its exact bytes, as every unit's is. Measured
+(`crates/nazm-cli/tests/native_cache.rs`): a new instantiation compiles the caller, the new
+instance and whatever runtime it newly reaches; a **generic body edit recompiles exactly its
+instances and no caller**, not even its own module's unit; renaming a parameter recompiles
+nothing. `nazm.build-report/1` gained `native.instances { units, compiled, reused }` — a
+compatible addition under its contract.
+
+### `Vec[T]`
+
+The sequence header every `Ints` already has — `{ len, cap, data, rc }` from
+`@nz.seq_new` — so a `Vec` is allocated, counted, grown and reclaimed by the runtime that
+already does all four. What is `T`'s is the element's layout, asked of LLVM by the address of
+element 1 of an array at null (no semantic stage knows a byte size, §7.10), and what an
+element owns, by `T`'s own law: push takes its own reference, get returns its own copy, set
+takes the new reference before releasing the old, pop transfers. One release helper per
+owning element type, `nz.vrel.<key>`, releases each element before the buffer; a `Vec` of
+non-owning elements is released as an `Ints` is. Growth relocates bytes with `realloc` and
+changes no count: every value this language has is movable by its bytes. `arr_grow`'s size
+arithmetic is overflow-checked (`umul`) since N11.
+
+### Ownership cycles, over definitions
+
+`UserTypes::ownership_cycles`. The graph's nodes are **definitions** — an application is
+not a declaration and is answered by the one it applies — and an edge runs from a record or
+enum to every definition its fields or payloads mention, labelled **inline** or **counted**
+by the path. How a generic definition uses each parameter — inline, counted, both, or not at
+all — is found first by a fixpoint (`parameter_uses`), and an application's argument
+inherits that use composed with how the application is reached. So `Tag[T] { n: Int }` owns
+nothing of its argument and `Box[T] { v: T }` owns it inline. An all-inline cycle is
+`N0336`, as before; any cycle with a counted edge is `N0359`, with the path. Two passes —
+inline first, then everything, avoiding what the first reported — so one cycle is one
+error.
+
+### The compiler written in Nazm
+
+`compiler/*.nz` implements all of it within its own subset, and did not mirror the
+reference's structure where its own was simpler:
+
+- **One table.** The record table since N9 already held records, enums and variants; N11
+  adds two more kinds, `rk_vec` and `rk_param`, and an application is an entry of kind
+  record or enum with `tpl` naming its definition. A type is still one `Int`: `100 + r` a
+  record, enum or variant, `1_000_000 + r` a `Vec`, `2_000_000 + r` a parameter. The arrays
+  travel as one `struct Table` of handles — the first record in the compiler used as a
+  bundle of shared state.
+- **No recursion anywhere**, which the native backend requires of the compiler compiling
+  itself. Substitution is a post-order walk with an explicit stack; `apply` only enqueues,
+  and the stages that hand a type on call `settle_now` — because `apply → settle → complete
+  → substitute → apply` is a call cycle `nazm build` refuses, and was, the first time.
+- **Written types carry their offsets.** A type with arguments is written into a node's text
+  as `Pair@10[Int@15,Vec@20[Str@24]@27]@28`, and a return type always carries its offset, so
+  the checker reports at the reference's spans; `selfhost.rs`'s dumper writes the same text
+  from the reference's `TypeName`.
+- **Instances are node ranges.** The emitter plans instances with a worklist before emitting
+  anything, records each one's substituted `ntype`/`nrec` and callee instances, and emits a
+  generic function's subtree once per instance with those arrays patched — one LLVM module,
+  as always; the per-instance objects are the reference's decomposition, not a language
+  requirement. Instance symbols are `@nz.g<n>`, numbered by the worklist, which is a
+  function of the program alone. The same N0357/N0358/N0101 refusals apply.
+
+`the_nazm_checker_agrees_with_the_reference_on_generics` compares code **and** span over 42
+programs; the memory test builds five generic programs with both compilers and compares the
+reclamation reports; the bootstrap compiles a generic corpus and refuses a refusal corpus
+with C2, C3 and the reference.
+
+**The dogfood.** The diagnostics were four parallel arrays — code, start, end, message —
+threaded through every stage as four parameters and kept the same length by care. They are
+a `Vec[Diag]` now: 19 parameter lists and 127 argument lists lost three parameters each, and
+a stage that pushed a code without a message would not compile. Measured on the compiler
+compiling itself: the same result, 26 KB less IR, about 3 MB less peak RSS and no
+measurable change in time (`performance.md`).
+
+### What this still does not do
+
+- **No traits, constraints, methods or `impl`**, so a generic body can do only what every
+  type can, and no `Option`/`Result` in the standard sense — `enum Maybe[T]` is a user
+  declaration. No higher kinds, const generics, defaults, variance, specialisation or
+  overloading.
+- **No spawn of a generic function**, and no generic `main`.
+- **No indexing syntax**; `vec_get`/`vec_set` are calls.
+- **Monomorphisation only.** Code size grows with the number of instances; `performance.md`
+  measures 1, 10 and 100.
+- **No space promise for an enum in a `Vec`**: an enum is still one slot per variant, and a
+  `Vec[Enum]` multiplies it by the length.
 
 ## 8. Toolchain, and one real incompatibility
 
