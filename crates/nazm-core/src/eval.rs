@@ -101,6 +101,12 @@ pub enum Value {
     /// do. `docs/spec.md` says an inactive variant owns nothing, and a value that carried
     /// storage for one would have made that a promise rather than a fact.
     Enum(EnumVal),
+    /// A `Vec[T]`: a handle to shared, mutable, counted storage, by the sequence law. N11.
+    ///
+    /// One representation for every `T`, because the interpreter is **parametric**: what
+    /// an element owns is what its own [`Value`] owns, so copying one in and out by
+    /// `clone` applies `T`'s law without this code knowing what `T` is.
+    Vec(Arc<Seq<Vec<Value>>>),
 }
 
 /// A record value: which record it is, and its fields in **declaration order**.
@@ -256,6 +262,7 @@ impl PartialEq for Value {
             (Self::Ints(a), Self::Ints(b)) => Arc::ptr_eq(a, b),
             (Self::Strs(a), Self::Strs(b)) => Arc::ptr_eq(a, b),
             (Self::Chan(a), Self::Chan(b)) => Arc::ptr_eq(a, b),
+            (Self::Vec(a), Self::Vec(b)) => Arc::ptr_eq(a, b),
             // Field by field. Never observable from a program — `docs/spec.md` does not
             // offer `==` on a record, and `N0304` refuses it — and defined so that the
             // rest of `Value` can still be compared.
@@ -488,6 +495,10 @@ impl std::fmt::Display for Value {
                 Err(_) => f.write_str("Strs(unreadable)"),
             },
             Self::Chan(_) => f.write_str("Chan"),
+            Self::Vec(v) => match v.lock() {
+                Ok(v) => write!(f, "Vec({} items)", v.len()),
+                Err(_) => f.write_str("Vec(unreadable)"),
+            },
             // A record is never a program's result — `main` returns `Int` — so this is
             // for diagnostics, and says what it is rather than dumping it.
             Self::Record(r) => write!(f, "record({} fields)", r.fields.len()),
@@ -901,10 +912,17 @@ impl Interpreter {
         // The discriminant selects the arm. Checking has established that exactly one arm
         // names each variant, so the first match is the only match and there is no
         // fallthrough to express.
+        //
+        // Compared by **definition**, since N11: the interpreter is parametric, so an arm in
+        // a generic body names `Maybe[T]` while the value it meets is a `Maybe[Int]`, and
+        // both are the one enum `Maybe` whose variants every application shares.
+        let types = self.res.types();
+        let subject_def = types.definition_of(nazm_sema::Type::Enum(subject.def));
         let Some(arm) = arms.iter().find(|a| {
-            self.res
-                .variant(a.variant_span)
-                .is_some_and(|v| v.enumeration == subject.def && v.variant == subject.variant)
+            self.res.variant(a.variant_span).is_some_and(|v| {
+                types.definition_of(nazm_sema::Type::Enum(v.enumeration)) == subject_def
+                    && v.variant == subject.variant
+            })
         }) else {
             // Unreachable for a checked program: `N0343` refuses a `match` that leaves a
             // variant uncovered. Reported rather than assumed away, and deliberately not
@@ -1349,6 +1367,69 @@ impl Interpreter {
                         ))
                     },
                     |v| Ok(Value::Str(v)),
+                )
+            }
+
+            // --- `Vec[T]` ------------------------------------------------------------
+            //
+            // The sequence law, with the element's own law for what goes in and comes out:
+            // `clone` is a copy by `T`'s law, so a `Str` element takes its own reference to
+            // its backing and a `Vec` element takes one to its storage, and dropping an
+            // element releases exactly what it owned.
+            (Intrinsic::VecNew, []) => Ok(Value::Vec(Arc::new(Seq::new(Vec::new())))),
+            (Intrinsic::VecLen, [Value::Vec(a)]) => seq(a)
+                .and_then(|a| index_fits(a.len()))
+                .map_or_else(|| Err(bug("a sequence that could not be read")), Ok),
+            (Intrinsic::VecGet, [Value::Vec(a), Value::Int(at)]) => {
+                let Some(a) = seq(a) else {
+                    return Err(bug("a sequence that could not be read"));
+                };
+                let Some(v) = usize::try_from(*at).ok().and_then(|i| a.get(i)) else {
+                    return Err(out_of_bounds(
+                        "this index is outside the sequence",
+                        format!("asked for item {at} of a `Vec` holding {}", a.len()),
+                    ));
+                };
+                // A copy of its own: overwriting the element afterwards cannot touch it.
+                Ok(v.clone())
+            }
+            (Intrinsic::VecSet, [Value::Vec(a), Value::Int(at), v]) => {
+                let Some(mut a) = seq(a) else {
+                    return Err(bug("a sequence that could not be written"));
+                };
+                let len = a.len();
+                let Some(slot) = usize::try_from(*at).ok().and_then(|i| a.get_mut(i)) else {
+                    return Err(out_of_bounds(
+                        "this index is outside the sequence",
+                        format!("asked to write item {at} of a `Vec` holding {len}"),
+                    ));
+                };
+                // The new value's copy is made before the old one is dropped, which is the
+                // order the assignment runs in.
+                *slot = v.clone();
+                Ok(Value::Int(*at))
+            }
+            (Intrinsic::VecPush, [Value::Vec(a), v]) => {
+                let Some(mut a) = seq(a) else {
+                    return Err(bug("a sequence that could not be written"));
+                };
+                a.push(v.clone());
+                index_fits(a.len())
+                    .map_or_else(|| Err(bug("a sequence longer than `Int` can measure")), Ok)
+            }
+            (Intrinsic::VecPop, [Value::Vec(a)]) => {
+                let Some(mut a) = seq(a) else {
+                    return Err(bug("a sequence that could not be written"));
+                };
+                // A transfer: the element leaves the vector and is this value now.
+                a.pop().map_or_else(
+                    || {
+                        Err(out_of_bounds(
+                            "this sequence is empty",
+                            "asked to remove the last item of an empty `Vec`".to_owned(),
+                        ))
+                    },
+                    Ok,
                 )
             }
 
@@ -1890,6 +1971,7 @@ impl Interpreter {
                 callee_span,
                 args,
                 span,
+                ..
             } => {
                 let mut values = Vec::with_capacity(args.len());
                 for a in args {
@@ -2088,5 +2170,6 @@ fn type_name(v: &Value) -> &'static str {
         // refused — and no built-in takes a record, so no message can name one usefully.
         Value::Record(_) => "a record",
         Value::Enum(_) => "an enum",
+        Value::Vec(_) => "a `Vec`",
     }
 }

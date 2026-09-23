@@ -76,7 +76,9 @@
 //! so is the honest version of giving it a durable-looking name.
 
 use nazm_sema::key::DefKey;
-use nazm_sema::ModuleId;
+use nazm_sema::module::ModuleGraph;
+use nazm_sema::udt::{TypeNode, UserTypes};
+use nazm_sema::{ModuleId, Type};
 
 /// What the linker calls one definition. Compiler-private.
 ///
@@ -108,6 +110,19 @@ impl NativeSymbol {
     #[must_use]
     pub fn of_unkeyed(module: ModuleId, name: &str) -> Self {
         Self(format!("nz.u.{}.{}", module.index(), encode(name)))
+    }
+
+    /// One concrete instance of a generic function: its definition's symbol and the
+    /// [canonical keys](type_key) of its type arguments, in order.
+    ///
+    /// The **generic instance key** made a symbol. `identity[Int]` and `identity[Str]`
+    /// differ in their keys and so in their symbols even where their machine code happens
+    /// to coincide — semantic identity, not layout, names native code. The keys are
+    /// encoded, so the `.` that introduces them cannot occur inside them, and a symbol with
+    /// no `.g.` part is an ordinary definition's: the two can never collide.
+    #[must_use]
+    pub fn of_instance(base: &Self, args: &[String]) -> Self {
+        Self(format!("{}.g.{}", base.0, encode(&args.join(","))))
     }
 
     /// The name itself, with no sigil.
@@ -181,6 +196,13 @@ impl NativeTypeName {
     /// variant of the same name. A variant name is an identifier, so the encoding has
     /// nothing to escape — it is applied anyway, because the reason to encode is that a
     /// name is data and that is true of every one of them.
+    /// One concrete application of a generic record or enum: its definition's name and its
+    /// arguments' canonical keys, by the rule [`NativeSymbol::of_instance`] states.
+    #[must_use]
+    pub fn of_instance(base: &Self, args: &[String]) -> Self {
+        Self(format!("{}.g.{}", base.0, encode(&args.join(","))))
+    }
+
     #[must_use]
     pub fn member(&self, name: &str) -> Self {
         Self(format!("{}.{}", self.0, encode(name)))
@@ -233,6 +255,70 @@ impl Linkage {
 /// One byte of a path or an identifier, made safe for an object symbol.
 ///
 /// See the module documentation for why `_` is escaped along with everything else.
+/// A concrete type's **canonical key**: one durable spelling per semantic type.
+///
+/// It is what a generic instance's native name is made of, so it must distinguish every
+/// two types the language distinguishes and nothing else — `Vec[Int]` from `Vec[Str]`,
+/// `a.nz`'s `Box[Int]` from `b.nz`'s, `Pair[Int, Str]` from `Pair[Str, Int]` — and must
+/// contain nothing session-local: no `RecordId`, no `TypeId`, no span, no path outside the
+/// source root. A built-in is its name; a definition is its module's key and its name,
+/// each [encoded](encode), under `R` or `E`; an application adds its arguments' keys in
+/// parentheses; a `Vec` is `Vec(…)`. Encoded components contain only letters, digits and
+/// `_`, so the punctuation between them is unambiguous and the key is injective.
+///
+/// A module with no durable identity is spelled by its load position — `u.3` — exactly as
+/// its functions' symbols are, and for the same reason: it still compiles.
+#[must_use]
+pub fn type_key(t: Type, types: &UserTypes, graph: &ModuleGraph) -> String {
+    match t {
+        Type::Vec(v) => format!(
+            "Vec({})",
+            types
+                .vec_element(v)
+                .map_or_else(|| "?".to_owned(), |e| type_key(e, types, graph))
+        ),
+        Type::Record(_) | Type::Enum(_) => {
+            let Some(node) = types.definition_of(t) else {
+                return "?".to_owned();
+            };
+            let (kind, module, name) = match node {
+                TypeNode::Record(id) => {
+                    let Some(d) = types.records().get(id) else {
+                        return "?".to_owned();
+                    };
+                    ("R", d.module, d.name.clone())
+                }
+                TypeNode::Enum(id) => {
+                    let Some(d) = types.enums().get(id) else {
+                        return "?".to_owned();
+                    };
+                    ("E", d.module, d.name.clone())
+                }
+            };
+            let head = match graph.key(module) {
+                Some(k) => format!("{kind}.m.{}.{}", encode(k.as_str()), encode(&name)),
+                None => format!("{kind}.u.{}.{}", module.index(), encode(&name)),
+            };
+            let args = types.type_args(t);
+            if args.is_empty() {
+                head
+            } else {
+                let inner: Vec<String> = args.iter().map(|a| type_key(*a, types, graph)).collect();
+                format!("{head}({})", inner.join(","))
+            }
+        }
+        // A parameter never reaches a native name: instances are concrete.
+        Type::Param(_) => "?".to_owned(),
+        other => other.builtin_name().unwrap_or("?").to_owned(),
+    }
+}
+
+/// [`encode`], for a canonical key that becomes part of a helper's name.
+#[must_use]
+pub fn encoded(text: &str) -> String {
+    encode(text)
+}
+
 fn encode(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for b in text.bytes() {

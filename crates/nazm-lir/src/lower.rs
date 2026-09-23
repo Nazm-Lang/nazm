@@ -54,12 +54,16 @@ use nazm_syntax::{
 
 use nazm_sema::key::{DefKey, DefKind};
 use nazm_sema::module::{ModuleGraph, ModuleId};
+use nazm_sema::types::{ParamOwner, Type};
+use nazm_sema::udt::TypeNode;
 
+use crate::instance::{plan_instances, InstanceKey, Instances};
 use crate::ir::{
     fits, ArithOp, Block, Builtin, CmpOp, EnumLayout, EnumTy, Expr, External, Function, Local,
     Lowering as _, MatchArm, Native, RecordLayout, RecordTy, Stmt, Ty, Unit, VariantLayout,
+    VecLayout, VecTy,
 };
-use crate::symbol::{Linkage, NativeSymbol, NativeTypeName};
+use crate::symbol::{encoded, type_key, Linkage, NativeSymbol, NativeTypeName};
 
 /// What the subset is, in one sentence, for every refusal to point at.
 const SUBSET: &str = "`nazm build` currently compiles functions over `Int`, `Bool` and \
@@ -86,6 +90,10 @@ pub struct LowerError {
 #[derive(Debug, Clone)]
 struct Sig {
     symbol: NativeSymbol,
+    /// Whether this is a generic function instance's, which is always defined in a unit
+    /// of its own and so is external to every unit that calls it — including the unit of
+    /// the module its generic definition belongs to.
+    instance: bool,
     /// Which module declares it, so a unit knows which of these it owns and which it
     /// must declare.
     module: ModuleId,
@@ -116,6 +124,12 @@ pub struct Plan {
     /// By [`EnumTy`], how that enum is laid out and which discriminant each variant has.
     /// Global and computed once, for the reason the records are.
     enums: Vec<EnumLayout>,
+    /// By [`VecTy`], each concrete `Vec`'s element type and helper name. N11.
+    vecs: Vec<VecLayout>,
+    /// Every generic function instance the program needs, and, in the same order, the
+    /// signature this backend gives each.
+    instances: Instances,
+    instance_sigs: Vec<Sig>,
     entry: NativeSymbol,
 }
 
@@ -145,13 +159,18 @@ struct Ctx<'a> {
     used_records: std::collections::BTreeSet<u32>,
     /// The enum types this unit's text mentions, by the same rule.
     used_enums: std::collections::BTreeSet<u32>,
+    /// The `Vec` types this unit's text mentions, by the same rule.
+    used_vecs: std::collections::BTreeSet<u32>,
+    /// The substitution a generic instance's body is lowered under: its definition's
+    /// parameters, and the concrete arguments that replace them. `None` for an ordinary
+    /// function, whose types are concrete already.
+    subst: Option<(ParamOwner, Vec<Type>)>,
+    /// Whether this unit is a generic instance's. Such a unit defines exactly one function
+    /// and **owns no module's definitions**, so everything it calls is external to it.
+    instance_unit: bool,
     /// Locals of the function being lowered, in slot order, taken from the resolution.
     locals: Vec<Local>,
-    /// Call edges, as **resolved definition identities**: the cycle check is a question
-    /// about the program's functions, not about one unit's numbering, and a cycle may run
-    /// through any number of modules.
-    calls: Vec<(FnId, FnId, Span)>,
-    /// The function whose body is being lowered, for recording edges.
+    /// The function whose body is being lowered.
     current: FnId,
     /// The declared return type of the function being lowered, for checking `return`.
     /// Reset per function, like everything else about a function's body.
@@ -185,6 +204,46 @@ enum Ends {
 /// The order is **canonical by field name**, which is the layout rule. Nothing about the
 /// author's declaration order reaches the object file, so moving two field declarations —
 /// an edit the language says means nothing — changes no byte of it.
+/// The native name of a record or enum table entry.
+///
+/// Derived from the durable identity where there is one, exactly as a function symbol is,
+/// and from load order where there is not — for a module that has no durable identity,
+/// which still compiles. An applied entry adds its arguments' canonical keys, so two units
+/// that name `Box[Int]` name it identically and `Box[Int]` and `Box[Str]` never share a
+/// name, whatever their layouts happen to be.
+fn native_type_name(res: &Resolution, graph: &ModuleGraph, node: TypeNode) -> NativeTypeName {
+    let definition = res.types().definition_of(node.ty()).unwrap_or(node);
+    let (kind, module, name) = match definition {
+        TypeNode::Record(id) => (
+            DefKind::Record,
+            res.records().get(id).map(|d| d.module),
+            res.records().get(id).map(|d| d.name.clone()),
+        ),
+        TypeNode::Enum(id) => (
+            DefKind::Enum,
+            res.enums().get(id).map(|d| d.module),
+            res.enums().get(id).map(|d| d.name.clone()),
+        ),
+    };
+    let (Some(module), Some(name)) = (module, name) else {
+        return NativeTypeName::of_unkeyed(ModuleId::ROOT, "?");
+    };
+    let base = match graph.key(module) {
+        Some(key) => NativeTypeName::of_definition(&DefKey::new(key.clone(), kind, name)),
+        None => NativeTypeName::of_unkeyed(module, &name),
+    };
+    let args = res.types().type_args(node.ty());
+    if args.is_empty() {
+        base
+    } else {
+        let keys: Vec<String> = args
+            .iter()
+            .map(|a| type_key(*a, res.types(), graph))
+            .collect();
+        NativeTypeName::of_instance(&base, &keys)
+    }
+}
+
 fn record_layouts(res: &Resolution, graph: &ModuleGraph) -> Vec<RecordLayout> {
     res.records()
         .all()
@@ -192,18 +251,17 @@ fn record_layouts(res: &Resolution, graph: &ModuleGraph) -> Vec<RecordLayout> {
         .enumerate()
         .map(|(i, def)| {
             let id = RecordTy(u32::try_from(i).unwrap_or(u32::MAX));
-            // Derived from the durable identity where there is one, exactly as a function
-            // symbol is, and from load order where there is not — for a module that has
-            // no durable identity, which still compiles.
-            let name = match graph.key(def.module) {
-                Some(key) => NativeTypeName::of_definition(&DefKey::new(
-                    key.clone(),
-                    DefKind::Record,
-                    def.name.clone(),
-                )),
-                None => NativeTypeName::of_unkeyed(def.module, &def.name),
+            let node = TypeNode::Record(nazm_sema::RecordId::from_index(i));
+            let name = native_type_name(res, graph, node);
+            // A generic definition as written, or an application still mentioning a
+            // parameter, has no layout: no native code can hold a value of one. Its entry
+            // stays in the table so that ids index it, and nothing names it.
+            let concrete = def.params.is_empty() && res.types().is_concrete(node.ty());
+            let fields: Vec<Ty> = if concrete {
+                def.in_layout_order().map(|(_, f)| Ty::of(f.ty)).collect()
+            } else {
+                Vec::new()
             };
-            let fields: Vec<Ty> = def.in_layout_order().map(|(_, f)| Ty::of(f.ty)).collect();
             let mut of_declaration = vec![0_u32; def.fields.len()];
             for (position, (declared, _)) in def.in_layout_order().enumerate() {
                 if let Some(slot) = of_declaration.get_mut(declared as usize) {
@@ -213,7 +271,7 @@ fn record_layouts(res: &Resolution, graph: &ModuleGraph) -> Vec<RecordLayout> {
             RecordLayout {
                 id,
                 name,
-                source: def.name.clone(),
+                source: res.types().show(node.ty()),
                 fields,
                 of_declaration,
             }
@@ -238,21 +296,20 @@ fn enum_layouts(res: &Resolution, graph: &ModuleGraph) -> Vec<EnumLayout> {
         .enumerate()
         .map(|(i, def)| {
             let id = EnumTy(u32::try_from(i).unwrap_or(u32::MAX));
-            let name = match graph.key(def.module) {
-                Some(key) => NativeTypeName::of_definition(&DefKey::new(
-                    key.clone(),
-                    DefKind::Enum,
-                    def.name.clone(),
-                )),
-                None => NativeTypeName::of_unkeyed(def.module, &def.name),
-            };
+            let node = TypeNode::Enum(nazm_sema::EnumId::from_index(i));
+            let name = native_type_name(res, graph, node);
+            let concrete = def.params.is_empty() && res.types().is_concrete(node.ty());
             let mut variants: Vec<VariantLayout> = Vec::new();
             let mut of_declaration = vec![0_u32; def.variants.len()];
             for (tag, (declared, v)) in def.in_tag_order().enumerate() {
                 if let Some(slot) = of_declaration.get_mut(declared as usize) {
                     *slot = u32::try_from(tag).unwrap_or(u32::MAX);
                 }
-                let fields: Vec<Ty> = v.in_layout_order().map(|(_, f)| Ty::of(f.ty)).collect();
+                let fields: Vec<Ty> = if concrete {
+                    v.in_layout_order().map(|(_, f)| Ty::of(f.ty)).collect()
+                } else {
+                    Vec::new()
+                };
                 let mut fields_of_declaration = vec![0_u32; v.fields.len()];
                 for (position, (field_declared, _)) in v.in_layout_order().enumerate() {
                     if let Some(slot) = fields_of_declaration.get_mut(field_declared as usize) {
@@ -269,9 +326,27 @@ fn enum_layouts(res: &Resolution, graph: &ModuleGraph) -> Vec<EnumLayout> {
             EnumLayout {
                 id,
                 name,
-                source: def.name.clone(),
+                source: res.types().show(node.ty()),
                 variants,
                 of_declaration,
+            }
+        })
+        .collect()
+}
+
+/// Every concrete `Vec` of this compilation: its element, and the name its release helper
+/// is derived from — the element's canonical key, so the name is a function of the type.
+fn vec_layouts(res: &Resolution, graph: &ModuleGraph) -> Vec<VecLayout> {
+    (0..res.types().vec_count())
+        .map(|i| {
+            let id = VecTy(u32::try_from(i).unwrap_or(u32::MAX));
+            let v = nazm_sema::VecId::from_index(i);
+            let elem = res.types().vec_element(v).unwrap_or(Type::Int);
+            VecLayout {
+                id,
+                name: encoded(&type_key(elem, res.types(), graph)),
+                elem: Ty::concrete(elem).unwrap_or(Ty::Int),
+                source: res.types().show(Type::Vec(v)),
             }
         })
         .collect()
@@ -291,7 +366,52 @@ impl Ctx<'_> {
             Ty::Enum(id) => {
                 self.used_enums.insert(id.0);
             }
+            Ty::Vec(id) => {
+                self.used_vecs.insert(id.0);
+            }
             _ => {}
+        }
+    }
+
+    /// A front-end type as this backend represents it, **under the substitution of the
+    /// instance being lowered**.
+    ///
+    /// The one place a generic body's types become concrete. By lookup, never by creation:
+    /// the instance planner interned every type this body mentions under this substitution
+    /// before any code was written, so a type missing here is a type the planner missed —
+    /// reported as the compiler bug it is rather than guessed at.
+    fn ty(&mut self, t: Type, at: Span) -> Option<Ty> {
+        let concrete = match &self.subst {
+            Some((owner, args)) => self.res.types().substituted(t, *owner, args),
+            None => Some(t),
+        };
+        match concrete.filter(|c| self.res.types().is_concrete(*c)) {
+            Some(c) => Ty::concrete(c),
+            None => {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNSUPPORTED_CONSTRUCT,
+                        at,
+                        format!(
+                            "`nazm build` reached a generic type, `{}`, with no concrete \
+                             instance for it",
+                            self.res.types().show(t)
+                        ),
+                    )
+                    .help(
+                        "this is a bug in the compiler's instance planning; `nazm run` still works",
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// A front-end type under the current substitution, as a front-end type.
+    fn concrete(&self, t: Type) -> Option<Type> {
+        match &self.subst {
+            Some((owner, args)) => self.res.types().substituted(t, *owner, args),
+            None => Some(t),
         }
     }
 
@@ -380,8 +500,18 @@ impl Ctx<'_> {
     /// The one place a cross-module reference is made, and what it makes is a **symbol**:
     /// there is no name here to look up and nothing downstream that could.
     fn refer_to(&mut self, sig: &Sig) {
-        if sig.module == self.module {
+        // An instance's unit defines only the instance, so even a function of the module
+        // the generic definition belongs to is somebody else's definition here.
+        if sig.module == self.module && !self.instance_unit && !sig.instance {
             return;
+        }
+        // A declaration names its parameter and result types, so their definitions travel
+        // with this unit exactly as a local's would. Until the N11 conformance corpus a
+        // call could only mention a type the caller's own code had also mentioned; an
+        // instance taking `Maybe[Str]`, called with a value the caller never bound, was
+        // declared with a type this unit did not carry and clang read `<enum>`.
+        for t in sig.params.iter().chain(std::iter::once(&sig.ret)) {
+            self.note(*t);
         }
         let external = External {
             symbol: sig.symbol.clone(),
@@ -407,19 +537,47 @@ impl Ctx<'_> {
 /// # Errors
 ///
 /// A `main` this backend refuses, or a program with none.
-pub fn plan(program: &Program, res: &Resolution, graph: &ModuleGraph) -> Result<Plan, LowerError> {
+pub fn plan(
+    program: &Program,
+    res: &Resolution,
+    graph: &ModuleGraph,
+    instances: Instances,
+) -> Result<Plan, LowerError> {
     let mut errors = Vec::new();
     let mut sig: Vec<Option<Sig>> = vec![None; res.functions().len()];
+
+    // A private function a generic body calls is reached from that body's **instances**,
+    // which are artefacts of their own — so it must be bindable across objects. Decided by
+    // its own module's generic bodies, never by who instantiates them: a module's object
+    // must not depend on its importers.
+    let mut from_generic: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    for f in res.functions() {
+        if f.type_params.is_empty() {
+            continue;
+        }
+        for site in &f.call_sites {
+            if let Callee::Function(g) = site.callee {
+                from_generic.insert(g.index());
+            }
+        }
+    }
 
     // Driven by the **resolution**, not by the syntax tree: each definition says which
     // declaration it came from, so pairing the two needs no name. A name stopped being
     // able to do the job when two modules became able to declare the same one.
     for (i, def) in res.functions().iter().enumerate() {
         let id = FnId::from_index(i);
+        // A generic definition has no one signature; its instances each have theirs.
+        if !def.type_params.is_empty() {
+            continue;
+        }
         let Some(f) = program.functions.get(def.decl as usize) else {
             continue;
         };
-        if let Some(accepted) = signature(res, graph, id, f, &mut errors) {
+        if let Some(mut accepted) = signature(res, graph, id, f, &mut errors) {
+            if from_generic.contains(&i) {
+                accepted.linkage = Linkage::Hidden;
+            }
             if let Some(slot) = sig.get_mut(id.index()) {
                 *slot = Some(accepted);
             }
@@ -428,6 +586,21 @@ pub fn plan(program: &Program, res: &Resolution, graph: &ModuleGraph) -> Result<
 
     let records = record_layouts(res, graph);
     let enums = enum_layouts(res, graph);
+    let vecs = vec_layouts(res, graph);
+    let instance_sigs: Vec<Sig> = instances
+        .planned
+        .iter()
+        .map(|p| Sig {
+            symbol: p.symbol.clone(),
+            instance: true,
+            module: res.function(p.key.def).map_or(ModuleId::ROOT, |d| d.module),
+            // One definition, in one artefact of its own, called from any unit that
+            // needs it — so bindable across objects, and exported from none.
+            linkage: Linkage::Hidden,
+            params: p.params.iter().map(|t| Ty::of(*t)).collect(),
+            ret: Ty::of(p.ret),
+        })
+        .collect();
 
     let entry = match res
         .entry()
@@ -472,6 +645,9 @@ pub fn plan(program: &Program, res: &Resolution, graph: &ModuleGraph) -> Result<
             sig,
             records,
             enums,
+            vecs,
+            instances,
+            instance_sigs,
             entry,
         })
     } else {
@@ -485,73 +661,47 @@ pub fn plan(program: &Program, res: &Resolution, graph: &ModuleGraph) -> Result<
 #[derive(Debug)]
 pub struct Lowered {
     pub unit: Unit,
-    /// Call edges found in this module's bodies, as resolved definition identities. The
-    /// cycle check is a question about the whole compilation and is answered once, after
-    /// every module has contributed.
-    pub calls: Vec<(FnId, FnId, Span)>,
     pub errors: Vec<Diagnostic>,
 }
 
-/// Lower one module's bodies, and nothing else.
-///
-/// # What it may see
-///
-/// Its own functions' bodies, and every function's *signature* through [`Plan`]. It never
-/// reads another module's body, and there is nothing here through which it could: a call
-/// into another module becomes an [`External`] — a symbol and a signature — which is
-/// exactly what a linker needs and exactly what a dependency's implementation is not.
-pub fn lower_module(
-    program: &Program,
-    res: &Resolution,
-    plan: &Plan,
-    module: ModuleId,
-    source: &str,
-) -> Lowered {
-    let mut ctx = Ctx {
+/// A fresh context for one unit.
+fn context<'a>(res: &'a Resolution, plan: &'a Plan, module: ModuleId) -> Ctx<'a> {
+    Ctx {
         res,
         plan,
         module,
         externals: Vec::new(),
         used_records: std::collections::BTreeSet::new(),
         used_enums: std::collections::BTreeSet::new(),
+        used_vecs: std::collections::BTreeSet::new(),
+        subst: None,
+        instance_unit: false,
         locals: Vec::new(),
-        calls: Vec::new(),
         current: FnId::from_index(0),
         ret_ty: Ty::Int,
         loop_depth: 0,
         errors: Vec::new(),
-    };
-
-    let mut functions = Vec::new();
-    for (i, def) in res.functions().iter().enumerate() {
-        if def.module != module {
-            continue;
-        }
-        let id = FnId::from_index(i);
-        let Some(f) = program.functions.get(def.decl as usize) else {
-            continue;
-        };
-        if ctx.sig(id).is_none() {
-            continue;
-        }
-        if let Some(lowered) = lower_function(&mut ctx, id, f) {
-            functions.push(lowered);
-        }
     }
+}
 
+/// The unit a context has collected, closed over the types its definitions mention.
+fn finish(ctx: Ctx<'_>, module: ModuleId, source: &str, functions: Vec<Function>) -> Lowered {
+    let mut ctx = ctx;
     // Sorted, so the declarations a unit carries do not depend on the order its bodies
     // happened to mention them. Two builds of one module produce one text.
     ctx.externals.sort();
 
-    // Closed over field and payload types: a named LLVM type whose definition refers to
-    // another must have that one defined beside it. One walk over both kinds, because a
-    // record field may be an enum and a payload may be a record. Iterative, and bounded by
-    // the number of definitions.
+    // Closed over field, payload and element types: a named LLVM type whose definition
+    // refers to another must have that one defined beside it, and a `Vec`'s release helper
+    // releases its elements by their own law. One walk over every kind, because each may
+    // contain each. Iterative, and bounded by the number of definitions.
+    let plan = ctx.plan;
     let mut work: Vec<Ty> = ctx
         .used_records
         .iter()
         .map(|id| Ty::Record(RecordTy(*id)))
         .chain(ctx.used_enums.iter().map(|id| Ty::Enum(EnumTy(*id))))
+        .chain(ctx.used_vecs.iter().map(|id| Ty::Vec(VecTy(*id))))
         .collect();
     while let Some(ty) = work.pop() {
         let inner: Vec<Ty> = match ty {
@@ -565,12 +715,18 @@ pub fn lower_module(
                 .get(id.index())
                 .map(|l| l.variants.iter().flat_map(|v| v.fields.clone()).collect())
                 .unwrap_or_default(),
+            Ty::Vec(id) => plan
+                .vecs
+                .get(id.index())
+                .map(|l| vec![l.elem])
+                .unwrap_or_default(),
             _ => Vec::new(),
         };
         for t in inner {
             match t {
                 Ty::Record(r) if ctx.used_records.insert(r.0) => work.push(t),
                 Ty::Enum(e) if ctx.used_enums.insert(e.0) => work.push(t),
+                Ty::Vec(v) if ctx.used_vecs.insert(v.0) => work.push(t),
                 _ => {}
             }
         }
@@ -585,6 +741,11 @@ pub fn lower_module(
         .iter()
         .filter_map(|id| plan.enums.get(*id as usize).cloned())
         .collect();
+    let vecs: Vec<VecLayout> = ctx
+        .used_vecs
+        .iter()
+        .filter_map(|id| plan.vecs.get(*id as usize).cloned())
+        .collect();
 
     Lowered {
         unit: Unit {
@@ -594,19 +755,92 @@ pub fn lower_module(
             externals: ctx.externals,
             records,
             enums,
+            vecs,
         },
-        calls: ctx.calls,
         errors: ctx.errors,
     }
 }
 
-/// Lower a checked program into one native unit per module, or explain what stopped it.
+/// Lower one module's bodies, and nothing else.
+///
+/// # What it may see
+///
+/// Its own functions' bodies, and every function's *signature* through [`Plan`]. It never
+/// reads another module's body, and there is nothing here through which it could: a call
+/// into another module becomes an [`External`] — a symbol and a signature — which is
+/// exactly what a linker needs and exactly what a dependency's implementation is not.
+///
+/// Its generic definitions are **not** here. They have no one signature and no one body
+/// as native code; each instance is lowered into a unit of its own by [`lower_instance`].
+pub fn lower_module(
+    program: &Program,
+    res: &Resolution,
+    plan: &Plan,
+    module: ModuleId,
+    source: &str,
+) -> Lowered {
+    let mut ctx = context(res, plan, module);
+    let mut functions = Vec::new();
+    for (i, def) in res.functions().iter().enumerate() {
+        if def.module != module || !def.type_params.is_empty() {
+            continue;
+        }
+        let id = FnId::from_index(i);
+        let Some(f) = program.functions.get(def.decl as usize) else {
+            continue;
+        };
+        if ctx.sig(id).is_none() {
+            continue;
+        }
+        if let Some(lowered) = lower_function(&mut ctx, id, f) {
+            functions.push(lowered);
+        }
+    }
+    finish(ctx, module, source, functions)
+}
+
+/// Lower one generic function instance into a unit of its own.
+///
+/// The generic definition's **resolved body**, lowered under the instance's substitution:
+/// nothing is re-parsed, re-resolved or re-checked, and no source is copied. Every name in
+/// the body means what the checker said it meant; only the types it was checked with are
+/// replaced, and they are replaced by lookup ([`Ctx::ty`]). Spans are the definition's own,
+/// so a failure inside an instance names the line of the generic function that failed.
+pub fn lower_instance(
+    program: &Program,
+    res: &Resolution,
+    plan: &Plan,
+    at: usize,
+    source: &str,
+) -> Option<Lowered> {
+    let planned = plan.instances.planned.get(at)?;
+    let def = res.function(planned.key.def)?;
+    let f = program.functions.get(def.decl as usize)?;
+    let mut ctx = context(res, plan, def.module);
+    ctx.subst = Some((
+        ParamOwner::Function(planned.key.def),
+        planned.key.args.clone(),
+    ));
+    ctx.instance_unit = true;
+    let sig = plan.instance_sigs.get(at)?.clone();
+    let lowered = lower_body_as(&mut ctx, planned.key.def, f, &sig);
+    let functions = lowered.into_iter().collect();
+    Some(finish(ctx, def.module, source, functions))
+}
+
+/// Lower a checked program into one native unit per module, and one per generic function
+/// instance, or explain what stopped it.
 ///
 /// # The pipeline
 ///
 /// ```text
-/// resolved compilation → plan (global) → lower each module → cycle check (global)
+/// resolved compilation → instance plan → plan (global) → lower each module
+///                                                      → lower each instance
+///                      → recursion check (global)
 /// ```
+///
+/// The resolution is cloned: instance planning interns the concrete types each instance
+/// needs, and that is a native build's business, not the checker's answer.
 ///
 /// # Errors
 ///
@@ -619,28 +853,50 @@ pub fn lower(
     graph: &ModuleGraph,
     names: &crate::names::SourceNames<'_>,
 ) -> Result<Native, LowerError> {
-    let settled = plan(program, res, graph)?;
+    let mut res = res.clone();
+    let instances =
+        plan_instances(&mut res, graph).map_err(|diagnostics| LowerError { diagnostics })?;
+    let res = res;
+    let settled = plan(program, &res, graph, instances)?;
 
     let mut units = Vec::new();
-    let mut calls = Vec::new();
     let mut errors = Vec::new();
     for module in graph.ids() {
         // The module's durable identity where it has one, which is what makes the
         // artefact the same bytes from any checkout. `crate::names` owns the rule.
         let source = graph.file(module).map_or("", |f| names.name(f));
-        let mut lowered = lower_module(program, res, &settled, module, source);
+        let mut lowered = lower_module(program, &res, &settled, module, source);
         units.push(lowered.unit);
-        calls.append(&mut lowered.calls);
         errors.append(&mut lowered.errors);
     }
+    let mut instances = Vec::new();
+    for at in 0..settled.instances.planned.len() {
+        let module = settled
+            .instances
+            .planned
+            .get(at)
+            .and_then(|p| res.function(p.key.def))
+            .map(|d| d.module);
+        let source = module
+            .and_then(|m| graph.file(m))
+            .map_or("", |f| names.name(f));
+        if let Some(mut lowered) = lower_instance(program, &res, &settled, at, source) {
+            instances.push(lowered.unit);
+            errors.append(&mut lowered.errors);
+        }
+    }
 
-    // The call graph is complete only now, so the cycle check comes last — and it is over
-    // every module at once, because `A::f → B::g → A::f` is a cycle no one module can see.
-    report_cycles(res, &calls, &mut errors);
+    // The call graph is whole-program, so the cycle check is too — and it is over
+    // **definitions**, from the calls the checker recorded. An instance-level cycle is a
+    // definition-level one, and a definition-level cycle through a generic function makes
+    // every instance of it reach another, so the two refuse the same programs; the
+    // definition graph also covers a generic function nothing instantiates.
+    report_cycles(&res, &mut errors);
 
     if errors.is_empty() {
         Ok(Native {
             units,
+            instances,
             entry: settled.entry,
         })
     } else {
@@ -710,6 +966,7 @@ fn signature(
 
     ok.then_some(Sig {
         symbol,
+        instance: false,
         module: def.module,
         linkage,
         params,
@@ -744,21 +1001,26 @@ fn unsupported_at(span: Span, what: &str) -> Diagnostic {
 /// come from the resolution, **parameters first**, and nothing here can disagree with the
 /// checker about which binding a name means.
 fn lower_function(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn) -> Option<Function> {
+    let sig = ctx.sig(id)?.clone();
+    lower_body_as(ctx, id, f, &sig)
+}
+
+/// Lower a body under a signature: an ordinary function's own, or an instance's.
+fn lower_body_as(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn, sig: &Sig) -> Option<Function> {
     let Sig {
         symbol,
         linkage,
         ret,
         ..
-    } = ctx.sig(id)?.clone();
+    } = sig.clone();
     let def = ctx.res.function(id)?;
-    ctx.locals = def
-        .locals
-        .iter()
-        .map(|l| Local {
-            name: l.name.clone(),
-            ty: Ty::of(l.ty),
-        })
-        .collect();
+    let declared: Vec<(String, Type)> = def.locals.iter().map(|l| (l.name.clone(), l.ty)).collect();
+    let mut locals = Vec::with_capacity(declared.len());
+    for (name, t) in declared {
+        let ty = ctx.ty(t, f.name_span)?;
+        locals.push(Local { name, ty });
+    }
+    ctx.locals = locals;
     // Every local's type is mentioned by this unit's text: it is the type of an `alloca`.
     let local_types: Vec<Ty> = ctx.locals.iter().map(|l| l.ty).collect();
     for t in local_types {
@@ -838,12 +1100,16 @@ fn lower_function(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn) -> Option<Function> {
 /// — `docs/architecture.md` names it as the analysis that remains global, and weakening
 /// the recursion policy to make lowering local would have been trading a language rule
 /// for an implementation convenience.
-fn report_cycles(res: &Resolution, calls: &[(FnId, FnId, Span)], errors: &mut Vec<Diagnostic>) {
+fn report_cycles(res: &Resolution, errors: &mut Vec<Diagnostic>) {
     let n = res.functions().len();
     let mut edges: Vec<Vec<(usize, Span)>> = vec![Vec::new(); n];
-    for (from, to, span) in calls {
-        if let Some(e) = edges.get_mut(from.index()) {
-            e.push((to.index(), *span));
+    for (from, f) in res.functions().iter().enumerate() {
+        for site in &f.call_sites {
+            if let Callee::Function(to) = site.callee {
+                if let Some(e) = edges.get_mut(from) {
+                    e.push((to.index(), site.span));
+                }
+            }
         }
     }
 
@@ -1449,10 +1715,9 @@ fn lower_spawn(ctx: &mut Ctx<'_>, sp: &AstSpawn) -> Option<Stmt> {
     } = sig.clone();
     ctx.refer_to(&sig);
 
-    // A task is an edge in the call graph like any other. `fn f() { scope { spawn f(); } }`
-    // is recursion, and the fact that it goes through a thread does not make the stack
-    // depth bounded.
-    ctx.calls.push((ctx.current, fid, sp.callee_span));
+    // A task is an edge in the call graph like any other — `fn f() { scope { spawn f(); } }`
+    // is recursion — and the checker recorded it as one, which is what the cycle check
+    // reads.
 
     let args: Vec<Expr> = lowered.into_iter().collect::<Option<_>>()?;
     if args.len() != params.len() || !args.iter().zip(&params).all(|(a, want)| fits(a, *want)) {
@@ -1574,13 +1839,35 @@ fn lower_call(
     // one rule drifted.
     let target = ctx.res.callee(callee_span);
     if let Some(Callee::Builtin(op)) = target {
+        if op.generics() > 0 {
+            return lower_vec(ctx, op, lowered, callee_span);
+        }
         return lower_builtin(ctx, op, lowered, callee_span);
     }
 
     // By id. The name is not consulted here and could not be: two modules may define
     // the same one, and this backend stopped being able to tell them apart by spelling on
     // 2026-09-22.
+    //
+    // A generic callee is one of its **instances**: the type arguments the checker settled
+    // for this call, under the substitution of the body being lowered, are the instance's
+    // key, and the plan has its symbol.
     let resolved = match target {
+        Some(Callee::Function(fid)) if is_generic(ctx.res, fid) => {
+            let written = ctx.res.type_args(callee_span).map(<[Type]>::to_vec);
+            let args: Option<Vec<Type>> =
+                written.and_then(|w| w.into_iter().map(|t| ctx.concrete(t)).collect());
+            args.and_then(|args| {
+                let key = InstanceKey { def: fid, args };
+                ctx.plan
+                    .instances
+                    .planned
+                    .iter()
+                    .position(|p| p.key == key)
+                    .and_then(|i| ctx.plan.instance_sigs.get(i))
+                    .cloned()
+            })
+        }
         Some(Callee::Function(fid)) => ctx.sig(fid).cloned(),
         _ => None,
     };
@@ -1607,12 +1894,6 @@ fn lower_call(
         ..
     } = sig.clone();
     ctx.refer_to(&sig);
-
-    // Recorded whether or not the arguments lowered: the cycle check is about the call
-    // graph, and an edge exists as soon as the source names one.
-    if let Some(Callee::Function(to)) = target {
-        ctx.calls.push((ctx.current, to, callee_span));
-    }
 
     let args: Vec<Expr> = lowered.into_iter().collect::<Option<_>>()?;
 
@@ -1650,8 +1931,15 @@ fn lower_construct(
     ty_span: Span,
     fields: &[nazm_syntax::FieldInit],
 ) -> Option<Expr> {
-    let id = ctx.res.construction(ty_span)?;
-    let ty = Ty::of(nazm_sema::Type::Record(id));
+    let written = ctx.res.construction(ty_span)?;
+    // The record this construction builds, **as this instance sees it**: `Box[T]` in a
+    // generic body is `Box[Int]` in the instance for `Int`. The field a name refers to is
+    // the same declaration index in every application, so the checker's answers carry.
+    let concrete = ctx.concrete(Type::Record(written))?;
+    let Type::Record(id) = concrete else {
+        return None;
+    };
+    let ty = ctx.ty(concrete, ty_span)?;
     ctx.note(ty);
     let Ty::Record(rid) = ty else { return None };
 
@@ -1696,7 +1984,7 @@ fn lower_variant(
     fields: &[nazm_syntax::FieldInit],
 ) -> Option<Expr> {
     let to = ctx.res.variant(variant_span)?;
-    let ty = Ty::of(nazm_sema::Type::Enum(to.enumeration));
+    let ty = ctx.ty(Type::Enum(to.enumeration), variant_span)?;
     ctx.note(ty);
     let Ty::Enum(eid) = ty else { return None };
     let tag = ctx.tag(eid, to.variant)?;
@@ -1832,6 +2120,77 @@ fn lower_field(ctx: &mut Ctx<'_>, base: &AstExpr, name_span: Span, span: Span) -
         base_ty,
         at,
         ty,
+    })
+}
+
+fn is_generic(res: &Resolution, f: FnId) -> bool {
+    res.function(f).is_some_and(|d| !d.type_params.is_empty())
+}
+
+/// One of the `Vec[T]` built-ins, with its concrete vector.
+///
+/// Which vector is **this site's**: its type argument, as the checker settled it and as the
+/// body being lowered substitutes it. The element type follows from it, and so does every
+/// ownership rule the emitter applies — nothing here depends on how `T` was spelled.
+fn lower_vec(
+    ctx: &mut Ctx<'_>,
+    op: Builtin,
+    lowered: Vec<Option<Expr>>,
+    span: Span,
+) -> Option<Expr> {
+    let args: Vec<Expr> = lowered.into_iter().collect::<Option<_>>()?;
+    let elem = ctx.res.type_args(span).and_then(|a| a.first().copied())?;
+    let elem = ctx.concrete(elem)?;
+    let Some(vec) = ctx.res.types().find_vec(elem) else {
+        ctx.errors.push(
+            Diagnostic::error(
+                codes::UNSUPPORTED_CONSTRUCT,
+                span,
+                format!(
+                    "`nazm build` reached `{}` with no `Vec` of `{}` planned",
+                    op.name(),
+                    ctx.res.types().show(elem)
+                ),
+            )
+            .help("this is a bug in the compiler's instance planning; `nazm run` still works"),
+        );
+        return None;
+    };
+    let vec_ty = ctx.ty(vec, span)?;
+    let elem_ty = ctx.ty(elem, span)?;
+    ctx.note(vec_ty);
+    ctx.note(elem_ty);
+    let Ty::Vec(vid) = vec_ty else { return None };
+    // The front end established arity and types; this is the lowering's own check that it
+    // did not lose them on the way.
+    let want: Vec<Ty> = nazm_sema::Intrinsic::params(op)
+        .iter()
+        .map(|s| match s {
+            nazm_sema::Shape::VecT => vec_ty,
+            nazm_sema::Shape::T => elem_ty,
+            other => other.monomorphic().map_or(Ty::Int, Ty::of),
+        })
+        .collect();
+    if args.len() != want.len() || !args.iter().zip(&want).all(|(a, w)| fits(a, *w)) {
+        ctx.errors.push(
+            Diagnostic::error(
+                codes::UNSUPPORTED_CONSTRUCT,
+                span,
+                format!(
+                    "`nazm build` lowered `{}` with the wrong arguments",
+                    op.name()
+                ),
+            )
+            .help("this is a bug in the compiler; `nazm run` still works"),
+        );
+        return None;
+    }
+    Some(Expr::Vec {
+        op,
+        vec: vid,
+        elem: elem_ty,
+        args,
+        span,
     })
 }
 

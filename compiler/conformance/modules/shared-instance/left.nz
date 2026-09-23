@@ -1,0 +1,5 @@
+use "lib.nz";
+
+pub fn left() -> Int {
+    vec_len(twice(1)) + vec_len(twice("l"))
+}

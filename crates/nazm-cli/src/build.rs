@@ -56,6 +56,12 @@ pub(crate) struct Native {
     rejected: usize,
     /// Objects written to the store this run.
     stored: usize,
+    /// Generic function instances: how many units there were, and of those how many were
+    /// compiled and how many reused. Already counted in the totals above; broken out
+    /// because the question *what did one more instantiation cost* is about these alone.
+    instances: usize,
+    instances_compiled: usize,
+    instances_reused: usize,
 }
 
 /// Compile, or explain what stopped it.
@@ -181,6 +187,7 @@ pub(crate) fn run(
 
     let mut tally = Native {
         units: artefacts.len(),
+        instances: artefacts.iter().filter(|a| a.instance).count(),
         ..Native::default()
     };
     let mut objects: Vec<PathBuf> = Vec::new();
@@ -201,6 +208,9 @@ pub(crate) fn run(
                     // place — it is immutable derived data.
                     if std::fs::write(&obj, &bytes).is_ok() {
                         tally.reused += 1;
+                        if artefact.instance {
+                            tally.instances_reused += 1;
+                        }
                         objects.push(obj);
                         continue;
                     }
@@ -216,7 +226,12 @@ pub(crate) fn run(
             return ExitCode::from(exit::TOOLCHAIN_FAILED);
         }
         match backend.compile(&ll, &obj) {
-            Outcome::Ran(o) if o.status.success() => tally.compiled += 1,
+            Outcome::Ran(o) if o.status.success() => {
+                tally.compiled += 1;
+                if artefact.instance {
+                    tally.instances_compiled += 1;
+                }
+            }
             other => return report_clang(other, &ll, cleanup),
         }
 
@@ -294,13 +309,16 @@ pub(crate) fn run(
 /// the link runs on every build: there is no executable cache and no incremental linker.
 fn report(root: crate::root::How, modules: usize, t: Native) -> String {
     format!(
-        r#"{{"schema":"nazm.build-report/1","root":"{}","semantic":{{"checked":{modules},"reused":0}},"native":{{"units":{},"compiled":{},"reused":{},"rejected":{},"stored":{}}},"link":{{"performed":true}}}}"#,
+        r#"{{"schema":"nazm.build-report/1","root":"{}","semantic":{{"checked":{modules},"reused":0}},"native":{{"units":{},"compiled":{},"reused":{},"rejected":{},"stored":{},"instances":{{"units":{},"compiled":{},"reused":{}}}}},"link":{{"performed":true}}}}"#,
         root.as_str(),
         t.units,
         t.compiled,
         t.reused,
         t.rejected,
         t.stored,
+        t.instances,
+        t.instances_compiled,
+        t.instances_reused,
     )
 }
 
@@ -314,6 +332,8 @@ struct Artefact {
     /// plumbing, deliberately not as an identity.
     name: String,
     ir: String,
+    /// Whether this is a generic function instance's unit.
+    instance: bool,
 }
 
 /// Lower a checked compilation into one artefact per module, plus the program's support.
@@ -329,6 +349,20 @@ fn emit_artefacts(native: &nazm_lir::Native, names: &nazm_lir::SourceNames<'_>) 
         out.push(Artefact {
             name: format!("m{i}"),
             ir,
+            instance: false,
+        });
+    }
+    // One artefact per generic function instance, never folded into a caller's: the
+    // object cache then reuses each by its own bytes, one instance requested by two modules
+    // is one object, and a module's object does not change when another module starts
+    // instantiating something. `docs/architecture.md` §7.12.
+    for (i, unit) in native.instances.iter().enumerate() {
+        let (ir, reached) = nazm_lir::emit_unit(unit, names);
+        needs = needs.union(reached);
+        out.push(Artefact {
+            name: format!("g{i}"),
+            ir,
+            instance: true,
         });
     }
     // After every unit, because what the runtime must define is the union of what the
@@ -336,10 +370,12 @@ fn emit_artefacts(native: &nazm_lir::Native, names: &nazm_lir::SourceNames<'_>) 
     out.push(Artefact {
         name: "runtime".to_owned(),
         ir: nazm_lir::emit_runtime(needs),
+        instance: false,
     });
     out.push(Artefact {
         name: "entry".to_owned(),
         ir: nazm_lir::emit_entry(&native.entry, needs),
+        instance: false,
     });
     out
 }

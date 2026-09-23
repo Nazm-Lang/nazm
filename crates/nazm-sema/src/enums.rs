@@ -33,9 +33,11 @@ use std::collections::HashMap;
 
 use nazm_span::Span;
 
+use crate::generic::Instance;
 use crate::interface::Visibility;
 use crate::module::ModuleId;
 use crate::record::FieldDef;
+use crate::types::Type;
 
 /// An enum of this compilation, by declaration order. Session-local.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -109,6 +111,18 @@ pub struct EnumDef {
     /// This enum's index in `Program::enums`, so a consumer holding an [`EnumId`] can
     /// reach the declaration. An index into **the program this was produced from**.
     pub decl: u32,
+    /// The type parameters' names, in the order declared. Empty unless this enum is
+    /// generic. Presentation only: a parameter's identity is its **position**, and nothing
+    /// that persists or names native code reads these.
+    pub params: Vec<String>,
+    /// For an **applied** enum — `Box[Int]` — the definition it applies and to what.
+    ///
+    /// An applied enum is an entry of its own in this table, interned by that pair, whose
+    /// variants are the definition's after substitution. That is what lets every
+    /// consumer that reads a definition — copy, drop, layout, task safety, construction —
+    /// read an instance by the same code: the substitution happened once, here, and
+    /// nothing downstream has to know it did. `None` for a definition as written.
+    pub instance: Option<Instance<EnumId>>,
 }
 
 impl EnumDef {
@@ -147,6 +161,9 @@ impl EnumDef {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Enums {
     defs: Vec<EnumDef>,
+    /// Applied definitions, by what they apply: one entry per definition and argument
+    /// list, which is what makes `EnumId` equality type equality for an applied type too.
+    interned: HashMap<(EnumId, Vec<Type>), EnumId>,
     /// Name to definition, per module. There is no global type namespace, and records and
     /// enums share the one a module has — the collision between `struct Item` and
     /// `enum Item` is reported by the checker, which can see both tables.
@@ -209,6 +226,24 @@ impl Enums {
     /// visibility `docs/spec.md` refuses.
     pub fn declare_unnamed(&mut self, def: EnumDef) -> EnumId {
         let id = EnumId::from_index(self.defs.len());
+        self.defs.push(def);
+        id
+    }
+
+    /// The entry for this definition applied to these arguments, if there is one yet.
+    #[must_use]
+    pub fn instance(&self, template: EnumId, args: &[Type]) -> Option<EnumId> {
+        self.interned.get(&(template, args.to_vec())).copied()
+    }
+
+    /// Add an applied definition. Never registered by name — `Box[Int]` is not a name a
+    /// module declares — and interned, so the caller must have asked [`Self::instance`]
+    /// first.
+    pub fn declare_instance(&mut self, def: EnumDef) -> EnumId {
+        let id = EnumId::from_index(self.defs.len());
+        if let Some(inst) = &def.instance {
+            self.interned.insert((inst.template, inst.args.clone()), id);
+        }
         self.defs.push(def);
         id
     }

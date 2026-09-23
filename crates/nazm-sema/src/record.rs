@@ -26,6 +26,7 @@ use std::collections::HashMap;
 
 use nazm_span::Span;
 
+use crate::generic::Instance;
 use crate::interface::Visibility;
 use crate::module::ModuleId;
 use crate::types::Type;
@@ -87,6 +88,18 @@ pub struct RecordDef {
     /// can reach the declaration it came from. An index into **the program this was
     /// produced from**, exactly as [`FnDef::decl`](crate::resolve::FnDef::decl) is.
     pub decl: u32,
+    /// The type parameters' names, in the order declared. Empty unless this record is
+    /// generic. Presentation only: a parameter's identity is its **position**, and nothing
+    /// that persists or names native code reads these.
+    pub params: Vec<String>,
+    /// For an **applied** record — `Box[Int]` — the definition it applies and to what.
+    ///
+    /// An applied record is an entry of its own in this table, interned by that pair, whose
+    /// fields are the definition's after substitution. That is what lets every
+    /// consumer that reads a definition — copy, drop, layout, task safety, construction —
+    /// read an instance by the same code: the substitution happened once, here, and
+    /// nothing downstream has to know it did. `None` for a definition as written.
+    pub instance: Option<Instance<RecordId>>,
 }
 
 impl RecordDef {
@@ -122,6 +135,9 @@ pub struct TaskUnsafe {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Records {
     defs: Vec<RecordDef>,
+    /// Applied definitions, by what they apply: one entry per definition and argument
+    /// list, which is what makes `RecordId` equality type equality for an applied type too.
+    interned: HashMap<(RecordId, Vec<Type>), RecordId>,
     /// Name to definition, per module — the same shape, and for the same reason, as
     /// [`Resolution`](crate::Resolution)'s function map. There is no global type
     /// namespace.
@@ -199,6 +215,24 @@ impl Records {
     /// visibility `docs/spec.md` refuses.
     pub fn declare_unnamed(&mut self, def: RecordDef) -> RecordId {
         let id = RecordId::from_index(self.defs.len());
+        self.defs.push(def);
+        id
+    }
+
+    /// The entry for this definition applied to these arguments, if there is one yet.
+    #[must_use]
+    pub fn instance(&self, template: RecordId, args: &[Type]) -> Option<RecordId> {
+        self.interned.get(&(template, args.to_vec())).copied()
+    }
+
+    /// Add an applied definition. Never registered by name — `Box[Int]` is not a name a
+    /// module declares — and interned, so the caller must have asked [`Self::instance`]
+    /// first.
+    pub fn declare_instance(&mut self, def: RecordDef) -> RecordId {
+        let id = RecordId::from_index(self.defs.len());
+        if let Some(inst) = &def.instance {
+            self.interned.insert((inst.template, inst.args.clone()), id);
+        }
         self.defs.push(def);
         id
     }

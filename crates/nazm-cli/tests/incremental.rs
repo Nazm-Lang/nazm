@@ -944,10 +944,10 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        3,
-        "N9 and N10 each changed what the checker accepts, so the epoch moved twice"
+        4,
+        "N9, N10 and N11 each changed what the checker accepts, so the epoch moved three times"
     );
-    assert_eq!(nazm_iface::SCHEMA, "nazm.interface/3");
+    assert_eq!(nazm_iface::SCHEMA, "nazm.interface/4");
 }
 
 #[test]

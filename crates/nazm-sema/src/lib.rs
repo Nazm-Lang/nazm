@@ -39,6 +39,7 @@
 //! `docs/research-register.md` R2 and R3, and it is deliberately not this.
 
 pub mod enums;
+pub mod generic;
 pub mod interface;
 pub mod intrinsic;
 pub mod key;
@@ -50,10 +51,12 @@ pub mod udt;
 
 pub use enums::{EnumDef, EnumId, Enums, VariantDef};
 pub use interface::{reachable_types, EnumExport, Export, RecordExport, UnitInterface, Visibility};
-pub use intrinsic::Intrinsic;
+pub use intrinsic::{Intrinsic, Shape};
 pub use key::{DefKey, DefKind, ModuleKey};
 pub use module::{Dependency, ModuleGraph, ModuleId};
 pub use record::{FieldDef, RecordDef, RecordId, Records, TaskUnsafe};
-pub use resolve::{Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Resolution, VariantRef};
-pub use types::Type;
-pub use udt::{CycleEdge, LayoutCycle, TypeNode, UserTypes, MAX_TYPE_DEPTH};
+pub use resolve::{
+    CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Resolution, VariantRef,
+};
+pub use types::{ParamOwner, Type, TypeParam, VecId};
+pub use udt::{CycleEdge, LayoutCycle, OwnershipCycle, Reach, TypeNode, UserTypes, MAX_TYPE_DEPTH};

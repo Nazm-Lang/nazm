@@ -56,6 +56,11 @@ pub enum TokenKind {
     RParen,
     LBrace,
     RBrace,
+    /// `[` and `]` — a type parameter list, a type application, and explicit type
+    /// arguments, and nothing else. N11. There is no indexing expression, which is what
+    /// keeps `name[` unambiguous wherever it appears.
+    LBracket,
+    RBracket,
     Comma,
     Colon,
     /// `.` — field projection, and the separator between an enum and one of its
@@ -121,6 +126,8 @@ impl TokenKind {
         Self::RParen,
         Self::LBrace,
         Self::RBrace,
+        Self::LBracket,
+        Self::RBracket,
         Self::Comma,
         Self::Colon,
         Self::Dot,
@@ -175,6 +182,8 @@ impl TokenKind {
             Self::RParen => Some(")"),
             Self::LBrace => Some("{"),
             Self::RBrace => Some("}"),
+            Self::LBracket => Some("["),
+            Self::RBracket => Some("]"),
             Self::Comma => Some(","),
             Self::Colon => Some(":"),
             Self::Dot => Some("."),
@@ -226,6 +235,8 @@ impl TokenKind {
             Self::RParen => "`)`".to_owned(),
             Self::LBrace => "`{`".to_owned(),
             Self::RBrace => "`}`".to_owned(),
+            Self::LBracket => "`[`".to_owned(),
+            Self::RBracket => "`]`".to_owned(),
             Self::Comma => "`,`".to_owned(),
             Self::Colon => "`:`".to_owned(),
             Self::Dot => "`.`".to_owned(),
@@ -442,6 +453,8 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
             b')' => Some(TokenKind::RParen),
             b'{' => Some(TokenKind::LBrace),
             b'}' => Some(TokenKind::RBrace),
+            b'[' => Some(TokenKind::LBracket),
+            b']' => Some(TokenKind::RBracket),
             b',' => Some(TokenKind::Comma),
             b':' => Some(TokenKind::Colon),
             b'.' => Some(TokenKind::Dot),

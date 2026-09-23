@@ -32,7 +32,7 @@ pub mod __syntax {
     pub use nazm_syntax::{
         format, lex, lex_in, parse_file, parse_map, parse_source, Block, Enum, Expr, Field,
         FieldInit, Function, MatchArm, PatternField, Place, PlaceField, Program, Record, Stmt,
-        TokenKind, Variant,
+        TokenKind, TypeName, TypeParam, Variant,
     };
 }
 

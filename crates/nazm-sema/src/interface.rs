@@ -81,6 +81,10 @@ pub struct Export {
     /// Session-local. An interface that outlived its process would need something else
     /// here, and nothing here pretends otherwise.
     pub def: FnId,
+    /// The type parameters' names, in order; empty unless the function is generic. Only
+    /// the count is part of the interface — names are presentation, and a function read
+    /// back from a persisted interface has none.
+    pub type_params: Vec<String>,
 }
 
 /// One record definition an importer needs to see.
@@ -233,33 +237,41 @@ impl UnitInterface {
 pub fn reachable_types(types: &UserTypes, roots: impl IntoIterator<Item = Type>) -> Vec<TypeNode> {
     let mut seen: Vec<TypeNode> = Vec::new();
     let mut out: Vec<TypeNode> = Vec::new();
-    let mut work: Vec<TypeNode> = roots.into_iter().filter_map(TypeNode::of).collect();
-    // Reversed so the first root is visited first, which makes the result's order a
-    // function of the input rather than of the stack.
+    let mut work: Vec<Type> = roots.into_iter().collect();
     work.reverse();
-    while let Some(node) = work.pop() {
-        if seen.contains(&node) {
-            continue;
-        }
-        seen.push(node);
-        out.push(node);
-        let mut inner: Vec<TypeNode> = Vec::new();
-        match node {
-            TypeNode::Record(id) => {
-                if let Some(def) = types.records().get(id) {
-                    inner.extend(def.fields.iter().filter_map(|f| TypeNode::of(f.ty)));
-                }
-            }
-            TypeNode::Enum(id) => {
-                if let Some(def) = types.enums().get(id) {
-                    for v in &def.variants {
-                        inner.extend(v.fields.iter().filter_map(|f| TypeNode::of(f.ty)));
+    while let Some(t) = work.pop() {
+        match t {
+            // A `Vec` is not a definition: what it reaches is its element's.
+            Type::Vec(v) => work.extend(types.vec_element(v)),
+            Type::Record(_) | Type::Enum(_) => {
+                // An application reaches the **definition** it applies — which is what an
+                // interface publishes — and everything its arguments reach.
+                let mut inner: Vec<Type> = types.type_args(t);
+                if let Some(node) = types.definition_of(t) {
+                    if !seen.contains(&node) {
+                        seen.push(node);
+                        out.push(node);
+                        match node {
+                            TypeNode::Record(id) => {
+                                if let Some(def) = types.records().get(id) {
+                                    inner.extend(def.fields.iter().map(|f| f.ty));
+                                }
+                            }
+                            TypeNode::Enum(id) => {
+                                if let Some(def) = types.enums().get(id) {
+                                    for v in &def.variants {
+                                        inner.extend(v.fields.iter().map(|f| f.ty));
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
+                for n in inner.into_iter().rev() {
+                    work.push(n);
+                }
             }
-        }
-        for n in inner.into_iter().rev() {
-            work.push(n);
+            _ => {}
         }
     }
     out

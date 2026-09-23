@@ -1,0 +1,6 @@
+pub fn twice[T](x: T) -> Vec[T] {
+    let v = vec_new[T]();
+    vec_push(v, x);
+    vec_push(v, x);
+    v
+}

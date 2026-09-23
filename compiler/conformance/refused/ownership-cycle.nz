@@ -1,0 +1,8 @@
+// expect: N0359
+// A record whose values could own themselves through a `Vec`: finite in layout, and no
+// count would ever reach zero.
+struct Node {
+    children: Vec[Node],
+}
+
+fn main() -> Int { 0 }

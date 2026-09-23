@@ -143,13 +143,24 @@ pub fn before_colon(s: Str) -> Str {
     s
 }
 
-pub fn report(dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs,
+// One diagnostic: its code, where it points, and what it says.
+//
+// **The compiler's first `Vec` of records**, N11. Until then a diagnostic was four parallel
+// arrays — a code, a start, an end and a message — threaded through every stage as four
+// parameters, pushed together here and popped together in one other place, and nothing
+// but care kept the four the same length. One element is one diagnostic now: the
+// relationship the arrays held by convention is the type's, and a stage that pushed a code
+// without a message would not compile.
+pub struct Diag {
+    code: Str,
+    start: Int,
+    end: Int,
+    message: Str,
+}
+
+pub fn report(diags: Vec[Diag],
         code: Str, from: Int, to: Int, message: Str) -> Int {
-    strs_push(dcode, code);
-    ints_push(dstart, from);
-    ints_push(dend, to);
-    strs_push(dmsg, message);
-    strs_len(dcode)
+    vec_push(diags, Diag(code: code, start: from, end: to, message: message))
 }
 
 // --- types ---------------------------------------------------------------------------
@@ -173,7 +184,12 @@ pub fn t_chan() -> Int { 6 }
 // no change. The base is far above the built-ins so the two can never be confused.
 pub fn t_record_base() -> Int { 100 }
 pub fn t_record(i: Int) -> Int { t_record_base() + i }
-pub fn is_record(t: Int) -> Bool { t >= t_record_base() }
+pub fn is_record(t: Int) -> Bool {
+    if t < t_record_base() { return false; }
+    // A `Vec` and a type parameter are entries of the same table and are not records:
+    // see *generics* below.
+    t < 1000000
+}
 pub fn record_of(t: Int) -> Int { t - t_record_base() }
 
 // --- an enum is a record whose fields are its variants ----------------------------------
@@ -193,6 +209,10 @@ pub fn record_of(t: Int) -> Int { t - t_record_base() }
 // because a variant genuinely is a step in the path. What a record and an enum **do**
 // differ in is how a value of one is built and eliminated, and that is written out at each
 // of those two places rather than hidden here.
+// An item's auxiliary word, read back: `compiler/parse.nz`, `item_aux`.
+pub fn is_public(naux: Ints, k: Int) -> Int { ints_get(naux, k) % 2 }
+pub fn name_offset(naux: Ints, k: Int) -> Int { ints_get(naux, k) / 2 }
+
 pub fn rk_record() -> Int { 0 }
 pub fn rk_enum() -> Int { 1 }
 pub fn rk_variant() -> Int { 2 }
@@ -271,11 +291,1247 @@ fn type_name(t: Int) -> Str {
 // A type as a reader sees it. A record spells its declared name, which is not its
 // identity — two modules may each declare `Thing` — and is right for a message.
 pub fn show_type(t: Int, rnames: Strs) -> Str {
-    if is_record(t) {
-        if record_of(t) < strs_len(rnames) { return strs_get(rnames, record_of(t)); }
+    // Every entry carries the name a reader would write: `Point`, `Pair[Int, Str]`,
+    // `Vec[T]`, `T`.
+    if t >= t_record_base() {
+        if entry_of(t) < strs_len(rnames) { return strs_get(rnames, entry_of(t)); }
         return "?";
     }
     type_name(t)
+}
+
+// --- generics: applied types, `Vec`, and type parameters, N11 ------------------------------
+//
+// **Every type is still one `Int`**, and every user-defined one is still an entry of the
+// record table. What N11 adds is three more things an entry can be, and one rule about
+// where each one's code lives:
+//
+//     t_record(r)   100 + r         a record, an enum or a variant — as since N9 and N10
+//     t_vec(r)      1_000_000 + r   `Vec[T]`, whose element is the entry's one argument
+//     t_param(r)    2_000_000 + r   a type parameter, which only its declaration can name
+//
+// An **applied** record or enum — `Pair[Int, Str]` — is an entry of its own whose fields are
+// its definition's with the parameters substituted, done once, when it is interned. Every
+// consumer this compiler has — copy and cleanup derivation, layout, task safety,
+// construction, projection, the emitter's helpers — reads *fields*, and each was written
+// and tested against entries with concrete fields. So none of them learns that generics
+// exist: `crates/nazm-sema/src/generic.rs` makes the same decision for the same reason.
+//
+// Interning is what keeps `==` on a type code the language's type equality: one definition
+// applied to one argument list is one entry, found again by `apply` rather than made twice.
+//
+// The ranges are far apart so that no code in one can be mistaken for another, and so
+// that every place that asks `is_record` keeps meaning what it meant — a `Vec` is not a
+// record, and neither is a parameter.
+
+pub fn rk_vec() -> Int { 3 }
+pub fn rk_param() -> Int { 4 }
+
+pub fn t_vec(r: Int) -> Int { 1000000 + r }
+pub fn t_param(r: Int) -> Int { 2000000 + r }
+pub fn is_vec(t: Int) -> Bool {
+    if t < 1000000 { return false; }
+    t < 2000000
+}
+pub fn is_param(t: Int) -> Bool { t >= 2000000 }
+
+// The table entry a user type's code names, or -1 for a built-in or `unknown`.
+pub fn entry_of(t: Int) -> Int {
+    if t >= 2000000 { return t - 2000000; }
+    if t >= 1000000 { return t - 1000000; }
+    if t >= 100 { return t - 100; }
+    0 - 1
+}
+
+// The type code of entry `r`, by what the entry is.
+pub fn code_of(tb: Table, r: Int) -> Int {
+    let k = ints_get(tb.kind, r);
+    if k == rk_vec() { return t_vec(r); }
+    if k == rk_param() { return t_param(r); }
+    t_record(r)
+}
+
+// The record table, as one value.
+//
+// The same arrays every stage since N9 has threaded one by one — `rnames`, `rowner` and the
+// rest — plus what N11 needs, gathered into a record so that the machinery below takes one
+// argument where it would otherwise take eighteen. A record of handles: copying it copies
+// the handles, so every holder sees one table, which is exactly the sharing the separate
+// arrays had.
+//
+// * `tpl[r]` — for an applied record or enum, the definition it applies; for a variant of
+//   an applied enum, the definition's variant; `-1` for everything else.
+// * `afirst[r]`/`acount[r]` — into `args`. For an application its type arguments; for a
+//   `Vec` its element; for a **generic definition** its own parameters, as `t_param`
+//   codes, which is where the definition's arity is read from.
+// * `depth[r]` — how deeply the type nests: a built-in and a parameter are 1, `Vec[Int]`
+//   is 2. Computed once, when the entry is made, from arguments that already exist.
+// * `state` — `[deferred, settling, created]`, and `pending` the applications interned and
+//   not yet given their fields.
+pub struct Table {
+    names: Strs,
+    owner: Ints,
+    vis: Ints,
+    at: Ints,
+    node: Ints,
+    kind: Ints,
+    first: Ints,
+    count: Ints,
+    fname: Strs,
+    ftype: Ints,
+    fat: Ints,
+    tpl: Ints,
+    afirst: Ints,
+    acount: Ints,
+    args: Ints,
+    depth: Ints,
+    state: Ints,
+    pending: Ints,
+}
+
+// The bound reported to a program: a written type, or one a generic call produces, may
+// nest this deep and no deeper — the reference's `MAX_TYPE_DEPTH`.
+pub fn max_type_depth() -> Int { 32 }
+// The last line, not the rule: an instance nested deeper than this is interned and never
+// completed, and completion stops after this many. The ownership-cycle check reports
+// first; these exist so that a refused definition cannot keep the checker busy.
+fn hard_nesting() -> Int { 256 }
+fn instance_budget() -> Int { 100000 }
+
+pub fn new_table(names: Strs, owner: Ints, vis: Ints, at: Ints, node: Ints, kind: Ints,
+        first: Ints, count: Ints, fname: Strs, ftype: Ints, fat: Ints) -> Table {
+    let state = ints_new();
+    ints_push(state, 0);
+    ints_push(state, 0);
+    ints_push(state, 0);
+    Table(names: names, owner: owner, vis: vis, at: at, node: node, kind: kind,
+            first: first, count: count, fname: fname, ftype: ftype, fat: fat,
+            tpl: ints_new(), afirst: ints_new(), acount: ints_new(), args: ints_new(),
+            depth: ints_new(), state: state, pending: ints_new())
+}
+
+// One more entry, with no fields and no arguments yet. Every per-entry array grows here and
+// nowhere else, so they cannot fall out of step.
+pub fn new_entry(tb: Table, name: Str, owner: Int, vis: Int, at: Int, node: Int, kind: Int,
+        tpl: Int) -> Int {
+    strs_push(tb.names, name);
+    ints_push(tb.owner, owner);
+    ints_push(tb.vis, vis);
+    ints_push(tb.at, at);
+    ints_push(tb.node, node);
+    ints_push(tb.kind, kind);
+    ints_push(tb.first, strs_len(tb.fname));
+    ints_push(tb.count, 0);
+    ints_push(tb.tpl, tpl);
+    ints_push(tb.afirst, ints_len(tb.args));
+    ints_push(tb.acount, 0);
+    ints_push(tb.depth, 1);
+    strs_len(tb.names) - 1
+}
+
+// How deeply a type nests.
+pub fn depth_of(tb: Table, t: Int) -> Int {
+    let r = entry_of(t);
+    if r < 0 { return 1; }
+    if r >= ints_len(tb.depth) { return 1; }
+    ints_get(tb.depth, r)
+}
+
+// How many type parameters a declaration has: 0 unless it is a generic definition as
+// written — an application has arguments, not parameters.
+pub fn generic_count(tb: Table, r: Int) -> Int {
+    if r < 0 { return 0; }
+    if ints_get(tb.tpl, r) >= 0 { return 0; }
+    let k = ints_get(tb.kind, r);
+    if k == rk_vec() { return 0; }
+    if k == rk_param() { return 0; }
+    if k == rk_variant() { return 0; }
+    ints_get(tb.acount, r)
+}
+
+// Whether entry `r` is a declaration as written: a record or an enum that applies nothing.
+pub fn is_declaration(tb: Table, r: Int) -> Bool {
+    if ints_get(tb.tpl, r) >= 0 { return false; }
+    let k = ints_get(tb.kind, r);
+    if k == rk_record() { return true; }
+    k == rk_enum()
+}
+
+// The definition a type applies, or the type's own entry when it applies nothing. -1 for a
+// built-in, a `Vec` or a parameter.
+pub fn definition_of(tb: Table, t: Int) -> Int {
+    if is_record(t) == false { return 0 - 1; }
+    let r = record_of(t);
+    if ints_get(tb.tpl, r) >= 0 { return ints_get(tb.tpl, r); }
+    r
+}
+
+// The arguments of an application or the element of a `Vec`, as a fresh list; empty for
+// anything else. A declaration's own parameters are **not** its arguments.
+pub fn type_args(tb: Table, t: Int) -> Ints {
+    let out = ints_new();
+    let r = entry_of(t);
+    if r < 0 { return out; }
+    let mut applies = false;
+    if ints_get(tb.kind, r) == rk_vec() { applies = true; }
+    if ints_get(tb.tpl, r) >= 0 {
+        if ints_get(tb.kind, r) != rk_variant() { applies = true; }
+    }
+    if applies == false { return out; }
+    let mut i = 0;
+    while i < ints_get(tb.acount, r) {
+        ints_push(out, ints_get(tb.args, ints_get(tb.afirst, r) + i));
+        i = i + 1;
+    }
+    out
+}
+
+// The entry of `Vec[elem]`, interned.
+pub fn vec_of(tb: Table, elem: Int) -> Int {
+    let mut r = 0;
+    while r < ints_len(tb.kind) {
+        if ints_get(tb.kind, r) == rk_vec() {
+            if ints_get(tb.args, ints_get(tb.afirst, r)) == elem { return t_vec(r); }
+        }
+        r = r + 1;
+    }
+    let e = new_entry(tb, str_concat(str_concat("Vec[", shown(tb, elem)), "]"),
+            0 - 1, 1, 0, 0 - 1, rk_vec(), 0 - 1);
+    ints_push(tb.args, elem);
+    ints_set(tb.acount, e, 1);
+    ints_set(tb.depth, e, depth_of(tb, elem) + 1);
+    t_vec(e)
+}
+
+// A type as a reader sees it, with its arguments: `Pair[Int, Str]`, `Vec[T]`.
+pub fn shown(tb: Table, t: Int) -> Str {
+    if t >= 100 {
+        let r = entry_of(t);
+        if r < strs_len(tb.names) { return strs_get(tb.names, r); }
+        return "?";
+    }
+    type_name(t)
+}
+
+// `decl[args]`, interned: the entry that already exists for exactly these arguments, or a
+// new one whose fields are filled in when the worklist is drained.
+//
+// A new application of an **enum** brings its variant entries with it, straight after its
+// own, because that is where an enum's variants are found: `rk_variant` entries following
+// the enum, in declaration order. They are allocated here, together, so nothing interned
+// later can land between them.
+pub fn apply(tb: Table, decl: Int, args: Ints) -> Int {
+    let n = ints_len(args);
+    let mut r = 0;
+    while r < ints_len(tb.tpl) {
+        if ints_get(tb.tpl, r) == decl {
+            if ints_get(tb.kind, r) != rk_variant() {
+                if ints_get(tb.acount, r) == n {
+                    let mut same = true;
+                    let mut i = 0;
+                    while i < n {
+                        if ints_get(tb.args, ints_get(tb.afirst, r) + i) != ints_get(args, i) {
+                            same = false;
+                        }
+                        i = i + 1;
+                    }
+                    if same { return t_record(r); }
+                }
+            }
+        }
+        r = r + 1;
+    }
+    let mut name = str_concat(strs_get(tb.names, decl), "[");
+    let mut deepest = 0;
+    let mut i = 0;
+    while i < n {
+        if i > 0 { name = str_concat(name, ", "); }
+        name = str_concat(name, shown(tb, ints_get(args, i)));
+        if depth_of(tb, ints_get(args, i)) > deepest { deepest = depth_of(tb, ints_get(args, i)); }
+        i = i + 1;
+    }
+    name = str_concat(name, "]");
+    let e = new_entry(tb, name, ints_get(tb.owner, decl), ints_get(tb.vis, decl),
+            ints_get(tb.at, decl), ints_get(tb.node, decl), ints_get(tb.kind, decl), decl);
+    let mut a = 0;
+    while a < n { ints_push(tb.args, ints_get(args, a)); a = a + 1; }
+    ints_set(tb.acount, e, n);
+    ints_set(tb.depth, e, deepest + 1);
+    if ints_get(tb.kind, decl) == rk_enum() {
+        let mut v = decl + 1;
+        while v < ints_len(tb.kind) {
+            if ints_get(tb.kind, v) != rk_variant() { break; }
+            let ve = new_entry(tb, str_concat(str_concat(name, "."),
+                    after_dot(strs_get(tb.names, v))),
+                    0 - 1, ints_get(tb.vis, decl), ints_get(tb.at, v), ints_get(tb.node, v),
+                    rk_variant(), v);
+            ints_set(tb.afirst, ve, ints_get(tb.afirst, e));
+            ints_set(tb.acount, ve, n);
+            ints_set(tb.depth, ve, deepest + 1);
+            v = v + 1;
+        }
+    }
+    // Only enqueued. Completion substitutes, and substituting applies, so an `apply` that
+    // completed would be a call cycle — which this compiler cannot have, since it compiles
+    // itself natively. The stages that hand a type on call `settle_now` instead.
+    ints_push(tb.pending, e);
+    ints_set(tb.state, 2, ints_get(tb.state, 2) + 1);
+    t_record(e)
+}
+
+// Complete what is pending, unless completion is being held — the call every stage makes
+// before a type it produced is read.
+pub fn settle_now(tb: Table) -> Int {
+    if ints_get(tb.state, 0) == 1 { return 0; }
+    settle(tb)
+}
+
+// Hold completion until `settle`: while field types are still being resolved, a
+// definition an application names may not have any fields yet.
+pub fn defer(tb: Table) -> Int {
+    ints_set(tb.state, 0, 1);
+    0
+}
+
+// Give every pending application its fields, and every application completing them
+// creates. A worklist, so completion never recurses into completion.
+pub fn settle(tb: Table) -> Int {
+    ints_set(tb.state, 0, 0);
+    if ints_get(tb.state, 1) == 1 { return 0; }
+    ints_set(tb.state, 1, 1);
+    while ints_len(tb.pending) > 0 {
+        complete(tb, ints_pop(tb.pending));
+    }
+    ints_set(tb.state, 1, 0);
+    0
+}
+
+// The parameters of a generic definition and the arguments of one application of it, as
+// the two lists `substitute` reads.
+fn params_of(tb: Table, decl: Int) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < ints_get(tb.acount, decl) {
+        ints_push(out, ints_get(tb.args, ints_get(tb.afirst, decl) + i));
+        i = i + 1;
+    }
+    out
+}
+
+// Copy the field list of `from` onto `to`, substituted. The slots are reserved first and
+// filled after, because substituting may intern more applications — which only push
+// entries, never fields, so the reserved run stays contiguous.
+fn copy_fields(tb: Table, from: Int, to: Int, params: Ints, args: Ints) -> Int {
+    ints_set(tb.first, to, strs_len(tb.fname));
+    ints_set(tb.count, to, ints_get(tb.count, from));
+    let base = strs_len(tb.fname);
+    let mut i = 0;
+    while i < ints_get(tb.count, from) {
+        strs_push(tb.fname, strs_get(tb.fname, ints_get(tb.first, from) + i));
+        ints_push(tb.ftype, 0);
+        ints_push(tb.fat, ints_get(tb.fat, ints_get(tb.first, from) + i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_get(tb.count, from) {
+        let t = ints_get(tb.ftype, ints_get(tb.first, from) + i);
+        ints_set(tb.ftype, base + i, substitute(tb, t, params, args));
+        i = i + 1;
+    }
+    0
+}
+
+fn complete(tb: Table, e: Int) -> Int {
+    if ints_get(tb.state, 2) > instance_budget() { return 0; }
+    if ints_get(tb.depth, e) > hard_nesting() { return 0; }
+    let decl = ints_get(tb.tpl, e);
+    let params = params_of(tb, decl);
+    let args = type_args(tb, t_record(e));
+    if ints_get(tb.kind, e) == rk_enum() {
+        // The enum's fields are its variants, each typed as **this** application's variant
+        // entry — at the same distance from the enum as the definition's is from its own.
+        ints_set(tb.first, e, strs_len(tb.fname));
+        ints_set(tb.count, e, ints_get(tb.count, decl));
+        let mut i = 0;
+        while i < ints_get(tb.count, decl) {
+            let at = ints_get(tb.first, decl) + i;
+            strs_push(tb.fname, strs_get(tb.fname, at));
+            ints_push(tb.ftype, t_record(e + (record_of(ints_get(tb.ftype, at)) - decl)));
+            ints_push(tb.fat, ints_get(tb.fat, at));
+            i = i + 1;
+        }
+        let mut v = e + 1;
+        while v < ints_len(tb.kind) {
+            if ints_get(tb.kind, v) != rk_variant() { break; }
+            if ints_get(tb.tpl, v) < 0 { break; }
+            copy_fields(tb, ints_get(tb.tpl, v), v, params, args);
+            v = v + 1;
+        }
+        return 0;
+    }
+    copy_fields(tb, decl, e, params, args)
+}
+
+// `t` with every parameter in `params` replaced by the matching argument.
+//
+// Parameters of any other owner are left alone: substituting a callee's parameters in its
+// signature must not touch the caller's own `T`, which may be one of the arguments.
+//
+// Post-order over the type's tree with an explicit stack, because an application's
+// substituted arguments are needed before it can be re-applied — and this compiler has no
+// recursion to do that with. `from`/`to` remember what each part became.
+pub fn substitute(tb: Table, t: Int, params: Ints, args: Ints) -> Int {
+    if t < 100 { return t; }
+    let from = ints_new();
+    let to = ints_new();
+    let work = ints_new();
+    ints_push(work, t);
+    while ints_len(work) > 0 {
+        let x = ints_get(work, ints_len(work) - 1);
+        if index_of(from, x) >= 0 {
+            ints_pop(work);
+            continue;
+        }
+        if x < 100 {
+            ints_push(from, x);
+            ints_push(to, x);
+            ints_pop(work);
+            continue;
+        }
+        if is_param(x) {
+            let at = index_of(params, x);
+            ints_push(from, x);
+            if at >= 0 {
+                if at < ints_len(args) { ints_push(to, ints_get(args, at)); } else { ints_push(to, x); }
+            } else {
+                ints_push(to, x);
+            }
+            ints_pop(work);
+            continue;
+        }
+        let parts = type_args(tb, x);
+        let mut waiting = false;
+        let mut i = 0;
+        while i < ints_len(parts) {
+            if index_of(from, ints_get(parts, i)) < 0 {
+                ints_push(work, ints_get(parts, i));
+                waiting = true;
+            }
+            i = i + 1;
+        }
+        if waiting { continue; }
+        let made = ints_new();
+        let mut changed = false;
+        i = 0;
+        while i < ints_len(parts) {
+            let now = ints_get(to, index_of(from, ints_get(parts, i)));
+            if now != ints_get(parts, i) { changed = true; }
+            ints_push(made, now);
+            i = i + 1;
+        }
+        let mut result = x;
+        if changed {
+            if is_vec(x) {
+                result = vec_of(tb, ints_get(made, 0));
+            } else {
+                result = apply(tb, ints_get(tb.tpl, record_of(x)), made);
+            }
+        }
+        ints_push(from, x);
+        ints_push(to, result);
+        ints_pop(work);
+    }
+    ints_get(to, index_of(from, t))
+}
+
+pub fn index_of(xs: Ints, want: Int) -> Int {
+    let mut i = 0;
+    while i < ints_len(xs) {
+        if ints_get(xs, i) == want { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Whether `t` mentions any parameter in `params`, anywhere. A walk, not a fold: the first
+// one found answers.
+pub fn mentions(tb: Table, t: Int, params: Ints) -> Bool {
+    let work = ints_new();
+    ints_push(work, t);
+    while ints_len(work) > 0 {
+        let x = ints_pop(work);
+        if is_param(x) {
+            if index_of(params, x) >= 0 { return true; }
+        } else {
+            let parts = type_args(tb, x);
+            let mut i = 0;
+            while i < ints_len(parts) { ints_push(work, ints_get(parts, i)); i = i + 1; }
+        }
+    }
+    false
+}
+
+// Whether `t` mentions any parameter at all — whether it is concrete.
+pub fn is_concrete(tb: Table, t: Int) -> Bool {
+    let work = ints_new();
+    ints_push(work, t);
+    while ints_len(work) > 0 {
+        let x = ints_pop(work);
+        if is_param(x) { return false; }
+        let parts = type_args(tb, x);
+        let mut i = 0;
+        while i < ints_len(parts) { ints_push(work, ints_get(parts, i)); i = i + 1; }
+    }
+    true
+}
+
+// --- written types ---------------------------------------------------------------------
+//
+// A type's text, as `compiler/parse.nz` writes it, flattened into prefix order: one item
+// per name, with where it is written and how many arguments it was given — `-1` for a name
+// written with no brackets at all, which is a different thing from `[]`.
+//
+// A top-level type with no arguments carries no offsets (`Int`), and its items say `-1`:
+// the caller knows where it is written from the node it belongs to.
+pub fn type_items(tt: Str, inames: Strs, istart: Ints, iend: Ints, iargs: Ints) -> Int {
+    let n = str_len(tt);
+    let open = ints_new();
+    let mut i = 0;
+    let mut want_name = true;
+    while i < n {
+        if want_name {
+            let from = i;
+            while i < n {
+                let b = str_byte(tt, i);
+                if b == 64 { break; }
+                if b == 91 { break; }
+                if b == 44 { break; }
+                if b == 93 { break; }
+                i = i + 1;
+            }
+            let name = str_slice(tt, from, i);
+            let mut start = 0 - 1;
+            if i < n {
+                if str_byte(tt, i) == 64 {
+                    i = i + 1;
+                    start = 0;
+                    while i < n {
+                        let d = str_byte(tt, i);
+                        if d < 48 { break; }
+                        if d > 57 { break; }
+                        start = start * 10 + (d - 48);
+                        i = i + 1;
+                    }
+                }
+            }
+            strs_push(inames, name);
+            ints_push(istart, start);
+            if start >= 0 { ints_push(iend, start + str_len(name)); } else { ints_push(iend, 0 - 1); }
+            ints_push(iargs, 0 - 1);
+            if ints_len(open) > 0 {
+                let top = ints_get(open, ints_len(open) - 1);
+                ints_set(iargs, top, ints_get(iargs, top) + 1);
+            }
+            want_name = false;
+            if i < n {
+                if str_byte(tt, i) == 91 {
+                    ints_push(open, strs_len(inames) - 1);
+                    ints_set(iargs, strs_len(inames) - 1, 0);
+                    i = i + 1;
+                    want_name = true;
+                    if i < n {
+                        if str_byte(tt, i) == 93 { want_name = false; }
+                    }
+                }
+            }
+            continue;
+        }
+        let b = str_byte(tt, i);
+        if b == 44 {
+            i = i + 1;
+            want_name = true;
+            continue;
+        }
+        if b == 93 {
+            i = i + 1;
+            let mut end = 0;
+            if i < n {
+                if str_byte(tt, i) == 64 {
+                    i = i + 1;
+                    while i < n {
+                        let d = str_byte(tt, i);
+                        if d < 48 { break; }
+                        if d > 57 { break; }
+                        end = end * 10 + (d - 48);
+                        i = i + 1;
+                    }
+                }
+            }
+            let top = ints_pop(open);
+            ints_set(iend, top, end);
+            continue;
+        }
+        i = i + 1;
+    }
+    strs_len(inames)
+}
+
+// The type parameter `name` means in a scope, or -1: a scope is the declaration's own
+// parameters, as `t_param` codes.
+fn in_scope(tb: Table, tscope: Ints, name: Str) -> Int {
+    let mut i = 0;
+    while i < ints_len(tscope) {
+        if strs_get(tb.names, entry_of(ints_get(tscope, i))) == name {
+            return ints_get(tscope, i);
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// A written type, resolved: its names, its arguments, and the applications they make.
+//
+// The reference's `resolve_written`, rule for rule. A type parameter in `scope` shadows
+// every other name; `Vec` is the one generic built-in; a built-in and a parameter take no
+// arguments (`N0351`); a generic definition is written with them (`N0352`) and with exactly
+// as many as it declares (`N0353`); and the whole may nest `max_type_depth` deep (`N0338`).
+// `from`/`to` is where a top-level type with no offsets of its own is written.
+pub fn resolve_written(tb: Table, tt: Str, owner: Int, tscope: Ints, from: Int, to: Int,
+        tmod: Ints, tname: Strs, trec: Ints,
+        diags: Vec[Diag]) -> Int {
+    let inames = strs_new();
+    let istart = ints_new();
+    let iend = ints_new();
+    let iargs = ints_new();
+    type_items(tt, inames, istart, iend, iargs);
+    let vals = ints_new();
+    let mut i = strs_len(inames) - 1;
+    while i >= 0 {
+        let name = strs_get(inames, i);
+        let mut at = ints_get(istart, i);
+        let mut end = ints_get(iend, i);
+        if at < 0 {
+            // A top-level type with no offsets of its own ends where the node it belongs to
+            // ends — a parameter's or a field's — so its name is the last thing written.
+            at = to - str_len(name);
+            end = to;
+        }
+        let name_end = at + str_len(name);
+        let written = ints_get(iargs, i);
+        let args = ints_new();
+        let mut a = 0;
+        while a < written { ints_push(args, ints_pop(vals)); a = a + 1; }
+        let mut result = t_unknown();
+        let mut done = false;
+        let p = in_scope(tb, tscope, name);
+        if p >= 0 {
+            if written >= 0 {
+                report(diags, "N0351", at, end,
+                        str_concat(str_concat("`", name),
+                        "` is a type parameter, so it takes no type arguments"));
+            }
+            result = p;
+            done = true;
+        }
+        if done == false {
+            if name == "Vec" {
+                if written < 0 {
+                    report(diags, "N0352", at, name_end,
+                            "`Vec` is written with its element type");
+                } else {
+                    if written != 1 {
+                        report(diags, "N0353", at, end,
+                                str_concat(str_concat("`Vec` takes 1 type argument, but ",
+                                int_to_str(written)), " were given"));
+                    }
+                    let mut elem = t_int();
+                    if written > 0 { elem = ints_get(args, 0); }
+                    result = vec_of(tb, elem);
+                }
+                done = true;
+            }
+        }
+        if done == false {
+            let built = type_of_name(name);
+            if built != t_unknown() {
+                if written >= 0 {
+                    report(diags, "N0351", at, end,
+                            str_concat(str_concat("`", name),
+                            "` is a built-in type, so it takes no type arguments"));
+                }
+                result = built;
+                done = true;
+            }
+        }
+        if done == false {
+            let t = type_in(name, owner, tb.names, tb.owner, tmod, tname, trec);
+            if t == t_unknown() {
+                report(diags, "N0305", at, name_end,
+                        str_concat(str_concat("`", name), "` is not a type"));
+            } else {
+                let decl = record_of(t);
+                let arity = generic_count(tb, decl);
+                if written < 0 {
+                    if arity == 0 {
+                        result = t;
+                    } else {
+                        report(diags, "N0352", at, name_end,
+                                str_concat(str_concat(str_concat(str_concat("`", name),
+                                "` is generic, so it is written with its "),
+                                int_to_str(arity)), " type arguments"));
+                    }
+                } else {
+                    if arity == 0 {
+                        report(diags, "N0351", at, end,
+                                str_concat(str_concat("`", name),
+                                "` is not generic, so it takes no type arguments"));
+                        result = t;
+                    } else {
+                        if written != arity {
+                            report(diags, "N0353", at, end,
+                                    str_concat(str_concat(str_concat(str_concat(str_concat(
+                                    "`", name), "` takes "), int_to_str(arity)),
+                                    " type arguments, but "),
+                                    str_concat(int_to_str(written), " were given")));
+                            while ints_len(args) > arity { ints_pop(args); }
+                            while ints_len(args) < arity { ints_push(args, t_int()); }
+                        }
+                        result = apply(tb, decl, args);
+                    }
+                }
+            }
+        }
+        ints_push(vals, result);
+        i = i - 1;
+    }
+    let t = ints_pop(vals);
+    if depth_of(tb, t) > max_type_depth() {
+        let mut whole_from = ints_get(istart, 0);
+        let mut whole_to = ints_get(iend, 0);
+        if whole_from < 0 {
+            whole_from = to - str_len(strs_get(inames, 0));
+            whole_to = to;
+        }
+        report(diags, "N0338", whole_from, whole_to,
+                "types may nest 32 deep");
+        return t_unknown();
+    }
+    settle_now(tb);
+    t
+}
+
+// Declared type parameters, from `[A@7,B@10]`: one `rk_param` entry each, in order, and the
+// two refusals a parameter list can earn — a built-in type's name or `Vec` (`N0331`), and a
+// name used twice (`N0350`). Returns the parameters as `t_param` codes.
+pub fn declare_params(tb: Table, text: Str, diags: Vec[Diag]) -> Ints {
+    let out = ints_new();
+    if str_len(text) == 0 { return out; }
+    let inames = strs_new();
+    let istart = ints_new();
+    let iend = ints_new();
+    let iargs = ints_new();
+    // `[A@7,B@10]` is the argument list of a nameless item, which is exactly the shape
+    // `type_items` reads.
+    type_items(str_concat("_", text), inames, istart, iend, iargs);
+    let mut i = 1;
+    while i < strs_len(inames) {
+        let name = strs_get(inames, i);
+        let at = ints_get(istart, i);
+        if type_of_name(name) != t_unknown() {
+            report(diags, "N0331", at, at + str_len(name),
+                    str_concat(str_concat("`", name),
+                    "` is a built-in type and cannot be a type parameter"));
+        } else {
+            if name == "Vec" {
+                report(diags, "N0331", at, at + str_len(name),
+                        "`Vec` is a built-in type and cannot be a type parameter");
+            } else {
+                let mut j = 1;
+                let mut twice = false;
+                while j < i {
+                    if strs_get(inames, j) == name { twice = true; }
+                    j = j + 1;
+                }
+                if twice {
+                    report(diags, "N0350", at, at + str_len(name),
+                            str_concat(str_concat("`", name),
+                            "` is declared twice in this parameter list"));
+                }
+            }
+        }
+        let p = new_entry(tb, name, 0 - 1, 0, at, 0 - 1, rk_param(), 0 - 1);
+        ints_push(out, t_param(p));
+        i = i + 1;
+    }
+    out
+}
+
+// A declaration's text without its parameter list: `Pair` from `Pair[A@7,B@10]`.
+pub fn before_bracket(s: Str) -> Str {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 91 { return str_slice(s, 0, i); }
+        i = i + 1;
+    }
+    s
+}
+
+// The parameter list itself, brackets included, or `""`.
+pub fn from_bracket(s: Str) -> Str {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 91 { return str_slice(s, i, str_len(s)); }
+        i = i + 1;
+    }
+    ""
+}
+
+// A function's name, from its node's text `name[T@3]:ret`.
+pub fn fn_name(text: Str) -> Str { before_bracket(before_colon(text)) }
+
+// Written type arguments, from the text after a name in an expression —
+// `[Int@9,Vec@13[Str@17]@20]` — resolved in `scope`, one type per argument, in order.
+//
+// Split at the commas outside any inner bracket; each piece is a complete written type with
+// its own offsets, which is exactly what `resolve_written` reads.
+pub fn resolve_type_args(tb: Table, text: Str, owner: Int, tscope: Ints,
+        tmod: Ints, tname: Strs, trec: Ints,
+        diags: Vec[Diag]) -> Ints {
+    let out = ints_new();
+    let n = str_len(text);
+    if n < 2 { return out; }
+    let mut depth = 0;
+    let mut from = 1;
+    let mut i = 1;
+    while i < n - 1 {
+        let b = str_byte(text, i);
+        if b == 91 { depth = depth + 1; }
+        if b == 93 { depth = depth - 1; }
+        if b == 44 {
+            if depth == 0 {
+                ints_push(out, resolve_written(tb, str_slice(text, from, i), owner, tscope, 0, 0,
+                        tmod, tname, trec, diags));
+                from = i + 1;
+            }
+        }
+        i = i + 1;
+    }
+    if n - 1 > from {
+        ints_push(out, resolve_written(tb, str_slice(text, from, n - 1), owner, tscope, 0, 0,
+                tmod, tname, trec, diags));
+    }
+    out
+}
+
+// A definition named in an expression — a construction's or a variant's head — applied to
+// the type arguments written after it: the reference's `applied`. A non-generic one takes
+// none (`N0351`), a generic one is built with them written — a construction infers nothing
+// (`N0352`) — and with exactly as many as it declares (`N0353`). `from`/`to` is the name.
+//
+// `t_unknown` where the arguments were needed and missing: the caller checks what it can
+// without a type rather than against one invented here.
+pub fn apply_written(tb: Table, def: Int, text: Str, from: Int, to: Int, owner: Int,
+        tscope: Ints, tmod: Ints, tname: Strs, trec: Ints,
+        diags: Vec[Diag]) -> Int {
+    let decl = record_of(def);
+    let arity = generic_count(tb, decl);
+    let name = strs_get(tb.names, decl);
+    if str_len(text) == 0 {
+        if arity == 0 { return def; }
+        report(diags, "N0352", from, to,
+                str_concat(str_concat(str_concat(str_concat("`", name),
+                "` is generic, so it is built with its "), int_to_str(arity)),
+                " type arguments written"));
+        return t_unknown();
+    }
+    let args = resolve_type_args(tb, text, owner, tscope, tmod, tname, trec,
+            diags);
+    if arity == 0 {
+        report(diags, "N0351", from, to,
+                str_concat(str_concat("`", name),
+                "` is not generic, so it takes no type arguments"));
+        return def;
+    }
+    if ints_len(args) != arity {
+        report(diags, "N0353", from, to,
+                str_concat(str_concat(str_concat(str_concat(str_concat("`", name),
+                "` takes "), int_to_str(arity)), " type arguments, but "),
+                str_concat(int_to_str(ints_len(args)), " were given")));
+        while ints_len(args) > arity { ints_pop(args); }
+        while ints_len(args) < arity { ints_push(args, t_int()); }
+    }
+    let t = apply(tb, decl, args);
+    settle_now(tb);
+    t
+}
+
+// --- the ownership graph, N11 --------------------------------------------------------------
+//
+// `crates/nazm-sema/src/udt.rs`'s rule, over **definitions**, transcribed. A field reaches
+// a definition **inline** when a value of it is stored in place and **counted** when it is
+// reached through a `Vec`'s handle. An all-inline cycle is an impossible layout (`N0336`);
+// any cycle with a counted edge is an ownership cycle a count could never break (`N0359`).
+//
+// What a generic definition does with each of its parameters — stores it inline, behind a
+// handle, both or not at all — is found first, to a fixed point, so that `Tag[T] { n: Int }`
+// applied to anything owns nothing of it and `Box[T] { v: T }` applied to a type owns it
+// inline.
+
+fn inline_reach() -> Int { 1 }
+fn counted_reach() -> Int { 2 }
+
+// How a use through `outer` composes with a use of kind `inner`: inline only when both are,
+// counted as soon as either is.
+fn compose(outer: Int, inner: Int) -> Int {
+    let mut out = 0;
+    if outer % 2 == 1 {
+        if inner % 2 == 1 { out = out + 1; }
+    }
+    let mut counted = false;
+    if outer >= 2 {
+        if inner > 0 { counted = true; }
+    }
+    if inner >= 2 {
+        if outer > 0 { counted = true; }
+    }
+    if counted { out = out + 2; }
+    out
+}
+
+fn has_bit(v: Int, bit: Int) -> Bool {
+    if bit == 1 { return v % 2 == 1; }
+    v >= 2
+}
+
+// The field types a definition holds: a record's fields, or every variant's payload.
+fn contained(tb: Table, d: Int) -> Ints {
+    let out = ints_new();
+    if ints_get(tb.kind, d) == rk_enum() {
+        let mut v = d + 1;
+        while v < ints_len(tb.kind) {
+            if ints_get(tb.kind, v) != rk_variant() { break; }
+            let mut i = 0;
+            while i < ints_get(tb.count, v) {
+                ints_push(out, ints_get(tb.ftype, ints_get(tb.first, v) + i));
+                i = i + 1;
+            }
+            v = v + 1;
+        }
+        return out;
+    }
+    let mut i = 0;
+    while i < ints_get(tb.count, d) {
+        ints_push(out, ints_get(tb.ftype, ints_get(tb.first, d) + i));
+        i = i + 1;
+    }
+    out
+}
+
+// How every entry reaches a value of parameter `p`, given how each generic definition uses
+// its parameters. One pass in entry order is enough: an application's arguments and a
+// `Vec`'s element are always interned before it, so they are answered first.
+fn reaches(tb: Table, p: Int, uses: Ints) -> Ints {
+    let val = ints_new();
+    let mut r = 0;
+    while r < ints_len(tb.kind) {
+        let k = ints_get(tb.kind, r);
+        let mut v = 0;
+        if k == rk_param() {
+            if t_param(r) == p { v = inline_reach(); }
+        }
+        if k == rk_vec() {
+            if reach_of(val, ints_get(tb.args, ints_get(tb.afirst, r))) > 0 { v = counted_reach(); }
+        }
+        if ints_get(tb.tpl, r) >= 0 {
+            if k != rk_variant() {
+                let decl = ints_get(tb.tpl, r);
+                let mut i = 0;
+                while i < ints_get(tb.acount, r) {
+                    let inner = reach_of(val, ints_get(tb.args, ints_get(tb.afirst, r) + i));
+                    if inner > 0 {
+                        let used = ints_get(uses, entry_of(ints_get(tb.args,
+                                ints_get(tb.afirst, decl) + i)));
+                        v = merge(v, compose(used, inner));
+                    }
+                    i = i + 1;
+                }
+            }
+        }
+        ints_push(val, v);
+        r = r + 1;
+    }
+    val
+}
+
+fn reach_of(val: Ints, t: Int) -> Int {
+    let r = entry_of(t);
+    if r < 0 { return 0; }
+    if r >= ints_len(val) { return 0; }
+    ints_get(val, r)
+}
+
+// The union of two reach sets.
+fn merge(a: Int, b: Int) -> Int {
+    let mut out = 0;
+    if has_bit(a, 1) { out = 1; }
+    if has_bit(b, 1) { out = 1; }
+    if has_bit(a, 2) { out = out + 2; } else {
+        if has_bit(b, 2) { out = out + 2; }
+    }
+    out
+}
+
+// How each generic definition uses each of its parameters, by parameter entry, to a fixed
+// point. Monotone — each round only adds kinds — so it settles.
+fn parameter_uses(tb: Table) -> Ints {
+    let uses = ints_new();
+    let mut r = 0;
+    while r < ints_len(tb.kind) { ints_push(uses, 0); r = r + 1; }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut d = 0;
+        while d < ints_len(tb.kind) {
+            if is_declaration(tb, d) {
+                let mut i = 0;
+                while i < generic_count(tb, d) {
+                    let p = ints_get(tb.args, ints_get(tb.afirst, d) + i);
+                    let val = reaches(tb, p, uses);
+                    let held = contained(tb, d);
+                    let mut used = 0;
+                    let mut f = 0;
+                    while f < ints_len(held) {
+                        used = merge(used, reach_of(val, ints_get(held, f)));
+                        f = f + 1;
+                    }
+                    let was = ints_get(uses, entry_of(p));
+                    if merge(was, used) != was {
+                        ints_set(uses, entry_of(p), merge(was, used));
+                        changed = true;
+                    }
+                    i = i + 1;
+                }
+            }
+            d = d + 1;
+        }
+    }
+    uses
+}
+
+// Every edge of the ownership graph: from a definition, through one of its fields, to a
+// definition a value of it may own, and how. `efield` is the field's index in the table's
+// flat field arrays, so a message can name it.
+fn ownership_edges(tb: Table, uses: Ints, efrom: Ints, eto: Ints, ereach: Ints,
+        efield: Ints) -> Int {
+    let mut d = 0;
+    while d < ints_len(tb.kind) {
+        if is_declaration(tb, d) {
+            // The fields, each with its place in the flat arrays.
+            let fields = ints_new();
+            if ints_get(tb.kind, d) == rk_enum() {
+                let mut v = d + 1;
+                while v < ints_len(tb.kind) {
+                    if ints_get(tb.kind, v) != rk_variant() { break; }
+                    let mut i = 0;
+                    while i < ints_get(tb.count, v) {
+                        ints_push(fields, ints_get(tb.first, v) + i);
+                        i = i + 1;
+                    }
+                    v = v + 1;
+                }
+            } else {
+                let mut i = 0;
+                while i < ints_get(tb.count, d) {
+                    ints_push(fields, ints_get(tb.first, d) + i);
+                    i = i + 1;
+                }
+            }
+            let mut f = 0;
+            while f < ints_len(fields) {
+                let at = ints_get(fields, f);
+                let work = ints_new();
+                let wreach = ints_new();
+                ints_push(work, ints_get(tb.ftype, at));
+                ints_push(wreach, inline_reach());
+                while ints_len(work) > 0 {
+                    let t = ints_pop(work);
+                    let reach = ints_pop(wreach);
+                    if is_vec(t) {
+                        ints_push(work, ints_get(tb.args, ints_get(tb.afirst, entry_of(t))));
+                        ints_push(wreach, counted_reach());
+                    }
+                    if is_record(t) {
+                        let to = definition_of(tb, t);
+                        if ints_get(tb.kind, to) != rk_variant() {
+                            ints_push(efrom, d);
+                            ints_push(eto, to);
+                            ints_push(ereach, reach);
+                            ints_push(efield, at);
+                            let parts = type_args(tb, t);
+                            let mut k = 0;
+                            while k < ints_len(parts) {
+                                let used = ints_get(uses, entry_of(ints_get(tb.args,
+                                        ints_get(tb.afirst, to) + k)));
+                                let through = compose(used, reach);
+                                if has_bit(through, 1) {
+                                    ints_push(work, ints_get(parts, k));
+                                    ints_push(wreach, inline_reach());
+                                }
+                                if has_bit(through, 2) {
+                                    ints_push(work, ints_get(parts, k));
+                                    ints_push(wreach, counted_reach());
+                                }
+                                k = k + 1;
+                            }
+                        }
+                    }
+                }
+                f = f + 1;
+            }
+        }
+        d = d + 1;
+    }
+    ints_len(efrom)
+}
+
+// Stage 0c: refuse the definitions that cannot be laid out, and the ones whose values
+// could own themselves through a `Vec`.
+//
+// Two passes, as the reference makes them. The first follows inline edges only and finds
+// the impossible layouts; the second follows every edge, stays out of what the first
+// reported, and finds the cycles through a counted handle. One cycle is reported once.
+pub fn check_ownership(tb: Table, diags: Vec[Diag]) -> Int {
+    let uses = parameter_uses(tb);
+    let efrom = ints_new();
+    let eto = ints_new();
+    let ereach = ints_new();
+    let efield = ints_new();
+    ownership_edges(tb, uses, efrom, eto, ereach, efield);
+    let reported = ints_new();
+    let mut found = 0;
+    let mut pass = 1;
+    while pass <= 2 {
+        let mut start = 0;
+        while start < ints_len(tb.kind) {
+            let mut eligible = is_declaration(tb, start);
+            if contains(reported, start) { eligible = false; }
+            if eligible {
+                if find_cycle(tb, start, pass, reported, efrom, eto, ereach, efield,
+                        diags) {
+                    found = found + 1;
+                }
+            }
+            start = start + 1;
+        }
+        pass = pass + 1;
+    }
+    found
+}
+
+// A cycle reachable from `start` over the edges `pass` allows — inline ones only, or all —
+// avoiding what is already reported. Reported, and its definitions added to `reported`,
+// when there is one.
+fn find_cycle(tb: Table, start: Int, pass: Int, reported: Ints,
+        efrom: Ints, eto: Ints, ereach: Ints, efield: Ints,
+        diags: Vec[Diag]) -> Bool {
+    // One frame per node on the path: the node, the next edge to try, and the edge that
+    // entered it (-1 for the start).
+    let snode = ints_new();
+    let snext = ints_new();
+    let sedge = ints_new();
+    let done = ints_new();
+    ints_push(snode, start);
+    ints_push(snext, 0);
+    ints_push(sedge, 0 - 1);
+    while ints_len(snode) > 0 {
+        let top = ints_len(snode) - 1;
+        let node = ints_get(snode, top);
+        let mut e = ints_get(snext, top);
+        let mut edge = 0 - 1;
+        while e < ints_len(efrom) {
+            if ints_get(efrom, e) == node {
+                edge = e;
+                e = ints_len(efrom);
+            } else {
+                e = e + 1;
+            }
+        }
+        if edge < 0 {
+            ints_push(done, node);
+            ints_pop(snode);
+            ints_pop(snext);
+            ints_pop(sedge);
+            continue;
+        }
+        ints_set(snext, top, edge + 1);
+        let to = ints_get(eto, edge);
+        let reach = ints_get(ereach, edge);
+        let mut allowed = true;
+        if pass == 1 {
+            if has_bit(reach, 1) == false { allowed = false; }
+            if reach != inline_reach() { allowed = false; }
+        }
+        if contains(reported, to) { allowed = false; }
+        if contains(done, to) { allowed = false; }
+        if allowed {
+            let back = index_of(snode, to);
+            if back >= 0 {
+                // The suffix of the path from where it re-enters, closed by this edge.
+                let mut counted = false;
+                if reach != inline_reach() { counted = true; }
+                let mut names = "";
+                let mut path = "";
+                let mut j = back;
+                while j < ints_len(snode) {
+                    let n = ints_get(snode, j);
+                    ints_push(reported, n);
+                    if j > back {
+                        if ints_get(ereach, ints_get(sedge, j)) != inline_reach() { counted = true; }
+                        path = str_concat(str_concat(path, hop_name(tb, ints_get(efield,
+                                ints_get(sedge, j)), ints_get(efrom, ints_get(sedge, j)))), " → ");
+                    }
+                    names = str_concat(str_concat(names, strs_get(tb.names, n)), " → ");
+                    j = j + 1;
+                }
+                path = str_concat(str_concat(path, hop_name(tb, ints_get(efield, edge), node)),
+                        " → ");
+                let first = strs_get(tb.names, to);
+                let at = ints_get(tb.at, to);
+                if counted {
+                    report(diags, "N0359", at, at + str_len(first),
+                            str_concat(str_concat(str_concat(str_concat("`", first),
+                            "` can own itself through a `Vec`: "), path), first));
+                } else {
+                    report(diags, "N0336", at, at + str_len(first),
+                            str_concat(str_concat("`", first), "` contains itself"));
+                }
+                return true;
+            }
+            ints_push(snode, to);
+            ints_push(snext, 0);
+            ints_push(sedge, edge);
+        }
+    }
+    false
+}
+
+// One hop of an ownership path as a reader would find it: `Node.children`, or
+// `Tree.Branch.kids` for a payload field.
+fn hop_name(tb: Table, field: Int, from: Int) -> Str {
+    let fname = strs_get(tb.fname, field);
+    // A payload field belongs to one of the enum's variants, whose entry names it.
+    let mut v = from + 1;
+    while v < ints_len(tb.kind) {
+        if ints_get(tb.kind, v) != rk_variant() { break; }
+        let first = ints_get(tb.first, v);
+        if field >= first {
+            if field < first + ints_get(tb.count, v) {
+                return str_concat(str_concat(strs_get(tb.names, v), "."), fname);
+            }
+        }
+        v = v + 1;
+    }
+    str_concat(str_concat(strs_get(tb.names, from), "."), fname)
 }
 
 // --- the record table -----------------------------------------------------------------
@@ -356,6 +1612,10 @@ pub fn task_unsafe_path(t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype
     if is_record(t) == false {
         if t == t_ints() { return "."; }
         if t == t_strs() { return "."; }
+        // Every `Vec` is a handle to shared mutable storage, whatever it holds, and a type
+        // parameter is a type about which nothing is known — so neither may cross.
+        if is_vec(t) { return "."; }
+        if is_param(t) { return "."; }
         return "";
     }
     let at = ints_new();
@@ -381,6 +1641,8 @@ pub fn task_unsafe_path(t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype
             } else {
                 if ft == t_ints() { return joined(path, fname); }
                 if ft == t_strs() { return joined(path, fname); }
+                if is_vec(ft) { return joined(path, fname); }
+                if is_param(ft) { return joined(path, fname); }
             }
         }
     }
@@ -436,9 +1698,9 @@ fn as_value(t: Int, ncomp: Ints, node: Int) -> Int {
 // is not refused — it never produces the contradictory value — and one that failed is not
 // refused twice.
 fn needs_value(ncomp: Ints, node: Int, nst: Ints, nen: Ints,
-        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        diags: Vec[Diag]) -> Int {
     if ints_get(ncomp, node) == c_unit() {
-        report(dcode, dstart, dend, dmsg, "N0300", ints_get(nst, node), ints_get(nen, node),
+        report(diags, "N0300", ints_get(nst, node), ints_get(nen, node),
                 "this produces no value");
         return 1;
     }
@@ -607,7 +1869,51 @@ pub fn builtins(bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: I
     add_builtin(bnames, bret, bfirst, bcount, bparams, "file_exists", t_bool(), t_str(), n, n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "print", t_int(), t_str(), n, n);
     add_builtin(bnames, bret, bfirst, bcount, bparams, "eprint", t_int(), t_str(), n, n);
-    add_builtin(bnames, bret, bfirst, bcount, bparams, "exit_with", t_int(), t_int(), n, n)
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "exit_with", t_int(), t_int(), n, n);
+    // `Vec[T]`, N11: the generic built-ins. Their `T` and `Vec[T]` are entries of the type
+    // table, which does not exist yet, so they are written as two placeholders here and
+    // made real by `generic_builtins` once it does.
+    let t = shape_t();
+    let vt = shape_vec_t();
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "vec_new", vt, n, n, n);
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "vec_len", t_int(), vt, n, n);
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "vec_get", t, vt, t_int(), n);
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "vec_set", t_int(), vt, t_int(), t);
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "vec_push", t_int(), vt, t, n);
+    add_builtin(bnames, bret, bfirst, bcount, bparams, "vec_pop", t, vt, n, n)
+}
+
+// The two placeholders a generic built-in's signature is written with: its `T`, and
+// `Vec[T]`. Negative, so no real type code is either.
+fn shape_t() -> Int { 0 - 10 }
+fn shape_vec_t() -> Int { 0 - 11 }
+
+// Give the generic built-ins their parameter. One `T` for all of them: a built-in's
+// signature mentions only its own parameter, and substitution replaces only the callee's,
+// so sharing the entry cannot confuse two of them. `bgen[i]` is the parameter's entry, or
+// -1 for a built-in that is not generic.
+pub fn generic_builtins(tb: Table, bnames: Strs, bret: Ints, bparams: Ints, bgen: Ints) -> Int {
+    let pe = new_entry(tb, "T", 0 - 1, 0, 0, 0 - 1, rk_param(), 0 - 1);
+    let t = t_param(pe);
+    let vt = vec_of(tb, t);
+    let mut i = 0;
+    while i < strs_len(bnames) {
+        let mut generic = false;
+        if ints_get(bret, i) == shape_t() { ints_set(bret, i, t); generic = true; }
+        if ints_get(bret, i) == shape_vec_t() { ints_set(bret, i, vt); generic = true; }
+        if str_len(strs_get(bnames, i)) > 4 {
+            if str_slice(strs_get(bnames, i), 0, 4) == "vec_" { generic = true; }
+        }
+        if generic { ints_push(bgen, pe); } else { ints_push(bgen, 0 - 1); }
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < ints_len(bparams) {
+        if ints_get(bparams, j) == shape_t() { ints_set(bparams, j, t); }
+        if ints_get(bparams, j) == shape_vec_t() { ints_set(bparams, j, vt); }
+        j = j + 1;
+    }
+    0
 }
 
 // --- user signatures ------------------------------------------------------------------
@@ -726,12 +2032,12 @@ pub fn field_name_at(s: Str, n: Int) -> Str {
 // other record is not a field of this one.
 pub fn project(base: Int, name: Str, from: Int, to: Int,
         rnames: Strs, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
-        nrec: Ints, k: Int, dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        nrec: Ints, k: Int, diags: Vec[Diag]) -> Int {
     if base == t_unknown() { return t_unknown(); }
     if is_record(base) == false {
         let head = str_concat(str_concat("`", show_type(base, rnames)),
                 "` is not a record, so `.");
-        report(dcode, dstart, dend, dmsg, "N0335", to - str_len(name), to,
+        report(diags, "N0335", to - str_len(name), to,
                 str_concat(str_concat(head, name), "` has nothing to read"));
         return t_unknown();
     }
@@ -739,7 +2045,7 @@ pub fn project(base: Int, name: Str, from: Int, to: Int,
     let at = field_index(rfirst, rcount, rfname, r, name);
     if at < 0 {
         let head = str_concat(str_concat("`", strs_get(rnames, r)), "` has no field `");
-        report(dcode, dstart, dend, dmsg, "N0333", to - str_len(name), to,
+        report(diags, "N0333", to - str_len(name), to,
                 str_concat(str_concat(head, name), "`"));
         return t_unknown();
     }
@@ -751,9 +2057,10 @@ pub fn project(base: Int, name: Str, from: Int, to: Int,
 }
 
 pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
-        mstart: Ints, rnames: Strs, rowner: Ints, rpub: Ints, rat: Ints, rnode: Ints,
-        rkind: Ints, kids: Ints, kid_first: Ints,
-        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        mstart: Ints, tb: Table, kids: Ints, kid_first: Ints,
+        diags: Vec[Diag]) -> Int {
+    let rnames = tb.names;
+    let rowner = tb.owner;
     let mut k = 0;
     while k < ints_len(nk) {
         let this = ints_get(nk, k);
@@ -761,32 +2068,40 @@ pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, nau
         if this == n_record() { declares = 1; }
         if this == n_enum() { declares = 1; }
         if declares == 1 {
-            let name = strs_get(ntx, k);
+            // `Name[A@7,B@10]`: the name, then any parameter list.
+            let name = before_bracket(strs_get(ntx, k));
             let owner = module_at(mstart, ints_get(nst, k));
             let at = ints_get(nst, k);
             let mut refused = 0;
             if type_of_name(name) != t_unknown() {
-                report(dcode, dstart, dend, dmsg, "N0331", at, ints_get(nen, k),
+                report(diags, "N0331", at, ints_get(nen, k),
                         str_concat(str_concat("`", name),
                         "` is a built-in type and cannot be redefined"));
                 refused = 1;
             }
             if refused == 0 {
+                if name == "Vec" {
+                    report(diags, "N0331", at, ints_get(nen, k),
+                            "`Vec` is a built-in type and cannot be redefined");
+                    refused = 1;
+                }
+            }
+            if refused == 0 {
                 if record_owned(rnames, rowner, owner, name) >= 0 {
-                    report(dcode, dstart, dend, dmsg, "N0330", at, ints_get(nen, k),
+                    report(diags, "N0330", at, ints_get(nen, k),
                             str_concat(str_concat("`", name),
                             "` is declared more than once in this module"));
                     refused = 1;
                 }
             }
             if refused == 0 {
-                strs_push(rnames, name);
-                ints_push(rowner, owner);
-                ints_push(rpub, ints_get(naux, k));
-                ints_push(rat, at);
-                ints_push(rnode, k);
+                let mut kind = rk_record();
+                if this == n_enum() { kind = rk_enum(); }
+                // Where the name is written: what a diagnostic about the declaration points
+                // at, as the reference's `name_span` is.
+                let r = new_entry(tb, name, owner, is_public(naux, k), name_offset(naux, k),
+                        k, kind, 0 - 1);
                 if this == n_enum() {
-                    ints_push(rkind, rk_enum());
                     // One entry per variant, straight after the enum's own. A variant is
                     // owned by no module — `rowner` is -1 — so no type name resolves to
                     // one, which is what keeps a variant from being written as a type.
@@ -795,18 +2110,24 @@ pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, nau
                     let mut v = 0;
                     while v < arity {
                         let child = ints_get(kids, first + v);
-                        strs_push(rnames, str_concat(str_concat(name, "."),
-                                strs_get(ntx, child)));
-                        ints_push(rowner, 0 - 1);
-                        ints_push(rpub, ints_get(naux, k));
-                        ints_push(rat, ints_get(nst, child));
-                        ints_push(rnode, child);
-                        ints_push(rkind, rk_variant());
+                        new_entry(tb, str_concat(str_concat(name, "."), strs_get(ntx, child)),
+                                0 - 1, is_public(naux, k), ints_get(nst, child), child,
+                                rk_variant(), 0 - 1);
                         v = v + 1;
                     }
-                } else {
-                    ints_push(rkind, rk_record());
                 }
+                // The parameters, as entries of their own after the variants — so the
+                // variants stay contiguous — and as the definition's `args`, which is
+                // where its arity is read from.
+                let params = declare_params(tb, from_bracket(strs_get(ntx, k)),
+                        diags);
+                ints_set(tb.afirst, r, ints_len(tb.args));
+                let mut p = 0;
+                while p < ints_len(params) {
+                    ints_push(tb.args, ints_get(params, p));
+                    p = p + 1;
+                }
+                ints_set(tb.acount, r, ints_len(params));
             }
         }
         k = k + 1;
@@ -820,7 +2141,7 @@ pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, nau
 pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: Int,
         rnames: Strs, rowner: Ints, rpub: Ints,
         tmod: Ints, tname: Strs, trec: Ints,
-        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        diags: Vec[Diag]) -> Int {
     let mut m = 0;
     while m < modules {
         let first = ints_get(mfirst, m);
@@ -838,14 +2159,14 @@ pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modu
                     let name = strs_get(rnames, r);
                     let mut taken = 1;
                     if record_owned(rnames, rowner, m, name) >= 0 {
-                        report(dcode, dstart, dend, dmsg, "N0208", at, at + 1,
+                        report(diags, "N0208", at, at + 1,
                                 str_concat(str_concat("this import brings in the type `", name),
                                 "`, which this module declares"));
                         taken = 0;
                     }
                     if taken == 1 {
                         if record_imported(tmod, tname, trec, m, name) >= 0 {
-                            report(dcode, dstart, dend, dmsg, "N0207", at, at + 1,
+                            report(diags, "N0207", at, at + 1,
                                     str_concat(str_concat("the type `", name),
                                     "` is exported by two imported modules"));
                             taken = 0;
@@ -868,16 +2189,38 @@ pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modu
 
 // Stage 0b: resolve every record's field types, and refuse a record with none.
 pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
-        kids: Ints, kid_first: Ints,
-        rnames: Strs, rowner: Ints, rat: Ints, rnode: Ints, rkind: Ints,
-        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, rfat: Ints,
+        kids: Ints, kid_first: Ints, tb: Table,
         tmod: Ints, tname: Strs, trec: Ints,
-        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        diags: Vec[Diag]) -> Int {
+    let rnames = tb.names;
+    let rowner = tb.owner;
+    let rat = tb.at;
+    let rnode = tb.node;
+    let rkind = tb.kind;
+    let rfirst = tb.first;
+    let rcount = tb.count;
+    let rfname = tb.fname;
+    let rftype = tb.ftype;
+    let rfat = tb.fat;
+    // Completion waits until every declaration has its fields: an application written in
+    // a field may name a definition declared later, or in another module, that has none
+    // yet. `settle` below gives every application interned here its fields at once.
+    defer(tb);
+    // The declarations are the entries that exist now. Applications interned while their
+    // fields are resolved are appended past them and completed by substitution instead.
+    let declared = strs_len(rnames);
     let mut r = 0;
-    while r < strs_len(rnames) {
+    while r < declared {
+        let mut resolvable = true;
+        if ints_get(rkind, r) == rk_vec() { resolvable = false; }
+        if ints_get(rkind, r) == rk_param() { resolvable = false; }
+        if resolvable == false {
+            r = r + 1;
+            continue;
+        }
         let k = ints_get(rnode, r);
         let mut owner = ints_get(rowner, r);
-        ints_push(rfirst, strs_len(rfname));
+        ints_set(rfirst, r, strs_len(rfname));
         let arity = ints_get(nar, k);
         let first = ints_get(kid_first, k);
         let mut kept = 0;
@@ -895,7 +2238,7 @@ pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Str
                 let mut d = 0;
                 while d < kept {
                     if strs_get(rfname, ints_get(rfirst, r) + d) == vname {
-                        report(dcode, dstart, dend, dmsg, "N0340", ints_get(nst, child),
+                        report(diags, "N0340", ints_get(nst, child),
                                 ints_get(nen, child),
                                 str_concat(str_concat(str_concat(str_concat("`",
                                 strs_get(rnames, r)), "` has two variants called `"),
@@ -912,9 +2255,9 @@ pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Str
                 }
                 v = v + 1;
             }
-            ints_push(rcount, kept);
+            ints_set(rcount, r, kept);
             if kept == 0 {
-                report(dcode, dstart, dend, dmsg, "N0339", ints_get(rat, r),
+                report(diags, "N0339", ints_get(rat, r),
                         ints_get(rat, r) + str_len(strs_get(rnames, r)),
                         str_concat(str_concat("`", strs_get(rnames, r)),
                         "` has no variants, which is not supported yet"));
@@ -923,10 +2266,14 @@ pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Str
             continue;
         }
         // A variant's payload is resolved in the module that declares its enum, which
-        // `rowner` does not carry — a variant is owned by no module as a type.
+        // `rowner` does not carry — a variant is owned by no module as a type — and in the
+        // scope of the enum's parameters.
+        let mut decl = r;
         if ints_get(rkind, r) == rk_variant() {
             owner = module_at_of(rowner, rkind, r);
+            decl = enum_of_variant(rkind, r);
         }
+        let tscope = params_of(tb, decl);
         let mut i = 0;
         while i < arity {
             let child = ints_get(kids, first + i);
@@ -940,7 +2287,7 @@ pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Str
             let mut d = 0;
             while d < kept {
                 if strs_get(rfname, ints_get(rfirst, r) + d) == fname {
-                    report(dcode, dstart, dend, dmsg, "N0332", at, ints_get(nen, child),
+                    report(diags, "N0332", at, ints_get(nen, child),
                             str_concat(str_concat(str_concat(str_concat("`",
                             strs_get(rnames, r)), "` has two fields called `"), fname), "`"));
                     refused = 1;
@@ -948,11 +2295,8 @@ pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Str
                 d = d + 1;
             }
             if refused == 0 {
-                let ft = type_in(tn, owner, rnames, rowner, tmod, tname, trec);
-                if ft == t_unknown() {
-                    report(dcode, dstart, dend, dmsg, "N0305", at, ints_get(nen, child),
-                            str_concat(str_concat("`", tn), "` is not a type"));
-                }
+                let ft = resolve_written(tb, tn, owner, tscope, at, ints_get(nen, child),
+                        tmod, tname, trec, diags);
                 strs_push(rfname, fname);
                 ints_push(rftype, ft);
                 ints_push(rfat, at);
@@ -960,12 +2304,12 @@ pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Str
             }
             i = i + 1;
         }
-        ints_push(rcount, kept);
+        ints_set(rcount, r, kept);
         // A record with no fields is refused for a reason about the grammar; a **variant**
         // with none is ordinary, and is written with no parentheses at all.
         if kept == 0 {
             if ints_get(rkind, r) == rk_record() {
-                report(dcode, dstart, dend, dmsg, "N0101", ints_get(rat, r),
+                report(diags, "N0101", ints_get(rat, r),
                         ints_get(rat, r) + str_len(strs_get(rnames, r)),
                         str_concat(str_concat("`", strs_get(rnames, r)),
                         "` has no fields, which is not supported yet"));
@@ -973,7 +2317,18 @@ pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Str
         }
         r = r + 1;
     }
+    settle(tb);
     strs_len(rfname)
+}
+
+// The enum a variant entry belongs to: the nearest entry before it that is not a variant.
+pub fn enum_of_variant(rkind: Ints, r: Int) -> Int {
+    let mut i = r;
+    while i >= 0 {
+        if ints_get(rkind, i) != rk_variant() { return i; }
+        i = i - 1;
+    }
+    0 - 1
 }
 
 // Every field of a construction, against the declaration it names.
@@ -985,7 +2340,7 @@ pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Str
 fn check_fields(text: Str, arity: Int, r: Int, ts: Ints, kids: Ints, first: Int,
         nst: Ints, nen: Ints, rnames: Strs,
         rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, from: Int, to: Int,
-        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        diags: Vec[Diag]) -> Int {
     let given = ints_new();
     let mut g = 0;
     while g < ints_get(rcount, r) { ints_push(given, 0); g = g + 1; }
@@ -996,13 +2351,13 @@ fn check_fields(text: Str, arity: Int, r: Int, ts: Ints, kids: Ints, first: Int,
         let c = ints_get(kids, first + a);
         let at = field_index(rfirst, rcount, rfname, r, fname);
         if at < 0 {
-            report(dcode, dstart, dend, dmsg, "N0333",
+            report(diags, "N0333",
                     ints_get(nst, c), ints_get(nen, c),
                     str_concat(str_concat(str_concat(str_concat("`",
                     strs_get(rnames, r)), "` has no field `"), fname), "`"));
         } else {
             if ints_get(given, at) == 1 {
-                report(dcode, dstart, dend, dmsg, "N0332",
+                report(diags, "N0332",
                         ints_get(nst, c), ints_get(nen, c),
                         str_concat(str_concat("`", fname), "` is given a value twice"));
             }
@@ -1010,7 +2365,7 @@ fn check_fields(text: Str, arity: Int, r: Int, ts: Ints, kids: Ints, first: Int,
             let want = field_type(rfirst, rftype, r, at);
             if agrees(got, want) == false {
                 let head = str_concat(str_concat("`", fname), "` is `");
-                report(dcode, dstart, dend, dmsg, "N0300",
+                report(diags, "N0300",
                         ints_get(nst, c), ints_get(nen, c),
                         str_concat(str_concat(str_concat(str_concat(head,
                         show_type(want, rnames)), "`, but this is `"),
@@ -1032,7 +2387,7 @@ fn check_fields(text: Str, arity: Int, r: Int, ts: Ints, kids: Ints, first: Int,
     if missing != "" {
         let head = str_concat(str_concat("this `", strs_get(rnames, r)),
                 "` does not give a value for ");
-        report(dcode, dstart, dend, dmsg, "N0334", from, to, str_concat(head, missing));
+        report(diags, "N0334", from, to, str_concat(head, missing));
     }
     0
 }
@@ -1073,71 +2428,6 @@ fn module_at_of(rowner: Ints, rkind: Ints, r: Int) -> Int {
     0 - 1
 }
 
-// Stage 0c: refuse records that cannot be laid out.
-//
-// A record holds its fields by value, so a chain of record-typed fields that returns to
-// where it started describes a value containing itself and has no finite size. Refused as
-// an impossible layout rather than as a safety problem, and reported before anything is
-// emitted — a backend complaining about a recursive type is a refusal arriving after the
-// compiler decided the program was fine.
-//
-// Depth-first with an explicit stack and a three-state mark: 0 unvisited, 1 on the current
-// path, 2 finished.
-pub fn check_record_layouts(rnames: Strs, rat: Ints, rfirst: Ints, rcount: Ints,
-        rftype: Ints, dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
-    let state = ints_new();
-    let mut i = 0;
-    while i < strs_len(rnames) { ints_push(state, 0); i = i + 1; }
-    let mut found = 0;
-    let mut root = 0;
-    while root < strs_len(rnames) {
-        if ints_get(state, root) == 0 {
-            let at = ints_new();
-            let which = ints_new();
-            ints_push(at, root);
-            ints_push(which, 0);
-            ints_set(state, root, 1);
-            while ints_len(at) > 0 {
-                let r = ints_get(at, ints_len(at) - 1);
-                let f = ints_get(which, ints_len(which) - 1);
-                if f >= ints_get(rcount, r) {
-                    ints_set(state, r, 2);
-                    ints_pop(at);
-                    ints_pop(which);
-                } else {
-                    ints_set(which, ints_len(which) - 1, f + 1);
-                    let ft = ints_get(rftype, ints_get(rfirst, r) + f);
-                    if is_record(ft) {
-                        let inner = record_of(ft);
-                        if ints_get(state, inner) == 1 {
-                            report(dcode, dstart, dend, dmsg, "N0336",
-                                    ints_get(rat, inner),
-                                    ints_get(rat, inner) + str_len(strs_get(rnames, inner)),
-                                    str_concat(str_concat("`", strs_get(rnames, inner)),
-                                    "` contains itself"));
-                            // Every record on the current path belongs to this one cycle,
-                            // so none of them is reported again.
-                            let mut c = 0;
-                            while c < ints_len(at) { ints_set(state, ints_get(at, c), 2); c = c + 1; }
-                            ints_set(state, inner, 2);
-                            found = found + 1;
-                            while ints_len(at) > 0 { ints_pop(at); ints_pop(which); }
-                        } else {
-                            if ints_get(state, inner) == 0 {
-                                ints_set(state, inner, 1);
-                                ints_push(at, inner);
-                                ints_push(which, 0);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        root = root + 1;
-    }
-    found
-}
-
 // A public item that names a private record would publish a type the importer cannot
 // resolve, so it is refused. Checked at each public item on its **direct** references:
 // an intermediate record must itself be public to appear in a public signature, and its
@@ -1147,61 +2437,86 @@ pub fn check_record_layouts(rnames: Strs, rat: Ints, rfirst: Ints, rcount: Ints,
 // A **variant** entry is transparent here. It has no module and no `pub` of its own —
 // `docs/spec.md` gives an enum no per-variant visibility — so the question is about the
 // types its payload names, and those are asked about instead.
-pub fn check_private_types(t: Int, at: Int, to: Int, kind: Str, who: Str,
-        rnames: Strs, rpub: Ints, rkind: Ints, rfirst: Ints, rcount: Ints, rftype: Ints,
-        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+pub fn check_private_types(t: Int, at: Int, to: Int, kind: Str, who: Str, tb: Table,
+        diags: Vec[Diag]) -> Int {
     let unused = who;
-    if is_record(t) == false { return 0; }
-    if record_of(t) >= strs_len(rnames) { return 0; }
-    // A worklist rather than a call: a variant is transparent, so reaching the types it
-    // names is a walk — and this compiler has no recursion to walk with.
+    if t < t_record_base() { return 0; }
+    if entry_of(t) >= strs_len(tb.names) { return 0; }
+    // A worklist rather than a call: a variant is transparent, and so are a `Vec` and an
+    // application — what they expose is their element and their arguments, which are
+    // asked about in turn. `seen` because an application may mention itself.
     let work = ints_new();
-    ints_push(work, record_of(t));
+    let seen = ints_new();
+    ints_push(work, entry_of(t));
     let mut found = 0;
     while ints_len(work) > 0 {
         let e = ints_pop(work);
-        if ints_get(rkind, e) == rk_variant() {
+        if contains(seen, e) { continue; }
+        ints_push(seen, e);
+        let k = ints_get(tb.kind, e);
+        if k == rk_param() { continue; }
+        if k == rk_vec() {
+            push_entry(work, ints_get(tb.args, ints_get(tb.afirst, e)));
+            continue;
+        }
+        if k == rk_variant() {
             let mut i = 0;
-            while i < ints_get(rcount, e) {
-                let ft = ints_get(rftype, ints_get(rfirst, e) + i);
-                if is_record(ft) { ints_push(work, record_of(ft)); }
+            while i < ints_get(tb.count, e) {
+                push_entry(work, ints_get(tb.ftype, ints_get(tb.first, e) + i));
                 i = i + 1;
             }
-        } else {
-            if ints_get(rpub, e) == 0 {
-                let head = str_concat(str_concat("this public ", kind), " exposes `");
-                report(dcode, dstart, dend, dmsg, "N0337", at, to,
-                        str_concat(str_concat(head, strs_get(rnames, e)),
-                        "`, which is private to this module"));
-                found = found + 1;
-            }
+            continue;
         }
+        if ints_get(tb.vis, e) == 0 {
+            let head = str_concat(str_concat("this public ", kind), " exposes `");
+            report(diags, "N0337", at, to,
+                    str_concat(str_concat(head, strs_get(tb.names, definition_of(tb, t_record(e)))),
+                    "`, which is private to this module"));
+            found = found + 1;
+        }
+        let parts = type_args(tb, t_record(e));
+        let mut a = 0;
+        while a < ints_len(parts) { push_entry(work, ints_get(parts, a)); a = a + 1; }
     }
     found
+}
+
+// Push the entry of a user type onto a worklist; a built-in has none.
+fn push_entry(work: Ints, t: Int) -> Int {
+    if t >= t_record_base() { ints_push(work, entry_of(t)); }
+    0
 }
 
 pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
         kids: Ints, kid_first: Ints, mstart: Ints,
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
-        fowner: Ints, fpub: Ints, bnames: Strs,
-        rnames: Strs, rowner: Ints, rpub: Ints, rat: Ints, rkind: Ints,
-        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, rfat: Ints,
+        fowner: Ints, fpub: Ints, fgen: Ints, fgc: Ints, bnames: Strs, tb: Table,
+        nrec: Ints, ntfirst: Ints, ntargs: Ints,
         tmod: Ints, tname: Strs, trec: Ints,
-        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        diags: Vec[Diag]) -> Int {
+    let rkind = tb.kind;
+    // The declared types of every `fn` and `param` node are written onto the node, here,
+    // where they are resolved — the emitter and the body checks read them off it. So the
+    // per-node arrays exist before any function is checked.
+    while ints_len(nrec) < ints_len(nk) { ints_push(nrec, 0 - 1); }
+    while ints_len(ntfirst) < ints_len(nk) { ints_push(ntfirst, 0 - 1); }
     // An exported record's own fields, first: the same refusal as a public signature's,
-    // at the place the private name is written.
+    // at the place the private name is written. **Declarations only**: an application of
+    // a public definition is exactly as public as the definition and its arguments, and
+    // its arguments are asked about where they are written.
     let mut r = 0;
-    while r < strs_len(rnames) {
-        // A variant is not a public item of its own: its enum is, and the enum's fields
-        // are the variants, so the walk reaches every payload type through them.
-        if ints_get(rkind, r) == rk_variant() { r = r + 1; continue; }
-        if ints_get(rpub, r) == 1 {
+    while r < strs_len(tb.names) {
+        let mut exported = false;
+        if is_declaration(tb, r) {
+            if ints_get(tb.vis, r) == 1 { exported = true; }
+        }
+        if exported {
             let mut i = 0;
-            while i < ints_get(rcount, r) {
-                let at = ints_get(rfat, ints_get(rfirst, r) + i);
-                check_private_types(ints_get(rftype, ints_get(rfirst, r) + i), at, at + 1,
-                        entry_kind(rkind, r), strs_get(rnames, r), rnames, rpub, rkind,
-                        rfirst, rcount, rftype, dcode, dstart, dend, dmsg);
+            while i < ints_get(tb.count, r) {
+                let at = ints_get(tb.fat, ints_get(tb.first, r) + i);
+                check_private_types(ints_get(tb.ftype, ints_get(tb.first, r) + i), at, at + 1,
+                        entry_kind(rkind, r), strs_get(tb.names, r), tb,
+                        diags);
                 i = i + 1;
             }
         }
@@ -1211,12 +2526,12 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
     while k < ints_len(nk) {
         if ints_get(nk, k) == n_fn() {
             let text = strs_get(ntx, k);
-            let name = before_colon(text);
+            let name = fn_name(text);
             let owner = module_at(mstart, ints_get(nst, k));
 
             let mut refused = 0;
             if builtin_index(bnames, name) >= 0 {
-                report(dcode, dstart, dend, dmsg, "N0203",
+                report(diags, "N0203",
                         ints_get(nst, k), ints_get(nst, k) + str_len(name),
                         str_concat(str_concat("`", name),
                         "` is a built-in and cannot be redefined"));
@@ -1224,7 +2539,7 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
             }
             if refused == 0 {
                 if owned_index(fnames, fowner, owner, name) >= 0 {
-                    report(dcode, dstart, dend, dmsg, "N0203",
+                    report(diags, "N0203",
                             ints_get(nst, k), ints_get(nst, k) + str_len(name),
                             str_concat(str_concat("`", name),
                             "` is defined more than once in this module"));
@@ -1232,45 +2547,78 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
                 }
             }
 
+            // A refused definition is still checked — its body may hold other mistakes —
+            // so its types are resolved too, but **silently**: what is wrong with them
+            // belongs to the definition that was kept, or has been said already.
+            let mut sink = diags;
+            if refused == 1 { sink = vec_new[Diag](); }
+            // The parameters first: the signature's types may name them.
+            let tscope = declare_params(tb, from_bracket(before_colon(text)), sink);
+            // `main` cannot be generic: there is no caller to choose its type arguments.
             if refused == 0 {
-                let rt = type_in(after_colon(text), owner, rnames, rowner, tmod, tname, trec);
-                if rt == t_unknown() {
-                    report(dcode, dstart, dend, dmsg, "N0305",
-                            ints_get(nst, k), ints_get(nen, k),
-                            str_concat(str_concat("`", after_colon(text)), "` is not a type"));
+                if owner == 0 {
+                    if name == "main" {
+                        if ints_len(tscope) > 0 {
+                            report(diags, "N0356",
+                                    name_offset(naux, k), name_offset(naux, k) + str_len(name),
+                                    "`main` cannot be generic");
+                        }
+                    }
                 }
+            }
+            // The node's own parameters, as `[count, p1, …]` in the node-type list, so the
+            // body is checked in their scope and the emitter can substitute them.
+            ints_set(ntfirst, k, ints_len(ntargs));
+            ints_push(ntargs, ints_len(tscope));
+            let mut sp = 0;
+            while sp < ints_len(tscope) { ints_push(ntargs, ints_get(tscope, sp)); sp = sp + 1; }
+
+            let rt = resolve_written(tb, after_colon(text), owner, tscope, ints_get(nst, k),
+                    ints_get(nen, k), tmod, tname, trec, sink);
+            ints_set(nrec, k, rt);
+            let arity = ints_get(nar, k);
+            let first = ints_get(kid_first, k);
+            // Every child but the last is a parameter; the last is the body.
+            let ptypes = ints_new();
+            let mut p = 0;
+            while p < arity - 1 {
+                let child = ints_get(kids, first + p);
+                let pt = resolve_written(tb, after_colon(strs_get(ntx, child)), owner, tscope,
+                        ints_get(nst, child), ints_get(nen, child), tmod, tname, trec,
+                        sink);
+                ints_set(nrec, child, pt);
+                ints_push(ptypes, pt);
+                p = p + 1;
+            }
+
+            if refused == 0 {
                 strs_push(fnames, name);
                 ints_push(fret, rt);
                 ints_push(ffirst, ints_len(fparams));
                 ints_push(fowner, owner);
-                ints_push(fpub, ints_get(naux, k));
-                if ints_get(naux, k) == 1 {
-                    check_private_types(rt, ints_get(nst, k), ints_get(nst, k) + str_len(name),
-                            "function", name, rnames, rpub, rkind, rfirst, rcount, rftype,
-                            dcode, dstart, dend, dmsg);
+                ints_push(fpub, is_public(naux, k));
+                if ints_len(tscope) > 0 {
+                    ints_push(fgen, entry_of(ints_get(tscope, 0)));
+                } else {
+                    ints_push(fgen, 0 - 1);
                 }
-                // Every child but the last is a parameter; the last is the body.
-                let arity = ints_get(nar, k);
-                let first = ints_get(kid_first, k);
-                let mut p = 0;
-                while p < arity - 1 {
+                ints_push(fgc, ints_len(tscope));
+                if is_public(naux, k) == 1 {
+                    check_private_types(rt, ints_get(nst, k), ints_get(nst, k) + str_len(name),
+                            "function", name, tb, diags);
+                }
+                p = 0;
+                while p < ints_len(ptypes) {
                     let child = ints_get(kids, first + p);
-                    let pn = after_colon(strs_get(ntx, child));
-                    let pt = type_in(pn, owner, rnames, rowner, tmod, tname, trec);
-                    if pt == t_unknown() {
-                        report(dcode, dstart, dend, dmsg, "N0305",
-                                ints_get(nst, child), ints_get(nen, child),
-                                str_concat(str_concat("`", pn), "` is not a type"));
+                    if is_public(naux, k) == 1 {
+                        check_private_types(ints_get(ptypes, p), ints_get(nst, child),
+                                ints_get(nen, child), "function", name, tb,
+                                diags);
                     }
-                    if ints_get(naux, k) == 1 {
-                        check_private_types(pt, ints_get(nst, child), ints_get(nen, child),
-                                "function", name, rnames, rpub, rkind, rfirst, rcount,
-                                rftype, dcode, dstart, dend, dmsg);
-                    }
-                    ints_push(fparams, pt);
+                    ints_push(fparams, ints_get(ptypes, p));
                     p = p + 1;
                 }
-                ints_push(fcount, arity - 1);
+                ints_push(fcount, ints_len(ptypes));
             }
         }
         k = k + 1;
@@ -1307,7 +2655,7 @@ pub fn owned_index(fnames: Strs, fowner: Ints, owner: Int, name: Str) -> Int {
 pub fn check_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: Int,
         fnames: Strs, fowner: Ints, fpub: Ints,
         vmod: Ints, vname: Strs, vfn: Ints,
-        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        diags: Vec[Diag]) -> Int {
     let mut m = 0;
     while m < modules {
         let first = ints_get(mfirst, m);
@@ -1325,14 +2673,14 @@ pub fn check_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: 
                     let name = strs_get(fnames, f);
                     let mut taken = 1;
                     if owned_index(fnames, fowner, m, name) >= 0 {
-                        report(dcode, dstart, dend, dmsg, "N0208", at, at + 1,
+                        report(diags, "N0208", at, at + 1,
                                 str_concat(str_concat("this import brings in `", name),
                                 "`, which this module defines"));
                         taken = 0;
                     }
                     if taken == 1 {
                         if visible_import(vmod, vname, vfn, m, name) >= 0 {
-                            report(dcode, dstart, dend, dmsg, "N0207", at, at + 1,
+                            report(diags, "N0207", at, at + 1,
                                     str_concat(str_concat("`", name),
                                     "` is exported by two imported modules"));
                             taken = 0;
@@ -1442,10 +2790,19 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
         fowner: Ints, fpub: Ints, vmod: Ints, vname: Strs, vfn: Ints,
         bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
-        rnames: Strs, rowner: Ints, rkind: Ints,
-        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
+        tb: Table, fgen: Ints, fgc: Ints, bgen: Ints, ntfirst: Ints, ntargs: Ints,
         tmod: Ints, tname: Strs, trec: Ints,
-        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        diags: Vec[Diag]) -> Int {
+    let rnames = tb.names;
+    let rowner = tb.owner;
+    let rkind = tb.kind;
+    let rfirst = tb.first;
+    let rcount = tb.count;
+    let rfname = tb.fname;
+    let rftype = tb.ftype;
+    // The type parameters of the function being checked, as `t_param` codes. A type written
+    // in its body — a type argument — is resolved in their scope.
+    let tscope = ints_new();
     let work = ints_new();
     let marks = ints_new();
     let names = strs_new();
@@ -1490,22 +2847,11 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
     // a field's identity is spelled as in one session. Emission reads it off the node and
     // looks up nothing, which is the same division every other annotation here keeps.
     while ints_len(nrec) < ints_len(nk) { ints_push(nrec, 0 - 1); }
-    // A declared type, on the node that declares it. `type_of_name` is enough for a
-    // built-in and not for a record — which name means which record depends on the
-    // module — so the answer is resolved here, once, and read off the node by emission.
-    // The same rule every other annotation in this array follows.
-    let mut d = 0;
-    while d < ints_len(nk) {
-        if ints_get(nk, d) == n_fn() {
-            ints_set(nrec, d, type_in(after_colon(strs_get(ntx, d)),
-                    module_at(mstart, ints_get(nst, d)), rnames, rowner, tmod, tname, trec));
-        }
-        if ints_get(nk, d) == n_param() {
-            ints_set(nrec, d, type_in(after_colon(strs_get(ntx, d)),
-                    module_at(mstart, ints_get(nst, d)), rnames, rowner, tmod, tname, trec));
-        }
-        d = d + 1;
-    }
+    // A declared type is on the node that declares it — every `fn` and `param` — written
+    // there by `collect_signatures`, where it was resolved. Which name means which record
+    // depends on the module, and since N11 on the declaration's own parameters, so the
+    // answer is reached once and read off the node by everything after.
+    while ints_len(ntfirst) < ints_len(nk) { ints_push(ntfirst, 0 - 1); }
     // Slots are numbered per function, and the count is recorded on the `fn` node so
     // the emitter knows how many `alloca`s its entry block needs.
     let counter = ints_new();
@@ -1527,7 +2873,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // because each arm needs it and none can reach it by then.
                 let mk = (v - 1) / 3;
                 let scrutinee = ints_get(kids, ints_get(kid_first, mk));
-                needs_value(ncomp, scrutinee, nst, nen, dcode, dstart, dend, dmsg);
+                needs_value(ncomp, scrutinee, nst, nen, diags);
                 let st = as_value(ints_get(ts, ints_len(ts) - 1), ncomp, scrutinee);
                 ints_set(ts, ints_len(ts) - 1, st);
                 ints_push(menum, st);
@@ -1536,11 +2882,11 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 if is_enum(st, rkind) == false {
                     if st != t_unknown() {
                         let c = ints_get(kids, ints_get(kid_first, mk));
-                        report(dcode, dstart, dend, dmsg, "N0342",
+                        report(diags, "N0342",
                                 ints_get(nst, c), ints_get(nen, c),
                                 str_concat(str_concat("`match` needs an enum, but this is `",
                                 show_type(st, rnames)), "`"));
-                        silenced = strs_len(dcode);
+                        silenced = vec_len(diags);
                     }
                 }
                 ints_push(mdiag, silenced);
@@ -1573,14 +2919,14 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 let mut vc = 0;
                 while vc < arity {
                     needs_value(ncomp, ints_get(kids, first + vc), nst, nen,
-                            dcode, dstart, dend, dmsg);
+                            diags);
                     vc = vc + 1;
                 }
             }
             if wants >= 0 {
                 if wants < arity {
                     needs_value(ncomp, ints_get(kids, first + wants), nst, nen,
-                            dcode, dstart, dend, dmsg);
+                            diags);
                 }
             }
 
@@ -1592,7 +2938,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // operands instead.
                 let op_at = ints_get(naux, k);
                 ints_push(ts, check_binary(text, l, r, op_at, op_at + str_len(text), rnames,
-                        dcode, dstart, dend, dmsg));
+                        diags));
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
@@ -1601,7 +2947,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 if agrees(t, t_int()) == false {
                     // The `-` itself: a negation's span runs to its operand's end, and
                     // the reference reports at the operator.
-                    report(dcode, dstart, dend, dmsg, "N0304", from, from + 1,
+                    report(diags, "N0304", from, from + 1,
                             str_concat(str_concat("`-` applies to `Int`, but this is `",
                             type_name(t)), "`"));
                 }
@@ -1610,20 +2956,49 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 continue;
             }
             if kind == n_construct() {
-                // `Ty(a,b)` — the type, then the field names in the order written.
-                let tn = before_paren(text);
+                // `Ty(a,b)` — the type, then the field names in the order written — or
+                // `Ty[A, B](a,b)`, a generic record built with its arguments written.
+                let tn = before_bracket(before_paren(text));
                 let owner = module_at(mstart, from);
-                let t = type_in(tn, owner, rnames, rowner, tmod, tname, trec);
+                let mut t = type_in(tn, owner, rnames, rowner, tmod, tname, trec);
+                // A type parameter is not a record, whatever it will be.
+                if in_scope(tb, tscope, tn) >= 0 { t = t_unknown(); }
                 let mut r = 0 - 1;
-                if is_record(t) { r = record_of(t); }
+                if is_enum(t, rkind) {
+                    // An enum is not built this way; its fields are its variants, and the
+                    // check below names the one that was not written.
+                    r = record_of(t);
+                }
+                if is_record(t) {
+                    if is_enum(t, rkind) == false {
+                        r = record_of(apply_written(tb, t, from_bracket(before_paren(text)),
+                                from, from + str_len(tn), owner, tscope, tmod, tname, trec,
+                                diags));
+                        if r < 0 {
+                            let mut drop0 = 0;
+                            while drop0 < arity { ints_pop(ts); drop0 = drop0 + 1; }
+                            ints_push(ts, t_unknown());
+                            ints_set(ntype, k, t_unknown());
+                            continue;
+                        }
+                        t = t_record(r);
+                    }
+                }
                 if r < 0 {
-                    if type_of_name(tn) == t_unknown() {
-                        report(dcode, dstart, dend, dmsg, "N0305", from, from + str_len(tn),
-                                str_concat(str_concat("`", tn), "` is not a type"));
-                    } else {
-                        report(dcode, dstart, dend, dmsg, "N0333", from, from + str_len(tn),
+                    if in_scope(tb, tscope, tn) >= 0 {
+                        report(diags, "N0333", from, from + str_len(tn),
                                 str_concat(str_concat("`", tn),
-                                "` is not a record, so it has no fields to name"));
+                                "` is a type parameter, so it has no fields to name"));
+                    }
+                    if in_scope(tb, tscope, tn) < 0 {
+                        if type_of_name(tn) == t_unknown() {
+                            report(diags, "N0305", from, from + str_len(tn),
+                                    str_concat(str_concat("`", tn), "` is not a type"));
+                        } else {
+                            report(diags, "N0333", from, from + str_len(tn),
+                                    str_concat(str_concat("`", tn),
+                                    "` is not a record, so it has no fields to name"));
+                        }
                     }
                     let mut drop = 0;
                     while drop < arity { ints_pop(ts); drop = drop + 1; }
@@ -1634,7 +3009,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 ints_set(nrec, k, r);
                 check_fields(text, arity, r, ts, kids, first, nst, nen, rnames,
                         rfirst, rcount, rfname, rftype, from, to,
-                        dcode, dstart, dend, dmsg);
+                        diags);
                 // A construction that owns something is assembled in a hidden slot, so
                 // that an initialiser failing after an earlier one produced a heap string
                 // releases it: a value held only in a register is not reachable from the
@@ -1654,7 +3029,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             if kind == n_fieldread() {
                 let base = as_value(ints_pop(ts), ncomp, ints_get(kids, first));
                 if is_enum(base, rkind) {
-                    report(dcode, dstart, dend, dmsg, "N0335", from, to,
+                    report(diags, "N0335", from, to,
                             str_concat(str_concat(str_concat(str_concat("`",
                             show_type(base, rnames)), "` is not a record, so `."), text),
                             "` has nothing to read"));
@@ -1663,7 +3038,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                     continue;
                 }
                 let t = project(base, text, from, to, rnames, rfirst, rcount, rfname, rftype,
-                        nrec, k, dcode, dstart, dend, dmsg);
+                        nrec, k, diags);
                 ints_push(ts, t);
                 ints_set(ntype, k, t);
                 continue;
@@ -1673,28 +3048,50 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             // the construction check with a different entry and a different result type.
             if kind == n_makevariant() {
                 let qualified = before_paren(text);
-                let en = before_dot(qualified);
+                let en = before_bracket(before_dot(qualified));
                 let vn = after_dot(qualified);
                 let owner = module_at(mstart, from);
-                let et = type_in(en, owner, rnames, rowner, tmod, tname, trec);
+                let mut et = type_in(en, owner, rnames, rowner, tmod, tname, trec);
+                if in_scope(tb, tscope, en) >= 0 { et = t_unknown(); }
                 let mut v = 0 - 1;
+                // Whether the enum was named correctly and its arguments were not — which
+                // has been reported already, where the arguments are written.
+                let mut said = false;
                 if is_enum(et, rkind) {
-                    let at = field_index(rfirst, rcount, rfname, record_of(et), vn);
-                    if at < 0 {
-                        report(dcode, dstart, dend, dmsg, "N0341", from, to,
-                                str_concat(str_concat(str_concat(str_concat("`", en),
-                                "` has no variant `"), vn), "`"));
+                    // `E[A].V(…)`: the enum applied to its written arguments, and the
+                    // variant looked up in **that** application, whose payload types are
+                    // the definition's with the arguments substituted.
+                    et = apply_written(tb, et, from_bracket(before_dot(qualified)), from,
+                            from + str_len(en), owner, tscope, tmod, tname, trec,
+                            diags);
+                    if et == t_unknown() { said = true; }
+                }
+                if said == false {
+                    if is_enum(et, rkind) {
+                        let at = field_index(rfirst, rcount, rfname, record_of(et), vn);
+                        if at < 0 {
+                            report(diags, "N0341", from, to,
+                                    str_concat(str_concat(str_concat(str_concat("`", en),
+                                    "` has no variant `"), vn), "`"));
+                        } else {
+                            v = record_of(field_type(rfirst, rftype, record_of(et), at));
+                        }
                     } else {
-                        v = record_of(field_type(rfirst, rftype, record_of(et), at));
-                    }
-                } else {
-                    if et == t_unknown() {
-                        report(dcode, dstart, dend, dmsg, "N0305", from, from + str_len(en),
-                                str_concat(str_concat("`", en), "` is not a type"));
-                    } else {
-                        report(dcode, dstart, dend, dmsg, "N0341", from, from + str_len(en),
-                                str_concat(str_concat("`", en),
-                                "` is not an enum, so it has no variants"));
+                        if et == t_unknown() {
+                            if in_scope(tb, tscope, en) >= 0 {
+                                report(diags, "N0341", from,
+                                        from + str_len(en), str_concat(str_concat("`", en),
+                                        "` is a type parameter, so it has no variants"));
+                            } else {
+                                report(diags, "N0305", from,
+                                        from + str_len(en),
+                                        str_concat(str_concat("`", en), "` is not a type"));
+                            }
+                        } else {
+                            report(diags, "N0341", from, from + str_len(en),
+                                    str_concat(str_concat("`", en),
+                                    "` is not an enum, so it has no variants"));
+                        }
                     }
                 }
                 if v < 0 {
@@ -1707,7 +3104,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 ints_set(nrec, k, v);
                 check_fields(text, arity, v, ts, kids, first, nst, nen, rnames,
                         rfirst, rcount, rfname, rftype, from, to,
-                        dcode, dstart, dend, dmsg);
+                        diags);
                 if needs_cleanup(et, rfirst, rcount, rftype) {
                     let slot = ints_get(counter, 0);
                     ints_set(counter, 0, slot + 1);
@@ -1731,12 +3128,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             if kind == n_match() {
                 let silenced = ints_pop(mdiag);
                 if silenced >= 0 {
-                    while strs_len(dcode) > silenced {
-                        strs_pop(dcode);
-                        ints_pop(dstart);
-                        ints_pop(dend);
-                        strs_pop(dmsg);
-                    }
+                    while vec_len(diags) > silenced { vec_pop(diags); }
                 }
                 // Children: the scrutinee, then one arm each. Every arm must agree, and
                 // an arm that transfers control constrains nothing — the same rule an
@@ -1769,7 +3161,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                                 let arm = ints_get(kids, first + a);
                                 let c = ints_get(kids,
                                         ints_get(kid_first, arm) + ints_get(nar, arm) - 1);
-                                report(dcode, dstart, dend, dmsg, "N0302",
+                                report(diags, "N0302",
                                         ints_get(nst, c), ints_get(nen, c),
                                         str_concat(str_concat(str_concat(str_concat(
                                         "this arm is `", show_type(armt, rnames)),
@@ -1803,7 +3195,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                             m = m + 1;
                         }
                         if missing != "" {
-                            report(dcode, dstart, dend, dmsg, "N0343", from, to,
+                            report(diags, "N0343", from, to,
                                     str_concat("this `match` does not cover ", missing));
                         }
                     }
@@ -1825,7 +3217,8 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                         fnames, fret, ffirst, fcount, fparams,
                         fowner, fpub, vmod, vname, vfn, mfirst, mcount, mto,
                         bnames, bret, bfirst, bcount, bparams,
-                        dcode, dstart, dend, dmsg));
+                        tb, fgen, fgc, bgen, tscope, ncomp, ntfirst, ntargs, tmod, tname, trec,
+                        diags));
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
@@ -1839,7 +3232,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 if agrees(cond_t, t_bool()) == false {
                     // The condition's own span, which is the first child's.
                     let c = ints_get(kids, first);
-                    report(dcode, dstart, dend, dmsg, "N0301",
+                    report(diags, "N0301",
                             ints_get(nst, c), ints_get(nen, c),
                             str_concat(str_concat("an `if` condition must be `Bool`, but this is `",
                             type_name(cond_t)), "`"));
@@ -1872,7 +3265,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                                     if agrees(then_t, else_t) == false {
                                         let tail = ints_get(kids,
                                                 ints_get(kid_first, else_b) + ints_get(nar, else_b) - 1);
-                                        report(dcode, dstart, dend, dmsg, "N0302",
+                                        report(diags, "N0302",
                                                 ints_get(nst, tail), ints_get(nen, tail),
                                                 str_concat(str_concat(str_concat(str_concat(
                                                 "this branch is `", show_type(else_t, rnames)),
@@ -1881,7 +3274,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                                     }
                                     if t == t_unknown() { t = else_t; }
                                 } else {
-                                    report(dcode, dstart, dend, dmsg, "N0302", from, to,
+                                    report(diags, "N0302", from, to,
                                             str_concat(str_concat("one branch produces `",
                                             show_type(then_t, rnames)),
                                             "` and the other produces nothing"));
@@ -1890,7 +3283,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                                 if ec == c_value() {
                                     c = c_value();
                                     t = else_t;
-                                    report(dcode, dstart, dend, dmsg, "N0302", from, to,
+                                    report(diags, "N0302", from, to,
                                             str_concat(str_concat("one branch produces `",
                                             show_type(else_t, rnames)),
                                             "` and the other produces nothing"));
@@ -1933,7 +3326,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 while d < stmts {
                     let child = ints_get(kids, first + d);
                     if left == 1 {
-                        report(dcode, dstart, dend, dmsg, "N0313",
+                        report(diags, "N0313",
                                 ints_get(nst, child), ints_get(nen, child), "this can never run");
                         left = 0;
                     }
@@ -1943,7 +3336,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 if left == 1 {
                     if has_tail {
                         let tail = ints_get(kids, first + arity - 1);
-                        report(dcode, dstart, dend, dmsg, "N0313",
+                        report(diags, "N0313",
                                 ints_get(nst, tail), ints_get(nen, tail), "this can never run");
                     }
                     ints_set(ncomp, k, c_diverges());
@@ -1997,7 +3390,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                         said = str_concat(said, str_concat(str_concat(
                                 ", so its `", after_dot(text)), "` cannot be replaced"));
                     }
-                    report(dcode, dstart, dend, dmsg, "N0310", from, from + str_len(root),
+                    report(diags, "N0310", from, from + str_len(root),
                             said);
                 }
                 ints_set(nslot, k, lookup_slot(names, nslotof, root));
@@ -2008,13 +3401,13 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 while step < path_length(text) {
                     want = project(want, path_step(text, step), from, from,
                             rnames, rfirst, rcount, rfname, rftype, nrec, 0 - 1,
-                            dcode, dstart, dend, dmsg);
+                            diags);
                     step = step + 1;
                 }
                 if agrees(t, want) == false {
                     let value = ints_get(kids, first);
                     let head = str_concat(str_concat("`", text), "` is `");
-                    report(dcode, dstart, dend, dmsg, "N0300",
+                    report(diags, "N0300",
                             ints_get(nst, value), ints_get(nen, value),
                             str_concat(str_concat(str_concat(str_concat(head,
                             show_type(want, rnames)), "`, but this is `"),
@@ -2032,7 +3425,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             }
             if kind == n_spawn() {
                 if ints_get(inscope, k) == 0 {
-                    report(dcode, dstart, dend, dmsg, "N0320", from, to,
+                    report(diags, "N0320", from, to,
                             "`spawn` outside a `scope`: nothing would join this task");
                 }
                 // `Ints` and `Strs` are handles to shared mutable storage with no
@@ -2054,20 +3447,40 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                             said = str_concat(str_concat(str_concat(head,
                                     " may not cross into a task: its `"), why), "` is a sequence");
                         }
-                        report(dcode, dstart, dend, dmsg, "N0321",
+                        report(diags, "N0321",
                                 ints_get(nst, c), ints_get(nen, c), said);
                     }
                     a = a + 1;
                 }
-                // The callee is resolved exactly as a call's is — same arity and argument
-                // rules, one definition. A task's result is discarded, which the
-                // specification states outright: results travel through channels.
-                check_call(text, arity, ts, from, to,
-                        kids, first, nst, nen, ncallee, k, module_at(mstart, from),
-                        fnames, fret, ffirst, fcount, fparams,
-                        fowner, fpub, vmod, vname, vfn, mfirst, mcount, mto,
-                        bnames, bret, bfirst, bcount, bparams,
-                        dcode, dstart, dend, dmsg);
+                // A task runs one function with one signature. A generic one would need
+                // its type arguments settled at the `spawn`, which N11 does not do — refused
+                // at the callee, as the reference refuses it, and nothing else is asked.
+                let callee_at = ints_get(naux, k);
+                let spawned = resolve_fn(fnames, fowner, vmod, vname, vfn,
+                        module_at(mstart, from), before_bracket(text));
+                let mut generic_task = false;
+                if spawned >= 0 {
+                    if ints_get(fgc, spawned) > 0 { generic_task = true; }
+                }
+                if generic_task {
+                    report(diags, "N0101", callee_at,
+                            callee_at + str_len(before_bracket(text)),
+                            str_concat(str_concat("`spawn ", before_bracket(text)),
+                            "` runs a generic function, which is not supported yet"));
+                    let mut gone = 0;
+                    while gone < arity { ints_pop(ts); gone = gone + 1; }
+                } else {
+                    // The callee is resolved exactly as a call's is — same arity and argument
+                    // rules, one definition. A task's result is discarded, which the
+                    // specification states outright: results travel through channels.
+                    check_call(text, arity, ts, from, to,
+                            kids, first, nst, nen, ncallee, k, module_at(mstart, from),
+                            fnames, fret, ffirst, fcount, fparams,
+                            fowner, fpub, vmod, vname, vfn, mfirst, mcount, mto,
+                            bnames, bret, bfirst, bcount, bparams,
+                            tb, fgen, fgc, bgen, tscope, ncomp, ntfirst, ntargs, tmod, tname, trec,
+                            diags);
+                }
                 ints_push(ts, t_unknown());
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
@@ -2077,7 +3490,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 let cond_t = ints_pop(ts);
                 if agrees(cond_t, t_bool()) == false {
                     let c = ints_get(kids, first);
-                    report(dcode, dstart, dend, dmsg, "N0301",
+                    report(diags, "N0301",
                             ints_get(nst, c), ints_get(nen, c),
                             str_concat(str_concat("a `while` condition must be `Bool`, but this is `",
                             type_name(cond_t)), "`"));
@@ -2095,7 +3508,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 let got = ints_get(ts, ints_len(ts) - 1);
                 if ints_get(ncomp, rv) == c_value() {
                     if agrees(got, ints_get(cur_ret, 0)) == false {
-                        report(dcode, dstart, dend, dmsg, "N0300",
+                        report(diags, "N0300",
                                 ints_get(nst, rv), ints_get(nen, rv),
                                 str_concat(str_concat(str_concat(str_concat("this returns `",
                                 show_type(got, rnames)), "`, but the function returns `"),
@@ -2132,7 +3545,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                     let bt = ints_get(ts, ints_len(ts) - 1);
                     if agrees(bt, declared) == false {
                         let tail = ints_get(kids, ints_get(kid_first, body) + ints_get(nar, body) - 1);
-                        report(dcode, dstart, dend, dmsg, "N0300",
+                        report(diags, "N0300",
                                 ints_get(nst, tail), ints_get(nen, tail),
                                 str_concat(str_concat(str_concat(str_concat(str_concat("`",
                                 before_colon(text)), "` returns `"), show_type(bt, rnames)),
@@ -2140,7 +3553,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                     }
                 }
                 if bc == c_unit() {
-                    report(dcode, dstart, dend, dmsg, "N0300",
+                    report(diags, "N0300",
                             ints_get(nst, body), ints_get(nen, body),
                             str_concat(str_concat(str_concat("`", before_colon(text)),
                             "` must produce a `"), str_concat(show_type(declared, rnames),
@@ -2238,7 +3651,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
 
         if kind == n_var() {
             if scope_has(names, text) == false {
-                report(dcode, dstart, dend, dmsg, "N0200", ints_get(nst, entry),
+                report(diags, "N0200", ints_get(nst, entry),
                         ints_get(nen, entry),
                         str_concat(str_concat("`", text), "` is not defined"));
                 ints_push(ts, t_unknown());
@@ -2292,8 +3705,10 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             let named = type_in(en, owner, rnames, rowner, tmod, tname, trec);
             let mut v = 0 - 1;
             if is_enum(et, rkind) {
-                if named != et {
-                    report(dcode, dstart, dend, dmsg, "N0345", ints_get(nst, entry),
+                // A pattern names the **definition** — `Maybe.Some`, never `Maybe[Int].Some`
+                // — so it is compared with the definition the scrutinee applies.
+                if named != t_record(definition_of(tb, et)) {
+                    report(diags, "N0345", ints_get(nst, entry),
                             ints_get(nst, entry) + str_len(en),
                             str_concat(str_concat(str_concat(str_concat(
                             "this pattern is a `", show_type(named, rnames)),
@@ -2303,7 +3718,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                     let r = record_of(et);
                     let at = field_index(rfirst, rcount, rfname, r, vn);
                     if at < 0 {
-                        report(dcode, dstart, dend, dmsg, "N0341", ints_get(nst, entry),
+                        report(diags, "N0341", ints_get(nst, entry),
                                 ints_get(nen, entry),
                                 str_concat(str_concat(str_concat(str_concat("`", en),
                                 "` has no variant `"), vn), "`"));
@@ -2312,7 +3727,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                         let seen = strs_get(mcov, strs_len(mcov) - 1);
                         if seen != "!" {
                             if listed(seen, vn) {
-                                report(dcode, dstart, dend, dmsg, "N0344",
+                                report(diags, "N0344",
                                         ints_get(nst, entry), ints_get(nen, entry),
                                         str_concat(str_concat(str_concat(str_concat("`",
                                         en), "."), vn), "` already has an arm"));
@@ -2351,14 +3766,14 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                     let binding = after_colon(item);
                     let at = field_index(rfirst, rcount, rfname, v, fname);
                     if at < 0 {
-                        report(dcode, dstart, dend, dmsg, "N0333", ints_get(nst, entry),
+                        report(diags, "N0333", ints_get(nst, entry),
                                 ints_get(nen, entry),
                                 str_concat(str_concat(str_concat(str_concat("`",
                                 strs_get(rnames, v)), "` has no payload field `"),
                                 fname), "`"));
                     } else {
                         if ints_get(bound, at) == 1 {
-                            report(dcode, dstart, dend, dmsg, "N0332", ints_get(nst, entry),
+                            report(diags, "N0332", ints_get(nst, entry),
                                     ints_get(nen, entry),
                                     str_concat(str_concat("this pattern names `", fname),
                                     "` twice"));
@@ -2373,7 +3788,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                                     q = q - 1;
                                 }
                                 if shadow == 1 {
-                                    report(dcode, dstart, dend, dmsg, "N0202",
+                                    report(diags, "N0202",
                                             ints_get(nst, entry), ints_get(nen, entry),
                                             str_concat(str_concat("`", binding),
                                             "` is bound twice by this pattern"));
@@ -2396,7 +3811,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                     m = m + 1;
                 }
                 if missing != "" {
-                    report(dcode, dstart, dend, dmsg, "N0334", ints_get(nst, entry),
+                    report(diags, "N0334", ints_get(nst, entry),
                             ints_get(nen, entry),
                             str_concat(str_concat(str_concat("this pattern does not name ",
                             missing), " of `"), str_concat(strs_get(rnames, v), "`")));
@@ -2408,6 +3823,17 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
         }
 
         if kind == n_fn() {
+            // The function's own type parameters are the scope its body's types are
+            // written in, and nothing else's are.
+            while ints_len(tscope) > 0 { ints_pop(tscope); }
+            let own = ints_get(ntfirst, entry);
+            if own >= 0 {
+                let mut sp = 0;
+                while sp < ints_get(ntargs, own) {
+                    ints_push(tscope, ints_get(ntargs, own + 1 + sp));
+                    sp = sp + 1;
+                }
+            }
             // Slots are per function: a caller's local and a callee's cannot share one.
             ints_set(counter, 0, 0);
             ints_set(cur_ret, 0, ints_get(nrec, entry));
@@ -2426,7 +3852,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             j = j - 1;
         }
     }
-    strs_len(dcode)
+    vec_len(diags)
 }
 
 fn str_to_int_flag(s: Str) -> Int {
@@ -2453,7 +3879,7 @@ fn is_ordering(op: Str) -> Bool {
 }
 
 fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int, rnames: Strs,
-        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        diags: Vec[Diag]) -> Int {
     let mut ok = true;
     if is_comparison(op) {
         if is_ordering(op) {
@@ -2471,9 +3897,14 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int, rnames: Strs,
             // A record joins them rather than getting an exception: equality would have
             // to decide what a sequence field means, and the language has not chosen.
             if is_record(l) { ok = false; }
+            // So does every `Vec`, for the sequence reason, and a type parameter: `==` is
+            // not valid for every type, and an unconstrained `T` supports only what every
+            // type supports.
+            if is_vec(l) { ok = false; }
+            if is_param(l) { ok = false; }
         }
         if ok == false {
-            report(dcode, dstart, dend, dmsg, "N0304", from, to,
+            report(diags, "N0304", from, to,
                     str_concat(str_concat(str_concat("`", op), "` cannot compare `"),
                     str_concat(show_type(l, rnames), "`")));
             return t_bool();
@@ -2485,7 +3916,7 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int, rnames: Strs,
     if agrees(l, t_int()) == false { ok = false; }
     if agrees(r, t_int()) == false { ok = false; }
     if ok == false {
-        report(dcode, dstart, dend, dmsg, "N0304", from, to,
+        report(diags, "N0304", from, to,
                 str_concat(str_concat(str_concat("`", op), "` does not apply to `"),
                 str_concat(show_type(l, rnames), "`")));
     }
@@ -2500,11 +3931,10 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int, rnames: Strs,
 /// not expressible.
 ///
 /// `main` need not be `pub`: being the entry point is not the same as being importable.
-pub fn entry_point(fnames: Strs, fowner: Ints, dcode: Strs, dstart: Ints, dend: Ints,
-        dmsg: Strs) -> Int {
+pub fn entry_point(fnames: Strs, fowner: Ints, diags: Vec[Diag]) -> Int {
     let at = owned_index(fnames, fowner, 0, "main");
     if at < 0 {
-        report(dcode, dstart, dend, dmsg, "N0204", 0, 0,
+        report(diags, "N0204", 0, 0,
                 "this program has no `main` function");
     }
     at
@@ -2521,13 +3951,19 @@ pub fn entry_point(fnames: Strs, fowner: Ints, dcode: Strs, dstart: Ints, dend: 
 /// The resolution is written to `ncallee[k]`: `-2` for a built-in, otherwise the
 /// definition's index. Emission reads that and never looks a name up again, which is what
 /// keeps two modules' private `helper` from becoming one symbol.
-fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
+fn check_call(text: Str, argc: Int, ts: Ints, from: Int, to: Int,
         kids: Ints, first: Int, nst: Ints, nen: Ints, ncallee: Ints, node: Int, here: Int,
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
         fowner: Ints, fpub: Ints, vmod: Ints, vname: Strs, vfn: Ints,
         mfirst: Ints, mcount: Ints, mto: Ints,
         bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
-        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+        tb: Table, fgen: Ints, fgc: Ints, bgen: Ints, tscope: Ints, ncomp: Ints,
+        ntfirst: Ints, ntargs: Ints, tmod: Ints, tname: Strs, trec: Ints,
+        diags: Vec[Diag]) -> Int {
+    // `name[T@9]`: the callee, then any type arguments written after it.
+    let name = before_bracket(text);
+    let written = from_bracket(text);
+    let rnames = tb.names;
     // The arguments' types are the top `argc` entries, oldest first. Taken off here and
     // compared in order.
     let got = ints_new();
@@ -2539,6 +3975,9 @@ fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
     let mut ret = t_unknown();
     let mut params = fparams;
     let mut found = false;
+    // The callee's own type parameters, as `t_param` codes: empty for one that is not
+    // generic.
+    let generics = ints_new();
 
     let bi = builtin_index(bnames, name);
     if bi >= 0 {
@@ -2548,6 +3987,7 @@ fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
         params = bparams;
         found = true;
         ints_set(ncallee, node, 0 - 2);
+        if ints_get(bgen, bi) >= 0 { ints_push(generics, t_param(ints_get(bgen, bi))); }
     } else {
         let fi = resolve_fn(fnames, fowner, vmod, vname, vfn, here, name);
         if fi >= 0 {
@@ -2556,6 +3996,11 @@ fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
             ret = ints_get(fret, fi);
             found = true;
             ints_set(ncallee, node, fi);
+            let mut g = 0;
+            while g < ints_get(fgc, fi) {
+                ints_push(generics, t_param(ints_get(fgen, fi) + g));
+                g = g + 1;
+            }
         }
     }
 
@@ -2564,20 +4009,31 @@ fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
         // which is true from here and useless to a reader looking at the file they just
         // imported.
         if private_in_an_import(fnames, fowner, fpub, mfirst, mcount, mto, here, name) {
-            report(dcode, dstart, dend, dmsg, "N0206", from, from + str_len(name),
+            report(diags, "N0206", from, from + str_len(name),
                     str_concat(str_concat("`", name),
                     "` is private to the module that defines it"));
             return t_unknown();
         }
-        report(dcode, dstart, dend, dmsg, "N0201", from, from + str_len(name),
+        report(diags, "N0201", from, from + str_len(name),
                 str_concat(str_concat("`", name), "` is not a function"));
         return t_unknown();
     }
 
     if want_count != argc {
-        report(dcode, dstart, dend, dmsg, "N0303", from, to,
+        report(diags, "N0303", from, to,
                 str_concat(str_concat("`", name), "` was given the wrong number of arguments"));
         return ret;
+    }
+
+    if ints_len(generics) > 0 {
+        return check_generic_call(name, written, argc, got, from, to, kids, first, nst, nen,
+                node, want_first, params, ret, generics, tb, tscope, ncomp, ntfirst, ntargs,
+                here, tmod, tname, trec, diags);
+    }
+    if str_len(written) > 0 {
+        report(diags, "N0351", from, from + str_len(name),
+                str_concat(str_concat("`", name),
+                "` is not generic, so it takes no type arguments"));
     }
 
     let mut a = 0;
@@ -2588,7 +4044,7 @@ fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
         if agrees(actual, expected) == false {
             // The argument's own span: the reference points at the value, not the call.
             let node = ints_get(kids, first + a);
-            report(dcode, dstart, dend, dmsg, "N0300",
+            report(diags, "N0300",
                     ints_get(nst, node), ints_get(nen, node),
                     str_concat(str_concat(str_concat("argument ", int_to_str(a + 1)),
                     str_concat(" of `", name)),
@@ -2597,4 +4053,252 @@ fn check_call(name: Str, argc: Int, ts: Ints, from: Int, to: Int,
         a = a + 1;
     }
     ret
+}
+
+// A call to a generic function, or to a generic built-in: the reference's
+// `check_generic_call`, in the same order and with the same answers.
+//
+// The type arguments are the written ones when there are exactly as many as the callee
+// declares; otherwise each parameter is **inferred from the arguments**, by matching each
+// declared parameter type against the argument's type — never from what the result is
+// used for. An argument whose declared type is already fully known is simply checked
+// against it. What each parameter settles to is recorded on the node, `[count, a1, …]`
+// in the node-type list, for the emitter to instantiate.
+//
+// `solved[i]` is 1 once parameter `i` is known, with its type in `sval[i]` and in
+// `sfrom[i]` the argument that settled it — `-1` for the written type arguments.
+fn check_generic_call(name: Str, written: Str, argc: Int, got: Ints, from: Int, to: Int,
+        kids: Ints, first: Int, nst: Ints, nen: Ints, node: Int, want_first: Int,
+        params: Ints, ret: Int, generics: Ints, tb: Table, tscope: Ints, ncomp: Ints,
+        ntfirst: Ints, ntargs: Ints, here: Int, tmod: Ints, tname: Strs, trec: Ints,
+        diags: Vec[Diag]) -> Int {
+    let n = ints_len(generics);
+    let solved = ints_new();
+    let sval = ints_new();
+    let sfrom = ints_new();
+    // Parameters an argument already failed on. One mistake is one error: an argument of
+    // the wrong shape is reported as a mismatch, and the parameters its declared type
+    // mentions are not reported again as impossible to infer.
+    let excused = ints_new();
+    let mut g = 0;
+    while g < n {
+        ints_push(solved, 0);
+        ints_push(sval, t_int());
+        ints_push(sfrom, 0);
+        ints_push(excused, 0);
+        g = g + 1;
+    }
+    let mut explicit = false;
+    if str_len(written) > 0 {
+        let resolved = resolve_type_args(tb, written, here, tscope, tmod, tname, trec,
+                diags);
+        if ints_len(resolved) == n {
+            let mut w = 0;
+            while w < n {
+                ints_set(solved, w, 1);
+                ints_set(sval, w, ints_get(resolved, w));
+                ints_set(sfrom, w, 0 - 1);
+                w = w + 1;
+            }
+            explicit = true;
+        } else {
+            report(diags, "N0353", from, from + str_len(name),
+                    str_concat(str_concat(str_concat(str_concat(str_concat("`", name),
+                    "` takes "), int_to_str(n)), " type arguments, but "),
+                    str_concat(int_to_str(ints_len(resolved)), " were given")));
+        }
+    }
+
+    let mut a = 0;
+    while a < argc {
+        let actual = ints_get(got, argc - 1 - a);
+        let formal = ints_get(params, want_first + a);
+        let arg = ints_get(kids, first + a);
+        let mut known = explicit;
+        if mentions(tb, formal, generics) == false { known = true; }
+        if known {
+            // Checked against its declared type, as a monomorphic call's argument is, when
+            // that type is fully known. A parameter settled by an earlier **argument** is
+            // not "known": the two are unified, so that `same(1, "x")` is a conflict
+            // between them rather than the second read against the first.
+            let want = substitute(tb, formal, generics, partial(solved, sval, generics));
+            if agrees(actual, want) == false {
+                report(diags, "N0300", ints_get(nst, arg), ints_get(nen, arg),
+                        str_concat(str_concat(str_concat(str_concat(str_concat(
+                        "argument ", int_to_str(a + 1)), str_concat(" of `", name)), "` is `"),
+                        str_concat(show_type(want, tb.names), "`, but this is `")),
+                        str_concat(show_type(actual, tb.names), "`")));
+            }
+        } else {
+            let c = ints_get(ncomp, arg);
+            if c == c_unit() {
+                // No value — refused already where it is written. Its parameters are
+                // excused, so the one mistake is not reported twice.
+                excuse(tb, formal, generics, excused);
+            }
+            if c == c_value() {
+                let conflict = ints_new();
+                let outcome = unify(tb, formal, actual, generics, solved, sval, sfrom, a, conflict);
+                if outcome == 2 {
+                    let p = ints_get(conflict, 0);
+                    let earlier = ints_get(conflict, 1);
+                    let mut source = str_concat("argument ", int_to_str(ints_get(conflict, 2) + 1));
+                    if ints_get(conflict, 2) < 0 { source = "the written type arguments"; }
+                    report(diags, "N0355", ints_get(nst, arg), ints_get(nen, arg),
+                            str_concat(str_concat(str_concat(str_concat(str_concat(str_concat(
+                            "`", strs_get(tb.names, entry_of(ints_get(generics, p)))), "` is `"),
+                            show_type(earlier, tb.names)), "` from "), source),
+                            str_concat(str_concat(", but argument ", int_to_str(a + 1)),
+                            " makes it something else")));
+                }
+                if outcome == 1 {
+                    excuse(tb, formal, generics, excused);
+                    let want = substitute(tb, formal, generics, partial(solved, sval, generics));
+                    report(diags, "N0300", ints_get(nst, arg), ints_get(nen, arg),
+                            str_concat(str_concat(str_concat(str_concat(str_concat(
+                            "argument ", int_to_str(a + 1)), str_concat(" of `", name)), "` is `"),
+                            str_concat(show_type(want, tb.names), "`, but this is `")),
+                            str_concat(show_type(actual, tb.names), "`")));
+                }
+            }
+            // An argument that never produces a value says nothing about a type.
+        }
+        a = a + 1;
+    }
+
+    let mut missing = "";
+    g = 0;
+    while g < n {
+        if ints_get(solved, g) == 0 {
+            if ints_get(excused, g) == 0 {
+                if missing != "" { missing = str_concat(missing, ", "); }
+                missing = str_concat(str_concat(missing, "`"),
+                        str_concat(strs_get(tb.names, entry_of(ints_get(generics, g))), "`"));
+            }
+        }
+        g = g + 1;
+    }
+    if missing != "" {
+        report(diags, "N0354", from, from + str_len(name),
+                str_concat(str_concat(str_concat("nothing in this call to `", name), "` says what "),
+                str_concat(missing, " is")));
+    }
+
+    // What the call settled, on the node: an unsettled parameter is `Int`, as the
+    // reference's is, and the program is refused anyway.
+    ints_set(ntfirst, node, ints_len(ntargs));
+    ints_push(ntargs, n);
+    g = 0;
+    while g < n {
+        ints_push(ntargs, ints_get(sval, g));
+        g = g + 1;
+    }
+    let settled = ints_new();
+    g = 0;
+    while g < n { ints_push(settled, ints_get(sval, g)); g = g + 1; }
+    let result = substitute(tb, ret, generics, settled);
+    settle_now(tb);
+    if depth_of(tb, result) > max_type_depth() {
+        report(diags, "N0338", from, to,
+                "this call produces a type nested more than 32 deep");
+        return t_unknown();
+    }
+    result
+}
+
+// The arguments settled so far, with each unsettled parameter left as itself — so that
+// substituting them into a declared type says what is known and nothing more.
+fn partial(solved: Ints, sval: Ints, generics: Ints) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < ints_len(generics) {
+        if ints_get(solved, i) == 1 {
+            ints_push(out, ints_get(sval, i));
+        } else {
+            ints_push(out, ints_get(generics, i));
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Mark every parameter in `generics` that `formal` mentions as already accounted for.
+fn excuse(tb: Table, formal: Int, generics: Ints, excused: Ints) -> Int {
+    let work = ints_new();
+    ints_push(work, formal);
+    while ints_len(work) > 0 {
+        let t = ints_pop(work);
+        let at = index_of(generics, t);
+        if at >= 0 { ints_set(excused, at, 1); }
+        let parts = type_args(tb, t);
+        let mut i = 0;
+        while i < ints_len(parts) { ints_push(work, ints_get(parts, i)); i = i + 1; }
+    }
+    0
+}
+
+// Match a declared parameter type against an argument's type, settling the callee's
+// parameters it mentions. Structural through applications and `Vec`; nothing else is.
+//
+// `0` when it matches, `1` for a mismatch of shape, `2` for a conflict — a parameter
+// already settled to something else — with `[parameter, earlier type, where from]` in
+// `conflict`. A worklist of pairs, taken left to right as the reference's recursion takes
+// them, so the first conflict found is the first one written.
+fn unify(tb: Table, formal: Int, actual: Int, generics: Ints, solved: Ints, sval: Ints,
+        sfrom: Ints, arg: Int, conflict: Ints) -> Int {
+    let wf = ints_new();
+    let wa = ints_new();
+    ints_push(wf, formal);
+    ints_push(wa, actual);
+    while ints_len(wf) > 0 {
+        let f = ints_pop(wf);
+        let x = ints_pop(wa);
+        // What has already been reported agrees with everything.
+        if x == t_unknown() { continue; }
+        if mentions(tb, f, generics) == false {
+            if f != x { return 1; }
+            continue;
+        }
+        let p = index_of(generics, f);
+        if p >= 0 {
+            if ints_get(solved, p) == 0 {
+                ints_set(solved, p, 1);
+                ints_set(sval, p, x);
+                ints_set(sfrom, p, arg);
+            } else {
+                if ints_get(sval, p) != x {
+                    if ints_get(sval, p) != t_unknown() {
+                        ints_push(conflict, p);
+                        ints_push(conflict, ints_get(sval, p));
+                        ints_push(conflict, ints_get(sfrom, p));
+                        return 2;
+                    }
+                }
+            }
+            continue;
+        }
+        if is_vec(f) {
+            if is_vec(x) == false { return 1; }
+            ints_push(wf, ints_get(type_args(tb, f), 0));
+            ints_push(wa, ints_get(type_args(tb, x), 0));
+            continue;
+        }
+        if is_record(f) {
+            if is_record(x) == false { return 1; }
+            if definition_of(tb, f) != definition_of(tb, x) { return 1; }
+            let fa = type_args(tb, f);
+            let xa = type_args(tb, x);
+            if ints_len(fa) != ints_len(xa) { return 1; }
+            // Pushed in reverse, so the first argument is matched first.
+            let mut i = ints_len(fa) - 1;
+            while i >= 0 {
+                ints_push(wf, ints_get(fa, i));
+                ints_push(wa, ints_get(xa, i));
+                i = i - 1;
+            }
+            continue;
+        }
+        return 1;
+    }
+    0
 }

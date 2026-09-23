@@ -1,0 +1,58 @@
+// Generics: an identity function, a generic record and a generic enum, `match` on an
+// applied enum, explicit and inferred type arguments, and generic functions returning a
+// `Str` and a record — each instance built by whichever compiler is compiling this.
+//
+// Every value is folded into one integer, so disagreement between the reference, C2 and
+// C3 cannot hide.
+
+struct Pair[A, B] {
+    second: B,
+    first: A,
+}
+
+enum Maybe[T] {
+    Some(value: T),
+    None,
+}
+
+fn identity[T](value: T) -> T {
+    value
+}
+
+fn swap[A, B](p: Pair[A, B]) -> Pair[B, A] {
+    Pair[B, A](first: p.second, second: p.first)
+}
+
+fn or_else[T](m: Maybe[T], fallback: T) -> T {
+    match m {
+        Maybe.None() => fallback,
+        Maybe.Some(value: v) => v,
+    }
+}
+
+fn some[T](x: T) -> Maybe[T] {
+    Maybe[T].Some(value: x)
+}
+
+// A generic function returning a string it built: the caller holds a valid one after the
+// instance's frame has gone.
+fn shout[T](x: T, s: Str) -> Str {
+    str_concat(s, "!")
+}
+
+fn main() -> Int {
+    let p = Pair[Int, Str](first: 7, second: "nazm");
+    let q = swap(p);
+    let r = swap(q);
+    let mut total = identity[Int](r.first) + str_len(identity(q.first));
+    total = total * 10 + or_else(some(5), 0) + or_else(Maybe[Int].None(), 3);
+    let named = or_else(some(str_concat("gen", "eric")), "none");
+    total = total * 10 + str_len(named) + str_len(shout(1, "hi")) + str_len(shout("x", "hey"));
+    let mut i = 0;
+    while i < 20 {
+        let m = if i % 2 == 0 { some(Pair[Str, Int](first: int_to_str(i), second: i)) } else { Maybe[Pair[Str, Int]].None() };
+        total = total + or_else(m, Pair[Str, Int](first: "", second: 1)).second;
+        i = i + 1;
+    }
+    total
+}

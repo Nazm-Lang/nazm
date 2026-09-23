@@ -80,7 +80,15 @@ use crate::digest::{self, Framed};
 /// source contains either was recorded by an N9 build as having a diagnostic; under N10
 /// it has none. The code set moved too, but it would have moved for the additions alone,
 /// and the refusal that went away is not visible in it at all.
-pub const SEMANTIC_EPOCH: u32 = 3;
+///
+/// `4` — N11, 2026-09-23. Generics and `Vec[T]`. Most of it moved the code set, and some of
+/// it did not: `[` and `]` stopped being unknown characters, so a module whose source
+/// contained one was recorded by an N10 build as having a lexical error and has none now;
+/// a generic body is checked under rules — `==` on a type parameter under the existing
+/// `N0304`, passing one to a task under `N0321` — that reuse old codes; and the interface
+/// schema a dependency's fingerprint is taken over changed shape. The counter is what makes
+/// every N10 entry unreachable regardless of which of those a given module touched.
+pub const SEMANTIC_EPOCH: u32 = 4;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -95,13 +103,17 @@ pub const CHECKER_CODES: &[&str] = &[
     "ASSIGN_TO_IMMUTABLE",
     "BRANCH_TYPES_DIFFER",
     "BUILTIN_TYPE_REDEFINED",
+    "CANNOT_INFER_TYPE_ARGUMENT",
     "CONDITION_NOT_BOOL",
+    "CONFLICTING_TYPE_ARGUMENTS",
     "DUPLICATE_FIELD",
     "DUPLICATE_FUNCTION",
     "DUPLICATE_MATCH_ARM",
     "DUPLICATE_TYPE",
+    "DUPLICATE_TYPE_PARAMETER",
     "DUPLICATE_VARIANT",
     "EMPTY_ENUM",
+    "GENERIC_MAIN",
     "ILLEGAL_TASK_CAPTURE",
     "IMPORT_COLLIDES_WITH_DEFINITION",
     "INVALID_OPERANDS",
@@ -109,12 +121,15 @@ pub const CHECKER_CODES: &[&str] = &[
     "MATCH_ON_NON_ENUM",
     "MISSING_FIELD",
     "MISSING_MAIN",
+    "MISSING_TYPE_ARGUMENTS",
     "NON_EXHAUSTIVE_MATCH",
     "NOT_IN_A_LOOP",
+    "OWNERSHIP_CYCLE",
     "PRIVATE_DEFINITION",
     "PRIVATE_TYPE_EXPOSED",
     "RECURSIVE_RECORD",
     "SPAWN_OUTSIDE_SCOPE",
+    "TYPE_ARGUMENTS_ON_NON_GENERIC",
     "TYPE_MISMATCH",
     "TYPE_NESTING_TOO_DEEP",
     "UNDEFINED_FUNCTION",
@@ -126,6 +141,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "UNSUPPORTED_CONSTRUCT",
     "WRONG_ARGUMENT_COUNT",
     "WRONG_ENUM_IN_PATTERN",
+    "WRONG_TYPE_ARGUMENT_COUNT",
 ];
 
 /// The checker that produced, or is asking for, a result.
@@ -154,14 +170,16 @@ impl CheckerIdentity {
         f.number(u32::try_from(Intrinsic::ALL.len()).unwrap_or(u32::MAX));
         for i in Intrinsic::ALL {
             f.field(i.name());
+            // Since N11 a signature is written in the table's own vocabulary, which spells
+            // a generic built-in's `T` and `Vec[T]` as well as every built-in type. A record
+            // still cannot appear: records exist only in the compilation that declared
+            // them, and this identity describes the build.
+            f.number(i.generics());
             f.number(u32::try_from(i.params().len()).unwrap_or(u32::MAX));
-            // Every built-in's signature is built-in types only, so `builtin_name` is
-            // total here. A record cannot appear: records exist only in the compilation
-            // that declared them, and this identity describes the build.
             for p in i.params() {
-                f.field(p.builtin_name().unwrap_or("?"));
+                f.field(p.spelling());
             }
-            f.field(i.ret().builtin_name().unwrap_or("?"));
+            f.field(i.ret().spelling());
         }
 
         f.number(u32::try_from(Type::ALL.len()).unwrap_or(u32::MAX));
