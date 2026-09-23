@@ -1,0 +1,11 @@
+// expect: N0336
+// Through a generic record that stores its parameter inline: an impossible layout.
+struct Box[T] {
+    value: T,
+}
+
+struct S {
+    b: Box[S],
+}
+
+fn main() -> Int { 0 }

@@ -1,0 +1,12 @@
+use "lib.nz";
+
+fn main() -> Int {
+    let b = Box[Str](value: str_concat("gen", "erics"));
+    let n = Box[Int](value: 30);
+    let m = Maybe[Box[Int]].Some(value: n);
+    let got = match m {
+        Maybe.Some(value: v) => unbox(v),
+        Maybe.None() => 0,
+    };
+    str_len(unbox(b)) + identity[Int](got) + identity(4)
+}

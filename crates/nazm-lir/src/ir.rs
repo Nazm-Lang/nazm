@@ -86,12 +86,44 @@ pub enum Ty {
     /// only one of the payload slots means anything at a time, and which one is the first
     /// field's value — see [`EnumLayout`] for the representation and what it costs.
     Enum(EnumTy),
+    /// A `Vec[T]` handle: a pointer to the sequence header every sequence has, whose
+    /// elements are `T`'s own representation laid out contiguously. N11. Which `T` is in
+    /// the unit's [`VecLayout`] table, by this id.
+    Vec(VecTy),
 }
 
 /// An enum type of this compilation, by declaration order. Session-local, like
 /// [`RecordTy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EnumTy(pub u32);
+
+/// A `Vec` type of this compilation, by its session-local interned id.
+///
+/// The same rule as [`RecordTy`]: an index shared with the checker's table rather than a
+/// second numbering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VecTy(pub u32);
+
+impl VecTy {
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// What a unit needs to know about one concrete `Vec[T]`: its element's type, and the name
+/// its generated release helper is derived from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VecLayout {
+    pub id: VecTy,
+    /// Derived from the element's canonical type key, so two units that release one
+    /// `Vec[Point]` generate one helper name — each its own `internal` copy, which is what
+    /// keeps a unit independent of another's text.
+    pub name: String,
+    pub elem: Ty,
+    /// The element's source spelling, for a comment.
+    pub source: String,
+}
 
 impl EnumTy {
     #[must_use]
@@ -248,6 +280,10 @@ pub enum Owns {
     /// variant's. Neither is a case in a consumer: both are a helper generated once per
     /// type, so adding an enum to a program adds no arm here either.
     Enum(EnumTy),
+    /// A `Vec` header, its data buffer, and **every element's** ownership, by the
+    /// element's law. N11. Releasing the last reference releases each element and then
+    /// the storage, through a helper generated once per element type.
+    Vec(VecTy),
 }
 
 impl Ty {
@@ -272,6 +308,8 @@ impl Ty {
             // Unconditional for the reason a record's is, and one step stronger: the
             // answer depends on every variant's payload, which this does not have.
             Self::Enum(id) => Some(Owns::Enum(id)),
+            // A handle's storage is its own, whatever it holds.
+            Self::Vec(id) => Some(Owns::Vec(id)),
         }
     }
 
@@ -284,7 +322,7 @@ impl Ty {
     /// where *aliasing* is what matters rather than reclamation.
     #[must_use]
     pub fn is_handle(self) -> bool {
-        matches!(self, Self::Ints | Self::Strs)
+        matches!(self, Self::Ints | Self::Strs | Self::Vec(_))
     }
 
     /// Bytes one element of this sequence occupies, for indexing and growth.
@@ -324,7 +362,7 @@ impl Ty {
             Self::Int => "i64",
             Self::Bool => "i1",
             Self::Str => "{ ptr, i64, ptr }",
-            Self::Ints | Self::Strs | Self::Chan => "ptr",
+            Self::Ints | Self::Strs | Self::Chan | Self::Vec(_) => "ptr",
             // A record's spelling is its name, which is not static. Every site goes
             // through the emitter's own `ty`, which has the table; this arm exists so
             // that a site which has not been converted is a visible wrong answer in the
@@ -355,7 +393,7 @@ impl Ty {
             // the runtime's release functions. So a zeroed enum slot is safe to release
             // exactly as a zeroed record slot is.
             Self::Str | Self::Record(_) | Self::Enum(_) => "zeroinitializer",
-            Self::Ints | Self::Strs | Self::Chan => "null",
+            Self::Ints | Self::Strs | Self::Chan | Self::Vec(_) => "null",
         }
     }
 
@@ -370,6 +408,7 @@ impl Ty {
             Self::Chan => "Chan",
             Self::Record(_) => "a record",
             Self::Enum(_) => "an enum",
+            Self::Vec(_) => "a `Vec`",
         }
     }
 }
@@ -379,9 +418,27 @@ impl Ty {
     ///
     /// One-to-one, and written as a total match rather than a default arm so that adding a
     /// type to the language is a compile error here instead of a silent `Int`.
+    ///
+    /// `None` for a type parameter, which has no representation: native code exists only
+    /// for concrete instances, and a parameter reaching here is a lowering that forgot its
+    /// substitution — which `crate::lower` reports as the compiler bug it is.
+    #[must_use]
+    pub fn concrete(t: nazm_sema::Type) -> Option<Self> {
+        match t {
+            nazm_sema::Type::Param(_) => None,
+            other => Some(Self::of(other)),
+        }
+    }
+
+    /// [`Self::concrete`] for a type already known to be concrete. A parameter maps to
+    /// `Int` here, and every caller that can meet one uses [`Self::concrete`] instead.
     #[must_use]
     pub fn of(t: nazm_sema::Type) -> Self {
         match t {
+            nazm_sema::Type::Vec(id) => {
+                Self::Vec(VecTy(u32::try_from(id.index()).unwrap_or(u32::MAX)))
+            }
+            nazm_sema::Type::Param(_) => Self::Int,
             nazm_sema::Type::Int => Self::Int,
             nazm_sema::Type::Bool => Self::Bool,
             nazm_sema::Type::Str => Self::Str,
@@ -438,6 +495,8 @@ pub struct Unit {
     /// The enum types this unit's own code mentions, closed over payload types, by the
     /// same rule and for the same reason as [`Self::records`].
     pub enums: Vec<EnumLayout>,
+    /// The `Vec` types this unit's text mentions, closed over element types.
+    pub vecs: Vec<VecLayout>,
 }
 
 /// A definition another unit owns, as this one needs to see it.
@@ -456,6 +515,14 @@ pub struct External {
 pub struct Native {
     /// One per Nazm module, in load order.
     pub units: Vec<Unit>,
+    /// One per concrete generic function instance, in the order of their symbols. N11.
+    ///
+    /// **Separate artefacts**, never appended to a caller's unit: an instance is a function
+    /// of its generic definition and its type arguments, so one instance requested by five
+    /// modules is one unit and one object, and a module's own object stays a function of
+    /// that module's source and its dependencies' signatures — independent of which other
+    /// modules instantiate what. `docs/architecture.md` §7.12.
+    pub instances: Vec<Unit>,
     /// The root module's `main`, which the platform entry wrapper calls.
     ///
     /// An ordinary definition with an ordinary symbol: `docs/architecture.md` keeps the
@@ -772,6 +839,18 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// One of the `Vec[T]` built-ins, with the concrete vector it acts on.
+    ///
+    /// Its own variant rather than [`Self::Builtin`] because the generic built-ins have no
+    /// fixed signature: which element type `vec_get` returns is this site's `vec`, settled
+    /// by the checker and substituted by the instance being lowered.
+    Vec {
+        op: Builtin,
+        vec: VecTy,
+        elem: Ty,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// Value-position `if`. Both branches are present and produce `ty`.
     ///
     /// There is no statement-position variant, and that is the point: this backend
@@ -817,6 +896,11 @@ impl Expr {
             Self::Bool(_) | Self::Compare { .. } => Some(Ty::Bool),
             Self::Str(_) => Some(Ty::Str),
             Self::Builtin { op, .. } => Some(op.lowered_ret()),
+            Self::Vec { op, vec, elem, .. } => Some(match op {
+                Builtin::VecNew => Ty::Vec(*vec),
+                Builtin::VecGet | Builtin::VecPop => *elem,
+                _ => Ty::Int,
+            }),
             Self::Load { ty, .. } => Some(*ty),
             Self::Call { ret, .. } => Some(*ret),
             Self::Record { ty, .. }
@@ -886,30 +970,32 @@ pub trait Lowering {
 
 impl Lowering for Builtin {
     fn sequence(self) -> Option<Ty> {
-        use nazm_sema::Type;
-        // Derived from the front end's own signature rather than listed again: a sequence
-        // operation is one whose first parameter is a sequence, and for `ints_new` and
-        // `strs_new` — which take nothing — the return type is the only evidence.
+        use nazm_sema::Shape;
         match nazm_sema::Intrinsic::params(self).first() {
-            Some(Type::Ints) => Some(Ty::Ints),
-            Some(Type::Strs) => Some(Ty::Strs),
+            Some(Shape::Ints) => Some(Ty::Ints),
+            Some(Shape::Strs) => Some(Ty::Strs),
             _ => match nazm_sema::Intrinsic::ret(self) {
-                Type::Ints => Some(Ty::Ints),
-                Type::Strs => Some(Ty::Strs),
+                Shape::Ints => Some(Ty::Ints),
+                Shape::Strs => Some(Ty::Strs),
                 _ => None,
             },
         }
     }
 
+    // A generic built-in's shapes mention `T`, which has no representation here; its
+    // positions map to `Int` and are never read, because a generic built-in is lowered to
+    // [`Expr::Vec`], which carries its concrete types, and never to [`Expr::Builtin`].
     fn lowered_params(self) -> Vec<Ty> {
         nazm_sema::Intrinsic::params(self)
             .iter()
-            .map(|t| Ty::of(*t))
+            .map(|s| s.monomorphic().map_or(Ty::Int, Ty::of))
             .collect()
     }
 
     fn lowered_ret(self) -> Ty {
-        Ty::of(nazm_sema::Intrinsic::ret(self))
+        nazm_sema::Intrinsic::ret(self)
+            .monomorphic()
+            .map_or(Ty::Int, Ty::of)
     }
 }
 

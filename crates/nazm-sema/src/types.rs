@@ -10,7 +10,50 @@
 //! a half-built `[T]` syntax very much would.
 
 use crate::enums::EnumId;
+use crate::intrinsic::Intrinsic;
 use crate::record::RecordId;
+use crate::resolve::FnId;
+
+/// A `Vec[T]` of this compilation, by its session-local interned id.
+///
+/// Interned by element type, so two `Vec[Point]` written anywhere are one id and `==` on
+/// [`Type`] is the language's type equality. Session-local like every id in this crate;
+/// the durable spelling of a `Vec` is its element's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VecId(u32);
+
+impl VecId {
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    #[must_use]
+    pub fn from_index(i: usize) -> Self {
+        Self(u32::try_from(i).unwrap_or(u32::MAX))
+    }
+}
+
+/// Which declaration a type parameter belongs to.
+///
+/// A parameter is not a name: it is a **position in its owner's list**, and the owner is
+/// part of it so that one function's `T` can never be mistaken for another's while one is
+/// being inferred from the other. `docs/spec.md`, *Order is semantic; names are not*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ParamOwner {
+    Function(FnId),
+    Record(RecordId),
+    Enum(EnumId),
+    /// A generic built-in's own parameter, such as `vec_push`'s `T`.
+    Builtin(Intrinsic),
+}
+
+/// One type parameter: its owner, and its position in the owner's list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypeParam {
+    pub owner: ParamOwner,
+    pub index: u32,
+}
 
 /// # Why a user-defined type is an id and not a shape
 ///
@@ -56,7 +99,16 @@ pub enum Type {
     /// Which variant a *value* holds is not here and could not be. That is runtime state,
     /// and the whole of what `docs/spec.md` means by a sum type is that the fields which
     /// exist are decided then rather than now.
+    ///
+    /// Since N11 the id may also be an **applied** enum — `Maybe[Int]` — which the table
+    /// interns as an entry of its own whose payloads are the definition's after
+    /// substitution. Interning is what makes id equality type equality: one definition
+    /// applied to one argument list is one id.
     Enum(EnumId),
+    /// `Vec[T]`, interned by element type. N11. A mutable handle, by the sequence law.
+    Vec(VecId),
+    /// A type parameter, inside the declaration that owns it.
+    Param(TypeParam),
 }
 
 impl Type {
@@ -94,7 +146,7 @@ impl Type {
             Self::Ints => Some("Ints"),
             Self::Strs => Some("Strs"),
             Self::Chan => Some("Chan"),
-            Self::Record(_) | Self::Enum(_) => None,
+            Self::Record(_) | Self::Enum(_) | Self::Vec(_) | Self::Param(_) => None,
         }
     }
 
@@ -127,7 +179,13 @@ impl Type {
     /// language has not chosen.
     #[must_use]
     pub fn is_sequence(self) -> bool {
-        matches!(self, Self::Ints | Self::Strs)
+        matches!(self, Self::Ints | Self::Strs | Self::Vec(_))
+    }
+
+    /// Whether this is a type parameter, which supports only what every type supports.
+    #[must_use]
+    pub const fn is_param(self) -> bool {
+        matches!(self, Self::Param(_))
     }
 
     /// Whether a value of this type may be passed to a task.
@@ -136,9 +194,13 @@ impl Type {
     /// primitive designed to be shared and its operations are the synchronisation. A
     /// sequence is a handle to unsynchronised shared mutable storage, and letting one
     /// cross would be a data race the language had invited.
+    ///
+    /// A type parameter is refused too: nothing is known about it, and a generic function
+    /// has no way to say it wants only types that may cross. `docs/spec.md`, *Generic
+    /// definitions are checked once, parametrically*.
     #[must_use]
     pub fn may_cross_into_a_task(self) -> bool {
-        !self.is_sequence()
+        !self.is_sequence() && !self.is_param()
     }
 
     /// Parse a written **built-in** type name. `None` for anything else, including every

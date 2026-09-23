@@ -51,7 +51,7 @@ use crate::names::SourceNames;
 
 use crate::ir::{
     ArithOp, Block, Builtin, EnumLayout, EnumTy, Expr, Function, Lowering as _, MatchArm, Owns,
-    RecordLayout, RecordTy, Stmt, Ty, Unit,
+    RecordLayout, RecordTy, Stmt, Ty, Unit, VecLayout, VecTy,
 };
 use crate::symbol::NativeSymbol;
 
@@ -103,6 +103,8 @@ struct OwningVariant {
 struct Layouts<'a> {
     records: &'a [RecordLayout],
     enums: &'a [EnumLayout],
+    /// The `Vec` types this unit's text mentions. N11.
+    vecs: &'a [VecLayout],
 }
 
 /// How a type is written in LLVM text.
@@ -124,6 +126,11 @@ fn record_layout(records: &[RecordLayout], id: RecordTy) -> Option<&RecordLayout
 /// The layout of an enum this unit carries.
 fn enum_layout(enums: &[EnumLayout], id: EnumTy) -> Option<&EnumLayout> {
     enums.iter().find(|l| l.id == id)
+}
+
+/// The element type of a `Vec` this unit carries.
+fn vec_layout(vecs: &[VecLayout], id: VecTy) -> Option<&VecLayout> {
+    vecs.iter().find(|l| l.id == id)
 }
 
 /// Whether anything this type contains, at any depth, owns something to release.
@@ -267,6 +274,8 @@ struct Emitter<'a> {
     generated: std::collections::BTreeSet<(RecordTy, bool)>,
     /// The same, for enums.
     generated_enums: std::collections::BTreeSet<(EnumTy, bool)>,
+    /// The per-`Vec` release helpers generated, by element type. N11.
+    generated_vecs: std::collections::BTreeSet<VecTy>,
     /// The argument-block types generated for `spawn` sites, by field list.
     ///
     /// One per distinct argument shape rather than one per site, so two `spawn`s of the
@@ -573,7 +582,9 @@ impl Emitter<'_> {
     fn retain(&mut self, value: u32, ty: Ty) {
         match ty.owns() {
             None => {}
-            Some(Owns::Ints | Owns::Strs) => {
+            // A `Vec` is a sequence header whatever it holds: taking a reference to one is
+            // one increment, never a walk over its elements.
+            Some(Owns::Ints | Owns::Strs | Owns::Vec(_)) => {
                 let _ = writeln!(self.out, "  call void @nz.arr_retain(ptr %{value})");
                 self.needs_sequences = true;
             }
@@ -676,7 +687,109 @@ impl Emitter<'_> {
                     let _ = writeln!(self.out, "  call void @{helper}({ty} %{value})");
                 }
             }
+            // The last reference releases every element by the element's own law, and
+            // then the storage. An element type that owns nothing needs no walk, and the
+            // header goes the way an `Ints` does.
+            Some(Owns::Vec(id)) => {
+                self.needs_sequences = true;
+                match self.vec_helper(id) {
+                    Some(helper) => {
+                        let _ = writeln!(self.out, "  call void @{helper}(ptr %{value})");
+                    }
+                    None => {
+                        let _ = writeln!(self.out, "  call void @nz.seq_release(ptr %{value})");
+                    }
+                }
+            }
         }
+    }
+
+    /// The symbol of this `Vec` type's release helper, generating it if needed.
+    ///
+    /// `None` for an element type that owns nothing: releasing such a vector is releasing
+    /// its header and buffer, which `@nz.seq_release` already does.
+    ///
+    /// The same algorithm `@nz.strs_release` is, over this element type: decrement, and
+    /// on the last reference release each element **before** the buffer that holds it and
+    /// the buffer before the header, then count the reclamation. One helper per element
+    /// type rather than a loop at every site, and an element that is itself a `Vec`, a
+    /// record or an enum is released by *its* helper — so the recursion is in the emitted
+    /// program, not in this compiler.
+    fn vec_helper(&mut self, id: VecTy) -> Option<String> {
+        let layout = vec_layout(self.types.vecs, id)?.clone();
+        if !owns_anything(self.types, layout.elem) {
+            return None;
+        }
+        let name = format!("nz.vrel.{}", layout.name);
+        if !self.generated_vecs.insert(id) {
+            return Some(name);
+        }
+        self.needs_sequences = true;
+        let elem = llvm_type(self.types, layout.elem);
+
+        let saved_out = std::mem::take(&mut self.out);
+        let saved_next = self.next;
+        let saved_label = self.next_label;
+        let saved_current = std::mem::take(&mut self.current);
+        self.next = 0;
+        self.next_label = 0;
+        self.current = "entry".to_owned();
+
+        let _ = writeln!(
+            self.out,
+            "\ndefine internal void @{name}(ptr %h) {{    ; {}",
+            layout.source
+        );
+        for line in [
+            "entry:",
+            "  %none = icmp eq ptr %h, null",
+            "  br i1 %none, label %done, label %drop",
+            "drop:",
+            "  %rcp = getelementptr i8, ptr %h, i64 24",
+            "  %rc = load i64, ptr %rcp",
+            "  %rc2 = sub i64 %rc, 1",
+            "  store i64 %rc2, ptr %rcp",
+            "  %last = icmp sle i64 %rc2, 0",
+            "  br i1 %last, label %contents, label %done",
+            "contents:",
+            "  %n = load i64, ptr %h",
+            "  %dp = getelementptr i8, ptr %h, i64 16",
+            "  %data = load ptr, ptr %dp",
+            "  br label %test",
+            "test:",
+            "  %i = phi i64 [ 0, %contents ], [ %next, %body ]",
+            "  %more = icmp slt i64 %i, %n",
+            "  br i1 %more, label %body, label %storage",
+            "body:",
+        ] {
+            let _ = writeln!(self.out, "{line}");
+        }
+        self.current = "body".to_owned();
+        let _ = writeln!(self.out, "  %e = getelementptr {elem}, ptr %data, i64 %i");
+        let v = self.fresh();
+        let _ = writeln!(self.out, "  %{v} = load {elem}, ptr %e");
+        self.release(v, layout.elem);
+        for line in [
+            "  %next = add i64 %i, 1",
+            "  br label %test",
+            "storage:",
+            "  call void @free(ptr %data)",
+            "  call void @free(ptr %h)",
+            "  %c = atomicrmw add ptr @nz.seq_reclaimed, i64 1 monotonic",
+            "  br label %done",
+            "done:",
+            "  ret void",
+            "}",
+        ] {
+            let _ = writeln!(self.out, "{line}");
+        }
+
+        let body = std::mem::replace(&mut self.out, saved_out);
+        self.helpers.push_str(&body);
+        self.next = saved_next;
+        self.next_label = saved_label;
+        self.current = saved_current;
+        Some(name)
     }
 
     /// The symbol of this record's retain or release helper, generating it if needed.
@@ -1994,6 +2107,9 @@ impl Emitter<'_> {
                 // generated below is what reaches them. Setting flags from a partial walk
                 // here would be a second answer to the same question.
                 Some(Owns::Record(_) | Owns::Enum(_)) => {}
+                // Never reached: a `Vec` may not cross into a task (`N0321`), and the
+                // lowering refuses one by name as well.
+                Some(Owns::Vec(_)) => self.needs_sequences = true,
             }
         }
         // The task's return value is discarded, which `docs/spec.md` says outright:
@@ -2057,6 +2173,13 @@ impl Emitter<'_> {
                         let t = llvm_type(self.types, *ty);
                         let _ = writeln!(&mut body, "  call void @{helper}({t} %v{i})");
                     }
+                }
+                // Never reached, for the reason above; released correctly if it were.
+                Some(Owns::Vec(id)) => {
+                    let helper = self
+                        .vec_helper(id)
+                        .unwrap_or_else(|| "nz.seq_release".to_owned());
+                    let _ = writeln!(&mut body, "  call void @{helper}(ptr %v{i})");
                 }
             }
         }
@@ -2451,6 +2574,13 @@ impl Emitter<'_> {
                 }
             }
             Expr::Builtin { op, args, span } => self.builtin(*op, args, *span),
+            Expr::Vec {
+                op,
+                vec,
+                elem,
+                args,
+                span,
+            } => self.vec_builtin(*op, *vec, *elem, args, *span),
             Expr::Variant {
                 ty,
                 tag,
@@ -2535,6 +2665,194 @@ impl Emitter<'_> {
             }
         }
         out
+    }
+
+    /// A `Vec[T]` built-in: its arguments evaluated left to right, then the operation, then
+    /// any temporary argument given back — the rule [`Self::builtin`] follows, because a
+    /// generic built-in borrows its arguments exactly as every other call does.
+    fn vec_builtin(&mut self, op: Builtin, vec: VecTy, elem: Ty, args: &[Expr], span: Span) -> Val {
+        let mut vals = Vec::new();
+        let mut types = Vec::new();
+        for a in args {
+            match self.expr(a) {
+                Val::Of { value, ty } => {
+                    vals.push(value);
+                    types.push(ty);
+                }
+                Val::Transferred => return Val::Transferred,
+            }
+        }
+        let out = self.vec_op(op, vec, elem, &vals, span);
+        if let Val::Of { .. } = out {
+            for (v, t) in vals.iter().zip(&types) {
+                self.drop_temporary(*v, *t);
+            }
+        }
+        out
+    }
+
+    /// The size in bytes of one element of this type, as an SSA value.
+    ///
+    /// Asked of LLVM rather than computed here, by the address of element 1 of an array at
+    /// null — the same question the task machinery asks of an argument block. Semantic
+    /// stages know no byte size (`docs/architecture.md` §7.10), and neither does this one:
+    /// the target's layout answers it.
+    fn stride(&mut self, elem: Ty) -> u32 {
+        let t = llvm_type(self.types, elem);
+        let at = self.fresh();
+        let _ = writeln!(self.out, "  %{at} = getelementptr {t}, ptr null, i64 1");
+        let size = self.fresh();
+        let _ = writeln!(self.out, "  %{size} = ptrtoint ptr %{at} to i64");
+        size
+    }
+
+    /// One `Vec[T]` operation, with its arguments already evaluated.
+    ///
+    /// The header is the one every sequence has — `{ i64 len, i64 cap, ptr data, i64 rc }`
+    /// from `@nz.seq_new` — so a `Vec` is reclaimed, counted and grown by the runtime that
+    /// already reclaims, counts and grows an `Ints`. What is `T`'s is the element's layout,
+    /// taken from LLVM, and what an element owns, taken from `T`'s own law.
+    fn vec_op(&mut self, op: Builtin, vec: VecTy, elem: Ty, vals: &[u32], span: Span) -> Val {
+        let arg = |i: usize| vals.get(i).copied().unwrap_or_default();
+        let t = llvm_type(self.types, elem);
+        self.needs_sequences = true;
+        match op {
+            Builtin::VecNew => {
+                let h = self.fresh();
+                let _ = writeln!(self.out, "  %{h} = call ptr @nz.seq_new()");
+                let null = self.fresh();
+                let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{h}, null");
+                self.guard(
+                    null,
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    span,
+                );
+                self.own(h, Ty::Vec(vec));
+                Val::Of {
+                    value: h,
+                    ty: Ty::Vec(vec),
+                }
+            }
+            Builtin::VecLen => {
+                let n = self.fresh();
+                let _ = writeln!(self.out, "  %{n} = load i64, ptr %{}", arg(0));
+                Val::Of {
+                    value: n,
+                    ty: Ty::Int,
+                }
+            }
+            Builtin::VecGet => {
+                let slot = self.sequence_slot(arg(0), arg(1), elem, span);
+                let v = self.fresh();
+                let _ = writeln!(self.out, "  %{v} = load {t}, ptr %{slot}");
+                // **Its own copy**, by `T`'s law, before anything else can happen to the
+                // slot: the element may be overwritten, popped or released the moment this
+                // expression is done, and what it returned must not care. N8's `strs_get`
+                // lesson, generic.
+                if elem.owns().is_some() {
+                    self.take(v, elem);
+                    self.own(v, elem);
+                }
+                Val::Of { value: v, ty: elem }
+            }
+            Builtin::VecSet => {
+                let slot = self.sequence_slot(arg(0), arg(1), elem, span);
+                // The order is the correctness: the new value's reference is taken
+                // **before** the old one is released, so storing a copy of the element
+                // itself — `vec_set(xs, 0, vec_get(xs, 0))` — cannot drop a count to zero
+                // in between.
+                let old = self.fresh();
+                let _ = writeln!(self.out, "  %{old} = load {t}, ptr %{slot}");
+                self.retain(arg(2), elem);
+                let _ = writeln!(self.out, "  store {t} %{}, ptr %{slot}", arg(2));
+                self.release(old, elem);
+                Val::Of {
+                    value: arg(1),
+                    ty: Ty::Int,
+                }
+            }
+            Builtin::VecPush => {
+                // Growth first, and nothing taken until it has succeeded: a failed growth
+                // leaves the vector as it was and the caller's value untouched. The
+                // runtime relocates the elements with `realloc` — a move of storage, not a
+                // copy of values, so no element's count changes (`docs/architecture.md`
+                // §7.12 says why every current value may be moved by its bytes).
+                let size = self.stride(elem);
+                let data = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{data} = call ptr @nz.arr_grow(ptr %{}, i64 %{size})",
+                    arg(0)
+                );
+                let null = self.fresh();
+                let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{data}, null");
+                self.guard(
+                    null,
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    span,
+                );
+                let len = self.fresh();
+                let _ = writeln!(self.out, "  %{len} = load i64, ptr %{}", arg(0));
+                let slot = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{slot} = getelementptr {t}, ptr %{data}, i64 %{len}"
+                );
+                // The vector keeps what it is given, so it takes a copy of its own; the
+                // caller's value is untouched, which is rule 2.
+                self.retain(arg(1), elem);
+                let _ = writeln!(self.out, "  store {t} %{}, ptr %{slot}", arg(1));
+                let grown = self.fresh();
+                let _ = writeln!(self.out, "  %{grown} = add i64 %{len}, 1");
+                let _ = writeln!(self.out, "  store i64 %{grown}, ptr %{}", arg(0));
+                Val::Of {
+                    value: grown,
+                    ty: Ty::Int,
+                }
+            }
+            Builtin::VecPop => {
+                let len = self.fresh();
+                let _ = writeln!(self.out, "  %{len} = load i64, ptr %{}", arg(0));
+                let empty = self.fresh();
+                let _ = writeln!(self.out, "  %{empty} = icmp sle i64 %{len}, 0");
+                self.require(empty, "this sequence is empty", span);
+                let last = self.fresh();
+                let _ = writeln!(self.out, "  %{last} = sub i64 %{len}, 1");
+                let data_field = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{data_field} = getelementptr i8, ptr %{}, i64 16",
+                    arg(0)
+                );
+                let data = self.fresh();
+                let _ = writeln!(self.out, "  %{data} = load ptr, ptr %{data_field}");
+                let slot = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{slot} = getelementptr {t}, ptr %{data}, i64 %{last}"
+                );
+                let v = self.fresh();
+                let _ = writeln!(self.out, "  %{v} = load {t}, ptr %{slot}");
+                let _ = writeln!(self.out, "  store i64 %{last}, ptr %{}", arg(0));
+                // A **transfer**: the vector gives up its reference to the element and this
+                // expression holds that same one. No retain and no release.
+                if elem.owns().is_some() {
+                    self.own(v, elem);
+                }
+                Val::Of { value: v, ty: elem }
+            }
+            // Only the `Vec` built-ins are lowered to this operation.
+            _ => {
+                let _ = writeln!(self.out, "  unreachable");
+                Val::Transferred
+            }
+        }
     }
 
     /// One built-in, with its arguments already evaluated.
@@ -3096,6 +3414,17 @@ impl Emitter<'_> {
                 self.own(out, Ty::Str);
                 out
             }
+            // The generic built-ins are lowered to `Expr::Vec` and never reach here: their
+            // types are the site's, and this function has none.
+            Builtin::VecNew
+            | Builtin::VecLen
+            | Builtin::VecGet
+            | Builtin::VecSet
+            | Builtin::VecPush
+            | Builtin::VecPop => {
+                let _ = writeln!(self.out, "  unreachable");
+                return Val::Transferred;
+            }
             Builtin::IntToStr => {
                 // 20 digits is the widest `Int` (`-9223372036854775808`), plus the NUL
                 // `snprintf` insists on writing.
@@ -3567,6 +3896,7 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         types: Layouts {
             records: &unit.records,
             enums: &unit.enums,
+            vecs: &unit.vecs,
         },
         loops: Vec::new(),
         owned: std::collections::BTreeSet::new(),
@@ -3579,6 +3909,7 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         helpers: String::new(),
         generated: std::collections::BTreeSet::new(),
         generated_enums: std::collections::BTreeSet::new(),
+        generated_vecs: std::collections::BTreeSet::new(),
         blocks: Vec::new(),
         block_types: String::new(),
         tasks: String::new(),
@@ -3615,6 +3946,7 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
     let layouts = Layouts {
         records: &unit.records,
         enums: &unit.enums,
+        vecs: &unit.vecs,
     };
     for r in &unit.records {
         let fields = r
@@ -4301,11 +4633,20 @@ entry:
   br i1 %full, label %grow, label %done
 grow:
   ; Doubling, with a floor of four. `realloc(null, n)` is `malloc(n)`, so the first
-  ; growth needs no special case.
-  %twice = mul i64 %cap, 2
+  ; growth needs no special case. Both products are checked: an element may be a record
+  ; or an enum of any size since N11, and a wrapped size would allocate less than the
+  ; caller is about to write.
+  %twice.r = call {i64, i1} @llvm.umul.with.overflow.i64(i64 %cap, i64 2)
+  %twice = extractvalue {i64, i1} %twice.r, 0
+  %twice.o = extractvalue {i64, i1} %twice.r, 1
   %tiny = icmp slt i64 %twice, 4
   %want = select i1 %tiny, i64 4, i64 %twice
-  %bytes = mul i64 %want, %elem
+  %bytes.r = call {i64, i1} @llvm.umul.with.overflow.i64(i64 %want, i64 %elem)
+  %bytes = extractvalue {i64, i1} %bytes.r, 0
+  %bytes.o = extractvalue {i64, i1} %bytes.r, 1
+  %over = or i1 %twice.o, %bytes.o
+  br i1 %over, label %oom, label %sized
+sized:
   %old = load ptr, ptr %datap
   %new = call ptr @realloc(ptr %old, i64 %bytes)
   %failed = icmp eq ptr %new, null
@@ -4997,6 +5338,7 @@ mod tests {
             externals: Vec::new(),
             records: Vec::new(),
             enums: Vec::new(),
+            vecs: Vec::new(),
         }
     }
 

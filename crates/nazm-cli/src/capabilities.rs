@@ -109,6 +109,14 @@ const CONSTRUCTS: &[ConstructRow] = &[
         evidence: "nazm-core/tests/enums.rs, nazm-cli/tests/memory.rs",
     },
     ConstructRow {
+        name: "first-order generics: generic records, enums and functions, `Vec[T]`",
+        interpreted: true,
+        compiled: true,
+        evidence: "nazm-core/tests/generics.rs, nazm-cli/tests/generics.rs, \
+                   nazm-cli/tests/memory.rs; natively monomorphised, polymorphic recursion \
+                   refused (N0357)",
+    },
+    ConstructRow {
         name: "modules: `use`, relative resolution, diamonds, cycles",
         interpreted: true,
         compiled: true,
@@ -164,8 +172,10 @@ fn inventory() -> Inventory {
             .iter()
             .map(|i| BuiltinRow {
                 name: i.name(),
-                params: i.params().iter().filter_map(|t| t.builtin_name()).collect(),
-                returns: i.ret().builtin_name().unwrap_or("?"),
+                // In the table's own vocabulary since N11, which spells a generic
+                // built-in's `T` and `Vec[T]` as well as every built-in type.
+                params: i.params().iter().map(|t| t.spelling()).collect(),
+                returns: i.ret().spelling(),
                 interpreted: true,
                 compiled: Builtin::by_name(i.name()).is_some(),
             })

@@ -23,11 +23,63 @@
 
 use crate::types::Type;
 
+/// How one position of a built-in's signature is typed, in the table's own vocabulary.
+///
+/// A vocabulary rather than [`Type`] since N11, because a generic built-in's signature
+/// names `Vec[T]`, and a `Vec` is an interned id that exists only inside one compilation —
+/// so it cannot be written in a `const` table. `T` is the built-in's **own** parameter, and
+/// the checker turns a shape into a [`Type`] once, when it builds a module's environment.
+/// One inventory still: the checker, the interpreter and the backend all read this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Shape {
+    Int,
+    Bool,
+    Str,
+    Ints,
+    Strs,
+    Chan,
+    /// The built-in's type parameter.
+    T,
+    /// `Vec[T]`.
+    VecT,
+}
+
+impl Shape {
+    /// The monomorphic type this shape is, or `None` for one that mentions `T`.
+    #[must_use]
+    pub const fn monomorphic(self) -> Option<Type> {
+        match self {
+            Self::Int => Some(Type::Int),
+            Self::Bool => Some(Type::Bool),
+            Self::Str => Some(Type::Str),
+            Self::Ints => Some(Type::Ints),
+            Self::Strs => Some(Type::Strs),
+            Self::Chan => Some(Type::Chan),
+            Self::T | Self::VecT => None,
+        }
+    }
+
+    /// How the shape is spelled in source, for tooling and for the checker's identity.
+    #[must_use]
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            Self::Int => "Int",
+            Self::Bool => "Bool",
+            Self::Str => "Str",
+            Self::Ints => "Ints",
+            Self::Strs => "Strs",
+            Self::Chan => "Chan",
+            Self::T => "T",
+            Self::VecT => "Vec[T]",
+        }
+    }
+}
+
 /// A built-in operation.
 ///
 /// `Str` values are **immutable and byte-addressed**. See `docs/spec.md`, *Strings are
 /// bytes, and what that commits to*.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Intrinsic {
     /// `str_len(s: Str) -> Int` — length in **bytes**, not characters.
     StrLen,
@@ -135,11 +187,34 @@ pub enum Intrinsic {
     /// `exit_with(code: Int) -> Int` — ends the process. Never returns, which the type
     /// system cannot say, so it is written `Int` and the value never arrives.
     ExitWith,
+
+    // --- `Vec[T]`, N11 --------------------------------------------------------------
+    //
+    // The first generic built-ins. Each has one type parameter, `T`, and follows the
+    // sequence law of `Ints` and `Strs` with `T`'s own copy law for the elements:
+    // `docs/spec.md`, *`Vec[T]` — a mutable handle, by the sequence law*.
+    /// `vec_new[T]() -> Vec[T]` — an empty vector. `T` is written, because nothing else
+    /// could say what it is.
+    VecNew,
+    /// `vec_len[T](xs: Vec[T]) -> Int`
+    VecLen,
+    /// `vec_get[T](xs: Vec[T], i: Int) -> T` — a copy of element `i`, by `T`'s law.
+    /// Fails with `N0405` unless `0 <= i < len`.
+    VecGet,
+    /// `vec_set[T](xs: Vec[T], i: Int, v: T) -> Int` — replaces element `i` with a copy
+    /// of `v` and returns `i`. The new value is taken before the old one is released.
+    VecSet,
+    /// `vec_push[T](xs: Vec[T], v: T) -> Int` — appends a copy of `v` and returns the new
+    /// length. A failed growth leaves the vector as it was.
+    VecPush,
+    /// `vec_pop[T](xs: Vec[T]) -> T` — removes the last element and transfers it out.
+    /// Fails with `N0405` on an empty vector.
+    VecPop,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 37] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -171,6 +246,12 @@ impl Intrinsic {
         Self::Print,
         Self::EPrint,
         Self::ExitWith,
+        Self::VecNew,
+        Self::VecLen,
+        Self::VecGet,
+        Self::VecSet,
+        Self::VecPush,
+        Self::VecPop,
     ];
 
     #[must_use]
@@ -207,43 +288,69 @@ impl Intrinsic {
             Self::Print => "print",
             Self::EPrint => "eprint",
             Self::ExitWith => "exit_with",
+            Self::VecNew => "vec_new",
+            Self::VecLen => "vec_len",
+            Self::VecGet => "vec_get",
+            Self::VecSet => "vec_set",
+            Self::VecPush => "vec_push",
+            Self::VecPop => "vec_pop",
+        }
+    }
+
+    /// How many type parameters this built-in has: one for the `Vec` operations, none for
+    /// everything else.
+    #[must_use]
+    pub const fn generics(self) -> u32 {
+        match self {
+            Self::VecNew
+            | Self::VecLen
+            | Self::VecGet
+            | Self::VecSet
+            | Self::VecPush
+            | Self::VecPop => 1,
+            _ => 0,
         }
     }
 
     #[must_use]
-    pub fn params(self) -> &'static [Type] {
+    pub fn params(self) -> &'static [Shape] {
         match self {
-            Self::StrLen => &[Type::Str],
-            Self::StrByte => &[Type::Str, Type::Int],
-            Self::StrSlice => &[Type::Str, Type::Int, Type::Int],
-            Self::StrConcat => &[Type::Str, Type::Str],
-            Self::IntToStr | Self::StrFromByte => &[Type::Int],
+            Self::StrLen => &[Shape::Str],
+            Self::StrByte => &[Shape::Str, Shape::Int],
+            Self::StrSlice => &[Shape::Str, Shape::Int, Shape::Int],
+            Self::StrConcat => &[Shape::Str, Shape::Str],
+            Self::IntToStr | Self::StrFromByte => &[Shape::Int],
             Self::IntsNew | Self::StrsNew => &[],
-            Self::IntsLen | Self::IntsPop => &[Type::Ints],
-            Self::StrsLen | Self::StrsPop => &[Type::Strs],
-            Self::IntsGet => &[Type::Ints, Type::Int],
-            Self::StrsGet => &[Type::Strs, Type::Int],
-            Self::IntsSet => &[Type::Ints, Type::Int, Type::Int],
-            Self::StrsSet => &[Type::Strs, Type::Int, Type::Str],
-            Self::IntsPush => &[Type::Ints, Type::Int],
-            Self::StrsPush => &[Type::Strs, Type::Str],
-            Self::StrJoin => &[Type::Strs, Type::Str],
-            Self::ChanNew => &[Type::Int],
-            Self::ChanSend => &[Type::Chan, Type::Int],
-            Self::ChanRecv => &[Type::Chan, Type::Ints],
-            Self::ChanClose => &[Type::Chan],
+            Self::IntsLen | Self::IntsPop => &[Shape::Ints],
+            Self::StrsLen | Self::StrsPop => &[Shape::Strs],
+            Self::IntsGet => &[Shape::Ints, Shape::Int],
+            Self::StrsGet => &[Shape::Strs, Shape::Int],
+            Self::IntsSet => &[Shape::Ints, Shape::Int, Shape::Int],
+            Self::StrsSet => &[Shape::Strs, Shape::Int, Shape::Str],
+            Self::IntsPush => &[Shape::Ints, Shape::Int],
+            Self::StrsPush => &[Shape::Strs, Shape::Str],
+            Self::StrJoin => &[Shape::Strs, Shape::Str],
+            Self::ChanNew => &[Shape::Int],
+            Self::ChanSend => &[Shape::Chan, Shape::Int],
+            Self::ChanRecv => &[Shape::Chan, Shape::Ints],
+            Self::ChanClose => &[Shape::Chan],
             Self::ArgsCount => &[],
-            Self::Arg | Self::ExitWith => &[Type::Int],
-            Self::ReadFile | Self::FileExists | Self::Print | Self::EPrint => &[Type::Str],
-            Self::WriteFile => &[Type::Str, Type::Str],
+            Self::Arg | Self::ExitWith => &[Shape::Int],
+            Self::ReadFile | Self::FileExists | Self::Print | Self::EPrint => &[Shape::Str],
+            Self::WriteFile => &[Shape::Str, Shape::Str],
+            Self::VecNew => &[],
+            Self::VecLen | Self::VecPop => &[Shape::VecT],
+            Self::VecGet => &[Shape::VecT, Shape::Int],
+            Self::VecSet => &[Shape::VecT, Shape::Int, Shape::T],
+            Self::VecPush => &[Shape::VecT, Shape::T],
         }
     }
 
     #[must_use]
-    pub fn ret(self) -> Type {
+    pub fn ret(self) -> Shape {
         match self {
-            Self::StrLen | Self::StrByte => Type::Int,
-            Self::StrSlice | Self::StrConcat | Self::IntToStr | Self::StrFromByte => Type::Str,
+            Self::StrLen | Self::StrByte => Shape::Int,
+            Self::StrSlice | Self::StrConcat | Self::IntToStr | Self::StrFromByte => Shape::Str,
             Self::IntsLen
             | Self::StrsLen
             | Self::IntsGet
@@ -251,16 +358,21 @@ impl Intrinsic {
             | Self::IntsPush
             | Self::IntsPop
             | Self::StrsSet
-            | Self::StrsPush => Type::Int,
-            Self::StrsGet | Self::StrsPop | Self::StrJoin | Self::Arg | Self::ReadFile => Type::Str,
-            Self::ArgsCount | Self::WriteFile | Self::Print | Self::EPrint | Self::ExitWith => {
-                Type::Int
+            | Self::StrsPush => Shape::Int,
+            Self::StrsGet | Self::StrsPop | Self::StrJoin | Self::Arg | Self::ReadFile => {
+                Shape::Str
             }
-            Self::FileExists | Self::ChanSend | Self::ChanRecv => Type::Bool,
-            Self::ChanNew => Type::Chan,
-            Self::ChanClose => Type::Int,
-            Self::IntsNew => Type::Ints,
-            Self::StrsNew => Type::Strs,
+            Self::ArgsCount | Self::WriteFile | Self::Print | Self::EPrint | Self::ExitWith => {
+                Shape::Int
+            }
+            Self::FileExists | Self::ChanSend | Self::ChanRecv => Shape::Bool,
+            Self::ChanNew => Shape::Chan,
+            Self::ChanClose => Shape::Int,
+            Self::IntsNew => Shape::Ints,
+            Self::StrsNew => Shape::Strs,
+            Self::VecNew => Shape::VecT,
+            Self::VecLen | Self::VecSet | Self::VecPush => Shape::Int,
+            Self::VecGet | Self::VecPop => Shape::T,
         }
     }
 

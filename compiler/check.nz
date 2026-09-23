@@ -64,10 +64,7 @@ fn main() -> Int {
     let bparams = ints_new();
     builtins(bnames, bret, bfirst, bcount, bparams);
 
-    let dcode = strs_new();
-    let dstart = ints_new();
-    let dend = ints_new();
-    let dmsg = strs_new();
+    let diags = vec_new[Diag]();
 
     // Records, in three stages before any signature. Names first, for the whole
     // compilation, because a field's type may name a record declared later or in another
@@ -78,29 +75,43 @@ fn main() -> Int {
     let rpub = ints_new();
     let rat = ints_new();
     let rnode = ints_new();
-    // What each entry is: a record, an enum, or one of an enum's variants. See
-    // `analyse.nz`, *an enum is a record whose fields are its variants*.
+    // What each entry is: a record, an enum, one of an enum's variants, a `Vec` or a type
+    // parameter. See `analyse.nz`, *an enum is a record whose fields are its variants*,
+    // and *generics*.
     let rkind = ints_new();
     let rfirst = ints_new();
     let rcount = ints_new();
     let rfname = strs_new();
     let rftype = ints_new();
     let rfat = ints_new();
+    let tb = new_table(rnames, rowner, rpub, rat, rnode, rkind, rfirst, rcount,
+            rfname, rftype, rfat);
     let tmod = ints_new();
     let tname = strs_new();
     let trec = ints_new();
-    collect_records(nk, nar, nst, nen, ntx, naux, mstart,
-            rnames, rowner, rpub, rat, rnode, rkind, kids, kid_first,
-            dcode, dstart, dend, dmsg);
+    collect_records(nk, nar, nst, nen, ntx, naux, mstart, tb, kids, kid_first,
+            diags);
     check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath),
-            rnames, rowner, rpub, tmod, tname, trec, dcode, dstart, dend, dmsg);
-    resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first,
-            rnames, rowner, rat, rnode, rkind, rfirst, rcount, rfname, rftype, rfat,
-            tmod, tname, trec, dcode, dstart, dend, dmsg);
-    check_record_layouts(rnames, rat, rfirst, rcount, rftype, dcode, dstart, dend, dmsg);
+            rnames, rowner, rpub, tmod, tname, trec, diags);
+    resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first, tb,
+            tmod, tname, trec, diags);
+    check_ownership(tb, diags);
+    // The generic built-ins' `T` and `Vec[T]`, now that there is a table to hold them.
+    let bgen = ints_new();
+    generic_builtins(tb, bnames, bret, bparams, bgen);
 
     // Signatures before any body, so a forward reference resolves — the same two-pass
-    // shape `nazm-lir::lower` uses, and for the same reason.
+    // shape `nazm-lir::lower` uses, and for the same reason. The declared types go on the
+    // `fn` and `param` nodes as they are resolved, so those arrays exist first.
+    let nslot = ints_new();
+    let ntype = ints_new();
+    let ncallee = ints_new();
+    let nrec = ints_new();
+    // The types a node carries beyond its own: a function's type parameters, and what a
+    // generic call settled its callee's to — `[count, t1, …]` in `ntargs`, from
+    // `ntfirst[node]`.
+    let ntfirst = ints_new();
+    let ntargs = ints_new();
     let fnames = strs_new();
     let fret = ints_new();
     let ffirst = ints_new();
@@ -108,11 +119,12 @@ fn main() -> Int {
     let fparams = ints_new();
     let fowner = ints_new();
     let fpub = ints_new();
+    let fgen = ints_new();
+    let fgc = ints_new();
     collect_signatures(nk, nar, nst, nen, ntx, naux, kids, kid_first, mstart,
-            fnames, fret, ffirst, fcount, fparams, fowner, fpub, bnames,
-            rnames, rowner, rpub, rat, rkind, rfirst, rcount, rfname, rftype, rfat,
-            tmod, tname, trec,
-            dcode, dstart, dend, dmsg);
+            fnames, fret, ffirst, fcount, fparams, fowner, fpub, fgen, fgc, bnames, tb,
+            nrec, ntfirst, ntargs, tmod, tname, trec,
+            diags);
 
     // What each module's imports bring in, and the collisions that creates. Nothing here
     // for a one-module program, and it still runs: the pass is not conditional on there
@@ -121,40 +133,37 @@ fn main() -> Int {
     let vname = strs_new();
     let vfn = ints_new();
     check_imports(mfirst, mcount, mto, mat, strs_len(mpath), fnames, fowner, fpub,
-            vmod, vname, vfn, dcode, dstart, dend, dmsg);
+            vmod, vname, vfn, diags);
 
-    entry_point(fnames, fowner, dcode, dstart, dend, dmsg);
+    entry_point(fnames, fowner, diags);
 
-    let nslot = ints_new();
-    let ntype = ints_new();
-    let ncallee = ints_new();
-    let nrec = ints_new();
     check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee, nrec,
             kids, kid_first, ints_len(nk) - 1,
             mstart, mfirst, mcount, mto,
             fnames, fret, ffirst, fcount, fparams,
             fowner, fpub, vmod, vname, vfn,
             bnames, bret, bfirst, bcount, bparams,
-            rnames, rowner, rkind, rfirst, rcount, rfname, rftype,
+            tb, fgen, fgc, bgen, ntfirst, ntargs,
             tmod, tname, trec,
-            dcode, dstart, dend, dmsg);
+            diags);
 
     // One allocation for the whole output; see the note in `lexer.nz`.
     let nl = str_from_byte(10);
     let out = strs_new();
     let mut d = 0;
-    while d < strs_len(dcode) {
-        strs_push(out, strs_get(dcode, d));
+    while d < vec_len(diags) {
+        let one = vec_get(diags, d);
+        strs_push(out, one.code);
         strs_push(out, "|");
-        strs_push(out, int_to_str(ints_get(dstart, d)));
+        strs_push(out, int_to_str(one.start));
         strs_push(out, "|");
-        strs_push(out, int_to_str(ints_get(dend, d)));
+        strs_push(out, int_to_str(one.end));
         strs_push(out, "|");
-        strs_push(out, strs_get(dmsg, d));
+        strs_push(out, one.message);
         strs_push(out, nl);
         d = d + 1;
     }
     print(str_join(out, ""));
-    if strs_len(dcode) > 0 { exit_with(1); }
+    if vec_len(diags) > 0 { exit_with(1); }
     0
 }

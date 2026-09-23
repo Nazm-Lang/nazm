@@ -8,7 +8,7 @@ pub mod parser;
 pub use ast::{
     Assign, BinOp, Block, Enum, Expr, Field, FieldInit, Function, Import, Let, MatchArm, Param,
     PatternField, Place, PlaceField, Program, Record, Return, Scope, Spawn, Stmt, TypeName,
-    Variant, While,
+    TypeParam, Variant, While,
 };
 pub use format::format;
 pub use lexer::{lex, lex_in, lex_with_comments, lex_with_comments_in, Token, TokenKind};

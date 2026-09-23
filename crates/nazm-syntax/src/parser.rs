@@ -11,7 +11,7 @@ use nazm_span::{FileId, Span};
 use crate::ast::{
     Assign, BinOp, Block, Enum, Expr, Field, FieldInit, Function, Import, Let, MatchArm, Param,
     PatternField, Place, PlaceField, Program, Record, Return, Scope, Spawn, Stmt, TypeName,
-    Variant, While,
+    TypeParam, Variant, While,
 };
 use crate::lexer::{Token, TokenKind};
 
@@ -442,6 +442,7 @@ impl<'a> Parser<'a> {
                 return None;
             }
         };
+        let type_params = self.type_params()?;
 
         self.expect(&TokenKind::LBrace, "to start the fields")?;
         let mut fields = Vec::new();
@@ -478,6 +479,7 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             pub_span,
+            type_params,
             fields,
             span: start.join(close),
         })
@@ -518,6 +520,7 @@ impl<'a> Parser<'a> {
                 return None;
             }
         };
+        let type_params = self.type_params()?;
 
         self.expect(&TokenKind::LBrace, "to start the variants")?;
         let mut variants = Vec::new();
@@ -610,6 +613,7 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             pub_span,
+            type_params,
             variants,
             span: start.join(close),
         })
@@ -651,6 +655,7 @@ impl<'a> Parser<'a> {
             }
         };
 
+        let type_params = self.type_params()?;
         self.expect(&TokenKind::LParen, "after the function name")?;
         let mut params = Vec::new();
         while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
@@ -721,6 +726,7 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             pub_span,
+            type_params,
             params,
             return_type,
             body,
@@ -728,19 +734,99 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// `[A, B]` after a declared name, or nothing.
+    ///
+    /// At least one name and no trailing comma: an empty list declares nothing, and a
+    /// parameter list is written on one line. Uniqueness and what a name may be are the
+    /// checker's — they are questions about a namespace, not about punctuation.
+    fn type_params(&mut self) -> Option<Vec<TypeParam>> {
+        let mut out = Vec::new();
+        if !self.eat(&TokenKind::LBracket) {
+            return Some(out);
+        }
+        loop {
+            let span = self.peek_span();
+            match self.advance() {
+                TokenKind::Ident(n) => out.push(TypeParam { name: n, span }),
+                other => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            span,
+                            format!("expected a type parameter, found {}", other.describe()),
+                        )
+                        .help("type parameters are names: `fn identity[T](value: T) -> T`"),
+                    );
+                    return None;
+                }
+            }
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RBracket, "to close the type parameters")?;
+        Some(out)
+    }
+
+    /// A type: a name, optionally applied to type arguments.
+    ///
+    /// Recursion here is counted against the same budget as every other: `Vec[Vec[…]]` is a
+    /// tree, and each level is one more frame in every pass that walks it.
     fn type_name(&mut self) -> Option<TypeName> {
-        let span = self.peek_span();
+        if !self.enter() {
+            return None;
+        }
+        let out = self.type_name_inner();
+        self.leave();
+        out
+    }
+
+    fn type_name_inner(&mut self) -> Option<TypeName> {
+        let name_span = self.peek_span();
         match self.advance() {
-            TokenKind::Ident(n) => Some(TypeName { name: n, span }),
+            TokenKind::Ident(n) => {
+                let (args, end) = if self.at(&TokenKind::LBracket) {
+                    let (args, close) = self.type_args()?;
+                    (Some(args), close)
+                } else {
+                    (None, name_span)
+                };
+                Some(TypeName {
+                    name: n,
+                    name_span,
+                    span: name_span.join(end),
+                    args,
+                })
+            }
             other => {
                 self.errors.push(Diagnostic::error(
                     codes::UNEXPECTED_TOKEN,
-                    span,
+                    name_span,
                     format!("expected a type, found {}", other.describe()),
                 ));
                 None
             }
         }
+    }
+
+    /// `[T, U]` — type arguments, possibly none.
+    ///
+    /// `[]` parses: it is a type written with the wrong number of arguments, which the
+    /// checker reports with the arity it wanted (`N0353`), rather than a syntax error that
+    /// could only say a type was expected.
+    fn type_args(&mut self) -> Option<(Vec<TypeName>, Span)> {
+        self.expect(&TokenKind::LBracket, "to start the type arguments")?;
+        let mut args = Vec::new();
+        if !self.at(&TokenKind::RBracket) {
+            loop {
+                args.push(self.type_name()?);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        let close = self.expect(&TokenKind::RBracket, "to close the type arguments")?;
+        Some((args, close))
     }
 
     /// Statements, then an optional tail expression.
@@ -1058,12 +1144,18 @@ impl<'a> Parser<'a> {
     }
 
     /// `Name(field: value, …)`, the `(` already seen by the caller's lookahead.
-    fn construction(&mut self, ty: String, ty_span: Span) -> Option<Expr> {
+    fn construction(
+        &mut self,
+        ty: String,
+        ty_span: Span,
+        type_args: Option<Vec<TypeName>>,
+    ) -> Option<Expr> {
         let (fields, close, deepest) = self.field_inits()?;
         self.built(deepest + 1)?;
         Some(Expr::Construct {
             ty,
             ty_span,
+            type_args,
             fields,
             span: ty_span.join(close),
         })
@@ -1073,7 +1165,12 @@ impl<'a> Parser<'a> {
     ///
     /// The parentheses are written even when the variant has no payload, because
     /// `Enum.Variant` alone is exactly the shape of a field projection. See `docs/spec.md`.
-    fn variant_construction(&mut self, ty: String, ty_span: Span) -> Option<Expr> {
+    fn variant_construction(
+        &mut self,
+        ty: String,
+        ty_span: Span,
+        type_args: Option<Vec<TypeName>>,
+    ) -> Option<Expr> {
         self.advance(); // `.`
         let variant_span = self.peek_span();
         let TokenKind::Ident(variant) = self.advance() else {
@@ -1085,6 +1182,7 @@ impl<'a> Parser<'a> {
         Some(Expr::Variant {
             ty,
             ty_span,
+            type_args,
             variant,
             variant_span,
             fields,
@@ -1465,6 +1563,43 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 self.advance();
+                // `name[T, …]` — type arguments, before a call, a construction or a
+                // variant. Nothing else can follow a name with `[`: there is no indexing.
+                let type_args = if self.at(&TokenKind::LBracket) {
+                    let (args, _) = self.type_args()?;
+                    let applies = self.at(&TokenKind::LParen)
+                        || (self.at(&TokenKind::Dot)
+                            && matches!(
+                                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                                Some(TokenKind::Ident(_))
+                            )
+                            && matches!(
+                                self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                                Some(TokenKind::LParen)
+                            ));
+                    if !applies {
+                        let at = self.peek_span();
+                        self.errors.push(
+                            Diagnostic::error(
+                                codes::UNEXPECTED_TOKEN,
+                                at,
+                                format!(
+                                    "expected `(` after the type arguments of `{name}`, found {}",
+                                    self.peek().describe()
+                                ),
+                            )
+                            .help(
+                                "type arguments are written where something is called or \
+                                 built: `identity[Int](7)`, `Box[Int](value: 7)`, \
+                                 `Maybe[Int].None()`",
+                            ),
+                        );
+                        return None;
+                    }
+                    Some(args)
+                } else {
+                    None
+                };
                 // `Enum.Variant(…)` is a variant. Three tokens decide it, and the
                 // decision is total: the language has no methods and no function values,
                 // so a `(` can never follow a field projection and nothing else has this
@@ -1479,7 +1614,7 @@ impl<'a> Parser<'a> {
                         Some(TokenKind::LParen)
                     );
                 if variant {
-                    return self.variant_construction(name, span);
+                    return self.variant_construction(name, span, type_args);
                 }
                 // `Name(field: …)` is a construction; `f(a, b)` is a call. Two tokens
                 // past the `(` decide it, and the decision is total: no expression can
@@ -1495,7 +1630,7 @@ impl<'a> Parser<'a> {
                         Some(TokenKind::Colon)
                     );
                 if constructing {
-                    return self.construction(name, span);
+                    return self.construction(name, span, type_args);
                 }
                 if self.eat(&TokenKind::LParen) {
                     let mut args = Vec::new();
@@ -1512,6 +1647,7 @@ impl<'a> Parser<'a> {
                     Some(Expr::Call {
                         callee: name,
                         callee_span: span,
+                        type_args,
                         args,
                         span: span.join(close),
                     })

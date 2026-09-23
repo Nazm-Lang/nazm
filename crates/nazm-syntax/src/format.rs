@@ -352,8 +352,10 @@ impl<'a> Printer<'a> {
                     self.break_line();
                 }
             }
-            TokenKind::LParen => self.brackets.push(false),
-            TokenKind::RParen => {
+            // A type parameter or argument list is one line, like an argument list:
+            // `Pair[Int, Str]` is a type, and breaking inside it would be breaking a name.
+            TokenKind::LParen | TokenKind::LBracket => self.brackets.push(false),
+            TokenKind::RParen | TokenKind::RBracket => {
                 self.brackets.pop();
             }
             TokenKind::Semi if !self.in_inline() => {
@@ -409,6 +411,7 @@ impl<'a> Printer<'a> {
         if matches!(
             next,
             TokenKind::RParen
+                | TokenKind::RBracket
                 | TokenKind::Comma
                 | TokenKind::Colon
                 | TokenKind::Semi
@@ -417,13 +420,21 @@ impl<'a> Printer<'a> {
             return false;
         }
         // Nothing after an opener, or after a `.`.
-        if matches!(previous, TokenKind::LParen | TokenKind::Dot) {
+        if matches!(
+            previous,
+            TokenKind::LParen | TokenKind::LBracket | TokenKind::Dot
+        ) {
             return false;
         }
-        // `f(` is one thing; `while (` is two. The bracket is glued to a name and
-        // separated from anything else.
+        // `Pair[` is one thing: a type argument list is glued to what it applies to, and
+        // only a name can come before one.
+        if *next == TokenKind::LBracket {
+            return false;
+        }
+        // `f(` is one thing; `while (` is two. The bracket is glued to a name — or to the
+        // type arguments after one, `f[Int](` — and separated from anything else.
         if *next == TokenKind::LParen {
-            return !matches!(previous, TokenKind::Ident(_));
+            return !matches!(previous, TokenKind::Ident(_) | TokenKind::RBracket);
         }
         true
     }

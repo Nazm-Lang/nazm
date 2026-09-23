@@ -53,6 +53,10 @@ pub struct Record {
     /// Where `pub` was written, if it was. Syntax, not meaning — exactly as
     /// [`Function::pub_span`].
     pub pub_span: Option<Span>,
+    /// `[A, B]` after the name, in the order written. Empty for a record that is not
+    /// generic. Order is semantic and spelling is not: `docs/spec.md`, *Order is semantic;
+    /// names are not*.
+    pub type_params: Vec<TypeParam>,
     /// The fields, in the order written.
     ///
     /// Order is recorded because a reader wrote it and a formatter must preserve it. It
@@ -82,6 +86,8 @@ pub struct Enum {
     pub name_span: Span,
     /// Where `pub` was written, if it was. Syntax, not meaning.
     pub pub_span: Option<Span>,
+    /// `[T]` after the name. Empty for an enum that is not generic.
+    pub type_params: Vec<TypeParam>,
     /// The variants, in the order written.
     ///
     /// Order is recorded because a reader wrote it and a formatter must preserve it. It is
@@ -116,6 +122,8 @@ pub struct Function {
     /// definition to modules that directly import this one — is `nazm_sema`'s to decide,
     /// because deciding it here would put visibility in two places.
     pub pub_span: Option<Span>,
+    /// `[T]` after the name. Empty for a function that is not generic.
+    pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     /// Always written. Inference across a function boundary would make a signature
     /// change invisible at the definition, which is the opposite of what a reader needs.
@@ -136,8 +144,39 @@ pub struct Param {
     pub span: Span,
 }
 
+/// A type as written: a name, and — for an application — its arguments.
+///
+/// Recursive since N11: `Vec[Pair[Int, Str]]` is a name with one argument that is itself a
+/// name with two. `args` is `None` where no brackets were written and `Some` where they
+/// were, **including empty ones**: `Vec[]` is a type written with the wrong number of
+/// arguments, which is a question for the checker about a type rather than one for the
+/// parser about punctuation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeName {
+    pub name: String,
+    /// Where the name alone is written, for a diagnostic about the name.
+    pub name_span: Span,
+    /// The whole written type, arguments included.
+    pub span: Span,
+    pub args: Option<Vec<TypeName>>,
+}
+
+impl TypeName {
+    /// A plain name with no arguments, for code that builds one.
+    #[must_use]
+    pub fn plain(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            name_span: span,
+            span,
+            args: None,
+        }
+    }
+}
+
+/// One declared type parameter: `T` in `fn identity[T](…)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeParam {
     pub name: String,
     pub span: Span,
 }
@@ -360,6 +399,8 @@ pub enum Expr {
     Call {
         callee: String,
         callee_span: Span,
+        /// `f[Int](…)` — explicit type arguments, or `None` where none were written.
+        type_args: Option<Vec<TypeName>>,
         args: Vec<Expr>,
         span: Span,
     },
@@ -376,6 +417,9 @@ pub enum Expr {
     Construct {
         ty: String,
         ty_span: Span,
+        /// `Pair[Int, Str](…)` — the type arguments of a generic record, which are always
+        /// written. `None` where none were.
+        type_args: Option<Vec<TypeName>>,
         fields: Vec<FieldInit>,
         span: Span,
     },
@@ -389,6 +433,9 @@ pub enum Expr {
     Variant {
         ty: String,
         ty_span: Span,
+        /// `Maybe[Int].Some(…)` — the type arguments of a generic enum, which are always
+        /// written. `None` where none were.
+        type_args: Option<Vec<TypeName>>,
         variant: String,
         /// Where the variant name is written — the span resolution keys this by.
         variant_span: Span,

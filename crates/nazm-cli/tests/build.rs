@@ -3415,43 +3415,45 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
     // emit every one. Each must therefore either compile or be refused **by its own
     // name**, never fail some other way.
     for i in nazm_core::Intrinsic::ALL {
+        use nazm_core::sema::Shape;
         let args: Vec<&str> = i
             .params()
             .iter()
             .map(|t| match t {
-                nazm_core::Type::Int => "0",
-                nazm_core::Type::Bool => "true",
-                nazm_core::Type::Str => "\"ab\"",
-                nazm_core::Type::Ints => "ints_new()",
-                nazm_core::Type::Strs => "strs_new()",
-                nazm_core::Type::Chan => "chan_new(1)",
-                // No built-in takes or returns a user-defined type, and none can: a
-                // built-in is part of the language and a record or enum exists in one
-                // program.
-                nazm_core::Type::Record(_) | nazm_core::Type::Enum(_) => {
-                    unreachable!("no built-in names a user type")
-                }
+                Shape::Int => "0",
+                Shape::Bool => "true",
+                Shape::Str => "\"ab\"",
+                Shape::Ints => "ints_new()",
+                Shape::Strs => "strs_new()",
+                Shape::Chan => "chan_new(1)",
+                // The generic built-ins, at `T = Int`. No built-in names a user type, and
+                // none can: a built-in is part of the language and a record or enum exists
+                // in one program.
+                Shape::T => "0",
+                Shape::VecT => "vec_new[Int]()",
             })
             .collect();
-        // Every built-in currently returns `Int` or `Str`; wrap the `Str` ones so `main`
-        // still returns `Int`.
-        let call = format!("{}({})", i.name(), args.join(", "));
+        // `vec_new` is the one built-in whose type argument nothing else could say.
+        let name = if i.params().is_empty() && i.generics() > 0 {
+            format!("{}[Int]", i.name())
+        } else {
+            i.name().to_owned()
+        };
+        let call = format!("{name}({})", args.join(", "));
         // Wrapped so `main` still returns `Int`, whatever the built-in produces. The
         // program is only built, never run, so an index that would be out of bounds at
         // run time is fine here — this test is about lowering coverage.
         let body = match i.ret() {
-            nazm_core::Type::Int => call,
-            nazm_core::Type::Str => format!("str_len({call})"),
-            nazm_core::Type::Bool => format!("if {call} {{ 1 }} else {{ 0 }}"),
-            nazm_core::Type::Ints => format!("ints_len({call})"),
-            nazm_core::Type::Strs => format!("strs_len({call})"),
+            Shape::Int | Shape::T => call,
+            Shape::Str => format!("str_len({call})"),
+            Shape::Bool => format!("if {call} {{ 1 }} else {{ 0 }}"),
+            Shape::Ints => format!("ints_len({call})"),
+            Shape::Strs => format!("strs_len({call})"),
+            Shape::VecT => format!("vec_len({call})"),
             // No `chan_len`, and none is wanted: a channel's length is not a thing a
             // program may observe without racing. Sending into it is the shortest way
             // to reach an `Int` from one.
-            nazm_core::Type::Chan => format!("if chan_send({call}, 0) {{ 1 }} else {{ 0 }}"),
-            nazm_core::Type::Record(_) | nazm_core::Type::Enum(_) => {
-                unreachable!("no built-in names a user type")
-            }
+            Shape::Chan => format!("if chan_send({call}, 0) {{ 1 }} else {{ 0 }}"),
         };
         let src = format!("fn main() -> Int {{ {body} }}\n");
 

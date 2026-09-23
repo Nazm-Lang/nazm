@@ -105,6 +105,34 @@ pub struct FnDef {
     pub decl: u32,
     /// Every binding in the body, in the order slots were allocated.
     pub locals: Vec<LocalDef>,
+    /// The type parameters' names, in the order declared. Empty unless the function is
+    /// generic. Presentation only — see [`crate::TypeParam`].
+    pub type_params: Vec<String>,
+    /// Every call its body makes, with the type arguments the checker settled.
+    ///
+    /// What the native backend's instance planner walks: which instances a body needs is a
+    /// fact about the resolved body, and recording it here means planning neither re-walks
+    /// the tree nor re-decides a single call. For a generic body the arguments may mention
+    /// its own parameters, which is exactly what substitution then replaces.
+    pub call_sites: Vec<CallSite>,
+    /// Every type a **generic** body's resolution mentions — its locals, what it constructs
+    /// and the type arguments of what it calls — so that an instance can have each of them
+    /// interned under its substitution before any native code is written. Empty for a
+    /// function that is not generic, which needs no substitution.
+    pub mentions: Vec<Type>,
+}
+
+/// One call in a body: where it is, what it resolved to, and with which type arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallSite {
+    /// The callee's name span — the key [`Resolution::callee`] answers.
+    pub span: Span,
+    pub callee: Callee,
+    /// The callee's type arguments, in its parameters' order. Empty for a callee that is
+    /// not generic.
+    pub type_args: Vec<Type>,
+    /// Whether this is a `spawn` rather than a call. Both are edges of the call graph.
+    pub spawned: bool,
 }
 
 /// Which field of which record a projection refers to.
@@ -182,6 +210,9 @@ pub struct Resolution {
     /// Keyed by the span of a **payload field name** in a variant construction or a
     /// pattern.
     payloads: HashMap<Span, PayloadRef>,
+    /// What each generic call site's type arguments were settled to, by the callee's name
+    /// span — written or inferred, the checker decided and the backend reads.
+    type_args: HashMap<Span, Vec<Type>>,
 }
 
 impl Resolution {
@@ -391,5 +422,50 @@ impl Resolution {
 
     pub fn record_payload(&mut self, span: Span, to: PayloadRef) {
         self.payloads.insert(span, to);
+    }
+
+    /// Record the type arguments a generic call site was checked with.
+    pub fn record_type_args(&mut self, span: Span, args: Vec<Type>) {
+        self.type_args.insert(span, args);
+    }
+
+    /// The type arguments a generic call site was checked with, if it had any.
+    #[must_use]
+    pub fn type_args(&self, span: Span) -> Option<&[Type]> {
+        self.type_args.get(&span).map(Vec::as_slice)
+    }
+
+    /// Record a call a function's body makes.
+    pub fn record_call_site(&mut self, id: FnId, site: CallSite) {
+        if let Some(f) = self.functions.get_mut(id.index()) {
+            f.call_sites.push(site);
+        }
+    }
+
+    /// Record that a generic function's body mentions a type.
+    pub fn record_mention(&mut self, id: FnId, t: Type) {
+        if let Some(f) = self.functions.get_mut(id.index()) {
+            if !f.type_params.is_empty() && !f.mentions.contains(&t) {
+                f.mentions.push(t);
+            }
+        }
+    }
+
+    /// Give a declared function its signature, once its types have been resolved.
+    ///
+    /// Two steps, like a record's fields, because a generic function's parameter types
+    /// mention its own parameters — and a parameter names its owner, which needs the
+    /// function's id before anything else about it can be written down.
+    pub fn complete_signature(&mut self, id: FnId, params: Vec<Type>, ret: Type) {
+        if let Some(f) = self.functions.get_mut(id.index()) {
+            f.params = params;
+            f.ret = ret;
+        }
+    }
+
+    /// The id the next [`Self::declare`] will return.
+    #[must_use]
+    pub fn next_function(&self) -> FnId {
+        FnId::from_index(self.functions.len())
     }
 }

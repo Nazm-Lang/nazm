@@ -222,12 +222,38 @@ for case in "$corpus"/modules/*/; do
   modules=$((modules + 1))
 done
 
+# Refusals, N11: programs every compiler must refuse, with the code the first line of
+# each names — an ownership cycle through a `Vec`, an impossible inline layout through a
+# generic record, conflicting inference, and an instance family that never ends. Agreement
+# on what is accepted says nothing about agreement on what is not.
+say "conformance: C2, C3 and the reference refuse the same programs"
+refused=0
+for case in "$corpus"/refused/*.nz; do
+  [ -e "$case" ] || continue
+  name=$(basename "$case" .nz)
+  code=$(sed -n '1s#^// expect: ##p' "$case")
+  [ -n "$code" ] || fail "refusal case $name names no code"
+  for stage in stage2 stage3; do
+    if "$out/$stage/nazmc" "$case" > "$out/$stage/$name.ll" 2> "$out/$stage/$name.err"; then
+      fail "$stage accepted refusal case $name"
+    fi
+    grep -q "error\[$code\]" "$out/$stage/$name.err" || fail "$stage refused $name without $code"
+  done
+  if "$nazm" build "$case" -o "$out/$name.ref" > /dev/null 2> "$out/$name.ref.err"; then
+    fail "the reference accepted refusal case $name"
+  fi
+  grep -q "error\[$code\]" "$out/$name.ref.err" || fail "the reference refused $name without $code"
+  refused=$((refused + 1))
+done
+
 say "conformance-cases: $checked" >> "$out/record.txt"
 say "module-conformance-cases: $modules" >> "$out/record.txt"
+say "refusal-conformance-cases: $refused" >> "$out/record.txt"
+[ "$refused" -gt 0 ] || fail "no refusal conformance cases were run"
 [ "$checked" -gt 0 ] || fail "no conformance cases were run"
 [ "$modules" -gt 0 ] || fail "no module conformance cases were run"
 
 say ""
-say "bootstrap complete: C2 and C3 are byte-identical, $checked conformance cases agree ($modules of them multi-module)"
+say "bootstrap complete: C2 and C3 are byte-identical, $checked conformance cases agree ($modules of them multi-module), $refused refusals agree"
 say "record: $out/record.txt"
 cat "$out/record.txt"

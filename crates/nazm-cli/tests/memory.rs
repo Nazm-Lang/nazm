@@ -1743,3 +1743,408 @@ fn a_value_whose_every_branch_leaves_makes_nothing_after_it_run() {
     assert_eq!(r.value, "2");
     assert_eq!(r.strings, expected(2), "{r:?}");
 }
+
+// --- N11: `Vec[T]` and generic values ------------------------------------------------------
+//
+// `docs/spec.md`, *`Vec[T]` — a mutable handle, by the sequence law*. Every case runs in
+// both implementations, which must agree on the value and on what each class of storage
+// did — and the interesting half is the element: a `Vec` of `Str`, of a record, of an enum
+// and of another `Vec` each owns its elements by **the element's** law, which is the
+// composition this milestone exists to test.
+
+#[test]
+fn a_vec_of_int_follows_the_sequence_law_of_ints() {
+    // The control. The same operations over `Ints` and over `Vec[Int]`, including an alias
+    // and a return, must produce the same answer — and a `Vec` is a sequence, so both
+    // storage records are counted in the same class.
+    let r = both(
+        r#"fn fill(n: Int) -> Vec[Int] {
+    let xs = vec_new[Int]();
+    let mut i = 0;
+    while i < n { vec_push(xs, i * i); i = i + 1; }
+    xs
+}
+fn fill_ints(n: Int) -> Ints {
+    let xs = ints_new();
+    let mut i = 0;
+    while i < n { ints_push(xs, i * i); i = i + 1; }
+    xs
+}
+fn main() -> Int {
+    let v = fill(10);
+    let a = fill_ints(10);
+    let alias = v;
+    vec_push(alias, 7);
+    ints_push(a, 7);
+    vec_set(v, 2, 40);
+    ints_set(a, 2, 40);
+    let p = vec_pop(v);
+    let q = ints_pop(a);
+    let same = if vec_len(v) == ints_len(a) { 1 } else { 0 };
+    vec_get(v, 2) + vec_get(alias, 9) + p + same * 1000 - ints_get(a, 2) - ints_get(a, 9) - q
+}
+"#,
+    );
+    assert_eq!(r.value, "1000");
+    assert_eq!(r.sequences, expected(2), "{r:?}");
+}
+
+#[test]
+fn a_vec_of_str_owns_each_string_by_the_string_law() {
+    // Heap strings and slices go in; one is read out and then overwritten, one is replaced
+    // with a copy of itself, one is popped out and outlives the vector. Every backing is
+    // reclaimed exactly once, and nothing is released while a value still names it.
+    let r = both(
+        r#"fn main() -> Int {
+    let xs = vec_new[Str]();
+    let mut i = 0;
+    while i < 20 {
+        vec_push(xs, int_to_str(i * 111));
+        vec_push(xs, str_slice(str_concat("abc", int_to_str(i)), 1, 4));
+        i = i + 1;
+    }
+    let got = vec_get(xs, 4);
+    vec_set(xs, 4, "literal");
+    vec_set(xs, 5, vec_get(xs, 5));
+    let popped = vec_pop(xs);
+    let mut noise = "";
+    let mut k = 0;
+    while k < 30 { noise = str_concat(noise, "z"); k = k + 1; }
+    str_len(got) * 1000 + str_len(popped) * 100 + str_len(vec_get(xs, 5)) * 10 + vec_len(xs)
+        + str_len(noise) - 30
+}
+"#,
+    );
+    assert_eq!(r.value, "3369");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+    assert_eq!(r.strings.live, 0, "{r:?}");
+    assert!(r.strings.allocated > 60, "{r:?}");
+}
+
+#[test]
+fn a_record_read_out_of_a_vec_survives_its_slot_being_overwritten() {
+    // `docs/spec.md`: `vec_get` returns its own copy. The element is overwritten at once,
+    // and then enough small allocations are made that a block the overwrite freed too
+    // early would be handed back out — the churn is what makes a use-after-free show as a
+    // wrong answer or a signal rather than as nothing.
+    let r = both(
+        r#"struct Item {
+    name: Str,
+    count: Int,
+    tags: Ints,
+}
+fn main() -> Int {
+    let xs = vec_new[Item]();
+    let mut i = 0;
+    while i < 12 {
+        let tags = ints_new();
+        ints_push(tags, i);
+        vec_push(xs, Item(name: str_concat("item", int_to_str(i)), count: i, tags: tags));
+        i = i + 1;
+    }
+    let kept = vec_get(xs, 3);
+    vec_set(xs, 3, Item(name: "other", count: 99, tags: ints_new()));
+    let mut noise = vec_new[Str]();
+    let mut k = 0;
+    while k < 40 { vec_push(noise, int_to_str(k)); k = k + 1; }
+    noise = vec_new[Str]();
+    let mut updated = vec_get(xs, 5);
+    updated.count = 500;
+    vec_set(xs, 5, updated);
+    let last = vec_pop(xs);
+    str_len(kept.name) * 1000 + kept.count * 100 + ints_get(kept.tags, 0) * 10
+        + vec_get(xs, 5).count + last.count + vec_get(xs, 3).count + vec_len(noise)
+}
+"#,
+    );
+    assert_eq!(r.value, "5940");
+    assert_eq!(r.sequences.live, 0, "{r:?}");
+    assert_eq!(r.strings.live, 0, "{r:?}");
+}
+
+#[test]
+fn a_vec_of_enum_releases_only_each_elements_active_payload() {
+    // Four variants with four ownership shapes. A vector of them, grown past several
+    // reallocations, has to relocate every element without touching an inactive arm and
+    // release each one by its own discriminant when the vector goes.
+    let r = both(
+        r#"struct Point {
+    label: Str,
+    x: Int,
+}
+enum Token {
+    Eof,
+    Number(value: Int),
+    Word(text: Str),
+    At(point: Point),
+}
+fn main() -> Int {
+    let toks = vec_new[Token]();
+    let mut i = 0;
+    while i < 40 {
+        vec_push(toks, Token.Eof());
+        vec_push(toks, Token.Number(value: i));
+        vec_push(toks, Token.Word(text: int_to_str(i)));
+        vec_push(toks, Token.At(point: Point(label: str_concat("p", int_to_str(i)), x: i)));
+        i = i + 1;
+    }
+    let mut total = 0;
+    let mut k = 0;
+    while k < vec_len(toks) {
+        total = total + match vec_get(toks, k) {
+            Token.Eof() => 1,
+            Token.Number(value: v) => v,
+            Token.Word(text: t) => str_len(t),
+            Token.At(point: p) => str_len(p.label) + p.x,
+        };
+        k = k + 1;
+    }
+    vec_set(toks, 3, Token.Eof());
+    let popped = vec_pop(toks);
+    total + match popped { Token.At(point: p) => p.x, Token.Eof() => 0, Token.Number(value: v) => v, Token.Word(text: t) => 0, }
+}
+"#,
+    );
+    assert_eq!(r.value, "1819");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+    assert_eq!(r.strings.live, 0, "{r:?}");
+}
+
+#[test]
+fn a_nested_vec_releases_each_inner_vector_and_what_it_holds() {
+    // The outer vector stores handles, and releasing it releases each inner one — which
+    // releases its strings. An inner vector that is still named elsewhere survives the
+    // outer one.
+    let r = both(
+        r#"fn main() -> Int {
+    let grid = vec_new[Vec[Int]]();
+    let words = vec_new[Vec[Str]]();
+    let mut i = 0;
+    while i < 6 {
+        let row = vec_new[Int]();
+        let texts = vec_new[Str]();
+        let mut j = 0;
+        while j < i {
+            vec_push(row, j);
+            vec_push(texts, int_to_str(i * 10 + j));
+            j = j + 1;
+        }
+        vec_push(grid, row);
+        vec_push(words, texts);
+        i = i + 1;
+    }
+    let kept = vec_get(words, 5);
+    let total = vec_len(vec_get(grid, 5)) + vec_get(vec_get(grid, 4), 3);
+    total * 100 + vec_len(kept) + str_len(vec_get(kept, 4))
+}
+"#,
+    );
+    assert_eq!(r.value, "807");
+    assert_eq!(r.sequences, expected(14), "{r:?}");
+    assert_eq!(r.strings.live, 0, "{r:?}");
+}
+
+#[test]
+fn a_vec_of_channels_holds_a_reference_to_each_channel() {
+    // A channel stored in a vector stays alive for as long as the vector holds it, and is
+    // reclaimed only when its other alias is gone too.
+    let r = both(
+        r#"fn main() -> Int {
+    let kept = chan_new(4);
+    let chans = vec_new[Chan]();
+    vec_push(chans, kept);
+    vec_push(chans, chan_new(1));
+    vec_push(chans, chan_new(2));
+    chan_send(vec_get(chans, 0), 7);
+    let got = ints_new();
+    chan_recv(kept, got);
+    vec_pop(chans);
+    vec_len(chans) * 100 + ints_get(got, 0)
+}
+"#,
+    );
+    assert_eq!(r.value, "207");
+    assert_eq!(r.channels, expected(3), "{r:?}");
+}
+
+#[test]
+fn a_vec_returned_by_tail_and_by_return_is_the_same_handle() {
+    let r = both(
+        r#"struct Row {
+    name: Str,
+    n: Int,
+}
+fn by_tail(n: Int) -> Vec[Row] {
+    let xs = vec_new[Row]();
+    let mut i = 0;
+    while i < n { vec_push(xs, Row(name: int_to_str(i), n: i)); i = i + 1; }
+    xs
+}
+fn by_return(n: Int) -> Vec[Row] {
+    let xs = vec_new[Row]();
+    let mut i = 0;
+    while true {
+        if i == n { return xs; }
+        vec_push(xs, Row(name: int_to_str(i), n: i));
+        i = i + 1;
+    }
+    xs
+}
+fn main() -> Int {
+    let a = by_tail(5);
+    let b = by_return(7);
+    vec_len(a) * 10 + vec_len(b) + vec_get(b, 6).n * 100
+}
+"#,
+    );
+    assert_eq!(r.value, "657");
+    assert_eq!(r.sequences, expected(2), "{r:?}");
+    assert_eq!(r.strings, expected(12), "{r:?}");
+}
+
+#[test]
+fn a_generic_function_returns_each_kind_of_value_by_its_own_law() {
+    // `identity[T]` at six concrete types: the result must outlive the callee's cleanup,
+    // exactly as a monomorphic function's does, and the copy made by `let y = x;` inside it
+    // must take and give back references by `T`'s law rather than by one rule for all.
+    let r = both(
+        r#"struct Pair {
+    left: Str,
+    right: Int,
+}
+enum Maybe[T] {
+    None,
+    Some(value: T),
+}
+fn identity[T](x: T) -> T {
+    let y = x;
+    y
+}
+fn main() -> Int {
+    let n = identity(40);
+    let s = identity(str_concat("ab", "cd"));
+    let p = identity(Pair(left: int_to_str(12345), right: 1));
+    let m = identity(Maybe[Str].Some(value: int_to_str(7)));
+    let v = identity(vec_new[Str]());
+    vec_push(v, int_to_str(99));
+    let c = identity(chan_new(1));
+    chan_send(c, 3);
+    let got = ints_new();
+    chan_recv(c, got);
+    let from_m = match m { Maybe.None() => 0, Maybe.Some(value: t) => str_len(t), };
+    n + str_len(s) * 10 + str_len(p.left) * 100 + p.right + from_m + vec_len(v) + ints_get(got, 0)
+}
+"#,
+    );
+    assert_eq!(r.value, "586");
+    assert_eq!(r.sequences.live, 0, "{r:?}");
+    assert_eq!(r.strings.live, 0, "{r:?}");
+    assert_eq!(r.channels, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_generic_record_releases_each_field_by_its_substituted_type() {
+    // One definition, four instantiations with four ownership laws: nothing, a backing, a
+    // handle, and a nested record. Each copy and each release is its instance's.
+    let r = both(
+        r#"struct Holder[T] {
+    value: T,
+    tag: Int,
+}
+struct Named {
+    name: Str,
+}
+fn main() -> Int {
+    let a = Holder[Int](value: 1, tag: 1);
+    let b = Holder[Str](value: str_concat("x", "yz"), tag: 2);
+    let c = Holder[Vec[Int]](value: vec_new[Int](), tag: 3);
+    vec_push(c.value, 5);
+    let d = Holder[Named](value: Named(name: int_to_str(4444)), tag: 4);
+    let d2 = d;
+    let b2 = b;
+    a.value + str_len(b2.value) * 10 + vec_get(c.value, 0) * 100 + str_len(d2.value.name) * 1000
+        + a.tag + b.tag + c.tag + d.tag
+}
+"#,
+    );
+    assert_eq!(r.value, "4541");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+    assert_eq!(r.strings, expected(2), "{r:?}");
+}
+
+#[test]
+fn a_vec_element_replaced_by_a_copy_of_itself_survives_the_allocator() {
+    // `vec_set(xs, 0, vec_get(xs, 0))`: taking the new reference before releasing the old
+    // one is the only order in which this cannot free the string it is storing. The noise
+    // afterwards is what would reuse the block a wrong order released.
+    let r = both(
+        r#"fn main() -> Int {
+    let xs = vec_new[Str]();
+    vec_push(xs, str_concat("keep", "me"));
+    vec_set(xs, 0, vec_get(xs, 0));
+    let mut noise = vec_new[Str]();
+    let mut i = 0;
+    while i < 64 { vec_push(noise, str_concat("n", int_to_str(i))); i = i + 1; }
+    noise = vec_new[Str]();
+    str_len(vec_get(xs, 0)) + str_byte(vec_get(xs, 0), 0) + vec_len(noise)
+}
+"#,
+    );
+    assert_eq!(r.value, "113");
+    assert_eq!(r.strings.live, 0, "{r:?}");
+}
+
+#[test]
+fn a_failed_vec_operation_gives_back_what_the_frame_held() {
+    // An index outside the vector fails with `N0405` in both implementations, at the call,
+    // and the failure path releases the vector and every string in it.
+    let (r, err) = both_failing(
+        r#"fn main() -> Int {
+    let xs = vec_new[Str]();
+    vec_push(xs, int_to_str(1));
+    vec_push(xs, int_to_str(2));
+    str_len(vec_get(xs, 5))
+}
+"#,
+    );
+    assert!(err.contains("N0405"), "{err}");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+    assert_eq!(r.strings, expected(2), "{r:?}");
+    let (popped, err) = both_failing(
+        r#"fn main() -> Int {
+    let xs = vec_new[Str]();
+    str_len(vec_pop(xs))
+}
+"#,
+    );
+    assert!(err.contains("N0405") && err.contains("empty"), "{err}");
+    assert_eq!(popped.sequences, expected(1), "{popped:?}");
+}
+
+#[test]
+fn many_short_lived_vectors_keep_a_constant_live_set() {
+    // Every round builds a vector of records with heap fields and drops it. If anything
+    // an element owns outlived the vector, the live count would say so.
+    let r = both(
+        r#"struct Pair {
+    a: Str,
+    b: Str,
+}
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 300 {
+        let xs = vec_new[Pair]();
+        vec_push(xs, Pair(a: int_to_str(i), b: str_concat("b", int_to_str(i))));
+        vec_push(xs, Pair(a: "lit", b: int_to_str(i + 1)));
+        total = total + str_len(vec_get(xs, 1).b);
+        i = i + 1;
+    }
+    total
+}
+"#,
+    );
+    assert_eq!(r.value, "792");
+    assert_eq!(r.sequences, expected(300), "{r:?}");
+    assert_eq!(r.strings.live, 0, "{r:?}");
+}

@@ -310,7 +310,7 @@ fn a_dependent_checks_against_a_deserialised_interface_with_the_dependency_delet
     // And the negative half, so the pass above is not something else succeeding: with an
     // interface that offers nothing, the same source is refused.
     let empty = PersistentUnitInterface::from_json(
-        r#"{"schema":"nazm.interface/3","module":"b.nz","dependencies":[],"records":[],"enums":[],"exports":[]}"#,
+        r#"{"schema":"nazm.interface/4","module":"b.nz","dependencies":[],"records":[],"enums":[],"exports":[]}"#,
     )
     .expect("valid");
     let mut errors = Vec::new();
@@ -497,12 +497,13 @@ fn an_exported_record_is_published_with_its_fields_and_durable_identity() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/3\",\"module\":\"m.nz\",\"dependencies\":[],\
-         \"records\":[{\"def\":\"m.nz::record Point\",\"name\":\"Point\",\
+        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[],\
+         \"records\":[{\"def\":\"m.nz::record Point\",\"name\":\"Point\",\"generics\":0,\
          \"fields\":[{\"name\":\"x\",\"ty\":\"Str\"},{\"name\":\"y\",\"ty\":\"Int\"}]}],\
          \"enums\":[],\
-         \"exports\":[{\"def\":\"m.nz::fn at\",\"name\":\"at\",\"kind\":\"fn\",\
-         \"params\":[\"m.nz::record Point\"],\"ret\":\"m.nz::record Point\"}]}"
+         \"exports\":[{\"def\":\"m.nz::fn at\",\"name\":\"at\",\"kind\":\"fn\",\"generics\":0,\
+         \"params\":[{\"def\":\"m.nz::record Point\",\"args\":[]}],\
+         \"ret\":{\"def\":\"m.nz::record Point\",\"args\":[]}}]}"
     );
     // A private record is not offered, and its name is not in the bytes.
     assert!(!json.contains("Hidden"), "{json}");
@@ -723,15 +724,15 @@ fn an_exported_enum_is_published_with_its_variants_and_durable_identity() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/3\",\"module\":\"m.nz\",\"dependencies\":[],\
+        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[],\
          \"records\":[],\
-         \"enums\":[{\"def\":\"m.nz::enum State\",\"name\":\"State\",\"variants\":[\
+         \"enums\":[{\"def\":\"m.nz::enum State\",\"name\":\"State\",\"generics\":0,\"variants\":[\
          {\"name\":\"Done\",\"fields\":[{\"name\":\"code\",\"ty\":\"Int\"}]},\
          {\"name\":\"Failed\",\"fields\":[{\"name\":\"code\",\"ty\":\"Int\"},\
          {\"name\":\"why\",\"ty\":\"Str\"}]},\
          {\"name\":\"Ready\",\"fields\":[]}]}],\
          \"exports\":[{\"def\":\"m.nz::fn start\",\"name\":\"start\",\"kind\":\"fn\",\
-         \"params\":[],\"ret\":\"m.nz::enum State\"}]}"
+         \"generics\":0,\"params\":[],\"ret\":{\"def\":\"m.nz::enum State\",\"args\":[]}}]}"
     );
     assert!(!json.contains("Hidden"), "{json}");
     // The numeric discriminant is representation, not meaning, and is nowhere in this.
@@ -893,5 +894,208 @@ fn a_dependent_checks_enums_against_a_deserialised_interface_with_the_dependency
             .iter()
             .any(|d| d.code == nazm_diag::codes::NON_EXHAUSTIVE_MATCH),
         "an added variant should make the importer's match non-exhaustive: {errors:#?}"
+    );
+}
+
+// --- N11: generic interfaces, `nazm.interface/4` -------------------------------------------
+
+/// The fingerprint of one module's published interface, from its source.
+fn generic_hash(dir: &Path, source: &str) -> String {
+    write(dir, "m.nz", source);
+    let json = interface_of(&dir.join("m.nz"));
+    let parsed = PersistentUnitInterface::from_json(&json).expect("valid");
+    InterfaceHash::of(&parsed).expect("hashable").to_string()
+}
+
+const GENERIC_BASE: &str = "pub struct Pair[A, B] {\n    first: A,\n    second: B,\n}\n\
+    pub enum Maybe[T] {\n    None,\n    Some(value: T),\n}\n\
+    pub fn identity[T](value: T) -> T { value }\n\
+    pub fn first[A, B](p: Pair[A, B]) -> A { p.first }\n";
+
+#[test]
+fn a_generic_interface_carries_positions_and_no_parameter_names() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(dir.path(), "m.nz", GENERIC_BASE);
+    let json = interface_of(&dir.path().join("m.nz"));
+    assert_eq!(
+        json,
+        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[],\
+         \"records\":[{\"def\":\"m.nz::record Pair\",\"name\":\"Pair\",\"generics\":2,\
+         \"fields\":[{\"name\":\"first\",\"ty\":{\"param\":0}},{\"name\":\"second\",\"ty\":{\"param\":1}}]}],\
+         \"enums\":[{\"def\":\"m.nz::enum Maybe\",\"name\":\"Maybe\",\"generics\":1,\"variants\":[\
+         {\"name\":\"None\",\"fields\":[]},{\"name\":\"Some\",\"fields\":[{\"name\":\"value\",\"ty\":{\"param\":0}}]}]}],\
+         \"exports\":[\
+         {\"def\":\"m.nz::fn first\",\"name\":\"first\",\"kind\":\"fn\",\"generics\":2,\
+         \"params\":[{\"def\":\"m.nz::record Pair\",\"args\":[{\"param\":0},{\"param\":1}]}],\"ret\":{\"param\":0}},\
+         {\"def\":\"m.nz::fn identity\",\"name\":\"identity\",\"kind\":\"fn\",\"generics\":1,\
+         \"params\":[{\"param\":0}],\"ret\":{\"param\":0}}]}"
+    );
+    // The names written in the source are nowhere in the bytes.
+    for name in ["\"A\"", "\"B\"", "\"T\""] {
+        assert!(!json.contains(name), "{name} leaked: {json}");
+    }
+}
+
+#[test]
+fn the_generic_invalidation_table_is_what_the_fingerprint_actually_does() {
+    // `docs/spec.md`, *Order is semantic; names are not*, and the rest of the table the
+    // milestone asked for — measured.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = generic_hash(dir.path(), GENERIC_BASE);
+
+    let unchanged: &[(&str, &str)] = &[
+        (
+            "every type parameter renamed",
+            "pub struct Pair[Left, Right] {\n    first: Left,\n    second: Right,\n}\n\
+             pub enum Maybe[Value] {\n    None,\n    Some(value: Value),\n}\n\
+             pub fn identity[Value](value: Value) -> Value { value }\n\
+             pub fn first[X, Y](p: Pair[X, Y]) -> X { p.first }\n",
+        ),
+        (
+            "a generic body changes",
+            "pub struct Pair[A, B] {\n    first: A,\n    second: B,\n}\n\
+             pub enum Maybe[T] {\n    None,\n    Some(value: T),\n}\n\
+             pub fn identity[T](value: T) -> T { let v = value; v }\n\
+             pub fn first[A, B](p: Pair[A, B]) -> A { p.first }\n",
+        ),
+        (
+            "a private generic definition is added",
+            &format!(
+                "{GENERIC_BASE}struct Hidden[T] {{ v: T, }}\nfn helper[T](x: T) -> T {{ x }}\n"
+            ),
+        ),
+    ];
+    for (what, source) in unchanged {
+        assert_eq!(generic_hash(dir.path(), source), base, "{what} moved it");
+    }
+
+    let changed: &[(&str, &str)] = &[
+        (
+            "the parameter order changes",
+            "pub struct Pair[B, A] {\n    first: A,\n    second: B,\n}\n\
+             pub enum Maybe[T] {\n    None,\n    Some(value: T),\n}\n\
+             pub fn identity[T](value: T) -> T { value }\n\
+             pub fn first[A, B](p: Pair[B, A]) -> A { p.first }\n",
+        ),
+        (
+            "a record gains a parameter",
+            "pub struct Pair[A, B, C] {\n    first: A,\n    second: B,\n}\n\
+             pub enum Maybe[T] {\n    None,\n    Some(value: T),\n}\n\
+             pub fn identity[T](value: T) -> T { value }\n\
+             pub fn first[A, B](p: Pair[A, B, Int]) -> A { p.first }\n",
+        ),
+        (
+            "a public generic field changes type",
+            "pub struct Pair[A, B] {\n    first: A,\n    second: Vec[B],\n}\n\
+             pub enum Maybe[T] {\n    None,\n    Some(value: T),\n}\n\
+             pub fn identity[T](value: T) -> T { value }\n\
+             pub fn first[A, B](p: Pair[A, B]) -> A { p.first }\n",
+        ),
+        (
+            "a public generic variant is added",
+            "pub struct Pair[A, B] {\n    first: A,\n    second: B,\n}\n\
+             pub enum Maybe[T] {\n    None,\n    Some(value: T),\n    Many(values: Vec[T]),\n}\n\
+             pub fn identity[T](value: T) -> T { value }\n\
+             pub fn first[A, B](p: Pair[A, B]) -> A { p.first }\n",
+        ),
+        (
+            "a public generic signature changes",
+            "pub struct Pair[A, B] {\n    first: A,\n    second: B,\n}\n\
+             pub enum Maybe[T] {\n    None,\n    Some(value: T),\n}\n\
+             pub fn identity[T](value: T) -> Maybe[T] { Maybe[T].Some(value: value) }\n\
+             pub fn first[A, B](p: Pair[A, B]) -> A { p.first }\n",
+        ),
+        (
+            "a function gains a type parameter",
+            "pub struct Pair[A, B] {\n    first: A,\n    second: B,\n}\n\
+             pub enum Maybe[T] {\n    None,\n    Some(value: T),\n}\n\
+             pub fn identity[T, U](value: T) -> T { value }\n\
+             pub fn first[A, B](p: Pair[A, B]) -> A { p.first }\n",
+        ),
+    ];
+    for (what, source) in changed {
+        assert_ne!(
+            generic_hash(dir.path(), source),
+            base,
+            "{what} did not move it"
+        );
+    }
+}
+
+#[test]
+fn a_dependent_checks_generic_apis_against_a_deserialised_interface_with_the_dependency_deleted() {
+    // §29: `Box[Int]` built, a `Maybe[Str]` built and matched, `identity` called with its
+    // type argument inferred and written, and a `Vec[Box[Int]]` — all checked from the
+    // interface's bytes, with `b.nz` not on disk. Then the same source against an interface
+    // whose `Box` lost its parameter, which must be refused: otherwise the first half
+    // proves only that nothing was checked.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub struct Box[T] {\n    value: T,\n}\n\
+         pub enum Maybe[T] {\n    None,\n    Some(value: T),\n}\n\
+         pub fn identity[T](value: T) -> T { value }\n",
+    );
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\n\
+         fn size(m: Maybe[Str]) -> Int { match m { Maybe.None() => 0, Maybe.Some(value: s) => str_len(s), } }\n\
+         fn main() -> Int {\n    let b = Box[Int](value: 1);\n    \
+         let xs = vec_new[Box[Int]]();\n    vec_push(xs, b);\n    \
+         identity(b.value) + identity[Int](2) + size(Maybe[Str].Some(value: \"abc\")) \
+         + vec_get(xs, 0).value\n}\n",
+    );
+
+    let published = interface_of(&dir.path().join("b.nz"));
+    std::fs::remove_file(dir.path().join("b.nz")).expect("remove B");
+    assert!(!dir.path().join("b.nz").exists());
+
+    let a_source = std::fs::read_to_string(dir.path().join("a.nz")).expect("read A");
+    let (program, parse_errors) = nazm_core::__syntax::parse_source(&a_source);
+    assert!(parse_errors.is_empty(), "{parse_errors:#?}");
+
+    let mut graph = ModuleGraph::default();
+    let a = graph.add(FileId::ROOT, ModuleKey::relative("a.nz"));
+    let b = graph.add(
+        FileId::from_index(1),
+        PersistentUnitInterface::from_json(&published)
+            .expect("valid")
+            .module_key(),
+    );
+    graph.import(a, b, nazm_span::Span::synthetic());
+
+    let check_against = |json: &str| -> Vec<nazm_diag::Diagnostic> {
+        let iface = PersistentUnitInterface::from_json(json).expect("a valid interface");
+        let units = [nazm_core::Unit::of(&program, &graph, a)];
+        let mut res = Resolution::default();
+        let mut errors = Vec::new();
+        let rehydrated = iface.rehydrate(b, FnId::from_index(4096), res.types_mut());
+        nazm_core::declare_types(&units, &mut res, &mut errors);
+        nazm_core::declare_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+        nazm_core::check_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+        errors
+    };
+
+    let errors = check_against(&published);
+    assert!(
+        errors.is_empty(),
+        "A should check against B's persisted interface alone: {errors:#?}"
+    );
+
+    // The negative half: `Box` declared with no parameter, and its one field an `Int`, so
+    // every `Box[Int]` A writes is applied to arguments it does not take.
+    let narrowed = published.replace(
+        "\"name\":\"Box\",\"generics\":1,\"fields\":[{\"name\":\"value\",\"ty\":{\"param\":0}}]",
+        "\"name\":\"Box\",\"generics\":0,\"fields\":[{\"name\":\"value\",\"ty\":\"Int\"}]",
+    );
+    assert_ne!(narrowed, published, "the interface was not narrowed");
+    let errors = check_against(&narrowed);
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.code == nazm_diag::codes::TYPE_ARGUMENTS_ON_NON_GENERIC),
+        "a definition that lost its parameter should be refused where it is applied: {errors:#?}"
     );
 }

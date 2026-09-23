@@ -762,7 +762,7 @@ language: an imported module's private helper becomes callable, and the two comp
 accepting the same programs while both still bootstrap
 """
 file = "compiler/analyse.nz"
-find = "                ints_push(fpub, ints_get(naux, k));"
+find = "                ints_push(fpub, is_public(naux, k));"
 replace = "                ints_push(fpub, 1);"
 
 [[mutation]]
@@ -792,7 +792,7 @@ has to be checked where the ambiguity is created
 file = "compiler/analyse.nz"
 find = """                    if taken == 1 {
                         if visible_import(vmod, vname, vfn, m, name) >= 0 {
-                            report(dcode, dstart, dend, dmsg, "N0207", at, at + 1,
+                            report(diags, "N0207", at, at + 1,
                                     str_concat(str_concat("`", name),
                                     "` is exported by two imported modules"));
                             taken = 0;
@@ -846,15 +846,9 @@ new signature contradicts — a stale accept, which is the failure a fingerprint
 prevent
 """
 file = "crates/nazm-iface/src/wire.rs"
-find = """            exports.push(PersistentExport {
-                def: DefKey::new(module.clone(), DefKind::Function, e.name.clone()).to_string(),
-                name: e.name.clone(),
-                kind: DefKind::Function.as_str().to_owned(),
+find = """                generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),
                 params,"""
-replace = """            exports.push(PersistentExport {
-                def: DefKey::new(module.clone(), DefKind::Function, e.name.clone()).to_string(),
-                name: e.name.clone(),
-                kind: DefKind::Function.as_str().to_owned(),
+replace = """                generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),
                 params: Vec::new(),"""
 
 [[mutation]]
@@ -1004,8 +998,12 @@ emits a program whose stack it has no plan for. The check is whole-program on pu
 code generation is not a reason to stop looking
 """
 file = "crates/nazm-lir/src/lower.rs"
-find = "    report_cycles(res, &calls, &mut errors);"
-replace = "    report_cycles(res, &[], &mut errors);"
+find = """            if let Callee::Function(to) = site.callee {
+                if let Some(e) = edges.get_mut(from) {
+                    e.push((to.index(), site.span));"""
+replace = """            if let Callee::Function(to) = site.callee {
+                if let Some(e) = edges.get_mut(from).filter(|_| false) {
+                    e.push((to.index(), site.span));"""
 
 [[mutation]]
 name = "the-object-key-forgets-its-input"
@@ -1248,8 +1246,32 @@ for good. Converting a leak into a leak inside a container is the failure §17 o
 directive names by that description
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = "  br i1 %last, label %contents, label %done"
-replace = "  br i1 %last, label %storage, label %done"
+find = """  %last = icmp sle i64 %rc2, 0
+  br i1 %last, label %contents, label %done
+contents:
+  %n = load i64, ptr %h
+  %dp = getelementptr i8, ptr %h, i64 16
+  %data = load ptr, ptr %dp
+  br label %test
+test:
+  %i = phi i64 [ 0, %contents ], [ %next, %body ]
+  %more = icmp slt i64 %i, %n
+  br i1 %more, label %body, label %storage
+body:
+  %e = getelementptr { ptr, i64, ptr }, ptr %data, i64 %i"""
+replace = """  %last = icmp sle i64 %rc2, 0
+  br i1 %last, label %storage, label %done
+contents:
+  %n = load i64, ptr %h
+  %dp = getelementptr i8, ptr %h, i64 16
+  %data = load ptr, ptr %dp
+  br label %test
+test:
+  %i = phi i64 [ 0, %contents ], [ %next, %body ]
+  %more = icmp slt i64 %i, %n
+  br i1 %more, label %body, label %storage
+body:
+  %e = getelementptr { ptr, i64, ptr }, ptr %data, i64 %i"""
 
 [[mutation]]
 name = "string-storage-goes-while-another-view-remains"
@@ -1488,8 +1510,10 @@ two field declarations changes the object file. `docs/spec.md` says that edit me
 nothing; this makes the compiler and the linker disagree about whether anything happened
 """
 file = "crates/nazm-lir/src/lower.rs"
-find = """            let fields: Vec<Ty> = def.in_layout_order().map(|(_, f)| Ty::of(f.ty)).collect();"""
-replace = """            let fields: Vec<Ty> = def.fields.iter().map(|f| Ty::of(f.ty)).collect();"""
+find = """                def.in_layout_order().map(|(_, f)| Ty::of(f.ty)).collect()
+            } else {"""
+replace = """                def.fields.iter().map(|f| Ty::of(f.ty)).collect()
+            } else {"""
 
 [[mutation]]
 name = "a-field-is-read-from-the-wrong-position"
@@ -1530,12 +1554,12 @@ interface referring to a type its importer cannot resolve. Without opaque types 
 no reading of that which works
 """
 file = "crates/nazm-core/src/check.rs"
-find = """    let (private_name, declared_at) = match t {"""
-replace = """    if true {
+find = """    let Some((private_name, declared_at)) = found else {
         return;
-    }
-    #[allow(unreachable_code)]
-    let (private_name, declared_at) = match t {"""
+    };"""
+replace = """    let Some((private_name, declared_at)) = found.filter(|_| false) else {
+        return;
+    };"""
 
 [[mutation]]
 name = "the-self-hosted-emitter-forgets-a-record-field"
@@ -1597,7 +1621,7 @@ identically shaped enums two types, and structural matching would undo it silent
 arm would bind payload fields of a variant the value does not have
 """
 file = "crates/nazm-core/src/check.rs"
-find = "            if named != id {"
+find = "            if self.res.types().definition_of(sty) != Some(TypeNode::Enum(named)) {"
 replace = "            if false {"
 
 [[mutation]]
@@ -1791,11 +1815,11 @@ divergence in a refusal is the half that behavioural tests never reach
 """
 file = "compiler/analyse.nz"
 find = """                        if missing != "" {
-                            report(dcode, dstart, dend, dmsg, "N0343", from, to,
+                            report(diags, "N0343", from, to,
                                     str_concat("this `match` does not cover ", missing));
                         }"""
 replace = """                        if missing == "!" {
-                            report(dcode, dstart, dend, dmsg, "N0343", from, to,
+                            report(diags, "N0343", from, to,
                                     str_concat("this `match` does not cover ", missing));
                         }"""
 
@@ -2144,9 +2168,9 @@ refuses it at the whole `if` with `N0302`
 """
 file = "compiler/analyse.nz"
 find = """                                } else {
-                                    report(dcode, dstart, dend, dmsg, "N0302", from, to,"""
+                                    report(diags, "N0302", from, to,"""
 replace = """                                } else {
-                                    report(dcode, dstart, dend, dmsg, "N9999", from, to,"""
+                                    report(diags, "N9999", from, to,"""
 
 [[mutation]]
 name = "a-unit-arm-leaves-the-match-a-value"

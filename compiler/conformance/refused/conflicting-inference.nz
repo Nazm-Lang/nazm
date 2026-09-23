@@ -1,0 +1,4 @@
+// expect: N0355
+fn same[T](a: T, b: T) -> T { a }
+
+fn main() -> Int { same(1, "x") }

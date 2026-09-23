@@ -193,6 +193,41 @@ pub mod codes {
     /// A pattern whose variant belongs to a different enum than the scrutinee. There is
     /// no structural variant matching.
     pub const WRONG_ENUM_IN_PATTERN: Code = Code::new("N0345");
+
+    // N11: generics. Allocated after the enum block without renumbering, and only for what
+    // is genuinely new. A parameter named like a built-in is `N0331`, an unknown parameter
+    // name is `N0305`, an argument that disagrees with explicit type arguments is `N0300`,
+    // arithmetic or `==` on an unconstrained `T` is `N0304`, projecting or matching one is
+    // `N0335` or `N0342`, passing one to a task is `N0321`, a written type nested too deep
+    // is `N0338`, and an inline layout cycle through a generic type is `N0336` — each the
+    // same mistake it already named.
+    /// Two type parameters of one declaration with one name.
+    pub const DUPLICATE_TYPE_PARAMETER: Code = Code::new("N0350");
+    /// Type arguments written on something that takes none: a non-generic definition, a
+    /// built-in type, or a type parameter.
+    pub const TYPE_ARGUMENTS_ON_NON_GENERIC: Code = Code::new("N0351");
+    /// A generic definition, or `Vec`, written where a complete type is required but
+    /// without its type arguments.
+    pub const MISSING_TYPE_ARGUMENTS: Code = Code::new("N0352");
+    /// A generic definition applied to the wrong number of type arguments.
+    pub const WRONG_TYPE_ARGUMENT_COUNT: Code = Code::new("N0353");
+    /// A generic call whose arguments do not determine every type parameter. The expected
+    /// result type never does, so `make()` for `fn make[T]() -> T` is this.
+    pub const CANNOT_INFER_TYPE_ARGUMENT: Code = Code::new("N0354");
+    /// Two arguments of one call that give one type parameter different types.
+    pub const CONFLICTING_TYPE_ARGUMENTS: Code = Code::new("N0355");
+    /// A generic `main`: there is no caller to choose its type arguments.
+    pub const GENERIC_MAIN: Code = Code::new("N0356");
+    /// A generic function whose native instances would never end — polymorphic recursion,
+    /// `f[T]` calling `f[Vec[T]]`. `nazm build` only; the interpreter needs no instances.
+    pub const UNBOUNDED_SPECIALISATION: Code = Code::new("N0357");
+    /// More native generic instances than one program may have, or one nested too deeply.
+    /// `nazm build` only; a stated bound, not a crash.
+    pub const GENERIC_INSTANCE_LIMIT: Code = Code::new("N0358");
+    /// A type that can own itself through a reference-counted container — `Node {
+    /// children: Vec[Node] }`. Its layout is finite; the refusal is of a value no count
+    /// could reclaim. The inline case, with no finite layout, is `N0336`.
+    pub const OWNERSHIP_CYCLE: Code = Code::new("N0359");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

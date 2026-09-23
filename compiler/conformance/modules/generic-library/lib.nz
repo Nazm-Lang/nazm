@@ -1,0 +1,26 @@
+// Generic definitions exported across a module boundary: a record, an enum and a function,
+// each instantiated only by the importer.
+
+pub struct Box[T] {
+    value: T,
+}
+
+pub enum Maybe[T] {
+    Some(value: T),
+    None,
+}
+
+pub fn identity[T](x: T) -> T {
+    x
+}
+
+pub fn unbox[T](b: Box[T]) -> T {
+    helper();
+    b.value
+}
+
+// Private, and called from inside a generic body: every instance of `unbox`, wherever it
+// is built, still reaches it.
+fn helper() -> Int {
+    0
+}

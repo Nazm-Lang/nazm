@@ -1,0 +1,66 @@
+// `Vec[T]` over every kind of element this language has: `Int`, `Str`, a record that owns
+// a string, an enum with a string payload, and another `Vec` — through push, get, set, pop
+// and destruction, inside a generic function and outside one.
+
+struct Entry {
+    key: Str,
+    count: Int,
+}
+
+enum Token {
+    Word(text: Str),
+    Number(value: Int),
+    End,
+}
+
+fn last[T](xs: Vec[T]) -> T {
+    vec_get(xs, vec_len(xs) - 1)
+}
+
+fn filled[T](x: T, n: Int) -> Vec[T] {
+    let v = vec_new[T]();
+    let mut i = 0;
+    while i < n {
+        vec_push(v, x);
+        i = i + 1;
+    }
+    v
+}
+
+fn weight(t: Token) -> Int {
+    match t {
+        Token.Word(text: s) => str_len(s),
+        Token.Number(value: v) => v,
+        Token.End() => 100,
+    }
+}
+
+fn main() -> Int {
+    let ints = filled(3, 5);
+    let strs = filled("ab", 4);
+    let entries = vec_new[Entry]();
+    let tokens = vec_new[Token]();
+    let grid = vec_new[Vec[Int]]();
+    let mut i = 0;
+    while i < 30 {
+        vec_push(entries, Entry(key: str_concat("k", int_to_str(i)), count: i));
+        vec_push(tokens, Token.Word(text: int_to_str(i * i)));
+        vec_push(tokens, Token.Number(value: i));
+        vec_push(grid, filled(i, 3));
+        i = i + 1;
+    }
+    vec_push(tokens, Token.End());
+    // Replaced: the new value is taken before the old one is let go.
+    vec_set(entries, 0, Entry(key: "zero", count: 1000));
+    vec_set(strs, 1, vec_get(strs, 0));
+    let popped = vec_pop(tokens);
+    let mut total = weight(popped);
+    let mut k = 0;
+    while k < vec_len(tokens) {
+        total = total + weight(vec_get(tokens, k));
+        k = k + 1;
+    }
+    total = total + vec_get(entries, 0).count + str_len(last(entries).key);
+    total = total + vec_len(ints) * vec_get(ints, 2) + str_len(last(strs));
+    total + vec_get(last(grid), 0) + vec_len(grid)
+}

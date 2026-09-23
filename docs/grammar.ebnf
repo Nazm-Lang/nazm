@@ -24,6 +24,7 @@
 (* @example use "other.nz"; fn main() -> Int { 0 } *)
 (* @example struct Point { x: Int, } fn main() -> Int { Point(x: 1).x } *)
 (* @example enum State { Ready, } fn main() -> Int { match State.Ready() { State.Ready() => 0, } } *)
+(* @example fn identity[T](value: T) -> T { value } fn main() -> Int { identity(7) } *)
 program = { use_item } , { function | record | enumeration } ;
 
 (* @example use "lib/helpers.nz"; fn main() -> Int { 0 } *)
@@ -32,7 +33,18 @@ use_item = "use" , STRING , ";" ;
 (* @example fn main() -> Int { 0 } *)
 (* @example fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) } *)
 (* @example pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) } *)
-function = [ visibility ] , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block ;
+(* @example fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") } *)
+function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" ,
+           "->" , type , block ;
+
+(* A generic declaration's parameters: at least one name, no trailing comma. A parameter
+ * is a **position** — renaming one changes nothing — and it is a type and nothing else.
+ * Which names may be one (not a built-in type, not `Vec`, not twice) is the checker's
+ * question. See `docs/spec.md`, *Generics*.
+ *)
+(* @example struct Pair[A, B] { first: A, second: B, } fn main() -> Int { 0 } *)
+(* @example enum Maybe[T] { None, Some(value: T), } fn main() -> Int { 0 } *)
+type_parameters = "[" , IDENT , { "," , IDENT } , "]" ;
 
 (* One bit, and one spelling for it. Absent means private to this module; `pub` exports
  * it to the modules that directly import this one. There is no `private` keyword,
@@ -52,7 +64,8 @@ visibility = "pub" ;
  *)
 (* @example struct Point { x: Int, y: Int, } fn main() -> Int { Point(x: 1, y: 2).x } *)
 (* @example pub struct User { name: Str, } fn main() -> Int { str_len(User(name: "a").name) } *)
-record = [ visibility ] , "struct" , IDENT , "{" , [ fields ] , "}" ;
+(* @example struct Box[T] { value: T, } fn main() -> Int { Box[Int](value: 1).value } *)
+record = [ visibility ] , "struct" , IDENT , [ type_parameters ] , "{" , [ fields ] , "}" ;
 
 (* @example struct P { x: Int, y: Int, } fn main() -> Int { P(x: 1, y: 2).y } *)
 fields = field , { "," , field } , [ "," ] ;
@@ -70,7 +83,8 @@ field = IDENT , ":" , type ;
  *)
 (* @example enum State { Ready, Done, } fn main() -> Int { match State.Ready() { State.Ready() => 1, State.Done() => 0, } } *)
 (* @example pub enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } } *)
-enumeration = [ visibility ] , "enum" , IDENT , "{" , [ variants ] , "}" ;
+(* @example enum Maybe[T] { None, Some(value: T), } fn main() -> Int { match Maybe[Int].Some(value: 1) { Maybe.None() => 0, Maybe.Some(value: v) => v, } } *)
+enumeration = [ visibility ] , "enum" , IDENT , [ type_parameters ] , "{" , [ variants ] , "}" ;
 
 (* @example enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } } *)
 variants = variant , { "," , variant } , [ "," ] ;
@@ -92,15 +106,24 @@ parameters = parameter , { "," , parameter } ;
 (* @example fn f(n: Int) -> Int { n } fn main() -> Int { f(1) } *)
 parameter = IDENT , ":" , type ;
 
-(* A name, and only a name. Which names are types — `Int`, `Bool`, `Str`, `Ints`,
- * `Strs`, `Chan` — is a *checking* question, not a grammatical one: the parser accepts
- * any identifier here and the checker reports `N0305` for one that is not a type. A
- * grammar that listed them would be claiming the parser rejects `fn f(x: Widget)`,
- * which it does not — it parses it and then says what is wrong with it, which is how
- * one mistake stays one error.
+(* A name, applied to type arguments or not. Which names are types — `Int`, `Bool`,
+ * `Str`, `Ints`, `Strs`, `Chan`, `Vec`, a declared record or enum, a type parameter in
+ * scope — is a *checking* question, not a grammatical one: the parser accepts any
+ * identifier here and the checker reports `N0305` for one that is not a type. A grammar
+ * that listed them would be claiming the parser rejects `fn f(x: Widget)`, which it does
+ * not — it parses it and then says what is wrong with it, which is how one mistake stays
+ * one error. How many arguments a name takes is the checker's too (`N0351` – `N0353`).
  *)
 (* @example fn f(c: Chan) -> Int { 0 } fn main() -> Int { f(chan_new(1)) } *)
-type = IDENT ;
+(* @example fn f(xs: Vec[Vec[Int]]) -> Int { vec_len(xs) } fn main() -> Int { f(vec_new[Vec[Int]]()) } *)
+type = IDENT , [ type_arguments ] ;
+
+(* Square brackets, and one spelling: there are no angle brackets and no indexing, so
+ * `name[` can only begin type arguments. Empty brackets parse — `Vec[]` is a type written
+ * with the wrong number of arguments, which is `N0353` rather than a syntax error.
+ *)
+(* @example struct Pair[A, B] { a: A, b: B, } fn f(p: Pair[Int, Str]) -> Int { p.a } fn main() -> Int { f(Pair[Int, Str](a: 1, b: "x")) } *)
+type_arguments = "[" , [ type , { "," , type } ] , "]" ;
 
 (* @example fn main() -> Int { let a = 1; a } *)
 (* @example fn main() -> Int { 1 } *)
@@ -197,8 +220,13 @@ atom = INTEGER
      | match_expression
      | "(" , expression , ")" ;
 
+(* Type arguments are written where inference cannot find them from the arguments —
+ * `vec_new[Int]()` — or where a reader wants them visible. The expected result type
+ * never supplies one.
+ *)
 (* @example fn main() -> Int { str_len("abc") } *)
-call = IDENT , "(" , [ arguments ] , ")" ;
+(* @example fn identity[T](v: T) -> T { v } fn main() -> Int { identity[Int](7) } *)
+call = IDENT , [ type_arguments ] , "(" , [ arguments ] , ")" ;
 
 (* Named, never positional, so field order is never an implicit API. Parenthesised rather
  * than `Point { x: 1 }` because `IDENT "{"` is exactly what an `if` whose condition is a
@@ -209,7 +237,8 @@ call = IDENT , "(" , [ arguments ] , ")" ;
  * begin with a name followed by a colon, so the two forms cannot be confused.
  *)
 (* @example struct P { x: Int, y: Int, } fn main() -> Int { P(x: 1, y: 2).x } *)
-construction = IDENT , "(" , initialisers , ")" ;
+(* @example struct Box[T] { value: T, } fn main() -> Int { Box[Int](value: 7).value } *)
+construction = IDENT , [ type_arguments ] , "(" , initialisers , ")" ;
 
 (* @example struct P { x: Int, } fn main() -> Int { P(x: 1,).x } *)
 initialisers = initialiser , { "," , initialiser } , [ "," ] ;
@@ -225,7 +254,8 @@ initialiser = IDENT , ":" , expression ;
  *)
 (* @example enum E { A, } fn main() -> Int { match E.A() { E.A() => 0, } } *)
 (* @example enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1 + 1) { E.V(x: n) => n, } } *)
-variant_construction = IDENT , "." , IDENT , "(" , [ initialisers ] , ")" ;
+(* @example enum Maybe[T] { None, Some(value: T), } fn main() -> Int { match Maybe[Int].None() { Maybe.None() => 0, Maybe.Some(value: v) => v, } } *)
+variant_construction = IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")" ;
 
 (* @example fn main() -> Int { ints_set(ints_new(), 0, 1) } *)
 arguments = expression , { "," , expression } ;
@@ -249,6 +279,10 @@ match_expression = "match" , expression , "{" , [ match_arms ] , "}" ;
 (* @example enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } } *)
 match_arms = match_arm , { "," , match_arm } , [ "," ] ;
 
+(* A pattern names the enum and never its type arguments: the value being matched already
+ * has one concrete type, and `Maybe.Some(value: v)` matches a `Maybe[Int]` and a
+ * `Maybe[Str]` alike.
+ *)
 (* @example enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } } *)
 match_arm = IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression ;
 

@@ -705,6 +705,212 @@ layout, its size and its calling convention are compiler-private and may change 
 builds. There is no `repr`, no C ABI, no FFI layout, no serialisation format and no storage
 layout.
 
+
+### Generics — first-order parametric types, and `Vec[T]`
+
+Settled by N11, 2026-09-23. A record, an enum and a function may declare **type parameters**,
+and a type may be **applied** to type arguments. There is one kind — *type* — and nothing
+else: no constraints, no traits, no methods, no higher-kinded parameter, no type-level
+computation, no defaults, no variance, no specialisation. What N11 adds is first-order
+parametric polymorphism and one generic container, `Vec[T]`, and every law below is written
+so that the ones before it — records, enums, the memory constitution — survive substitution
+unchanged.
+
+```nazm
+struct Pair[A, B] {
+    first: A,
+    second: B,
+}
+
+enum Maybe[T] {
+    None,
+    Some(value: T),
+}
+
+fn identity[T](value: T) -> T {
+    value
+}
+
+fn main() -> Int {
+    let xs = vec_new[Pair[Int, Str]]();
+    vec_push(xs, Pair[Int, Str](first: 7, second: "nazm"));
+    let p = vec_get(xs, 0);
+    p.first
+}
+```
+
+#### One syntax for each thing
+
+| | |
+| --- | --- |
+| **Parameter list** | `[A, B]` after the declared name: `struct Pair[A, B]`, `enum Maybe[T]`, `fn identity[T](…)`. At least one name, no trailing comma |
+| **Type application** | `Pair[Int, Str]`, `Maybe[Point]`, `Vec[Vec[Int]]`, anywhere a type is written |
+| **Explicit function arguments** | `identity[Int](7)`, `vec_new[Token]()` |
+| **Generic construction** | `Pair[Int, Str](first: 1, second: "x")` — the type arguments are written |
+| **Generic variant** | `Maybe[Int].Some(value: 42)`, `Maybe[Int].None()` — the type arguments are written |
+| **Pattern** | `Maybe.Some(value: x)` — the enum's **name**, never its arguments; the scrutinee's type supplies them |
+
+Square brackets, and no angle brackets as a second spelling. `[` and `]` are new tokens in
+N11 and mean this and nothing else, and there is no indexing expression for an application
+to be confused with: `name[` in an expression can only begin type arguments — where `<`
+would have been a comparison until the parser guessed otherwise. A pattern takes no
+type arguments because it cannot choose them — the value being matched already has one
+concrete type, and writing it again in every arm would be a second place to get it wrong.
+
+#### A type parameter is a type and nothing else
+
+Inside the declaration that owns it, a parameter may be written wherever a type is. It is
+not a value, not an integer, not runtime metadata and not something a program can inspect.
+Its names are unique within one list (`N0350`), may not be a built-in type name or `Vec`
+(`N0331`), and are resolved lexically: a parameter belongs to its own declaration only, so
+one function's `T` is never another's, and a parameter may shadow a user-defined type of the
+same name inside the declaration that introduces it.
+
+#### Order is semantic; names are not
+
+`Pair[A, B]` and `Pair[B, A]` with the same field declarations are different definitions:
+the first argument of an application fills the first position. **Renaming** a parameter —
+`[A, B]` to `[X, Y]` with every use renamed — changes nothing: not what the definition
+means, not its interface fingerprint, not any object. A parameter's identity is its
+**position** in its owner's list, and that is what a persisted interface writes.
+
+#### Identity
+
+A generic definition is one definition — its `DefKey` and kind, exactly as before — and its
+**arity** is part of its interface. An **applied type** is identified by the definition and
+its ordered type arguments, recursively: `Pair[Int, Str]` is the same type in every module
+of a compilation that resolves the same `Pair`, `Pair[Str, Int]` is a different one, and
+`a.nz`'s `Box[Int]` is not `b.nz`'s `Box[Int]`, because the definitions differ. Nothing about
+the shape is compared: two generic records with identical fields are still two types after
+substitution, for the reason two ordinary records are.
+
+#### Generic definitions are checked once, parametrically
+
+A generic function is checked **once, as a generic definition**, with each parameter an
+unknown type. It is never re-checked for a particular use, and whether it is valid does not
+depend on how it is called. An unconstrained `T` supports exactly what every value in the
+language supports: it may be bound, copied by its own law, passed, returned, stored in a
+field or a payload of a generic type, pushed into a `Vec[T]` and taken out of one. It may
+**not** be added, ordered, compared with `==` (`N0304`), projected (`N0335`), matched
+(`N0342`), used as a condition (`N0301`) or passed to a task (`N0321`), because none of those
+is valid for every type — and the language has no constraint that could say "for these
+types only". `fn equal[T](a: T, b: T) -> Bool { a == b }` is refused at its definition.
+
+#### Calling a generic function
+
+The type arguments are either **written** or **inferred from the arguments**, and nothing
+else:
+
+- Inference unifies each parameter's declared type with the argument's type, recursing
+  through applications and `Vec`: passing a `Vec[Point]` for `Vec[T]` gives `T = Point`.
+- **The expected result type never participates.** `fn make[T]() -> T` cannot be called as
+  `make()`; it must be `make[Int]()` (`N0354`). Local, left-to-right, from the arguments —
+  so a call's meaning is visible in the call.
+- Two arguments that give one parameter different types are **refused** (`N0355`) —
+  `same(1, "x")` for `fn same[T](a: T, b: T)` does not choose the first.
+- Explicit arguments fix every parameter, and an argument that then disagrees with the
+  signature is an ordinary mismatch (`N0300`).
+- The wrong number of type arguments is `N0353` wherever it is written — `Pair[Int]`,
+  `Vec[Int, Str]`, `identity[Int, Str](…)`; type arguments on a definition that has no
+  parameters are `N0351`; a generic type written without its arguments where a concrete type
+  is needed — a field, a parameter, a construction — is `N0352`.
+- An argument that never produces a value (every path `return`s, `break`s or `continue`s)
+  contributes nothing to inference.
+
+Inference is not overload resolution. A name still resolves to exactly one definition, and
+generics add no overloading: `fn f[T]` and `fn f` in one module are two definitions of one
+name, which is `N0203` as it always was. A generic `main` is refused (`N0356`): nothing
+could choose its arguments. A `spawn` runs a non-generic function (`N0101`).
+
+#### Generic records and enums
+
+Every law in *Records* and *Enums* holds **after substitution**. `Box[Int]` and `Box[Str]`
+are two concrete types of one definition; each is nominal, a value, constructed by naming
+every field, copied and destroyed field by field according to the field types it has *after*
+substitution. A generic enum's variants are its definition's, for every instantiation:
+`Maybe[Int]` and `Maybe[Str]` have the same variant set, exhaustiveness is decided over it,
+and only the active variant's payload owns anything.
+
+Visibility is unchanged, and the closure rule recurses through applications: a public
+signature or shape may not mention a private type **anywhere in a type argument** either
+(`N0337`).
+
+#### `Vec[T]` — a mutable handle, by the sequence law
+
+`Vec[T]` is the generic counterpart of `Ints` and `Strs` and follows **their** law, not a
+value law: it is an *owned mutable handle* in the memory constitution's table.
+
+| | |
+| --- | --- |
+| **Creation** | `vec_new[T]()` — explicit, because nothing else could say what `T` is |
+| **Identity** | a handle. `let b = a;` makes `b` the same vector, and a push through either is visible through both. Nothing is copied |
+| **Length** | `vec_len(xs)` |
+| **Reading** | `vec_get(xs, i)` returns **its own copy** of the element by `T`'s copy law, `N0405` unless `0 <= i < len` |
+| **Replacing** | `vec_set(xs, i, v)` stores a copy of `v` and returns the index written. The new value is taken before the old one is released |
+| **Appending** | `vec_push(xs, v)` stores a copy of `v` and returns the new length. A failed growth (`N0406`) leaves the vector exactly as it was |
+| **Removing** | `vec_pop(xs)` **transfers** the last element out; `N0405` on an empty vector |
+| **Equality** | refused (`N0304`), for the reason it is refused on `Ints` |
+| **Tasks** | a `Vec[T]` **never** crosses into a task, whatever `T` is (`N0321`). It is shared mutable storage with an unsynchronised count, and a record or enum containing one inherits that |
+| **Destruction** | when the last reference dies, every element is released by `T`'s law, then the storage |
+
+There is **no indexing syntax**. `xs[i].field = v` would need a place calculus — what is
+evaluated once, what is copied, what happens on failure part way through — and nothing in
+N11 needs one. Updating a record element is written as what it is: get a copy, change it,
+set it back.
+
+`Ints` and `Strs` are unchanged and are not aliases of `Vec[Int]` and `Vec[Str]`.
+
+#### What may not be expressed: an ownership cycle
+
+A `Vec` holds its elements **somewhere else**, so a type can now contain a handle to storage
+holding values of that same type — `struct Node { children: Vec[Node], }`. Its layout is
+finite, and a program could still build a `Node` whose `children` contain itself, which no
+reference count ever reclaims. The memory constitution said in advance what admitting such a
+type requires; **N11 takes the first option again, and refuses it.**
+
+The rule is over the **ownership graph of definitions**: an edge runs from a record or enum
+to every definition its fields or payloads mention, labelled *inline* or *through a
+reference-counted container* by the path that reaches it — a field is inline, a `Vec`
+element is not, and an argument of a generic type inherits how that type uses the
+corresponding parameter. Then:
+
+- a cycle whose every edge is inline is an **impossible layout** — `N0336`, as before;
+- any other cycle is an **ownership cycle** — `N0359`, with the path that closes it.
+
+So `Node { children: Vec[Node] }`, `A → Vec[B] → B → Vec[A]`, `enum Tree { Leaf, Node(kids: Vec[Tree]) }`
+and `Tree[T] { kids: Vec[Tree[T]] }` are refused, and `Vec[Vec[Int]]`, `Vec[Pair[Int, Str]]`,
+a record holding a `Vec[Int]` and an enum holding a `Vec[Str]` are not: an acyclic ownership
+graph is a graph whose values cannot own themselves. A parameter that no field uses
+contributes no edge. The rule also bounds every instance family: with no cycle among the
+definitions, substitution can only nest types a finite way deep, so it never runs forever.
+
+#### How much a generic value costs
+
+Nothing about generics is free and nothing claims to be. Copying a `Pair[Str, Chan]` is two
+reference adjustments; copying a `Maybe[Record]` is a branch on the discriminant and then the
+active payload's copy; assigning a `Vec[T]` is one adjustment, never a copy of its elements.
+The same table as *What this costs* applies to every instantiation, with the field types it
+has after substitution.
+
+#### What a program cannot observe
+
+Which native code implements a generic function, whether one copy of it serves two
+instantiations, what size `T` has and what a specialisation is called are not part of the
+language. `nazm check` and `nazm run` are parametric; `nazm build` currently
+**monomorphises** — one native instance per concrete argument list — and that is a property
+of the current LLVM backend, not of the language (`architecture.md` §7.12). The native
+backend refuses recursion, which includes polymorphic recursion (`N0357`), and bounds how
+many instances one program may need (`N0358`).
+
+#### What generics are not, in N11
+
+No traits, interfaces or protocols; no `impl` and no methods; no constraints or `where`; no
+associated types or constants; no higher-kinded parameters; no const generics; no defaults;
+no variance or subtyping; no specialisation or overloading; no reflection. No built-in
+`Option` or `Result` — `enum Maybe[T]` is an ordinary declaration. No closures, no function
+values, no `Never`, no unit type. Construction infers nothing: its type arguments are
+written.
+
 ## Settled for v0.2 — mutation and iteration
 
 ### Mutation is opt-in and visible at the binding

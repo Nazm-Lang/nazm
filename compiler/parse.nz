@@ -345,11 +345,37 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 continue;
             }
             if t == k_ident() {
+                // `name[T, …]` — type arguments, before a call, a construction or a
+                // variant, and nowhere else: there is no indexing. They travel on the
+                // node's text straight after the name, and from here on `i` is the last
+                // token of the head, so the lookahead below reads what follows the `]`.
+                let head = text_at(texts, i);
+                let head_at = start_at(starts, i);
+                let mut targs = "";
+                if kind_at(kinds, i + 1) == k_lbracket() {
+                    let got = strs_new();
+                    let past = type_tail(kinds, starts, ends, texts, i + 2, "[", 1, got);
+                    // The list's own closing offset is dropped: a diagnostic about these
+                    // arguments points at the name they follow, as the reference's does.
+                    targs = before_last_at(strs_get(got, 0));
+                    let mut applies = false;
+                    if kind_at(kinds, past) == k_lparen() { applies = true; }
+                    if kind_at(kinds, past) == k_dot() {
+                        if kind_at(kinds, past + 1) == k_ident() {
+                            if kind_at(kinds, past + 2) == k_lparen() { applies = true; }
+                        }
+                    }
+                    if applies == false {
+                        die("expected `(` after the type arguments", start_at(starts, past));
+                    }
+                    i = past - 1;
+                }
+                let named = str_concat(head, targs);
                 if making_variant(kinds, i) {
                     // `E.V(…)`. The enum and the variant are one name for the node's
                     // text, because what a variant *is* is its enum and its name.
-                    let ename = text_at(texts, i);
-                    let at = start_at(starts, i);
+                    let ename = named;
+                    let at = head_at;
                     let vname = text_at(texts, i + 2);
                     let qualified = str_concat(str_concat(ename, "."), vname);
                     i = i + 4;
@@ -383,8 +409,8 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                         // `Name(field: …)`. The sentinel is a second kind of bracket rather
                         // than a flag on the call one, so the closing `)` cannot build the
                         // wrong node, and the field names are accumulated as they are read.
-                        let name = text_at(texts, i);
-                        let at = start_at(starts, i);
+                        let name = named;
+                        let at = head_at;
                         i = i + 2;
                         ints_push(ops, sent_construct());
                         ints_push(opat, at);
@@ -395,8 +421,8 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                         continue;
                     }
                     if kind_at(kinds, i + 1) == k_lparen() {
-                        let name = text_at(texts, i);
-                        let at = start_at(starts, i);
+                        let name = named;
+                        let at = head_at;
                         i = i + 2;
                         if kind_at(kinds, i) == k_rparen() {
                             // No arguments: the call is complete without ever opening a frame.
@@ -734,6 +760,121 @@ fn making_variant(kinds: Ints, i: Int) -> Bool {
     kind_at(kinds, i + 3) == k_lparen()
 }
 
+// --- types, as the text a node carries ------------------------------------------------
+//
+// A type with no arguments is its name, exactly as before N11: `Int`, `Point`. A type with
+// arguments carries **where each part is written**, because a diagnostic about one argument
+// of `Pair[Int, Vec[Nope]]` points at that argument and the node's own span cannot say
+// where it is. Every name is followed by `@` and its offset, and every `]` by `@` and the
+// offset just past it:
+//
+//     Pair@10[Int@15,Vec@20[Str@24]@27]@28
+//
+// The reference dumper in `crates/nazm-cli/tests/selfhost.rs` writes the same text from
+// the reference parser's `TypeName`, so agreeing on the dump is agreeing on every span.
+//
+// No recursion: the nesting is a counter, because a type is a bracketed list and nothing
+// else. `from` is where a type is expected, or — straight after a `[` — where a `]` may
+// close an empty list; `open` is how many brackets are already open.
+fn type_tail(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int, head: Str,
+        open: Int, out: Strs) -> Int {
+    let mut at = from;
+    let mut text = head;
+    let mut depth = open;
+    let mut want_type = true;
+    // `[]` parses. It is a type written with the wrong number of arguments, which the
+    // checker reports with the count it wanted — the reference's decision, for its reason.
+    if depth > 0 {
+        if kind_at(kinds, at) == k_rbracket() { want_type = false; }
+    }
+    while true {
+        if want_type {
+            if kind_at(kinds, at) != k_ident() {
+                die("expected a type", start_at(starts, at));
+            }
+            text = str_concat(str_concat(str_concat(text, text_at(texts, at)), "@"),
+                    int_to_str(start_at(starts, at)));
+            at = at + 1;
+            want_type = false;
+            if kind_at(kinds, at) == k_lbracket() {
+                text = str_concat(text, "[");
+                depth = depth + 1;
+                at = at + 1;
+                if kind_at(kinds, at) != k_rbracket() { want_type = true; }
+            }
+            continue;
+        }
+        if depth == 0 { break; }
+        if kind_at(kinds, at) == k_comma() {
+            text = str_concat(text, ",");
+            at = at + 1;
+            want_type = true;
+            continue;
+        }
+        if kind_at(kinds, at) == k_rbracket() {
+            text = str_concat(str_concat(text, "]@"), int_to_str(end_at(ends, at)));
+            depth = depth - 1;
+            at = at + 1;
+            continue;
+        }
+        die("expected `,` or `]` in the type arguments", start_at(starts, at));
+    }
+    strs_push(out, text);
+    at
+}
+
+// Everything before the last `@` — a type argument list without its closing offset.
+fn before_last_at(s: Str) -> Str {
+    let mut i = str_len(s) - 1;
+    while i >= 0 {
+        if str_byte(s, i) == 64 { return str_slice(s, 0, i); }
+        i = i - 1;
+    }
+    s
+}
+
+// A written type — a field's, a parameter's, a return's. Its text is pushed onto `out`;
+// the index just past it is returned.
+fn read_type(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, i: Int, what: Str,
+        out: Strs) -> Int {
+    if kind_at(kinds, i) != k_ident() {
+        die(what, start_at(starts, i));
+    }
+    if kind_at(kinds, i + 1) != k_lbracket() {
+        strs_push(out, text_at(texts, i));
+        return i + 1;
+    }
+    type_tail(kinds, starts, ends, texts, i, "", 0, out)
+}
+
+// `[A, B]` after a declared name, or nothing: `[A@7,B@10]`, pushed onto `out`. At least
+// one name and no trailing comma, as the reference parser has it; whether the names are
+// distinct is the checker's question.
+fn read_type_params(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs) -> Int {
+    if kind_at(kinds, i) != k_lbracket() {
+        strs_push(out, "");
+        return i;
+    }
+    let mut at = i + 1;
+    let mut text = "[";
+    while true {
+        if kind_at(kinds, at) != k_ident() {
+            die("expected a type parameter", start_at(starts, at));
+        }
+        text = str_concat(str_concat(str_concat(text, text_at(texts, at)), "@"),
+                int_to_str(start_at(starts, at)));
+        at = at + 1;
+        if kind_at(kinds, at) != k_comma() { break; }
+        text = str_concat(text, ",");
+        at = at + 1;
+    }
+    if kind_at(kinds, at) != k_rbracket() {
+        die("expected `]` to close the type parameters", start_at(starts, at));
+    }
+    strs_push(out, str_concat(text, "]"));
+    at + 1
+}
+
 fn innermost_is_call(ops: Ints, base: Int) -> Bool {
     let mut i = ints_len(ops) - 1;
     while i >= base {
@@ -890,6 +1031,12 @@ fn push_frame(fk: Ints, fstart: Ints, fcount: Ints, ftail: Ints, faux: Ints, fpa
 }
 
 fn top(a: Ints) -> Int { ints_get(a, ints_len(a) - 1) }
+
+// An item's auxiliary word: whether `pub` was written, and where the item's **name** is —
+// which its node's span, starting at `pub` or the keyword, does not say. Two facts in one
+// column because the column already exists and every item has exactly these two; read back
+// by `is_public` and `name_offset` in `analyse.nz`.
+pub fn item_aux(vis: Int, name_at: Int) -> Int { vis + 2 * name_at }
 
 fn bump(a: Ints) -> Int {
     ints_set(a, ints_len(a) - 1, ints_get(a, ints_len(a) - 1) + 1);
@@ -1098,6 +1245,9 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                     die("`spawn` needs a call to a named function", at);
                 }
                 ints_set(nk, last, n_spawn());
+                // Where the callee is written, which the node's span no longer says once
+                // it starts at the keyword: the auxiliary column, as a `bin`'s operator is.
+                set_aux(naux, nk, ints_get(nst, last));
                 ints_set(nst, last, at);
                 ints_set(nen, last, semi);
             }
@@ -1131,8 +1281,10 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 if kind_at(kinds, i) != k_ident() {
                     die("expected a record name", start_at(starts, i));
                 }
+                let tp = strs_new();
                 let rname = text_at(texts, i);
-                i = i + 1;
+                let name_at = start_at(starts, i);
+                i = read_type_params(kinds, starts, texts, i + 1, tp);
                 i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the fields");
                 let mut nfields = 0;
                 while kind_at(kinds, i) != k_rbrace() {
@@ -1143,12 +1295,10 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                     let fat = start_at(starts, i);
                     i = i + 1;
                     i = expect(kinds, starts, i, k_colon(), "expected `:` after a field name");
-                    if kind_at(kinds, i) != k_ident() {
-                        die("expected a field type", start_at(starts, i));
-                    }
-                    let ftype = text_at(texts, i);
-                    let fto = end_at(ends, i);
-                    i = i + 1;
+                    let ft = strs_new();
+                    i = read_type(kinds, starts, ends, texts, i, "expected a field type", ft);
+                    let ftype = strs_get(ft, 0);
+                    let fto = end_at(ends, i - 1);
                     emit(nk, nar, nst, nen, ntx, n_structfield(), 0, fat, fto,
                             str_concat(str_concat(fname, ":"), ftype));
                     nfields = nfields + 1;
@@ -1156,8 +1306,9 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 }
                 let close = end_at(ends, i);
                 i = i + 1;
-                emit(nk, nar, nst, nen, ntx, n_record(), nfields, fn_start, close, rname);
-                set_aux(naux, nk, vis);
+                emit(nk, nar, nst, nen, ntx, n_record(), nfields, fn_start, close,
+                        str_concat(rname, strs_get(tp, 0)));
+                set_aux(naux, nk, item_aux(vis, name_at));
                 items = items + 1;
                 continue;
             }
@@ -1170,8 +1321,10 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 if kind_at(kinds, i) != k_ident() {
                     die("expected an enum name", start_at(starts, i));
                 }
+                let etp = strs_new();
                 let ename = text_at(texts, i);
-                i = i + 1;
+                let ename_at = start_at(starts, i);
+                i = read_type_params(kinds, starts, texts, i + 1, etp);
                 i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the variants");
                 let mut nvariants = 0;
                 while kind_at(kinds, i) != k_rbrace() {
@@ -1201,12 +1354,11 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                             i = i + 1;
                             i = expect(kinds, starts, i, k_colon(),
                                     "expected `:` after a payload field name");
-                            if kind_at(kinds, i) != k_ident() {
-                                die("expected a payload field type", start_at(starts, i));
-                            }
-                            let ptype = text_at(texts, i);
-                            let pto = end_at(ends, i);
-                            i = i + 1;
+                            let pt = strs_new();
+                            i = read_type(kinds, starts, ends, texts, i,
+                                    "expected a payload field type", pt);
+                            let ptype = strs_get(pt, 0);
+                            let pto = end_at(ends, i - 1);
                             emit(nk, nar, nst, nen, ntx, n_payload(), 0, pat, pto,
                                     str_concat(str_concat(pname, ":"), ptype));
                             npayload = npayload + 1;
@@ -1221,8 +1373,9 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 }
                 let eclose = end_at(ends, i);
                 i = i + 1;
-                emit(nk, nar, nst, nen, ntx, n_enum(), nvariants, fn_start, eclose, ename);
-                set_aux(naux, nk, vis);
+                emit(nk, nar, nst, nen, ntx, n_enum(), nvariants, fn_start, eclose,
+                        str_concat(ename, strs_get(etp, 0)));
+                set_aux(naux, nk, item_aux(vis, ename_at));
                 items = items + 1;
                 continue;
             }
@@ -1231,8 +1384,10 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             if kind_at(kinds, i) != k_ident() {
                 die("expected a function name", start_at(starts, i));
             }
+            let ftp = strs_new();
             let name = text_at(texts, i);
-            i = i + 1;
+            let fname_at = start_at(starts, i);
+            i = read_type_params(kinds, starts, texts, i + 1, ftp);
             i = expect(kinds, starts, i, k_lparen(), "expected `(` after the function name");
             let mut params = 0;
             while kind_at(kinds, i) != k_rparen() {
@@ -1243,12 +1398,10 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 let pstart = start_at(starts, i);
                 i = i + 1;
                 i = expect(kinds, starts, i, k_colon(), "expected `:` after a parameter name");
-                if kind_at(kinds, i) != k_ident() {
-                    die("expected a type", start_at(starts, i));
-                }
-                let ptype = text_at(texts, i);
-                let pend = end_at(ends, i);
-                i = i + 1;
+                let pty = strs_new();
+                i = read_type(kinds, starts, ends, texts, i, "expected a type", pty);
+                let ptype = strs_get(pty, 0);
+                let pend = end_at(ends, i - 1);
                 emit(nk, nar, nst, nen, ntx, n_param(), 0, pstart, pend,
                         str_concat(str_concat(pname, ":"), ptype));
                 params = params + 1;
@@ -1256,16 +1409,20 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             }
             i = i + 1;
             i = expect(kinds, starts, i, k_arrow(), "expected `->` and a return type");
-            if kind_at(kinds, i) != k_ident() {
-                die("expected a return type", start_at(starts, i));
+            let rty = strs_new();
+            let ret_at = start_at(starts, i);
+            i = read_type(kinds, starts, ends, texts, i, "expected a return type", rty);
+            // A return type always carries where it is written: the `fn` node's span is the
+            // whole function, so nothing else could say.
+            let mut ret = strs_get(rty, 0);
+            if kind_at(kinds, i - 1) == k_ident() {
+                ret = str_concat(str_concat(ret, "@"), int_to_str(ret_at));
             }
-            let ret = text_at(texts, i);
-            i = i + 1;
             let brace = start_at(starts, i);
             i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the body");
             push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
-                    frame_body(), brace, fn_start, params, vis,
-                    str_concat(str_concat(name, ":"), ret));
+                    frame_body(), brace, fn_start, params, item_aux(vis, fname_at),
+                    str_concat(str_concat(str_concat(name, strs_get(ftp, 0)), ":"), ret));
             continue;
         }
 
