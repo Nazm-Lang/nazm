@@ -108,6 +108,9 @@ fn payload_initialisers_may_be_written_in_any_order_and_mean_the_same_value() {
 }
 
 #[test]
+// The expectation is written as the program computes it — the first entry times 100, the
+// second times 10 — and `1 * 10` is that second term, not an operation to simplify away.
+#[allow(clippy::identity_op)]
 fn payload_initialisers_are_evaluated_exactly_once_in_the_order_written() {
     // `docs/spec.md` fixes the order as the order written, whatever order the payload is
     // stored in. The sequence records which ran first.
