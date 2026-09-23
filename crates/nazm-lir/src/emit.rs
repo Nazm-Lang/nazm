@@ -224,6 +224,15 @@ struct Emitter<'a> {
     /// removal and this is read only where a failure is leaving. Cleared per function
     /// with everything else.
     outstanding: Vec<(u32, Ty)>,
+    /// Slots an expression is **part way through filling**, innermost last.
+    ///
+    /// A record or enum being assembled, and the value a `match` is holding, live in
+    /// frame slots, so the shared unwind block and every `return` release them by the
+    /// ordinary path. A `break` or a `continue` takes neither: it stays in the frame and
+    /// carries on, so the slot would keep a reference nothing will ever hand on — and the
+    /// next turn of the loop zeroes it. This is [`Self::outstanding`]'s other half, for
+    /// slots rather than registers, and it is read at exactly one place.
+    building: Vec<(usize, Ty)>,
     /// The type of every slot in the function being emitted, by slot.
     ///
     /// `frame` holds only the owning ones, because only those need releasing; a field
@@ -307,6 +316,19 @@ struct Targets {
     /// Recording the depth here is what tells the two apart — the same shape the Nazm
     /// parser's per-expression stack base has, for the same reason.
     scope_depth: usize,
+    /// How many values were part way through being assembled when this loop started.
+    ///
+    /// The same distinction `scope_depth` draws, for the same reason: a `break` inside an
+    /// arm abandons what the arm's own loop was building and **not** the value the `match`
+    /// around it is holding, which the arm is still inside.
+    building_depth: usize,
+    /// How many temporaries were outstanding when this loop started.
+    ///
+    /// The third of the same distinction. A temporary produced **before** the loop and
+    /// consumed after it — an argument to a call whose later argument contains one — is
+    /// still wanted when a `break` inside leaves, and releasing it there would be a
+    /// premature free rather than a leak.
+    outstanding_depth: usize,
 }
 
 /// What emitting an expression produced.
@@ -937,20 +959,28 @@ impl Emitter<'_> {
                 Val::Of { value: last, ty }
             }
             Some(slot) => {
-                // Zeroed first: the slot is reused each time this expression is reached —
-                // in a loop, for instance — and what a previous round left in it has
-                // already been handed on.
+                // Zeroed first. The slot is already zero on every path that reaches
+                // here — the prologue does it once, a completed construction restores it,
+                // and a `break` or a `continue` out of an unfinished one releases what it
+                // held and restores it too — so this store is what makes that a local
+                // fact rather than a property of three other places. It is also the
+                // "which fields are initialised" bookkeeping: a field not yet written is
+                // null, and releasing null is a no-op.
                 let _ = writeln!(
                     self.out,
                     "  store {text} {}, ptr %slot{slot}",
                     ty.unwind_value()
                 );
+                // From here until the value leaves, a `break` or a `continue` out of an
+                // initialiser has to give back what the slot is already holding.
+                self.building.push((slot, ty));
                 for (at, value) in fields {
                     let Val::Of {
                         value: v,
                         ty: field,
                     } = self.expr(value)
                     else {
+                        self.building.pop();
                         return Val::Transferred;
                     };
                     // The initialiser's reference moves into the record, which the frame
@@ -976,6 +1006,7 @@ impl Emitter<'_> {
                     "  store {text} {}, ptr %slot{slot}",
                     ty.unwind_value()
                 );
+                self.building.pop();
                 self.own(whole, ty);
                 Val::Of { value: whole, ty }
             }
@@ -1045,14 +1076,16 @@ impl Emitter<'_> {
                 Val::Of { value: out, ty }
             }
             Some(slot) => {
-                // Zeroed first: the slot is reused each time this expression is reached —
-                // in a loop, for instance — and what a previous round left in it has
-                // already been handed on.
+                // Zeroed first — see `record`, which says why this store is kept when
+                // the slot is already zero on every path that reaches it.
                 let _ = writeln!(
                     self.out,
                     "  store {whole} {}, ptr %slot{slot}",
                     ty.unwind_value()
                 );
+                // From here until the value leaves, a `break` or a `continue` out of an
+                // initialiser has to give back what the slot is already holding.
+                self.building.push((slot, ty));
                 // The discriminant, before any payload: see above.
                 let empty = self.fresh();
                 let _ = writeln!(self.out, "  %{empty} = load {whole}, ptr %slot{slot}");
@@ -1068,6 +1101,7 @@ impl Emitter<'_> {
                         ty: field,
                     } = self.expr(value)
                     else {
+                        self.building.pop();
                         return Val::Transferred;
                     };
                     // The initialiser's reference moves into the value, which the frame
@@ -1105,6 +1139,7 @@ impl Emitter<'_> {
                     "  store {whole} {}, ptr %slot{slot}",
                     ty.unwind_value()
                 );
+                self.building.pop();
                 self.own(complete, ty);
                 Val::Of {
                     value: complete,
@@ -1137,6 +1172,9 @@ impl Emitter<'_> {
         // arm, the unwind block a failure takes — releases it exactly once.
         self.take(v, ty);
         let _ = writeln!(self.out, "  store {whole} %{v}, ptr %slot{slot}");
+        // The `match` is holding it from here, so a `break` or a `continue` out of an arm
+        // gives it back rather than leaving it for the next turn of the loop to zero.
+        self.building.push((slot, ty));
 
         let held = self.fresh();
         let _ = writeln!(self.out, "  %{held} = load {whole}, ptr %slot{slot}");
@@ -1174,6 +1212,7 @@ impl Emitter<'_> {
         let Some(result_ty) = incomings.first().map(|(_, t, _)| *t) else {
             // No arm arrives: every one transfers control. The join is never opened, and
             // the value in the slot is released by whichever exit each arm took.
+            self.building.pop();
             return Val::Transferred;
         };
 
@@ -1206,6 +1245,7 @@ impl Emitter<'_> {
             "  store {whole} {}, ptr %slot{slot}",
             scrutinee_ty.unwind_value()
         );
+        self.building.pop();
         self.release(dying, scrutinee_ty);
         Val::Of {
             value: out,
@@ -1403,10 +1443,42 @@ impl Emitter<'_> {
     /// is a property of the program point, which is why this is written at each failure
     /// site rather than in the one block they all reach.
     fn release_temporaries(&mut self) {
-        for (value, ty) in self.outstanding.clone() {
+        self.release_temporaries_from(0);
+    }
+
+    /// The same, for the temporaries produced from `from` onwards.
+    ///
+    /// A failure leaves the function, so it releases everything; a `break` leaves one loop
+    /// and must not touch what an expression around that loop is still holding.
+    fn release_temporaries_from(&mut self, from: usize) {
+        for (value, ty) in self.outstanding.clone().into_iter().skip(from) {
             if self.owned.contains(&value) {
                 self.release(value, ty);
             }
+        }
+    }
+
+    /// Give back every value being assembled from `from` inwards, on a path that stays in
+    /// the frame.
+    ///
+    /// Innermost first, because that is the nesting: `E.V(a: R(b: f()))` has the record's
+    /// slot inside the variant's, and the record is the one the transfer leaves first.
+    ///
+    /// Each slot is zeroed once its contents are released, so the frame's own cleanup —
+    /// which still owns the slot, and reaches it when the loop finally ends — finds null
+    /// and does nothing. That is the same "released, and the zero says so" bookkeeping a
+    /// completed construction already leaves behind.
+    fn release_building(&mut self, from: usize) {
+        for (slot, ty) in self.building.clone().into_iter().skip(from).rev() {
+            let v = self.fresh();
+            let text = llvm_type(self.types, ty);
+            let _ = writeln!(self.out, "  %{v} = load {text}, ptr %slot{slot}");
+            let _ = writeln!(
+                self.out,
+                "  store {text} {}, ptr %slot{slot}",
+                ty.unwind_value()
+            );
+            self.release(v, ty);
         }
     }
 
@@ -1565,6 +1637,10 @@ impl Emitter<'_> {
                         // everything else — otherwise returning a local would release the
                         // storage on the way out of the function that is returning it.
                         self.take(value, ty);
+                        // Taken over first, so releasing what this statement was still
+                        // holding cannot reach the value being returned. The slots are
+                        // the frame's and are released just below.
+                        self.release_temporaries();
                         self.release_frame();
                         let _ =
                             writeln!(self.out, "  ret {} %{value}", llvm_type(self.types, ty));
@@ -1605,6 +1681,13 @@ impl Emitter<'_> {
         if let Some(target) = self.loops.last() {
             let label = pick(target).clone();
             let depth = target.scope_depth;
+            let building = target.building_depth;
+            let outstanding = target.outstanding_depth;
+            // The expression this `break` or `continue` is leaving will never finish, so
+            // what it was holding is nobody's. The failure path has released both halves
+            // since N9 and this one released neither.
+            self.release_temporaries_from(outstanding);
+            self.release_building(building);
             // Only the scopes opened inside this loop. The ones around it are still
             // running, and joining them here would wait for tasks the loop never started.
             self.join_through(depth);
@@ -2056,6 +2139,8 @@ impl Emitter<'_> {
             head: head.clone(),
             exit: exit.clone(),
             scope_depth: self.scopes.len(),
+            building_depth: self.building.len(),
+            outstanding_depth: self.outstanding.len(),
         });
         // The body's temporaries do not dominate the exit, and every statement in it has
         // already consumed or dropped its own. See `value_branch`.
@@ -3471,6 +3556,7 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         loops: Vec::new(),
         owned: std::collections::BTreeSet::new(),
         outstanding: Vec::new(),
+        building: Vec::new(),
         slot_types: Vec::new(),
         frame: Vec::new(),
         scopes: Vec::new(),
@@ -4360,6 +4446,7 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
     e.used_unwind = false;
     e.owned.clear();
     e.outstanding.clear();
+    e.building.clear();
     // No loop target crosses a function boundary. Push and pop are balanced, so this is
     // already empty — clearing it says so rather than relying on it.
     e.loops.clear();

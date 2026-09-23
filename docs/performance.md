@@ -598,7 +598,7 @@ bytes both). One that owns something costs **+144 bytes** over the same program 
 against a record's +120 — the difference is the `switch` the enum's two helpers carry.
 
 **The compiler itself**, Darwin arm64 host, release binary, on a `compiler/emit.nz` that
-grew from 3,756 lines to 4,276: `nazm check --no-cache` 10 ms, peak 12.6 MiB; `nazm build
+grew from 3,756 lines to 4,276 (and to 4,359 with what a `break` gives back): `nazm check --no-cache` 10 ms, peak 12.6 MiB; `nazm build
 --no-cache --opt-level 0` 720 ms, peak 57.7 MiB, and 120 ms with a warm object cache. These
 are not comparable with N8's or N9's figures for the same command — different binary and
 different cache state — and are recorded as a baseline rather than as a delta.
