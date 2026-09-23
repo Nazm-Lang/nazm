@@ -333,27 +333,56 @@ against the design rather than for it.
 | A wildcard arm and `non_exhaustive` | variants ✓ | deliberately absent. Adding a variant should break importers while the language is young; when it should stop doing that is a design decision, not an omission to fix |
 | A lossless CST | nothing above | unchanged; still independent, still the last AI-native item |
 
-### N11 — the next milestone, and not started
+### After N11, in dependency order
 
-**Generic containers.** It is the recommendation, and unlike N10's it is not an argument —
-it is what two milestones in a row have run into.
+| | Depends on | Why not before |
+| --- | --- | --- |
+| **`Result`, `Option` and typed error propagation** | generics ✓ | expressible now as ordinary generic enums, which is the evidence the kernel is ready. What is missing is not the type but the decisions around it: where a standard definition lives when there is no standard library, whether `?`-style propagation is syntax, and what a failure *is* when `N0405` already stops the program. N11 deliberately left all three alone |
+| Traits, or any constraint on `T` | generics ✓ | a generic body can do only what every type can, which is the honest limit of N11. A constraint system is a large decision about dispatch, coherence and orphan rules and should be forced by a program that needs `==` or ordering on `T`, not by symmetry |
+| Copy elision, specified | records ✓, variants ✓, generics ✓ | R1's sharp question is larger again: a `Vec` of records copies each element on `vec_get`, by `T`'s law, and nothing says when the pair may be removed |
+| A compact enum representation | variants ✓, `Vec[T]` ✓ | an enum is one slot per variant, and a `Vec[Enum]` multiplies that by its length. `performance.md` measures the pressure; nothing here claims it is acceptable at scale |
+| A lossless CST | nothing above | unchanged; still independent, still the last AI-native item |
 
-`research-register.md` R1 asked for a dogfood and got one record in N9. N10 looked for an
-enum to replace a tagged integer in the self-hosted compiler and found the same wall: the
-node kinds, the token kinds and the type codes are integers stored in `Ints`, and an enum
-cannot live in a sequence. The migration would have meant packing a payload into a string,
-which is what the parallel arrays already avoid. **That is the finding**, and it is the
-second time the same one has appeared.
+### N12 — recommended next: `Result` and typed error propagation
 
-The semantic questions are real and none of them is about ownership, which is why this is
-the right thing to do next rather than more of what N7–N10 did. `Vec[T]` needs a type
-parameter, a monomorphisation or dictionary decision, an element-access form, and an answer
-to whether `xs[i].f = v` is expressible without a place calculus the surface hides. It also
-reopens `spec.md`'s *Cycles*: a container that can hold a record is a value that can refer
-to one that refers back, and the constitution says in advance what admitting that requires.
+N11 made the recommendation concrete rather than argued. The compiler written in Nazm now
+holds its diagnostics in a `Vec[Diag]`, and every stage still reports a failure by pushing
+onto it and carrying on with `unknown` — there is no way for a function to *return* a
+failure a caller must handle, so every stage threads the sink instead. That is the next wall,
+and it is a semantic question rather than a representation one: what an error value is,
+whether propagating one is syntax, and how it composes with the failure that already stops
+a program. `Option` belongs to the same decision and should not be settled apart from it.
 
-The alternatives are unchanged and both are smaller: a lossless CST, which wants nothing,
-and `nazm explain-cost`, which wants only writing.
+The alternatives are unchanged and smaller: a lossless CST, and `nazm explain-cost`.
+
+### N11 — Parametric generics and `Vec[T]` — **complete, 2026-09-23**
+
+First-order parametric polymorphism, in both compilers. Records, enums and functions declare
+type parameters; types are applied with `[…]`; a generic definition is checked **once**,
+parametrically; call-site type arguments are written or inferred from the arguments, never
+from the expected result. One generic container, `Vec[T]`, follows the sequence law: a
+task-unsafe mutable handle whose elements are copied, replaced, appended and removed by `T`'s
+own law.
+
+| Settled | Where |
+| --- | --- |
+| syntax, identity, parametric checking, inference, `Vec[T]`, the ownership-cycle rule | `spec.md`, *Generics* |
+| an applied type is an interned entry with substituted fields; completion is a worklist | `architecture.md` §7.12 |
+| `nazm.interface/4`: parameters are positions, so renaming changes no byte | `crates/nazm-iface/src/wire.rs` |
+| monomorphisation, one artefact per instance, symbols from canonical type keys, `N0357`/`N0358` | `crates/nazm-lir/src/instance.rs`, `symbol.rs` |
+| an ownership cycle through a `Vec` is `N0359`; acyclic nesting and phantom parameters stay legal | `crates/nazm-sema/src/udt.rs` |
+| the compiler written in Nazm does all of it, and holds its diagnostics in a `Vec[Diag]` | `compiler/*.nz`, `bootstrap.md` |
+
+The finding that justified it came true in the dogfood: the self-hosted compiler's
+diagnostics were four parallel arrays kept the same length by care, and are one `Vec` of
+records now. The finding N11 leaves is the one above — a `Vec` of diagnostics still cannot be
+returned as a failure.
+
+The generic conformance corpus found one real defect in the reference backend on its first
+run: a unit that declared an instance never carried the types in that declaration's
+signature, so `or_else[Str]` taking a `Maybe[Str]` the caller never bound was declared with
+`<enum>`. Fixed in `crates/nazm-lir/src/lower.rs`, held by
+`a_call_carries_the_types_its_callee_is_declared_with`.
 
 ### N10.2 — Selfhost completion and diagnostic parity — **complete, 2026-09-23**
 

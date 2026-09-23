@@ -762,7 +762,8 @@ concrete type, and writing it again in every arm would be a second place to get 
 Inside the declaration that owns it, a parameter may be written wherever a type is. It is
 not a value, not an integer, not runtime metadata and not something a program can inspect.
 Its names are unique within one list (`N0350`), may not be a built-in type name or `Vec`
-(`N0331`), and are resolved lexically: a parameter belongs to its own declaration only, so
+(`N0331`) — and neither may a declared record or enum, since a type written `Vec` is always
+the built-in — and are resolved lexically: a parameter belongs to its own declaration only, so
 one function's `T` is never another's, and a parameter may shadow a user-defined type of the
 same name inside the declaration that introduces it.
 
@@ -1469,6 +1470,15 @@ ones, and a composition of leaves is a leaf. The claim therefore now covers `Int
 type that can refer to another value indirectly — a pointer, a reference, or a generic
 container able to hold a record — and none of those exists.
 
+**N11 added the third, and took the first option again, 2026-09-23.** `Vec[T]` holds its
+elements through a reference-counted handle, so a definition can reach itself with a finite
+layout — `struct Node { children: Vec[Node], }` — and a value of it could own itself. The
+type system refuses every such definition (`N0359`) over the ownership graph of definitions
+described in *Generics*, beside the impossible layouts `N0336` already refused. So the
+argument holds with one more step: no definition can reach itself through what it owns, so
+no value can, and counting still reclaims every value of every type a program can write —
+now including every `Vec` and every generic record or enum applied to such types.
+
 **N10 extended the refusal rather than the argument.** An enum holds its active payload by
 value too, so records and enums form **one** inline-containment graph and a cycle anywhere
 in it is refused by the same rule and the same code. An enum adds no new kind of value
@@ -2042,9 +2052,14 @@ were never built would be claims about the parser's guess, not about the program
 
 ### Not in v0.3, and unsupported rather than half-present
 
-Valueless `return`, labelled break, `for`, `loop`, mutable parameters, effects, generics,
-floating point. A program using any of them is rejected by name rather than misparsed into
-something else.
+Valueless `return`, labelled break, `for`, `loop`, mutable parameters, effects, floating
+point. A program using any of them is rejected by name rather than misparsed into something
+else.
+
+**Corrected 2026-09-23, N11.** This list named **generics**, which N11 added: records, enums
+and functions may declare type parameters, and `Vec[T]` is the one generic built-in — the
+section *Generics* above is the law. **Traits, methods, constraints and every other item in
+*What generics are not, in N11*** remain absent and remain refused.
 
 **Corrected 2026-09-23.** This list also named **user-defined types**, which N9 added:
 `struct` declares a record, and the section *Records* above is the law. It then named

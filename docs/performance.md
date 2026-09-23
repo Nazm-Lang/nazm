@@ -603,6 +603,90 @@ grew from 3,756 lines to 4,276 (and to 4,359 with what a `break` gives back): `n
 are not comparable with N8's or N9's figures for the same command — different binary and
 different cache state — and are recorded as a baseline rather than as a delta.
 
+### Generics and `Vec[T]` — measured 2026-09-23, and the cost is the instances
+
+N11 added parametric generics, monomorphised by `nazm build`, and one generic container.
+Measured **contained, Linux aarch64** (`nazm-contained:1.98.1`, one CPU), release compiler,
+median of five by a nanosecond clock; these are not comparable with the Darwin rows above,
+and the process floor here is about **1.3 ms**. The programs are `target/n11/perf/gen.py`.
+
+**`Vec[Int]` against `Ints`, `Vec[Str]` against `Strs`** — 3M push, get-and-set and pop of
+`Int`s; 1M of the same over heap strings, each set taking another element's string:
+
+| Workload | `Ints` / `Strs` | `Vec[T]` | |
+| --- | ---: | ---: | --- |
+| 3M `Int`s, `-O2` | 19.5 ms, 24.0 MiB | **19.4 ms**, 24.7 MiB | the same code |
+| 3M `Int`s, `-O0` | 60.5 ms | 59.1 ms | |
+| 1M strings, `-O2` | 156.2 ms, 69.7 MiB | **151.3 ms**, 70.4 MiB | within noise |
+| 1M strings, `-O0` | 159.6 ms | 162.6 ms | |
+
+A `Vec[T]` is the sequence runtime with the element's layout, and it costs what the
+sequence it generalises costs. The stride is asked of LLVM, and at `-O2` it folds.
+
+**Peak resident memory, short-lived containers against a constant live set**, `-O2`:
+
+| Workload, per iteration | 5,000 | 20,000 | 80,000 |
+| --- | ---: | ---: | ---: |
+| a `Vec[Str]` of two heap strings | 1.17 MiB | 1.17 MiB | 1.17 MiB |
+| a `Vec[Row]`, `Row { name: Str, n: Int, tags: Ints }` | 1.17 MiB | 1.17 MiB | 1.17 MiB |
+| a `Vec[Tok]` of a string, an `Int` and a zero-payload variant | 1.17 MiB | 1.17 MiB | 1.17 MiB |
+| a `Vec[Vec[Str]]` holding one inner vector | 1.17 MiB | 1.17 MiB | 1.17 MiB |
+| empty program | 1.16 MiB | | |
+
+Every row reports `live=0` for sequences and strings. What a program ever built does not
+reach its peak; what it holds does.
+
+**Enum pressure** — the first workload where an enum's size is multiplied. 200,001 tokens
+of `enum Tok { Word(text: Str), Num(v: Int), Punct(c: Int), End }` in a `Vec[Tok]`, against
+the same tokens as three parallel arrays (`Ints` kind, `Ints` number, `Strs` text), built
+and then read by a `match`:
+
+| | parallel arrays | `Vec[Tok]` | |
+| --- | ---: | ---: | --- |
+| bytes per token | 40 (8 + 8 + 24) | **48** (tag 8, `Num` 8, `Punct` 8, `Word` 24, `End` 0) | +20% |
+| peak RSS, `-O2` | 11.8 MiB | **14.0 MiB** | +18% |
+| time, `-O2` | 12.3 ms | 12.5 ms | not measurable |
+
+The slot-per-variant layout N10 chose costs 8 bytes a token here, a fifth; an ideal union
+would be 32. `spec.md` promises nothing about the size, so a compact representation stays
+possible — and is a separate milestone, not an N11 optimisation.
+
+**Monomorphisation's growth** — one generic function, `twice[T]`, instantiated for 1, 10 and
+100 distinct records:
+
+| Instances | `nazm check` | cold build | warm build | instance units compiled cold / warm | IR | cache | executable |
+| ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |
+| 1 | 2.2 ms | 0.11 s | 0.04 s | 1 / **0** | 19 KB, 4 units | 12 KB | 72,496 B |
+| 10 | 1.9 ms | 0.27 s | 0.04 s | 10 / **0** | 75 KB, 13 units | 41 KB | 74,360 B |
+| 100 | 2.7 ms | 1.79 s | 0.05 s | 100 / **0** | 637 KB, 103 units | 324 KB | 93,008 B |
+
+**Checking does not grow**: a generic body is checked once, however many instances there
+are. **Code generation grows linearly**: about 6.2 KB of IR, 3.2 KB of cached object, 206
+bytes of executable and 17 ms of cold build per instance, almost all of it one `clang -c`
+each. A warm build compiles **no** instance, and the build report says so
+(`native.instances.compiled = 0`). An instance symbol names its definition and its
+arguments' canonical keys, which makes it long — 60 bytes for `twice[R7]` in a module named
+`inst_10.nz` — and injective. No cross-instance deduplication, polymorphisation or LTO was
+added; this is the measurement a later milestone would start from.
+
+**The compiler itself**, same host: `nazm check --no-cache compiler/emit.nz` 45.5 ms, peak
+20.5 MiB; `nazm build` cold 1.68 s, peak 119 MiB, warm **0.15 s**.
+
+**The dogfood** — the Nazm-written compiler's diagnostics moved from four parallel arrays to
+one `Vec[Diag]`. C1 compiling `compiler/emit.nz`, three runs each:
+
+| | four arrays | `Vec[Diag]` |
+| --- | ---: | ---: |
+| source lines, `compiler/*.nz` | 11,885 | 11,877 |
+| wall | 10.31–10.36 s | 10.22–10.27 s |
+| peak RSS | 54.1–56.3 MiB | 51.7–52.3 MiB |
+| emitted IR | 6,000,902 B | 5,974,992 B |
+| C2 executable | 1,724,704 B | 1,724,800 B |
+
+The same output, a little less IR and memory, and no claim about speed: 1% of wall time is
+inside the noise of one run to the next. What the migration bought is the invariant — a code
+cannot be pushed without its message — not a number.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

@@ -38,8 +38,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 936 passed, 0 failed, 6 ignored, across 55 suites**, run through
-`cargo xtask contained tests`. The frozen count at the tested release commit is in
+**Current suite: 1,125 passed, 0 failed, 6 ignored, across 58 suites**, run through
+`cargo xtask contained run "cargo test --locked --workspace --jobs 1 --no-fail-fast -- --test-threads 1"`
+at N11 (2026-09-23). The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
 
@@ -105,6 +106,13 @@ section is generated from the same file by `xtask/src/guide.rs`.
 parser no longer requires a concatenated buffer. Since N2 the grammar has one visibility
 bit — `function = [ visibility ] , "fn" , ...` — and the AST records `pub_span`, which is
 where the word was written and nothing about what it means.*
+
+*Since N11, `[` and `]` are tokens and mean one thing: type parameters after a declared name
+(`type_parameters`) and type arguments after a type or an expression's name
+(`type_arguments`). A `TypeName` is recursive, carries its name's span and its whole span,
+and counts against the parse budget; `[]` parses and is the checker's to refuse. The
+Nazm-written parser produces the same tree for every generic shape in
+`the_nazm_parser_produces_the_same_tree_as_the_reference`, spans included.*
 
 **Limitation** · There is **no CST**. `crates/nazm-syntax/src/ast.rs` is a plain owned
 AST; comments are returned as a parallel span list consumed only by the formatter, and
@@ -265,11 +273,26 @@ alone, derived and dispatched in the emitted program, while task safety stays a 
 the **type** and quantifies over every variant. `docs/spec.md`, *Enums*, is the law;
 `architecture.md` §7.11 is the implementation.
 
-Three constructs are verified rather than partial: **records**, **closed enums**, and
-**exhaustive variant match**. What surrounds them is not.
+*N11, 2026-09-23.* First-order parametric generics — `struct Pair[A, B]`, `enum Maybe[T]`,
+`fn identity[T]` — checked **once, parametrically**, with call-site type arguments written
+or inferred from the arguments and never from the expected result, and one generic
+container, `Vec[T]`. An applied type is an interned table entry with substituted fields, so
+every derivation above holds after substitution unchanged; parameters are positions, so
+renaming one changes no interface byte. Codes `N0350`–`N0359`. 40 tests in
+`crates/nazm-core/tests/generics.rs` with code and span, 7 native ones in
+`crates/nazm-cli/tests/generics.rs`, and `the_nazm_checker_agrees_with_the_reference_on_generics`
+comparing both checkers on 42 programs by code **and** span. `docs/spec.md`, *Generics*, is
+the law; `architecture.md` §7.12 is the implementation.
 
-**Limitation** · No generics, so no `Option`, no `Result` and no generic enum of any kind;
-no traits, no methods or `impl`, no closures or function values, no unit type, no `Never`.
+Four constructs are verified rather than partial: **records**, **closed enums**,
+**exhaustive variant match** and **first-order generics with `Vec[T]`**. What surrounds them
+is not.
+
+**Limitation** · Generics are unconstrained: no traits, no constraints, no methods or
+`impl`, so a generic body can do only what every type can. No built-in `Option` or
+`Result`; no higher kinds, const generics, defaults, variance or specialisation; no
+indexing syntax on a `Vec`; no `spawn` of a generic function. No closures or function
+values, no unit type, no `Never`.
 No derived equality on a record or an enum. No field-level or per-variant visibility, no
 default field values, no record update syntax. The pattern language is variant selection
 with named payload bindings and `_` — no top-level wildcard arm, no guards, no or-patterns,
@@ -277,13 +300,12 @@ no literal, record, tuple or range patterns, and no `let` destructuring. Five ke
 remain reserved and refused by name rather than silently absent
 (`crates/nazm-syntax/src/parser.rs`); `struct` left that list in N9 and `enum` and `match`
 in N10, for the same reason `print` did in B3 — a reserved word earns its place by naming
-something absent. Neither a record nor an enum can be put in a sequence, because there is
-no container that can hold one.
+something absent. *Until N11 this said neither a record nor an enum could be put in a
+sequence; `Vec[T]` holds either.*
 
-**Next dependency** · Generics. A monomorphic `enum MaybeInt { None, Some(value: Int), }`
-is already expressible, which is the evidence that the semantic kernel is ready for generic
-algebraic data types — and a generic container is what would let a record or an enum be
-stored in a collection, which is also what would end the cycle argument area 4 rests on.
+**Next dependency** · Typed errors: `Result` and propagation, and `Option` with them. All
+three are expressible as ordinary generic enums now, which is the evidence the kernel is
+ready; what is missing is the decision about what a failure is (`roadmap.md`, N12).
 
 **Accepted when** · Chosen by the milestone that needs it, not by completeness.
 
@@ -313,8 +335,16 @@ no finite layout.
 variant's payload owns: copy, destroy and cleanup dispatch on the discriminant in the
 emitted program, and an inactive variant is ownership-inert. A payload is held inline like
 a field, so the same refusal (`N0336`) covers a containment cycle through a variant, across
-modules too. **Generics are still not covered**, and a generic container able to hold a
-record or an enum is what would end the argument.
+modules too.
+
+*N11, 2026-09-23, extended it to generics and `Vec[T]`.* An applied record or enum owns
+exactly what its substituted fields own; a `Vec[T]` is a reference-counted handle whose
+elements are copied in by `vec_push` and `vec_set`, copied out by `vec_get`, transferred
+out by `vec_pop`, and released by `T`'s law when the last reference dies. A `Vec` is the
+first way a definition can reach itself with a finite layout, so the argument needed its
+second satisfaction, and got it the first way again: every definition whose values could
+own themselves through a counted handle is refused (`N0359`), over an ownership graph that
+keeps acyclic nesting and phantom parameters legal.
 
 **Evidence** · `docs/spec.md`'s *memory constitution* settles assignment, parameters,
 returns, aliasing, mutation, reclamation, cross-task transfer, cycles and cost visibility
@@ -330,6 +360,8 @@ dispatches on. No program that was legal before changed its meaning.
 | `Chan` | a reference-counted header, with its ring, mutex and condition variable | **VERIFIED** |
 | a **record** | none of its own — an inline aggregate whose fields own what they own | **VERIFIED**, composed: one generated retain and release helper per record that owns anything, and none at all for one that does not |
 | an **enum** | none of its own — an inline discriminant and payload slots; only the active variant's payload owns anything | **VERIFIED** since N10: one generated helper pair per enum that owns anything, dispatching on the discriminant |
+| an applied **record** or **enum** | as its definition's, with the substituted field types | **VERIFIED** since N11: its own helpers, generated from the substituted fields |
+| `Vec[T]` | the sequence header an `Ints` has, holding elements of `T`'s layout | **VERIFIED** since N11: one release helper per owning element type, releasing each element before the storage; a `Vec` of non-owning elements is released as an `Ints` is |
 | a `spawn`'s argument block, a file path's terminated copy | runtime-internal | **VERIFIED** — freed since N8; each was one `malloc` per operation before |
 | a literal's constant, the process's `argv` | not this program's | **not reclaimed, correctly.** Nothing allocated them and nothing may free them |
 
@@ -368,6 +400,16 @@ inside a record and a record inside an enum, a nested enum, and an enum crossing
 tasks. The Nazm-written compiler is held to the same counts by four enum programs in
 `the_nazm_written_compiler_emits_the_same_memory_semantics`.
 
+*The 12 generic cases added by N11* cover: `Vec[Int]` under the `Ints` law, `Vec[Str]`
+owning each string, a record read out of a `Vec` surviving its slot being overwritten, a
+`Vec` of enums releasing only each element's active payload, a nested `Vec` releasing each
+inner vector and what it holds, a `Vec[Chan]` holding a reference to each channel, a `Vec`
+returned by tail and by `return`, a generic function returning each kind of value by its own
+law, a generic record releasing each field by its substituted type, an element replaced by a
+copy of itself surviving the allocator, a failed `Vec` operation giving back what the frame
+held, and many short-lived vectors keeping a constant live set. The Nazm-written compiler is
+held to the same counts by five generic programs in the same test.
+
 **Two of those were written because a mutation survived**, and the pair is the lesson.
 Removing `strs_get`'s own reference broke nothing the suite could see, because a binding
 retains what it stores whether or not the built-in already did — the shape that finds it is
@@ -377,6 +419,12 @@ the shape that finds it is `h.name = h.name` followed by enough small allocation
 block the wrong order freed is handed back out, after which the program stops with a
 signal. A compensating mechanism makes a defect invisible without making it absent, and
 the compensation is sometimes the allocator.
+
+**Measured, N11** (contained, Linux aarch64). 5,000 / 20,000 / 80,000 short-lived `Vec[Str]`,
+`Vec[Row]`, `Vec[Tok]` and `Vec[Vec[Str]]` against a constant live set all peak at **1.17 MiB**,
+the empty program's floor, with nothing live at exit. `Vec[Int]` and `Vec[Str]` cost what
+`Ints` and `Strs` cost. `performance.md` has the rows, and the enum-in-a-`Vec` pressure: 48
+bytes a token against 40 for parallel arrays, +18% peak.
 
 **Measured, N9.** 80,000 short-lived two-string records against a constant live set:
 **1.72 MiB**, against 1.73 MiB for the same two strings without a record, and 1.69 MiB for
@@ -430,8 +478,9 @@ module boundary with two records laid out alike. What is claimed is diagnostic *
 primary spans*, not message text, and not the diagnostics that follow an earlier error in
 the same expression, where the two checkers recover differently (`bootstrap.md`).
 
-**Not claimed.** Whole-language leak freedom as a permanent property; anything about
-generics, or a container able to hold a record or an enum; deadlock freedom; user-visible destruction, RAII or any ordering a program can
+**Not claimed.** Whole-language leak freedom as a permanent property; anything about a
+kind of value the language does not have — a weak reference, a closure, a trait object;
+deadlock freedom; user-visible destruction, RAII or any ordering a program can
 observe; a clean sanitizer run. `exit_with` reclaims nothing and reports nothing, which is
 correct and is tested so nobody later treats it as a bug.
 
@@ -442,11 +491,10 @@ are false now, and the second was still true between N7 and N8. **Whole-language
 freedom is still NOT VERIFIED and is still not claimed** — the sentence above about types
 that do not exist is the reason, and it is not a formality.
 
-**Next dependency** · A generic container (N10 supplied the variant type, and an enum's
-payload is held inline, so it did not reopen the argument). A container that can hold a
-record or an enum is what makes a cycle expressible again —
-at which point `docs/spec.md`'s *Cycles* has to be satisfied a second time, and refusing
-inline containment will no longer be enough.
+**Next dependency** · None for the current type universe. *Until N11 this named a generic
+container, which would make a cycle expressible again; N11 added one and refused the cycles
+(`N0359`).* The next value kind that could form a cycle — a closure capturing its own
+handle, a weak or shared reference — has to satisfy `docs/spec.md`'s *Cycles* a third time.
 
 **Accepted when** · A compiled program's peak RSS is bounded by live data rather than by
 total allocation, demonstrated on the self-hosting compiler compiling itself. **Met since
@@ -590,6 +638,13 @@ reaches a symbol, and no LLVM spelling reaches `nazm-sema`.
 call each leave A's artefact **byte-identical** — so an object depends on its dependencies'
 symbol identity and ABI signature, and not on their implementations.
 
+*Since N11* a generic function instance is a unit and an object of its own — artefacts
+`g0`, `g1`, … — named from its definition's `DefKey` and its type arguments' canonical
+keys, never folded into a caller's unit: `one_instance_requested_by_two_modules_is_one_unit_and_one_object`,
+`a_callers_unit_never_carries_a_generic_body`, and a caller that declares an instance
+carries every type the declaration names (`a_call_carries_the_types_its_callee_is_declared_with`,
+found by the conformance corpus).
+
 **Limitation** · The clean build is roughly **twice as slow** for a small program, almost
 entirely because there are now several `clang` processes where there was one — measured in
 `performance.md` together with a 10% smaller optimised executable, which is cross-module
@@ -629,6 +684,12 @@ key still has all three fields, that a lookup still recomputes the key and the o
 digest, that nothing semantic is imported into the key, that an entry carries no field
 nothing validates, and that the arguments hashed and the arguments executed come from one
 function.
+
+*Since N11, for generic instances* (`crates/nazm-cli/tests/native_cache.rs`, seven cases):
+a new instantiation compiles the caller, the new instance and any runtime it newly reaches;
+a generic **body** edit recompiles exactly its instances and no caller — not even its own
+module's unit, which never carries the body; renaming a type parameter recompiles nothing;
+a warm build compiles nothing. The key needed no change: an instance's key is its bytes.
 
 **Measured** · On the five-module compiler, `-O0`: 665.4 ms with `--no-cache`, 730.7 ms
 cold, **157.6 ms** warm; `-O2`: 1693.0 ms, 1755.4 ms, **157.6 ms**. A one-module edit costs
@@ -1119,6 +1180,36 @@ is N10.1's `N0313` entry, whose line the block's rewrite moved;
 three-state join, which `a-then-branch-that-leaves-still-gives-the-type` mutates exactly.
 Targeted batches, not a catalogue run.
 
+*N11 added twenty-six on 2026-09-23 and repointed four the diagnostics migration moved, and
+ran them contained and serial in five batches with nothing else running.* By category —
+**type system** (six: parameter order forgotten, wrong arity accepted, inference keeping the
+first conflicting type, `==` on a parameter, two definitions of one shape unified, parameter
+names persisted in the interface), **native instances** (four: a symbol built from the first
+argument alone, an instance planned twice, an instance's own calls never planned, polymorphic
+recursion not counted as expanding), **`Vec` ownership** (five: push without a reference of
+its own, get handing out the vector's, set releasing before taking, pop copying instead of
+transferring, destruction without the elements), **cycles** (two: a `Vec` hiding what it
+owns, every parameter counted as used) and **the compiler written in Nazm** (nine, across
+all four). First run: **twenty caught, six survived**, none unapplied, none that did not
+build, no timeout. The six were two holes and one equivalence:
+
+* `two-generic-definitions-of-one-shape-unify` and `an-instance-symbol-keeps-only-its-first-argument`
+  had no test that could see them — no call passed one generic record where another of the
+  same arity was declared, and no two instances differed only after their first argument.
+  Now `inference_does_not_unify_two_generic_definitions_of_one_shape` and
+  `two_instances_that_differ_only_in_a_later_argument_are_two_functions`;
+* `vec-get-returns-a-borrowed-element`, in both compilers, is the N8 lesson a third time:
+  every shape bound what it read, and a binding takes a reference of its own. Now
+  `an_unbound_vec_read_outlives_the_element_being_replaced`, in both, reads an element into
+  an argument and replaces it in the next argument, and churns the allocator in the callee;
+* `vec-set-releases-before-it-takes`, in both, survived a second run and is **equivalent**:
+  the order is observable only when the new value's one reference is the slot it replaces,
+  and `vec_get` always gives out a reference of its own, so no program can build that. Both
+  are retired, with the reason in the catalogue.
+
+Rerun: **all four remaining caught**. Final: **24 of 24 live mutations caught**, 2 retired as
+equivalent. Targeted batches, not a catalogue run; the catalogue is 182 entries.
+
 **Limitation** · The **whole-catalogue run timed out unexplained** at its 3600 s deadline
 without reaching injection, and is recorded as incomplete rather than as a result; the
 first hypothesis (a cold build cache) was measured and is wrong. It must not be restarted
@@ -1163,6 +1254,13 @@ Fifteen rules are compared through both compilers
 (`the_two_compilers_agree_on_every_module_and_visibility_rule`), and five multi-module
 conformance cases agree across the reference, C2 and C3 — which is a **different** claim
 from C2 = C3 and is recorded separately in `bootstrap.md`.
+
+**Since N11** the compiler written in Nazm implements generics and `Vec[T]` and uses one — its
+diagnostics are a `Vec[Diag]` — so every stage compiles a `Vec` of records. The corpus has 24
+cases, 9 of them multi-module, including a generic library instantiated only by its importer
+and one instance requested from two modules, and a **refusal corpus** of 4 programs that C2,
+C3 and the reference must each refuse with the named code. The fixpoint moved to
+`c58b91dd…` at 11,877 source lines. `bootstrap.md` has the record.
 
 **Next dependency** · None.
 

@@ -200,6 +200,48 @@ now failed to reach twice, and that repetition is itself the finding.
 
 ---
 
+### N11 asked the container question, 2026-09-23. Status: still **SUPPORTED, not VERIFIED**
+— one of the three gaps closed, the sharpest one left.
+
+`Vec[T]` exists, in both compilers, and holds records, enums, strings and other `Vec`s. The
+invalidating result did not appear: **a container of records needed no region, no lifetime,
+no annotation and no place calculus.** What made that true is a decision, not a discovery,
+and it is the one this item has to weigh:
+
+* **`Vec[T]` is a handle, and its elements are values.** `let b = a` on a `Vec` aliases, as it
+  does on an `Ints`; `vec_get` returns **its own copy** of an element by the element's law,
+  and `vec_set` replaces one. So a record inside a `Vec` keeps value semantics — mutating the
+  copy changes nothing in the vector — and the surface never had to say who may hold a
+  reference into the storage, because nobody can.
+* **The price is the one this item predicted.** There is no `xs[i].f = v`. Updating an
+  element's field is get, change, set — three operations and a copy of every owning field
+  twice. That is not hidden: `spec.md` says why the indexing form is absent, and
+  `performance.md` measures what the copy costs. It is exactly the place where "value
+  semantics usually start to hurt", and the answer N11 gives is to make the hurt explicit
+  rather than to remove it.
+* **The cycle argument held a second time, by refusal.** A container that can hold a record
+  is what makes an ownership cycle expressible, and the type system refuses every definition
+  that could form one (`N0359`) while leaving acyclic nesting legal. So counting is still
+  complete for every type a program can write.
+* **And the dogfood this item failed to reach twice happened.** The self-hosted compiler's
+  diagnostics were four parallel arrays and are a `Vec[Diag]` now. No other structure was
+  migrated, deliberately: the node arena and the record table are shared mutable state as
+  much as they are data, which is the handle/value distinction N9 recorded, and the integer
+  tags that N10 wanted as enums are compared in hundreds of places where an enum has no `==`
+  — a cost this item should count against value semantics rather than hide.
+
+**Why still SUPPORTED and not VERIFIED.** What remains is the item's original sharp
+question, now larger than ever: **copy elision is still folklore.** A `vec_get` of a record
+copies every owning field and a `vec_set` copies them again, and nothing says when either
+pair may be removed. The surface model is ergonomic where the language has run it; whether
+it stays affordable depends on a specification that does not exist.
+
+**Evidence needed next** · A statement of when redundant retain/release pairs may be elided,
+tested against the get-change-set shape, and a second real migration — one where the
+elements are updated in place in a loop — measured before and after.
+
+---
+
 ## R2 · Content-addressed semantic IR pays for itself
 
 **Hypothesis** · Normalising each top-level definition after type checking — names erased
