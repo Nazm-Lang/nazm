@@ -205,7 +205,7 @@ accepts.
 | `field` | `IDENT , ":" , type` |
 | `enumeration` | `[ visibility ] , "enum" , IDENT , "{" , [ variants ] , "}"` |
 | `variants` | `variant , { "," , variant } , [ "," ]` |
-| `variant` | `IDENT , [ "(" , [ payload ] , ")" ]` |
+| `variant` | `IDENT , [ "(" , payload , ")" ]` |
 | `payload` | `field , { "," , field } , [ "," ]` |
 | `parameters` | `parameter , { "," , parameter }` |
 | `parameter` | `IDENT , ":" , type` |
@@ -382,7 +382,7 @@ enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } }
 ### `variant`
 
 ```ebnf
-variant = IDENT , [ "(" , [ payload ] , ")" ] ;
+variant = IDENT , [ "(" , payload , ")" ] ;
 ```
 
 A variant with no payload is written with **no parentheses**: there is no field list,

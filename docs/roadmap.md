@@ -390,7 +390,10 @@ between leaves is a leaf.
 
 Evidence: the numbers are in the milestone report and in `bootstrap.md`; what they cover is
 the contained suite, selfhost parity, a new C2 = C3 fixpoint, eighteen new mutations, and
-the interface and cache behaviour that variant addition is supposed to move.
+the interface and cache behaviour that variant addition is supposed to move. The compiler
+written in Nazm uses an enum of its own — and making that one dispatch exhaustive found a
+defect N9 had shipped, where a record passed to a task produced a wrong answer and leaked
+its fields.
 
 ### N9 — User-defined records — **complete, 2026-09-23**
 

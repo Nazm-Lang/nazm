@@ -173,10 +173,15 @@ What the experiment adds to the evidence, and what it does not:
   a variant breaks every importer that believed it had handled the whole enum. That is
   intended while the language is young and it is a real friction, and a later
   `non_exhaustive` design will have to weigh it;
-* **and the compiler still does not use one.** The dogfood assessment is below, and the
-  answer is the same as N9's for the same reason: the structures are parallel arrays, and
-  a tagged node kind stored in an `Ints` cannot become an enum without a container that can
-  hold one.
+* **and the compiler uses one, in the one place a container is not needed.**
+  `enum Owning { Nothing, Sequence, Strings, Backing, Channel, Record(at: Int),
+  Enum(at: Int) }` replaced the small integer `compiler/emit.nz`'s `owns` returned. The
+  node kinds, token kinds and type codes stayed integers, because they live in an `Ints`
+  and there is no container that can hold an enum — which is the same wall N9 hit, reached
+  from the other side. What `Owning` shows is that the ergonomic win is real where the
+  language can express it: the dispatch became exhaustive, and **making it exhaustive found
+  a defect N9 had shipped**, where a record crossing a task boundary produced a wrong answer
+  and leaked its fields in the self-hosted compiler.
 
 **Why still SUPPORTED and not VERIFIED.** Two of the three gaps N9 named are open, and one
 of them is the same one:

@@ -380,6 +380,16 @@ fn an_enum_with_no_variants_is_refused_by_name() {
 }
 
 #[test]
+fn a_variant_declared_with_empty_brackets_is_refused() {
+    // One concept, one spelling: a variant with no payload has no field list. The
+    // brackets are written at a construction and in a pattern, where they are what
+    // separates a variant from a field read — and nowhere else.
+    let (c, message) = sole("enum E { A(), B, } fn main() -> Int { 0 }");
+    assert_eq!(c, codes::UNSUPPORTED_CONSTRUCT);
+    assert!(message.contains("`A`"), "{message}");
+}
+
+#[test]
 fn two_variants_of_one_name_are_refused() {
     assert_eq!(
         code("enum E { A, A, } fn main() -> Int { 0 }"),
