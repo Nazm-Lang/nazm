@@ -179,3 +179,22 @@ fn a_call_carries_the_types_its_callee_is_declared_with() {
     let out = Command::new(dir.path().join("prog")).output().expect("run");
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "3");
 }
+
+#[test]
+fn two_instances_that_differ_only_in_a_later_argument_are_two_functions() {
+    // Found by mutation: a symbol built from the first type argument alone gave
+    // `second[Int, Str]` and `second[Int, Bool]` one name, and nothing noticed. Every
+    // argument is in an instance's identity, and both instances run.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "m.nz",
+        "fn second[A, B](a: A, b: B) -> B { b }\n\
+         fn main() -> Int {\n    let s = second(1, \"four\");\n    \
+         if second(2, true) { str_len(s) } else { 0 }\n}\n",
+    );
+    let (ok, _, stderr) = nazm(dir.path(), &["build", "m.nz", "-o", "prog", "--emit-ir"]);
+    assert!(ok, "{stderr}");
+    let out = Command::new(dir.path().join("prog")).output().expect("run");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "4");
+}

@@ -238,6 +238,13 @@ fn is_generic(res: &Resolution, f: FnId) -> bool {
     res.function(f).is_some_and(|d| !d.type_params.is_empty())
 }
 
+/// One node of the expanding-cycle graph: a function and one of its parameter positions.
+type ParamNode = (FnId, u32);
+
+/// The graph's edges out of each node: the node reached, whether the edge expands, and
+/// the call that makes it.
+type ParamEdges = HashMap<ParamNode, Vec<(FnId, u32, bool, Span)>>;
+
 /// Refuse polymorphic recursion: a generic function that reaches itself with a type
 /// argument **larger** than the parameter it came from.
 ///
@@ -246,13 +253,6 @@ fn is_generic(res: &Resolution, f: FnId) -> bool {
 /// parameters `i` that `t` mentions to `(g, j)` — *expanding* when `t` is more than `f`'s
 /// parameter itself. An instance family is infinite exactly when some cycle of this graph
 /// contains an expanding edge, so that is what is refused, with the call that expands.
-/// One node of the expanding-cycle graph: a function and one of its parameter positions.
-type ParamNode = (FnId, u32);
-
-/// The graph's edges out of each node: the node reached, whether the edge expands, and
-/// the call that makes it.
-type ParamEdges = HashMap<ParamNode, Vec<(FnId, u32, bool, Span)>>;
-
 fn expanding_cycles(res: &Resolution) -> Vec<Diagnostic> {
     // Edges, and each expanding edge's call site.
     let mut edges: ParamEdges = HashMap::new();
