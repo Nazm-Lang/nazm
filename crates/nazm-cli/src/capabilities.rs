@@ -97,6 +97,18 @@ const CONSTRUCTS: &[ConstructRow] = &[
         evidence: "refused by name; a separate scoping question (docs/spec.md)",
     },
     ConstructRow {
+        name: "`struct` records: named fields, construction, projection, replacement",
+        interpreted: true,
+        compiled: true,
+        evidence: "nazm-core/tests/records.rs, nazm-cli/tests/memory.rs",
+    },
+    ConstructRow {
+        name: "`enum` variants and exhaustive `match`",
+        interpreted: true,
+        compiled: true,
+        evidence: "nazm-core/tests/enums.rs, nazm-cli/tests/memory.rs",
+    },
+    ConstructRow {
         name: "modules: `use`, relative resolution, diamonds, cycles",
         interpreted: true,
         compiled: true,

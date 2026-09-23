@@ -1687,6 +1687,59 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
              t.b\n}\n",
             "",
         ),
+        // Enums: the active variant copied, matched, replaced across variants, and
+        // returned out of the arm that matched it — with an owning variant that is never
+        // the active one, so a compiler that copied or released every arm would show a
+        // different count rather than a different answer.
+        (
+            "enum Holder {\n    Nothing,\n    Many(items: Strs),\n    Text(value: Str),\n}\n\
+             fn take(h: Holder) -> Str { match h { Holder.Nothing() => \"\", \
+             Holder.Many(items: _) => \"\", Holder.Text(value: s) => s, } }\n\
+             fn main() -> Int {\n    let mut h = Holder.Text(value: str_concat(\"ab\", \"cd\"));\n    \
+             let copy = h;\n    h = Holder.Nothing();\n    \
+             h = Holder.Text(value: str_concat(\"x\", \"y\"));\n    let mut i = 0;\n    \
+             let mut total = 0;\n    \
+             while i < 30 {\n        \
+             total = total + str_len(take(Holder.Text(value: int_to_str(i))));\n        \
+             i = i + 1;\n    }\n    \
+             total + str_len(take(copy)) + str_len(take(h))\n}\n",
+            "56",
+        ),
+        // A nested enum inside a record, so both helpers have to recurse into the other.
+        (
+            "enum Inner {\n    None,\n    Text(value: Str),\n}\n\
+             struct Event {\n    state: Inner,\n    values: Ints,\n}\n\
+             fn size(e: Inner) -> Int { match e { Inner.None() => 0, \
+             Inner.Text(value: s) => str_len(s), } }\n\
+             fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    \
+             while i < 30 {\n        \
+             let e = Event(state: Inner.Text(value: int_to_str(i)), values: ints_new());\n        \
+             let copy = e;\n        total = total + size(copy.state) + ints_len(e.values);\n        \
+             i = i + 1;\n    }\n    total\n}\n",
+            "50",
+        ),
+        // A record and an enum **crossing a task boundary**, which is where the reference
+        // and this compiler diverged until N10 looked: the argument block's offsets were
+        // arithmetic — twenty-four bytes for a `Str` and eight for everything else — so a
+        // record was given eight and the task read the next argument's bytes as its own.
+        // And the trampoline released four kinds of value and not these two, so what it
+        // was given was never handed back. The answer was wrong *and* the string leaked.
+        (
+            "struct M {\n    text: Str,\n}\n\
+             enum E {\n    Empty,\n    Text(value: Str),\n}\n\
+             fn worker(m: M, e: E, out: Chan) -> Int {\n    \
+             let n = str_len(m.text) + match e { E.Empty() => 0, \
+             E.Text(value: s) => str_len(s), };\n    \
+             if chan_send(out, n) { 1 } else { 0 }\n}\n\
+             fn main() -> Int {\n    let s = str_concat(\"he\", \"llo\");\n    \
+             let out = chan_new(4);\n    let got = ints_new();\n    \
+             scope {\n        spawn worker(M(text: s), E.Text(value: s), out);\n        \
+             spawn worker(M(text: s), E.Text(value: s), out);\n    }\n    \
+             if chan_recv(out, got) { 0 } else { 0 };\n    \
+             if chan_recv(out, got) { 0 } else { 0 };\n    \
+             ints_get(got, 0) + ints_get(got, 1)\n}\n",
+            "20",
+        ),
     ];
 
     /// The `nazm-memory:` line, which both compilers' programs print under the same

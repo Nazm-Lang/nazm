@@ -1185,6 +1185,13 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                     let mut npayload = 0;
                     if kind_at(kinds, i) == k_lparen() {
                         i = i + 1;
+                        // `Eof()` is refused rather than read as a variant with no
+                        // payload: one concept gets one spelling, and the spelling for no
+                        // payload is no brackets.
+                        if kind_at(kinds, i) == k_rparen() {
+                            die("this variant has an empty payload, which is written by writing nothing",
+                                    vat);
+                        }
                         while kind_at(kinds, i) != k_rparen() {
                             if kind_at(kinds, i) != k_ident() {
                                 die("expected a payload field name", start_at(starts, i));

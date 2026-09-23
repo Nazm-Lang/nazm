@@ -543,6 +543,28 @@ impl<'a> Parser<'a> {
             let mut fields = Vec::new();
             let mut last = variant_span;
             if self.eat(&TokenKind::LParen) {
+                // `Eof()` is refused rather than read as a variant with no payload. One
+                // concept gets one spelling, and the spelling for *no payload* is no
+                // brackets — `docs/spec.md` says so, and a record with no fields is
+                // refused for the same reason.
+                if self.at(&TokenKind::RParen) {
+                    let close = self.peek_span();
+                    self.advance();
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNSUPPORTED_CONSTRUCT,
+                            variant_span.join(close),
+                            format!("`{variant_name}` has an empty payload, which is written by writing nothing"),
+                        )
+                        .help(
+                            "a variant with no payload is declared `Name,` — the brackets \
+                             are the payload. Construction and patterns write them anyway, \
+                             because there they are what separates a variant from a field \
+                             read",
+                        ),
+                    );
+                    return None;
+                }
                 while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
                     let field_span = self.peek_span();
                     let field_name = match self.advance() {

@@ -8,12 +8,12 @@
 
 use nazm_iface::wire::{PersistentUnitInterface, ReadError};
 use nazm_iface::{InterfaceHash, SCHEMA};
-use nazm_sema::interface::{EnumExport, Export, RecordExport, UnitInterface};
+use nazm_sema::interface::{EnumExport, Export, UnitInterface};
 use nazm_sema::key::ModuleKey;
 use nazm_sema::module::ModuleGraph;
 use nazm_sema::enums::{EnumDef, VariantDef};
 use nazm_sema::interface::Visibility;
-use nazm_sema::record::{FieldDef, RecordDef};
+use nazm_sema::record::FieldDef;
 use nazm_sema::udt::UserTypes;
 use nazm_sema::resolve::FnId;
 use nazm_sema::types::Type;
@@ -324,4 +324,199 @@ fn a_file_not_in_canonical_order_is_refused() {
         ),
         ReadError::NotCanonical(_)
     ));
+}
+
+// --- enums in a persisted interface -----------------------------------------------------
+//
+// A `/3` interface is **closed** over the types its public surface mentions, and canonical
+// in every order that is not semantic. These are the ways a file could be well-formed JSON
+// and not an interface, asked of the half N10 added.
+
+/// An interface carrying one enum, built from its own bytes so these depend on the format
+/// rather than on a second construction of it.
+fn enum_interface(variants: &str) -> Result<PersistentUnitInterface, ReadError> {
+    PersistentUnitInterface::from_json(&format!(
+        r#"{{"schema":"nazm.interface/3","module":"a.nz","dependencies":[],"records":[],"enums":[{{"def":"a.nz::enum State","name":"State","variants":[{variants}]}}],"exports":[]}}"#
+    ))
+}
+
+#[test]
+fn an_enum_round_trips_with_its_variants_and_payload_types() {
+    let g = graph();
+    let mut types = UserTypes::default();
+    let e = types.enums_mut().declare(EnumDef {
+        name: "State".to_owned(),
+        module: g.root(),
+        visibility: Visibility::Exported,
+        name_span: Span::synthetic(),
+        variants: Vec::new(),
+        order: Vec::new(),
+        decl: 0,
+    });
+    // Declared in neither canonical order: variants `Ready` then `Done`, and `Done`'s
+    // payload `why` then `code`. The published bytes must be in both.
+    types.enums_mut().complete(
+        e,
+        vec![
+            VariantDef {
+                name: "Ready".to_owned(),
+                name_span: Span::synthetic(),
+                fields: Vec::new(),
+                layout: Vec::new(),
+            },
+            VariantDef {
+                name: "Done".to_owned(),
+                name_span: Span::synthetic(),
+                fields: vec![
+                    FieldDef {
+                        name: "why".to_owned(),
+                        ty: Type::Str,
+                        name_span: Span::synthetic(),
+                        ty_span: Span::synthetic(),
+                    },
+                    FieldDef {
+                        name: "code".to_owned(),
+                        ty: Type::Int,
+                        name_span: Span::synthetic(),
+                        ty_span: Span::synthetic(),
+                    },
+                ],
+                layout: Vec::new(),
+            },
+        ],
+    );
+    let interface = UnitInterface::new(
+        g.root(),
+        Vec::new(),
+        Vec::new(),
+        vec![EnumExport {
+            def: e,
+            nameable: true,
+        }],
+        Vec::new(),
+    );
+    let published = PersistentUnitInterface::published(&interface, &g, &types).expect("publish");
+    let json = published.to_json().expect("json");
+    assert_eq!(
+        json,
+        r#"{"schema":"nazm.interface/3","module":"a.nz","dependencies":[],"records":[],"enums":[{"def":"a.nz::enum State","name":"State","variants":[{"name":"Done","fields":[{"name":"code","ty":"Int"},{"name":"why","ty":"Str"}]},{"name":"Ready","fields":[]}]}],"exports":[]}"#
+    );
+    // And it reads back: canonical bytes are what the reader requires.
+    assert_eq!(
+        PersistentUnitInterface::from_json(&json).expect("valid"),
+        published
+    );
+}
+
+#[test]
+fn variants_out_of_canonical_order_are_refused() {
+    assert_eq!(
+        enum_interface(r#"{"name":"Ready","fields":[]},{"name":"Done","fields":[]}"#)
+            .expect_err("should be refused"),
+        ReadError::NotCanonical("variants".to_owned())
+    );
+}
+
+#[test]
+fn a_duplicate_variant_is_refused() {
+    assert!(matches!(
+        enum_interface(r#"{"name":"Done","fields":[]},{"name":"Done","fields":[]}"#)
+            .expect_err("should be refused"),
+        ReadError::DuplicateRecord(_)
+    ));
+}
+
+#[test]
+fn payload_fields_out_of_canonical_order_or_duplicated_are_refused() {
+    assert_eq!(
+        enum_interface(
+            r#"{"name":"Done","fields":[{"name":"why","ty":"Str"},{"name":"code","ty":"Int"}]}"#
+        )
+        .expect_err("should be refused"),
+        ReadError::NotCanonical("fields".to_owned())
+    );
+    assert!(matches!(
+        enum_interface(
+            r#"{"name":"Done","fields":[{"name":"code","ty":"Int"},{"name":"code","ty":"Int"}]}"#
+        )
+        .expect_err("should be refused"),
+        ReadError::DuplicateRecord(_)
+    ));
+}
+
+#[test]
+fn a_payload_type_this_interface_does_not_define_is_refused() {
+    // The closure, as a refusal: a `/3` file defines every type it names, so a dangling
+    // reference is a malformed interface rather than something to go and look for.
+    assert_eq!(
+        enum_interface(r#"{"name":"Done","fields":[{"name":"p","ty":"a.nz::record Point"}]}"#)
+            .expect_err("should be refused"),
+        ReadError::UnknownType("a.nz::record Point".to_owned())
+    );
+}
+
+#[test]
+fn an_enum_listed_under_a_record_identity_is_refused() {
+    // The kind is part of a durable identity, so a file that files an enum among the
+    // records disagrees with itself.
+    assert!(matches!(
+        PersistentUnitInterface::from_json(
+            r#"{"schema":"nazm.interface/3","module":"a.nz","dependencies":[],"records":[{"def":"a.nz::enum State","name":"State","fields":[]}],"enums":[],"exports":[]}"#
+        )
+        .expect_err("should be refused"),
+        ReadError::BadKey(_)
+    ));
+    assert!(matches!(
+        PersistentUnitInterface::from_json(
+            r#"{"schema":"nazm.interface/3","module":"a.nz","dependencies":[],"records":[],"enums":[{"def":"a.nz::record State","name":"State","variants":[]}],"exports":[]}"#
+        )
+        .expect_err("should be refused"),
+        ReadError::BadKey(_)
+    ));
+}
+
+#[test]
+fn an_enums_name_must_agree_with_its_identity() {
+    assert!(matches!(
+        PersistentUnitInterface::from_json(
+            r#"{"schema":"nazm.interface/3","module":"a.nz","dependencies":[],"records":[],"enums":[{"def":"a.nz::enum State","name":"Other","variants":[]}],"exports":[]}"#
+        )
+        .expect_err("should be refused"),
+        ReadError::NameMismatch(_)
+    ));
+}
+
+#[test]
+fn a_record_and_an_enum_may_refer_to_one_another_across_the_file() {
+    // Closed and forward-referencing: a record's field names an enum defined after it and
+    // an enum's payload names that record. Checked after the whole set is known, which is
+    // why both orders work.
+    let json = r#"{"schema":"nazm.interface/3","module":"a.nz","dependencies":[],"records":[{"def":"a.nz::record Event","name":"Event","fields":[{"name":"state","ty":"a.nz::enum State"}]}],"enums":[{"def":"a.nz::enum State","name":"State","variants":[{"name":"At","fields":[{"name":"e","ty":"a.nz::record Event"}]}]}],"exports":[]}"#;
+    let read = PersistentUnitInterface::from_json(json).expect("a valid interface");
+    assert_eq!(read.to_json().expect("json"), json);
+}
+
+#[test]
+fn adding_or_renaming_a_variant_changes_the_fingerprint_and_reordering_does_not() {
+    let hash = |variants: &str| {
+        InterfaceHash::of(&enum_interface(variants).expect("valid"))
+            .expect("hashable")
+            .to_string()
+    };
+    let base = hash(r#"{"name":"Done","fields":[]},{"name":"Ready","fields":[]}"#);
+    assert_ne!(
+        base,
+        hash(r#"{"name":"Done","fields":[]},{"name":"Failed","fields":[]},{"name":"Ready","fields":[]}"#),
+        "adding a variant"
+    );
+    assert_ne!(
+        base,
+        hash(r#"{"name":"Done","fields":[]},{"name":"Waiting","fields":[]}"#),
+        "renaming a variant"
+    );
+    assert_ne!(
+        base,
+        hash(r#"{"name":"Done","fields":[{"name":"code","ty":"Int"}]},{"name":"Ready","fields":[]}"#),
+        "adding a payload field"
+    );
 }

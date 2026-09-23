@@ -1729,6 +1729,47 @@ per arm, so a diagnostic about a payload field inside a pattern points at the ar
 reference points at the field. Where each compiler points is not what N2.1 is about; what
 each decides is.
 
+#### And it uses one
+
+`enum Owning { Nothing, Sequence, Strings, Backing, Channel, Record(at: Int), Enum(at: Int) }`
+in `compiler/emit.nz`. It was a small integer — `0` nothing, `3` a string backing, `5` a
+record — that every caller compared against a number, and the two cases carrying an index
+recomputed it from the type at each site. N10 added a seventh and every one of those
+comparisons had to be found by hand.
+
+As an enum the dispatch is exhaustive, so adding a kind stops the retain and release paths
+compiling until both have answered; and the index a record or an enum needs travels **in
+the value that says it needs one**, so the two cannot disagree. The sites that only want
+*does this own anything* go through one `owns_anything`, which is the same `match` answered
+once rather than at each of them.
+
+It is one enum rather than a migration, and the reason is the same one N9 gave for one
+record: the compiler's node kinds, token kinds and type codes are integers stored in `Ints`,
+and there is no container that can hold an enum. `Owning` is the case where the value is
+returned and never stored, which is exactly the case a container is not needed for.
+
+#### A record crossing a task boundary, which N9 got wrong
+
+Making that `match` exhaustive found a defect, and it was N9's rather than N10's. The
+self-hosted emitter's trampoline released four kinds of value and not a record's. Worse, the
+argument block's offsets were arithmetic — twenty-four bytes for a `Str` and eight for
+everything else, which was true of every type the language had when it was written. A record
+is neither: `struct M { text: Str }` is twenty-four bytes and was given eight, so the store
+ran past its slot and the task read the next argument's bytes as its own.
+
+So a record passed to a task produced a **wrong answer** and leaked its fields, in the
+self-hosted compiler only, since N9. The block is a named LLVM type now — `{ i64 handle,
+ptr message, i64 length, … arguments }`, which is what the reference emitter always had —
+so LLVM computes the offsets and the arithmetic that could not survive a new type is gone.
+`the_nazm_written_compiler_emits_the_same_memory_semantics` carries the case.
+
+Two things this says. The first is that the reference emitter was right and the second
+implementation was the one that drifted, which is the usual direction and the reason the
+differential test exists. The second is that N9's evidence did not reach it: records crossed
+module boundaries, were returned on both edges and were copied in loops, and **no test
+passed one to a task through the self-hosted compiler.** The gap was in the corpus, not in
+the design.
+
 ### What this still does not do
 
 - **No generics**, so no `Option`, no `Result`, and no generic enum of any kind. A
