@@ -48,6 +48,7 @@ running anything, and `nazm test` runs a directory of programs against recorded 
 | `Strs` | The same, of `Str` |
 | `Chan` | A bounded queue of `Int`, by reference. The one type designed to be shared between tasks |
 | a `struct` you declare | A **record**: a value with named fields, each keeping its own type's rules |
+| an `enum` you declare | One of a fixed set of named **variants**, each with its own named fields |
 
 `Ints`, `Strs` and `Chan` are handles: two bindings of one sequence are the same storage,
 and `==` is not offered on them, because it would have to mean either identity or
@@ -95,6 +96,59 @@ tells you which field decided it.
 
 A record cannot contain itself, directly or in a circle. That is refused as a layout with
 no size rather than as a safety problem — there is nowhere for such a value to fit.
+
+## Enums, and `match`
+
+A record has all of its fields at once. An enum has **one of its variants** at a time.
+
+```nazm
+pub enum State {
+    Ready,
+    Done(code: Int),
+    Failed(why: Str, code: Int),
+}
+
+fn describe(s: State) -> Int {
+    match s {
+        State.Ready() => 0,
+        State.Done(code: c) => c,
+        State.Failed(why: w, code: c) => str_len(w) + c,
+    }
+}
+
+fn main() -> Int {
+    describe(State.Failed(why: "disk", code: 5))
+}
+```
+
+Six things to know, and then you know enums:
+
+- **A variant is always written with its enum, and always with brackets.** `State.Ready()`,
+  not `Ready` and not `State.Ready`. That is why two enums may both have a `Ready`, and why
+  importing a module brings in no new bare names.
+- **`match` is the only way to get at a payload.** There is no `s.code`: which fields a
+  value has depends on which variant it is, so the question only has an answer inside an
+  arm that has established one.
+- **Every variant gets exactly one arm.** Leave one out and the compiler names it; write
+  one twice and it says so. There is no `_ => …` arm — deliberately, so that when somebody
+  adds a variant, every `match` that thought it had handled the whole enum is told.
+- **A pattern names every payload field**, binding it or discarding it with `_`. Same
+  reason: add a field and the old patterns stop compiling instead of quietly ignoring it.
+  `_` only declines to *name* the value — it is still there and still cleaned up.
+- **A binding is a borrowed view that lives in its arm.** You can return it, store it or
+  pass it on, and it stays valid after the value you matched is gone. If it names an `Ints`,
+  you can still push to the sequence: the binding is immutable, the storage is not.
+- **`a == b` is not offered**, for the reason it is not offered on a record.
+
+Variant order and payload-field order are presentation, exactly as a record's field order
+is. Moving two of either changes nothing at all.
+
+Whether an enum can be passed to a task is worked out from **every** variant, not the one
+it happens to hold: `enum Work { None, Values(xs: Ints), }` may not cross even while it is
+`None`, because what a task is given is a value of a type.
+
+An enum and a record can contain one another, and an enum can contain an enum. What is
+refused is a circle — the same layout-with-no-size refusal a record gets.
 
 ## Memory: what you do not have to do
 
