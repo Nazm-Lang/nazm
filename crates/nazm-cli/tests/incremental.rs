@@ -970,3 +970,164 @@ fn main() -> Int { match State.Ready() { State.Ready() => 0, } }
     let again = check(dir.path(), "a.nz");
     assert_eq!(again.reused, 1, "{again:?}");
 }
+
+// --- enums, and which edits reach an importer -------------------------------------------
+
+/// A → B where B exports an enum and a function over it, and A matches on it.
+fn two_modules_with_an_enum(dir: &Path, b: &str) {
+    project(dir);
+    write(
+        dir,
+        "a.nz",
+        "use \"b.nz\";\n\
+         fn weight(s: State) -> Int { match s { State.Ready() => 21, \
+         State.Done(code: c) => c, } }\n\
+         fn main() -> Int { weight(start()) + weight(State.Done(code: 21)) }\n",
+    );
+    write(dir, "b.nz", b);
+}
+
+const ENUM_B: &str = "pub enum State {\n    Ready,\n    Done(code: Int),\n}\n\
+                      enum Hidden {\n    A,\n}\n\
+                      fn secret() -> Int { match Hidden.A() { Hidden.A() => 0, } }\n\
+                      pub fn start() -> State { State.Ready() }\n";
+
+#[test]
+fn a_private_enum_change_leaves_the_importer_alone() {
+    // B's private enum changes shape: B's source fingerprint moves, so B is checked
+    // again; B's *interface* does not, so A is not.
+    let dir = tempfile::tempdir().expect("tempdir");
+    two_modules_with_an_enum(dir.path(), ENUM_B);
+    let first = check(dir.path(), "a.nz");
+    assert_eq!((first.checked, first.reused), (2, 0));
+
+    write(
+        dir.path(),
+        "b.nz",
+        "pub enum State {\n    Ready,\n    Done(code: Int),\n}\n\
+         enum Hidden {\n    A(n: Str),\n    B,\n}\n\
+         fn secret() -> Int { match Hidden.B() { Hidden.A(n: s) => str_len(s), \
+         Hidden.B() => 0, } }\n\
+         pub fn start() -> State { State.Ready() }\n",
+    );
+    let after = check(dir.path(), "a.nz");
+    assert_eq!(
+        (after.checked, after.reused),
+        (1, 1),
+        "exactly B should have been checked"
+    );
+    assert!(after.accepted);
+    assert_eq!(meaning(&after), meaning(&cold(dir.path(), "a.nz")));
+}
+
+#[test]
+fn a_public_variant_addition_rechecks_the_importer_and_breaks_its_match() {
+    // §44, end to end and through the real binary. B gains a variant; B's interface moves;
+    // A's semantic key moves with it; A is re-checked and its `match` is no longer
+    // exhaustive. This is the cost of a closed enum with no wildcard arm, and it is the
+    // intended one.
+    let dir = tempfile::tempdir().expect("tempdir");
+    two_modules_with_an_enum(dir.path(), ENUM_B);
+    let first = check(dir.path(), "a.nz");
+    assert!(first.accepted, "{first:?}");
+
+    write(
+        dir.path(),
+        "b.nz",
+        "pub enum State {\n    Ready,\n    Done(code: Int),\n    Failed,\n}\n\
+         pub fn start() -> State { State.Ready() }\n",
+    );
+    let after = check(dir.path(), "a.nz");
+    assert_eq!(after.reused, 0, "A should have been re-checked: {after:?}");
+    assert!(!after.accepted, "A's match should no longer be exhaustive");
+    assert!(
+        after.diagnostics.iter().any(|d| d.starts_with("N0343")),
+        "expected a non-exhaustive match: {:?}",
+        after.diagnostics
+    );
+}
+
+#[test]
+fn an_exported_enum_change_rechecks_the_importer() {
+    // The other edits that move B's interface, so A's key moves with each.
+    let edits: &[(&str, &str)] = &[
+        (
+            "a variant is renamed",
+            "pub enum State {\n    Waiting,\n    Done(code: Int),\n}\n\
+             pub fn start() -> State { State.Waiting() }\n",
+        ),
+        (
+            "a payload field is added",
+            "pub enum State {\n    Ready,\n    Done(code: Int, why: Str),\n}\n\
+             pub fn start() -> State { State.Ready() }\n",
+        ),
+        (
+            "a payload type changes",
+            "pub enum State {\n    Ready,\n    Done(code: Str),\n}\n\
+             pub fn start() -> State { State.Ready() }\n",
+        ),
+        (
+            "an enum is added",
+            "pub enum State {\n    Ready,\n    Done(code: Int),\n}\n\
+             pub enum Other {\n    A,\n}\n\
+             pub fn start() -> State { State.Ready() }\n",
+        ),
+    ];
+    for (what, after_text) in edits {
+        let dir = tempfile::tempdir().expect("tempdir");
+        two_modules_with_an_enum(dir.path(), ENUM_B);
+        check(dir.path(), "a.nz");
+        write(dir.path(), "b.nz", after_text);
+        let after = check(dir.path(), "a.nz");
+        assert_eq!(after.reused, 0, "{what}: A should have been re-checked");
+    }
+}
+
+#[test]
+fn reordering_an_exported_enums_variants_reaches_nobody() {
+    // §110's high-value row. B's source moves, so B re-checks, and A does not — because
+    // the interface's variants are sorted by name and the bytes did not move. The same
+    // for the payload fields inside one.
+    for (what, edited) in [
+        (
+            "variants reordered",
+            "pub enum State {\n    Done(code: Int, why: Str),\n    Ready,\n}\n\
+             pub fn start() -> State { State.Ready() }\n",
+        ),
+        (
+            "payload fields reordered",
+            "pub enum State {\n    Ready,\n    Done(why: Str, code: Int),\n}\n\
+             pub fn start() -> State { State.Ready() }\n",
+        ),
+    ] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        project(dir.path());
+        write(
+            dir.path(),
+            "a.nz",
+            "use \"b.nz\";\n\
+             fn weight(s: State) -> Int { match s { State.Ready() => 21, \
+             State.Done(code: c, why: w) => c + str_len(w), } }\n\
+             fn main() -> Int { weight(start()) + weight(State.Done(code: 21, why: \"\")) }\n",
+        );
+        write(
+            dir.path(),
+            "b.nz",
+            "pub enum State {\n    Ready,\n    Done(code: Int, why: Str),\n}\n\
+             pub fn start() -> State { State.Ready() }\n",
+        );
+        let first = check(dir.path(), "a.nz");
+        assert_eq!(
+            (first.checked, first.stored),
+            (2, 2),
+            "{what}: both should be stored"
+        );
+        write(dir.path(), "b.nz", edited);
+        let after = check(dir.path(), "a.nz");
+        assert_eq!(
+            (after.checked, after.reused),
+            (1, 1),
+            "{what} should reach nobody"
+        );
+    }
+}

@@ -1080,3 +1080,166 @@ fn reordering_a_records_fields_changes_no_object() {
         "reordering two field declarations changed the emitted IR"
     );
 }
+
+// --- enums, and the boundary they must not blur ------------------------------------------
+
+/// A calls B, and B exports an enum A matches on.
+const A_USES_B_ENUM: &[(&str, &str)] = &[
+    (
+        "a.nz",
+        "use \"b.nz\";\n\
+         fn main() -> Int { let s = start(21); \
+         print(int_to_str(match s { State.Ready() => 0, State.Done(code: c) => c * 20, })); 0 }\n",
+    ),
+    (
+        "b.nz",
+        "pub enum State {\n    Ready,\n    Done(code: Int),\n}\n\
+         enum Hidden {\n    A,\n}\n\
+         fn secret() -> Int { match Hidden.A() { Hidden.A() => 0, } }\n\
+         pub fn start(n: Int) -> State { State.Done(code: n + secret()) }\n",
+    ),
+];
+
+#[test]
+fn an_enum_program_is_compiled_cold_and_reused_warm() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path(), A_USES_B_ENUM);
+    let first = build(dir.path(), "a.nz");
+    assert_eq!(first.reused, 0);
+    assert_eq!(run(dir.path(), "prog").stdout, "4200");
+
+    let second = build(dir.path(), "a.nz");
+    assert_eq!(second.compiled, 0, "nothing changed, so nothing to compile");
+    assert_eq!(second.reused, second.units);
+}
+
+#[test]
+fn a_private_enum_added_to_a_dependency_leaves_the_caller_s_object_reusable() {
+    // §112 and §113. `ObjectKey` is keyed on the text a unit actually produces, and an
+    // enum B keeps to itself is not in A's text — so it cannot move A's key. Nothing
+    // about `ObjectKey` had to learn what an enum is for this to hold.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path(), A_USES_B_ENUM);
+    build(dir.path(), "a.nz");
+
+    write(
+        dir.path(),
+        "b.nz",
+        "pub enum State {\n    Ready,\n    Done(code: Int),\n}\n\
+         enum Hidden {\n    A(n: Str),\n    B,\n}\n\
+         enum Another {\n    Only,\n}\n\
+         fn secret() -> Int { match Hidden.B() { Hidden.A(n: s) => str_len(s), \
+         Hidden.B() => 0, } + match Another.Only() { Another.Only() => 0, } }\n\
+         pub fn start(n: Int) -> State { State.Done(code: n + secret()) }\n",
+    );
+    let after = build(dir.path(), "a.nz");
+    assert_eq!(
+        after.compiled, 1,
+        "only b.nz's unit should have been compiled"
+    );
+    assert_eq!(after.reused, after.units - 1);
+    assert_eq!(run(dir.path(), "prog").stdout, "4200");
+}
+
+#[test]
+fn an_enum_a_unit_never_mentions_is_not_in_its_text() {
+    // The other half, read out of the IR: a unit carries the enum types **it uses**,
+    // closed over payload types, and nothing else.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[
+            ("a.nz", "use \"b.nz\";\nfn main() -> Int { plain() }\n"),
+            (
+                "b.nz",
+                "pub enum Unused {\n    A(x: Int),\n}\n\
+                 pub fn plain() -> Int { match Unused.A(x: 1) { Unused.A(x: n) => n, } }\n",
+            ),
+        ],
+    );
+    let units = emitted(dir.path(), "a.nz", "prog");
+    let a = unit_of(&units, "a.nz");
+    let b = unit_of(&units, "b.nz");
+    assert!(
+        !a.contains("nz.t."),
+        "a.nz names no enum and should carry no type:\n{a}"
+    );
+    assert!(
+        b.contains("nz.t."),
+        "b.nz uses `Unused` and must define its type:\n{b}"
+    );
+}
+
+#[test]
+fn reordering_an_enums_variants_changes_no_object() {
+    // `docs/spec.md` says variant order is not semantic, so the discriminant is derived
+    // from the names — and the claim holds of the object file too. A source edit that
+    // means nothing must not produce a different binary. The same for payload fields.
+    for (what, before, after) in [
+        (
+            "variants",
+            "enum E {\n    Ready,\n    Done(code: Int, why: Str),\n}\n",
+            "enum E {\n    Done(code: Int, why: Str),\n    Ready,\n}\n",
+        ),
+        (
+            "payload fields",
+            "enum E {\n    Ready,\n    Done(code: Int, why: Str),\n}\n",
+            "enum E {\n    Ready,\n    Done(why: Str, code: Int),\n}\n",
+        ),
+    ] {
+        const BODY: &str = "fn main() -> Int { match E.Done(code: 1, why: \"ab\") { \
+                            E.Ready() => 0, E.Done(code: c, why: w) => c + str_len(w), } }\n";
+        let dir = tempfile::tempdir().expect("tempdir");
+        project(dir.path(), &[("m.nz", &format!("{before}{BODY}"))]);
+        let first = emitted(dir.path(), "m.nz", "prog");
+        write(dir.path(), "m.nz", &format!("{after}{BODY}"));
+        let second = emitted(dir.path(), "m.nz", "prog");
+        assert_eq!(
+            unit_of(&first, "m.nz"),
+            unit_of(&second, "m.nz"),
+            "reordering {what} changed the emitted text"
+        );
+    }
+}
+
+#[test]
+fn an_enum_type_is_named_from_its_durable_identity_and_not_its_position() {
+    // Two modules each declare a private `Thing`. Both units must lay one out, and the
+    // two names must differ — the same removal N5 made for functions and N9 for records.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[
+            (
+                "main.nz",
+                "use \"a.nz\";\nuse \"b.nz\";\nfn main() -> Int { from_a() + from_b() }\n",
+            ),
+            (
+                "a.nz",
+                "enum Thing {\n    N(n: Int),\n}\n\
+                 pub fn from_a() -> Int { match Thing.N(n: 1) { Thing.N(n: n) => n, } }\n",
+            ),
+            (
+                "b.nz",
+                "enum Thing {\n    M(m: Str),\n}\n\
+                 pub fn from_b() -> Int { match Thing.M(m: \"ab\") { Thing.M(m: m) => str_len(m), } }\n",
+            ),
+        ],
+    );
+    let units = emitted(dir.path(), "main.nz", "prog");
+    let a = unit_of(&units, "a.nz");
+    let b = unit_of(&units, "b.nz");
+    let names_in = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|l| l.contains("= type {"))
+            .filter_map(|l| l.split_whitespace().next().map(ToOwned::to_owned))
+            .collect()
+    };
+    let (an, bn) = (names_in(&a), names_in(&b));
+    assert!(!an.is_empty() && !bn.is_empty(), "{an:?} {bn:?}");
+    for x in &an {
+        assert!(!bn.contains(x), "two modules' `Thing` share a native name: {x}");
+    }
+    assert!(an.iter().all(|n| n.contains("a_2Enz")), "{an:?}");
+    assert!(bn.iter().all(|n| n.contains("b_2Enz")), "{bn:?}");
+}

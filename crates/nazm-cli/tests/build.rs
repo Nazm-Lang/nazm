@@ -4247,3 +4247,74 @@ fn a_record_field_written_in_a_loop_keeps_the_right_value() {
     // str_len: i<10 → 2 (10 × 2 = 20), i<50 → 3 (40 × 3 = 120); sum of i 0..49 = 1225.
     expect_program(src, "1365");
 }
+
+// --- enums, at both optimisation levels -------------------------------------------------
+//
+// §107. The specified behaviour must not depend on the optimiser, and an enum is where it
+// could: the representation is an aggregate with slots nothing reads, and `-O2` is
+// entitled to do anything it likes with bytes that are never observed. Every one of these
+// runs interpreted, at `-O0` and at `-O2`, and all three must agree.
+
+#[test]
+fn every_variant_shape_agrees_across_the_interpreter_and_both_levels() {
+    let src = "enum Token {\n    Pair(left: Int, right: Int),\n    Eof,\n    \
+               Number(value: Int),\n    Name(text: Str),\n}\n\
+               fn size(t: Token) -> Int {\n    match t {\n        \
+               Token.Eof() => 0,\n        Token.Number(value: n) => n,\n        \
+               Token.Name(text: s) => str_len(s),\n        \
+               Token.Pair(left: a, right: b) => a + b,\n    }\n}\n\
+               fn main() -> Int {\n    \
+               size(Token.Eof()) + size(Token.Number(value: 30))\n        \
+               + size(Token.Name(text: str_concat(\"ab\", \"cd\")))\n        \
+               + size(Token.Pair(left: 3, right: 5))\n}\n";
+    expect_program(src, "42");
+}
+
+#[test]
+fn a_variant_built_in_a_loop_keeps_the_right_value() {
+    // Storage reuse must never become value reuse: the hidden slot a variant is assembled
+    // in is reached once per iteration, and the discriminant written into it on the last
+    // turn must not survive into the next.
+    let src = "enum E {\n    Text(value: Str),\n    Count(n: Int),\n}\n\
+               fn size(e: E) -> Int { match e { E.Text(value: s) => str_len(s), \
+               E.Count(n: n) => n, } }\n\
+               fn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    \
+               while i < 50 {\n        \
+               let e = if i > 24 { E.Text(value: int_to_str(i)) } else { E.Count(n: i) };\n        \
+               total = total + size(e);\n        i = i + 1;\n    }\n    total\n}\n";
+    // i in 0..24 contribute i (sum 300); i in 25..49 contribute str_len (2 each, 50).
+    expect_program(src, "350");
+}
+
+#[test]
+fn a_nested_match_and_a_record_payload_agree_at_both_levels() {
+    let src = "struct Point { x: Int, label: Str, }\n\
+               enum Inner { Some(n: Int), None, }\n\
+               enum Outer { Wrapped(value: Inner), At(p: Point), Empty, }\n\
+               fn depth(o: Outer) -> Int {\n    match o {\n        \
+               Outer.Empty() => 0,\n        \
+               Outer.At(p: p) => p.x + str_len(p.label),\n        \
+               Outer.Wrapped(value: v) => match v { Inner.None() => 1, \
+               Inner.Some(n: n) => n, },\n    }\n}\n\
+               fn main() -> Int {\n    \
+               depth(Outer.Empty()) + depth(Outer.Wrapped(value: Inner.None()))\n        \
+               + depth(Outer.Wrapped(value: Inner.Some(n: 30)))\n        \
+               + depth(Outer.At(p: Point(x: 9, label: \"ab\")))\n}\n";
+    expect_program(src, "42");
+}
+
+#[test]
+fn a_payload_returned_from_an_arm_is_valid_at_both_levels() {
+    // The ordering the milestone turns on, put where the optimiser can see it: the value
+    // being matched dies on the line it was made, and the string the arm handed back is
+    // read afterwards.
+    let src = "enum E {\n    Empty,\n    Text(value: Str),\n}\n\
+               fn take(e: E) -> Str { match e { E.Empty() => \"\", E.Text(value: s) => s, } }\n\
+               fn main() -> Int {\n    \
+               let held = take(E.Text(value: str_concat(\"abcde\", \"fghij\")));\n    \
+               let mut i = 0;\n    \
+               while i < 100 {\n        let churn = str_concat(\"xxxxxxxxxx\", int_to_str(i));\n        \
+               i = i + str_len(churn) - str_len(churn) + 1;\n    }\n    \
+               str_len(held) * 100 + str_byte(held, 0)\n}\n";
+    expect_program(src, "1097");
+}

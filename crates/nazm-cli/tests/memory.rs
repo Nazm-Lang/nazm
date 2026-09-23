@@ -1283,3 +1283,249 @@ fn a_record_built_in_a_branch_is_reclaimed_from_either() {
     );
     assert_eq!(r.value, "2");
 }
+
+// --- enums: only the active variant owns anything ---------------------------------------
+//
+// The whole of what N10 adds to the memory model is that *which fields exist* is decided
+// at runtime. These are the cases where that could go wrong, and each one is run by both
+// implementations, which is what makes it a statement about the language.
+
+#[test]
+fn an_inactive_variant_owns_nothing_at_all() {
+    // §116. `Many` holds a `Strs` and `Text` a `Str`, and only `Text` is ever built. A
+    // compiler that copied or released every arm would move the sequence counter, and a
+    // compiler that allocated storage per variant would move it further.
+    let r = both(
+        "enum Holder {\n    Nothing,\n    Text(value: Str),\n    Many(items: Strs),\n}\n\
+         fn main() -> Int {\n    \
+         let h = Holder.Text(value: int_to_str(1234));\n    \
+         let copy = h;\n    \
+         match copy { Holder.Nothing() => 0, Holder.Many(items: _) => 0, \
+         Holder.Text(value: s) => str_len(s), }\n}\n",
+    );
+    assert_eq!(r.value, "4");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+    assert_eq!(r.sequences, expected(0), "{r:?}");
+}
+
+#[test]
+fn a_zero_payload_variant_beside_owning_ones_costs_nothing() {
+    // The same, from the other side: the enum's type owns something, the value does not.
+    let r = both(
+        "enum Holder {\n    Nothing,\n    Text(value: Str),\n}\n\
+         fn size(h: Holder) -> Int { match h { Holder.Nothing() => 0, \
+         Holder.Text(value: s) => str_len(s), } }\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut n = 0;\n    \
+         while i < 100 {\n        n = n + size(Holder.Nothing());\n        i = i + 1;\n    }\n    n\n}\n",
+    );
+    assert_eq!(r.value, "0");
+    assert_eq!(r.strings, expected(0), "{r:?}");
+}
+
+#[test]
+fn copying_an_enum_retains_the_active_payload_and_releases_it_once() {
+    let r = both(
+        "enum E {\n    A,\n    Text(value: Str),\n}\n\
+         fn main() -> Int {\n    \
+         let a = E.Text(value: str_concat(\"he\", \"llo\"));\n    \
+         let b = a;\n    let c = b;\n    \
+         match c { E.A() => 0, E.Text(value: s) => str_len(s), }\n}\n",
+    );
+    assert_eq!(r.value, "5");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_payload_returned_from_an_arm_survives_the_value_it_came_from() {
+    // §78. The temporary dies on the line it was made, and the string it held is the
+    // result. A compiler that released the scrutinee before the arm's value was
+    // established would free storage the caller is about to read.
+    let r = both(
+        "enum E {\n    Empty,\n    Text(value: Str),\n}\n\
+         fn take(e: E) -> Str { match e { E.Empty() => \"\", E.Text(value: s) => s, } }\n\
+         fn main() -> Int {\n    \
+         let s = take(E.Text(value: str_concat(\"ab\", \"cde\")));\n    str_len(s)\n}\n",
+    );
+    assert_eq!(r.value, "5");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_returned_payload_is_still_valid_after_the_allocator_has_been_reused() {
+    // The counters cannot see a premature free: a release before the retain and a release
+    // after it both end at one allocation and one reclamation. What sees it is the
+    // allocator handing the storage to somebody else while the result is still being read.
+    let r = both(
+        "enum E {\n    Empty,\n    Text(value: Str),\n}\n\
+         fn take(e: E) -> Str { match e { E.Empty() => \"\", E.Text(value: s) => s, } }\n\
+         fn main() -> Int {\n    \
+         let held = take(E.Text(value: str_concat(\"abcde\", \"fghij\")));\n    \
+         let mut i = 0;\n    \
+         while i < 300 {\n        let churn = str_concat(\"xxxxxxxxxx\", int_to_str(i));\n        \
+         i = i + str_len(churn) - str_len(churn) + 1;\n    }\n    \
+         str_len(held) * 100 + str_byte(held, 0)\n}\n",
+    );
+    // `a` is 97: the first byte of the string the arm handed back, read after three
+    // hundred allocations of its size have come and gone.
+    assert_eq!(r.value, "1097");
+}
+
+#[test]
+fn a_discarded_payload_is_released_rather_than_forgotten() {
+    // §80. `_` declines to name the value; it does not decline to own it.
+    let r = both(
+        "enum E {\n    Empty,\n    Text(value: Str),\n}\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut n = 0;\n    \
+         while i < 50 {\n        \
+         n = n + match E.Text(value: int_to_str(i)) { E.Empty() => 0, E.Text(value: _) => 1, };\n        \
+         i = i + 1;\n    }\n    n\n}\n",
+    );
+    assert_eq!(r.value, "50");
+    assert_eq!(r.strings, expected(50), "{r:?}");
+}
+
+#[test]
+fn replacing_an_enum_releases_the_variant_it_had_and_not_the_one_it_gets() {
+    // §82. Across variants in both directions, and within one variant, and through a
+    // self-assignment — the order is take-the-new-first, and these are the shapes that
+    // tell a compiler that got it backwards.
+    let r = both(
+        "enum E {\n    Count(n: Int),\n    Text(value: Str),\n}\n\
+         fn size(e: E) -> Int { match e { E.Count(n: n) => n, E.Text(value: s) => str_len(s), } }\n\
+         fn main() -> Int {\n    \
+         let mut e = E.Text(value: str_concat(\"abc\", \"de\"));\n    \
+         let a = size(e);\n    e = e;\n    \
+         e = E.Count(n: 7);\n    let b = size(e);\n    \
+         e = E.Text(value: str_concat(\"x\", \"y\"));\n    let c = size(e);\n    \
+         e = E.Text(value: str_concat(\"p\", \"qr\"));\n    \
+         a * 100 + b * 10 + c + size(e)\n}\n",
+    );
+    assert_eq!(r.value, "575");
+    assert_eq!(r.strings, expected(3), "{r:?}");
+}
+
+#[test]
+fn a_failed_payload_initialiser_releases_what_the_earlier_ones_produced() {
+    // §24, and the shape that found a real defect. Cleanup finds the fields to release by
+    // dispatching on the discriminant, so a tag written *after* the payload would send it
+    // to variant 0's fields while variant 1's were the ones already taken — and the string
+    // `a` produced would leak, on the one path the program was already failing on.
+    //
+    // `Absent` sorts before `Value`, so the owning variant is deliberately **not** tag 0:
+    // with the variants the other way round the defect is invisible.
+    let (r, text) = both_failing(
+        "enum E {\n    Absent,\n    Value(a: Str, b: Int),\n}\n\
+         fn main() -> Int {\n    let z = 0;\n    \
+         match E.Value(a: int_to_str(1234), b: 1 / z) { \
+         E.Absent() => 0, E.Value(a: s, b: n) => n, }\n}\n",
+    );
+    assert!(text.contains("N0401"), "{text}");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_failure_inside_an_arm_gives_back_the_value_being_matched() {
+    // §85. The arm that runs fails, and the value the `match` owns is still released —
+    // by the ordinary frame path, which is why it lives in a slot rather than a register.
+    let (r, text) = both_failing(
+        "enum E {\n    Empty,\n    Text(value: Str),\n}\n\
+         fn main() -> Int {\n    let z = 0;\n    \
+         match E.Text(value: str_concat(\"ab\", \"cd\")) { \
+         E.Empty() => 0, E.Text(value: s) => str_len(s) / z, }\n}\n",
+    );
+    assert!(text.contains("N0401"), "{text}");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_matched_sequence_handle_is_the_one_it_names() {
+    // A binding is an immutable *name*; the storage it reaches is not. And the handle is
+    // borrowed, so the sequence is not reclaimed when the value being matched dies.
+    let r = both(
+        "enum E {\n    Values(items: Ints),\n}\n\
+         fn main() -> Int {\n    let xs = ints_new();\n    ints_push(xs, 1);\n    \
+         match E.Values(items: xs) { E.Values(items: ys) => ints_push(ys, 2), };\n    \
+         ints_len(xs) * 10 + ints_get(xs, 1)\n}\n",
+    );
+    assert_eq!(r.value, "22");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+}
+
+#[test]
+fn many_short_lived_enums_keep_a_constant_live_set() {
+    // §117. The count of live string backings must not grow with the number of values
+    // ever built, which is the scaling claim `docs/spec.md` makes for every heap-backed
+    // type and now makes for enums composed of them.
+    let r = both(
+        "enum E {\n    Empty,\n    Pair(a: Str, b: Str),\n}\n\
+         fn size(e: E) -> Int { match e { E.Empty() => 0, \
+         E.Pair(a: x, b: y) => str_len(x) + str_len(y), } }\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut n = 0;\n    \
+         while i < 500 {\n        \
+         n = n + size(E.Pair(a: int_to_str(i), b: int_to_str(i + 1)));\n        \
+         i = i + 1;\n    }\n    n\n}\n",
+    );
+    assert_eq!(r.strings, expected(1000), "{r:?}");
+}
+
+#[test]
+fn an_enum_inside_a_record_and_a_record_inside_an_enum_both_compose() {
+    // §62 and §63. Neither direction is the special case: the copy and the release walk
+    // one graph, and the only thing that differs is which of its nodes is a choice.
+    let r = both(
+        "struct Point { x: Int, label: Str, }\n\
+         enum Shape { Dot, At(p: Point), }\n\
+         struct Event { shape: Shape, note: Str, }\n\
+         fn area(s: Shape) -> Int { match s { Shape.Dot() => 0, \
+         Shape.At(p: p) => p.x + str_len(p.label), } }\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut n = 0;\n    \
+         while i < 100 {\n        \
+         let e = Event(shape: Shape.At(p: Point(x: 1, label: int_to_str(i))), \
+         note: int_to_str(i));\n        \
+         n = n + area(e.shape) + str_len(e.note);\n        i = i + 1;\n    }\n    n\n}\n",
+    );
+    assert_eq!(r.strings, expected(200), "{r:?}");
+}
+
+#[test]
+fn a_nested_enum_releases_through_both_levels() {
+    // §64. The outer enum's helper calls the inner one's, which is what puts the
+    // recursion in the emitted program rather than in either compiler.
+    let r = both(
+        "enum Inner { None, Text(value: Str), }\n\
+         enum Outer { Empty, Wrapped(value: Inner), }\n\
+         fn size(o: Outer) -> Int { match o { Outer.Empty() => 0, \
+         Outer.Wrapped(value: v) => match v { Inner.None() => 0, \
+         Inner.Text(value: s) => str_len(s), }, } }\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut n = 0;\n    \
+         while i < 100 {\n        \
+         n = n + size(Outer.Wrapped(value: Inner.Text(value: int_to_str(i))));\n        \
+         i = i + 1;\n    }\n    n\n}\n",
+    );
+    assert_eq!(r.strings, expected(100), "{r:?}");
+}
+
+#[test]
+fn an_enum_crossing_into_a_task_carries_its_active_payload_and_no_other() {
+    // §67. Two tasks are handed values of one enum whose other variant owns a channel;
+    // the string backing is retained once per task and given back when each finishes.
+    let r = both(
+        "enum Message { Reply(chan: Chan), Text(value: Str), }\n\
+         fn worker(m: Message, out: Chan) -> Int {\n    \
+         let n = match m { Message.Reply(chan: c) => 0, \
+         Message.Text(value: s) => str_len(s), };\n    \
+         if chan_send(out, n) { 1 } else { 0 }\n}\n\
+         fn main() -> Int {\n    \
+         let shared = str_concat(\"he\", \"llo\");\n    \
+         let out = chan_new(4);\n    let got = ints_new();\n    \
+         scope {\n        spawn worker(Message.Text(value: shared), out);\n        \
+         spawn worker(Message.Text(value: shared), out);\n    }\n    \
+         if chan_recv(out, got) { 0 } else { 0 };\n    \
+         if chan_recv(out, got) { 0 } else { 0 };\n    \
+         ints_get(got, 0) + ints_get(got, 1)\n}\n",
+    );
+    assert_eq!(r.value, "10");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+    assert_eq!(r.channels, expected(1), "{r:?}");
+    assert_eq!(r.sequences, expected(1), "{r:?}");
+}
