@@ -379,46 +379,46 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     }
                 }
                 if done_primary == false {
-                if constructing(kinds, i) {
-                    // `Name(field: …)`. The sentinel is a second kind of bracket rather
-                    // than a flag on the call one, so the closing `)` cannot build the
-                    // wrong node, and the field names are accumulated as they are read.
-                    let name = text_at(texts, i);
-                    let at = start_at(starts, i);
-                    i = i + 2;
-                    ints_push(ops, sent_construct());
-                    ints_push(opat, at);
-                    strs_push(cname, name);
-                    ints_push(cargs, 0);
-                    strs_push(cfields, text_at(texts, i));
-                    i = i + 2;
-                    continue;
-                }
-                if kind_at(kinds, i + 1) == k_lparen() {
-                    let name = text_at(texts, i);
-                    let at = start_at(starts, i);
-                    i = i + 2;
-                    if kind_at(kinds, i) == k_rparen() {
-                        // No arguments: the call is complete without ever opening a frame.
-                        emit(nk, nar, nst, nen, ntx, n_call(), 0, at, end_at(ends, i), name);
-                        ints_push(vs, at);
-                        ints_push(ve, end_at(ends, i));
-                        i = i + 1;
-                        done_primary = true;
-                    } else {
-                        ints_push(ops, sent_call());
+                    if constructing(kinds, i) {
+                        // `Name(field: …)`. The sentinel is a second kind of bracket rather
+                        // than a flag on the call one, so the closing `)` cannot build the
+                        // wrong node, and the field names are accumulated as they are read.
+                        let name = text_at(texts, i);
+                        let at = start_at(starts, i);
+                        i = i + 2;
+                        ints_push(ops, sent_construct());
                         ints_push(opat, at);
                         strs_push(cname, name);
                         ints_push(cargs, 0);
+                        strs_push(cfields, text_at(texts, i));
+                        i = i + 2;
                         continue;
                     }
-                } else {
-                    emit(nk, nar, nst, nen, ntx, n_var(), 0, start_at(starts, i), end_at(ends, i), text_at(texts, i));
-                    ints_push(vs, start_at(starts, i));
-                    ints_push(ve, end_at(ends, i));
-                    i = i + 1;
-                    done_primary = true;
-                }
+                    if kind_at(kinds, i + 1) == k_lparen() {
+                        let name = text_at(texts, i);
+                        let at = start_at(starts, i);
+                        i = i + 2;
+                        if kind_at(kinds, i) == k_rparen() {
+                            // No arguments: the call is complete without ever opening a frame.
+                            emit(nk, nar, nst, nen, ntx, n_call(), 0, at, end_at(ends, i), name);
+                            ints_push(vs, at);
+                            ints_push(ve, end_at(ends, i));
+                            i = i + 1;
+                            done_primary = true;
+                        } else {
+                            ints_push(ops, sent_call());
+                            ints_push(opat, at);
+                            strs_push(cname, name);
+                            ints_push(cargs, 0);
+                            continue;
+                        }
+                    } else {
+                        emit(nk, nar, nst, nen, ntx, n_var(), 0, start_at(starts, i), end_at(ends, i), text_at(texts, i));
+                        ints_push(vs, start_at(starts, i));
+                        ints_push(ve, end_at(ends, i));
+                        i = i + 1;
+                        done_primary = true;
+                    }
                 }
             }
 
@@ -1286,7 +1286,7 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             strs_pop(ftext);
             emit(nk, nar, nst, nen, ntx, n_block(), count + tail, start, close,
                     if tail == 1 { "tail" } else { "" }
-            );
+                    );
             if kind == frame_if_then() {
                 // `else` or not decides the arity, and the `if`'s span runs to whichever
                 // block closed last.
