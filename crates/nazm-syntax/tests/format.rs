@@ -143,6 +143,14 @@ fn the_promises_hold_for_deliberately_ugly_input() {
             "fn w(c: Chan) -> Int { 0 }\nfn main() -> Int { let c = chan_new(1); scope { spawn w(c); chan_close(c); } 0 }",
         ),
         ("a use item", "use \"other.nz\";\nfn main() -> Int { 0 }"),
+        (
+            "generics, crowded",
+            "struct Pair [ A , B ] { first : A , second : B , }\n\
+             fn id [ T ] ( x : T ) -> T { x }\n\
+             fn main ( ) -> Int { let v = vec_new [ Pair [ Int , Str ] ] ( ) ; \
+             vec_push ( v , Pair [ Int , Str ] ( first : 1 , second : \"s\" ) ) ; \
+             id [ Int ] ( vec_get ( v , 0 ) . first ) }",
+        ),
         ("an empty block", "fn f() -> Int { return 1; }\nfn main() -> Int { f() }"),
     ] {
         holds(what, source);
@@ -197,6 +205,21 @@ fn a_block_written_on_one_line_stays_on_one_line() {
     assert_eq!(
         out,
         "fn f(b: Int) -> Int {\n    if b == 95 { return 1; }\n    0\n}\nfn main() -> Int { f(95) }\n",
+        "got:\n{out}"
+    );
+}
+
+#[test]
+fn generic_syntax_is_written_with_no_space_inside_or_before_the_brackets() {
+    let out = holds(
+        "generics",
+        "struct Pair [ A , B ] { first : A , second : B , }\nfn id [ T ] ( x : T ) -> T { x }\n\
+         fn main ( ) -> Int { id [ Int ] ( Pair [ Int , Str ] ( first : 1 , second : \"s\" ) . first ) }",
+    );
+    assert_eq!(
+        out,
+        "struct Pair[A, B] { first: A, second: B, }\nfn id[T](x: T) -> T { x }\n\
+         fn main() -> Int { id[Int](Pair[Int, Str](first: 1, second: \"s\").first) }\n",
         "got:\n{out}"
     );
 }

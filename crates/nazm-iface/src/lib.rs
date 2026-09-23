@@ -32,4 +32,4 @@ pub mod fingerprint;
 pub mod wire;
 
 pub use fingerprint::InterfaceHash;
-pub use wire::{PersistentExport, PersistentUnitInterface, ReadError, SCHEMA};
+pub use wire::{PersistentExport, PersistentType, PersistentUnitInterface, ReadError, SCHEMA};

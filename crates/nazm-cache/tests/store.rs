@@ -36,7 +36,7 @@ fn key(p: &str) -> ModuleKey {
 /// that these tests depend on the format rather than on a second construction of it.
 fn interface(module: &str, exports: &str) -> PersistentUnitInterface {
     let text = format!(
-        r#"{{"schema":"nazm.interface/3","module":"{module}","dependencies":[],"records":[],"enums":[],"exports":[{exports}]}}"#
+        r#"{{"schema":"nazm.interface/4","module":"{module}","dependencies":[],"records":[],"enums":[],"exports":[{exports}]}}"#
     );
     PersistentUnitInterface::from_json(&text).expect("a valid interface")
 }
@@ -45,7 +45,7 @@ fn one_export(module: &str, name: &str, ret: &str) -> PersistentUnitInterface {
     interface(
         module,
         &format!(
-            r#"{{"def":"{module}::fn {name}","name":"{name}","kind":"fn","params":["Int"],"ret":"{ret}"}}"#
+            r#"{{"def":"{module}::fn {name}","name":"{name}","kind":"fn","generics":0,"params":["Int"],"ret":"{ret}"}}"#
         ),
     )
 }

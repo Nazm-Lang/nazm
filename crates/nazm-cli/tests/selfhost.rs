@@ -149,6 +149,8 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::Gt => 49,
                 T::GtEq => 50,
                 T::FatArrow => 51,
+                T::LBracket => 52,
+                T::RBracket => 53,
                 // The Rust lexer emits a final `Eof`; the Nazm one prints `EOF` and
                 // stops, so there is nothing to compare.
                 T::Eof => return None,
@@ -328,6 +330,49 @@ fn dump_program(p: &nazm_core::__syntax::Program) -> String {
     out
 }
 
+/// A written type as the Nazm parser's node text carries it (`compiler/parse.nz`, *types,
+/// as the text a node carries*): its name alone when it has no arguments, and otherwise
+/// every name with its offset and every `]` with the offset just past it.
+fn type_text(t: &nazm_core::__syntax::TypeName) -> String {
+    if t.args.is_none() {
+        return t.name.clone();
+    }
+    positional(t)
+}
+
+fn positional(t: &nazm_core::__syntax::TypeName) -> String {
+    let mut s = format!("{}@{}", t.name, t.name_span.start);
+    if let Some(args) = &t.args {
+        let inner: Vec<String> = args.iter().map(positional).collect();
+        s.push_str(&format!("[{}]@{}", inner.join(","), t.span.end));
+    }
+    s
+}
+
+/// Type arguments written after a name in an expression: `[Int@9]`, without the list's
+/// own closing offset — a diagnostic about them points at the name they follow.
+fn type_args_text(args: Option<&Vec<nazm_core::__syntax::TypeName>>) -> String {
+    match args {
+        None => String::new(),
+        Some(a) => format!(
+            "[{}]",
+            a.iter().map(positional).collect::<Vec<_>>().join(",")
+        ),
+    }
+}
+
+/// Declared type parameters: `[A@7,B@10]`, or nothing.
+fn type_params_text(params: &[nazm_core::__syntax::TypeParam]) -> String {
+    if params.is_empty() {
+        return String::new();
+    }
+    let inner: Vec<String> = params
+        .iter()
+        .map(|p| format!("{}@{}", p.name, p.span.start))
+        .collect();
+    format!("[{}]", inner.join(","))
+}
+
 fn dump_record(r: &nazm_core::__syntax::Record, out: &mut String) {
     for f in &r.fields {
         push_node(
@@ -336,7 +381,7 @@ fn dump_record(r: &nazm_core::__syntax::Record, out: &mut String) {
             0,
             f.span.start,
             f.span.end,
-            &format!("{}:{}", f.name, f.ty.name),
+            &format!("{}:{}", f.name, type_text(&f.ty)),
         );
     }
     push_node(
@@ -345,7 +390,7 @@ fn dump_record(r: &nazm_core::__syntax::Record, out: &mut String) {
         r.fields.len(),
         r.span.start,
         r.span.end,
-        &r.name,
+        &format!("{}{}", r.name, type_params_text(&r.type_params)),
     );
 }
 
@@ -358,7 +403,7 @@ fn dump_enum(e: &nazm_core::__syntax::Enum, out: &mut String) {
                 0,
                 f.span.start,
                 f.span.end,
-                &format!("{}:{}", f.name, f.ty.name),
+                &format!("{}:{}", f.name, type_text(&f.ty)),
             );
         }
         push_node(
@@ -376,7 +421,7 @@ fn dump_enum(e: &nazm_core::__syntax::Enum, out: &mut String) {
         e.variants.len(),
         e.span.start,
         e.span.end,
-        &e.name,
+        &format!("{}{}", e.name, type_params_text(&e.type_params)),
     );
 }
 
@@ -393,7 +438,7 @@ fn dump_function(f: &nazm_core::__syntax::Function, out: &mut String) {
             0,
             p.span.start,
             p.span.end,
-            &format!("{}:{}", p.name, p.ty.name),
+            &format!("{}:{}", p.name, type_text(&p.ty)),
         );
     }
     let arity = match &f.body {
@@ -409,7 +454,14 @@ fn dump_function(f: &nazm_core::__syntax::Function, out: &mut String) {
         arity,
         f.span.start,
         f.span.end,
-        &format!("{}:{}", f.name, f.return_type.name),
+        // A return type always carries its offset: the `fn` node's span is the whole
+        // function, so nothing else says where the type is written.
+        &format!(
+            "{}{}:{}",
+            f.name,
+            type_params_text(&f.type_params),
+            positional(&f.return_type)
+        ),
     );
 }
 
@@ -508,7 +560,11 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
         E::Str { value, span } => push_node(out, "str", 0, span.start, span.end, value),
         E::Var { name, span } => push_node(out, "var", 0, span.start, span.end, name),
         E::Construct {
-            ty, fields, span, ..
+            ty,
+            type_args,
+            fields,
+            span,
+            ..
         } => {
             // Initialisers in the order **written**, each named, because that is the
             // order both parsers must record: it is the order the values are computed in,
@@ -527,11 +583,12 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
                 fields.len(),
                 span.start,
                 span.end,
-                &format!("{ty}({names})"),
+                &format!("{ty}{}({names})", type_args_text(type_args.as_ref())),
             );
         }
         E::Variant {
             ty,
+            type_args,
             variant,
             fields,
             span,
@@ -553,7 +610,10 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
                 fields.len(),
                 span.start,
                 span.end,
-                &format!("{ty}.{variant}({names})"),
+                &format!(
+                    "{ty}{}.{variant}({names})",
+                    type_args_text(type_args.as_ref())
+                ),
             );
         }
         E::Match {
@@ -599,12 +659,17 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
             push_node(out, "bin", 2, span.start, span.end, op.symbol());
         }
         E::Call {
-            callee, args, span, ..
+            callee,
+            type_args,
+            args,
+            span,
+            ..
         } => {
             for a in args {
                 dump_expr(a, out);
             }
-            push_node(out, "call", args.len(), span.start, span.end, callee);
+            let named = format!("{callee}{}", type_args_text(type_args.as_ref()));
+            push_node(out, "call", args.len(), span.start, span.end, &named);
         }
         E::If {
             cond,
@@ -818,6 +883,21 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
         "fn m() -> Int { (if true { 1 } else { 2 }) * 3 }",
         "fn m() -> Int { -if true { 1 } else { 2 } }",
         "fn total(n: Int) -> Int {\n    let mut i = 0;\n    let mut s = 0;\n    while i < n {\n        s = s + i;\n        i = i + 1;\n    }\n    return s;\n}\n",
+        // N11: type parameters on every kind of declaration, applied types in every
+        // position a type is written, and type arguments after a name in an expression —
+        // including an empty list, which parses and is the checker's to refuse.
+        "struct Pair[A, B] { first: A, second: B, }\nfn m() -> Int { 0 }",
+        "enum Maybe[T] { None, Some(value: T), }\nfn m() -> Int { 0 }",
+        "fn identity[T](value: T) -> T { value }",
+        "fn m(p: Pair[Int, Vec[Str]]) -> Vec[Pair[Int, Str]] { f(p) }",
+        "struct Box[T] { v: Vec[Maybe[T]], }\nfn m() -> Int { 0 }",
+        "fn m() -> Int { identity[Int](7) }",
+        "fn m() -> Int { let p = Pair[Int, Str](first: 1, second: \"x\"); p.first }",
+        "fn m() -> Int { let x = Maybe[Int].Some(value: 42); let y = Maybe[Int].None(); 0 }",
+        "fn m() -> Int { let xs = vec_new[Pair[Int, Vec[Str]]](); vec_len(xs) }",
+        "fn m() -> Int { f[](1) + g[Vec[Vec[Int]], Str](2) }",
+        "fn m() -> Int { match Maybe[Int].None() { Maybe.None() => 0, Maybe.Some(value: v) => v, } }",
+        "fn m() -> Int { h(identity[Str](\"a\"), Box[Int](v: vec_new[Maybe[Int]]())) }",
     ];
 
     for source in sources {
@@ -1426,6 +1506,105 @@ fn the_nazm_checker_agrees_with_the_reference_on_enums_and_matching() {
     }
 }
 
+/// The generic codes both checkers decide, compared on code **and** span — N11. With them the
+/// codes of the rules a generic program most often meets on the way: a mismatch, an
+/// unknown type, an operator, a task capture.
+const GENERIC_COMPARABLE: &[&str] = &[
+    "N0101", "N0300", "N0304", "N0305", "N0321", "N0331", "N0336", "N0338", "N0350", "N0351",
+    "N0352", "N0353", "N0354", "N0355", "N0356", "N0359",
+];
+
+#[test]
+fn the_nazm_checker_agrees_with_the_reference_on_generics() {
+    // N11, `docs/spec.md`, *Generics*. Accepted programs must be accepted by both, and every
+    // refused one must be refused with the same codes at the same spans: a generic checker
+    // that agreed only on the programs it accepts would agree with everything.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_checker(dir.path());
+
+    let sources = [
+        // Clean.
+        "struct Pair[A, B] { first: A, second: B, }\nfn m() -> Int { let p = Pair[Int, Str](first: 1, second: \"x\"); p.first }",
+        "enum Maybe[T] { None, Some(value: T), }\nfn or[T](m: Maybe[T], d: T) -> T { match m { Maybe.None() => d, Maybe.Some(value: v) => v, } }\nfn m() -> Int { or(Maybe[Int].Some(value: 4), 0) }",
+        "fn identity[T](value: T) -> T { value }\nfn m() -> Int { identity[Int](7) + identity(3) + str_len(identity(\"ab\")) }",
+        "fn m() -> Int { let xs = vec_new[Vec[Str]](); vec_push(xs, vec_new[Str]()); vec_len(vec_get(xs, 0)) }",
+        "struct Tag[T] { n: Int, }\nstruct S { t: Tag[S], xs: Vec[Vec[Int]], }\nfn m() -> Int { 0 }",
+        "struct Box[T] { v: T, }\nfn un[T](b: Box[T]) -> T { b.v }\nfn m() -> Int { un(Box[Int](v: 3)) }",
+        "fn first[T](xs: Vec[T]) -> T { vec_get(xs, 0) }\nfn m() -> Int { let v = vec_new[Int](); vec_push(v, 1); first(v) }",
+        "fn swap[A, B](a: A, b: B) -> B { b }\nfn m() -> Int { swap(\"a\", 1) }",
+        "enum L[T] { Nil, Cons(head: T, tail: Vec[Int]), }\nfn m() -> Int { 0 }",
+        // Refused: the declaration rules.
+        "fn f[T, T](x: T) -> Int { 0 }\nfn m() -> Int { 0 }",
+        "fn f[Int](x: Int) -> Int { 0 }\nfn m() -> Int { 0 }",
+        "struct B[Vec] { v: Int, }\nfn m() -> Int { 0 }",
+        "fn main[T]() -> Int { 0 }",
+        // Refused: written types.
+        "struct Box[T] { v: T, }\nfn f(b: Box) -> Int { 0 }\nfn m() -> Int { 0 }",
+        "struct Box[T] { v: T, }\nfn f(b: Box[Int, Str]) -> Int { 0 }\nfn m() -> Int { 0 }",
+        "fn f(b: Int[Str]) -> Int { 0 }\nfn m() -> Int { 0 }",
+        "fn f[T](x: T[Int]) -> Int { 0 }\nfn m() -> Int { 0 }",
+        "fn f(v: Vec) -> Int { 0 }\nfn m() -> Int { 0 }",
+        "fn f(v: Vec[Int, Int]) -> Int { 0 }\nfn m() -> Int { 0 }",
+        "fn f(v: Vec[Nope]) -> Int { 0 }\nfn m() -> Int { 0 }",
+        "struct P { x: Int, }\nfn f(p: P[Int]) -> Int { 0 }\nfn m() -> Int { 0 }",
+        // Refused: constructions and variants.
+        "struct Box[T] { v: T, }\nfn m() -> Int { let b = Box(v: 1); 0 }",
+        "struct Box[T] { v: T, }\nfn m() -> Int { let b = Box[Int, Str](v: 1); 0 }",
+        "struct P { x: Int, }\nfn m() -> Int { let p = P[Int](x: 1); p.x }",
+        "enum Maybe[T] { None, Some(value: T), }\nfn m() -> Int { let x = Maybe.None(); 0 }",
+        "enum Maybe[T] { None, Some(value: T), }\nfn m() -> Int { let x = Maybe[Int].Some(value: \"s\"); 0 }",
+        // Refused: calls.
+        "fn f(x: Int) -> Int { x }\nfn m() -> Int { f[Int](1) }",
+        "fn m() -> Int { let xs = vec_new(); 0 }",
+        "fn same[T](a: T, b: T) -> T { a }\nfn m() -> Int { same(1, \"x\") }",
+        "fn f[T](xs: Vec[T]) -> Int { 0 }\nfn m() -> Int { f(1) }",
+        "fn id[T](x: T) -> T { x }\nfn m() -> Int { id[Int, Str](1) }",
+        "fn id[T](x: T) -> T { x }\nfn m() -> Int { id[Str](1) }",
+        "fn id[T](x: T) -> T { x }\nfn m() -> Str { id(1) }",
+        // Refused: what an unconstrained `T` supports.
+        "fn f[T](a: T, b: T) -> Bool { a == b }\nfn m() -> Int { 0 }",
+        "fn f[T](a: T) -> Int { a + 1 }\nfn m() -> Int { 0 }",
+        "fn f[T](a: T) -> Int { a.x }\nfn m() -> Int { 0 }",
+        // Refused: tasks.
+        "fn w(v: Vec[Int]) -> Int { 0 }\nfn m() -> Int { let v = vec_new[Int](); scope { spawn w(v); } 0 }",
+        "fn w[T](v: T) -> Int { 0 }\nfn m() -> Int { scope { spawn w(1); } 0 }",
+        // Refused: ownership.
+        "struct Node { children: Vec[Node], }\nfn m() -> Int { 0 }",
+        "struct Box[T] { v: T, }\nstruct S { b: Box[S], }\nfn m() -> Int { 0 }",
+        "struct A { bs: Vec[B], }\nenum B { V(a: A), N, }\nfn m() -> Int { 0 }",
+        "struct Strange[T] { next: Vec[Strange[Vec[T]]], }\nfn m() -> Int { 0 }",
+    ];
+
+    for source in sources {
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, source).expect("write");
+        let (status, stdout, stderr) = run_stage(&exe, &file);
+        let ours: Vec<(String, u32, u32)> = sorted_diagnostics(&stdout)
+            .into_iter()
+            .filter(|(c, _, _)| GENERIC_COMPARABLE.contains(&c.as_str()))
+            .collect();
+        let mut theirs: Vec<(String, u32, u32)> = nazm_core::check_source(source)
+            .into_iter()
+            .filter(|d| GENERIC_COMPARABLE.contains(&d.code.as_str()))
+            .map(|d| {
+                (
+                    d.code.as_str().to_owned(),
+                    d.primary.span.start,
+                    d.primary.span.end,
+                )
+            })
+            .collect();
+        theirs.sort();
+        assert_eq!(ours, theirs, "checking differs for {source:?}\n{stderr}");
+        let refused = !nazm_core::check_source(source).is_empty();
+        assert_eq!(
+            status,
+            Some(i32::from(refused)),
+            "wrong exit status for {source:?}"
+        );
+    }
+}
+
 #[test]
 fn the_nazm_checker_accepts_the_compiler_it_is_part_of() {
     // The strongest available check short of self-hosting: run the Nazm checker over
@@ -1979,6 +2158,16 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
              total\n}\n",
             "4",
         ),
+        // N11: generic records, enums and functions, and `Vec[T]` of every kind of element
+        // — `Int`, `Str`, a record owning a string, an enum with a string payload, and a
+        // `Vec` — through push, get, set, pop and destruction. The instances are the
+        // Nazm compiler's own, and what they reclaim must be the reference's.
+        ("struct Pair[A, B] { first: A, second: B, }\nenum Maybe[T] { None, Some(value: T), }\nfn identity[T](value: T) -> T { value }\nfn or[T](m: Maybe[T], d: T) -> T { match m { Maybe.None() => d, Maybe.Some(value: v) => v, } }\nfn main() -> Int {\n    let xs = vec_new[Pair[Int, Str]]();\n    vec_push(xs, Pair[Int, Str](first: 7, second: \"nazm\"));\n    let p = vec_get(xs, 0);\n    let m = Maybe[Int].Some(value: 42);\n    identity[Int](p.first) + identity(str_len(p.second)) + or(m, 0) + or(Maybe[Int].None(), 1)\n}\n", "54"),
+        ("struct Named { name: Str, n: Int, }\nenum Tok { Word(text: Str), Num(v: Int), End, }\nfn first[T](xs: Vec[T]) -> T { vec_get(xs, 0) }\nfn keep[T](xs: Vec[T], x: T) -> Int { vec_push(xs, x) }\nfn score(t: Tok) -> Int { match t { Tok.Word(text: s) => str_len(s), Tok.Num(v: v) => v, Tok.End() => 0, } }\nfn main() -> Int {\n    let names = vec_new[Named]();\n    let toks = vec_new[Tok]();\n    let strs = vec_new[Str]();\n    let nest = vec_new[Vec[Int]]();\n    let mut i = 0;\n    while i < 50 {\n        keep(names, Named(name: str_concat(\"n\", int_to_str(i)), n: i));\n        keep(toks, Tok.Word(text: int_to_str(i * 7)));\n        keep(toks, Tok.Num(v: i));\n        vec_push(strs, str_concat(\"s\", int_to_str(i)));\n        let inner = vec_new[Int]();\n        vec_push(inner, i);\n        vec_push(nest, inner);\n        i = i + 1;\n    }\n    vec_set(names, 3, Named(name: \"replaced\", n: 1000));\n    vec_set(strs, 0, vec_get(strs, 1));\n    let popped = vec_pop(toks);\n    let mut total = 0;\n    let mut k = 0;\n    while k < vec_len(toks) { total = total + score(vec_get(toks, k)); k = k + 1; }\n    let p = first(names);\n    total + vec_get(names, 3).n + str_len(first(strs)) + score(popped) + str_len(p.name)\n        + vec_get(vec_get(nest, 9), 0) + vec_len(nest)\n}\n", "2421"),
+        ("struct Pair[A, B] { first: A, second: B, }\nenum Maybe[T] { None, Some(value: T), }\nfn swap[A, B](p: Pair[A, B]) -> Pair[B, A] { Pair[B, A](first: p.second, second: p.first) }\nfn get_or[T](m: Maybe[T], d: T) -> T { match m { Maybe.None() => d, Maybe.Some(value: v) => v, } }\nfn wrap[T](x: T) -> Maybe[T] { Maybe[T].Some(value: x) }\nfn tag[T](x: T, s: Str) -> Str { str_concat(s, \"!\") }\nfn main() -> Int {\n    let p = swap(Pair[Int, Str](first: 1, second: \"abc\"));\n    let q = swap(p);\n    let m = wrap(str_concat(\"x\", \"yz\"));\n    let s = get_or(m, \"none\");\n    let n = get_or(wrap(5), 0) + get_or(Maybe[Int].None(), 7);\n    str_len(p.first) + q.first + str_len(s) + n + str_len(tag(3, \"hi\")) + str_len(tag(\"a\", \"hey\"))\n}\n", "26"),
+        ("fn id[T](x: T) -> T { x }\nfn twice[T](x: T) -> Vec[T] { let v = vec_new[T](); vec_push(v, id(x)); vec_push(v, x); v }\nfn main() -> Int {\n    let a = twice(3);\n    let b = twice(\"q\");\n    let c = twice(a);\n    vec_len(a) + vec_len(b) + vec_len(c) + vec_get(vec_get(c, 1), 0) + str_len(vec_pop(b))\n}\n", "10"),
+        // A failure inside a generic built-in's bounds check still gives back everything.
+        ("fn main() -> Int { let xs = vec_new[Str](); vec_push(xs, \"a\"); str_len(vec_get(xs, 3)) }\n", ""),
     ];
 
     /// The `nazm-memory:` line, which both compilers' programs print under the same
@@ -2502,13 +2691,18 @@ fn the_bootstrap_chain_reaches_a_fixpoint() {
             .and_then(|n| n.parse().ok())
             .unwrap_or(0)
     };
+    // N11 added two generic programs, two generic module cases and four refusals.
     assert!(
-        count("conformance-cases:") >= 14,
+        count("conformance-cases:") >= 23,
         "the corpus has shrunk:\n{record}"
     );
     assert!(
-        count("module-conformance-cases:") >= 7,
+        count("module-conformance-cases:") >= 9,
         "the module corpus has shrunk:\n{record}"
+    );
+    assert!(
+        count("refusal-conformance-cases:") >= 4,
+        "the refusal corpus has shrunk:\n{record}"
     );
     // The two compilers really are the same bytes, read out of the record rather than
     // inferred from the script not having failed.
@@ -2848,6 +3042,69 @@ fn a_program_from_the_nazm_compiler_joins_its_scope_before_reporting() {
 /// edge like any other — a thread does not bound the stack), and one acyclic program that
 /// must keep compiling. The second is what makes "every declared function" a claim rather
 /// than a phrase; the last is the one that fails if a cycle check is written too eagerly.
+#[test]
+fn the_nazm_written_compiler_refuses_what_monomorphisation_cannot_do() {
+    // N11. The native limits on instantiation, refused by both compilers with the same code
+    // at the same position: an instance family that never ends (`N0357`), one past the
+    // stated nesting bound (`N0358`), and ordinary recursion through a generic function,
+    // which is recursion (`N0101`).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    let mut nested = String::from("struct Box[T] { v: T, }\n");
+    for i in 0..70 {
+        nested.push_str(&format!(
+            "fn f{i}[T](x: T) -> Int {{ f{}(Box[T](v: x)) }}\n",
+            i + 1
+        ));
+    }
+    nested.push_str("fn f70[T](x: T) -> Int { 0 }\nfn main() -> Int { f0(1) }\n");
+    let cases: Vec<(String, &str)> = vec![
+        (
+            "fn grow[T](x: T, n: Int) -> Int {\n    if n == 0 { 0 } else {\n        \
+             let v = vec_new[T]();\n        vec_push(v, x);\n        grow(v, n - 1) + 1\n    }\n}\n\
+             fn main() -> Int { grow(1, 3) }\n"
+                .to_owned(),
+            "N0357",
+        ),
+        (nested, "N0358"),
+        (
+            "fn count[T](x: T, n: Int) -> Int { if n == 0 { 0 } else { count(x, n - 1) + 1 } }\n\
+             fn main() -> Int { count(\"a\", 3) }\n"
+                .to_owned(),
+            "N0101",
+        ),
+    ];
+    for (source, code) in &cases {
+        let file = dir.path().join("m.nz");
+        std::fs::write(&file, source).expect("write");
+        let (rc, _, err) = run_stage(&emitter, &file);
+        assert_eq!(rc, Some(1), "the Nazm compiler accepted:\n{source}");
+        let out = Command::new(NAZM)
+            .args(["build", file.to_str().unwrap(), "-o"])
+            .arg(dir.path().join("prog"))
+            .output()
+            .expect("run nazm build");
+        let reference = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(&format!("error[{code}]")), "{code}: {err}");
+        assert!(
+            reference.contains(&format!("error[{code}]")),
+            "{code}: {reference}"
+        );
+        // The same position: the Nazm compiler writes `path:line:column`, and the reference
+        // renders the same `line:column` after the path.
+        let at = err
+            .lines()
+            .next()
+            .and_then(|l| l.rsplit(" at ").next())
+            .map(|p| p.split(':').skip(1).take(2).collect::<Vec<_>>().join(":"))
+            .unwrap_or_default();
+        assert!(
+            reference.contains(&format!("m.nz:{}", at.trim())),
+            "{code}: {err} / {reference}"
+        );
+    }
+}
+
 #[test]
 fn the_nazm_written_compiler_refuses_recursion_as_the_reference_does() {
     let dir = tempfile::tempdir().expect("tempdir");

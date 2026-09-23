@@ -78,6 +78,9 @@ fn llvm_type(t: Int) -> Str {
     if t == t_ints() { return "ptr"; }
     if t == t_strs() { return "ptr"; }
     if t == t_chan() { return "ptr"; }
+    // A `Vec` is a sequence header by pointer, whatever it holds: the element's layout is
+    // in the operations, not in the handle.
+    if is_vec(t) { return "ptr"; }
     // A record is a **named** LLVM aggregate, by value. Named for the reason a function
     // is named by index here: this emitter writes one module for a whole program, so the
     // index is unique by construction and is the same discipline `symbol` uses.
@@ -488,6 +491,8 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
             Owning.Channel() => task_release(t, "@nz.chan_release(ptr %v", i),
             Owning.Record(at: r) => task_release_helper(t, r, ty, i),
             Owning.Enum(at: r) => task_release_helper(t, r, ty, i),
+            // A `Vec` never crosses into a task: the checker refuses it, whatever it holds.
+            Owning.Vector(at: _) => 0,
         };
         i = i + 1;
     }
@@ -1318,6 +1323,10 @@ enum Owning {
     Channel,
     Record(at: Int),
     Enum(at: Int),
+    // A `Vec` whose elements own something: released by its own helper, which releases
+    // each element by `T`'s law before the storage. A `Vec` of `Int` owns only its storage
+    // and is a `Sequence`, exactly as an `Ints` is.
+    Vector(at: Int),
 }
 
 fn owns(t: Int, rowns: Ints) -> Owning {
@@ -1325,6 +1334,12 @@ fn owns(t: Int, rowns: Ints) -> Owning {
     if t == t_strs() { return Owning.Strings(); }
     if t == t_str() { return Owning.Backing(); }
     if t == t_chan() { return Owning.Channel(); }
+    if is_vec(t) {
+        if entry_of(t) < ints_len(rowns) {
+            if ints_get(rowns, entry_of(t)) == 3 { return Owning.Vector(at: entry_of(t)); }
+        }
+        return Owning.Sequence();
+    }
     if is_record(t) {
         if record_of(t) < ints_len(rowns) {
             // A record owns every field; an enum owns the **active** variant's, which is a
@@ -1349,6 +1364,7 @@ fn owns_anything(t: Int, rowns: Ints) -> Bool {
         Owning.Channel() => true,
         Owning.Record(at: _) => true,
         Owning.Enum(at: _) => true,
+        Owning.Vector(at: _) => true,
     }
 }
 
@@ -1489,6 +1505,8 @@ fn emit_retain(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
         Owning.Channel() => runtime_call(out, "@nz.chan_retain(ptr ", v(value)),
         Owning.Record(at: r) => helper_call(out, "@nz.rt", r, t, value),
         Owning.Enum(at: r) => helper_call(out, "@nz.rt", r, t, value),
+        // A handle: another reference to the same storage, as for any sequence.
+        Owning.Vector(at: _) => runtime_call(out, "@nz.arr_retain(ptr ", v(value)),
     }
 }
 
@@ -1506,6 +1524,8 @@ fn emit_release(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
         Owning.Channel() => runtime_call(out, "@nz.chan_release(ptr ", v(value)),
         Owning.Record(at: r) => helper_call(out, "@nz.rl", r, t, value),
         Owning.Enum(at: r) => helper_call(out, "@nz.rl", r, t, value),
+        Owning.Vector(at: r) => runtime_call(out,
+                str_concat(str_concat("@nz.vr", int_to_str(r)), "(ptr "), v(value)),
     }
 }
 
@@ -1881,11 +1901,20 @@ fn runtime() -> Str {
     strs_push(r, "  br i1 %full, label %grow, label %done");
     strs_push(r, "grow:");
     strs_push(r, "  ; Doubling, with a floor of four. `realloc(null, n)` is `malloc(n)`, so the first");
-    strs_push(r, "  ; growth needs no special case.");
-    strs_push(r, "  %twice = mul i64 %cap, 2");
+    strs_push(r, "  ; growth needs no special case. Both products are checked: an element may be a record");
+    strs_push(r, "  ; or an enum of any size since N11, and a wrapped size would allocate less than the");
+    strs_push(r, "  ; caller is about to write.");
+    strs_push(r, "  %twice.r = call {i64, i1} @llvm.umul.with.overflow.i64(i64 %cap, i64 2)");
+    strs_push(r, "  %twice = extractvalue {i64, i1} %twice.r, 0");
+    strs_push(r, "  %twice.o = extractvalue {i64, i1} %twice.r, 1");
     strs_push(r, "  %tiny = icmp slt i64 %twice, 4");
     strs_push(r, "  %want = select i1 %tiny, i64 4, i64 %twice");
-    strs_push(r, "  %bytes = mul i64 %want, %elem");
+    strs_push(r, "  %bytes.r = call {i64, i1} @llvm.umul.with.overflow.i64(i64 %want, i64 %elem)");
+    strs_push(r, "  %bytes = extractvalue {i64, i1} %bytes.r, 0");
+    strs_push(r, "  %bytes.o = extractvalue {i64, i1} %bytes.r, 1");
+    strs_push(r, "  %over = or i1 %twice.o, %bytes.o");
+    strs_push(r, "  br i1 %over, label %oom, label %sized");
+    strs_push(r, "sized:");
     strs_push(r, "  %old = load ptr, ptr %datap");
     strs_push(r, "  %new = call ptr @realloc(ptr %old, i64 %bytes)");
     strs_push(r, "  %failed = icmp eq ptr %new, null");
@@ -2313,11 +2342,28 @@ fn symbol(index: Int) -> Str {
     str_concat("@nz.f", int_to_str(index))
 }
 
+// The symbol a call names: a function's own, or — for a call to a generic function — the
+// instance the planner chose for it.
+// A written type's name without the offset a return type carries: `Int` from `Int@25`.
+fn before_at(s: Str) -> Str {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 64 { return str_slice(s, 0, i); }
+        i = i + 1;
+    }
+    s
+}
+
+fn callee_symbol(ncallee: Ints, ninst: Ints, k: Int) -> Str {
+    if ints_get(ninst, k) >= 0 { return str_concat("@nz.g", int_to_str(ints_get(ninst, k))); }
+    symbol(ints_get(ncallee, k))
+}
+
 fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
         nk: Ints, nar: Ints, nst: Ints, ntx: Strs, nslot: Ints, ntype: Ints,
         kids: Ints, kid_first: Ints, fnames: Strs, fowner: Ints, mstart: Ints,
         frame: Ints, owned: Ints, k: Int, begin: Int, src: Str, path: Str, rowns: Ints,
-        nrec: Ints, otype: Ints, rfirst: Ints, rcount: Ints, rftype: Ints) -> Int {
+        nrec: Ints, otype: Ints, rfirst: Ints, rcount: Ints, rftype: Ints, me_sym: Str) -> Int {
     // Numbering restarts per function: LLVM requires a function's unnamed values to be
     // consecutive from zero, and `%p<n>`/`%slot<n>` are named so they consume none of it.
     ints_set(next, 0, 0);
@@ -2337,11 +2383,14 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     // a module's own name, in the module the declaration sits in. Names are unique within
     // a module (`N0203`), so this is exact.
     let me = owned_index(fnames, fowner, module_at(mstart, ints_get(nst, k)),
-            before_colon(text));
+            fn_name(text));
+    // An instance of a generic function has a symbol of its own, chosen by the planner.
+    let mut named = symbol(me);
+    if me_sym != "" { named = me_sym; }
     add_line(out, str_concat(str_concat(str_concat("define internal ",
             llvm_type(ints_get(nrec, k))),
-            str_concat(" ", symbol(me))),
-            str_concat(str_concat("(", list), str_concat(") {   ; ", before_colon(text)))));
+            str_concat(" ", named)),
+            str_concat(str_concat("(", list), str_concat(") {   ; ", fn_name(text)))));
     add_line(out, "entry:");
     strs_set(current, 0, "entry");
     ints_set(live, 0, 1);
@@ -2465,6 +2514,181 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     0
 }
 
+// --- generic instances, N11 --------------------------------------------------------------
+
+// A refusal with its own code: the same shape `refuse` writes, for the two limits on
+// instantiation that are not "outside this backend's subset" but facts about the program.
+fn refuse_as(code: Str, message: Str, at: Str) -> Int {
+    eprint(str_concat(str_concat(str_concat(str_concat("nazm: error[", code), "]: "), message),
+            str_concat(str_concat(" at ", at), nl())));
+    exit_with(1);
+    0
+}
+
+// The types a node carries beyond its own — a function's parameters, a generic call's
+// settled arguments — as a fresh list.
+fn node_types(ntfirst: Ints, ntargs: Ints, k: Int) -> Ints {
+    let out = ints_new();
+    let at = ints_get(ntfirst, k);
+    if at < 0 { return out; }
+    let mut i = 0;
+    while i < ints_get(ntargs, at) {
+        ints_push(out, ints_get(ntargs, at + 1 + i));
+        i = i + 1;
+    }
+    out
+}
+
+// How many instances one program may have, and how deeply an instance's argument may
+// nest: the reference's stated bounds, reported rather than discovered by running out of
+// memory.
+fn max_instances() -> Int { 10000 }
+fn max_instance_nesting() -> Int { 64 }
+
+// The instance of the generic function whose node is `fnn` for exactly these arguments:
+// the one already planned, or a new one at the end of the worklist. Numbered in the order
+// the worklist finds them, which is a function of the program alone.
+fn request_instance(fnn: Int, args: Ints, inst_fn: Ints, inst_first: Ints, inst_args: Ints,
+        tb: Table, src: Str, path: Str, at: Int) -> Int {
+    let mut i = 0;
+    while i < ints_len(inst_fn) {
+        if ints_get(inst_fn, i) == fnn {
+            let mut same = true;
+            let mut a = 0;
+            while a < ints_len(args) {
+                if ints_get(inst_args, ints_get(inst_first, i) + a) != ints_get(args, a) {
+                    same = false;
+                }
+                a = a + 1;
+            }
+            if same { return i; }
+        }
+        i = i + 1;
+    }
+    let mut a = 0;
+    while a < ints_len(args) {
+        if depth_of(tb, ints_get(args, a)) > max_instance_nesting() {
+            refuse_as("N0358", "this call needs a generic instance whose type argument nests more than 64 deep",
+                    position(src, path, at));
+        }
+        a = a + 1;
+    }
+    if ints_len(inst_fn) >= max_instances() {
+        refuse_as("N0358", "this program needs more than 10000 generic instances",
+                position(src, path, at));
+    }
+    ints_push(inst_fn, fnn);
+    ints_push(inst_first, ints_len(inst_args));
+    a = 0;
+    while a < ints_len(args) { ints_push(inst_args, ints_get(args, a)); a = a + 1; }
+    ints_len(inst_fn) - 1
+}
+
+// Whether an entry is a native type: a declaration that is not generic, an application
+// that mentions no parameter, or a `Vec` of a concrete type. A generic definition as
+// written is not code until it is applied, and neither is anything inside one.
+fn emittable(tb: Table, r0: Int) -> Bool {
+    let mut r = r0;
+    let k = ints_get(tb.kind, r);
+    if k == rk_param() { return false; }
+    if k == rk_vec() { return is_concrete(tb, t_vec(r)); }
+    if k == rk_variant() { r = enum_of_variant(tb.kind, r); }
+    if ints_get(tb.tpl, r) < 0 { return generic_count(tb, r) == 0; }
+    is_concrete(tb, t_record(r))
+}
+
+// Refuse an instance family that would never end: a generic function reachable from one
+// of its own calls whose type argument is built from its own parameters — `grow[T]`
+// calling `grow[Vec[T]]` — needs a larger instance for every one it has. `N0357`, at the
+// call that expands, before any instance is planned; the reference finds the same edge.
+fn refuse_expansion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent: Ints,
+        ncallee: Ints, fnames: Strs, fowner: Ints, fgc: Ints, mstart: Ints,
+        tb: Table, ntfirst: Ints, ntargs: Ints) -> Int {
+    // The function each call sits in, found by walking parents, and its node.
+    let efrom = ints_new();
+    let eto = ints_new();
+    let enode = ints_new();
+    let efnode = ints_new();
+    let mut k = 0;
+    while k < ints_len(nk) {
+        let mut calls = false;
+        if ints_get(nk, k) == n_call() { calls = true; }
+        if ints_get(nk, k) == n_spawn() { calls = true; }
+        if calls {
+            let to = ints_get(ncallee, k);
+            if to >= 0 {
+                let mut up = k;
+                let mut fnode = 0 - 1;
+                while up >= 0 {
+                    if ints_get(nk, up) == n_fn() {
+                        fnode = up;
+                        up = 0 - 1;
+                    } else {
+                        up = ints_get(parent, up);
+                    }
+                }
+                if fnode >= 0 {
+                    ints_push(efrom, owned_index(fnames, fowner,
+                            module_at(mstart, ints_get(nst, fnode)), fn_name(strs_get(ntx, fnode))));
+                    ints_push(eto, to);
+                    ints_push(enode, k);
+                    ints_push(efnode, fnode);
+                }
+            }
+        }
+        k = k + 1;
+    }
+    let mut e = 0;
+    while e < ints_len(efrom) {
+        let from = ints_get(efrom, e);
+        let to = ints_get(eto, e);
+        let mut expanding = false;
+        if from >= 0 {
+            if ints_get(fgc, from) > 0 {
+                if ints_get(fgc, to) > 0 {
+                    let own = node_types(ntfirst, ntargs, ints_get(efnode, e));
+                    let written = node_types(ntfirst, ntargs, ints_get(enode, e));
+                    let mut w = 0;
+                    while w < ints_len(written) {
+                        let t = ints_get(written, w);
+                        if is_param(t) == false {
+                            if mentions(tb, t, own) { expanding = true; }
+                        }
+                        w = w + 1;
+                    }
+                }
+            }
+        }
+        if expanding {
+            // Whether the callee reaches the caller again: a breadth-first walk of the call
+            // graph from `to`.
+            let seen = ints_new();
+            let work = ints_new();
+            ints_push(work, to);
+            let mut back = false;
+            while ints_len(work) > 0 {
+                let f = ints_pop(work);
+                if f == from { back = true; }
+                if contains(seen, f) == false {
+                    ints_push(seen, f);
+                    let mut x = 0;
+                    while x < ints_len(efrom) {
+                        if ints_get(efrom, x) == f { ints_push(work, ints_get(eto, x)); }
+                        x = x + 1;
+                    }
+                }
+            }
+            if back {
+                refuse_as("N0357", str_concat(str_concat("`", strs_get(fnames, to)),
+                        "` is called with a type argument built from its caller's own, so every instance of it needs a larger one"),
+                        position(src, path, ints_get(nst, ints_get(enode, e))));
+            }
+        }
+        e = e + 1;
+    }
+    0
+}
+
 // --- recursion ------------------------------------------------------------------------
 //
 // The refusal `nazm-lir::lower::report_cycles` makes, made here for the same reason and
@@ -2500,7 +2724,7 @@ fn refuse_recursion(src: Str, path: Str, nk: Ints, nst: Ints, ntx: Strs, parent:
     while k < ints_len(nk) {
         if ints_get(nk, k) == n_fn() {
             ints_set(fnof, k, owned_index(fnames, fowner,
-                    module_at(mstart, ints_get(nst, k)), before_colon(strs_get(ntx, k))));
+                    module_at(mstart, ints_get(nst, k)), fn_name(strs_get(ntx, k))));
         }
         k = k + 1;
     }
@@ -2610,7 +2834,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         parent: Ints, childno: Ints, substart: Ints, kids: Ints, kid_first: Ints,
         fnames: Strs, fret: Ints, fowner: Ints, mstart: Ints,
         out: Strs, msgs: Strs, blobs: Strs, tasks: Strs, blocks: Strs, nrec: Ints, rowns: Ints,
-        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
+        lo: Int, hi: Int, me_sym: Str, ninst: Ints, generic_fn: Ints, tb: Table) -> Int {
     let next = ints_new();
     ints_push(next, 0);
     // Slot 1 is the block-label counter, separate from slot 0 because the labels are
@@ -2733,8 +2958,21 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         each = each + 1;
     }
 
-    let mut k = 0;
-    while k < ints_len(nk) {
+    let mut k = lo;
+    while k <= hi {
+        // A generic function is not code until it is instantiated: the whole-program pass
+        // steps over its subtree, and each instance is emitted from it afterwards, by a
+        // pass over exactly that range with the types substituted.
+        let mut skipped = false;
+        if me_sym == "" {
+            if ints_get(fn_at, k) >= 0 {
+                if ints_get(generic_fn, ints_get(fn_at, k)) == 1 { skipped = true; }
+            }
+        }
+        if skipped {
+            k = ints_get(fn_at, k) + 1;
+            continue;
+        }
         let kind = ints_get(nk, k);
         let from = ints_get(nst, k);
         let text = strs_get(ntx, k);
@@ -2744,7 +2982,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             open_function(out, current, live, next, vals, nk, nar, nst, ntx, nslot, ntype,
                     kids, kid_first, fnames, fowner, mstart, frame, owned,
                     ints_get(fn_at, k), k, src, path, rowns, nrec, otype,
-                    rfirst, rcount, rftype);
+                    rfirst, rcount, rftype, me_sym);
         }
 
         // How deep the value stack was when the scan arrived here, which is where every
@@ -2831,8 +3069,21 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                 let ordered = ints_new();
                                 let mut o = argc - 1;
                                 while o >= 0 { ints_push(ordered, ints_get(args, o)); o = o - 1; }
-                                let built = emit_builtin(text, ordered, owned, out, msgs, next, current,
-                                        live, position(src, path, from), rowns, otype);
+                                let callee = before_bracket(text);
+                                let mut built = 0 - 1;
+                                if is_vec_op(callee) {
+                                    // A `Vec` operation is instructions over its element's layout,
+                                    // which is the call's own type — or its first argument's.
+                                    let mut vt = ints_get(ntype, k);
+                                    if callee != "vec_new" {
+                                        vt = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+                                    }
+                                    built = emit_vec_op(callee, ordered, vt, tb, owned, out, msgs,
+                                            next, current, live, position(src, path, from), rowns, otype);
+                                } else {
+                                    built = emit_builtin(callee, ordered, owned, out, msgs, next, current,
+                                            live, position(src, path, from), rowns, otype);
+                                }
                                 if built >= 0 {
                                     // A built-in borrows its arguments, exactly as a function does,
                                     // so a temporary handed to one is nobody's after it returns.
@@ -2851,7 +3102,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                     let n = take_number(next);
                                     add_line(out, str_concat(str_concat("  ", v(n)),
                                             str_concat(str_concat(str_concat(" = call ", llvm_type(ints_get(ntype, k))),
-                                            str_concat(" ", symbol(ints_get(ncallee, k)))),
+                                            str_concat(" ", callee_symbol(ncallee, ninst, k))),
                                             str_concat(str_concat("(", list), ")"))));
                                     // A callee that failed has already left by its own exit and handed
                                     // back a stand-in. Noticed here, so the failure keeps travelling
@@ -3033,14 +3284,14 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                                 if kind == n_fn() {
                                                                                                     if llvm_type(ints_get(nrec, k)) == "void" {
                                                                                                         refuse(str_concat(str_concat("a function returning `",
-                                                                                                                after_colon(text)), "`"),
+                                                                                                                before_at(after_colon(text))), "`"),
                                                                                                                 position(src, path, from));
                                                                                                     }
                                                                                                     // The platform wrapper prints an `Int`, so `main` must
                                                                                                     // produce one. What a `Str` result would mean for a process
                                                                                                     // is a decision nobody has made.
-                                                                                                    if before_colon(text) == "main" {
-                                                                                                        if after_colon(text) != "Int" {
+                                                                                                    if fn_name(text) == "main" {
+                                                                                                        if before_at(after_colon(text)) != "Int" {
                                                                                                             refuse("a `main` that does not return `Int`",
                                                                                                                     position(src, path, from));
                                                                                                         }
@@ -3394,10 +3645,7 @@ fn main() -> Int {
     let bcount = ints_new();
     let bparams = ints_new();
     builtins(bnames, bret, bfirst, bcount, bparams);
-    let dcode = strs_new();
-    let dstart = ints_new();
-    let dend = ints_new();
-    let dmsg = strs_new();
+    let diags = vec_new[Diag]();
 
     // Records, in three stages before any signature. The order is `docs/spec.md`'s:
     // names for the whole compilation first, because a field's type may name a record
@@ -3414,43 +3662,27 @@ fn main() -> Int {
     let rfname = strs_new();
     let rftype = ints_new();
     let rfat = ints_new();
+    let tb = new_table(rnames, rowner, rpub, rat, rnode, rkind, rfirst, rcount,
+            rfname, rftype, rfat);
     let tmod = ints_new();
     let tname = strs_new();
     let trec = ints_new();
-    collect_records(nk, nar, nst, nen, ntx, naux, mstart,
-            rnames, rowner, rpub, rat, rnode, rkind, kids, kid_first,
-            dcode, dstart, dend, dmsg);
+    collect_records(nk, nar, nst, nen, ntx, naux, mstart, tb, kids, kid_first,
+            diags);
     check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath),
-            rnames, rowner, rpub, tmod, tname, trec, dcode, dstart, dend, dmsg);
-    resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first,
-            rnames, rowner, rat, rnode, rkind, rfirst, rcount, rfname, rftype, rfat,
-            tmod, tname, trec, dcode, dstart, dend, dmsg);
-    check_record_layouts(rnames, rat, rfirst, rcount, rftype, dcode, dstart, dend, dmsg);
-    // One bit per record: whether anything in it, at any depth, has to be released. The
-    // emitter asks this at every binding, every temporary and every frame slot, and it is
-    // the only thing about a record those sites need — so it travels as one array rather
-    // than the whole table. Computed once, after the fields are known and after a cycle
-    // would have been refused, so the walk below terminates.
-    // **Two bits, not one**, since N10: `2` is an enum that owns something, `1` a record
-    // or a variant that does. The difference is not what has to be released but *how* —
-    // a record's helper walks its fields and an enum's branches on its discriminant
-    // first — and carrying it here is what lets every site that already asks `owns` keep
-    // asking exactly that and nothing more.
-    let rowns = ints_new();
-    let mut r = 0;
-    while r < strs_len(rnames) {
-        if needs_cleanup(t_record(r), rfirst, rcount, rftype) {
-            if ints_get(rkind, r) == rk_enum() {
-                ints_push(rowns, 2);
-            } else {
-                ints_push(rowns, 1);
-            }
-        } else {
-            ints_push(rowns, 0);
-        }
-        r = r + 1;
-    }
+            rnames, rowner, rpub, tmod, tname, trec, diags);
+    resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first, tb,
+            tmod, tname, trec, diags);
+    check_ownership(tb, diags);
+    let bgen = ints_new();
+    generic_builtins(tb, bnames, bret, bparams, bgen);
 
+    let nslot = ints_new();
+    let ntype = ints_new();
+    let ncallee = ints_new();
+    let nrec = ints_new();
+    let ntfirst = ints_new();
+    let ntargs = ints_new();
     let fnames = strs_new();
     let fret = ints_new();
     let ffirst = ints_new();
@@ -3458,11 +3690,12 @@ fn main() -> Int {
     let fparams = ints_new();
     let fowner = ints_new();
     let fpub = ints_new();
+    let fgen = ints_new();
+    let fgc = ints_new();
     collect_signatures(nk, nar, nst, nen, ntx, naux, kids, kid_first, mstart,
-            fnames, fret, ffirst, fcount, fparams, fowner, fpub, bnames,
-            rnames, rowner, rpub, rat, rkind, rfirst, rcount, rfname, rftype, rfat,
-            tmod, tname, trec,
-            dcode, dstart, dend, dmsg);
+            fnames, fret, ffirst, fcount, fparams, fowner, fpub, fgen, fgc, bnames, tb,
+            nrec, ntfirst, ntargs, tmod, tname, trec,
+            diags);
 
     // Interfaces before bodies: what each module's direct imports bring into it, and the
     // collisions that creates. Every module's, before any body is checked, which is what
@@ -3471,30 +3704,27 @@ fn main() -> Int {
     let vname = strs_new();
     let vfn = ints_new();
     check_imports(mfirst, mcount, mto, mat, strs_len(mpath), fnames, fowner, fpub,
-            vmod, vname, vfn, dcode, dstart, dend, dmsg);
+            vmod, vname, vfn, diags);
 
-    let entry = entry_point(fnames, fowner, dcode, dstart, dend, dmsg);
+    let entry = entry_point(fnames, fowner, diags);
 
-    let nslot = ints_new();
-    let ntype = ints_new();
-    let ncallee = ints_new();
-    let nrec = ints_new();
     check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee, nrec,
             kids, kid_first, ints_len(nk) - 1,
             mstart, mfirst, mcount, mto,
             fnames, fret, ffirst, fcount, fparams,
             fowner, fpub, vmod, vname, vfn,
             bnames, bret, bfirst, bcount, bparams,
-            rnames, rowner, rkind, rfirst, rcount, rfname, rftype,
+            tb, fgen, fgc, bgen, ntfirst, ntargs,
             tmod, tname, trec,
-            dcode, dstart, dend, dmsg);
-    if strs_len(dcode) > 0 {
+            diags);
+    if vec_len(diags) > 0 {
         let mut d = 0;
-        while d < strs_len(dcode) {
-            eprint(str_concat(str_concat(str_concat("nazm: error[", strs_get(dcode, d)),
-                    str_concat("]: ", strs_get(dmsg, d))),
+        while d < vec_len(diags) {
+            let one = vec_get(diags, d);
+            eprint(str_concat(str_concat(str_concat("nazm: error[", one.code),
+                    str_concat("]: ", one.message)),
                     str_concat(str_concat(" at ",
-                    position(src, path, ints_get(dstart, d))), nl())));
+                    position(src, path, one.start)), nl())));
             d = d + 1;
         }
         exit_with(1);
@@ -3514,10 +3744,202 @@ fn main() -> Int {
     build_relations(nk, nar, kids, kid_first, parent, childno, substart);
     // Before a single instruction is written: a refusal that arrived after the IR was on
     // stdout would be a refusal nobody could act on.
+    refuse_expansion(src, path, nk, nst, ntx, parent, ncallee, fnames, fowner, fgc, mstart,
+            tb, ntfirst, ntargs);
     refuse_recursion(src, path, nk, nst, ntx, parent, ncallee, fnames, fowner, mstart);
+
+    // --- instances ------------------------------------------------------------------
+    //
+    // `nazm run` is parametric and this backend specialises: one native function per
+    // generic function and concrete list of type arguments that the program reaches. Every
+    // instance is planned before anything is emitted — a worklist from the calls that
+    // concrete code makes, each instance adding the calls its body makes with its own
+    // arguments substituted — and every type any instance mentions is interned then, so
+    // the table is complete before a single layout or helper is written.
+    //
+    // `ninst[k]` is the instance a call node calls, in the whole-program pass; each
+    // instance's own is in `icall`, beside the substituted `ntype`/`nrec` of every node of
+    // its function, in `itype`/`irec` from `ibase[i]`.
+    let generic_fn = ints_new();
+    let encl = ints_new();
+    let ninst = ints_new();
+    let mut gi = 0;
+    while gi < ints_len(nk) {
+        ints_push(generic_fn, 0);
+        ints_push(encl, 0 - 1);
+        ints_push(ninst, 0 - 1);
+        gi = gi + 1;
+    }
+    let fnode_of = ints_new();
+    gi = 0;
+    while gi < strs_len(fnames) { ints_push(fnode_of, 0 - 1); gi = gi + 1; }
+    gi = 0;
+    while gi < ints_len(nk) {
+        if ints_get(nk, gi) == n_fn() {
+            let f = owned_index(fnames, fowner, module_at(mstart, ints_get(nst, gi)),
+                    fn_name(strs_get(ntx, gi)));
+            if f >= 0 {
+                ints_set(fnode_of, f, gi);
+                if ints_get(fgc, f) > 0 { ints_set(generic_fn, gi, 1); }
+            }
+            let mut j = ints_get(substart, gi);
+            while j <= gi { ints_set(encl, j, gi); j = j + 1; }
+        }
+        gi = gi + 1;
+    }
+    let inst_fn = ints_new();
+    let inst_first = ints_new();
+    let inst_args = ints_new();
+    let ibase = ints_new();
+    let itype = ints_new();
+    let irec = ints_new();
+    let icall = ints_new();
+    gi = 0;
+    while gi < ints_len(nk) {
+        let gk = ints_get(nk, gi);
+        let mut calls = false;
+        if gk == n_call() { calls = true; }
+        if gk == n_spawn() { calls = true; }
+        if calls {
+            let f = ints_get(ncallee, gi);
+            let mut concrete_site = true;
+            if ints_get(encl, gi) >= 0 {
+                if ints_get(generic_fn, ints_get(encl, gi)) == 1 { concrete_site = false; }
+            }
+            if f >= 0 {
+                if ints_get(fgc, f) > 0 {
+                    if concrete_site {
+                        let args = node_types(ntfirst, ntargs, gi);
+                        ints_set(ninst, gi, request_instance(ints_get(fnode_of, f), args,
+                                inst_fn, inst_first, inst_args, tb, src, path,
+                                ints_get(nst, gi)));
+                    }
+                }
+            }
+        }
+        gi = gi + 1;
+    }
+    let mut ii = 0;
+    while ii < ints_len(inst_fn) {
+        let fnn = ints_get(inst_fn, ii);
+        let params = node_types(ntfirst, ntargs, fnn);
+        let args = ints_new();
+        let mut q = 0;
+        while q < ints_len(params) {
+            ints_push(args, ints_get(inst_args, ints_get(inst_first, ii) + q));
+            q = q + 1;
+        }
+        ints_push(ibase, ints_len(itype));
+        let mut j = ints_get(substart, fnn);
+        while j <= fnn {
+            let jk = ints_get(nk, j);
+            ints_push(itype, substitute(tb, ints_get(ntype, j), params, args));
+            let mut rec = ints_get(nrec, j);
+            let mut is_type = false;
+            if jk == n_fn() { is_type = true; }
+            if jk == n_param() { is_type = true; }
+            if jk == n_assign() { is_type = true; }
+            if is_type { rec = substitute(tb, rec, params, args); }
+            if jk == n_construct() {
+                if rec >= 0 { rec = record_of(substitute(tb, t_record(rec), params, args)); }
+            }
+            let mut variant = false;
+            if jk == n_makevariant() { variant = true; }
+            if jk == n_arm() { variant = true; }
+            if variant {
+                if rec >= 0 {
+                    // The same variant of the substituted enum: at the same distance from
+                    // its enum as the definition's is from its own.
+                    let e = enum_of_variant(rkind, rec);
+                    rec = record_of(substitute(tb, t_record(e), params, args)) + (rec - e);
+                }
+            }
+            ints_push(irec, rec);
+            let mut callee_inst = 0 - 1;
+            let mut calls = false;
+            if jk == n_call() { calls = true; }
+            if jk == n_spawn() { calls = true; }
+            if calls {
+                let f = ints_get(ncallee, j);
+                if f >= 0 {
+                    if ints_get(fgc, f) > 0 {
+                        let written = node_types(ntfirst, ntargs, j);
+                        let cargs = ints_new();
+                        let mut w = 0;
+                        while w < ints_len(written) {
+                            ints_push(cargs, substitute(tb, ints_get(written, w), params, args));
+                            w = w + 1;
+                        }
+                        callee_inst = request_instance(ints_get(fnode_of, f), cargs, inst_fn,
+                                inst_first, inst_args, tb, src, path, ints_get(nst, j));
+                    }
+                }
+            }
+            ints_push(icall, callee_inst);
+            j = j + 1;
+        }
+        settle_now(tb);
+        ii = ii + 1;
+    }
+
+    // One word per entry: whether anything in it, at any depth, has to be released, and
+    // how. `1` a record or a variant that does, `2` an enum that does — a record's helper
+    // walks its fields and an enum's branches on its discriminant first — and `3` a `Vec`
+    // whose elements own something. Computed after planning, because an instance's
+    // entries are part of the program, and in entry order, because a `Vec`'s element is
+    // always interned before it. Only for what is emitted: a generic definition as written,
+    // and anything that still mentions a parameter, is not a native type.
+    let rowns = ints_new();
+    let mut r = 0;
+    while r < strs_len(rnames) {
+        let mut word = 0;
+        if emittable(tb, r) {
+            if ints_get(rkind, r) == rk_vec() {
+                let elem = ints_get(tb.args, ints_get(tb.afirst, r));
+                let mut owning = false;
+                if elem == t_str() { owning = true; }
+                if elem == t_ints() { owning = true; }
+                if elem == t_strs() { owning = true; }
+                if elem == t_chan() { owning = true; }
+                if is_vec(elem) { owning = true; }
+                if is_record(elem) {
+                    if ints_get(rowns, record_of(elem)) != 0 { owning = true; }
+                }
+                if owning { word = 3; }
+            } else {
+                if needs_cleanup(t_record(r), rfirst, rcount, rftype) {
+                    if ints_get(rkind, r) == rk_enum() { word = 2; } else { word = 1; }
+                }
+            }
+        }
+        ints_push(rowns, word);
+        r = r + 1;
+    }
+
     emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
             parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
-            body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype);
+            body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype,
+            0, ints_len(nk) - 1, "", ninst, generic_fn, tb);
+    // Each instance, from its definition's own nodes — spans and all, so a failure inside
+    // one is reported at the generic definition's line — with the node types substituted.
+    ii = 0;
+    while ii < ints_len(inst_fn) {
+        let fnn = ints_get(inst_fn, ii);
+        let lo = ints_get(substart, fnn);
+        let mut j = lo;
+        while j <= fnn {
+            let at = ints_get(ibase, ii) + (j - lo);
+            ints_set(ntype, j, ints_get(itype, at));
+            ints_set(nrec, j, ints_get(irec, at));
+            ints_set(ninst, j, ints_get(icall, at));
+            j = j + 1;
+        }
+        emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
+                parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
+                body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype,
+                lo, fnn, str_concat("@nz.g", int_to_str(ii)), ninst, generic_fn, tb);
+        ii = ii + 1;
+    }
 
     // Whether this program can reach a channel. A `spawn` is not the only way: a program
     // may create one, send to it and receive from it without ever starting a task, and
@@ -3574,7 +3996,10 @@ fn main() -> Int {
     // textual parser — and an opaque type has no size.
     let mut rdef = 0;
     while rdef < strs_len(rnames) {
-        if ints_get(rkind, rdef) != rk_enum() {
+        let mut declares = emittable(tb, rdef);
+        if ints_get(rkind, rdef) == rk_enum() { declares = false; }
+        if ints_get(rkind, rdef) == rk_vec() { declares = false; }
+        if declares {
             let mut fields = "";
             let mut pos = 0;
             while pos < ints_get(rcount, rdef) {
@@ -3596,7 +4021,9 @@ fn main() -> Int {
     // and deliberately so: correctness first, and `docs/performance.md` measures the cost.
     let mut edef = 0;
     while edef < strs_len(rnames) {
-        if ints_get(rkind, edef) == rk_enum() {
+        let mut declares = false;
+        if ints_get(rkind, edef) == rk_enum() { declares = emittable(tb, edef); }
+        if declares {
             let mut slots = "i64";
             let mut pos = 0;
             while pos < ints_get(rcount, edef) {
@@ -3801,9 +4228,13 @@ fn main() -> Int {
     ints_push(hnext, 0);
     let mut hr = 0;
     while hr < strs_len(rnames) {
-        if ints_get(rowns, hr) != 0 {
-            record_helper(helpers, hnext, hr, true, rowns, rfirst, rcount, rfname, rftype);
-            record_helper(helpers, hnext, hr, false, rowns, rfirst, rcount, rfname, rftype);
+        if ints_get(rowns, hr) == 3 {
+            vec_helper(helpers, hnext, hr, ints_get(tb.args, ints_get(tb.afirst, hr)), rowns);
+        } else {
+            if ints_get(rowns, hr) != 0 {
+                record_helper(helpers, hnext, hr, true, rowns, rfirst, rcount, rfname, rftype);
+                record_helper(helpers, hnext, hr, false, rowns, rfirst, rcount, rfname, rftype);
+            }
         }
         hr = hr + 1;
     }
@@ -4132,6 +4563,120 @@ fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next:
     }
 
     0 - 1
+}
+
+// --- `Vec[T]`, N11 -----------------------------------------------------------------------
+//
+// The header every sequence has — `{ len, cap, data, rc }` from `@nz.seq_new` — so a `Vec` is
+// allocated, counted, grown and reclaimed by the runtime that already does all four for an
+// `Ints`. What is `T`'s is the element's layout, taken from LLVM, and what an element owns,
+// taken from `T`'s own law: the same five rules, applied to one more container.
+
+fn is_vec_op(name: Str) -> Bool {
+    if name == "vec_new" { return true; }
+    if name == "vec_len" { return true; }
+    if name == "vec_get" { return true; }
+    if name == "vec_set" { return true; }
+    if name == "vec_push" { return true; }
+    name == "vec_pop"
+}
+
+fn emit_vec_op(name: Str, args: Ints, vt: Int, tb: Table, owned: Ints, out: Strs, msgs: Strs,
+        next: Ints, current: Strs, live: Ints, at: Str, rowns: Ints, otype: Ints) -> Int {
+    let elem = ints_get(tb.args, ints_get(tb.afirst, entry_of(vt)));
+    let et = llvm_type(elem);
+    let a0 = if ints_len(args) > 0 { ints_get(args, 0) } else { 0 };
+    let a1 = if ints_len(args) > 1 { ints_get(args, 1) } else { 0 };
+    let a2 = if ints_len(args) > 2 { ints_get(args, 2) } else { 0 };
+    if name == "vec_new" {
+        return new_sequence(out, msgs, next, current, live, owned, at, vt, otype, rowns);
+    }
+    if name == "vec_len" {
+        return binop(out, next, "load", "i64,", str_concat("ptr ", v(a0)), "");
+    }
+    if name == "vec_get" {
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, et, at, owned, otype, rowns);
+        let got = binop(out, next, "load", str_concat(et, ","), str_concat("ptr ", v(slot)), "");
+        // **Its own copy**, by `T`'s law, before anything else can happen to the slot: the
+        // element may be overwritten, popped or released the moment this expression is
+        // done, and what it returned must not care.
+        if owns_anything(elem, rowns) {
+            emit_retain(out, next, got, elem, rowns);
+            own_add(owned, otype, got, elem);
+        }
+        return got;
+    }
+    if name == "vec_set" {
+        let slot = seq_slot(out, msgs, next, current, live, a0, a1, et, at, owned, otype, rowns);
+        // The new value's reference is taken **before** the old one is released, so storing
+        // a copy of the element itself cannot drop a count to zero in between.
+        let old = binop(out, next, "load", str_concat(et, ","), str_concat("ptr ", v(slot)), "");
+        emit_retain(out, next, a2, elem, rowns);
+        add_line(out, str_concat(str_concat(str_concat("  store ", et), str_concat(" ", v(a2))),
+                str_concat(", ptr ", v(slot))));
+        emit_release(out, next, old, elem, rowns);
+        return a1;
+    }
+    if name == "vec_push" {
+        // The stride, asked of LLVM by the address of element 1 of an array at null: no
+        // stage of this compiler knows a byte size, and the target's layout answers it.
+        let one = binop(out, next, "getelementptr", str_concat(et, ","), "ptr null", "i64 1");
+        let size = cast(out, next, "ptrtoint", "ptr", one, "i64");
+        return push_sequence(out, msgs, next, current, live, a0, a1, et, v(size), elem, at,
+                rowns, owned, otype);
+    }
+    // `vec_pop`: a transfer — the vector gives up its reference and this expression holds
+    // that same one.
+    pop_sequence(out, msgs, next, current, live, owned, a0, et, elem, at, rowns, otype)
+}
+
+// A `Vec` of owning elements' release helper: on the last reference, each element released
+// by its own law **before** the buffer that holds it, and the buffer before the header —
+// then the reclamation counted, as `@nz.seq_release` counts one. The loop is in the
+// emitted program; this compiler writes it once per element type.
+fn vec_helper(out: Strs, next: Ints, r: Int, elem: Int, rowns: Ints) -> Int {
+    ints_set(next, 0, 0);
+    ints_set(next, 1, 0);
+    let et = llvm_type(elem);
+    add_line(out, "");
+    add_line(out, str_concat(str_concat("define internal void @nz.vr", int_to_str(r)),
+            "(ptr %h) {"));
+    add_line(out, "entry:");
+    add_line(out, "  %none = icmp eq ptr %h, null");
+    add_line(out, "  br i1 %none, label %done, label %drop");
+    add_line(out, "drop:");
+    add_line(out, "  %rcp = getelementptr i8, ptr %h, i64 24");
+    add_line(out, "  %rc = load i64, ptr %rcp");
+    add_line(out, "  %rc2 = sub i64 %rc, 1");
+    add_line(out, "  store i64 %rc2, ptr %rcp");
+    add_line(out, "  %last = icmp sle i64 %rc2, 0");
+    add_line(out, "  br i1 %last, label %contents, label %done");
+    add_line(out, "contents:");
+    add_line(out, "  %n = load i64, ptr %h");
+    add_line(out, "  %dp = getelementptr i8, ptr %h, i64 16");
+    add_line(out, "  %data = load ptr, ptr %dp");
+    add_line(out, "  br label %test");
+    add_line(out, "test:");
+    add_line(out, "  %i = phi i64 [ 0, %contents ], [ %next, %body ]");
+    add_line(out, "  %more = icmp slt i64 %i, %n");
+    add_line(out, "  br i1 %more, label %body, label %storage");
+    add_line(out, "body:");
+    add_line(out, str_concat(str_concat("  %e = getelementptr ", et), ", ptr %data, i64 %i"));
+    let n = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(n)),
+            str_concat(str_concat(" = load ", et), ", ptr %e")));
+    emit_release(out, next, n, elem, rowns);
+    add_line(out, "  %next = add i64 %i, 1");
+    add_line(out, "  br label %test");
+    add_line(out, "storage:");
+    add_line(out, "  call void @free(ptr %data)");
+    add_line(out, "  call void @free(ptr %h)");
+    add_line(out, "  %c = atomicrmw add ptr @nz.seq_reclaimed, i64 1 monotonic");
+    add_line(out, "  br label %done");
+    add_line(out, "done:");
+    add_line(out, "  ret void");
+    add_line(out, "}");
+    0
 }
 
 fn write_bytes(out: Strs, next: Ints, fd: Str, s: Int) -> Int {

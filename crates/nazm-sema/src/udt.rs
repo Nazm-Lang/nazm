@@ -88,9 +88,25 @@ pub struct LayoutCycle {
 pub struct UserTypes {
     records: Records,
     enums: Enums,
+    /// `Vec` types, pending instances and parameter names. N11; see [`crate::generic`].
+    generics: crate::generic::Generics,
 }
 
 impl UserTypes {
+    pub(crate) fn generics(&self) -> &crate::generic::Generics {
+        &self.generics
+    }
+
+    pub(crate) fn generics_mut(&mut self) -> &mut crate::generic::Generics {
+        &mut self.generics
+    }
+
+    /// How many applied records and enums this compilation has interned, for evidence.
+    #[must_use]
+    pub fn instances_created(&self) -> usize {
+        self.generics.created()
+    }
+
     #[must_use]
     pub fn records(&self) -> &Records {
         &self.records
@@ -161,18 +177,45 @@ impl UserTypes {
     /// two modules may each declare `Thing` and this returns `Thing` for both, which is
     /// correct for a message and wrong for anything that compares. Comparison is
     /// [`Type`]'s own `Eq`, over ids.
+    ///
+    /// An application spells its arguments — `Pair[Int, Str]` — and a parameter its
+    /// declared name, which is presentation: `T` in one message and `T` in another may be
+    /// two different parameters, and the id says which.
     #[must_use]
-    pub fn show(&self, t: Type) -> &str {
+    pub fn show(&self, t: Type) -> String {
+        let args = self.type_args(t);
+        let shown = |me: &Self| -> String {
+            args.iter()
+                .map(|a| me.show(*a))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         match t {
-            Type::Record(id) => self
-                .records
-                .get(id)
-                .map_or("<unknown record>", |r| r.name.as_str()),
-            Type::Enum(id) => self
-                .enums
-                .get(id)
-                .map_or("<unknown enum>", |e| e.name.as_str()),
-            other => other.builtin_name().unwrap_or("<unknown type>"),
+            Type::Record(id) => {
+                let name = self
+                    .records
+                    .get(id)
+                    .map_or("<unknown record>", |r| r.name.as_str());
+                if args.is_empty() {
+                    name.to_owned()
+                } else {
+                    format!("{name}[{}]", shown(self))
+                }
+            }
+            Type::Enum(id) => {
+                let name = self
+                    .enums
+                    .get(id)
+                    .map_or("<unknown enum>", |e| e.name.as_str());
+                if args.is_empty() {
+                    name.to_owned()
+                } else {
+                    format!("{name}[{}]", shown(self))
+                }
+            }
+            Type::Vec(_) => format!("Vec[{}]", shown(self)),
+            Type::Param(p) => self.param_name(p),
+            other => other.builtin_name().unwrap_or("<unknown type>").to_owned(),
         }
     }
 
@@ -184,6 +227,10 @@ impl UserTypes {
     ///
     /// Iterative rather than recursive, with an explicit worklist, because the depth is a
     /// property of the program.
+    ///
+    /// A `Vec` always does: its storage is its own. A type parameter is answered `true`,
+    /// because nothing is known about it — no concrete question ever reaches here with
+    /// one, since the backend asks only about instances.
     #[must_use]
     pub fn needs_cleanup(&self, t: Type) -> bool {
         let Some(root) = TypeNode::of(t) else {
@@ -402,4 +449,300 @@ impl UserTypes {
         }
         Some(deepest)
     }
+}
+
+/// How a containment edge reaches what it contains.
+///
+/// The distinction N11 adds to N9's graph. A field holds its value **inline**, so a cycle
+/// of inline edges has no finite layout. A `Vec` element is held **through a counted
+/// handle**: the layout is finite, and a cycle through one is a value that can own itself,
+/// which reference counting never reclaims. Both are refused, for different reasons and with
+/// different codes, because the remediation differs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    Inline,
+    Counted,
+}
+
+/// A cycle in the ownership graph of definitions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnershipCycle {
+    /// [`Reach::Inline`] when every edge is inline — an impossible layout, `N0336`; else
+    /// [`Reach::Counted`], an ownership cycle, `N0359`.
+    pub reach: Reach,
+    /// The definitions around the cycle, starting and ending at the same one.
+    pub through: Vec<TypeNode>,
+    /// The field each hop leaves through: `hops[i]` leaves `through[i]`.
+    pub hops: Vec<CycleEdge>,
+}
+
+const INLINE: u8 = 1;
+const COUNTED: u8 = 2;
+
+/// How a use through `outer` composes with a use of kind `inner`: inline only when both
+/// are, and counted as soon as either is.
+fn compose(outer: u8, inner: u8) -> u8 {
+    let mut out = 0;
+    if outer & INLINE != 0 && inner & INLINE != 0 {
+        out |= INLINE;
+    }
+    if (outer & COUNTED != 0 && inner != 0) || (inner & COUNTED != 0 && outer != 0) {
+        out |= COUNTED;
+    }
+    out
+}
+
+/// One edge of the ownership graph: a definition, how it is reached, and from which field.
+#[derive(Debug, Clone, Copy)]
+struct Owns {
+    to: TypeNode,
+    reach: u8,
+    via: CycleEdge,
+}
+
+impl UserTypes {
+    /// Every definition as written — not an applied instance of one.
+    fn definitions(&self) -> Vec<TypeNode> {
+        let records = self
+            .records
+            .all()
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.instance.is_none())
+            .map(|(i, _)| TypeNode::Record(crate::record::RecordId::from_index(i)));
+        let enums = self
+            .enums
+            .all()
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.instance.is_none())
+            .map(|(i, _)| TypeNode::Enum(EnumId::from_index(i)));
+        records.chain(enums).collect()
+    }
+
+    fn owner_of(node: TypeNode) -> crate::types::ParamOwner {
+        match node {
+            TypeNode::Record(id) => crate::types::ParamOwner::Record(id),
+            TypeNode::Enum(id) => crate::types::ParamOwner::Enum(id),
+        }
+    }
+
+    /// How `t` reaches a value of parameter `p`: inline, through a counted handle, both, or
+    /// not at all. `uses` is how each generic definition uses each of its parameters.
+    fn reaches_param(
+        &self,
+        t: Type,
+        p: crate::types::TypeParam,
+        uses: &std::collections::HashMap<(TypeNode, u32), u8>,
+    ) -> u8 {
+        match t {
+            Type::Param(q) if q == p => INLINE,
+            Type::Vec(v) => match self.vec_element(v) {
+                Some(e) if self.reaches_param(e, p, uses) != 0 => COUNTED,
+                _ => 0,
+            },
+            Type::Record(_) | Type::Enum(_) => {
+                let Some(template) = self.definition_of(t) else {
+                    return 0;
+                };
+                let mut out = 0;
+                for (k, a) in self.type_args(t).into_iter().enumerate() {
+                    let inner = self.reaches_param(a, p, uses);
+                    if inner == 0 {
+                        continue;
+                    }
+                    let used = uses
+                        .get(&(template, u32::try_from(k).unwrap_or(u32::MAX)))
+                        .copied()
+                        .unwrap_or(0);
+                    out |= compose(used, inner);
+                }
+                out
+            }
+            _ => 0,
+        }
+    }
+
+    /// How each generic definition uses each of its parameters, to a fixed point.
+    ///
+    /// A parameter no field mentions is used not at all, and contributes no edge: `Tag[T] {
+    /// n: Int }` applied to anything owns nothing of it. Monotone — each round only adds
+    /// kinds — so it settles in at most two rounds per parameter.
+    fn parameter_uses(&self) -> std::collections::HashMap<(TypeNode, u32), u8> {
+        let mut uses: std::collections::HashMap<(TypeNode, u32), u8> =
+            std::collections::HashMap::new();
+        let generic: Vec<TypeNode> = self
+            .definitions()
+            .into_iter()
+            .filter(|n| self.declared_params(*n) > 0)
+            .collect();
+        loop {
+            let mut changed = false;
+            for node in &generic {
+                for i in 0..self.declared_params(*node) {
+                    let index = u32::try_from(i).unwrap_or(u32::MAX);
+                    let p = crate::types::TypeParam {
+                        owner: Self::owner_of(*node),
+                        index,
+                    };
+                    let mut used = 0;
+                    for (_, _, ty) in self.contained(*node) {
+                        used |= self.reaches_param(ty, p, &uses);
+                    }
+                    let entry = uses.entry((*node, index)).or_insert(0);
+                    if *entry | used != *entry {
+                        *entry |= used;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                return uses;
+            }
+        }
+    }
+
+    /// Every definition a type mentions, and how.
+    fn owned_by(
+        &self,
+        t: Type,
+        reach: u8,
+        via: CycleEdge,
+        uses: &std::collections::HashMap<(TypeNode, u32), u8>,
+        out: &mut Vec<Owns>,
+    ) {
+        match t {
+            Type::Vec(v) => {
+                if let Some(e) = self.vec_element(v) {
+                    self.owned_by(e, COUNTED, via, uses, out);
+                }
+            }
+            Type::Record(_) | Type::Enum(_) => {
+                let Some(to) = self.definition_of(t) else {
+                    return;
+                };
+                out.push(Owns { to, reach, via });
+                for (k, a) in self.type_args(t).into_iter().enumerate() {
+                    let used = uses
+                        .get(&(to, u32::try_from(k).unwrap_or(u32::MAX)))
+                        .copied()
+                        .unwrap_or(0);
+                    let through = compose(used, reach);
+                    for bit in [INLINE, COUNTED] {
+                        if through & bit != 0 {
+                            self.owned_by(a, bit, via, uses, out);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn ownership_edges(
+        &self,
+        node: TypeNode,
+        uses: &std::collections::HashMap<(TypeNode, u32), u8>,
+    ) -> Vec<Owns> {
+        let mut out = Vec::new();
+        for (variant, field, ty) in self.contained(node) {
+            let via = CycleEdge {
+                from: node,
+                variant,
+                field,
+            };
+            self.owned_by(ty, INLINE, via, uses, &mut out);
+        }
+        out
+    }
+
+    /// Every cycle in the ownership graph of this compilation's definitions.
+    ///
+    /// Two passes. The first follows inline edges only and finds the impossible layouts;
+    /// the second follows every edge, stays out of the definitions the first reported, and
+    /// finds the cycles that run through a counted handle. One cycle is reported once, and a
+    /// definition already in one is not reported again.
+    ///
+    /// Iterative depth-first search with an explicit stack, as every walk here is.
+    #[must_use]
+    pub fn ownership_cycles(&self) -> Vec<OwnershipCycle> {
+        let uses = self.parameter_uses();
+        let nodes = self.definitions();
+        let edges: std::collections::HashMap<TypeNode, Vec<Owns>> = nodes
+            .iter()
+            .map(|n| (*n, self.ownership_edges(*n, &uses)))
+            .collect();
+        let mut out: Vec<OwnershipCycle> = Vec::new();
+        let mut reported: Vec<TypeNode> = Vec::new();
+        for pass in [INLINE, INLINE | COUNTED] {
+            for start in &nodes {
+                if reported.contains(start) {
+                    continue;
+                }
+                if let Some(cycle) = find_cycle(*start, &edges, pass, &reported) {
+                    reported.extend(cycle.through.iter().copied());
+                    out.push(cycle);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// A cycle reachable from `start` over edges whose reach is in `allowed`, avoiding
+/// `excluded`, if there is one.
+fn find_cycle(
+    start: TypeNode,
+    edges: &std::collections::HashMap<TypeNode, Vec<Owns>>,
+    allowed: u8,
+    excluded: &[TypeNode],
+) -> Option<OwnershipCycle> {
+    // Each frame: a node, the next edge of it to try, and the edge that entered it.
+    let mut stack: Vec<(TypeNode, usize, Option<Owns>)> = vec![(start, 0, None)];
+    let mut done: Vec<TypeNode> = Vec::new();
+    while let Some((node, at, _)) = stack.last().copied() {
+        let next = edges.get(&node).and_then(|e| e.get(at)).copied();
+        let Some(edge) = next else {
+            done.push(node);
+            stack.pop();
+            continue;
+        };
+        if let Some(top) = stack.last_mut() {
+            top.1 += 1;
+        }
+        if edge.reach & allowed == 0 || excluded.contains(&edge.to) || done.contains(&edge.to) {
+            continue;
+        }
+        if let Some(from) = stack.iter().position(|(n, _, _)| *n == edge.to) {
+            // The suffix of the path from where it re-enters, closed by this edge.
+            let frames = stack.get(from..)?;
+            let mut through: Vec<TypeNode> = frames.iter().map(|(n, _, _)| *n).collect();
+            let mut hops: Vec<CycleEdge> = frames
+                .iter()
+                .skip(1)
+                .filter_map(|(_, _, entered)| entered.map(|e| e.via))
+                .collect();
+            hops.push(edge.via);
+            through.push(edge.to);
+            let mut reach = if edge.reach == INLINE {
+                Reach::Inline
+            } else {
+                Reach::Counted
+            };
+            if frames
+                .iter()
+                .skip(1)
+                .any(|(_, _, e)| e.is_some_and(|e| e.reach != INLINE))
+            {
+                reach = Reach::Counted;
+            }
+            return Some(OwnershipCycle {
+                reach,
+                through,
+                hops,
+            });
+        }
+        stack.push((edge.to, 0, Some(edge)));
+    }
+    None
 }

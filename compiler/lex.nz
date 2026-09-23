@@ -81,6 +81,10 @@ pub fn k_gteq() -> Int { 50 }
 // `=>`, between a `match` pattern and the arm it selects. Its own token rather than `=`
 // followed by `>`: written as two, `x = > 1` would be accepted.
 pub fn k_fatarrow() -> Int { 51 }
+// `[` and `]`, added by N11: they enclose type parameters and type arguments, and mean
+// nothing else. There is no indexing syntax.
+pub fn k_lbracket() -> Int { 52 }
+pub fn k_rbracket() -> Int { 53 }
 
 // --- byte classification -----------------------------------------------------------
 
@@ -281,6 +285,8 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int 
         if b == 37 { kind = k_percent(); }
         if b == 60 { kind = k_lt(); }
         if b == 62 { kind = k_gt(); }
+        if b == 91 { kind = k_lbracket(); }
+        if b == 93 { kind = k_rbracket(); }
 
         if kind == 0 { fail("N0001", i, "this character is not part of the language"); }
         push_token(kinds, starts, ends, texts, kind, i, i + 1, "");

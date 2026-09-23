@@ -25,14 +25,25 @@
     "native": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["units", "compiled", "reused", "rejected", "stored"],
-      "description": "The object stage. `units` is always the whole program: one LLVM unit per module, plus the runtime and the entry wrapper. Emission is not cached, so every unit is emitted and fingerprinted on every build; only `clang -c` is skipped.",
+      "required": ["units", "compiled", "reused", "rejected", "stored", "instances"],
+      "description": "The object stage. `units` is always the whole program: one LLVM unit per module, one per generic function instance, plus the runtime and the entry wrapper. Emission is not cached, so every unit is emitted and fingerprinted on every build; only `clang -c` is skipped.",
       "properties": {
         "units": { "type": "integer", "minimum": 0, "description": "LLVM units emitted." },
         "compiled": { "type": "integer", "minimum": 0, "description": "Units handed to the object compiler." },
         "reused": { "type": "integer", "minimum": 0, "description": "Units whose object came from the store, validated. Zero with `--no-cache`." },
         "rejected": { "type": "integer", "minimum": 0, "description": "Units compiled because what was filed could not be used: truncated, edited, from another backend, or an entry for something else. Never an error — a cache is derived data." },
-        "stored": { "type": "integer", "minimum": 0, "description": "Objects written to the store this run." }
+        "stored": { "type": "integer", "minimum": 0, "description": "Objects written to the store this run." },
+        "instances": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["units", "compiled", "reused"],
+          "description": "Added in N11, compatibly: a new field on an existing object. The generic function instances among the units above — one unit each, never folded into a caller's — and what became of them. Already counted in the totals.",
+          "properties": {
+            "units": { "type": "integer", "minimum": 0, "description": "Generic function instance units emitted: one per distinct definition and list of type arguments the program needs." },
+            "compiled": { "type": "integer", "minimum": 0, "description": "Instance units handed to the object compiler." },
+            "reused": { "type": "integer", "minimum": 0, "description": "Instance units whose object came from the store." }
+          }
+        }
       }
     },
     "link": {

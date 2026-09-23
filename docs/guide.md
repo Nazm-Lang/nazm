@@ -198,18 +198,20 @@ accepts.
 | --- | --- |
 | `program` | `{ use_item } , { function \| record \| enumeration }` |
 | `use_item` | `"use" , STRING , ";"` |
-| `function` | `[ visibility ] , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block` |
+| `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , block` |
+| `type_parameters` | `"[" , IDENT , { "," , IDENT } , "]"` |
 | `visibility` | `"pub"` |
-| `record` | `[ visibility ] , "struct" , IDENT , "{" , [ fields ] , "}"` |
+| `record` | `[ visibility ] , "struct" , IDENT , [ type_parameters ] , "{" , [ fields ] , "}"` |
 | `fields` | `field , { "," , field } , [ "," ]` |
 | `field` | `IDENT , ":" , type` |
-| `enumeration` | `[ visibility ] , "enum" , IDENT , "{" , [ variants ] , "}"` |
+| `enumeration` | `[ visibility ] , "enum" , IDENT , [ type_parameters ] , "{" , [ variants ] , "}"` |
 | `variants` | `variant , { "," , variant } , [ "," ]` |
 | `variant` | `IDENT , [ "(" , payload , ")" ]` |
 | `payload` | `field , { "," , field } , [ "," ]` |
 | `parameters` | `parameter , { "," , parameter }` |
 | `parameter` | `IDENT , ":" , type` |
-| `type` | `IDENT` |
+| `type` | `IDENT , [ type_arguments ]` |
+| `type_arguments` | `"[" , [ type , { "," , type } ] , "]"` |
 | `block` | `"{" , { statement } , [ expression ] , "}"` |
 | `statement` | `let_statement \| assignment \| while_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| spawn_statement \| expression_statement` |
 | `let_statement` | `"let" , [ "mut" ] , IDENT , "=" , expression , ";"` |
@@ -229,11 +231,11 @@ accepts.
 | `unary` | `[ "-" ] , primary` |
 | `primary` | `atom , { "." , IDENT }` |
 | `atom` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| "(" , expression , ")"` |
-| `call` | `IDENT , "(" , [ arguments ] , ")"` |
-| `construction` | `IDENT , "(" , initialisers , ")"` |
+| `call` | `IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
+| `construction` | `IDENT , [ type_arguments ] , "(" , initialisers , ")"` |
 | `initialisers` | `initialiser , { "," , initialiser } , [ "," ]` |
 | `initialiser` | `IDENT , ":" , expression` |
-| `variant_construction` | `IDENT , "." , IDENT , "(" , [ initialisers ] , ")"` |
+| `variant_construction` | `IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")"` |
 | `arguments` | `expression , { "," , expression }` |
 | `if_expression` | `"if" , expression , block , [ "else" , ( block \| if_expression ) ]` |
 | `match_expression` | `"match" , expression , "{" , [ match_arms ] , "}"` |
@@ -264,6 +266,10 @@ struct Point { x: Int, } fn main() -> Int { Point(x: 1).x }
 enum State { Ready, } fn main() -> Int { match State.Ready() { State.Ready() => 0, } }
 ```
 
+```nazm
+fn identity[T](value: T) -> T { value } fn main() -> Int { identity(7) }
+```
+
 ### `use_item`
 
 ```ebnf
@@ -277,7 +283,7 @@ use "lib/helpers.nz"; fn main() -> Int { 0 }
 ### `function`
 
 ```ebnf
-function = [ visibility ] , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block ;
+function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , block ;
 ```
 
 ```nazm
@@ -290,6 +296,29 @@ fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) }
 
 ```nazm
 pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) }
+```
+
+```nazm
+fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") }
+```
+
+### `type_parameters`
+
+```ebnf
+type_parameters = "[" , IDENT , { "," , IDENT } , "]" ;
+```
+
+A generic declaration's parameters: at least one name, no trailing comma. A parameter
+is a **position** — renaming one changes nothing — and it is a type and nothing else.
+Which names may be one (not a built-in type, not `Vec`, not twice) is the checker's
+question. See `docs/spec.md`, *Generics*.
+
+```nazm
+struct Pair[A, B] { first: A, second: B, } fn main() -> Int { 0 }
+```
+
+```nazm
+enum Maybe[T] { None, Some(value: T), } fn main() -> Int { 0 }
 ```
 
 ### `visibility`
@@ -310,7 +339,7 @@ pub fn helper() -> Int { 1 } fn main() -> Int { helper() }
 ### `record`
 
 ```ebnf
-record = [ visibility ] , "struct" , IDENT , "{" , [ fields ] , "}" ;
+record = [ visibility ] , "struct" , IDENT , [ type_parameters ] , "{" , [ fields ] , "}" ;
 ```
 
 A record: a nominal type whose fields are named. `struct` is the keyword; *record* is
@@ -326,6 +355,10 @@ struct Point { x: Int, y: Int, } fn main() -> Int { Point(x: 1, y: 2).x }
 
 ```nazm
 pub struct User { name: Str, } fn main() -> Int { str_len(User(name: "a").name) }
+```
+
+```nazm
+struct Box[T] { value: T, } fn main() -> Int { Box[Int](value: 1).value }
 ```
 
 ### `fields`
@@ -351,7 +384,7 @@ struct P { x: Int, } fn main() -> Int { P(x: 7).x }
 ### `enumeration`
 
 ```ebnf
-enumeration = [ visibility ] , "enum" , IDENT , "{" , [ variants ] , "}" ;
+enumeration = [ visibility ] , "enum" , IDENT , [ type_parameters ] , "{" , [ variants ] , "}" ;
 ```
 
 An enum: a closed set of named variants, exactly one of which is active in any value.
@@ -367,6 +400,10 @@ enum State { Ready, Done, } fn main() -> Int { match State.Ready() { State.Ready
 
 ```nazm
 pub enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } }
+```
+
+```nazm
+enum Maybe[T] { None, Some(value: T), } fn main() -> Int { match Maybe[Int].Some(value: 1) { Maybe.None() => 0, Maybe.Some(value: v) => v, } }
 ```
 
 ### `variants`
@@ -430,18 +467,37 @@ fn f(n: Int) -> Int { n } fn main() -> Int { f(1) }
 ### `type`
 
 ```ebnf
-type = IDENT ;
+type = IDENT , [ type_arguments ] ;
 ```
 
-A name, and only a name. Which names are types — `Int`, `Bool`, `Str`, `Ints`,
-`Strs`, `Chan` — is a *checking* question, not a grammatical one: the parser accepts
-any identifier here and the checker reports `N0305` for one that is not a type. A
-grammar that listed them would be claiming the parser rejects `fn f(x: Widget)`,
-which it does not — it parses it and then says what is wrong with it, which is how
-one mistake stays one error.
+A name, applied to type arguments or not. Which names are types — `Int`, `Bool`,
+`Str`, `Ints`, `Strs`, `Chan`, `Vec`, a declared record or enum, a type parameter in
+scope — is a *checking* question, not a grammatical one: the parser accepts any
+identifier here and the checker reports `N0305` for one that is not a type. A grammar
+that listed them would be claiming the parser rejects `fn f(x: Widget)`, which it does
+not — it parses it and then says what is wrong with it, which is how one mistake stays
+one error. How many arguments a name takes is the checker's too (`N0351` – `N0353`).
 
 ```nazm
 fn f(c: Chan) -> Int { 0 } fn main() -> Int { f(chan_new(1)) }
+```
+
+```nazm
+fn f(xs: Vec[Vec[Int]]) -> Int { vec_len(xs) } fn main() -> Int { f(vec_new[Vec[Int]]()) }
+```
+
+### `type_arguments`
+
+```ebnf
+type_arguments = "[" , [ type , { "," , type } ] , "]" ;
+```
+
+Square brackets, and one spelling: there are no angle brackets and no indexing, so
+`name[` can only begin type arguments. Empty brackets parse — `Vec[]` is a type written
+with the wrong number of arguments, which is `N0353` rather than a syntax error.
+
+```nazm
+struct Pair[A, B] { a: A, b: B, } fn f(p: Pair[Int, Str]) -> Int { p.a } fn main() -> Int { f(Pair[Int, Str](a: 1, b: "x")) }
 ```
 
 ### `block`
@@ -693,17 +749,25 @@ fn main() -> Int { 1 }
 ### `call`
 
 ```ebnf
-call = IDENT , "(" , [ arguments ] , ")" ;
+call = IDENT , [ type_arguments ] , "(" , [ arguments ] , ")" ;
 ```
+
+Type arguments are written where inference cannot find them from the arguments —
+`vec_new[Int]()` — or where a reader wants them visible. The expected result type
+never supplies one.
 
 ```nazm
 fn main() -> Int { str_len("abc") }
 ```
 
+```nazm
+fn identity[T](v: T) -> T { v } fn main() -> Int { identity[Int](7) }
+```
+
 ### `construction`
 
 ```ebnf
-construction = IDENT , "(" , initialisers , ")" ;
+construction = IDENT , [ type_arguments ] , "(" , initialisers , ")" ;
 ```
 
 Named, never positional, so field order is never an implicit API. Parenthesised rather
@@ -715,6 +779,10 @@ begin with a name followed by a colon, so the two forms cannot be confused.
 
 ```nazm
 struct P { x: Int, y: Int, } fn main() -> Int { P(x: 1, y: 2).x }
+```
+
+```nazm
+struct Box[T] { value: T, } fn main() -> Int { Box[Int](value: 7).value }
 ```
 
 ### `initialisers`
@@ -740,7 +808,7 @@ struct P { x: Int, } fn main() -> Int { P(x: 1 + 1).x }
 ### `variant_construction`
 
 ```ebnf
-variant_construction = IDENT , "." , IDENT , "(" , [ initialisers ] , ")" ;
+variant_construction = IDENT , [ type_arguments ] , "." , IDENT , "(" , [ initialisers ] , ")" ;
 ```
 
 Always qualified by the enum, and always parenthesised — including for a variant with
@@ -755,6 +823,10 @@ enum E { A, } fn main() -> Int { match E.A() { E.A() => 0, } }
 
 ```nazm
 enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1 + 1) { E.V(x: n) => n, } }
+```
+
+```nazm
+enum Maybe[T] { None, Some(value: T), } fn main() -> Int { match Maybe[Int].None() { Maybe.None() => 0, Maybe.Some(value: v) => v, } }
 ```
 
 ### `arguments`
@@ -817,6 +889,10 @@ enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } }
 ```ebnf
 match_arm = IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression ;
 ```
+
+A pattern names the enum and never its type arguments: the value being matched already
+has one concrete type, and `Maybe.Some(value: v)` matches a `Maybe[Int]` and a
+`Maybe[Str]` alike.
 
 ```nazm
 enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } }

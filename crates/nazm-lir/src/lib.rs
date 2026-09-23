@@ -36,6 +36,7 @@
 //! `docs/capability-matrix.md` carries the architectural view.
 
 pub mod emit;
+pub mod instance;
 pub mod ir;
 pub mod lower;
 pub mod names;

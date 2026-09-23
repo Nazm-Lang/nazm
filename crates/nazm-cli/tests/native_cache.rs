@@ -1246,3 +1246,244 @@ fn an_enum_type_is_named_from_its_durable_identity_and_not_its_position() {
     assert!(an.iter().all(|n| n.contains("a_2Enz")), "{an:?}");
     assert!(bn.iter().all(|n| n.contains("b_2Enz")), "{bn:?}");
 }
+
+// --- N11: generic function instances as artefacts of their own ------------------------------
+//
+// `docs/architecture.md` §7.12. One concrete instance is one unit and one object, named from
+// its definition's identity and its type arguments' canonical keys, and never folded into a
+// caller's unit. The object cache needs nothing new to reuse one: its key is the instance's
+// exact bytes, as every unit's is.
+
+/// What one build did with its generic instances: `(units, compiled, reused)`.
+fn instances(dir: &Path, root: &str) -> (u64, u64, u64) {
+    let out = Command::new(NAZM)
+        .args(["build", root, "-o", "prog", "--build-report"])
+        .current_dir(dir)
+        .output()
+        .expect("build");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text
+        .lines()
+        .find(|l| l.contains("nazm.build-report/1"))
+        .expect("a report");
+    let v: Value = serde_json::from_str(line).expect("json");
+    let n = |name: &str| v["native"]["instances"][name].as_u64().unwrap_or(u64::MAX);
+    (n("units"), n("compiled"), n("reused"))
+}
+
+const GENERIC_B: &str = "pub fn identity[T](x: T) -> T { x }\n\
+                         pub fn count[T](xs: Vec[T]) -> Int { vec_len(xs) }\n";
+
+#[test]
+fn one_instance_requested_by_two_modules_is_one_unit_and_one_object() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[
+            ("b.nz", GENERIC_B),
+            (
+                "c.nz",
+                "use \"b.nz\";\npub fn from_c() -> Int { identity(2) }\n",
+            ),
+            (
+                "a.nz",
+                "use \"b.nz\";\nuse \"c.nz\";\nfn main() -> Int { identity(40) + from_c() }\n",
+            ),
+        ],
+    );
+    // `identity[Int]` from `a` and from `c`: one instance.
+    assert_eq!(instances(dir.path(), "a.nz"), (1, 1, 0));
+    assert_eq!(run(dir.path(), "prog").stdout, "42");
+    // Warm, it is reused like any unit, and nothing is compiled at all.
+    let warm = build(dir.path(), "a.nz");
+    assert_eq!(warm.compiled, 0, "{warm:?}");
+    assert_eq!(instances(dir.path(), "a.nz"), (1, 0, 1));
+    // And it is defined once: exactly one unit carries its body.
+    let units = emitted(dir.path(), "a.nz", "prog");
+    let defining: Vec<&String> = units
+        .iter()
+        .filter(|(_, ir)| ir.contains("define hidden i64 @nz.m.b_2Enz.identity.g.Int("))
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(defining.len(), 1, "{defining:?}");
+}
+
+#[test]
+fn two_instances_of_one_definition_are_two_symbols_even_where_their_code_coincides() {
+    // `identity[Int]` and `identity[Bool]` would be the same machine code on some targets
+    // for all a layout could tell. Their identity is their type arguments, not their bytes.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[
+            ("b.nz", GENERIC_B),
+            (
+                "a.nz",
+                "use \"b.nz\";\nfn main() -> Int { if identity(true) { identity(3) } else { 0 } }\n",
+            ),
+        ],
+    );
+    assert_eq!(instances(dir.path(), "a.nz").0, 2);
+    let units = emitted(dir.path(), "a.nz", "prog");
+    let all: String = units.iter().map(|(_, ir)| ir.as_str()).collect();
+    assert!(all.contains("@nz.m.b_2Enz.identity.g.Int("), "{all}");
+    assert!(all.contains("@nz.m.b_2Enz.identity.g.Bool("), "{all}");
+}
+
+#[test]
+fn a_callers_unit_never_carries_a_generic_body() {
+    // The module that calls `identity[Int]` declares it and does not define it, so its
+    // object is a function of its own source and of `b`'s signatures — not of which
+    // instances somebody happened to need.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[
+            ("b.nz", GENERIC_B),
+            ("a.nz", "use \"b.nz\";\nfn main() -> Int { identity(1) }\n"),
+        ],
+    );
+    let units = emitted(dir.path(), "a.nz", "prog");
+    let caller = unit_of(&units, "a.nz");
+    assert!(
+        caller.contains("declare i64 @nz.m.b_2Enz.identity.g.Int(i64)"),
+        "{caller}"
+    );
+    assert!(
+        !caller.contains("define hidden i64 @nz.m.b_2Enz.identity"),
+        "{caller}"
+    );
+    // Nor does the defining module's own unit: a generic definition has no one body as
+    // native code, so `b`'s object is the same whoever instantiates what.
+    // (An instance's unit names its definition's file too, which is right for its spans;
+    // the module's own unit is the `m` artefact.)
+    let modules: Vec<(String, String)> = units
+        .iter()
+        .filter(|(name, _)| name.starts_with("prog.m"))
+        .cloned()
+        .collect();
+    let definer = unit_of(&modules, "b.nz");
+    assert!(!definer.contains("identity"), "{definer}");
+}
+
+#[test]
+fn one_new_instantiation_compiles_the_caller_and_the_new_instance_and_nothing_else() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[
+            ("b.nz", GENERIC_B),
+            (
+                "c.nz",
+                "use \"b.nz\";\npub fn from_c() -> Int { identity(2) }\n",
+            ),
+            (
+                "a.nz",
+                "use \"b.nz\";\nuse \"c.nz\";\nfn main() -> Int { identity(40) + from_c() }\n",
+            ),
+        ],
+    );
+    let cold = build(dir.path(), "a.nz");
+    assert_eq!(cold.reused, 0);
+    // `a` starts calling `identity[Str]`: `a`'s own unit changes, one new instance unit
+    // appears, and `b`, `c`, `identity[Int]` and the entry are byte-identical — reused.
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nuse \"c.nz\";\n\
+         fn main() -> Int { identity(40) + from_c() + str_len(identity(\"\")) }\n",
+    );
+    let after = build(dir.path(), "a.nz");
+    assert_eq!(instances(dir.path(), "a.nz").0, 2);
+    // Compiled: `a`, `identity[Str]`, and the runtime — a program that now handles a string
+    // reaches the string helpers it did not reach before.
+    assert_eq!(after.compiled, 3, "{after:?}");
+    assert_eq!(after.units, cold.units + 1, "{after:?}");
+}
+
+#[test]
+fn a_generic_body_edit_recompiles_its_instances_and_no_caller() {
+    // `docs/spec.md`: the body is not part of the interface. So the callers' units do not
+    // change — they declare the instance by its symbol and signature — and only the units
+    // that carry the body do.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[
+            (
+                "b.nz",
+                "pub fn identity[T](x: T) -> T { x }\npub fn other() -> Int { 1 }\n",
+            ),
+            (
+                "c.nz",
+                "use \"b.nz\";\npub fn from_c() -> Int { str_len(identity(\"cc\")) }\n",
+            ),
+            (
+                "a.nz",
+                "use \"b.nz\";\nuse \"c.nz\";\nfn main() -> Int { identity(40) + from_c() + other() }\n",
+            ),
+        ],
+    );
+    let cold = build(dir.path(), "a.nz");
+    assert_eq!(run(dir.path(), "prog").stdout, "43");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn identity[T](x: T) -> T { let y = x; y }\npub fn other() -> Int { 1 }\n",
+    );
+    let after = build(dir.path(), "a.nz");
+    assert_eq!(run(dir.path(), "prog").stdout, "43");
+    // Two instances recompile — `identity[Int]` and `identity[Str]` — and nothing else.
+    // Not even `b`'s own module unit: its source changed, but only inside a generic body,
+    // which that unit never carries. `a`, `c`, `b`, the runtime and the entry are reused.
+    assert_eq!(after.compiled, 2, "{after:?}");
+    assert_eq!(after.reused, cold.units - 2, "{after:?}");
+}
+
+#[test]
+fn renaming_a_type_parameter_changes_no_object() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[
+            ("b.nz", "pub fn pick[A, B](x: A, y: B) -> A { x }\n"),
+            (
+                "a.nz",
+                "use \"b.nz\";\nfn main() -> Int { pick(1, \"s\") }\n",
+            ),
+        ],
+    );
+    build(dir.path(), "a.nz");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn pick[Left, Right](x: Left, y: Right) -> Left { x }\n",
+    );
+    let after = build(dir.path(), "a.nz");
+    assert_eq!(after.compiled, 0, "a rename is not a change: {after:?}");
+}
+
+#[test]
+fn a_private_function_a_generic_body_calls_is_bindable_from_the_instance() {
+    // The instance is an object of its own, and it calls `secret`, which `b` keeps private.
+    // So `secret` is hidden rather than internal — decided by `b`'s own generic bodies,
+    // never by who instantiates them.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(
+        dir.path(),
+        &[
+            (
+                "b.nz",
+                "fn secret(n: Int) -> Int { n * 2 }\npub fn twice[T](x: T, n: Int) -> Int { secret(n) }\n",
+            ),
+            ("a.nz", "use \"b.nz\";\nfn main() -> Int { twice(\"x\", 21) }\n"),
+        ],
+    );
+    build(dir.path(), "a.nz");
+    assert_eq!(run(dir.path(), "prog").stdout, "42");
+}

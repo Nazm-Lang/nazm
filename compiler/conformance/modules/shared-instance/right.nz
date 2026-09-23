@@ -1,0 +1,7 @@
+use "lib.nz";
+
+// The same instance as `left.nz`'s — `twice[Int]` — requested from a second module. One
+// definition of it, whichever module asks first.
+pub fn right() -> Int {
+    vec_get(twice(20), 1)
+}

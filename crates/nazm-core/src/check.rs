@@ -14,20 +14,20 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 use nazm_syntax::{
     Assign, BinOp, Block, Enum, Expr, FieldInit, Function, MatchArm, Program, Record, Return,
-    Spawn, Stmt, While,
+    Spawn, Stmt, TypeName, TypeParam as WrittenParam, While,
 };
 
 use nazm_sema::enums::{EnumDef, EnumId, VariantDef};
 use nazm_sema::interface::{
     reachable_types, EnumExport, Export, RecordExport, UnitInterface, Visibility,
 };
-use nazm_sema::intrinsic::Intrinsic;
+use nazm_sema::intrinsic::{Intrinsic, Shape};
 use nazm_sema::module::{Dependency, ModuleGraph, ModuleId};
 use nazm_sema::record::{FieldDef, RecordDef, RecordId};
 use nazm_sema::resolve::{
-    Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Resolution, VariantRef,
+    CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Resolution, VariantRef,
 };
-use nazm_sema::types::Type;
+use nazm_sema::types::{ParamOwner, Type, TypeParam};
 use nazm_sema::udt::{TypeNode, UserTypes, MAX_TYPE_DEPTH};
 
 #[derive(Debug, Clone)]
@@ -35,6 +35,10 @@ pub struct Signature {
     pub params: Vec<Type>,
     pub ret: Type,
     pub name_span: Span,
+    /// How many type parameters the callee declares; zero for one that is not generic.
+    pub generics: u32,
+    /// Whose parameters `params` and `ret` mention, when `generics` is not zero.
+    pub owner: Option<ParamOwner>,
 }
 
 /// What is known about a binding.
@@ -296,6 +300,9 @@ pub struct Checker<'a> {
     /// costs nothing and means a loop inside a loop does not lose the outer one's count
     /// when it finishes.
     loop_depth: u32,
+    /// The type parameters in scope — the current function's — by name, for a type
+    /// written inside its body. Empty outside a generic function.
+    type_scope: Vec<(String, Type)>,
 }
 
 /// Which modules' bodies actually have to be checked.
@@ -423,6 +430,9 @@ pub fn check_reusing(
 
     // Stage 0a: every user-defined type's name, for the whole graph. Before any field
     // type, because a field may name a type declared later or in another module.
+    // Applied types met while field types are still being resolved are interned now and
+    // completed once every definition has its fields. `nazm_sema::generic` says why.
+    res.types_mut().defer();
     let before = errors.len();
     let type_interfaces = declare_types(&units, &mut res, &mut errors);
     if errors.len() != before {
@@ -441,6 +451,8 @@ pub fn check_reusing(
         resolve_type_fields(u, &deps, &mut res, &mut errors);
         mark(&mut declared_cleanly, n, before, errors.len());
     }
+    // Every definition has its fields now, so every application met so far can have its.
+    res.types_mut().settle();
     let before = errors.len();
     validate_type_layouts(&mut res, &mut errors);
     if errors.len() != before {
@@ -489,6 +501,25 @@ pub fn check_reusing(
         }
     }
 
+    // `main` cannot be generic: there is no caller to choose its type arguments.
+    if let Some(def) = res
+        .definition(graph.root(), "main")
+        .and_then(|id| res.function(id))
+        .filter(|d| !d.type_params.is_empty())
+    {
+        errors.push(
+            Diagnostic::error(
+                codes::GENERIC_MAIN,
+                def.name_span,
+                "`main` cannot be generic",
+            )
+            .help(
+                "the process entry is called by nothing that could choose its type \
+                 arguments. Make `main` concrete and call a generic function from it",
+            ),
+        );
+    }
+
     // The **root** module owns `main`. Another module's `main` is one of its definitions
     // and nothing more, which is why a helper file may have one.
     if res.definition(graph.root(), "main").is_none() {
@@ -534,6 +565,7 @@ pub fn declare_types(
                 continue;
             }
             let visibility = Visibility::from_keyword(r.pub_span);
+            let params = declared_type_params(&r.type_params, errors);
             let id = res.records_mut().declare(RecordDef {
                 name: r.name.clone(),
                 module: unit.module,
@@ -542,7 +574,10 @@ pub fn declare_types(
                 fields: Vec::new(),
                 layout: Vec::new(),
                 decl: *decl,
+                params: params.clone(),
+                instance: None,
             });
+            res.types_mut().name_params(ParamOwner::Record(id), params);
             if visibility.is_exported() {
                 records.push(RecordExport {
                     def: id,
@@ -555,6 +590,7 @@ pub fn declare_types(
                 continue;
             }
             let visibility = Visibility::from_keyword(e.pub_span);
+            let params = declared_type_params(&e.type_params, errors);
             let id = res.enums_mut().declare(EnumDef {
                 name: e.name.clone(),
                 module: unit.module,
@@ -563,7 +599,10 @@ pub fn declare_types(
                 variants: Vec::new(),
                 order: Vec::new(),
                 decl: *decl,
+                params: params.clone(),
+                instance: None,
             });
+            res.types_mut().name_params(ParamOwner::Enum(id), params);
             if visibility.is_exported() {
                 enums.push(EnumExport {
                     def: id,
@@ -595,8 +634,10 @@ fn refuse_type_name(
     errors: &mut Vec<Diagnostic>,
 ) -> bool {
     // A built-in's name is not a module's to define. Unlike a duplicate, there is no
-    // declaration to point at, so the reason is said rather than shown.
-    if Type::from_name(name).is_some() {
+    // declaration to point at, so the reason is said rather than shown. `Vec` is one: a
+    // type written `Vec` is always the built-in, so a record declared under that name
+    // could be built and never named.
+    if Type::from_name(name).is_some() || name == VEC {
         errors.push(
             Diagnostic::error(
                 codes::BUILTIN_TYPE_REDEFINED,
@@ -639,6 +680,66 @@ fn refuse_type_name(
     false
 }
 
+/// A declaration's type parameters, checked once: unique within the list (`N0350`), and
+/// never a built-in type's name or `Vec` (`N0331`). Returns the names in order, for
+/// messages — a parameter's identity is its position, not what it is called.
+fn declared_type_params(params: &[WrittenParam], errors: &mut Vec<Diagnostic>) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for (i, p) in params.iter().enumerate() {
+        if Type::from_name(&p.name).is_some() || p.name == VEC {
+            errors.push(
+                Diagnostic::error(
+                    codes::BUILTIN_TYPE_REDEFINED,
+                    p.span,
+                    format!(
+                        "`{}` is a built-in type and cannot be a type parameter",
+                        p.name
+                    ),
+                )
+                .help(
+                    "a built-in type's name means the same thing everywhere, including \
+                     inside a generic definition; choose another name, such as `T`",
+                ),
+            );
+        } else if let Some(first) = params.iter().take(i).find(|q| q.name == p.name) {
+            errors.push(
+                Diagnostic::error(
+                    codes::DUPLICATE_TYPE_PARAMETER,
+                    p.span,
+                    format!("`{}` is declared twice in this parameter list", p.name),
+                )
+                .secondary(first.span, "first declared here")
+                .help("a type parameter is one position; two cannot share a name"),
+            );
+        }
+        names.push(p.name.clone());
+    }
+    names
+}
+
+/// The written name of the one generic built-in type.
+///
+/// Not in [`Type::from_name`], which answers for a complete type, and `Vec` alone is not
+/// one: it is always applied to its element.
+const VEC: &str = "Vec";
+
+/// A declaration's type parameters as the types they are inside it, by name.
+fn param_scope(params: &[WrittenParam], owner: ParamOwner) -> Vec<(String, Type)> {
+    params
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            (
+                p.name.clone(),
+                Type::Param(TypeParam {
+                    owner,
+                    index: u32::try_from(i).unwrap_or(u32::MAX),
+                }),
+            )
+        })
+        .collect()
+}
+
 /// Stage 0b for one module: resolve its types' field types.
 ///
 /// `deps` are the type-carrying interfaces of the modules this one directly imports —
@@ -663,7 +764,8 @@ pub fn resolve_type_fields(
             continue;
         }
         completed.push(&r.name);
-        let fields = resolve_fields(&types, res, &r.name, &r.fields, errors);
+        let scope = param_scope(&r.type_params, ParamOwner::Record(id));
+        let fields = resolve_fields(&types, res, &r.name, &r.fields, &scope, errors);
         // A record with no fields. Refused rather than allowed, and the reason is the
         // grammar: `Marker()` is exactly what a call to a function named `Marker` looks
         // like, and types and functions are separate namespaces, so the two forms would
@@ -715,6 +817,7 @@ pub fn resolve_type_fields(
             );
         }
         let mut variants: Vec<VariantDef> = Vec::new();
+        let scope = param_scope(&e.type_params, ParamOwner::Enum(id));
         for v in &e.variants {
             if let Some(first) = variants.iter().find(|p| p.name == v.name) {
                 errors.push(
@@ -728,7 +831,7 @@ pub fn resolve_type_fields(
                 );
                 continue;
             }
-            let fields = resolve_fields(&types, res, &v.name, &v.fields, errors);
+            let fields = resolve_fields(&types, res, &v.name, &v.fields, &scope, errors);
             variants.push(VariantDef {
                 name: v.name.clone(),
                 name_span: v.name_span,
@@ -745,9 +848,10 @@ pub fn resolve_type_fields(
 /// future tuple variant is a new decision rather than a drift.
 fn resolve_fields(
     types: &Types,
-    res: &Resolution,
+    res: &mut Resolution,
     owner: &str,
     written: &[nazm_syntax::Field],
+    scope: &[(String, Type)],
     errors: &mut Vec<Diagnostic>,
 ) -> Vec<FieldDef> {
     let mut fields: Vec<FieldDef> = Vec::new();
@@ -764,7 +868,7 @@ fn resolve_fields(
             );
             continue;
         }
-        let ty = resolve_type_in(types, res, &f.ty.name, f.ty.span, errors);
+        let ty = resolve_written(types, res, &f.ty, scope, errors);
         fields.push(FieldDef {
             name: f.name.clone(),
             ty,
@@ -791,50 +895,80 @@ fn resolve_fields(
 /// complaining about one is a refusal that arrives after the compiler decided the program
 /// was fine.
 pub fn validate_type_layouts(res: &mut Resolution, errors: &mut Vec<Diagnostic>) {
-    let nodes: Vec<TypeNode> = (0..res.records().len())
-        .map(|i| TypeNode::Record(RecordId::from_index(i)))
-        .chain((0..res.enums().len()).map(|i| TypeNode::Enum(EnumId::from_index(i))))
-        .collect();
+    // Over **definitions**, since N11. An applied type is not a declaration and has no
+    // name span of its own to point at, and whether it can contain itself is decided by
+    // the definitions it applies: `nazm_sema::UserTypes::ownership_cycles` says how.
+    let cycles = res.types().ownership_cycles();
     let mut reported: Vec<TypeNode> = Vec::new();
-    for node in &nodes {
-        if reported.contains(node) {
-            continue;
-        }
-        let Some(cycle) = res.types().layout_cycle(*node) else {
+    for cycle in &cycles {
+        reported.extend(cycle.through.iter().copied());
+        let Some(first) = cycle.through.first().copied() else {
             continue;
         };
-        // One diagnostic per cycle, not one per definition in it.
-        reported.extend(cycle.through.iter().copied());
-        let names: Vec<&str> = cycle
+        let Some(start_span) = node_span(res, first) else {
+            continue;
+        };
+        let names: Vec<String> = cycle
             .through
             .iter()
             .map(|n| res.types().show(n.ty()))
             .collect();
-        let Some((field_span, start_span)) =
-            closing_field(res, &cycle.via).zip(node_span(res, *node))
-        else {
-            continue;
-        };
-        let start = res.types().show(node.ty());
-        let message = if names.len() == 2 {
-            format!("`{start}` contains itself")
-        } else {
-            format!("`{start}` contains itself through {}", names.join(" → "))
-        };
-        errors.push(
-            Diagnostic::error(codes::RECURSIVE_RECORD, start_span, message)
-                .secondary(field_span, "this field closes the cycle")
-                .help(
+        let start = res.types().show(first.ty());
+        let closing = cycle.hops.last().and_then(|via| closing_field(res, via));
+        let d = match cycle.reach {
+            nazm_sema::Reach::Inline => {
+                let message = if names.len() == 2 {
+                    format!("`{start}` contains itself")
+                } else {
+                    format!("`{start}` contains itself through {}", names.join(" → "))
+                };
+                Diagnostic::error(codes::RECURSIVE_RECORD, start_span, message).help(
                     "a record holds its fields by value and an enum holds its active \
                      payload by value, so this one would have no finite size. This is an \
                      impossible layout rather than a safety problem: a later type that \
                      holds its contents somewhere else would make the same shape \
                      expressible",
-                ),
-        );
+                )
+            }
+            nazm_sema::Reach::Counted => {
+                let path = cycle
+                    .hops
+                    .iter()
+                    .map(|via| hop_name(res, via))
+                    .chain(std::iter::once(start.clone()))
+                    .collect::<Vec<_>>()
+                    .join(" → ");
+                Diagnostic::error(
+                    codes::OWNERSHIP_CYCLE,
+                    start_span,
+                    format!("`{start}` can own itself through a `Vec`: {path}"),
+                )
+                .help(
+                    "a `Vec` holds its elements through a reference-counted handle, so this \
+                     layout is finite — but a value of it could hold a `Vec` containing \
+                     itself, and no count would ever reach zero. Nazm refuses such an \
+                     ownership cycle rather than leak it. Store the children somewhere that \
+                     does not own them: an index into a `Vec` owned outside the type",
+                )
+            }
+        };
+        errors.push(match closing {
+            Some(at) => d.secondary(at, "this field closes the cycle"),
+            None => d,
+        });
     }
 
-    // Depth is only meaningful once there is no cycle to walk forever.
+    // Depth is only meaningful once there is no cycle to walk forever, and it is asked of
+    // declarations: an applied type's depth is its definition's with its arguments filled.
+    let nodes: Vec<TypeNode> = (0..res.records().len())
+        .map(|i| TypeNode::Record(RecordId::from_index(i)))
+        .filter(|n| is_declaration(res, *n))
+        .chain(
+            (0..res.enums().len())
+                .map(|i| TypeNode::Enum(EnumId::from_index(i)))
+                .filter(|n| is_declaration(res, *n)),
+        )
+        .collect();
     for node in &nodes {
         if reported.contains(node) {
             continue;
@@ -856,6 +990,41 @@ pub fn validate_type_layouts(res: &mut Resolution, errors: &mut Vec<Diagnostic>)
                 ),
             );
         }
+    }
+}
+
+/// Whether a table entry is a definition as written, rather than an application of one.
+fn is_declaration(res: &Resolution, node: TypeNode) -> bool {
+    match node {
+        TypeNode::Record(id) => res.records().get(id).is_some_and(|d| d.instance.is_none()),
+        TypeNode::Enum(id) => res.enums().get(id).is_some_and(|d| d.instance.is_none()),
+    }
+}
+
+/// One hop of an ownership path, as a reader would find it: `Node.children`, or
+/// `Tree.Branch.kids` for a payload field.
+fn hop_name(res: &Resolution, via: &nazm_sema::CycleEdge) -> String {
+    match (via.from, via.variant) {
+        (TypeNode::Record(id), _) => res
+            .records()
+            .get(id)
+            .and_then(|d| {
+                d.fields
+                    .get(via.field as usize)
+                    .map(|f| format!("{}.{}", d.name, f.name))
+            })
+            .unwrap_or_default(),
+        (TypeNode::Enum(id), Some(v)) => res
+            .enums()
+            .get(id)
+            .and_then(|d| {
+                let vd = d.variants.get(v as usize)?;
+                vd.fields
+                    .get(via.field as usize)
+                    .map(|f| format!("{}.{}.{}", d.name, vd.name, f.name))
+            })
+            .unwrap_or_default(),
+        (TypeNode::Enum(_), None) => String::new(),
     }
 }
 
@@ -1025,8 +1194,10 @@ fn user_type_span(res: &Resolution, t: Type) -> Option<Span> {
 /// A type name, against the built-ins and then this module's visible types.
 ///
 /// Built-ins first and unshadowable, which is why they are matched before the map is
-/// consulted rather than being put in it.
-fn resolve_type_in(
+/// consulted rather than being put in it. A name alone: whether a generic definition may be
+/// named without its arguments is the caller's question, because a construction's head and a
+/// pattern may and a field's type may not.
+fn resolve_name(
     types: &Types,
     res: &Resolution,
     name: &str,
@@ -1068,6 +1239,162 @@ fn resolve_type_in(
     Type::Int
 }
 
+/// A written type, resolved: its name, its arguments, and the application they make.
+///
+/// Where a type is written in full — a field, a parameter, a return, a type argument. A
+/// type parameter in `scope` shadows every other name; `Vec` is the one generic built-in;
+/// and a generic definition must be written with exactly as many arguments as it declares.
+/// The bound on how deeply a written type may nest is checked once, at the top.
+fn resolve_written(
+    types: &Types,
+    res: &mut Resolution,
+    written: &TypeName,
+    scope: &[(String, Type)],
+    errors: &mut Vec<Diagnostic>,
+) -> Type {
+    let t = resolve_written_inner(types, res, written, scope, errors);
+    if res.types().nesting(t) > MAX_TYPE_DEPTH {
+        errors.push(
+            Diagnostic::error(
+                codes::TYPE_NESTING_TOO_DEEP,
+                written.span,
+                format!("types may nest {MAX_TYPE_DEPTH} deep"),
+            )
+            .help(
+                "each level multiplies the copy and cleanup code generated for every value \
+                 of the outer type, so the bound is on the emitted program rather than on \
+                 the compiler. It is stated rather than discovered",
+            ),
+        );
+        return Type::Int;
+    }
+    t
+}
+
+fn resolve_written_inner(
+    types: &Types,
+    res: &mut Resolution,
+    written: &TypeName,
+    scope: &[(String, Type)],
+    errors: &mut Vec<Diagnostic>,
+) -> Type {
+    let args: Option<Vec<Type>> = written.args.as_ref().map(|a| {
+        a.iter()
+            .map(|w| resolve_written_inner(types, res, w, scope, errors))
+            .collect()
+    });
+    if let Some((_, t)) = scope.iter().find(|(n, _)| *n == written.name) {
+        if args.is_some() {
+            errors.push(not_generic(&written.name, "a type parameter", written.span));
+        }
+        return *t;
+    }
+    if written.name == VEC {
+        let Some(args) = args else {
+            errors.push(
+                Diagnostic::error(
+                    codes::MISSING_TYPE_ARGUMENTS,
+                    written.name_span,
+                    "`Vec` is written with its element type",
+                )
+                .help("a vector of `Int` is `Vec[Int]`; `Vec` alone is not a type"),
+            );
+            return Type::Int;
+        };
+        if args.len() != 1 {
+            errors.push(wrong_arity("Vec", 1, args.len(), written.span));
+        }
+        let elem = args.first().copied().unwrap_or(Type::Int);
+        return res.types_mut().vec_of(elem);
+    }
+    let t = resolve_name(types, res, &written.name, written.name_span, errors);
+    if Type::from_name(&written.name).is_some() {
+        if args.is_some() {
+            errors.push(not_generic(&written.name, "a built-in type", written.span));
+        }
+        return t;
+    }
+    let Some(node) = TypeNode::of(t) else {
+        return t;
+    };
+    let arity = res.types().declared_params(node);
+    match (args, arity) {
+        (None, 0) => t,
+        (None, n) => {
+            let shown = res.types().show(t);
+            errors.push(
+                Diagnostic::error(
+                    codes::MISSING_TYPE_ARGUMENTS,
+                    written.name_span,
+                    format!(
+                        "`{shown}` is generic, so it is written with its {n} type argument{}",
+                        if n == 1 { "" } else { "s" }
+                    ),
+                )
+                .secondary(
+                    user_type_span(res, t).unwrap_or(written.name_span),
+                    "declared here",
+                )
+                .help(format!(
+                    "write `{shown}[…]` with {n} type{}",
+                    if n == 1 { "" } else { "s" }
+                )),
+            );
+            Type::Int
+        }
+        (Some(_), 0) => {
+            let shown = res.types().show(t);
+            errors.push(not_generic(&shown, "not generic", written.span));
+            t
+        }
+        (Some(mut args), n) => {
+            if args.len() != n {
+                errors.push(wrong_arity(
+                    &res.types().show(t),
+                    n,
+                    args.len(),
+                    written.span,
+                ));
+                args.resize(n, Type::Int);
+            }
+            apply(res, node, args)
+        }
+    }
+}
+
+/// A generic definition applied to its arguments, interned.
+fn apply(res: &mut Resolution, node: TypeNode, args: Vec<Type>) -> Type {
+    match node {
+        TypeNode::Record(id) => res.types_mut().apply_record(id, args),
+        TypeNode::Enum(id) => res.types_mut().apply_enum(id, args),
+    }
+}
+
+/// `N0351`: type arguments written on something that takes none.
+fn not_generic(name: &str, what: &str, at: Span) -> Diagnostic {
+    let why = if what == "not generic" {
+        format!("`{name}` is not generic, so it takes no type arguments")
+    } else {
+        format!("`{name}` is {what}, so it takes no type arguments")
+    };
+    Diagnostic::error(codes::TYPE_ARGUMENTS_ON_NON_GENERIC, at, why)
+        .help("only a definition that declares type parameters is applied to type arguments")
+}
+
+/// `N0353`: the wrong number of type arguments.
+fn wrong_arity(name: &str, want: usize, got: usize, at: Span) -> Diagnostic {
+    Diagnostic::error(
+        codes::WRONG_TYPE_ARGUMENT_COUNT,
+        at,
+        format!(
+            "`{name}` takes {want} type argument{}, but {got} {} given",
+            if want == 1 { "" } else { "s" },
+            if got == 1 { "was" } else { "were" }
+        ),
+    )
+    .help("a generic definition is applied to exactly as many types as it declares")
+}
+
 /// Stage 1 for one module: declare what it defines, and say what it offers.
 ///
 /// Reads this module's declarations and nothing else — no other module's source, no other
@@ -1083,12 +1410,18 @@ pub fn declare_unit(
     let mut exports = Vec::new();
 
     for (decl, f) in &unit.functions {
+        // A generic function's parameter types mention its own parameters, and a parameter
+        // names its owner — so the id comes first. Nothing else declares a function between
+        // here and the `declare` below, so the id this one would get is known now.
+        let id = res.next_function();
+        let generics = declared_type_params(&f.type_params, errors);
+        let scope = param_scope(&f.type_params, ParamOwner::Function(id));
         let params: Vec<Type> = f
             .params
             .iter()
-            .map(|p| resolve_type_in(&types, res, &p.ty.name, p.ty.span, errors))
+            .map(|p| resolve_written(&types, res, &p.ty, &scope, errors))
             .collect();
-        let ret = resolve_type_in(&types, res, &f.return_type.name, f.return_type.span, errors);
+        let ret = resolve_written(&types, res, &f.return_type, &scope, errors);
 
         // A built-in has no source span to point at, so "first defined here" would aim
         // at byte zero. Said plainly instead. Built-ins are not a module's definitions,
@@ -1126,7 +1459,7 @@ pub fn declare_unit(
         }
 
         let visibility = Visibility::from_keyword(f.pub_span);
-        let id = res.declare(FnDef {
+        let declared = res.declare(FnDef {
             name: f.name.clone(),
             module: unit.module,
             visibility,
@@ -1135,7 +1468,13 @@ pub fn declare_unit(
             name_span: f.name_span,
             decl: *decl,
             locals: Vec::new(),
+            type_params: generics.clone(),
+            call_sites: Vec::new(),
+            mentions: Vec::new(),
         });
+        debug_assert_eq!(declared, id);
+        res.types_mut()
+            .name_params(ParamOwner::Function(id), generics.clone());
 
         if visibility.is_exported() {
             // A public signature naming a private record would publish a type the
@@ -1157,6 +1496,7 @@ pub fn declare_unit(
                 ret,
                 name_span: f.name_span,
                 def: id,
+                type_params: generics,
             });
         }
     }
@@ -1266,16 +1606,33 @@ fn report_private_type(
     res: &Resolution,
     errors: &mut Vec<Diagnostic>,
 ) {
-    let (private_name, declared_at) = match t {
-        Type::Record(id) => match res.records().get(id) {
-            Some(d) if !d.visibility.is_exported() => (d.name.clone(), d.name_span),
-            _ => return,
-        },
-        Type::Enum(id) => match res.enums().get(id) {
-            Some(d) if !d.visibility.is_exported() => (d.name.clone(), d.name_span),
-            _ => return,
-        },
-        _ => return,
+    // Anywhere in the written type, since N11: `Box[Secret]` exposes `Secret` exactly as a
+    // field of type `Secret` would. The first private definition found is reported, once —
+    // one written type is one mistake.
+    let mut work = vec![t];
+    let mut found: Option<(String, Span)> = None;
+    while let Some(t) = work.pop() {
+        work.extend(res.types().type_args(t));
+        let private = match res.types().definition_of(t) {
+            Some(TypeNode::Record(id)) => res
+                .records()
+                .get(id)
+                .filter(|d| !d.visibility.is_exported())
+                .map(|d| (d.name.clone(), d.name_span)),
+            Some(TypeNode::Enum(id)) => res
+                .enums()
+                .get(id)
+                .filter(|d| !d.visibility.is_exported())
+                .map(|d| (d.name.clone(), d.name_span)),
+            None => None,
+        };
+        if private.is_some() {
+            found = private;
+            break;
+        }
+    }
+    let Some((private_name, declared_at)) = found else {
+        return;
     };
     errors.push(
         Diagnostic::error(
@@ -1305,10 +1662,10 @@ pub fn check_unit(
     errors: &mut Vec<Diagnostic>,
 ) {
     let env = environment(unit, deps, res, errors);
+    let types = type_environment(unit, deps, res, errors, Collisions::Silent);
     // Built from `deps` rather than from a graph, so the one path that checks a module
     // against persisted interfaces resolves type names by exactly the rule the
     // whole-program path uses. Two builders would be two rules.
-    let types = type_environment(unit, deps, res, errors, Collisions::Silent);
     let imports = unit.imports.iter().map(|d| d.on).collect();
     let mut c = Checker {
         res,
@@ -1322,6 +1679,7 @@ pub fn check_unit(
         return_type: None,
         scope_depth: 0,
         loop_depth: 0,
+        type_scope: Vec::new(),
     };
     for (_, f) in &unit.functions {
         c.check_function(f);
@@ -1336,7 +1694,7 @@ pub fn check_unit(
 fn environment(
     unit: &Unit<'_>,
     deps: &[&UnitInterface],
-    res: &Resolution,
+    res: &mut Resolution,
     errors: &mut Vec<Diagnostic>,
 ) -> Env {
     let mut names: HashMap<String, Visible> = HashMap::new();
@@ -1346,13 +1704,29 @@ fn environment(
     // call, and `str_len(s)` should resolve by the same rule as any other. They belong to
     // no module, so every module has all of them.
     for i in Intrinsic::ALL {
+        // The table's shapes become types here, once: `Vec[T]` is interned, so it cannot
+        // be written in a `const`. `T` is the built-in's own parameter.
+        let owner = ParamOwner::Builtin(i);
+        let t = Type::Param(TypeParam { owner, index: 0 });
+        let mut shape = |s: Shape| match s.monomorphic() {
+            Some(m) => m,
+            None if s == Shape::T => t,
+            None => res.types_mut().vec_of(t),
+        };
+        let params: Vec<Type> = i.params().iter().map(|s| shape(*s)).collect();
+        let ret = shape(i.ret());
+        if i.generics() > 0 {
+            res.types_mut().name_params(owner, vec!["T".to_owned()]);
+        }
         names.insert(
             i.name().to_owned(),
             Visible {
                 sig: Signature {
-                    params: i.params().to_vec(),
-                    ret: i.ret(),
+                    params,
+                    ret,
                     name_span: Span::synthetic(),
+                    generics: i.generics(),
+                    owner: (i.generics() > 0).then_some(owner),
                 },
                 callee: Callee::Builtin(i),
             },
@@ -1374,6 +1748,8 @@ fn environment(
                     params: def.params.clone(),
                     ret: def.ret,
                     name_span: def.name_span,
+                    generics: u32::try_from(def.type_params.len()).unwrap_or(u32::MAX),
+                    owner: (!def.type_params.is_empty()).then_some(ParamOwner::Function(id)),
                 },
                 callee: Callee::Function(id),
             },
@@ -1435,6 +1811,8 @@ fn environment(
                         params: e.params.clone(),
                         ret: e.ret,
                         name_span: e.name_span,
+                        generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),
+                        owner: (!e.type_params.is_empty()).then_some(ParamOwner::Function(e.def)),
                     },
                     callee: Callee::Function(e.def),
                 },
@@ -1443,6 +1821,75 @@ fn environment(
     }
 
     Env { names }
+}
+
+/// Where a type argument came from, when it was written rather than inferred.
+const WRITTEN: usize = usize::MAX;
+
+/// Why an argument's type could not be matched against its declared type.
+#[derive(Debug, Clone, Copy)]
+enum Unify {
+    /// A parameter already settled to another type.
+    Conflict {
+        param: TypeParam,
+        earlier: Type,
+        from: usize,
+    },
+    /// The shapes differ: a `Vec` where the signature wants a record, say.
+    Mismatch,
+}
+
+/// The arguments settled so far, with each unsettled parameter left as itself — so that
+/// substituting them into a declared type says what is known and nothing more.
+fn settled_args(solved: &[Option<(Type, usize)>], owner: ParamOwner) -> Vec<Type> {
+    solved
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            s.map_or(
+                Type::Param(TypeParam {
+                    owner,
+                    index: u32::try_from(i).unwrap_or(u32::MAX),
+                }),
+                |(t, _)| t,
+            )
+        })
+        .collect()
+}
+
+/// Mark every parameter of `owner` that `formal` mentions as already accounted for.
+fn excuse(types: &nazm_sema::UserTypes, formal: Type, owner: ParamOwner, excused: &mut [bool]) {
+    let mut work = vec![formal];
+    while let Some(t) = work.pop() {
+        if let Type::Param(p) = t {
+            if p.owner == owner {
+                if let Some(slot) = excused.get_mut(p.index as usize) {
+                    *slot = true;
+                }
+            }
+        }
+        work.extend(types.type_args(t));
+    }
+}
+
+/// What `actual` says `param` is, by matching it against `formal` — for the message that
+/// reports a conflict, which should name the type the argument implies rather than the
+/// argument's whole type.
+fn inferred_from(
+    types: &nazm_sema::UserTypes,
+    formal: Type,
+    actual: Type,
+    param: TypeParam,
+) -> Option<Type> {
+    match formal {
+        Type::Param(p) if p == param => Some(actual),
+        Type::Vec(_) | Type::Record(_) | Type::Enum(_) => types
+            .type_args(formal)
+            .into_iter()
+            .zip(types.type_args(actual))
+            .find_map(|(f, a)| inferred_from(types, f, a, param)),
+        _ => None,
+    }
 }
 
 /// A list of names, quoted, for a diagnostic that has to name several.
@@ -1465,6 +1912,7 @@ impl Checker<'_> {
         let Some(id) = self.current else {
             return 0;
         };
+        self.res.record_mention(id, ty);
         self.res
             .bind(
                 id,
@@ -1557,15 +2005,109 @@ impl Checker<'_> {
     /// record spells its declared name, which is not its identity — two modules may each
     /// declare `Thing`, and a message that says `Thing` is right about what was written.
     fn show(&self, t: Type) -> String {
-        self.res.types().show(t).to_owned()
+        self.res.types().show(t)
     }
 
+    /// The definition a name written as a construction's head or a pattern's enum refers
+    /// to — the **definition**, not a type: `Maybe` in `Maybe.Some(value: x)` names the
+    /// generic enum whose instance the scrutinee already is, and `Pair` in
+    /// `Pair[Int, Str](…)` is applied by its arguments afterwards.
     fn resolve_type(&mut self, name: &str, span: Span) -> Type {
         // Split borrow: the environment and the error list are both behind `self`.
         let mut errors = std::mem::take(&mut self.errors);
-        let t = resolve_type_in(&self.types, self.res, name, span, &mut errors);
+        let t = if let Some((_, p)) = self.type_scope.iter().find(|(n, _)| n == name) {
+            *p
+        } else {
+            resolve_name(&self.types, self.res, name, span, &mut errors)
+        };
         self.errors = errors;
         t
+    }
+
+    /// A type in the current function's signature, resolved again to the same answer
+    /// stage 1 reached — **silently**, because stage 1 already reported whatever was wrong
+    /// with it, and one mistake is one error. Before N11 an unknown parameter type was
+    /// reported twice, once here and once there.
+    fn signature_type(&mut self, written: &TypeName) -> Type {
+        let mut discarded = Vec::new();
+        let scope = std::mem::take(&mut self.type_scope);
+        let t = resolve_written(&self.types, self.res, written, &scope, &mut discarded);
+        self.type_scope = scope;
+        t
+    }
+
+    /// A type written in full inside a body — a type argument — in the current function's
+    /// parameter scope.
+    fn resolve_written_type(&mut self, written: &TypeName) -> Type {
+        let mut errors = std::mem::take(&mut self.errors);
+        let scope = std::mem::take(&mut self.type_scope);
+        let t = resolve_written(&self.types, self.res, written, &scope, &mut errors);
+        self.type_scope = scope;
+        self.errors = errors;
+        t
+    }
+
+    /// Resolve explicit type arguments written at a use of a generic definition, and apply
+    /// the definition to them — `Pair[Int, Str]` from `Pair` and `[Int, Str]`.
+    ///
+    /// The rules every type position has: a generic definition is written with its
+    /// arguments (`N0352`), a non-generic one without (`N0351`), and exactly as many as it
+    /// declares (`N0353`). `at` is the name the arguments follow.
+    ///
+    /// `None` where the arguments were missing, so the caller checks what it can without a
+    /// type to check it against rather than against one invented here.
+    fn applied(&mut self, def: Type, written: Option<&[TypeName]>, at: Span) -> Option<Type> {
+        let args: Option<Vec<Type>> =
+            written.map(|w| w.iter().map(|t| self.resolve_written_type(t)).collect());
+        let Some(node) = TypeNode::of(def) else {
+            return Some(def);
+        };
+        let arity = self.res.types().declared_params(node);
+        match (args, arity) {
+            (None, 0) => Some(def),
+            (Some(_), 0) => {
+                let shown = self.show(def);
+                self.errors.push(not_generic(&shown, "not generic", at));
+                Some(def)
+            }
+            (None, n) => {
+                let shown = self.show(def);
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::MISSING_TYPE_ARGUMENTS,
+                        at,
+                        format!(
+                            "`{shown}` is generic, so it is built with its {n} type argument{} \
+                             written",
+                            if n == 1 { "" } else { "s" }
+                        ),
+                    )
+                    .help(format!(
+                        "write them after the name: `{shown}[…]`. A construction infers \
+                         nothing"
+                    )),
+                );
+                None
+            }
+            (Some(mut args), n) => {
+                if args.len() != n {
+                    let shown = self.show(def);
+                    self.errors.push(wrong_arity(&shown, n, args.len(), at));
+                    args.resize(n, Type::Int);
+                }
+                let t = apply(self.res, node, args);
+                self.mention(t);
+                Some(t)
+            }
+        }
+    }
+
+    /// Note that the body being checked mentions a type, for the native instance planner.
+    /// Only a generic body records anything: a monomorphic one needs no substitution.
+    fn mention(&mut self, t: Type) {
+        if let Some(id) = self.current {
+            self.res.record_mention(id, t);
+        }
     }
 
     /// Which record a type name written in an expression refers to, if it is one.
@@ -1593,6 +2135,20 @@ impl Checker<'_> {
                     d = d.help(format!("write `{name}.{v}(…)`"));
                 }
                 self.errors.push(d);
+                None
+            }
+            Type::Param(_) => {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNKNOWN_FIELD,
+                        span,
+                        format!("`{name}` is a type parameter, so it has no fields to name"),
+                    )
+                    .help(
+                        "nothing is known about a type parameter inside its definition, so \
+                         there is no record to build",
+                    ),
+                );
                 None
             }
             other => {
@@ -1633,6 +2189,17 @@ impl Checker<'_> {
                 );
                 None
             }
+            Type::Param(_) => {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNKNOWN_VARIANT,
+                        span,
+                        format!("`{name}` is a type parameter, so it has no variants"),
+                    )
+                    .help("only an `enum` has variants, and nothing is known about a parameter"),
+                );
+                None
+            }
             other => {
                 if Type::from_name(name).is_some() {
                     let shown = self.show(other);
@@ -1659,10 +2226,14 @@ impl Checker<'_> {
         &mut self,
         ty: &str,
         ty_span: Span,
+        type_args: Option<&[TypeName]>,
         fields: &[FieldInit],
         span: Span,
     ) -> Option<Type> {
-        let Some(id) = self.resolve_record(ty, ty_span) else {
+        let applied = self
+            .resolve_record(ty, ty_span)
+            .and_then(|def| self.applied(Type::Record(def), type_args, ty_span));
+        let Some(Type::Record(id)) = applied else {
             // Still check the initialisers: one unknown type should not silence every
             // error inside it.
             for f in fields {
@@ -1761,16 +2332,21 @@ impl Checker<'_> {
     /// The same law as a record construction, applied to the fields of one variant: every
     /// payload field exactly once, by name, with no unknown field and no duplicate, and
     /// initialisers checked **in the order written** because that is the order they run in.
+    #[allow(clippy::too_many_arguments)]
     fn check_variant(
         &mut self,
         ty: &str,
         ty_span: Span,
+        type_args: Option<&[TypeName]>,
         variant: &str,
         variant_span: Span,
         fields: &[FieldInit],
         span: Span,
     ) -> Option<Type> {
-        let Some(id) = self.resolve_enum(ty, ty_span) else {
+        let applied = self
+            .resolve_enum(ty, ty_span)
+            .and_then(|def| self.applied(Type::Enum(def), type_args, ty_span));
+        let Some(Type::Enum(id)) = applied else {
             // Still check the initialisers: one unknown type should not silence every
             // error inside it.
             for f in fields {
@@ -1920,7 +2496,10 @@ impl Checker<'_> {
                 unresolved = true;
                 continue;
             };
-            if named != id {
+            // The enum a pattern names is a **definition**: `Maybe.Some(…)` against a
+            // `Maybe[Int]` names the enum it is an instance of, and the scrutinee supplies
+            // the arguments. A different definition is still another enum's variant.
+            if self.res.types().definition_of(sty) != Some(TypeNode::Enum(named)) {
                 let (want, got) = (self.show(sty), self.show(Type::Enum(named)));
                 self.errors.push(
                     Diagnostic::error(
@@ -2252,9 +2831,15 @@ impl Checker<'_> {
         // Looked up in **this module's** table. Before N2 the name alone was enough,
         // which is the same thing as saying a name meant one function in the program.
         self.current = self.res.definition(self.module, &f.name);
+        // The function's own type parameters are in scope for every type written inside
+        // it, and in no other function.
+        self.type_scope = self
+            .current
+            .map(|id| param_scope(&f.type_params, ParamOwner::Function(id)))
+            .unwrap_or_default();
         self.scopes.push();
         for p in &f.params {
-            let ty = self.resolve_type(&p.ty.name, p.ty.span);
+            let ty = self.signature_type(&p.ty);
             if self.scopes.defined_here(&p.name) {
                 self.errors.push(Diagnostic::error(
                     codes::ALREADY_DEFINED_IN_SCOPE,
@@ -2271,7 +2856,7 @@ impl Checker<'_> {
             self.scopes.define(&p.name, ty, false, None, slot);
         }
 
-        let declared = self.resolve_type(&f.return_type.name, f.return_type.span);
+        let declared = self.signature_type(&f.return_type);
         let Some(body) = &f.body else {
             // The body failed to parse; the parse error is already reported. Anything
             // said about statements that were never built would be about the parser's
@@ -2486,6 +3071,31 @@ impl Checker<'_> {
             return;
         };
 
+        // A task runs one function with one signature. A generic one would need its type
+        // arguments settled at the `spawn`, which N11 does not do: `docs/spec.md`, *Calling a
+        // generic function*.
+        if sig.generics > 0 {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::UNSUPPORTED_CONSTRUCT,
+                    s.callee_span,
+                    format!(
+                        "`spawn {}` runs a generic function, which is not supported yet",
+                        s.callee
+                    ),
+                )
+                .help(
+                    "a task runs a function that is not generic. Spawn a non-generic wrapper \
+                     that calls the generic one",
+                ),
+            );
+            for a in &s.args {
+                self.check_expr(a, None);
+            }
+            return;
+        }
+        self.record_site(s.callee_span, Vec::new(), true);
+
         if s.args.len() != sig.params.len() {
             self.errors.push(
                 Diagnostic::error(
@@ -2541,9 +3151,10 @@ impl Checker<'_> {
                 };
                 self.errors.push(
                     Diagnostic::error(codes::ILLEGAL_TASK_CAPTURE, a.span(), message).help(
-                        "`Ints` and `Strs` are handles to shared mutable storage with no \
-                         synchronisation, and a record or enum containing one at any depth \
-                         inherits that. For an enum it is every variant that counts, not \
+                        "`Ints`, `Strs` and every `Vec[T]` are handles to shared mutable \
+                         storage with no synchronisation, and a record or enum containing \
+                         one at any depth inherits that — as does a type parameter, about \
+                         which nothing is known. For an enum it is every variant that counts, not \
                          the one the value currently holds: what a task is given is a \
                          value of a type, and the guarantee is about the type. Pass \
                          `Int`, `Bool` or `Str` values, a `Chan`, or a record or enum \
@@ -2848,6 +3459,7 @@ impl Checker<'_> {
             Expr::Call {
                 callee,
                 callee_span,
+                type_args,
                 args,
                 span,
             } => {
@@ -2883,6 +3495,23 @@ impl Checker<'_> {
                     );
                 }
 
+                if sig.generics > 0 {
+                    let ret = self.check_generic_call(
+                        callee,
+                        *callee_span,
+                        type_args.as_deref(),
+                        args,
+                        *span,
+                        &sig,
+                    );
+                    return Completion::Value(ret);
+                }
+                if type_args.is_some() {
+                    self.errors
+                        .push(not_generic(callee, "not generic", *callee_span));
+                }
+                self.record_site(*callee_span, Vec::new(), false);
+
                 // Left to right, matching the evaluation order the spec fixes.
                 for (i, a) in args.iter().enumerate() {
                     let want = sig.params.get(i).copied();
@@ -2908,9 +3537,10 @@ impl Checker<'_> {
             Expr::Construct {
                 ty,
                 ty_span,
+                type_args,
                 fields,
                 span,
-            } => match self.check_construction(ty, *ty_span, fields, *span) {
+            } => match self.check_construction(ty, *ty_span, type_args.as_deref(), fields, *span) {
                 Some(t) => Completion::Value(t),
                 // The type did not resolve, and that is already reported. `Int` is what
                 // every unresolved type continues as, so no second error is raised here.
@@ -2920,11 +3550,20 @@ impl Checker<'_> {
             Expr::Variant {
                 ty,
                 ty_span,
+                type_args,
                 variant,
                 variant_span,
                 fields,
                 span,
-            } => match self.check_variant(ty, *ty_span, variant, *variant_span, fields, *span) {
+            } => match self.check_variant(
+                ty,
+                *ty_span,
+                type_args.as_deref(),
+                variant,
+                *variant_span,
+                fields,
+                *span,
+            ) {
                 Some(t) => Completion::Value(t),
                 None => Completion::Value(expected.unwrap_or(Type::Int)),
             },
@@ -3032,6 +3671,287 @@ impl Checker<'_> {
         }
     }
 
+    /// Record one call of the body being checked, for the native backend's planner.
+    fn record_site(&mut self, at: Span, type_args: Vec<Type>, spawned: bool) {
+        let (Some(id), Some(callee)) = (self.current, self.res.callee(at)) else {
+            return;
+        };
+        self.res.record_call_site(
+            id,
+            CallSite {
+                span: at,
+                callee,
+                type_args,
+                spawned,
+            },
+        );
+    }
+
+    /// A call to a generic function: settle its type arguments, check its arguments
+    /// against them, and return what it produces.
+    ///
+    /// The arguments are **written** or **inferred from the arguments**, and nothing
+    /// else — the expected result type never takes part, which is what keeps a call's
+    /// meaning visible in the call (`docs/spec.md`, *Calling a generic function*). Left to
+    /// right: an argument whose declared type is already fully known is checked against
+    /// it, exactly as a monomorphic call's is, and one whose declared type still mentions
+    /// an unsettled parameter is unified with it.
+    fn check_generic_call(
+        &mut self,
+        name: &str,
+        at: Span,
+        written: Option<&[TypeName]>,
+        args: &[Expr],
+        span: Span,
+        sig: &Signature,
+    ) -> Type {
+        let Some(owner) = sig.owner else {
+            return sig.ret;
+        };
+        let n = sig.generics as usize;
+        // Each parameter's argument, and where it came from: an argument's index, or
+        // `WRITTEN` for an explicit one.
+        let mut solved: Vec<Option<(Type, usize)>> = vec![None; n];
+        let mut explicit = false;
+        // Parameters an argument already failed on. One mistake is one error: an argument
+        // of the wrong shape is reported as a mismatch, and the parameters its declared
+        // type mentions are not reported again as uninferable.
+        let mut excused: Vec<bool> = vec![false; n];
+        if let Some(written) = written {
+            let resolved: Vec<Type> = written
+                .iter()
+                .map(|w| self.resolve_written_type(w))
+                .collect();
+            if resolved.len() == n {
+                for (slot, t) in solved.iter_mut().zip(resolved) {
+                    *slot = Some((t, WRITTEN));
+                }
+                explicit = true;
+            } else {
+                self.errors.push(wrong_arity(name, n, resolved.len(), at));
+            }
+        }
+
+        for (i, a) in args.iter().enumerate() {
+            let Some(formal) = sig.params.get(i).copied() else {
+                self.check_expr(a, None);
+                continue;
+            };
+            // Checked against its declared type — as a monomorphic call's argument is — when
+            // that type is fully known: it mentions no parameter, or every parameter was
+            // **written**. A parameter settled by an earlier argument is not "written": the
+            // two arguments are unified, so that `same(1, "x")` is a conflict between them
+            // rather than the second one read against what the first one happened to say.
+            if explicit || !self.res.types().mentions(formal, owner) {
+                let now = settled_args(&solved, owner);
+                let want = self.res.types_mut().substitute(formal, owner, &now);
+                let got = self.value_type(a, Some(want));
+                if got != want {
+                    self.errors.push(Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        a.span(),
+                        format!(
+                            "argument {} of `{name}` is `{}`, but this is `{}`",
+                            i + 1,
+                            self.show(want),
+                            self.show(got)
+                        ),
+                    ));
+                }
+                continue;
+            }
+            // What is already known is the expectation — for recovery only: it is what an
+            // argument that never produces a value stands in for, and it never settles a
+            // parameter.
+            let expected = solved.iter().all(Option::is_some).then(|| {
+                let now = settled_args(&solved, owner);
+                self.res.types_mut().substitute(formal, owner, &now)
+            });
+            match self.check_expr(a, expected) {
+                Completion::Value(got) => match self.unify(formal, got, owner, &mut solved, i) {
+                    Ok(()) => {}
+                    Err(Unify::Conflict {
+                        param,
+                        earlier,
+                        from,
+                    }) => {
+                        let p = self.res.types().param_name(param);
+                        let earlier = self.show(earlier);
+                        let source = if from == WRITTEN {
+                            "the written type arguments".to_owned()
+                        } else {
+                            format!("argument {}", from + 1)
+                        };
+                        let implied =
+                            inferred_from(self.res.types(), formal, got, param).unwrap_or(got);
+                        let implied = self.show(implied);
+                        self.errors.push(
+                            Diagnostic::error(
+                                codes::CONFLICTING_TYPE_ARGUMENTS,
+                                a.span(),
+                                format!(
+                                    "`{p}` is `{earlier}` from {source}, but argument {} makes \
+                                     it `{implied}`",
+                                    i + 1
+                                ),
+                            )
+                            .help(format!(
+                                "every use of `{p}` in `{name}`'s signature is one type. \
+                                 Inference does not choose the first and convert the rest"
+                            )),
+                        );
+                    }
+                    Err(Unify::Mismatch) => {
+                        excuse(self.res.types(), formal, owner, &mut excused);
+                        let partial = settled_args(&solved, owner);
+                        let want = self.res.types_mut().substitute(formal, owner, &partial);
+                        self.errors.push(Diagnostic::error(
+                            codes::TYPE_MISMATCH,
+                            a.span(),
+                            format!(
+                                "argument {} of `{name}` is `{}`, but this is `{}`",
+                                i + 1,
+                                self.show(want),
+                                self.show(got)
+                            ),
+                        ));
+                    }
+                },
+                Completion::Unit => {
+                    excuse(self.res.types(), formal, owner, &mut excused);
+                    self.errors.push(
+                        Diagnostic::error(codes::TYPE_MISMATCH, a.span(), "this produces no value")
+                            .help(
+                                "an `if` used as a value needs an `else`, and a block used as \
+                                 one needs a final expression with no `;` after it",
+                            ),
+                    );
+                }
+                // An argument that never produces a value says nothing about a type.
+                Completion::Diverges => {}
+            }
+        }
+
+        let missing: Vec<String> = solved
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| s.is_none() && !excused.get(*i).copied().unwrap_or(false))
+            .map(|(i, _)| {
+                self.res.types().param_name(TypeParam {
+                    owner,
+                    index: u32::try_from(i).unwrap_or(u32::MAX),
+                })
+            })
+            .collect();
+        if !missing.is_empty() {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::CANNOT_INFER_TYPE_ARGUMENT,
+                    at,
+                    format!(
+                        "nothing in this call to `{name}` says what {} {}",
+                        quoted(&missing),
+                        if missing.len() == 1 { "is" } else { "are" }
+                    ),
+                )
+                .secondary(sig.name_span, "declared here")
+                .help(format!(
+                    "a type argument is inferred from the arguments and never from what the \
+                     result is used for. Write it: `{name}[…](…)`"
+                )),
+            );
+        }
+
+        let settled: Vec<Type> = solved
+            .iter()
+            .map(|s| s.map_or(Type::Int, |(t, _)| t))
+            .collect();
+        for t in &settled {
+            self.mention(*t);
+        }
+        self.res.record_type_args(at, settled.clone());
+        self.record_site(at, settled.clone(), false);
+        let ret = self.res.types_mut().substitute(sig.ret, owner, &settled);
+        self.mention(ret);
+        if self.res.types().nesting(ret) > MAX_TYPE_DEPTH {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::TYPE_NESTING_TOO_DEEP,
+                    span,
+                    format!("this call produces a type nested more than {MAX_TYPE_DEPTH} deep"),
+                )
+                .help("types may nest 32 deep, and the result of a generic call is a type too"),
+            );
+            return Type::Int;
+        }
+        ret
+    }
+
+    /// Match a declared parameter type against an argument's type, settling the callee's
+    /// parameters it mentions. Structural through applications and `Vec`; nothing else is.
+    fn unify(
+        &self,
+        formal: Type,
+        actual: Type,
+        owner: ParamOwner,
+        solved: &mut [Option<(Type, usize)>],
+        arg: usize,
+    ) -> Result<(), Unify> {
+        let types = self.res.types();
+        if !types.mentions(formal, owner) {
+            return if formal == actual {
+                Ok(())
+            } else {
+                Err(Unify::Mismatch)
+            };
+        }
+        match formal {
+            Type::Param(p) if p.owner == owner => {
+                let Some(slot) = solved.get_mut(p.index as usize) else {
+                    return Err(Unify::Mismatch);
+                };
+                match *slot {
+                    None => {
+                        *slot = Some((actual, arg));
+                        Ok(())
+                    }
+                    Some((t, _)) if t == actual => Ok(()),
+                    Some((t, from)) => Err(Unify::Conflict {
+                        param: p,
+                        earlier: t,
+                        from,
+                    }),
+                }
+            }
+            Type::Vec(_) => {
+                let (Type::Vec(_), Some(fe), Some(ae)) = (
+                    actual,
+                    types.type_args(formal).first().copied(),
+                    types.type_args(actual).first().copied(),
+                ) else {
+                    return Err(Unify::Mismatch);
+                };
+                self.unify(fe, ae, owner, solved, arg)
+            }
+            Type::Record(_) | Type::Enum(_) => {
+                if types.definition_of(formal) != types.definition_of(actual)
+                    || std::mem::discriminant(&formal) != std::mem::discriminant(&actual)
+                {
+                    return Err(Unify::Mismatch);
+                }
+                let (fa, aa) = (types.type_args(formal), types.type_args(actual));
+                if fa.len() != aa.len() {
+                    return Err(Unify::Mismatch);
+                }
+                for (f, a) in fa.into_iter().zip(aa) {
+                    self.unify(f, a, owner, solved, arg)?;
+                }
+                Ok(())
+            }
+            _ => Err(Unify::Mismatch),
+        }
+    }
+
     fn check_binary(&mut self, b: &BinaryCheck, expected: Option<Type>) -> Type {
         let BinaryCheck {
             op,
@@ -3059,8 +3979,15 @@ impl Checker<'_> {
             // exactly that reason: one with an `Ints` field or payload would force the
             // same unmade choice, and a rule that held for some of them and not others
             // would be worse than no rule.
+            //
+            // A type parameter joins them too: `==` is not valid for every type, and an
+            // unconstrained `T` supports only what every type supports.
             BinOp::Eq | BinOp::NotEq => {
-                lt == rt && !lt.is_sequence() && lt != Type::Chan && !lt.is_user_defined()
+                lt == rt
+                    && !lt.is_sequence()
+                    && lt != Type::Chan
+                    && !lt.is_user_defined()
+                    && !lt.is_param()
             }
         };
 
