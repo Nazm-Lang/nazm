@@ -1553,8 +1553,7 @@ fn constant(out: Strs, next: Ints, value: Str) -> Int {
 // twenty call sites is how a stray comma reaches clang.
 fn binop(out: Strs, next: Ints, op: Str, ty: Str, a: Str, b: Str) -> Int {
     let n = take_number(next);
-    let rest = if str_len(b) == 0 { a } else { str_concat(a, str_concat(", ", b)) }
-    ;
+    let rest = if str_len(b) == 0 { a } else { str_concat(a, str_concat(", ", b)) };
     add_line(out, str_concat(str_concat("  ", v(n)),
             str_concat(str_concat(str_concat(" = ", op), str_concat(" ", ty)),
             str_concat(" ", rest))));
@@ -2775,8 +2774,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                         string_equality(out, current, live, next, a, b, text == "!=")
                                                                                     } else {
                                                                                         emit_binary(out, msgs, next, current, live, text, a, b, at, ot, owned, otype, rowns)
-                                                                                    }
-                                                                                    ;
+                                                                                    };
                                                                                     if r < 0 { refuse(str_concat(str_concat("the operator `", text), "`"), at); }
                                                                                     ints_push(vals, r);
                                                                                 } else {
@@ -2984,8 +2982,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             if pk == n_if() {
                 if which == 0 {
                     let c = ints_pop(vals);
-                    let other = if parity == 3 { blk("e", p) } else { blk("j", p) }
-                    ;
+                    let other = if parity == 3 { blk("e", p) } else { blk("j", p) };
                     add_line(out, str_concat(str_concat("  br i1 ", v(c)),
                             str_concat(str_concat(", label %", blk("t", p)),
                             str_concat(", label %", other))));
@@ -3365,8 +3362,7 @@ fn main() -> Int {
     let mut sb = 0;
     while sb < strs_len(blobs) {
         let text = strs_get(blobs, sb);
-        let stored = if str_len(text) == 0 { str_from_byte(0) } else { text }
-        ;
+        let stored = if str_len(text) == 0 { str_from_byte(0) } else { text };
         add_line(head, str_concat(str_concat(str_concat("@.s", int_to_str(sb)),
                 str_concat(" = private unnamed_addr constant [",
                 int_to_str(str_len(stored)))),
@@ -3519,12 +3515,9 @@ fn main() -> Int {
 fn emit_builtin(name: Str, args: Ints, owned: Ints, out: Strs, msgs: Strs, next: Ints,
         current: Strs, live: Ints, at: Str, rowns: Ints,
         otype: Ints) -> Int {
-    let a0 = if ints_len(args) > 0 { ints_get(args, 0) } else { 0 }
-    ;
-    let a1 = if ints_len(args) > 1 { ints_get(args, 1) } else { 0 }
-    ;
-    let a2 = if ints_len(args) > 2 { ints_get(args, 2) } else { 0 }
-    ;
+    let a0 = if ints_len(args) > 0 { ints_get(args, 0) } else { 0 };
+    let a1 = if ints_len(args) > 1 { ints_get(args, 1) } else { 0 };
+    let a2 = if ints_len(args) > 2 { ints_get(args, 2) } else { 0 };
 
     if name == "str_len" { return field(out, next, a0, "1"); }
 

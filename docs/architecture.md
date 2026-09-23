@@ -1570,7 +1570,7 @@ whole of the dogfood evidence and it is deliberately one record — see
 ### What this still does not do
 
 - **No variants, no generics, no traits, no methods, no pattern matching.** N9 is product
-  types. Sum types are the next distinct semantic problem.
+  types. Sum types are the next distinct semantic problem — §7.11 is where N10 answered it.
 - **No layout promise.** A record's field offsets, size and calling convention are
   compiler-private. `pub` says which Nazm modules may name the type.
 - **Nothing about a record inside a sequence.** `Ints` holds `Int` and `Strs` holds `Str`;
@@ -1578,6 +1578,170 @@ whole of the dogfood evidence and it is deliberately one record — see
   holds. A generic container is what would end it.
 - **No sanitizer result is claimed**, and the one defect class the counters cannot see —
   a premature free — is covered by exactly one test shape rather than by an instrument.
+
+## 7.11 Enums: a composition chosen at runtime — settled by N10, 2026-09-23
+
+N9 answered whether ownership can be *composed* from field types. N10 asks the next
+question, and it is a different one: can that composition be **selected at runtime**? A
+record owns every field it declares. An enum owns the fields of its active variant, and
+which variant that is is a value the program carries.
+
+The answer is again in what did not change. `Owns` gained one variant, `Owns::Enum`, and no
+consumer gained a case. What changed is where the answer is computed:
+
+| | Record | Enum |
+| --- | --- | --- |
+| needs cleanup | some field does, recursively | some field of **some** variant does |
+| may cross into a task | every field may | every field of **every** variant may |
+| copy | retain each owning field | branch on the discriminant, then retain the **active** variant's |
+| destroy | release each owning field | branch, then release the active variant's |
+
+The first two rows are static questions about a type and are computed in the checker. The
+last two are runtime questions about a value, and they are computed **in the emitted
+program** — one generated helper per enum, a `switch`, and one call per site. That is the
+whole difference, and it is why adding a sum type added no arm to either compiler's
+dispatch.
+
+### An enum adds no new kind of value either
+
+`spec.md`'s cycle argument holds for the same reason it held for records: an enum is a
+choice between compositions of existing kinds, and a choice between leaves is a leaf. The
+containment graph is now one graph over records and enums together — a record field may be
+an enum and a payload may be a record — and a cycle anywhere in it is refused (`N0336`)
+before anything is lowered. A walk that knew only about records would have run forever on
+`struct A { b: B } enum B { V(a: A) }`, which is why `needs_cleanup`, `task_safety`,
+`layout_cycle` and `depth` left `Records` for `UserTypes`. What they share is the graph;
+what a record and an enum *do* with their fields is written out at each derivation.
+
+### Semantic identity, and where a discriminant is decided
+
+An enum's durable identity is a `DefKey` with `DefKind::Enum` — the third kind, and the
+second time a key written by an earlier build kept its meaning, which is what the field
+exists for. A **variant** has no key of its own: `spec.md` makes its durable meaning the
+enum's identity and its name, and no persistent consumer has needed a composed one, so none
+was invented.
+
+In one session a variant is a `VariantRef { enumeration, variant }` and a payload field a
+`PayloadRef { enumeration, variant, field }`, both naming **declaration indices**. Nothing
+above the backend knows a discriminant, and nothing anywhere knows a byte offset.
+`nazm-lir::lower`'s `enum_layouts` is the only place a tag is decided, from the canonical
+variant-name order, exactly as `RecordLayout::of_declaration` is the only place a field
+position is decided.
+
+### Why the tag is canonical by variant name
+
+The same argument the field order rests on. `spec.md` makes variant declaration order
+non-semantic, so deriving the discriminant from the **names** makes that true of the object
+file as well: moving two variant declarations changes no byte. Taking the parser's order
+because it was there would have created an ABI difference from an edit with no meaning —
+the compiler right that nothing changed, and the linker disagreeing.
+
+### The representation, and what it costs
+
+`{ i64, %V0, %V1, … }`: a discriminant followed by **one slot per variant**, in canonical
+order, each slot that variant's payload struct. A value is built from `zeroinitializer` and
+the active slot filled, so every byte is defined and copying the aggregate is defined; the
+inactive slots hold zeros, which no operation reads.
+
+This is larger than the union it stands for — an enum of three `Str` payloads is
+8 + 24 × 3 bytes where an ideal tagged union is 8 + 24 — and `performance.md` measures it.
+It was chosen over a sized payload area with typed loads and stores through it for two
+reasons. That form needs the compiler to compute each variant's size exactly right, and an
+arithmetic mistake there is a buffer overflow rather than a compile error. And this form
+needs no memory at all: a variant is built with `insertvalue` and a payload read with
+`extractvalue`, entirely in registers. `spec.md` promises nothing about an enum's size or
+layout, so the representation can change without the language moving.
+
+### The discriminant is written first, and that was a defect
+
+A variant that owns something is assembled in a hidden local, for the reason a record is: an
+initialiser that fails after an earlier one produced a heap string must not leak it.
+
+The first implementation wrote the discriminant **last**, on the reasonable-sounding theory
+that a partially built value should not claim a variant. It is the other way round. Cleanup
+finds the fields to release by dispatching on the tag, so a tag written last leaves the slot
+saying *variant 0* while variant 3's payload is the one being filled — and a failure
+releases variant 0's fields, finds null in each, does nothing, and leaks everything the
+initialisers produced. On the one path the program was already failing on.
+
+Both emitters now zero the slot, write the tag, and then fill the payload. Cleanup at any
+point in between dispatches on a **valid** tag and releases exactly the fields that exist:
+the ones already stored, properly, and the ones not yet stored as null. The zeroed payload
+*is* the "which fields are initialised" bookkeeping, exactly as it is for a record.
+
+**Writing the emitter a second time is what found it.** The Nazm-written backend was being
+written against the same design, and the question "which variant does the frame think this
+is" only has to be asked once for the answer to be obviously wrong. `memory.rs` carries the
+shape that observes it, with the owning variant deliberately **not** tag 0 — with the
+variants the other way round the defect is invisible.
+
+### `match` is `if` with N arms, plus one thing
+
+The block structure is `conditional`'s: a `switch` on the discriminant, one block per arm,
+a `phi` at the join, and each arm brought to the same ownership state **inside its own
+block and before its jump** — the only place a retain can go, because after the `phi` there
+is no arm left to attribute it to.
+
+The one addition is that the value being matched lives in a hidden slot the frame releases.
+That is what makes a failure inside any arm give it back by the ordinary path, and what lets
+each arm read its payload out of something that dominates it. The release happens **after**
+the `phi`, which is the ordering the whole milestone turns on: every arm has already taken
+its own reference to whatever it hands to the join, so a payload returned from an arm holds
+one by the time the value it came out of is let go.
+
+A pattern binding lowers to an ordinary `Stmt::Let` over an `Expr::Payload`. Not a
+convenience: a binding *is* a local that takes a reference to what it names, and `Stmt::Let`
+is the one path that already gets take-before-release right when the same slot is reached
+again on the next turn of a loop.
+
+### The switch's default
+
+Checking establishes that every variant has exactly one arm, so the default is unreachable
+for any value a safe program can build. It is written as a branch to the first arm rather
+than as `unreachable`: the block has to exist for the instruction to be well formed, and a
+`switch` whose default is poison would turn a compiler mistake into undefined behaviour
+instead of a wrong answer. `spec.md` is explicit that no runtime trap stands in for the
+checker's coverage.
+
+### The self-hosted compiler
+
+The Nazm-written compiler implements the same language, and its data model is one flag on
+the table N9 already had: **an enum is a record whose fields are its variants, and a variant
+is a record whose fields are its payload.** `rkind` says which of the three an entry is.
+
+That is not a trick to save an array. Every derivation N9 wrote over records is the one N10
+needs over enums — *needs cleanup* is some field of some variant, which is the same walk; a
+containment cycle through a variant is the same cycle; and the task-safety path comes out as
+`work.Values.items`, naming the variant on the way, because a variant genuinely is a step in
+that path. What differs is how a value is built and eliminated, and those are written out at
+those two places.
+
+Its parser needed one new decision and one new mark: `IDENT . IDENT (` is a variant rather
+than a projection, and a `match` suspends its scrutinee at the `{` exactly as an `if`
+suspends its condition, after which each arm's body is an ordinary pending expression — so
+an `if` inside an arm needs no machinery of its own. Its emitter carries two bits where it
+had one: `rowns` says *2* for an enum and *1* for a record, so every site that already asked
+`owns` keeps asking exactly that, and an enum's helper switches on the tag and then calls the
+**variant's** helper — which is a record's, because a payload is record-shaped.
+
+Parity is compared on **codes rather than spans**. The self-hosted parser records one span
+per arm, so a diagnostic about a payload field inside a pattern points at the arm where the
+reference points at the field. Where each compiler points is not what N2.1 is about; what
+each decides is.
+
+### What this still does not do
+
+- **No generics**, so no `Option`, no `Result`, and no generic enum of any kind. A
+  monomorphic `enum MaybeInt { None, Some(value: Int) }` is an ordinary user declaration.
+- **No wildcard arm**, no guards, no or-patterns, no literal or record patterns, no `let`
+  destructuring. N10 is variant selection with named payload bindings.
+- **No space promise.** The representation is one slot per variant, which is larger than a
+  union; `performance.md` says by how much, and nothing here claims otherwise.
+- **No stable ABI.** Discriminant values, payload layout, size and calling convention are
+  compiler-private and may change between builds.
+- **A bare block is still not an expression in the self-hosted parser**, so an arm body
+  there may be `n + 1` but not `{ let n = …; n }`. That limitation is N2's and is unchanged;
+  N10 only made it reachable in one more position.
 
 ## 8. Toolchain, and one real incompatibility
 

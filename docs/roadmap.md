@@ -318,27 +318,79 @@ against the design rather than for it.
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| **Variants and pattern matching** | records ✓ | a payload is a record; a payload that is *sometimes* there is the next distinct semantic problem, and `Option` and `Result` are the first two users of it |
+| **Variants and pattern matching** | records ✓ | done — N10. A discriminant, an exhaustiveness rule and a binding form, and copy and release that act on the active variant alone |
 | Generic containers | records ✓ and variants | a `Vec<Record>` is where value semantics usually start to hurt, and it is also what would make a reference cycle expressible again — at which point `spec.md`'s *Cycles* has to be satisfied a second time |
 | Copy elision, specified | records ✓ | `research-register.md` R1's original sharp question, still unanswered: a record copy costs one reference adjustment per owning field, and nothing says when the compiler may remove the pair |
 | A lossless CST | nothing above | unchanged; still independent, still the last AI-native item |
 
-### N10 — the next milestone, and not started
+### After N10, in dependency order
 
-**Variants and pattern matching.** It is the recommendation, and the argument is that N9
-answered the question it was blocked on. A variant's payload is a record's problem, solved;
-what remains is a payload that is *sometimes* there, which is a different problem — it
-needs a discriminant, an exhaustiveness rule, and a binding form, and each of those is a
-decision the language has not made.
+| | Depends on | Why not before |
+| --- | --- | --- |
+| **Generic containers** | records ✓ and variants ✓ | `Vec[T]` is now named by two findings rather than argued for: it is what the self-hosted compiler needs before an enum can replace a tagged integer, and it is where value semantics usually start to hurt. It is also what would make a reference cycle expressible again, at which point `spec.md`'s *Cycles* has to be satisfied a second time |
+| `Option`, `Result`, typed errors | generics | expressible monomorphically today — `enum MaybeInt { None, Some(value: Int), }` — which is the evidence the kernel is ready and also the reason not to bless a built-in one before it can be written once |
+| Copy elision, specified | records ✓ and variants ✓ | R1's original sharp question, still unanswered, and now slightly larger: a copy costs one reference adjustment per owning field and, for an enum, a branch as well. Nothing says when either may be removed |
+| A wildcard arm and `non_exhaustive` | variants ✓ | deliberately absent. Adding a variant should break importers while the language is young; when it should stop doing that is a design decision, not an omission to fix |
+| A lossless CST | nothing above | unchanged; still independent, still the last AI-native item |
 
-It is also where the ownership model is asked a question records did not ask. A record owns
-what all of its fields own; a variant owns what **the live arm's** fields own, which is a
-run-time fact rather than a type-level one. Whether that can still be derived — or whether
-the discriminant has to be consulted at every release — is the milestone's real content,
-and the answer decides whether `Owns` stays a classification or becomes a dispatch.
+### N11 — the next milestone, and not started
 
-The alternatives are unchanged: generic containers, which want variants first, and a
-lossless CST, which wants nothing and would leave the language exactly where it is.
+**Generic containers.** It is the recommendation, and unlike N10's it is not an argument —
+it is what two milestones in a row have run into.
+
+`research-register.md` R1 asked for a dogfood and got one record in N9. N10 looked for an
+enum to replace a tagged integer in the self-hosted compiler and found the same wall: the
+node kinds, the token kinds and the type codes are integers stored in `Ints`, and an enum
+cannot live in a sequence. The migration would have meant packing a payload into a string,
+which is what the parallel arrays already avoid. **That is the finding**, and it is the
+second time the same one has appeared.
+
+The semantic questions are real and none of them is about ownership, which is why this is
+the right thing to do next rather than more of what N7–N10 did. `Vec[T]` needs a type
+parameter, a monomorphisation or dictionary decision, an element-access form, and an answer
+to whether `xs[i].f = v` is expressible without a place calculus the surface hides. It also
+reopens `spec.md`'s *Cycles*: a container that can hold a record is a value that can refer
+to one that refers back, and the constitution says in advance what admitting that requires.
+
+The alternatives are unchanged and both are smaller: a lossless CST, which wants nothing,
+and `nazm explain-cost`, which wants only writing.
+
+### N10 — Variants and exhaustive pattern matching — **complete, 2026-09-23**
+
+`enum State { Ready, Done(code: Int), }` with `match`. Closed nominal sum types with named
+payload fields, qualified construction, exhaustive variant matching with named payload
+bindings, module visibility, a persisted shape, and native code — in the reference
+compiler, the interpreter and the compiler written in Nazm.
+
+The milestone asked whether the model N7–N9 built survives **the ownership question
+becoming dynamic**. A record owns what all its fields own; an enum owns what the active
+variant's fields own, which is a value the program carries rather than a fact about the
+type. The answer is that `Owns` gained one variant and no consumer gained a case: copy and
+release are still one call per site, and the branch lives in a generated helper — in the
+emitted program, where the recursion already lived.
+
+The asymmetry that fell out of it is worth keeping. *Needs cleanup* and *may cross into a
+task* stayed static and quantify over **every** variant; copy and destroy became dynamic and
+act on **one**. So `enum Work { None, Values(xs: Ints), }` may not cross into a task even
+while it holds `None` — what a `spawn` is handed is a value of a type, and the guarantee is
+about the type.
+
+*Cycles* was satisfied the same way a second time, over one graph: records and enums form a
+single inline-containment graph, and a cycle anywhere in it is refused (`N0336`). A choice
+between leaves is a leaf.
+
+| Settled | Where |
+| --- | --- |
+| `enum` and `match` as the keywords, `Token.Eof()` as the constructor, always parenthesised | `spec.md`, *Enums* |
+| variant and payload order are not semantic — not in the type, the fingerprint, or the discriminant | `spec.md`; `architecture.md` §7.11 |
+| every variant gets exactly one arm, and there is no wildcard — adding one breaks importers on purpose | `spec.md`, *Exhaustiveness* |
+| the scrutinee is a value the `match` owns, released **after** the arm's result is established | §7.11 |
+| the discriminant is written **first**, so cleanup after a failed initialiser dispatches on a valid tag | §7.11 |
+| `nazm.interface/3`, closed over the payload types its public surface mentions | `architecture.md` §7.3, extended |
+
+Evidence: the numbers are in the milestone report and in `bootstrap.md`; what they cover is
+the contained suite, selfhost parity, a new C2 = C3 fixpoint, eighteen new mutations, and
+the interface and cache behaviour that variant addition is supposed to move.
 
 ### N9 — User-defined records — **complete, 2026-09-23**
 
@@ -394,9 +446,11 @@ REPL, hot reload) exists. None does.
 
 ## Deliberately not next
 
-Ownership · effects · capabilities · provenance · generics · user-defined types · pattern
-matching · M:N scheduling · a second backend · GPU or accelerator work · a package manager ·
-a standard library beyond the built-in table.
+Effects · capabilities · provenance · traits · methods · closures · typed errors ·
+M:N scheduling · a second backend · GPU or accelerator work · a package manager · a standard
+library beyond the built-in table. Ownership, user-defined types and pattern matching left
+this list as N7–N10 landed them; generics is no longer *deliberately* not next — it is the
+recommendation above.
 
 Each has a home — `capability-matrix.md` for status, `research-register.md` for the ones
 that are hypotheses, `NAZM_LANGUAGE_GOALS.md` for why they are wanted eventually. None is
