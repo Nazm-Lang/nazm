@@ -1129,8 +1129,13 @@ the order of these two lines is the whole of what makes that true
 """
 file = "crates/nazm-lir/src/emit.rs"
 find = """                        self.take(value, ty);
+                        // Taken over first, so releasing what this statement was still
+                        // holding cannot reach the value being returned. The slots are
+                        // the frame's and are released just below.
+                        self.release_temporaries();
                         self.release_frame();"""
-replace = """                        self.release_frame();"""
+replace = """                        self.release_temporaries();
+                        self.release_frame();"""
 
 [[mutation]]
 name = "a-borrowed-parameter-is-released-by-the-callee"
@@ -1816,20 +1821,51 @@ replace = """            let held = take_number(next);
             let payload = take_number(next);"""
 
 [[mutation]]
-name = "a-variant-slot-keeps-what-the-last-round-left-in-it"
+name = "a-break-keeps-what-the-expression-was-holding"
 why = """
-stops zeroing the assembly slot before a variant is built, so a construction reached twice
-— in a loop — inherits the discriminant and payload of the round before. The references in
-it were handed on when that value left, and cleanup finds them a second time. The values
-the program computes are unaffected; the counters are not
+stops a `break` or a `continue` giving back the temporaries the expression it is leaving
+had already produced, so every control transfer out of a half-evaluated call leaks them.
+The failure path still does, which is the version that looks like it works — and is exactly
+the state N8 shipped and N10 found
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """                let _ = writeln!(
-                    self.out,
-                    "  store {whole} {}, ptr %slot{slot}",
-                    ty.unwind_value()
-                );
-                // The discriminant, before any payload: see above.
-                let empty = self.fresh();"""
-replace = """                // The discriminant, before any payload: see above.
-                let empty = self.fresh();"""
+find = """            self.release_temporaries_from(outstanding);
+            self.release_building(building);"""
+replace = """            self.release_building(building);"""
+
+[[mutation]]
+name = "a-continue-keeps-the-value-it-was-building"
+why = """
+stops a `break` or a `continue` giving back the record, enum or matched value the frame is
+part way through holding, so the next turn of the loop stores over a live reference. The
+register temporaries are still released, which is the half that hides it
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """            self.release_temporaries_from(outstanding);
+            self.release_building(building);"""
+replace = """            self.release_temporaries_from(outstanding);"""
+
+[[mutation]]
+name = "a-transfer-releases-what-the-loop-around-it-is-holding"
+why = """
+releases **every** outstanding temporary at a `break` rather than the ones this loop
+produced, so a value made before the loop and wanted after it is freed while still live.
+The opposite mistake to the one above, and a premature free rather than a leak
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """            self.release_temporaries_from(outstanding);"""
+replace = """            self.release_temporaries_from(0);"""
+
+[[mutation]]
+name = "the-self-hosted-compiler-keeps-what-a-continue-abandons"
+why = """
+the same defect in the **Nazm-written** emitter: a `continue` branches without giving back
+what the expression it is leaving was holding. The two compilers would then disagree about
+reclamation while agreeing about every value, which is the divergence a differential memory
+test exists to catch
+"""
+file = "compiler/emit.nz"
+find = """                                                        leave_loop(out, next, owned, otype, rowns, mslots, mstyp,
+                                                                loop_own, loop_m);
+                                                        // The header, never the body: `continue` re-evaluates the condition."""
+replace = """                                                        // The header, never the body: `continue` re-evaluates the condition."""

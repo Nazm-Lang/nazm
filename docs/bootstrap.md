@@ -338,11 +338,20 @@ record's. The block is a named LLVM type now, as the reference emitter's always 
 divergence was real, it was a year of milestones old in compiler time, and **no N9 test
 passed a record to a task through this compiler** — the gap was in the corpus.
 
-**The digest moved a third time**, for the same reason and with the same property intact:
-`1ce9aafb…` (N8) → `3ecf0921…` → `3491dfed…` (N9) → `8030ecbb…` (enums and `match`, an enum
-in the compiler's own source, and the task-block fix). `ir: identical`, executables
-byte-identical once the linker UUID is removed, and C2 = C3 over 14 conformance cases, 7 of
-them multi-module. Preserving the old number by declining the change would have been
+**And a second one, found the same way.** A surviving mutation asked why zeroing a
+variant's assembly slot mattered, and the answer was that a `break`, a `continue` or a
+`return` out of a half-evaluated expression gave back nothing it was holding — the
+arguments already produced, and the value a `match` was holding while an arm ran. That was
+N8's, in this compiler and in the reference both, and `architecture.md` §7.11 writes it up.
+The fix here is `leave_loop`, and the differential memory case that carries it abandons a
+record, an enum and an arm in one program.
+
+**The digest moved a third and a fourth time**, for the same reason and with the same
+property intact: `1ce9aafb…` (N8) → `3ecf0921…` → `3491dfed…` (N9) → `8030ecbb…` (enums and
+`match`, an enum in the compiler's own source, and the task-block fix) → `ba8615e4…` (what
+a `break` and a `continue` give back). `ir: identical`, executables byte-identical once the
+linker UUID is removed, and C2 = C3 over 14 conformance cases, 7 of them multi-module, at
+8,724 source lines. Preserving the old number by declining the change would have been
 preserving the number rather than the property it stands for.
 
 ## 6. Reproducing it
