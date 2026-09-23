@@ -52,6 +52,9 @@ pub fn k_pub() -> Int { 24 }
 // reference parser long before it meant anything, for the reason above: a word that is a
 // keyword to one lexer and an identifier to the other is a divergence.
 pub fn k_struct() -> Int { 25 }
+// `enum` and `match`, added by N10. Reserved by name from v0.1 and refused until then.
+pub fn k_enum() -> Int { 26 }
+pub fn k_match() -> Int { 27 }
 pub fn k_lparen() -> Int { 30 }
 pub fn k_rparen() -> Int { 31 }
 pub fn k_lbrace() -> Int { 32 }
@@ -75,6 +78,9 @@ pub fn k_lt() -> Int { 47 }
 pub fn k_lteq() -> Int { 48 }
 pub fn k_gt() -> Int { 49 }
 pub fn k_gteq() -> Int { 50 }
+// `=>`, between a `match` pattern and the arm it selects. Its own token rather than `=`
+// followed by `>`: written as two, `x = > 1` would be accepted.
+pub fn k_fatarrow() -> Int { 51 }
 
 // --- byte classification -----------------------------------------------------------
 
@@ -124,6 +130,8 @@ fn keyword_kind(word: Str) -> Int {
     if word == "spawn" { return k_spawn(); }
     if word == "pub" { return k_pub(); }
     if word == "struct" { return k_struct(); }
+    if word == "enum" { return k_enum(); }
+    if word == "match" { return k_match(); }
     k_ident()
 }
 
@@ -223,6 +231,11 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs) -> Int 
         if b == 61 {
             if next == 61 {
                 push_token(kinds, starts, ends, texts, k_eqeq(), i, i + 2, "");
+                i = i + 2;
+                continue;
+            }
+            if next == 62 {
+                push_token(kinds, starts, ends, texts, k_fatarrow(), i, i + 2, "");
                 i = i + 2;
                 continue;
             }

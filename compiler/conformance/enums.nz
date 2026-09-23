@@ -1,0 +1,166 @@
+// Enums: construction, matching, the active payload, composition with records, nesting,
+// replacement across variants, return and cleanup.
+//
+// One program rather than a dozen, so the corpus stays a corpus. Every value it produces
+// is folded into one integer, which is what makes disagreement between the reference, C2
+// and C3 impossible to miss.
+//
+// The variants are deliberately **not** declared in name order. The discriminant is
+// derived from the names, so a compiler that took the parser's order instead would build
+// one value and read another — and this program would say so.
+
+struct Point {
+    y: Int,
+    x: Int,
+}
+
+enum Shape {
+    Named(label: Str, where: Point),
+    Dot,
+    At(where: Point),
+}
+
+enum Inner {
+    Some(n: Int),
+    None,
+}
+
+enum Outer {
+    Wrapped(value: Inner),
+    Empty,
+}
+
+// A record containing an enum, and an enum containing a record: both directions of the
+// composition, in one program.
+struct Event {
+    state: Inner,
+    note: Str,
+}
+
+enum Holder {
+    Many(items: Strs),
+    Text(value: Str),
+    Nothing,
+}
+
+// A zero-payload variant beside variants that own heap values.
+fn area(s: Shape) -> Int {
+    match s {
+        Shape.Dot() => 0,
+        Shape.At(where: p) => p.x + p.y,
+        Shape.Named(label: l, where: p) => str_len(l) + p.x + p.y,
+    }
+}
+
+// A payload returned out of the arm that matched it: the value must hold its own
+// reference before the value it came from is let go.
+fn text_of(h: Holder) -> Str {
+    match h {
+        Holder.Nothing() => "",
+        Holder.Many(items: _) => "",
+        Holder.Text(value: s) => s,
+    }
+}
+
+// A `match` inside a `match`, which is what makes the arm machinery nest.
+fn depth(o: Outer) -> Int {
+    match o {
+        Outer.Empty() => 0,
+        Outer.Wrapped(value: v) => match v {
+            Inner.None() => 1,
+            Inner.Some(n: n) => n,
+        },
+    }
+}
+
+// A value built in a tail position, and one built through a binding and returned. Records
+// showed these are different implementation edges; so are these.
+fn tail(n: Int) -> Holder {
+    Holder.Text(value: int_to_str(n))
+}
+
+fn explicit(n: Int) -> Holder {
+    let made = Holder.Text(value: str_concat("v", int_to_str(n)));
+    return made;
+}
+
+// A discarded payload is still the enum's, and is still released with it.
+fn discarded(h: Holder) -> Int {
+    match h {
+        Holder.Nothing() => 0,
+        Holder.Many(items: _) => 0,
+        Holder.Text(value: _) => 1,
+    }
+}
+
+fn main() -> Int {
+    let mut acc = 0;
+
+    // Every variant of an enum whose declaration order is not its name order.
+    acc = acc + area(Shape.Dot());
+    acc = acc + area(Shape.At(where: Point(y: 4, x: 3)));
+    acc = acc + area(Shape.Named(label: str_concat("ab", "c"), where: Point(y: 2, x: 1)));
+
+    // Initialisers run in the order **written**, whatever order the payload is stored in.
+    let log = ints_new();
+    let pair = Shape.Named(label: note(log, "z"), where: note_point(log));
+    acc = acc + area(pair) + ints_get(log, 0) * 10 + ints_get(log, 1);
+
+    // Nesting, in both directions.
+    acc = acc + depth(Outer.Empty());
+    acc = acc + depth(Outer.Wrapped(value: Inner.None()));
+    acc = acc + depth(Outer.Wrapped(value: Inner.Some(n: 8)));
+    let ev = Event(state: Inner.Some(n: 5), note: str_concat("no", "te"));
+    acc = acc + depth(Outer.Wrapped(value: ev.state)) + str_len(ev.note);
+
+    // A payload returned from an arm, out of a value that dies on the same line.
+    acc = acc + str_len(text_of(tail(1234)));
+    acc = acc + str_len(text_of(explicit(56)));
+
+    // A borrowed binding still reaches the storage it names.
+    let xs = strs_new();
+    strs_push(xs, "one");
+    let many = Holder.Many(items: xs);
+    match many { Holder.Nothing() => 0, Holder.Text(value: _) => 0, Holder.Many(items: ys) => strs_push(ys, "two"), };
+    acc = acc + strs_len(xs);
+
+    // Whole-value replacement, across variants and within one, including a
+    // self-assignment.
+    let mut c = Holder.Text(value: str_concat("q", "r"));
+    c = c;
+    acc = acc + discarded(c);
+    c = Holder.Nothing();
+    acc = acc + discarded(c);
+    c = Holder.Text(value: str_concat("s", "t"));
+    acc = acc + discarded(c);
+
+    // Many short-lived values with heap payloads, and a constant live set: the count of
+    // live string backings must not grow with the number of values ever built.
+    let mut i = 0;
+    while i < 200 {
+        let each = Holder.Text(value: int_to_str(i));
+        acc = acc + str_len(text_of(each));
+        i = i + 1;
+    }
+
+    // An inactive owning variant costs nothing at all: `Many` holds a `Strs` and is never
+    // the active one here.
+    let mut j = 0;
+    while j < 50 {
+        acc = acc + discarded(Holder.Nothing());
+        j = j + 1;
+    }
+
+    acc
+}
+
+// Two helpers whose only job is to record the order they ran in.
+fn note(log: Ints, s: Str) -> Str {
+    ints_push(log, 1);
+    str_concat(s, "z")
+}
+
+fn note_point(log: Ints) -> Point {
+    ints_push(log, 2);
+    Point(y: 0, x: 0)
+}

@@ -78,6 +78,9 @@ fn main() -> Int {
     let rpub = ints_new();
     let rat = ints_new();
     let rnode = ints_new();
+    // What each entry is: a record, an enum, or one of an enum's variants. See
+    // `analyse.nz`, *an enum is a record whose fields are its variants*.
+    let rkind = ints_new();
     let rfirst = ints_new();
     let rcount = ints_new();
     let rfname = strs_new();
@@ -87,11 +90,12 @@ fn main() -> Int {
     let tname = strs_new();
     let trec = ints_new();
     collect_records(nk, nar, nst, nen, ntx, naux, mstart,
-            rnames, rowner, rpub, rat, rnode, dcode, dstart, dend, dmsg);
+            rnames, rowner, rpub, rat, rnode, rkind, kids, kid_first,
+            dcode, dstart, dend, dmsg);
     check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath),
             rnames, rowner, rpub, tmod, tname, trec, dcode, dstart, dend, dmsg);
     resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first,
-            rnames, rowner, rat, rnode, rfirst, rcount, rfname, rftype, rfat,
+            rnames, rowner, rat, rnode, rkind, rfirst, rcount, rfname, rftype, rfat,
             tmod, tname, trec, dcode, dstart, dend, dmsg);
     check_record_layouts(rnames, rat, rfirst, rcount, rftype, dcode, dstart, dend, dmsg);
 
@@ -106,7 +110,7 @@ fn main() -> Int {
     let fpub = ints_new();
     collect_signatures(nk, nar, nst, nen, ntx, naux, kids, kid_first, mstart,
             fnames, fret, ffirst, fcount, fparams, fowner, fpub, bnames,
-            rnames, rowner, rpub, rat, rfirst, rcount, rfname, rftype, rfat,
+            rnames, rowner, rpub, rat, rkind, rfirst, rcount, rfname, rftype, rfat,
             tmod, tname, trec,
             dcode, dstart, dend, dmsg);
 
@@ -131,7 +135,7 @@ fn main() -> Int {
             fnames, fret, ffirst, fcount, fparams,
             fowner, fpub, vmod, vname, vfn,
             bnames, bret, bfirst, bcount, bparams,
-            rnames, rowner, rfirst, rcount, rfname, rftype,
+            rnames, rowner, rkind, rfirst, rcount, rfname, rftype,
             tmod, tname, trec,
             dcode, dstart, dend, dmsg);
 

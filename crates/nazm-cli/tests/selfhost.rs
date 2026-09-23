@@ -665,6 +665,50 @@ fn the_dump_format_round_trips_the_shapes_it_will_be_used_on() {
     // comparison would pass on a parser that ignored precedence.
     let (q, _) = nazm_core::__syntax::parse_source("fn main() -> Int { (1 + 2) * 3 }");
     assert_ne!(dump_program(&q), dump, "the format cannot see grouping");
+
+    // An enum and a `match`, pinned the same way. The arm's pattern travels as text
+    // because that is what both parsers record: one span per arm, and the names inside it.
+    let (e, errors) = nazm_core::__syntax::parse_source(
+        "enum E { A, B(x: Int), }\nfn main() -> Int { match E.A() { E.A() => 1, E.B(x: n) => n, } }",
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+    let enum_dump = dump_program(&e);
+    let enum_kinds: Vec<&str> = enum_dump
+        .lines()
+        .map(|l| l.split('|').next().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        enum_kinds,
+        vec![
+            "variant",
+            "payload",
+            "variant",
+            "enum",
+            "makevariant",
+            "int",
+            "arm",
+            "var",
+            "arm",
+            "match",
+            "block",
+            "fn",
+            "program",
+        ],
+        "{enum_dump}"
+    );
+    let patterns: Vec<&str> = enum_dump
+        .lines()
+        .filter(|l| l.starts_with("arm|"))
+        .map(|l| l.rsplit('|').next().unwrap_or(""))
+        .collect();
+    assert_eq!(patterns, vec!["E.A()", "E.B(x:n)"], "{enum_dump}");
+
+    // A discard is not the same pattern as a binding, or the format could not tell a
+    // compiler that ignored `_` from one that honoured it.
+    let (d, _) = nazm_core::__syntax::parse_source(
+        "enum E { A, B(x: Int), }\nfn main() -> Int { match E.A() { E.A() => 1, E.B(x: _) => 0, } }",
+    );
+    assert_ne!(dump_program(&d), enum_dump, "the format cannot see `_`");
 }
 
 /// Build `compiler/parser.nz` natively and return the executable.
@@ -1069,6 +1113,89 @@ fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
 
         assert_eq!(ours, theirs, "checking differs for {source:?}");
         // Exit status is part of the interface, not decoration.
+        assert_eq!(
+            status,
+            Some(i32::from(!theirs.is_empty())),
+            "wrong exit status for {source:?}"
+        );
+    }
+}
+
+#[test]
+fn the_nazm_checker_agrees_with_the_reference_on_enums_and_matching() {
+    // **Codes, not spans**, and stated rather than implied: the self-hosted parser records
+    // one span per `match` arm, so a diagnostic about a payload field inside a pattern
+    // points at the arm where the reference points at the field. That is a difference in
+    // where a message points, not in what either compiler decides — and *what each
+    // decides* is what N2.1 parity is about, so it is what this compares.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_checker(dir.path());
+
+    let sources = [
+        // Clean, and exercising the whole of N10: every variant shape, both directions of
+        // composition, nesting, a discard, a returned payload, and a borrowed handle.
+        "enum E { A, } fn m() -> Int { match E.A() { E.A() => 0, } }",
+        "enum E { B(x: Int), A, } fn m() -> Int { match E.A() { E.A() => 0, E.B(x: n) => n, } }",
+        "enum E { V(l: Int, r: Int), } fn m() -> Int { match E.V(l: 1, r: 2) { E.V(l: a, r: b) => a + b, } }",
+        "enum E { V(l: Int, r: Int), } fn m() -> Int { match E.V(r: 2, l: 1) { E.V(r: b, l: a) => a + b, } }",
+        "enum E { V(x: Int), } fn m() -> Int { match E.V(x: 1) { E.V(x: _) => 0, } }",
+        "enum E { T(v: Str), N, } fn t(e: E) -> Str { match e { E.N() => \"\", E.T(v: s) => s, } }\nfn m() -> Int { str_len(t(E.T(v: \"ab\"))) }",
+        "enum E { S(xs: Ints), } fn m() -> Int { let a = ints_new(); match E.S(xs: a) { E.S(xs: b) => ints_push(b, 1), }; ints_len(a) }",
+        "struct P { x: Int, } enum S { At(p: P), D, } fn m() -> Int { match S.At(p: P(x: 3)) { S.D() => 0, S.At(p: q) => q.x, } }",
+        "enum I { A(n: Int), B, } struct E { s: I, } fn m() -> Int { let e = E(s: I.A(n: 4)); match e.s { I.B() => 0, I.A(n: n) => n, } }",
+        "enum I { A, B, } enum O { W(v: I), E, } fn m() -> Int { match O.W(v: I.A()) { O.E() => 0, O.W(v: v) => match v { I.A() => 1, I.B() => 2, }, } }",
+        "enum A { R, } enum B { R, } fn m() -> Int { match A.R() { A.R() => 1, } + match B.R() { B.R() => 2, } }",
+        "enum E { A, } fn E() -> Int { 4 } fn m() -> Int { E() + match E.A() { E.A() => 5, } }",
+        "pub enum E { A(v: Str), } pub fn f(e: E) -> Int { match e { E.A(v: s) => str_len(s), } }\nfn m() -> Int { f(E.A(v: \"a\")) }",
+        "enum M { T(v: Str), C(n: Int), } fn w(e: M) -> Int { match e { M.T(v: s) => str_len(s), M.C(n: n) => n, } }\nfn m() -> Int { let c = chan_new(1); scope { } w(M.T(v: \"a\")) }",
+
+        // Now the refusals, one rule at a time.
+        "enum E { A, B, } fn m() -> Int { match E.A() { E.A() => 1, } }",
+        "enum E { A, B, } fn m() -> Int { match E.A() { E.A() => 1, E.A() => 2, E.B() => 3, } }",
+        "enum A { R, } enum B { R, } fn m() -> Int { match A.R() { B.R() => 1, } }",
+        "enum E { A, } fn m() -> Int { match E.Z() { E.A() => 1, } }",
+        "enum E { A, } fn m() -> Int { match E.A() { E.Z() => 1, } }",
+        "fn m() -> Int { match 42 { } }",
+        "struct P { x: Int, } fn m() -> Int { match P(x: 1) { } }",
+        "enum E { V(x: Int, y: Int), } fn m() -> Int { match E.V(x: 1, y: 2) { E.V(x: a) => a, } }",
+        "enum E { V(x: Int), } fn m() -> Int { match E.V(x: 1) { E.V(y: a) => a, } }",
+        "enum E { V(x: Int), } fn m() -> Int { match E.V(x: 1, y: 2) { E.V(x: a) => a, } }",
+        "enum E { V(x: Int, y: Int), } fn m() -> Int { match E.V(x: 1) { E.V(x: a, y: b) => a + b, } }",
+        "enum E { V(x: Int), } fn m() -> Int { match E.V(x: \"s\") { E.V(x: a) => a, } }",
+        "enum E { A(x: Int), } fn m() -> Int { E.A(x: 1).x }",
+        "enum E { A, } fn m() -> Int { let a = E.A(); let b = E.A(); if a == b { 1 } else { 0 } }",
+        "enum E { A, A, } fn m() -> Int { match E.A() { E.A() => 1, } }",
+        "enum E { V(x: Int, x: Int), } fn m() -> Int { 0 }",
+        "enum E {} fn m() -> Int { 0 }",
+        "struct I { x: Int, } enum I { A, } fn m() -> Int { 0 }",
+        "enum Int { A, } fn m() -> Int { 0 }",
+        "enum L { E, N(r: L), } fn m() -> Int { 0 }",
+        "struct A { b: B, } enum B { V(a: A), } fn m() -> Int { 0 }",
+        "struct S { x: Int, } pub enum P { H(v: S), } fn m() -> Int { 0 }",
+        "enum W { N, V(xs: Ints), } fn w(e: W) -> Int { match e { W.N() => 0, W.V(xs: x) => ints_len(x), } }\nfn m() -> Int { scope { spawn w(W.N()); } 0 }",
+        "enum E { A, B, } fn m() -> Int { let n = match E.A() { E.A() => 1, E.B() => \"t\", }; n }",
+        "enum E { A(x: Int, y: Int), } fn m() -> Int { match E.A(x: 1, y: 2) { E.A(x: a, y: a) => a, } }",
+        "enum E { A(x: Int), } fn m() -> Int { match E.A(x: 1) { E.A(x: v) => v, } + v }",
+    ];
+
+    for source in sources {
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, source).expect("write");
+        let (status, stdout, _) = run_stage(&exe, &file);
+        let mut ours: Vec<String> = stdout
+            .lines()
+            .filter(|l| l.contains('|'))
+            .filter_map(|l| l.split('|').next().map(ToOwned::to_owned))
+            .collect();
+        ours.sort();
+
+        let mut theirs: Vec<String> = nazm_core::check_source(source)
+            .into_iter()
+            .map(|d| d.code.as_str().to_owned())
+            .collect();
+        theirs.sort();
+
+        assert_eq!(ours, theirs, "checking differs for {source:?}");
         assert_eq!(
             status,
             Some(i32::from(!theirs.is_empty())),
@@ -1887,11 +2014,11 @@ fn the_bootstrap_chain_reaches_a_fixpoint() {
             .unwrap_or(0)
     };
     assert!(
-        count("conformance-cases:") >= 12,
+        count("conformance-cases:") >= 14,
         "the corpus has shrunk:\n{record}"
     );
     assert!(
-        count("module-conformance-cases:") >= 6,
+        count("module-conformance-cases:") >= 7,
         "the module corpus has shrunk:\n{record}"
     );
     // The two compilers really are the same bytes, read out of the record rather than

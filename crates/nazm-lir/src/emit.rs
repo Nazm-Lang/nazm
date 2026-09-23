@@ -994,14 +994,20 @@ impl Emitter<'_> {
 
     /// Build an enum value: a discriminant and one variant's payload.
     ///
-    /// # Why the discriminant goes in last
+    /// # Why the discriminant goes in first
     ///
-    /// Because cleanup after a failed construction must not dispatch on a variant the
-    /// value does not have. The slot starts at `zeroinitializer` — discriminant 0, the
-    /// canonically first variant, with an all-zero payload — and stays there until every
-    /// payload field is in place. So a failure part way through releases variant 0's
-    /// fields, finds null in each, and does nothing; and the moment the discriminant
-    /// becomes this variant's, the payload behind it is complete.
+    /// Because cleanup after a failed construction has to release what the construction
+    /// has already taken, and it finds those fields by dispatching on the discriminant.
+    /// Writing the tag last would leave the slot saying *variant 0* while the payload
+    /// being filled is variant 3's — so a failure would release variant 0's fields, find
+    /// null in each, do nothing, and leak everything the initialisers before the failure
+    /// had produced.
+    ///
+    /// So the slot is zeroed, the discriminant is written, and then the payload is filled.
+    /// Cleanup at any point in between dispatches on a **valid** tag and releases exactly
+    /// the fields that exist: the ones already stored, properly, and the ones not yet
+    /// stored as null, which every release function ignores. The zeroed payload *is* the
+    /// "which fields are initialised" bookkeeping, exactly as it is for a record.
     fn variant(&mut self, ty: Ty, tag: u32, fields: &[(u32, Expr)], slot: Option<usize>) -> Val {
         let whole = llvm_type(self.types, ty);
         let payload_ty = self.payload_type(ty, tag);
@@ -1047,6 +1053,15 @@ impl Emitter<'_> {
                     "  store {whole} {}, ptr %slot{slot}",
                     ty.unwind_value()
                 );
+                // The discriminant, before any payload: see above.
+                let empty = self.fresh();
+                let _ = writeln!(self.out, "  %{empty} = load {whole}, ptr %slot{slot}");
+                let tagged = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{tagged} = insertvalue {whole} %{empty}, i64 {tag}, 0"
+                );
+                let _ = writeln!(self.out, "  store {whole} %{tagged}, ptr %slot{slot}");
                 for (at, value) in fields {
                     let Val::Of {
                         value: v,
@@ -1081,24 +1096,20 @@ impl Emitter<'_> {
                     );
                     let _ = writeln!(self.out, "  store {whole} %{out}, ptr %slot{slot}");
                 }
-                // Every field is in place, so the discriminant may be written. Before this
-                // line the slot holds a zero, which releases to nothing.
-                let held = self.fresh();
-                let _ = writeln!(self.out, "  %{held} = load {whole}, ptr %slot{slot}");
-                let tagged = self.fresh();
-                let _ = writeln!(
-                    self.out,
-                    "  %{tagged} = insertvalue {whole} %{held}, i64 {tag}, 0"
-                );
                 // The value leaves with the references the slot was holding, and the slot
                 // is zeroed so the frame does not release them a second time.
+                let complete = self.fresh();
+                let _ = writeln!(self.out, "  %{complete} = load {whole}, ptr %slot{slot}");
                 let _ = writeln!(
                     self.out,
                     "  store {whole} {}, ptr %slot{slot}",
                     ty.unwind_value()
                 );
-                self.own(tagged, ty);
-                Val::Of { value: tagged, ty }
+                self.own(complete, ty);
+                Val::Of {
+                    value: complete,
+                    ty,
+                }
             }
         }
     }

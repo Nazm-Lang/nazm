@@ -714,11 +714,179 @@ fn set_field(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: Int,
 fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
         nk: Ints, nar: Ints, ntx: Strs, ntype: Ints, nrec: Ints, nslot: Ints,
         kids: Ints, kid_first: Ints, k: Int,
-        rowns: Ints, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, otype: Ints) -> Int {
+        rowns: Ints, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, otype: Ints,
+        phi_val: Ints, phi_blk: Strs) -> Int {
     let kind = ints_get(nk, k);
-    // A declaration is not code. Neither is a field of one.
+    // A declaration is not code. Neither is a field of one, nor a variant of one.
     if kind == n_record() { return 1; }
     if kind == n_structfield() { return 1; }
+    if kind == n_enum() { return 1; }
+    if kind == n_variant() { return 1; }
+    if kind == n_payload() { return 1; }
+    // An arm's value is its body's, which is already on the stack. The bindings were
+    // stored when the arm's block was opened, which is the only place they can be: the
+    // body is a child and runs after.
+    if kind == n_arm() { return 1; }
+
+    if kind == n_match() {
+        let et = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+        let arms = ints_get(nar, k) - 1;
+        if ints_get(ntype, k) != 0 {
+            // One incoming per arm, in the order they were emitted, so the `phi` reads
+            // them back in reverse.
+            let ins = ints_new();
+            let blks = strs_new();
+            let mut q = 0;
+            while q < arms {
+                let bv = ints_pop(phi_val);
+                ints_push(ins, bv);
+                strs_push(blks, strs_pop(phi_blk));
+                own_take(owned, otype, bv);
+                q = q + 1;
+            }
+            let n = take_number(next);
+            if owns(ints_get(ntype, k), rowns) != 0 {
+                own_add(owned, otype, n, ints_get(ntype, k));
+            }
+            let mut line = str_concat(str_concat("  ", v(n)),
+                    str_concat(" = phi ", llvm_type(ints_get(ntype, k))));
+            let mut w = arms - 1;
+            while w >= 0 {
+                if w < arms - 1 { line = str_concat(line, ","); }
+                line = str_concat(line,
+                        str_concat(str_concat(" [ ", v(ints_get(ins, w))),
+                        str_concat(str_concat(", %", strs_get(blks, w)), " ]")));
+                w = w - 1;
+            }
+            add_line(out, line);
+            ints_push(vals, n);
+        }
+        // **After** the result is established: each arm retained whatever it handed to
+        // the join before branching here, so a payload returned from an arm holds its own
+        // reference by the time the value it came out of is let go.
+        let mslot = ints_get(nslot, k);
+        let dying = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(dying)),
+                str_concat(str_concat(" = load ", llvm_type(et)),
+                str_concat(", ptr %slot", int_to_str(mslot)))));
+        add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(et)),
+                str_concat(" ", unwind_value(et))),
+                str_concat(", ptr %slot", int_to_str(mslot))));
+        emit_release(out, next, dying, et, rowns);
+        return 1;
+    }
+
+    if kind == n_makevariant() {
+        let t = ints_get(ntype, k);
+        let e = record_of(t);
+        let vr = ints_get(nrec, k);
+        let tag = variant_tag(rfirst, rcount, rfname, rftype, e, vr);
+        let ty = llvm_type(t);
+        let vty = llvm_type(t_record(vr));
+        let arity = ints_get(nar, k);
+        let text = strs_get(ntx, k);
+        let args = ints_new();
+        let mut a = 0;
+        while a < arity { ints_push(args, ints_pop(vals)); a = a + 1; }
+        let slot = ints_get(nslot, k);
+        if slot < 0 {
+            // Nothing to clean, so the value is built in registers: the payload first,
+            // then the discriminant and the payload into the enum.
+            let mut built = str_concat(vty, " zeroinitializer");
+            a = 0;
+            while a < arity {
+                let value = ints_get(args, arity - 1 - a);
+                let decl = field_index(rfirst, rcount, rfname, vr, field_name_at(text, a));
+                let at = layout_index(rfirst, rcount, rfname, vr, decl);
+                let ft = ints_get(rftype, ints_get(rfirst, vr) + decl);
+                let n = take_number(next);
+                add_line(out, str_concat(str_concat("  ", v(n)),
+                        str_concat(str_concat(" = insertvalue ", built),
+                        str_concat(str_concat(str_concat(", ", llvm_type(ft)),
+                        str_concat(" ", v(value))),
+                        str_concat(", ", int_to_str(at))))));
+                built = str_concat(str_concat(vty, " "), v(n));
+                a = a + 1;
+            }
+            let tagged = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(tagged)),
+                    str_concat(str_concat(" = insertvalue ", ty),
+                    str_concat(" zeroinitializer, i64 ", str_concat(int_to_str(tag), ", 0")))));
+            let whole = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(whole)),
+                    str_concat(str_concat(str_concat(" = insertvalue ", ty),
+                    str_concat(" ", v(tagged))),
+                    str_concat(str_concat(", ", built),
+                    str_concat(", ", int_to_str(tag + 1))))));
+            ints_push(vals, whole);
+            return 1;
+        }
+        // Zeroed, then the **discriminant, before any payload**. Cleanup after a failed
+        // initialiser finds the fields to release by dispatching on the tag, so a tag
+        // written last would send it looking at variant 0's fields while variant `tag`'s
+        // were the ones already taken — and everything produced so far would leak on the
+        // one path the program was already failing on.
+        add_line(out, str_concat(str_concat(str_concat("  store ", ty),
+                str_concat(" ", unwind_value(t))),
+                str_concat(", ptr %slot", int_to_str(slot))));
+        let empty = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(empty)),
+                str_concat(str_concat(" = load ", ty),
+                str_concat(", ptr %slot", int_to_str(slot)))));
+        let started = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(started)),
+                str_concat(str_concat(str_concat(" = insertvalue ", ty),
+                str_concat(" ", v(empty))),
+                str_concat(", i64 ", str_concat(int_to_str(tag), ", 0")))));
+        add_line(out, str_concat(str_concat(str_concat("  store ", ty),
+                str_concat(" ", v(started))),
+                str_concat(", ptr %slot", int_to_str(slot))));
+        a = 0;
+        while a < arity {
+            let value = ints_get(args, arity - 1 - a);
+            let decl = field_index(rfirst, rcount, rfname, vr, field_name_at(text, a));
+            let at = layout_index(rfirst, rcount, rfname, vr, decl);
+            let ft = ints_get(rftype, ints_get(rfirst, vr) + decl);
+            own_keep(out, next, owned, value, ft, rowns, otype);
+            let held = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(held)),
+                    str_concat(str_concat(" = load ", ty),
+                    str_concat(", ptr %slot", int_to_str(slot)))));
+            let payload = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(payload)),
+                    str_concat(str_concat(" = extractvalue ", ty),
+                    str_concat(str_concat(" ", v(held)),
+                    str_concat(", ", int_to_str(tag + 1))))));
+            let filled = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(filled)),
+                    str_concat(str_concat(str_concat(" = insertvalue ", vty),
+                    str_concat(" ", v(payload))),
+                    str_concat(str_concat(str_concat(", ", llvm_type(ft)),
+                    str_concat(" ", v(value))),
+                    str_concat(", ", int_to_str(at))))));
+            let made = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(made)),
+                    str_concat(str_concat(str_concat(" = insertvalue ", ty),
+                    str_concat(" ", v(held))),
+                    str_concat(str_concat(str_concat(", ", vty),
+                    str_concat(" ", v(filled))),
+                    str_concat(", ", int_to_str(tag + 1))))));
+            add_line(out, str_concat(str_concat(str_concat("  store ", ty),
+                    str_concat(" ", v(made))),
+                    str_concat(", ptr %slot", int_to_str(slot))));
+            a = a + 1;
+        }
+        let complete = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(complete)),
+                str_concat(str_concat(" = load ", ty),
+                str_concat(", ptr %slot", int_to_str(slot)))));
+        add_line(out, str_concat(str_concat(str_concat("  store ", ty),
+                str_concat(" ", unwind_value(t))),
+                str_concat(", ptr %slot", int_to_str(slot))));
+        own_add(owned, otype, complete, t);
+        ints_push(vals, complete);
+        return 1;
+    }
 
     if kind == n_construct() {
         let t = ints_get(ntype, k);
@@ -836,6 +1004,10 @@ fn record_helper(out: Strs, next: Ints, r: Int, retain: Bool, rowns: Ints,
     let ty = llvm_type(t_record(r));
     let mut name = str_concat("@nz.rl", int_to_str(r));
     if retain { name = str_concat("@nz.rt", int_to_str(r)); }
+    if ints_get(rowns, r) == 2 {
+        return enum_helper(out, next, r, retain, rowns, rfirst, rcount, rfname, rftype,
+                ty, name);
+    }
     add_line(out, "");
     add_line(out, str_concat(str_concat("define internal void ", name),
             str_concat(str_concat("(", ty), " %r) {")));
@@ -862,6 +1034,147 @@ fn record_helper(out: Strs, next: Ints, r: Int, retain: Bool, rowns: Ints,
     }
     add_line(out, "  ret void");
     add_line(out, "}");
+    0
+}
+
+// An enum's retain or release helper: a `switch` on the discriminant, then one variant's
+// fields.
+//
+// A record's helper is a fixed sequence of retains; an enum's is *a branch and then* a
+// fixed sequence, and which sequence is not known where the copy is written. A variant
+// whose payload owns nothing is left out of the table and reaches the exit through the
+// switch's default, so a zero-payload arm costs nothing at all.
+fn enum_helper(out: Strs, next: Ints, r: Int, retain: Bool, rowns: Ints,
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
+        ty: Str, name: Str) -> Int {
+    add_line(out, "");
+    add_line(out, str_concat(str_concat("define internal void ", name),
+            str_concat(str_concat("(", ty), " %e) {")));
+    add_line(out, "entry:");
+    let tag = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(tag)),
+            str_concat(str_concat(" = extractvalue ", ty), " %e, 0")));
+    // The table first, because the `switch` is written before the blocks it names.
+    let tags = ints_new();
+    let mut pos = 0;
+    while pos < ints_get(rcount, r) {
+        let decl = layout_field(rfirst, rcount, rfname, r, pos);
+        let vt = ints_get(rftype, ints_get(rfirst, r) + decl);
+        if owns(vt, rowns) != 0 { ints_push(tags, pos); }
+        pos = pos + 1;
+    }
+    let done = str_concat("b", int_to_str(take_label(next)));
+    let labels = strs_new();
+    let mut t = 0;
+    while t < ints_len(tags) {
+        strs_push(labels, str_concat("b", int_to_str(take_label(next))));
+        t = t + 1;
+    }
+    let mut table = "";
+    let mut u = 0;
+    while u < ints_len(tags) {
+        table = str_concat(str_concat(table, "i64 "),
+                str_concat(str_concat(int_to_str(ints_get(tags, u)), ", label %"),
+                str_concat(strs_get(labels, u), " ")));
+        u = u + 1;
+    }
+    // The default is the exit. A discriminant this enum does not have cannot arise in a
+    // safe program, and "nothing to release" is the answer that stays correct if one does.
+    add_line(out, str_concat(str_concat("  switch i64 ", v(tag)),
+            str_concat(str_concat(", label %", done), str_concat(" [ ", str_concat(table, "]")))));
+    let mut w = 0;
+    while w < ints_len(tags) {
+        let at = ints_get(tags, w);
+        add_line(out, str_concat(strs_get(labels, w), ":"));
+        let decl = layout_field(rfirst, rcount, rfname, r, at);
+        let vt = ints_get(rftype, ints_get(rfirst, r) + decl);
+        let payload = take_number(next);
+        // The variant's payload is one field of the enum, at its tag plus one: the
+        // discriminant occupies index 0.
+        add_line(out, str_concat(str_concat("  ", v(payload)),
+                str_concat(str_concat(" = extractvalue ", ty),
+                str_concat(" %e, ", int_to_str(at + 1)))));
+        // A variant's payload is record-shaped, so the walk over its fields is the one
+        // `record_helper` already generates. One call, and the recursion lives in the
+        // emitted program — which is the only place this compiler can put any.
+        if retain {
+            emit_retain(out, next, payload, vt, rowns);
+        } else {
+            emit_release(out, next, payload, vt, rowns);
+        }
+        add_line(out, str_concat(str_concat("  br label %", done), ""));
+        w = w + 1;
+    }
+    add_line(out, str_concat(done, ":"));
+    add_line(out, "  ret void");
+    add_line(out, "}");
+    0
+}
+
+// One arm's payload bindings, stored into the slots the checker numbered.
+//
+// Emitted where the arm's block is opened, which is the only place they can go: the body
+// is the arm's child and runs after. A binding takes its **own** reference, exactly as a
+// `let` does — the slot is written again on the next turn of a loop, and taking before
+// releasing the old value is what makes that safe.
+fn arm_bindings(out: Strs, next: Ints, ntx: Strs, nslot: Ints, nrec: Ints,
+        arm: Int, mslot: Int, et: Int, owned: Ints, otype: Ints, rowns: Ints,
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
+    let vr = ints_get(nrec, arm);
+    if vr < 0 { return 0; }
+    let base = ints_get(nslot, arm);
+    if base < 0 { return 0; }
+    let ety = llvm_type(et);
+    let vty = llvm_type(t_record(vr));
+    let tag = variant_tag(rfirst, rcount, rfname, rftype, record_of(et), vr);
+    let text = strs_get(ntx, arm);
+    let held = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(held)),
+            str_concat(str_concat(" = load ", ety),
+            str_concat(", ptr %slot", int_to_str(mslot)))));
+    let payload = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(payload)),
+            str_concat(str_concat(" = extractvalue ", ety),
+            str_concat(str_concat(" ", v(held)),
+            str_concat(", ", int_to_str(tag + 1))))));
+    let mut n = 0;
+    while true {
+        let item = field_name_at(text, n);
+        if item == "" { break; }
+        let binding = after_colon(item);
+        // `_` names nothing, so nothing is stored — and the field is still the enum's,
+        // still in the value this `match` holds, and still released with it.
+        if binding != "_" {
+            let decl = field_index(rfirst, rcount, rfname, vr, before_colon(item));
+            if decl >= 0 {
+                let at = layout_index(rfirst, rcount, rfname, vr, decl);
+                let ft = ints_get(rftype, ints_get(rfirst, vr) + decl);
+                let got = take_number(next);
+                add_line(out, str_concat(str_concat("  ", v(got)),
+                        str_concat(str_concat(" = extractvalue ", vty),
+                        str_concat(str_concat(" ", v(payload)),
+                        str_concat(", ", int_to_str(at))))));
+                store_binding(out, next, owned, got, ft, base + decl, rowns, otype);
+            }
+        }
+        n = n + 1;
+    }
+    0
+}
+
+// The discriminant of variant entry `vr` within enum entry `e`.
+//
+// **The layout boundary**, the enum's half: the position in canonical variant-name order
+// is the tag, and nothing above this function knows one. Found by looking for the field of
+// the enum whose type is that variant, because an enum's fields *are* its variants.
+fn variant_tag(rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, e: Int, vr: Int) -> Int {
+    let mut decl = 0;
+    while decl < ints_get(rcount, e) {
+        if ints_get(rftype, ints_get(rfirst, e) + decl) == t_record(vr) {
+            return layout_index(rfirst, rcount, rfname, e, decl);
+        }
+        decl = decl + 1;
+    }
     0
 }
 
@@ -975,7 +1288,10 @@ fn owns(t: Int, rowns: Ints) -> Int {
     if t == t_chan() { return 4; }
     if is_record(t) {
         if record_of(t) < ints_len(rowns) {
+            // 5 is a record: every field. 6 is an enum: the **active** variant's fields,
+            // which is a runtime question and therefore a branch in the generated helper.
             if ints_get(rowns, record_of(t)) == 1 { return 5; }
+            if ints_get(rowns, record_of(t)) == 2 { return 6; }
         }
         return 0;
     }
@@ -1040,6 +1356,16 @@ fn release_temporaries(out: Strs, next: Ints, owned: Ints, otype: Ints, rowns: I
 fn emit_retain(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
     let o = owns(t, rowns);
     if o == 0 { return 0; }
+    if o == 6 {
+        // An enum's helper is the same shape as a record's from out here — one call — and
+        // a switch on the discriminant on the inside. That is the whole of what a sum
+        // type adds to the memory model, and it is in the emitted program rather than in
+        // this compiler.
+        add_line(out, str_concat(str_concat(str_concat("  call void @nz.rt",
+                int_to_str(record_of(t))), str_concat("(", llvm_type(t))),
+                str_concat(str_concat(" ", v(value)), ")")));
+        return 0;
+    }
     if o == 5 {
         // One generated helper per record per direction, rather than the field walk
         // inlined here. A record copied in forty places then emits forty calls instead of
@@ -1068,6 +1394,12 @@ fn emit_retain(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
 fn emit_release(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
     let o = owns(t, rowns);
     if o == 0 { return 0; }
+    if o == 6 {
+        add_line(out, str_concat(str_concat(str_concat("  call void @nz.rl",
+                int_to_str(record_of(t))), str_concat("(", llvm_type(t))),
+                str_concat(str_concat(" ", v(value)), ")")));
+        return 0;
+    }
     if o == 5 {
         add_line(out, str_concat(str_concat(str_concat("  call void @nz.rl",
                 int_to_str(record_of(t))), str_concat("(", llvm_type(t))),
@@ -1832,7 +2164,7 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
         nk: Ints, nar: Ints, nst: Ints, ntx: Strs, nslot: Ints, ntype: Ints,
         kids: Ints, kid_first: Ints, fnames: Strs, fowner: Ints, mstart: Ints,
         frame: Ints, owned: Ints, k: Int, begin: Int, src: Str, path: Str, rowns: Ints,
-        nrec: Ints, otype: Ints) -> Int {
+        nrec: Ints, otype: Ints, rfirst: Ints, rcount: Ints, rftype: Ints) -> Int {
     // Numbering restarts per function: LLVM requires a function's unnamed values to be
     // consecutive from zero, and `%p<n>`/`%slot<n>` are named so they consume none of it.
     ints_set(next, 0, 0);
@@ -1890,6 +2222,36 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
         if sk == n_construct() {
             if ints_get(nslot, scan) >= 0 {
                 ints_set(styp, ints_get(nslot, scan), ints_get(ntype, scan));
+            }
+        }
+        if sk == n_makevariant() {
+            if ints_get(nslot, scan) >= 0 {
+                ints_set(styp, ints_get(nslot, scan), ints_get(ntype, scan));
+            }
+        }
+        // The value a `match` is matching lives in a slot the frame releases, so a failure
+        // inside any arm gives it back. Its type is the **scrutinee's**, not the match's —
+        // the match's is what its arms produce.
+        if sk == n_match() {
+            if ints_get(nslot, scan) >= 0 {
+                ints_set(styp, ints_get(nslot, scan),
+                        ints_get(ntype, ints_get(kids, ints_get(kid_first, scan))));
+            }
+        }
+        // An arm's payload bindings occupy one slot each, from `nslot` on, in the
+        // variant's **declaration** order — which is how the checker numbered them.
+        if sk == n_arm() {
+            let base = ints_get(nslot, scan);
+            let vr = ints_get(nrec, scan);
+            if base >= 0 {
+                if vr >= 0 {
+                    let mut f = 0;
+                    while f < ints_get(rcount, vr) {
+                        ints_set(styp, base + f,
+                                ints_get(rftype, ints_get(rfirst, vr) + f));
+                        f = f + 1;
+                    }
+                }
             }
         }
         scan = scan + 1;
@@ -2184,7 +2546,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         if ints_get(fn_at, k) >= 0 {
             open_function(out, current, live, next, vals, nk, nar, nst, ntx, nslot, ntype,
                     kids, kid_first, fnames, fowner, mstart, frame, owned,
-                    ints_get(fn_at, k), k, src, path, rowns, nrec, otype);
+                    ints_get(fn_at, k), k, src, path, rowns, nrec, otype,
+                    rfirst, rcount, rftype);
         }
 
         // A loop header opens before its condition, never after: `continue` and the back
@@ -2229,8 +2592,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             } else {
                 if emit_record_node(out, next, vals, owned, nk, nar, ntx, ntype, nrec,
                         nslot, kids, kid_first, k, rowns, rfirst, rcount, rfname,
-                        rftype, otype) == 1 {
-                    // A record declaration, a construction or a projection.
+                        rftype, otype, phi_val, phi_blk) == 1 {
+                    // A declaration, a construction, a projection, or a `match`.
                 } else {
                     if kind == n_param() {
                         // Handled by `open_function`, which stored it before the body began.
@@ -2546,6 +2909,78 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                 }
             }
 
+            if pk == n_match() {
+                let mslot = ints_get(nslot, p);
+                let et = ints_get(ntype, ints_get(kids, ints_get(kid_first, p)));
+                if which == 0 {
+                    // The scrutinee is complete. The `match` takes it over — a temporary
+                    // is already owned and a binding is borrowed, and `own_keep` settles
+                    // the difference — and from here the slot holds the reference, so
+                    // every exit releases it exactly once.
+                    let sv = ints_pop(vals);
+                    own_keep(out, next, owned, sv, et, rowns, otype);
+                    add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(et)),
+                            str_concat(" ", v(sv))),
+                            str_concat(", ptr %slot", int_to_str(mslot))));
+                    let tag = take_number(next);
+                    add_line(out, str_concat(str_concat("  ", v(tag)),
+                            str_concat(str_concat(" = extractvalue ", llvm_type(et)),
+                            str_concat(" ", str_concat(v(sv), ", 0")))));
+                    // Checking has established that every variant has exactly one arm, so
+                    // the default is unreachable for any value this program can build. It
+                    // is the first arm rather than `unreachable`: a `switch` whose default
+                    // is poison would turn a compiler mistake into undefined behaviour
+                    // instead of a wrong answer.
+                    let mut table = "";
+                    let mut a = 1;
+                    while a < parity {
+                        let arm = ints_get(kids, ints_get(kid_first, p) + a);
+                        let at = variant_tag(rfirst, rcount, rfname, rftype,
+                                record_of(et), ints_get(nrec, arm));
+                        table = str_concat(str_concat(table, "i64 "),
+                                str_concat(str_concat(int_to_str(at), ", label %"),
+                                str_concat(blk("a", arm), " ")));
+                        a = a + 1;
+                    }
+                    let first_arm = ints_get(kids, ints_get(kid_first, p) + 1);
+                    add_line(out, str_concat(str_concat("  switch i64 ", v(tag)),
+                            str_concat(str_concat(", label %", blk("a", first_arm)),
+                            str_concat(" [ ", str_concat(table, "]")))));
+                    open_block(out, current, live, blk("a", first_arm));
+                    arm_bindings(out, next, ntx, nslot, nrec, first_arm, mslot, et,
+                            owned, otype, rowns, rfirst, rcount, rfname, rftype);
+                    // What an arm creates is not visible to its siblings, exactly as an
+                    // `if` branch's is not.
+                    ints_push(own_base, ints_len(owned));
+                } else {
+                    if ints_get(ntype, p) != 0 {
+                        // Each arm is brought to the same ownership state inside its own
+                        // block and before its jump, which is the only place a retain can
+                        // go — after the `phi` there is no arm left to attribute it to.
+                        let av = ints_pop(vals);
+                        own_keep(out, next, owned, av, ints_get(ntype, p), rowns, otype);
+                        own_add(owned, otype, av, ints_get(ntype, p));
+                        ints_push(phi_val, av);
+                        strs_push(phi_blk, strs_get(current, 0));
+                    }
+                    branch(out, live, blk("j", p));
+                    let base = ints_get(own_base, ints_len(own_base) - 1);
+                    while ints_len(owned) > base {
+                        ints_pop(owned);
+                        ints_pop(otype);
+                    }
+                    if which == parity - 1 {
+                        ints_pop(own_base);
+                        open_block(out, current, live, blk("j", p));
+                    } else {
+                        let arm = ints_get(kids, ints_get(kid_first, p) + which + 1);
+                        open_block(out, current, live, blk("a", arm));
+                        arm_bindings(out, next, ntx, nslot, nrec, arm, mslot, et,
+                                owned, otype, rowns, rfirst, rcount, rfname, rftype);
+                    }
+                }
+            }
+
             if pk == n_if() {
                 if which == 0 {
                     let c = ints_pop(vals);
@@ -2671,6 +3106,7 @@ fn main() -> Int {
     let rpub = ints_new();
     let rat = ints_new();
     let rnode = ints_new();
+    let rkind = ints_new();
     let rfirst = ints_new();
     let rcount = ints_new();
     let rfname = strs_new();
@@ -2680,11 +3116,12 @@ fn main() -> Int {
     let tname = strs_new();
     let trec = ints_new();
     collect_records(nk, nar, nst, nen, ntx, naux, mstart,
-            rnames, rowner, rpub, rat, rnode, dcode, dstart, dend, dmsg);
+            rnames, rowner, rpub, rat, rnode, rkind, kids, kid_first,
+            dcode, dstart, dend, dmsg);
     check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath),
             rnames, rowner, rpub, tmod, tname, trec, dcode, dstart, dend, dmsg);
     resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first,
-            rnames, rowner, rat, rnode, rfirst, rcount, rfname, rftype, rfat,
+            rnames, rowner, rat, rnode, rkind, rfirst, rcount, rfname, rftype, rfat,
             tmod, tname, trec, dcode, dstart, dend, dmsg);
     check_record_layouts(rnames, rat, rfirst, rcount, rftype, dcode, dstart, dend, dmsg);
     // One bit per record: whether anything in it, at any depth, has to be released. The
@@ -2692,11 +3129,20 @@ fn main() -> Int {
     // the only thing about a record those sites need — so it travels as one array rather
     // than the whole table. Computed once, after the fields are known and after a cycle
     // would have been refused, so the walk below terminates.
+    // **Two bits, not one**, since N10: `2` is an enum that owns something, `1` a record
+    // or a variant that does. The difference is not what has to be released but *how* —
+    // a record's helper walks its fields and an enum's branches on its discriminant
+    // first — and carrying it here is what lets every site that already asks `owns` keep
+    // asking exactly that and nothing more.
     let rowns = ints_new();
     let mut r = 0;
     while r < strs_len(rnames) {
         if needs_cleanup(t_record(r), rfirst, rcount, rftype) {
-            ints_push(rowns, 1);
+            if ints_get(rkind, r) == rk_enum() {
+                ints_push(rowns, 2);
+            } else {
+                ints_push(rowns, 1);
+            }
         } else {
             ints_push(rowns, 0);
         }
@@ -2712,7 +3158,7 @@ fn main() -> Int {
     let fpub = ints_new();
     collect_signatures(nk, nar, nst, nen, ntx, naux, kids, kid_first, mstart,
             fnames, fret, ffirst, fcount, fparams, fowner, fpub, bnames,
-            rnames, rowner, rpub, rat, rfirst, rcount, rfname, rftype, rfat,
+            rnames, rowner, rpub, rat, rkind, rfirst, rcount, rfname, rftype, rfat,
             tmod, tname, trec,
             dcode, dstart, dend, dmsg);
 
@@ -2737,7 +3183,7 @@ fn main() -> Int {
             fnames, fret, ffirst, fcount, fparams,
             fowner, fpub, vmod, vname, vfn,
             bnames, bret, bfirst, bcount, bparams,
-            rnames, rowner, rfirst, rcount, rfname, rftype,
+            rnames, rowner, rkind, rfirst, rcount, rfname, rftype,
             tmod, tname, trec,
             dcode, dstart, dend, dmsg);
     if strs_len(dcode) > 0 {
@@ -2819,21 +3265,47 @@ fn main() -> Int {
     // changes no byte of this. Before anything that uses one: a named type referenced
     // before it is defined is opaque to LLVM's textual parser, and an opaque type has no
     // size.
+    // Records and variants first, then enums: an enum's aggregate names its variants'
+    // payload types, and a named type referenced before it is defined is opaque to LLVM's
+    // textual parser — and an opaque type has no size.
     let mut rdef = 0;
     while rdef < strs_len(rnames) {
-        let mut fields = "";
-        let mut pos = 0;
-        while pos < ints_get(rcount, rdef) {
-            if pos > 0 { fields = str_concat(fields, ", "); }
-            let decl = layout_field(rfirst, rcount, rfname, rdef, pos);
-            fields = str_concat(fields,
-                    llvm_type(ints_get(rftype, ints_get(rfirst, rdef) + decl)));
-            pos = pos + 1;
+        if ints_get(rkind, rdef) != rk_enum() {
+            let mut fields = "";
+            let mut pos = 0;
+            while pos < ints_get(rcount, rdef) {
+                if pos > 0 { fields = str_concat(fields, ", "); }
+                let decl = layout_field(rfirst, rcount, rfname, rdef, pos);
+                fields = str_concat(fields,
+                        llvm_type(ints_get(rftype, ints_get(rfirst, rdef) + decl)));
+                pos = pos + 1;
+            }
+            add_line(head, str_concat(str_concat(str_concat("%nz.t", int_to_str(rdef)),
+                    str_concat(" = type { ", fields)), str_concat(" }    ; ",
+                    strs_get(rnames, rdef))));
         }
-        add_line(head, str_concat(str_concat(str_concat("%nz.t", int_to_str(rdef)),
-                str_concat(" = type { ", fields)), str_concat(" }    ; ",
-                strs_get(rnames, rdef))));
         rdef = rdef + 1;
+    }
+    // An enum is a discriminant followed by **one slot per variant**, in canonical
+    // variant-name order — so the slot's index is one past the tag, and moving two
+    // variant declarations changes no byte of this. Larger than the union it stands for,
+    // and deliberately so: correctness first, and `docs/performance.md` measures the cost.
+    let mut edef = 0;
+    while edef < strs_len(rnames) {
+        if ints_get(rkind, edef) == rk_enum() {
+            let mut slots = "i64";
+            let mut pos = 0;
+            while pos < ints_get(rcount, edef) {
+                let decl = layout_field(rfirst, rcount, rfname, edef, pos);
+                slots = str_concat(str_concat(slots, ", "),
+                        llvm_type(ints_get(rftype, ints_get(rfirst, edef) + decl)));
+                pos = pos + 1;
+            }
+            add_line(head, str_concat(str_concat(str_concat("%nz.t", int_to_str(edef)),
+                    str_concat(" = type { ", slots)), str_concat(" }    ; ",
+                    strs_get(rnames, edef))));
+        }
+        edef = edef + 1;
     }
     add_line(head, "declare i32 @memcmp(ptr, ptr, i64)");
     add_line(head, "declare i32 @snprintf(ptr noundef, i64, ptr noundef, ...)");
@@ -3020,7 +3492,7 @@ fn main() -> Int {
     ints_push(hnext, 0);
     let mut hr = 0;
     while hr < strs_len(rnames) {
-        if ints_get(rowns, hr) == 1 {
+        if ints_get(rowns, hr) != 0 {
             record_helper(helpers, hnext, hr, true, rowns, rfirst, rcount, rfname, rftype);
             record_helper(helpers, hnext, hr, false, rowns, rfirst, rcount, rfname, rftype);
         }
