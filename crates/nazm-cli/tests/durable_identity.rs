@@ -295,8 +295,8 @@ fn a_dependent_checks_against_a_deserialised_interface_with_the_dependency_delet
     let mut errors = Vec::new();
     // B's records are materialised into this session's table before anything that could
     // name one, which is the order a compilation uses too.
-    let rehydrated = interface.rehydrate(b, FnId::from_index(4096), res.records_mut());
-    let own = nazm_core::declare_records(&units, &mut res, &mut errors);
+    let rehydrated = interface.rehydrate(b, FnId::from_index(4096), res.types_mut());
+    let own = nazm_core::declare_types(&units, &mut res, &mut errors);
     let _ = own;
     nazm_core::declare_unit(unit, &[&rehydrated], &mut res, &mut errors);
     assert!(errors.is_empty(), "{errors:#?}");
@@ -310,12 +310,12 @@ fn a_dependent_checks_against_a_deserialised_interface_with_the_dependency_delet
     // And the negative half, so the pass above is not something else succeeding: with an
     // interface that offers nothing, the same source is refused.
     let empty = PersistentUnitInterface::from_json(
-        r#"{"schema":"nazm.interface/2","module":"b.nz","dependencies":[],"records":[],"exports":[]}"#,
+        r#"{"schema":"nazm.interface/3","module":"b.nz","dependencies":[],"records":[],"enums":[],"exports":[]}"#,
     )
     .expect("valid");
     let mut errors = Vec::new();
     let mut empty_res = Resolution::default();
-    let rehydrated_empty = empty.rehydrate(b, FnId::from_index(4096), empty_res.records_mut());
+    let rehydrated_empty = empty.rehydrate(b, FnId::from_index(4096), empty_res.types_mut());
     nazm_core::check_unit(unit, &[&rehydrated_empty], &mut empty_res, &mut errors);
     assert_eq!(errors.len(), 1, "{errors:#?}");
     assert_eq!(errors[0].code, nazm_diag::codes::UNDEFINED_FUNCTION);
@@ -497,9 +497,10 @@ fn an_exported_record_is_published_with_its_fields_and_durable_identity() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/2\",\"module\":\"m.nz\",\"dependencies\":[],\
+        "{\"schema\":\"nazm.interface/3\",\"module\":\"m.nz\",\"dependencies\":[],\
          \"records\":[{\"def\":\"m.nz::record Point\",\"name\":\"Point\",\
          \"fields\":[{\"name\":\"x\",\"ty\":\"Str\"},{\"name\":\"y\",\"ty\":\"Int\"}]}],\
+         \"enums\":[],\
          \"exports\":[{\"def\":\"m.nz::fn at\",\"name\":\"at\",\"kind\":\"fn\",\
          \"params\":[\"m.nz::record Point\"],\"ret\":\"m.nz::record Point\"}]}"
     );
@@ -672,8 +673,8 @@ fn a_dependent_checks_records_against_a_deserialised_interface_with_the_dependen
         let units = [nazm_core::Unit::of(&program, &graph, a)];
         let mut res = Resolution::default();
         let mut errors = Vec::new();
-        let rehydrated = iface.rehydrate(b, FnId::from_index(4096), res.records_mut());
-        nazm_core::declare_records(&units, &mut res, &mut errors);
+        let rehydrated = iface.rehydrate(b, FnId::from_index(4096), res.types_mut());
+        nazm_core::declare_types(&units, &mut res, &mut errors);
         nazm_core::declare_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
         nazm_core::check_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
         errors

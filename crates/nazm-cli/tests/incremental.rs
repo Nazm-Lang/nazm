@@ -927,11 +927,12 @@ fn reordering_an_exported_records_fields_reaches_nobody() {
 }
 
 #[test]
-fn an_entry_written_before_records_existed_cannot_become_a_hit() {
+fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // §81. A cached answer is keyed by the checker that produced it, and that identity
-    // reads the interface schema and the semantic epoch — both of which moved in N9. So
-    // an entry from a build that had no concept of a record is unreachable by
-    // construction rather than by a rule someone has to remember, and nothing deletes it.
+    // reads the interface schema and the semantic epoch — both of which moved in N9 and
+    // again in N10. So an entry from a build that had no concept of a record, or of an
+    // enum, is unreachable by construction rather than by a rule someone has to remember,
+    // and nothing deletes it.
     let dir = tempfile::tempdir().expect("tempdir");
     two_modules_with_a_record(dir.path(), RECORD_B);
     let first = check(dir.path(), "a.nz");
@@ -943,8 +944,29 @@ fn an_entry_written_before_records_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        2,
-        "N9 changed what the checker accepts, so the epoch must have moved"
+        3,
+        "N9 and N10 each changed what the checker accepts, so the epoch moved twice"
     );
-    assert_eq!(nazm_iface::SCHEMA, "nazm.interface/2");
+    assert_eq!(nazm_iface::SCHEMA, "nazm.interface/3");
+}
+
+#[test]
+fn a_module_that_uses_an_enum_was_refused_by_the_build_before_this_one() {
+    // The N10 half of the epoch argument, and the reason the counter exists rather than
+    // being derived from the code set. `enum` and `match` were **reserved words** in N9:
+    // a module using either was refused with `N0102`, so an N9 entry about it — if one
+    // could be reached — would say the module has a diagnostic where this build says it
+    // has none. Nothing in the derived checker-code set records that a refusal went away.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "a.nz",
+        "enum State { Ready, }
+fn main() -> Int { match State.Ready() { State.Ready() => 0, } }
+",
+    );
+    let first = check(dir.path(), "a.nz");
+    assert_eq!(first.stored, 1, "{first:?}");
+    let again = check(dir.path(), "a.nz");
+    assert_eq!(again.reused, 1, "{again:?}");
 }

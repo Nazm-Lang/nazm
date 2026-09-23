@@ -45,7 +45,8 @@ pub use emit::{
     emit_entry, emit_runtime, emit_unit, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, TARGET_NOTE,
 };
 pub use ir::{
-    ArithOp, Block, CmpOp, Expr, External, Function, Local, Native, Owns, Stmt, Ty, Unit,
+    ArithOp, Block, CmpOp, EnumLayout, EnumTy, Expr, External, Function, Local, MatchArm, Native,
+    Owns, RecordLayout, RecordTy, Stmt, Ty, Unit, VariantLayout,
 };
 pub use lower::{lower, lower_module, plan, LowerError, Lowered, Plan};
 pub use names::SourceNames;

@@ -142,13 +142,17 @@ accepts.
 
 | Rule | Definition |
 | --- | --- |
-| `program` | `{ use_item } , { function \| record }` |
+| `program` | `{ use_item } , { function \| record \| enumeration }` |
 | `use_item` | `"use" , STRING , ";"` |
 | `function` | `[ visibility ] , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , block` |
 | `visibility` | `"pub"` |
 | `record` | `[ visibility ] , "struct" , IDENT , "{" , [ fields ] , "}"` |
 | `fields` | `field , { "," , field } , [ "," ]` |
 | `field` | `IDENT , ":" , type` |
+| `enumeration` | `[ visibility ] , "enum" , IDENT , "{" , [ variants ] , "}"` |
+| `variants` | `variant , { "," , variant } , [ "," ]` |
+| `variant` | `IDENT , [ "(" , [ payload ] , ")" ]` |
+| `payload` | `field , { "," , field } , [ "," ]` |
 | `parameters` | `parameter , { "," , parameter }` |
 | `parameter` | `IDENT , ":" , type` |
 | `type` | `IDENT` |
@@ -170,18 +174,24 @@ accepts.
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" ] , primary` |
 | `primary` | `atom , { "." , IDENT }` |
-| `atom` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| if_expression \| "(" , expression , ")"` |
+| `atom` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| "(" , expression , ")"` |
 | `call` | `IDENT , "(" , [ arguments ] , ")"` |
 | `construction` | `IDENT , "(" , initialisers , ")"` |
 | `initialisers` | `initialiser , { "," , initialiser } , [ "," ]` |
 | `initialiser` | `IDENT , ":" , expression` |
+| `variant_construction` | `IDENT , "." , IDENT , "(" , [ initialisers ] , ")"` |
 | `arguments` | `expression , { "," , expression }` |
 | `if_expression` | `"if" , expression , block , [ "else" , ( block \| if_expression ) ]` |
+| `match_expression` | `"match" , expression , "{" , [ match_arms ] , "}"` |
+| `match_arms` | `match_arm , { "," , match_arm } , [ "," ]` |
+| `match_arm` | `IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression` |
+| `pattern_fields` | `pattern_field , { "," , pattern_field } , [ "," ]` |
+| `pattern_field` | `IDENT , ":" , IDENT` |
 
 ### `program`
 
 ```ebnf
-program = { use_item } , { function | record } ;
+program = { use_item } , { function | record | enumeration } ;
 ```
 
 ```nazm
@@ -194,6 +204,10 @@ use "other.nz"; fn main() -> Int { 0 }
 
 ```nazm
 struct Point { x: Int, } fn main() -> Int { Point(x: 1).x }
+```
+
+```nazm
+enum State { Ready, } fn main() -> Int { match State.Ready() { State.Ready() => 0, } }
 ```
 
 ### `use_item`
@@ -278,6 +292,65 @@ field = IDENT , ":" , type ;
 
 ```nazm
 struct P { x: Int, } fn main() -> Int { P(x: 7).x }
+```
+
+### `enumeration`
+
+```ebnf
+enumeration = [ visibility ] , "enum" , IDENT , "{" , [ variants ] , "}" ;
+```
+
+An enum: a closed set of named variants, exactly one of which is active in any value.
+`enum` is the keyword and *enum* is what the semantics call the category — unlike
+`struct`/record there is no second word, because none was needed.
+Variant order is written down and means nothing: the discriminant is derived from the
+names, so reordering two variants changes neither the type, nor its interface
+fingerprint, nor its native representation. See `docs/spec.md`, *Enums*.
+
+```nazm
+enum State { Ready, Done, } fn main() -> Int { match State.Ready() { State.Ready() => 1, State.Done() => 0, } }
+```
+
+```nazm
+pub enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } }
+```
+
+### `variants`
+
+```ebnf
+variants = variant , { "," , variant } , [ "," ] ;
+```
+
+```nazm
+enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } }
+```
+
+### `variant`
+
+```ebnf
+variant = IDENT , [ "(" , [ payload ] , ")" ] ;
+```
+
+A variant with no payload is written with **no parentheses**: there is no field list,
+exactly as a record with no fields has none. Construction and patterns always write
+them, because there the parentheses are what separates a variant from a projection.
+
+```nazm
+enum E { A, } fn main() -> Int { match E.A() { E.A() => 0, } }
+```
+
+```nazm
+enum E { V(x: Int, y: Int), } fn main() -> Int { match E.V(x: 1, y: 2) { E.V(x: a, y: b) => a + b, } }
+```
+
+### `payload`
+
+```ebnf
+payload = field , { "," , field } , [ "," ] ;
+```
+
+```nazm
+enum E { V(x: Int,), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } }
 ```
 
 ### `parameters`
@@ -556,7 +629,7 @@ struct P { x: Int, } fn main() -> Int { P(x: 1).x }
 ### `atom`
 
 ```ebnf
-atom = INTEGER | STRING | "true" | "false" | IDENT | call | construction | if_expression | "(" , expression , ")" ;
+atom = INTEGER | STRING | "true" | "false" | IDENT | call | construction | variant_construction | if_expression | match_expression | "(" , expression , ")" ;
 ```
 
 ```nazm
@@ -610,6 +683,26 @@ initialiser = IDENT , ":" , expression ;
 struct P { x: Int, } fn main() -> Int { P(x: 1 + 1).x }
 ```
 
+### `variant_construction`
+
+```ebnf
+variant_construction = IDENT , "." , IDENT , "(" , [ initialisers ] , ")" ;
+```
+
+Always qualified by the enum, and always parenthesised — including for a variant with
+no payload, because `E.V` alone is exactly the shape of a field projection. Told apart
+from one by three tokens, `IDENT "." IDENT "("`, which is a decision rather than a
+guess: the language has no methods and no function values, so nothing else can put a
+`(` after a projection. See `docs/spec.md`, *Variants are named by their enum*.
+
+```nazm
+enum E { A, } fn main() -> Int { match E.A() { E.A() => 0, } }
+```
+
+```nazm
+enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1 + 1) { E.V(x: n) => n, } }
+```
+
 ### `arguments`
 
 ```ebnf
@@ -632,6 +725,70 @@ fn main() -> Int { if true { 1 } else { 2 } }
 
 ```nazm
 fn main() -> Int { let mut n = 0; if true { n = 1; } n }
+```
+
+### `match_expression`
+
+```ebnf
+match_expression = "match" , expression , "{" , [ match_arms ] , "}" ;
+```
+
+The one elimination form for an enum. An expression, so it composes wherever one may
+appear, and its arms reuse the existing block and completion rules rather than
+introducing a second set.
+Every variant gets exactly one arm — there is no `_` arm, deliberately, so that adding
+a variant breaks the matches that believed they had handled the whole enum. See
+`docs/spec.md`, *Exhaustiveness*.
+
+```nazm
+enum E { A, B(x: Int), } fn main() -> Int { match E.A() { E.A() => 1, E.B(x: n) => n, } }
+```
+
+```nazm
+enum E { A(text: Str), } fn main() -> Int { match E.A(text: "hi") { E.A(text: s) => { let n = str_len(s); n }, } }
+```
+
+### `match_arms`
+
+```ebnf
+match_arms = match_arm , { "," , match_arm } , [ "," ] ;
+```
+
+```nazm
+enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } }
+```
+
+### `match_arm`
+
+```ebnf
+match_arm = IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression ;
+```
+
+```nazm
+enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } }
+```
+
+### `pattern_fields`
+
+```ebnf
+pattern_fields = pattern_field , { "," , pattern_field } , [ "," ] ;
+```
+
+```nazm
+enum E { V(x: Int, y: Int), } fn main() -> Int { match E.V(x: 1, y: 2) { E.V(x: a, y: _) => a, } }
+```
+
+### `pattern_field`
+
+```ebnf
+pattern_field = IDENT , ":" , IDENT ;
+```
+
+A payload field is bound to a name, or discarded with `_`. `_` declines to name the
+value; it does not mean the field is absent and does not mean it is not released.
+
+```nazm
+enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: _) => 0, } }
 ```
 
 

@@ -13,15 +13,20 @@ use std::collections::HashMap;
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
 use nazm_syntax::{
-    Assign, BinOp, Block, Expr, FieldInit, Function, Program, Record, Return, Spawn, Stmt, While,
+    Assign, BinOp, Block, Enum, Expr, FieldInit, Function, MatchArm, Program, Record, Return,
+    Spawn, Stmt, While,
 };
 
-use nazm_sema::interface::{reachable_records, Export, RecordExport, UnitInterface, Visibility};
+use nazm_sema::enums::{EnumDef, EnumId, VariantDef};
+use nazm_sema::interface::{
+    reachable_types, EnumExport, Export, RecordExport, UnitInterface, Visibility,
+};
 use nazm_sema::intrinsic::Intrinsic;
 use nazm_sema::module::{Dependency, ModuleGraph, ModuleId};
-use nazm_sema::record::{FieldDef, RecordDef, RecordId, Records, MAX_RECORD_DEPTH};
-use nazm_sema::resolve::{Callee, FieldRef, FnDef, FnId, LocalDef, Resolution};
+use nazm_sema::record::{FieldDef, RecordDef, RecordId};
+use nazm_sema::resolve::{Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Resolution, VariantRef};
 use nazm_sema::types::Type;
+use nazm_sema::udt::{TypeNode, UserTypes, MAX_TYPE_DEPTH};
 
 #[derive(Debug, Clone)]
 pub struct Signature {
@@ -155,11 +160,15 @@ struct Visible {
 ///
 /// Built-in type names are not in here: they are parsed by [`Type::from_name`] and cannot
 /// be shadowed, which is the rule `docs/spec.md` states as *built-ins are not a module's
-/// definitions*. This holds records only — this module's own, public and private alike,
-/// and the ones its direct imports export.
+/// definitions*. This holds the user-defined types — this module's own, public and private
+/// alike, and the ones its direct imports export.
+///
+/// **One map, both kinds.** `docs/spec.md` puts records and enums in the same namespace, so
+/// `struct Item` and `enum Item` in one module is a collision; two maps would have made it
+/// legal by accident, which is the kind of decision nobody would have written down.
 #[derive(Debug, Default)]
 struct Types {
-    names: HashMap<String, RecordId>,
+    names: HashMap<String, Type>,
 }
 
 /// What one module may name.
@@ -200,6 +209,8 @@ pub struct Unit<'a> {
     functions: Vec<(u32, &'a Function)>,
     /// Each record of this module, with its index in `Program::records`.
     records: Vec<(u32, &'a Record)>,
+    /// Each enum of this module, with its index in `Program::enums`.
+    enums: Vec<(u32, &'a Enum)>,
     imports: &'a [Dependency],
 }
 
@@ -221,10 +232,18 @@ impl<'a> Unit<'a> {
             .filter(|(_, r)| graph.module_of(r.name_span.file) == Some(module))
             .map(|(i, r)| (u32::try_from(i).unwrap_or(u32::MAX), r))
             .collect();
+        let enums = program
+            .enums
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| graph.module_of(e.name_span.file) == Some(module))
+            .map(|(i, e)| (u32::try_from(i).unwrap_or(u32::MAX), e))
+            .collect();
         Self {
             module,
             functions,
             records,
+            enums,
             imports: graph.imports(module),
         }
     }
@@ -310,7 +329,7 @@ pub trait Reuse {
     /// `records` is every record the compilation declared, which a driver needs to
     /// publish an interface: since N9 an exported signature may name one, and a record's
     /// shape is not in the interface value itself.
-    fn plan(&mut self, graph: &ModuleGraph, interfaces: &[UnitInterface], records: &Records);
+    fn plan(&mut self, graph: &ModuleGraph, interfaces: &[UnitInterface], types: &UserTypes);
 
     /// Whether this module's bodies must be checked.
     fn must_check(&self, module: ModuleId) -> bool;
@@ -327,7 +346,7 @@ pub trait Reuse {
 pub struct CheckEverything;
 
 impl Reuse for CheckEverything {
-    fn plan(&mut self, _graph: &ModuleGraph, _interfaces: &[UnitInterface], _records: &Records) {}
+    fn plan(&mut self, _graph: &ModuleGraph, _interfaces: &[UnitInterface], _types: &UserTypes) {}
 
     fn must_check(&self, _module: ModuleId) -> bool {
         true
@@ -400,10 +419,10 @@ pub fn check_reusing(
         }
     };
 
-    // Stage 0a: every record's name, for the whole graph. Before any field type, because
-    // a field may name a record declared later or in another module.
+    // Stage 0a: every user-defined type's name, for the whole graph. Before any field
+    // type, because a field may name a type declared later or in another module.
     let before = errors.len();
-    let type_interfaces = declare_records(&units, &mut res, &mut errors);
+    let type_interfaces = declare_types(&units, &mut res, &mut errors);
     if errors.len() != before {
         declared_cleanly.iter_mut().for_each(|c| *c = false);
     }
@@ -417,11 +436,11 @@ pub fn check_reusing(
             .filter_map(|d| type_interfaces.get(d.on.index()))
             .collect();
         let before = errors.len();
-        resolve_record_fields(u, &deps, &mut res, &mut errors);
+        resolve_type_fields(u, &deps, &mut res, &mut errors);
         mark(&mut declared_cleanly, n, before, errors.len());
     }
     let before = errors.len();
-    validate_record_layouts(&mut res, &mut errors);
+    validate_type_layouts(&mut res, &mut errors);
     if errors.len() != before {
         // A layout cycle may span modules, so every module is conservatively unclean:
         // an artefact means *this checked*, and none of them did.
@@ -446,7 +465,7 @@ pub fn check_reusing(
         })
         .collect();
 
-    reuse.plan(graph, &interfaces, res.records());
+    reuse.plan(graph, &interfaces, res.types());
 
     // Stage 2, module by module. `deps` is the *direct* imports and nothing else, so a
     // name only reachable transitively is not in scope — by construction rather than by a
@@ -484,55 +503,32 @@ pub fn check_reusing(
     (res, errors)
 }
 
-/// Stage 0a for the whole compilation: declare every record's **name**.
+/// Stage 0a for the whole compilation: declare every user-defined type's **name**.
 ///
-/// Names before field types, for every module, because a field type may name a record
+/// Names before field types, for every module, because a field type may name a type
 /// declared later in the file or in another module — `docs/spec.md` makes declaration
 /// order irrelevant, and that is only true if every name exists before any type is
-/// resolved. It is N2's declare-then-check, one stage earlier, and the returned
-/// interfaces are the *type* half of what a dependent needs.
+/// resolved. It is N2's declare-then-check, one stage earlier, and the returned interfaces
+/// are the *type* half of what a dependent needs.
 ///
-/// The interfaces returned carry records and imports and no exports: at this point no
-/// record has fields, so there is nothing to close over and no signature to publish.
+/// Records and enums are declared in one pass over one namespace. A module that declares
+/// `struct Item` and `enum Item` is refused here rather than producing two types nothing
+/// could tell apart.
+///
+/// The interfaces returned carry types and imports and no exports: at this point no type
+/// has fields, so there is nothing to close over and no signature to publish.
 /// [`declare_unit`] returns the whole thing once both are known.
-pub fn declare_records(
+pub fn declare_types(
     units: &[Unit<'_>],
     res: &mut Resolution,
     errors: &mut Vec<Diagnostic>,
 ) -> Vec<UnitInterface> {
     let mut interfaces = Vec::with_capacity(units.len());
     for unit in units {
-        let mut exported = Vec::new();
+        let mut records = Vec::new();
+        let mut enums = Vec::new();
         for (decl, r) in &unit.records {
-            // A built-in's name is not a module's to define. Unlike a duplicate, there is
-            // no declaration to point at, so the reason is said rather than shown.
-            if Type::from_name(&r.name).is_some() {
-                errors.push(
-                    Diagnostic::error(
-                        codes::BUILTIN_TYPE_REDEFINED,
-                        r.name_span,
-                        format!("`{}` is a built-in type and cannot be redefined", r.name),
-                    )
-                    .help(
-                        "built-in type names mean the same thing in every module of every \
-                         program, so none of them may be shadowed; choose another name",
-                    ),
-                );
-                continue;
-            }
-            if let Some(first) = res
-                .records()
-                .declared(unit.module, &r.name)
-                .and_then(|id| res.records().get(id))
-            {
-                errors.push(
-                    Diagnostic::error(
-                        codes::DUPLICATE_TYPE,
-                        r.name_span,
-                        format!("`{}` is declared more than once in this module", r.name),
-                    )
-                    .secondary(first.name_span, "first declared here"),
-                );
+            if refuse_type_name(unit.module, &r.name, r.name_span, res, errors) {
                 continue;
             }
             let visibility = Visibility::from_keyword(r.pub_span);
@@ -546,7 +542,28 @@ pub fn declare_records(
                 decl: *decl,
             });
             if visibility.is_exported() {
-                exported.push(RecordExport {
+                records.push(RecordExport {
+                    def: id,
+                    nameable: true,
+                });
+            }
+        }
+        for (decl, e) in &unit.enums {
+            if refuse_type_name(unit.module, &e.name, e.name_span, res, errors) {
+                continue;
+            }
+            let visibility = Visibility::from_keyword(e.pub_span);
+            let id = res.enums_mut().declare(EnumDef {
+                name: e.name.clone(),
+                module: unit.module,
+                visibility,
+                name_span: e.name_span,
+                variants: Vec::new(),
+                order: Vec::new(),
+                decl: *decl,
+            });
+            if visibility.is_exported() {
+                enums.push(EnumExport {
                     def: id,
                     nameable: true,
                 });
@@ -555,20 +572,78 @@ pub fn declare_records(
         interfaces.push(UnitInterface::new(
             unit.module,
             Vec::new(),
-            exported,
+            records,
+            enums,
             unit.imports.to_vec(),
         ));
     }
     interfaces
 }
 
-/// Stage 0b for one module: resolve its records' field types.
+/// Whether this module may not declare a type of this name, having said why.
+///
+/// One function for both kinds, because the namespace is one: a built-in's name is nobody's
+/// to take, and a second declaration under a name this module already has is a duplicate
+/// whether or not the two are the same kind.
+fn refuse_type_name(
+    module: ModuleId,
+    name: &str,
+    at: Span,
+    res: &Resolution,
+    errors: &mut Vec<Diagnostic>,
+) -> bool {
+    // A built-in's name is not a module's to define. Unlike a duplicate, there is no
+    // declaration to point at, so the reason is said rather than shown.
+    if Type::from_name(name).is_some() {
+        errors.push(
+            Diagnostic::error(
+                codes::BUILTIN_TYPE_REDEFINED,
+                at,
+                format!("`{name}` is a built-in type and cannot be redefined"),
+            )
+            .help(
+                "built-in type names mean the same thing in every module of every \
+                 program, so none of them may be shadowed; choose another name",
+            ),
+        );
+        return true;
+    }
+    let first = res
+        .records()
+        .declared(module, name)
+        .and_then(|id| res.records().get(id))
+        .map(|d| d.name_span)
+        .or_else(|| {
+            res.enums()
+                .declared(module, name)
+                .and_then(|id| res.enums().get(id))
+                .map(|d| d.name_span)
+        });
+    if let Some(first) = first {
+        errors.push(
+            Diagnostic::error(
+                codes::DUPLICATE_TYPE,
+                at,
+                format!("`{name}` is declared more than once in this module"),
+            )
+            .secondary(first, "first declared here")
+            .help(
+                "records and enums share one type namespace, so a `struct` and an `enum` \
+                 of the same name collide exactly as two of either would",
+            ),
+        );
+        return true;
+    }
+    false
+}
+
+/// Stage 0b for one module: resolve its types' field types.
 ///
 /// `deps` are the type-carrying interfaces of the modules this one directly imports —
-/// what [`declare_records`] returned, selected by the caller. Their *bodies* are not a
+/// what [`declare_types`] returned, selected by the caller. Their *bodies* are not a
 /// parameter and never will be, which is the same claim [`check_unit`] makes one stage
 /// later.
-pub fn resolve_record_fields(
+pub fn resolve_type_fields(
     unit: &Unit<'_>,
     deps: &[&UnitInterface],
     res: &mut Resolution,
@@ -586,36 +661,13 @@ pub fn resolve_record_fields(
             continue;
         }
         completed.push(&r.name);
-        let mut fields: Vec<FieldDef> = Vec::new();
-        for f in &r.fields {
-            if let Some(first) = fields.iter().find(|e| e.name == f.name) {
-                errors.push(
-                    Diagnostic::error(
-                        codes::DUPLICATE_FIELD,
-                        f.name_span,
-                        format!("`{}` has two fields called `{}`", r.name, f.name),
-                    )
-                    .secondary(first.name_span, "first declared here")
-                    .help("a field is identified by its name, so two cannot share one"),
-                );
-                continue;
-            }
-            let ty = resolve_type_in(&types, res, &f.ty.name, f.ty.span, errors);
-            fields.push(FieldDef {
-                name: f.name.clone(),
-                ty,
-                name_span: f.name_span,
-                ty_span: f.ty.span,
-            });
-        }
+        let fields = resolve_fields(&types, res, &r.name, &r.fields, errors);
         // A record with no fields. Refused rather than allowed, and the reason is the
         // grammar: `Marker()` is exactly what a call to a function named `Marker` looks
         // like, and types and functions are separate namespaces, so the two forms would
         // be genuinely ambiguous. `docs/spec.md` records the decision and what would make
         // it reversible.
-        if fields.is_empty() && !r.fields.is_empty() {
-            // Every field was a duplicate; those are already reported.
-        } else if fields.is_empty() {
+        if fields.is_empty() && r.fields.is_empty() {
             errors.push(
                 Diagnostic::error(
                     codes::UNSUPPORTED_CONSTRUCT,
@@ -632,96 +684,204 @@ pub fn resolve_record_fields(
         }
         res.records_mut().complete(id, fields);
     }
+
+    let mut done: Vec<&str> = Vec::new();
+    for (_, e) in &unit.enums {
+        let Some(id) = res.enums().declared(unit.module, &e.name) else {
+            continue;
+        };
+        if done.contains(&e.name.as_str()) {
+            continue;
+        }
+        done.push(&e.name);
+        // An enum with no variants is a type with no values, which raises `Never`
+        // semantics the language has not settled. Refused deliberately rather than
+        // allowed as a side effect. `docs/spec.md` says what a future milestone would
+        // have to decide.
+        if e.variants.is_empty() {
+            errors.push(
+                Diagnostic::error(
+                    codes::EMPTY_ENUM,
+                    e.name_span,
+                    format!("`{}` has no variants, which is not supported yet", e.name),
+                )
+                .help(
+                    "a type with no values decides what a function returning one means \
+                     and whether a `match` on one is exhaustive, and neither has been \
+                     settled. Give it a variant",
+                ),
+            );
+        }
+        let mut variants: Vec<VariantDef> = Vec::new();
+        for v in &e.variants {
+            if let Some(first) = variants.iter().find(|p| p.name == v.name) {
+                errors.push(
+                    Diagnostic::error(
+                        codes::DUPLICATE_VARIANT,
+                        v.name_span,
+                        format!("`{}` has two variants called `{}`", e.name, v.name),
+                    )
+                    .secondary(first.name_span, "first declared here")
+                    .help("a variant is identified by its name, so two cannot share one"),
+                );
+                continue;
+            }
+            let fields = resolve_fields(&types, res, &v.name, &v.fields, errors);
+            variants.push(VariantDef {
+                name: v.name.clone(),
+                name_span: v.name_span,
+                fields,
+                layout: Vec::new(),
+            });
+        }
+        res.enums_mut().complete(id, variants);
+    }
 }
 
-/// Stage 0c for the whole compilation: refuse records that cannot be laid out.
+/// One declared field list, resolved. Shared by a record's fields and a variant's payload,
+/// because they are the same thing: `docs/spec.md` makes a payload record-shaped so that a
+/// future tuple variant is a new decision rather than a drift.
+fn resolve_fields(
+    types: &Types,
+    res: &Resolution,
+    owner: &str,
+    written: &[nazm_syntax::Field],
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<FieldDef> {
+    let mut fields: Vec<FieldDef> = Vec::new();
+    for f in written {
+        if let Some(first) = fields.iter().find(|e| e.name == f.name) {
+            errors.push(
+                Diagnostic::error(
+                    codes::DUPLICATE_FIELD,
+                    f.name_span,
+                    format!("`{owner}` has two fields called `{}`", f.name),
+                )
+                .secondary(first.name_span, "first declared here")
+                .help("a field is identified by its name, so two cannot share one"),
+            );
+            continue;
+        }
+        let ty = resolve_type_in(types, res, &f.ty.name, f.ty.span, errors);
+        fields.push(FieldDef {
+            name: f.name.clone(),
+            ty,
+            name_span: f.name_span,
+            ty_span: f.ty.span,
+        });
+    }
+    fields
+}
+
+/// Stage 0c for the whole compilation: refuse types that cannot be laid out.
 ///
-/// A record contains its fields by value, so a chain of record-typed fields that returns
-/// to where it started describes a value containing itself. `docs/spec.md` refuses it as
-/// an **impossible layout** rather than as a safety problem, and states the rule over
-/// *inline containment* so that a future indirection can break a cycle without the rule
-/// changing.
+/// A record contains its fields by value and an enum contains its active payload by value,
+/// so a chain of either that returns to where it started describes a value containing
+/// itself. `docs/spec.md` refuses it as an **impossible layout** rather than as a safety
+/// problem, and states the rule over *inline containment* so that a future indirection can
+/// break a cycle without the rule changing.
+///
+/// One graph over both kinds since N10: a cycle that runs through an enum is the same
+/// impossibility as one that does not, and a walk that knew only about records would have
+/// run forever on `struct A { b: B } enum B { V(a: A) }`.
 ///
 /// Reported before anything lowers, so LLVM never sees a recursive type — a backend
 /// complaining about one is a refusal that arrives after the compiler decided the program
 /// was fine.
-pub fn validate_record_layouts(res: &mut Resolution, errors: &mut Vec<Diagnostic>) {
-    let mut reported = vec![false; res.records().len()];
-    for i in 0..res.records().len() {
-        let id = RecordId::from_index(i);
-        if reported.get(i).copied().unwrap_or(true) {
+pub fn validate_type_layouts(res: &mut Resolution, errors: &mut Vec<Diagnostic>) {
+    let nodes: Vec<TypeNode> = (0..res.records().len())
+        .map(|i| TypeNode::Record(RecordId::from_index(i)))
+        .chain((0..res.enums().len()).map(|i| TypeNode::Enum(EnumId::from_index(i))))
+        .collect();
+    let mut reported: Vec<TypeNode> = Vec::new();
+    for node in &nodes {
+        if reported.contains(node) {
             continue;
         }
-        let Some(cycle) = res.records().layout_cycle(id) else {
+        let Some(cycle) = res.types().layout_cycle(*node) else {
             continue;
         };
-        // One diagnostic per cycle, not one per record in it.
-        for r in &cycle.through {
-            if let Some(slot) = reported.get_mut(r.index()) {
-                *slot = true;
-            }
-        }
+        // One diagnostic per cycle, not one per definition in it.
+        reported.extend(cycle.through.iter().copied());
         let names: Vec<&str> = cycle
             .through
             .iter()
-            .filter_map(|r| res.records().get(*r))
-            .map(|d| d.name.as_str())
+            .map(|n| res.types().show(n.ty()))
             .collect();
-        let (closing, at) = cycle.via;
-        let Some(field) = res
-            .records()
-            .get(closing)
-            .and_then(|d| d.fields.get(at as usize))
+        let Some((field_span, start_span)) = closing_field(res, &cycle.via).zip(node_span(res, *node))
         else {
             continue;
         };
-        let Some(start) = res.records().get(id) else {
-            continue;
-        };
+        let start = res.types().show(node.ty());
         let message = if names.len() == 2 {
-            format!("`{}` contains itself", start.name)
+            format!("`{start}` contains itself")
         } else {
-            format!(
-                "`{}` contains itself through {}",
-                start.name,
-                names.join(" → ")
-            )
+            format!("`{start}` contains itself through {}", names.join(" → "))
         };
         errors.push(
-            Diagnostic::error(codes::RECURSIVE_RECORD, start.name_span, message)
-                .secondary(field.name_span, "this field closes the cycle")
+            Diagnostic::error(codes::RECURSIVE_RECORD, start_span, message)
+                .secondary(field_span, "this field closes the cycle")
                 .help(
-                    "a record holds its fields by value, so this one would have no finite \
-                     size. This is an impossible layout rather than a safety problem: a \
-                     later type that holds its contents somewhere else would make the same \
-                     shape expressible",
+                    "a record holds its fields by value and an enum holds its active \
+                     payload by value, so this one would have no finite size. This is an \
+                     impossible layout rather than a safety problem: a later type that \
+                     holds its contents somewhere else would make the same shape \
+                     expressible",
                 ),
         );
     }
 
     // Depth is only meaningful once there is no cycle to walk forever.
-    for i in 0..res.records().len() {
-        let id = RecordId::from_index(i);
-        if reported.get(i).copied().unwrap_or(true) {
+    for node in &nodes {
+        if reported.contains(node) {
             continue;
         }
-        if res.records().depth(Type::Record(id)).is_none() {
-            let Some(def) = res.records().get(id) else {
+        if res.types().depth(node.ty()).is_none() {
+            let Some(at) = node_span(res, *node) else {
                 continue;
             };
             errors.push(
                 Diagnostic::error(
                     codes::TYPE_NESTING_TOO_DEEP,
-                    def.name_span,
-                    format!("records may contain records {MAX_RECORD_DEPTH} deep"),
+                    at,
+                    format!("user-defined types may nest {MAX_TYPE_DEPTH} deep"),
                 )
                 .help(
                     "each level multiplies the copy and cleanup code generated for every \
-                     value of the outer record, so the bound is on the emitted program \
+                     value of the outer type, so the bound is on the emitted program \
                      rather than on the compiler. It is stated rather than discovered",
                 ),
             );
         }
+    }
+}
+
+/// Where the field that closes a cycle is written.
+fn closing_field(res: &Resolution, via: &nazm_sema::CycleEdge) -> Option<Span> {
+    match (via.from, via.variant) {
+        (TypeNode::Record(id), _) => res
+            .records()
+            .get(id)?
+            .fields
+            .get(via.field as usize)
+            .map(|f| f.name_span),
+        (TypeNode::Enum(id), Some(v)) => res
+            .enums()
+            .get(id)?
+            .variants
+            .get(v as usize)?
+            .fields
+            .get(via.field as usize)
+            .map(|f| f.name_span),
+        (TypeNode::Enum(_), None) => None,
+    }
+}
+
+/// Where a definition's name is written.
+fn node_span(res: &Resolution, node: TypeNode) -> Option<Span> {
+    match node {
+        TypeNode::Record(id) => res.records().get(id).map(|d| d.name_span),
+        TypeNode::Enum(id) => res.enums().get(id).map(|d| d.name_span),
     }
 }
 
@@ -750,10 +910,15 @@ fn type_environment(
     errors: &mut Vec<Diagnostic>,
     collisions: Collisions,
 ) -> Types {
-    let mut names: HashMap<String, RecordId> = HashMap::new();
+    let mut names: HashMap<String, Type> = HashMap::new();
     for (_, r) in &unit.records {
         if let Some(id) = res.records().declared(unit.module, &r.name) {
-            names.insert(r.name.clone(), id);
+            names.insert(r.name.clone(), Type::Record(id));
+        }
+    }
+    for (_, e) in &unit.enums {
+        if let Some(id) = res.enums().declared(unit.module, &e.name) {
+            names.insert(e.name.clone(), Type::Enum(id));
         }
     }
 
@@ -762,14 +927,37 @@ fn type_environment(
         let Some(iface) = deps.iter().find(|i| i.module() == d.on) else {
             continue;
         };
-        for e in iface.records().iter().filter(|e| e.nameable) {
-            let Some(def) = res.records().get(e.def) else {
+        // Records then enums, each the ones this interface makes nameable. One loop body
+        // for both: which kind a name refers to changes the `Type` that goes in the map
+        // and nothing else about the rule.
+        let offered: Vec<Type> = iface
+            .records()
+            .iter()
+            .filter(|e| e.nameable)
+            .map(|e| Type::Record(e.def))
+            .chain(
+                iface
+                    .enums()
+                    .iter()
+                    .filter(|e| e.nameable)
+                    .map(|e| Type::Enum(e.def)),
+            )
+            .collect();
+        for offer in offered {
+            let Some(name) = type_name_of(res, offer) else {
                 continue;
             };
-            if let Some(own) = res
-                .records()
-                .declared(unit.module, &def.name)
-                .and_then(|id| res.records().get(id))
+            let Some(declared_at) = user_type_span(res, offer) else {
+                continue;
+            };
+            if let Some(own) = names
+                .get(&name)
+                .copied()
+                .and_then(|t| user_type_span(res, t))
+                .filter(|_| {
+                    res.records().declared(unit.module, &name).is_some()
+                        || res.enums().declared(unit.module, &name).is_some()
+                })
             {
                 if collisions == Collisions::Report {
                     errors.push(
@@ -777,13 +965,12 @@ fn type_environment(
                             codes::IMPORT_COLLIDES_WITH_DEFINITION,
                             d.at,
                             format!(
-                                "this import brings in the type `{}`, which this module \
-                                 declares",
-                                def.name
+                                "this import brings in the type `{name}`, which this \
+                                 module declares"
                             ),
                         )
-                        .secondary(own.name_span, "declared here")
-                        .secondary(def.name_span, "and exported here")
+                        .secondary(own, "declared here")
+                        .secondary(declared_at, "and exported here")
                         .help(
                             "an imported type and a local one are not ranked: rename one \
                              of them, or stop exporting the other",
@@ -792,19 +979,16 @@ fn type_environment(
                 }
                 continue;
             }
-            if let Some(first) = brought_in.get(&def.name) {
+            if let Some(first) = brought_in.get(&name) {
                 if collisions == Collisions::Report {
                     errors.push(
                         Diagnostic::error(
                             codes::AMBIGUOUS_IMPORT,
                             d.at,
-                            format!(
-                                "the type `{}` is exported by two imported modules",
-                                def.name
-                            ),
+                            format!("the type `{name}` is exported by two imported modules"),
                         )
                         .secondary(*first, "also brought in here")
-                        .secondary(def.name_span, "exported here")
+                        .secondary(declared_at, "exported here")
                         .help(
                             "there is no way to write which one is meant, so the \
                              ambiguity is refused where it is created rather than where \
@@ -814,14 +998,28 @@ fn type_environment(
                 }
                 continue;
             }
-            brought_in.insert(def.name.clone(), d.at);
-            names.insert(def.name.clone(), e.def);
+            brought_in.insert(name.clone(), d.at);
+            names.insert(name, offer);
         }
     }
     Types { names }
 }
 
-/// A type name, against the built-ins and then this module's visible records.
+/// A user-defined type's declared name, or `None` for a built-in.
+fn type_name_of(res: &Resolution, t: Type) -> Option<String> {
+    match t {
+        Type::Record(id) => res.records().get(id).map(|d| d.name.clone()),
+        Type::Enum(id) => res.enums().get(id).map(|d| d.name.clone()),
+        _ => None,
+    }
+}
+
+/// Where a user-defined type's name is written.
+fn user_type_span(res: &Resolution, t: Type) -> Option<Span> {
+    TypeNode::of(t).and_then(|n| node_span(res, n))
+}
+
+/// A type name, against the built-ins and then this module's visible types.
 ///
 /// Built-ins first and unshadowable, which is why they are matched before the map is
 /// consulted rather than being put in it.
@@ -835,23 +1033,31 @@ fn resolve_type_in(
     if let Some(t) = Type::from_name(name) {
         return t;
     }
-    if let Some(id) = types.names.get(name) {
-        return Type::Record(*id);
+    if let Some(t) = types.names.get(name) {
+        return *t;
     }
     let mut d = Diagnostic::error(codes::UNKNOWN_TYPE, span, format!("`{name}` is not a type"))
         .help(format!(
-            "the built-in types are {}, and a `struct` declares another",
+            "the built-in types are {}, and `struct` and `enum` declare others",
             Type::all_names()
         ));
     // The same courtesy the function namespace extends: a type that exists somewhere is
     // more usefully reported as unreachable than as non-existent.
-    if let Some(elsewhere) = res
+    let elsewhere = res
         .records()
         .declared_anywhere(name)
         .next()
         .and_then(|id| res.records().get(id))
-    {
-        d = d.secondary(elsewhere.name_span, "a type of this name is declared here");
+        .map(|d| d.name_span)
+        .or_else(|| {
+            res.enums()
+                .declared_anywhere(name)
+                .next()
+                .and_then(|id| res.enums().get(id))
+                .map(|d| d.name_span)
+        });
+    if let Some(at) = elsewhere {
+        d = d.secondary(at, "a type of this name is declared here");
     }
     errors.push(d);
     // Continue as `Int` rather than abandoning: one unknown type should not suppress
@@ -952,8 +1158,9 @@ pub fn declare_unit(
         }
     }
 
-    // The same check for an exported record's own fields, and the interface's record set.
+    // The same check for an exported type's own fields, and the interface's type set.
     let mut records: Vec<RecordExport> = Vec::new();
+    let mut enums: Vec<EnumExport> = Vec::new();
     let mut roots: Vec<Type> = Vec::new();
     for (_, r) in &unit.records {
         let Some(id) = res.records().declared(unit.module, &r.name) else {
@@ -977,9 +1184,39 @@ pub fn declare_unit(
         });
         roots.push(Type::Record(id));
     }
+    for (_, e) in &unit.enums {
+        let Some(id) = res.enums().declared(unit.module, &e.name) else {
+            continue;
+        };
+        let Some(def) = res.enums().get(id) else {
+            continue;
+        };
+        if !def.visibility.is_exported() {
+            continue;
+        }
+        let name = def.name.clone();
+        let name_span = def.name_span;
+        // Every payload field of every variant: a public enum's variants and their
+        // payloads are all part of the public type, because `docs/spec.md` gives it no
+        // per-variant visibility and an importer must be able to match every arm.
+        let payloads: Vec<(Type, Span)> = def
+            .variants
+            .iter()
+            .flat_map(|v| v.fields.iter().map(|f| (f.ty, f.ty_span)))
+            .collect();
+        for (t, at) in payloads {
+            report_private_type(t, at, name_span, "enum", &name, res, errors);
+        }
+        enums.push(EnumExport {
+            def: id,
+            nameable: true,
+        });
+        roots.push(Type::Enum(id));
+    }
     // Closed over what the public surface mentions: an importer that projects through an
-    // exported record needs every shape it can reach, and cannot go and read the module
-    // that declared one. `RecordExport` says why this is not transitive visibility.
+    // exported record or matches an exported enum needs every shape it can reach, and
+    // cannot go and read the module that declared one. `RecordExport` says why this is not
+    // transitive visibility.
     roots.extend(exports.iter().flat_map(|e| {
         e.params
             .iter()
@@ -987,22 +1224,42 @@ pub fn declare_unit(
             .chain(std::iter::once(e.ret))
             .collect::<Vec<_>>()
     }));
-    for id in reachable_records(res.records(), roots) {
-        if !records.iter().any(|r| r.def == id) {
-            records.push(RecordExport {
-                def: id,
-                nameable: false,
-            });
+    for node in reachable_types(res.types(), roots) {
+        match node {
+            TypeNode::Record(id) => {
+                if !records.iter().any(|r| r.def == id) {
+                    records.push(RecordExport {
+                        def: id,
+                        nameable: false,
+                    });
+                }
+            }
+            TypeNode::Enum(id) => {
+                if !enums.iter().any(|e| e.def == id) {
+                    enums.push(EnumExport {
+                        def: id,
+                        nameable: false,
+                    });
+                }
+            }
         }
     }
 
-    UnitInterface::new(unit.module, exports, records, unit.imports.to_vec())
+    UnitInterface::new(
+        unit.module,
+        exports,
+        records,
+        enums,
+        unit.imports.to_vec(),
+    )
 }
 
-/// Report a public item that names a private record.
+/// Report a public item that names a private user-defined type.
 ///
 /// `kind` and `name` describe the **public** item, so the message says what is leaking
-/// and the labels say from where to where.
+/// and the labels say from where to where. Records and enums both, because the closure
+/// `docs/spec.md` requires runs through both and a check that knew one kind would let a
+/// private enum out through a public record's field.
 fn report_private_type(
     t: Type,
     at: Span,
@@ -1012,24 +1269,25 @@ fn report_private_type(
     res: &Resolution,
     errors: &mut Vec<Diagnostic>,
 ) {
-    let Type::Record(id) = t else { return };
-    let Some(def) = res.records().get(id) else {
-        return;
+    let (private_name, declared_at) = match t {
+        Type::Record(id) => match res.records().get(id) {
+            Some(d) if !d.visibility.is_exported() => (d.name.clone(), d.name_span),
+            _ => return,
+        },
+        Type::Enum(id) => match res.enums().get(id) {
+            Some(d) if !d.visibility.is_exported() => (d.name.clone(), d.name_span),
+            _ => return,
+        },
+        _ => return,
     };
-    if def.visibility.is_exported() {
-        return;
-    }
     errors.push(
         Diagnostic::error(
             codes::PRIVATE_TYPE_EXPOSED,
             at,
-            format!(
-                "this public {kind} exposes `{}`, which is private to this module",
-                def.name
-            ),
+            format!("this public {kind} exposes `{private_name}`, which is private to this module"),
         )
         .secondary(item_span, format!("`{name}` is public"))
-        .secondary(def.name_span, "declared without `pub` here")
+        .secondary(declared_at, "declared without `pub` here")
         .help(
             "an importer would have to name this type to use the item and cannot. Export \
              the type with `pub`, or stop exporting the item",
@@ -1190,6 +1448,15 @@ fn environment(
     Env { names }
 }
 
+/// A list of names, quoted, for a diagnostic that has to name several.
+fn quoted(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|n| format!("`{n}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl Checker<'_> {
     /// Give a binding its slot in the current function's storage.
     ///
@@ -1293,7 +1560,7 @@ impl Checker<'_> {
     /// record spells its declared name, which is not its identity — two modules may each
     /// declare `Thing`, and a message that says `Thing` is right about what was written.
     fn show(&self, t: Type) -> String {
-        self.res.records().show(t).to_owned()
+        self.res.types().show(t).to_owned()
     }
 
     fn resolve_type(&mut self, name: &str, span: Span) -> Type {
@@ -1311,9 +1578,29 @@ impl Checker<'_> {
     fn resolve_record(&mut self, name: &str, span: Span) -> Option<RecordId> {
         match self.resolve_type(name, span) {
             Type::Record(id) => Some(id),
+            Type::Enum(id) => {
+                // `E(x: 1)` where `E` is an enum. A real mistake with an exact fix, so it
+                // says the fix rather than that `E` is not a record.
+                let name = self.res.types().show(Type::Enum(id)).to_owned();
+                let first = self
+                    .res
+                    .enums()
+                    .get(id)
+                    .and_then(|d| d.variants.first().map(|v| v.name.clone()));
+                let mut d = Diagnostic::error(
+                    codes::UNKNOWN_VARIANT,
+                    span,
+                    format!("`{name}` is an enum, so a value of it names one of its variants"),
+                );
+                if let Some(v) = first {
+                    d = d.help(format!("write `{name}.{v}(…)`"));
+                }
+                self.errors.push(d);
+                None
+            }
             other => {
-                // A known type that is not a record: `Int(x: 1)`. Distinguished from an
-                // unknown name, which `resolve_type` has already reported.
+                // A known type that is not a user-defined one: `Int(x: 1)`. Distinguished
+                // from an unknown name, which `resolve_type` has already reported.
                 if Type::from_name(name).is_some() {
                     let shown = self.show(other);
                     self.errors.push(
@@ -1326,6 +1613,39 @@ impl Checker<'_> {
                             "this form builds a record. A built-in type is built by its \
                              own operations",
                         ),
+                    );
+                }
+                None
+            }
+        }
+    }
+
+    /// Which enum a type name written in an expression or a pattern refers to.
+    fn resolve_enum(&mut self, name: &str, span: Span) -> Option<EnumId> {
+        match self.resolve_type(name, span) {
+            Type::Enum(id) => Some(id),
+            Type::Record(id) => {
+                let shown = self.res.types().show(Type::Record(id)).to_owned();
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNKNOWN_VARIANT,
+                        span,
+                        format!("`{shown}` is a record, so it has no variants"),
+                    )
+                    .help("a record is built by naming its fields: `Point(x: 1, y: 2)`"),
+                );
+                None
+            }
+            other => {
+                if Type::from_name(name).is_some() {
+                    let shown = self.show(other);
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNKNOWN_VARIANT,
+                            span,
+                            format!("`{shown}` is a built-in type, so it has no variants"),
+                        )
+                        .help("only an `enum` has variants"),
                     );
                 }
                 None
@@ -1363,7 +1683,7 @@ impl Checker<'_> {
                 .get(id)
                 .and_then(|d| d.field(&f.name).map(|(_, fd)| (fd.ty, fd.name_span)));
             let Some((want, declared_at)) = declared else {
-                let name = self.res.records().show(Type::Record(id)).to_owned();
+                let name = self.res.types().show(Type::Record(id)).to_owned();
                 self.errors.push(
                     Diagnostic::error(
                         codes::UNKNOWN_FIELD,
@@ -1414,7 +1734,7 @@ impl Checker<'_> {
                 .collect()
         });
         if !missing.is_empty() {
-            let name = self.res.records().show(Type::Record(id)).to_owned();
+            let name = self.res.types().show(Type::Record(id)).to_owned();
             let list = missing
                 .iter()
                 .map(|m| format!("`{m}`"))
@@ -1439,6 +1759,430 @@ impl Checker<'_> {
         Some(Type::Record(id))
     }
 
+    /// Check `Enum.Variant(field: value, …)` and return the enum it builds.
+    ///
+    /// The same law as a record construction, applied to the fields of one variant: every
+    /// payload field exactly once, by name, with no unknown field and no duplicate, and
+    /// initialisers checked **in the order written** because that is the order they run in.
+    fn check_variant(
+        &mut self,
+        ty: &str,
+        ty_span: Span,
+        variant: &str,
+        variant_span: Span,
+        fields: &[FieldInit],
+        span: Span,
+    ) -> Option<Type> {
+        let Some(id) = self.resolve_enum(ty, ty_span) else {
+            // Still check the initialisers: one unknown type should not silence every
+            // error inside it.
+            for f in fields {
+                self.check_expr(&f.value, None);
+            }
+            return None;
+        };
+        let Some(at) = self.find_variant(id, variant, variant_span) else {
+            for f in fields {
+                self.check_expr(&f.value, None);
+            }
+            return Some(Type::Enum(id));
+        };
+        self.res.record_variant(
+            variant_span,
+            VariantRef {
+                enumeration: id,
+                variant: at,
+            },
+        );
+
+        let mut given: Vec<(String, Span)> = Vec::new();
+        for f in fields {
+            let declared = self
+                .variant_def(id, at)
+                .and_then(|v| v.field(&f.name).map(|(i, fd)| (i, fd.ty, fd.name_span)));
+            let Some((index, want, declared_at)) = declared else {
+                let owner = self.variant_path(id, at);
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNKNOWN_FIELD,
+                        f.name_span,
+                        format!("`{owner}` has no payload field `{}`", f.name),
+                    )
+                    .secondary(self.variant_span(id, at).unwrap_or(ty_span), "declared here"),
+                );
+                self.check_expr(&f.value, None);
+                continue;
+            };
+            if let Some((_, first)) = given.iter().find(|(g, _)| *g == f.name) {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::DUPLICATE_FIELD,
+                        f.name_span,
+                        format!("`{}` is given a value twice", f.name),
+                    )
+                    .secondary(*first, "first given here")
+                    .help("every payload field is given exactly one value"),
+                );
+                self.check_expr(&f.value, None);
+                continue;
+            }
+            given.push((f.name.clone(), f.name_span));
+            self.res.record_payload(
+                f.name_span,
+                PayloadRef {
+                    enumeration: id,
+                    variant: at,
+                    field: index,
+                },
+            );
+            let got = self.value_type(&f.value, Some(want));
+            if got != want {
+                let (swant, sgot) = (self.show(want), self.show(got));
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        f.value.span(),
+                        format!("`{}` is `{swant}`, but this is `{sgot}`", f.name),
+                    )
+                    .secondary(declared_at, format!("declared `{swant}` here")),
+                );
+            }
+        }
+
+        let missing = self.missing_payload_fields(id, at, &given);
+        if !missing.is_empty() {
+            let owner = self.variant_path(id, at);
+            let list = quoted(&missing);
+            self.errors.push(
+                Diagnostic::error(
+                    codes::MISSING_FIELD,
+                    span,
+                    format!("this `{owner}` does not give a value for {list}"),
+                )
+                .secondary(self.variant_span(id, at).unwrap_or(ty_span), "declared here")
+                .help(
+                    "every payload field is given a value when a variant is built. There \
+                     are no default values",
+                ),
+            );
+        }
+        Some(Type::Enum(id))
+    }
+
+    /// Check `match scrutinee { … }`.
+    ///
+    /// The scrutinee is checked once, the arms are checked against the enum it named, and
+    /// exhaustiveness is decided here rather than deferred: `docs/spec.md` gives the
+    /// checker the language's meaning, and a `match` whose coverage were settled at
+    /// lowering would have two answers to one question.
+    fn check_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Completion {
+        let sty = self.value_type(scrutinee, None);
+        let Type::Enum(id) = sty else {
+            let shown = self.show(sty);
+            self.errors.push(
+                Diagnostic::error(
+                    codes::MATCH_ON_NON_ENUM,
+                    scrutinee.span(),
+                    format!("`match` needs an enum, but this is `{shown}`"),
+                )
+                .help(
+                    "`match` selects one variant of an enum. There is no literal, record \
+                     or range pattern",
+                ),
+            );
+            return Completion::Value(expected.unwrap_or(Type::Int));
+        };
+
+        // One slot per variant, in declaration order: where the arm that covers it was
+        // written. That is both the duplicate check and the exhaustiveness check, and
+        // keeping them as one structure is what stops the two disagreeing.
+        let count = self.res.enums().get(id).map_or(0, |d| d.variants.len());
+        let mut covered: Vec<Option<Span>> = vec![None; count];
+        // Whether some arm named a variant this enum does not have, or another enum's.
+        // Coverage is not reported when one did: the checker does not know which variant
+        // the author meant, so "does not cover `B`" would be a second diagnostic about the
+        // one mistake already reported. `docs/spec.md`, *One mistake, one error*.
+        let mut unresolved = false;
+        let mut result: Option<Completion> = None;
+        let mut first_value: Option<(Type, Span)> = None;
+
+        for arm in arms {
+            let Some(named) = self.resolve_enum(&arm.ty, arm.ty_span) else {
+                unresolved = true;
+                continue;
+            };
+            if named != id {
+                let (want, got) = (self.show(sty), self.show(Type::Enum(named)));
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::WRONG_ENUM_IN_PATTERN,
+                        arm.ty_span,
+                        format!("this pattern is a `{got}`, but the value is a `{want}`"),
+                    )
+                    .secondary(scrutinee.span(), format!("this is a `{want}`"))
+                    .help(
+                        "a variant belongs to its enum, so a pattern names the scrutinee's \
+                         own enum. There is no structural matching between two enums that \
+                         happen to have a variant of the same name",
+                    ),
+                );
+                unresolved = true;
+                continue;
+            }
+            let Some(at) = self.find_variant(id, &arm.variant, arm.variant_span) else {
+                unresolved = true;
+                continue;
+            };
+            if let Some(Some(first)) = covered.get(at as usize).copied() {
+                let owner = self.variant_path(id, at);
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::DUPLICATE_MATCH_ARM,
+                        arm.variant_span,
+                        format!("`{owner}` already has an arm"),
+                    )
+                    .secondary(first, "first covered here")
+                    .help(
+                        "the discriminant selects exactly one arm, so a second one for the \
+                         same variant can never run",
+                    ),
+                );
+                continue;
+            }
+            if let Some(slot) = covered.get_mut(at as usize) {
+                *slot = Some(arm.variant_span);
+            }
+            self.res.record_variant(
+                arm.variant_span,
+                VariantRef {
+                    enumeration: id,
+                    variant: at,
+                },
+            );
+
+            let completion = self.check_arm(id, at, arm, expected.or(first_value.map(|(t, _)| t)));
+            if let Completion::Value(t) = completion {
+                match first_value {
+                    None => first_value = Some((t, arm.body.span())),
+                    Some((want, at_span)) if want != t => {
+                        let (swant, sgot) = (self.show(want), self.show(t));
+                        self.errors.push(
+                            Diagnostic::error(
+                                codes::BRANCH_TYPES_DIFFER,
+                                arm.body.span(),
+                                format!("this arm is `{sgot}`, but an earlier one is `{swant}`"),
+                            )
+                            .secondary(at_span, format!("this one is `{swant}`"))
+                            .help("every arm of a `match` must have the same type"),
+                        );
+                    }
+                    Some(_) => {}
+                }
+            }
+            result = Some(match (result, completion) {
+                (None, c) => c,
+                // One arm leaving means the others decide, exactly as one branch of an
+                // `if` does.
+                (Some(Completion::Diverges), c) | (Some(c), Completion::Diverges) => c,
+                (Some(Completion::Unit), _) | (Some(_), Completion::Unit) => Completion::Unit,
+                (Some(a), _) => a,
+            });
+        }
+
+        let missing: Vec<String> = covered
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.is_none())
+            .filter_map(|(i, _)| {
+                self.res
+                    .enums()
+                    .get(id)
+                    .and_then(|d| d.variants.get(i))
+                    .map(|v| v.name.clone())
+            })
+            .collect();
+        if !missing.is_empty() && !unresolved {
+            let name = self.res.types().show(sty).to_owned();
+            let list = quoted(&missing);
+            let declared = self.res.enums().get(id).map(|d| d.name_span);
+            let mut d = Diagnostic::error(
+                codes::NON_EXHAUSTIVE_MATCH,
+                span,
+                format!("this `match` does not cover {list}"),
+            )
+            .help(format!(
+                "an enum is closed, so every variant of `{name}` gets an arm. There is no \
+                 `_` arm: adding a variant is meant to break the matches that believed \
+                 they had handled all of them"
+            ));
+            if let Some(at) = declared {
+                d = d.secondary(at, "declared here");
+            }
+            self.errors.push(d);
+        }
+
+        result.unwrap_or(Completion::Value(expected.unwrap_or(Type::Int)))
+    }
+
+    /// One arm: its payload bindings, then its body, in a scope of their own.
+    fn check_arm(
+        &mut self,
+        id: EnumId,
+        at: u32,
+        arm: &MatchArm,
+        expected: Option<Type>,
+    ) -> Completion {
+        self.scopes.push();
+        let mut named: Vec<(String, Span)> = Vec::new();
+        for f in &arm.fields {
+            let declared = self
+                .variant_def(id, at)
+                .and_then(|v| v.field(&f.name).map(|(i, fd)| (i, fd.ty)));
+            let Some((index, ty)) = declared else {
+                let owner = self.variant_path(id, at);
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNKNOWN_FIELD,
+                        f.name_span,
+                        format!("`{owner}` has no payload field `{}`", f.name),
+                    )
+                    .secondary(
+                        self.variant_span(id, at).unwrap_or(arm.variant_span),
+                        "declared here",
+                    ),
+                );
+                continue;
+            };
+            if let Some((_, first)) = named.iter().find(|(g, _)| *g == f.name) {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::DUPLICATE_FIELD,
+                        f.name_span,
+                        format!("this pattern names `{}` twice", f.name),
+                    )
+                    .secondary(*first, "first named here"),
+                );
+                continue;
+            }
+            named.push((f.name.clone(), f.name_span));
+            self.res.record_payload(
+                f.name_span,
+                PayloadRef {
+                    enumeration: id,
+                    variant: at,
+                    field: index,
+                },
+            );
+            // `_` names nothing. The field is still resolved above, because it still
+            // exists and is still released with the value — `docs/spec.md` is explicit
+            // that a discard declines to name a payload rather than forgetting it.
+            let Some(binding) = &f.binding else { continue };
+            if self.scopes.defined_here(binding) {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::ALREADY_DEFINED_IN_SCOPE,
+                        f.binding_span,
+                        format!("`{binding}` is bound twice by this pattern"),
+                    )
+                    .help("each payload field binds a name of its own, or is discarded with `_`"),
+                );
+                continue;
+            }
+            // Not mutable: a pattern binding is a borrowed, immutable view of the payload
+            // the match's scrutinee holds. That is a statement about the *name* — a
+            // binding that names a sequence still reaches shared mutable storage, which
+            // `docs/spec.md` says in as many words.
+            let slot = self.allocate(binding, ty, false);
+            self.res.record_var(f.binding_span, slot);
+            self.scopes
+                .define(binding, ty, false, Some(f.binding_span), slot);
+        }
+
+        let missing = self.missing_payload_fields(id, at, &named);
+        if !missing.is_empty() {
+            let owner = self.variant_path(id, at);
+            let list = quoted(&missing);
+            self.errors.push(
+                Diagnostic::error(
+                    codes::MISSING_FIELD,
+                    arm.variant_span,
+                    format!("this pattern does not name {list} of `{owner}`"),
+                )
+                .help(
+                    "a pattern names every payload field, binding it or discarding it with \
+                     `_`. There is no rest pattern, so adding a payload field breaks the \
+                     patterns that did not know about it rather than ignoring it",
+                ),
+            );
+        }
+
+        let completion = self.check_expr(&arm.body, expected);
+        self.scopes.pop();
+        completion
+    }
+
+    /// The variant of this name, reported if the enum does not have one.
+    fn find_variant(&mut self, id: EnumId, name: &str, at: Span) -> Option<u32> {
+        if let Some((i, _)) = self.res.enums().get(id).and_then(|d| d.variant(name)) {
+            return Some(i);
+        }
+        let shown = self.res.types().show(Type::Enum(id)).to_owned();
+        let known: Vec<String> = self
+            .res
+            .enums()
+            .get(id)
+            .map(|d| d.variants.iter().map(|v| v.name.clone()).collect())
+            .unwrap_or_default();
+        let declared = self.res.enums().get(id).map(|d| d.name_span);
+        let mut d = Diagnostic::error(
+            codes::UNKNOWN_VARIANT,
+            at,
+            format!("`{shown}` has no variant `{name}`"),
+        );
+        if let Some(span) = declared {
+            d = d.secondary(span, "declared here");
+        }
+        if !known.is_empty() {
+            d = d.help(format!("its variants are {}", quoted(&known)));
+        }
+        self.errors.push(d);
+        None
+    }
+
+    fn variant_def(&self, id: EnumId, at: u32) -> Option<&VariantDef> {
+        self.res.enums().get(id)?.variants.get(at as usize)
+    }
+
+    fn variant_span(&self, id: EnumId, at: u32) -> Option<Span> {
+        self.variant_def(id, at).map(|v| v.name_span)
+    }
+
+    /// `Enum.Variant`, for a message. A spelling, not an identity.
+    fn variant_path(&self, id: EnumId, at: u32) -> String {
+        let e = self.res.types().show(Type::Enum(id));
+        match self.variant_def(id, at) {
+            Some(v) => format!("{e}.{}", v.name),
+            None => e.to_owned(),
+        }
+    }
+
+    /// The payload fields of this variant that `given` does not mention.
+    fn missing_payload_fields(&self, id: EnumId, at: u32, given: &[(String, Span)]) -> Vec<String> {
+        self.variant_def(id, at).map_or_else(Vec::new, |v| {
+            v.fields
+                .iter()
+                .filter(|f| !given.iter().any(|(g, _)| *g == f.name))
+                .map(|f| f.name.clone())
+                .collect()
+        })
+    }
+
     /// Check `base.name` and return the field's type.
     ///
     /// Field lookup begins at the base's **resolved type** and goes no further: there is
@@ -1447,13 +2191,22 @@ impl Checker<'_> {
     fn check_projection(&mut self, base_ty: Type, name: &str, name_span: Span) -> Option<Type> {
         let Type::Record(id) = base_ty else {
             let shown = self.show(base_ty);
+            let help = if base_ty.is_enum() {
+                // An enum's payload depends on its active variant, so there is nothing a
+                // projection could mean. `docs/spec.md` gives `match` as the one
+                // elimination form, and saying so is more use than "not a record".
+                "which fields an enum value has depends on its active variant, so a \
+                 payload is read by `match` and not by `.`"
+            } else {
+                "`.` reads a declared field out of a record value"
+            };
             self.errors.push(
                 Diagnostic::error(
                     codes::INVALID_PROJECTION,
                     name_span,
                     format!("`{shown}` is not a record, so `.{name}` has nothing to read"),
                 )
-                .help("`.` reads a declared field out of a record value"),
+                .help(help),
             );
             return None;
         };
@@ -1772,7 +2525,7 @@ impl Checker<'_> {
             // Derived rather than asked of the type: a record's legality is its fields',
             // recursively, so the table answers and the answer carries the field path
             // that made it illegal. `docs/spec.md`, *Task safety is derived*.
-            if let Err(why) = self.res.records().task_safety(got) {
+            if let Err(why) = self.res.types().task_safety(got) {
                 let shown = self.show(got);
                 let named = self.show(why.ty);
                 let message = if why.path.is_empty() {
@@ -1786,8 +2539,11 @@ impl Checker<'_> {
                 self.errors.push(
                     Diagnostic::error(codes::ILLEGAL_TASK_CAPTURE, a.span(), message).help(
                         "`Ints` and `Strs` are handles to shared mutable storage with no \
-                         synchronisation, and a record containing one at any depth inherits \
-                         that. Pass `Int`, `Bool` or `Str` values, a `Chan`, or a record \
+                         synchronisation, and a record or enum containing one at any depth \
+                         inherits that. For an enum it is every variant that counts, not \
+                         the one the value currently holds: what a task is given is a \
+                         value of a type, and the guarantee is about the type. Pass \
+                         `Int`, `Bool` or `Str` values, a `Chan`, or a record or enum \
                          whose every field may cross",
                     ),
                 );
@@ -2158,6 +2914,24 @@ impl Checker<'_> {
                 None => Completion::Value(Type::Int),
             },
 
+            Expr::Variant {
+                ty,
+                ty_span,
+                variant,
+                variant_span,
+                fields,
+                span,
+            } => match self.check_variant(ty, *ty_span, variant, *variant_span, fields, *span) {
+                Some(t) => Completion::Value(t),
+                None => Completion::Value(expected.unwrap_or(Type::Int)),
+            },
+
+            Expr::Match {
+                scrutinee,
+                arms,
+                span,
+            } => self.check_match(scrutinee, arms, *span, expected),
+
             Expr::Field {
                 base,
                 name,
@@ -2278,11 +3052,12 @@ impl Checker<'_> {
             // same contents" and the language has chosen neither. Offering one silently
             // is how a program comes to depend on the wrong answer.
             //
-            // A record joins them rather than getting an exception, and for exactly that
-            // reason: one with an `Ints` field would force the same unmade choice, and a
-            // rule that held for some records and not others would be worse than no rule.
+            // A record and an enum join them rather than getting an exception, and for
+            // exactly that reason: one with an `Ints` field or payload would force the
+            // same unmade choice, and a rule that held for some of them and not others
+            // would be worse than no rule.
             BinOp::Eq | BinOp::NotEq => {
-                lt == rt && !lt.is_sequence() && lt != Type::Chan && !lt.is_record()
+                lt == rt && !lt.is_sequence() && lt != Type::Chan && !lt.is_user_defined()
             }
         };
 

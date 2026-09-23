@@ -79,6 +79,85 @@ pub enum Ty {
     /// record copy retains field by field rather than not at all. The id indexes the
     /// unit's [`RecordLayout`] table.
     Record(RecordTy),
+    /// A user-defined enum: an **LLVM aggregate, by value**, of a discriminant and one
+    /// slot per variant.
+    ///
+    /// The value semantics are a record's and for the same reason. What differs is that
+    /// only one of the payload slots means anything at a time, and which one is the first
+    /// field's value — see [`EnumLayout`] for the representation and what it costs.
+    Enum(EnumTy),
+}
+
+/// An enum type of this compilation, by declaration order. Session-local, like
+/// [`RecordTy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EnumTy(pub u32);
+
+impl EnumTy {
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// One variant's payload, as a type of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariantLayout {
+    /// The source name, for comments in `--emit-ir` and for the helper's symbol. Never
+    /// resolved against.
+    pub source: String,
+    /// What LLVM calls this variant's payload struct, derived from the enum's durable
+    /// identity and the variant's name.
+    pub name: NativeTypeName,
+    /// The payload field types **in layout order**, canonical by field name.
+    pub fields: Vec<Ty>,
+    /// For each payload field in **declaration** order, its index in [`Self::fields`].
+    pub of_declaration: Vec<u32>,
+}
+
+/// How one enum is laid out, and what each variant's payload owns.
+///
+/// # The representation, and what it costs
+///
+/// `{ i64, %V0, %V1, … }` — a discriminant followed by **one slot per variant**, in
+/// canonical variant-name order, each slot that variant's payload struct. A value is built
+/// from `zeroinitializer` and the active slot is filled, so every byte is defined and
+/// copying the aggregate is defined; the inactive slots hold zeros, which no operation
+/// reads.
+///
+/// This is larger than the union it stands for: an enum of three `Str` payloads is
+/// 8 + 24 × 3 bytes where an ideal tagged union is 8 + 24. That is a real cost and
+/// `docs/performance.md` measures it. It was chosen over a `[N x i64]` payload area with
+/// typed loads and stores through it because that needs the compiler to compute each
+/// variant's size exactly right — an arithmetic mistake there is a buffer overflow rather
+/// than a compile error — and because this form needs no memory at all: a variant is built
+/// with `insertvalue` and a payload read with `extractvalue`, entirely in registers.
+/// `docs/spec.md` promises nothing about an enum's size or layout, so the representation
+/// can change without the language moving.
+///
+/// # Why the order is by name
+///
+/// The same rule the field order follows: `docs/spec.md` makes variant declaration order
+/// non-semantic, so the discriminant is derived from the **names**. Moving two variant
+/// declarations therefore changes no byte of the object, where taking the parser's order
+/// would have created an ABI difference from an edit with no meaning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumLayout {
+    pub id: EnumTy,
+    /// What LLVM calls this type, derived from the enum's durable identity.
+    pub name: NativeTypeName,
+    /// The source name, for comments in `--emit-ir`. Never resolved against.
+    pub source: String,
+    /// The variants **in canonical order**, which is tag order: the position in this list
+    /// **is** the discriminant, and the slot in the aggregate is one past it.
+    pub variants: Vec<VariantLayout>,
+    /// For each variant in **declaration** order, its discriminant.
+    ///
+    /// The enum's half of the layout boundary. A consumer holding a
+    /// [`VariantRef`](nazm_sema::VariantRef) — which names a declaration index, because
+    /// that is what a variant's semantic identity is spelled as in one session — comes
+    /// through here and gets a number.
+    pub of_declaration: Vec<u32>,
 }
 
 /// A record type of this compilation, by declaration order.
@@ -162,6 +241,13 @@ pub enum Owns {
     /// applied in turn. Adding a record type to a program therefore adds no case here,
     /// which is the property `docs/architecture.md` §7.9 asked for before records existed.
     Record(RecordTy),
+    /// Whatever the **active variant's** fields own, recursively.
+    ///
+    /// The second composition, and the one N10 is a test of. A record's rule is a walk
+    /// over its fields; an enum's is a branch on its discriminant and then a walk over one
+    /// variant's. Neither is a case in a consumer: both are a helper generated once per
+    /// type, so adding an enum to a program adds no arm here either.
+    Enum(EnumTy),
 }
 
 impl Ty {
@@ -183,6 +269,9 @@ impl Ty {
             // emitter asks the table before it registers a frame slot, so a record that
             // owns nothing still costs nothing — it simply costs nothing one level later.
             Self::Record(id) => Some(Owns::Record(id)),
+            // Unconditional for the reason a record's is, and one step stronger: the
+            // answer depends on every variant's payload, which this does not have.
+            Self::Enum(id) => Some(Owns::Enum(id)),
         }
     }
 
@@ -241,6 +330,7 @@ impl Ty {
             // that a site which has not been converted is a visible wrong answer in the
             // IR rather than a silent one.
             Self::Record(_) => "<record>",
+            Self::Enum(_) => "<enum>",
         }
     }
 
@@ -259,7 +349,12 @@ impl Ty {
             // Valid for any aggregate, and it is also the value a record slot holds
             // before anything is stored in it: every owning field null, so releasing it
             // is a no-op. That is what makes a partially built record safe to clean.
-            Self::Str | Self::Record(_) => "zeroinitializer",
+            // For an enum, `zeroinitializer` is a discriminant of 0 — a real variant, the
+            // canonically first — with an all-zero payload. Releasing it walks that
+            // variant's fields and finds null in each, which is a no-op in every one of
+            // the runtime's release functions. So a zeroed enum slot is safe to release
+            // exactly as a zeroed record slot is.
+            Self::Str | Self::Record(_) | Self::Enum(_) => "zeroinitializer",
             Self::Ints | Self::Strs | Self::Chan => "null",
         }
     }
@@ -274,6 +369,7 @@ impl Ty {
             Self::Strs => "Strs",
             Self::Chan => "Chan",
             Self::Record(_) => "a record",
+            Self::Enum(_) => "an enum",
         }
     }
 }
@@ -301,6 +397,9 @@ impl Ty {
             // has other problems.
             nazm_sema::Type::Record(id) => {
                 Self::Record(RecordTy(u32::try_from(id.index()).unwrap_or(u32::MAX)))
+            }
+            nazm_sema::Type::Enum(id) => {
+                Self::Enum(EnumTy(u32::try_from(id.index()).unwrap_or(u32::MAX)))
             }
         }
     }
@@ -336,6 +435,9 @@ pub struct Unit {
     /// what keeps N6's object cache precise: a record added elsewhere changes no byte of
     /// this unit's text, so its object stays reusable.
     pub records: Vec<RecordLayout>,
+    /// The enum types this unit's own code mentions, closed over payload types, by the
+    /// same rule and for the same reason as [`Self::records`].
+    pub enums: Vec<EnumLayout>,
 }
 
 /// A definition another unit owns, as this one needs to see it.
@@ -590,6 +692,60 @@ pub enum Expr {
         fields: Vec<(u32, Expr)>,
         slot: Option<usize>,
     },
+    /// Build an enum value: a discriminant and **one variant's** payload.
+    ///
+    /// `fields` is in **evaluation order** — the order the initialisers were written,
+    /// which `docs/spec.md` fixes as the order side effects happen in — and each carries
+    /// the index it fills inside the variant's payload struct.
+    ///
+    /// `slot` is a hidden local to assemble into, present exactly when some payload field
+    /// of this variant owns something, and it exists for the reason a record's does: an
+    /// initialiser that fails after an earlier one has produced a heap string must not leak
+    /// it. **The discriminant is written last**, after every payload field is in place, so
+    /// a partially built value is a zero — the canonically first variant with an empty
+    /// payload — and cleanup on the failure path never dispatches on a variant the value
+    /// does not have.
+    Variant {
+        ty: Ty,
+        /// The discriminant, decided at lowering from the canonical order.
+        tag: u32,
+        fields: Vec<(u32, Expr)>,
+        slot: Option<usize>,
+    },
+    /// Read one payload field out of an enum value whose variant is known.
+    ///
+    /// Only ever emitted inside the arm that established the discriminant, so `tag` is a
+    /// fact rather than an assumption. Two `extractvalue`s: the variant's slot out of the
+    /// enum, then the field out of the payload.
+    Payload {
+        base: Box<Expr>,
+        /// The enum's type, carried so emission needs no second lookup.
+        base_ty: Ty,
+        /// The discriminant, which is also the payload slot's index minus one.
+        tag: u32,
+        /// The field's index **inside the variant's payload struct**, decided at lowering.
+        at: u32,
+        ty: Ty,
+    },
+    /// `match scrutinee { … }` — select one arm on a discriminant.
+    ///
+    /// The scrutinee is evaluated once into `slot`, a hidden local this expression owns,
+    /// so that a failure anywhere inside releases it by the ordinary frame path and an arm
+    /// may read its payload. Each arm establishes its own result before the join, exactly
+    /// as an `if`'s branches do, which is what keeps a returned payload valid after the
+    /// scrutinee is released.
+    Match {
+        scrutinee: Box<Expr>,
+        /// The enum's type.
+        scrutinee_ty: Ty,
+        /// The hidden local holding the value this `match` owns.
+        slot: usize,
+        /// One arm per variant, in declaration order. Each carries its discriminant, so
+        /// the emitter needs no second look at the layout.
+        arms: Vec<MatchArm>,
+        /// `None` when **no** arm produces a value, because every one transfers control.
+        ty: Option<Ty>,
+    },
     /// Read a field out of a record value.
     ///
     /// The result takes its **own** reference to whatever backs it, before the record it
@@ -631,6 +787,20 @@ pub enum Expr {
     },
 }
 
+/// One arm of a lowered [`Expr::Match`].
+///
+/// The pattern's bindings are not here: lowering turns each into an ordinary
+/// [`Stmt::Let`] at the head of [`Self::block`], whose value is an [`Expr::Payload`]. That
+/// is not a shortcut — a binding *is* a local that takes a reference to what it names, and
+/// routing it through the one path that already gets take-before-release right in a loop
+/// is what stops there being a second answer to that question.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArm {
+    /// The discriminant this arm is selected by.
+    pub tag: u32,
+    pub block: Block,
+}
+
 impl Expr {
     /// What this expression produces, or `None` when it never produces anything because
     /// every path through it transfers control.
@@ -648,8 +818,11 @@ impl Expr {
             Self::Builtin { op, .. } => Some(op.lowered_ret()),
             Self::Load { ty, .. } => Some(*ty),
             Self::Call { ret, .. } => Some(*ret),
-            Self::Record { ty, .. } | Self::Field { ty, .. } => Some(*ty),
-            Self::If { ty, .. } => *ty,
+            Self::Record { ty, .. }
+            | Self::Field { ty, .. }
+            | Self::Variant { ty, .. }
+            | Self::Payload { ty, .. } => Some(*ty),
+            Self::If { ty, .. } | Self::Match { ty, .. } => *ty,
         }
     }
 }

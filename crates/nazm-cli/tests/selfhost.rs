@@ -125,6 +125,8 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::Spawn => 23,
                 T::Pub => 24,
                 T::Struct => 25,
+                T::Enum => 26,
+                T::Match => 27,
                 T::LParen => 30,
                 T::RParen => 31,
                 T::LBrace => 32,
@@ -146,6 +148,7 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::LtEq => 48,
                 T::Gt => 49,
                 T::GtEq => 50,
+                T::FatArrow => 51,
                 // The Rust lexer emits a final `Eof`; the Nazm one prints `EOF` and
                 // stops, so there is nothing to compare.
                 T::Eof => return None,
@@ -301,6 +304,7 @@ fn dump_program(p: &nazm_core::__syntax::Program) -> String {
     enum Item<'a> {
         Fn(&'a nazm_core::__syntax::Function),
         Record(&'a nazm_core::__syntax::Record),
+        Enum(&'a nazm_core::__syntax::Enum),
     }
     let mut items: Vec<(u32, Item<'_>)> = Vec::new();
     for f in &p.functions {
@@ -309,11 +313,15 @@ fn dump_program(p: &nazm_core::__syntax::Program) -> String {
     for r in &p.records {
         items.push((r.span.start, Item::Record(r)));
     }
+    for e in &p.enums {
+        items.push((e.span.start, Item::Enum(e)));
+    }
     items.sort_by_key(|(at, _)| *at);
     for (_, item) in &items {
         match item {
             Item::Fn(f) => dump_function(f, &mut out),
             Item::Record(r) => dump_record(r, &mut out),
+            Item::Enum(e) => dump_enum(e, &mut out),
         }
     }
     push_node(&mut out, "program", items.len(), 0, 0, "");
@@ -338,6 +346,37 @@ fn dump_record(r: &nazm_core::__syntax::Record, out: &mut String) {
         r.span.start,
         r.span.end,
         &r.name,
+    );
+}
+
+fn dump_enum(e: &nazm_core::__syntax::Enum, out: &mut String) {
+    for v in &e.variants {
+        for f in &v.fields {
+            push_node(
+                out,
+                "payload",
+                0,
+                f.span.start,
+                f.span.end,
+                &format!("{}:{}", f.name, f.ty.name),
+            );
+        }
+        push_node(
+            out,
+            "variant",
+            v.fields.len(),
+            v.span.start,
+            v.span.end,
+            &v.name,
+        );
+    }
+    push_node(
+        out,
+        "enum",
+        e.variants.len(),
+        e.span.start,
+        e.span.end,
+        &e.name,
     );
 }
 
@@ -490,6 +529,63 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
                 span.end,
                 &format!("{ty}({names})"),
             );
+        }
+        E::Variant {
+            ty,
+            variant,
+            fields,
+            span,
+            ..
+        } => {
+            // Initialisers in the order **written**, exactly as a record construction's
+            // are, and for the same reason.
+            for f in fields {
+                dump_expr(&f.value, out);
+            }
+            let names = fields
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            push_node(
+                out,
+                "makevariant",
+                fields.len(),
+                span.start,
+                span.end,
+                &format!("{ty}.{variant}({names})"),
+            );
+        }
+        E::Match {
+            scrutinee,
+            arms,
+            span,
+        } => {
+            dump_expr(scrutinee, out);
+            for a in arms {
+                dump_expr(&a.body, out);
+                let pattern = a
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        format!(
+                            "{}:{}",
+                            f.name,
+                            f.binding.as_deref().unwrap_or("_")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                push_node(
+                    out,
+                    "arm",
+                    1,
+                    a.span.start,
+                    a.span.end,
+                    &format!("{}.{}({pattern})", a.ty, a.variant),
+                );
+            }
+            push_node(out, "match", arms.len() + 1, span.start, span.end, "");
         }
         E::Field {
             base, name, span, ..

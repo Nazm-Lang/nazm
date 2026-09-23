@@ -26,10 +26,12 @@
 
 use nazm_span::Span;
 
+use crate::enums::EnumId;
 use crate::module::{Dependency, ModuleId};
-use crate::record::{RecordId, Records};
+use crate::record::RecordId;
 use crate::resolve::FnId;
 use crate::types::Type;
+use crate::udt::{TypeNode, UserTypes};
 
 /// Whether a definition leaves its module.
 ///
@@ -106,6 +108,19 @@ pub struct RecordExport {
     pub nameable: bool,
 }
 
+/// One enum definition an importer needs to see.
+///
+/// The same rule and the same reason as [`RecordExport`], one kind over: an enum is
+/// transparent too — a module that can see one can construct its variants and match on
+/// them, so every payload type is part of its usable shape, and the closure carries those
+/// types whether or not their own modules were imported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumExport {
+    pub def: EnumId,
+    /// Whether an importing module may write this name. See [`RecordExport::nameable`].
+    pub nameable: bool,
+}
+
 /// A module's outward face: what it is, what it offers, and what it depends on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnitInterface {
@@ -114,6 +129,8 @@ pub struct UnitInterface {
     /// Every record definition this interface's public surface mentions, closed over
     /// field types. See [`RecordExport`].
     records: Vec<RecordExport>,
+    /// Every enum definition its public surface mentions, closed the same way.
+    enums: Vec<EnumExport>,
     imports: Vec<Dependency>,
 }
 
@@ -123,12 +140,14 @@ impl UnitInterface {
         module: ModuleId,
         exports: Vec<Export>,
         records: Vec<RecordExport>,
+        enums: Vec<EnumExport>,
         imports: Vec<Dependency>,
     ) -> Self {
         Self {
             module,
             exports,
             records,
+            enums,
             imports,
         }
     }
@@ -159,14 +178,41 @@ impl UnitInterface {
         &self.records
     }
 
+    /// Every enum definition this interface carries, nameable or not.
+    #[must_use]
+    pub fn enums(&self) -> &[EnumExport] {
+        &self.enums
+    }
+
     /// The record an importer names with this spelling, if this module offers one.
     #[must_use]
-    pub fn record(&self, records: &Records, name: &str) -> Option<RecordId> {
+    pub fn record(&self, types: &UserTypes, name: &str) -> Option<RecordId> {
         self.records
             .iter()
             .filter(|r| r.nameable)
-            .find(|r| records.get(r.def).is_some_and(|d| d.name == name))
+            .find(|r| types.records().get(r.def).is_some_and(|d| d.name == name))
             .map(|r| r.def)
+    }
+
+    /// The enum an importer names with this spelling, if this module offers one.
+    #[must_use]
+    pub fn enumeration(&self, types: &UserTypes, name: &str) -> Option<EnumId> {
+        self.enums
+            .iter()
+            .filter(|e| e.nameable)
+            .find(|e| types.enums().get(e.def).is_some_and(|d| d.name == name))
+            .map(|e| e.def)
+    }
+
+    /// The user-defined type an importer names with this spelling.
+    ///
+    /// One namespace: `docs/spec.md` puts records and enums both in the type namespace, so
+    /// a module cannot offer both under one name and this cannot have to choose.
+    #[must_use]
+    pub fn user_type(&self, types: &UserTypes, name: &str) -> Option<Type> {
+        self.record(types, name)
+            .map(Type::Record)
+            .or_else(|| self.enumeration(types, name).map(Type::Enum))
     }
 
     /// The modules this one directly imports.
@@ -176,39 +222,44 @@ impl UnitInterface {
     }
 }
 
-/// Every record reachable from a set of exported types, including them.
+/// Every user-defined type reachable from a set of exported types, including them.
 ///
-/// The closure [`RecordExport`] describes, computed once here so that the in-memory
-/// interface and the persisted one cannot disagree about what "closed" means. Iterative,
-/// like everything else that walks the containment graph.
+/// The closure [`RecordExport`] and [`EnumExport`] describe, computed once here so that the
+/// in-memory interface and the persisted one cannot disagree about what "closed" means.
+/// One walk over records and enums together, because a record field may be an enum and an
+/// enum payload may be a record — two walks would each stop at the other's edges.
+/// Iterative, like everything else that walks the containment graph.
 #[must_use]
-pub fn reachable_records(
-    records: &Records,
-    roots: impl IntoIterator<Item = Type>,
-) -> Vec<RecordId> {
-    let mut seen = vec![false; records.len()];
-    let mut out: Vec<RecordId> = Vec::new();
-    let mut work: Vec<RecordId> = roots
-        .into_iter()
-        .filter_map(|t| match t {
-            Type::Record(id) => Some(id),
-            _ => None,
-        })
-        .collect();
+pub fn reachable_types(types: &UserTypes, roots: impl IntoIterator<Item = Type>) -> Vec<TypeNode> {
+    let mut seen: Vec<TypeNode> = Vec::new();
+    let mut out: Vec<TypeNode> = Vec::new();
+    let mut work: Vec<TypeNode> = roots.into_iter().filter_map(TypeNode::of).collect();
     // Reversed so the first root is visited first, which makes the result's order a
     // function of the input rather than of the stack.
     work.reverse();
-    while let Some(id) = work.pop() {
-        match seen.get_mut(id.index()) {
-            Some(s) if !*s => *s = true,
-            _ => continue,
+    while let Some(node) = work.pop() {
+        if seen.contains(&node) {
+            continue;
         }
-        out.push(id);
-        let Some(def) = records.get(id) else { continue };
-        for f in def.fields.iter().rev() {
-            if let Type::Record(inner) = f.ty {
-                work.push(inner);
+        seen.push(node);
+        out.push(node);
+        let mut inner: Vec<TypeNode> = Vec::new();
+        match node {
+            TypeNode::Record(id) => {
+                if let Some(def) = types.records().get(id) {
+                    inner.extend(def.fields.iter().filter_map(|f| TypeNode::of(f.ty)));
+                }
             }
+            TypeNode::Enum(id) => {
+                if let Some(def) = types.enums().get(id) {
+                    for v in &def.variants {
+                        inner.extend(v.fields.iter().filter_map(|f| TypeNode::of(f.ty)));
+                    }
+                }
+            }
+        }
+        for n in inner.into_iter().rev() {
+            work.push(n);
         }
     }
     out

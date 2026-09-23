@@ -8,8 +8,8 @@ pub mod check;
 pub mod eval;
 
 pub use check::{
-    check, check_reusing, check_unit, declare_records, declare_unit, resolve_record_fields,
-    validate_record_layouts, CheckEverything, Reuse, Signature, Unit,
+    check, check_reusing, check_unit, declare_types, declare_unit, resolve_type_fields,
+    validate_type_layouts, CheckEverything, Reuse, Signature, Unit,
 };
 pub use eval::{Interpreter, RuntimeError, Value};
 // `Type`, `Intrinsic` and `Resolution` moved to `nazm-syntax` on 2026-09-21, so the
@@ -30,8 +30,9 @@ pub use nazm_sema as sema;
 /// crate. The double underscore marks it as plumbing rather than interface.
 pub mod __syntax {
     pub use nazm_syntax::{
-        format, lex, lex_in, parse_file, parse_map, parse_source, Block, Expr, Field, FieldInit,
-        Function, Place, PlaceField, Program, Record, Stmt, TokenKind,
+        format, lex, lex_in, parse_file, parse_map, parse_source, Block, Enum, Expr, Field,
+        FieldInit, Function, MatchArm, PatternField, Place, PlaceField, Program, Record, Stmt,
+        TokenKind, Variant,
     };
 }
 

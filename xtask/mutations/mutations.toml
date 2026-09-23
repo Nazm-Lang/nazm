@@ -1194,7 +1194,7 @@ find = """                self.retain(arg(1), elem);
                 let _ = writeln!(
                     self.out,
                     "  store {} %{}, ptr %{slot}",
-                    llvm_type(self.records, elem),
+                    llvm_type(self.types, elem),
                     arg(1)
                 );"""
 replace = """                let _ = writeln!(
@@ -1287,12 +1287,12 @@ find = """            self.take(*value, *ty);
             let _ = writeln!(
                 self.out,
                 "  store {} %{value}, ptr %{slot}",
-                llvm_type(self.records, *ty)
+                llvm_type(self.types, *ty)
             );"""
 replace = """            let _ = writeln!(
                 self.out,
                 "  store {} %{value}, ptr %{slot}",
-                llvm_type(self.records, *ty)
+                llvm_type(self.types, *ty)
             );"""
 
 [[mutation]]
@@ -1360,8 +1360,10 @@ record whose only owning thing is two levels down is treated as owning nothing: 
 no frame slot, and every string inside it leaked
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = "                Some(Owns::Record(inner)) => work.push(inner),"
-replace = "                Some(Owns::Record(_)) => {}"
+find = """            Some(Owns::Record(id)) => record_layout(types.records, id)
+                .map(|l| l.fields.clone())
+                .unwrap_or_default(),"""
+replace = "            Some(Owns::Record(_)) => continue,"
 
 [[mutation]]
 name = "a-field-replacement-releases-before-it-takes"
@@ -1387,11 +1389,11 @@ Invisible in every shape where something else keeps the record alive, which is w
 test that finds it uses a temporary that dies immediately
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """                if !borrowed && owns_anything(self.records, *ty) {
+find = """                if !borrowed && owns_anything(self.types, *ty) {
                     self.retain(out, *ty);
                     self.own(out, *ty);
                 }"""
-replace = """                if false && owns_anything(self.records, *ty) {
+replace = """                if false && owns_anything(self.types, *ty) {
                     self.retain(out, *ty);
                     self.own(out, *ty);
                 }"""
@@ -1406,7 +1408,7 @@ cleanup. The one path where the program was already failing becomes the one that
 file = "crates/nazm-lir/src/lower.rs"
 find = """    let slot = ctx
         .res
-        .records()
+        .types()
         .needs_cleanup(nazm_sema::Type::Record(id))
         .then(|| ctx.hidden(ty, "record"));"""
 replace = "    let slot = None;"
@@ -1418,12 +1420,15 @@ derives a record's task safety from its immediate fields only, so `Outer { inner
 values: Ints } }` crosses into a task. `N0321` exists because a sequence is unsynchronised
 shared mutable storage; wrapping one twice does not make it safe, and this says it does
 """
-file = "crates/nazm-sema/src/record.rs"
-find = """                Type::Record(inner) => {
-                    path.push(f.name.clone());
-                    stack.push((inner, 0));
+file = "crates/nazm-sema/src/udt.rs"
+find = """                Type::Record(_) | Type::Enum(_) => {
+                    let n = names.len();
+                    path.extend(names);
+                    if let Some(inner) = TypeNode::of(ty) {
+                        stack.push((inner, 0, n));
+                    }
                 }"""
-replace = """                Type::Record(_) => {}"""
+replace = """                Type::Record(_) | Type::Enum(_) => {}"""
 
 [[mutation]]
 name = "an-exported-record-is-left-out-of-the-interface"
@@ -1448,15 +1453,15 @@ shape no longer moves the fingerprint when a field's type changes. A dependent k
 answer the new shape contradicts, which is the stale accept a fingerprint exists to stop
 """
 file = "crates/nazm-iface/src/wire.rs"
-find = """                fields.push(PersistentField {
-                    name: f.name.clone(),
-                    ty,
-                });"""
-replace = """                let _ = ty;
-                fields.push(PersistentField {
-                    name: f.name.clone(),
-                    ty: "Int".to_owned(),
-                });"""
+find = """            out.push(PersistentField {
+                name: f.name.clone(),
+                ty,
+            });"""
+replace = """            let _ = ty;
+            out.push(PersistentField {
+                name: f.name.clone(),
+                ty: "Int".to_owned(),
+            });"""
 
 [[mutation]]
 name = "a-published-record-is-named-by-its-spelling"
@@ -1504,9 +1509,9 @@ finds no containment cycle, so `struct Node { next: Node, }` reaches the backend
 LLVM reports a recursive type, after the compiler has already decided the program is fine.
 A refusal that arrives after the output is one nobody can act on
 """
-file = "crates/nazm-sema/src/record.rs"
-find = "    pub fn layout_cycle(&self, start: RecordId) -> Option<LayoutCycle> {"
-replace = """    pub fn layout_cycle(&self, start: RecordId) -> Option<LayoutCycle> {
+file = "crates/nazm-sema/src/udt.rs"
+find = "    pub fn layout_cycle(&self, start: TypeNode) -> Option<LayoutCycle> {"
+replace = """    pub fn layout_cycle(&self, start: TypeNode) -> Option<LayoutCycle> {
         if true {
             let _ = start;
             return None;
@@ -1520,12 +1525,12 @@ interface referring to a type its importer cannot resolve. Without opaque types 
 no reading of that which works
 """
 file = "crates/nazm-core/src/check.rs"
-find = """    if def.visibility.is_exported() {
-        return;
-    }"""
+find = """    let (private_name, declared_at) = match t {"""
 replace = """    if true {
         return;
-    }"""
+    }
+    #[allow(unreachable_code)]
+    let (private_name, declared_at) = match t {"""
 
 [[mutation]]
 name = "the-self-hosted-emitter-forgets-a-record-field"

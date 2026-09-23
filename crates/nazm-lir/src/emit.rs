@@ -50,8 +50,8 @@ use nazm_span::Span;
 use crate::names::SourceNames;
 
 use crate::ir::{
-    ArithOp, Block, Builtin, Expr, Function, Lowering as _, Owns, RecordLayout, RecordTy, Stmt, Ty,
-    Unit,
+    ArithOp, Block, Builtin, EnumLayout, EnumTy, Expr, Function, Lowering as _, MatchArm, Owns,
+    RecordLayout, RecordTy, Stmt, Ty, Unit,
 };
 use crate::symbol::NativeSymbol;
 
@@ -79,14 +79,38 @@ pub const MEMORY_FORMAT: &str = "nazm-memory: sequences allocated=%lld reclaimed
                                  live=%lld strings allocated=%lld reclaimed=%lld live=%lld \
                                  channels allocated=%lld reclaimed=%lld live=%lld";
 
-/// How a type is written in LLVM text.
+/// One variant of an enum that has something to retain or release.
+#[derive(Debug, Clone)]
+struct OwningVariant {
+    /// Its discriminant, which is also its payload's index in the aggregate minus one.
+    tag: u32,
+    /// The LLVM name of its payload struct.
+    payload: String,
+    /// Its source name, for a comment.
+    source: String,
+    /// The payload fields that own something: their index in the payload struct, and
+    /// their type.
+    owning: Vec<(u32, Ty)>,
+}
+
+/// The type definitions one unit carries, as a pair of borrowed tables.
 ///
-/// A free function over the table rather than a method, so that a caller already writing
-/// into `self.out` can name a type in the same expression: two fields of one struct are
-/// disjoint borrows, and `self.ty(…)` would not have been.
-fn llvm_type(records: &[RecordLayout], t: Ty) -> String {
+/// `Copy`, so that a caller already writing into `self.out` can name a type in the same
+/// expression: two fields of one struct are disjoint borrows, and `self.ty(…)` would not
+/// have been. It is one struct rather than two parameters because the two tables are
+/// always needed together — a record field may be an enum and a payload may be a record.
+#[derive(Debug, Clone, Copy)]
+struct Layouts<'a> {
+    records: &'a [RecordLayout],
+    enums: &'a [EnumLayout],
+}
+
+/// How a type is written in LLVM text.
+fn llvm_type(types: Layouts<'_>, t: Ty) -> String {
     match t {
-        Ty::Record(id) => record_layout(records, id)
+        Ty::Record(id) => record_layout(types.records, id)
+            .map_or_else(|| t.builtin_llvm().to_owned(), |l| l.name.to_string()),
+        Ty::Enum(id) => enum_layout(types.enums, id)
             .map_or_else(|| t.builtin_llvm().to_owned(), |l| l.name.to_string()),
         other => other.builtin_llvm().to_owned(),
     }
@@ -97,43 +121,43 @@ fn record_layout(records: &[RecordLayout], id: RecordTy) -> Option<&RecordLayout
     records.iter().find(|l| l.id == id)
 }
 
-/// Whether any field of this record, at any depth, owns something to release.
+/// The layout of an enum this unit carries.
+fn enum_layout(enums: &[EnumLayout], id: EnumTy) -> Option<&EnumLayout> {
+    enums.iter().find(|l| l.id == id)
+}
+
+/// Whether anything this type contains, at any depth, owns something to release.
+///
+/// A record's answer is over every field; an enum's is over every payload field of
+/// **every** variant, because any of them may be the one a value holds. That asymmetry
+/// with copy and release — which act on the active variant alone — is not an inconsistency:
+/// *does this need cleanup at all* is a question about the type, and *what does this value
+/// own* is a question about the value.
 ///
 /// Iterative, with an explicit worklist: the containment graph is acyclic — the checker
 /// refuses a cycle before lowering (`N0336`) — but its depth is a property of the program,
 /// and a recursive walk would put that depth on the compiler's stack.
-fn record_owns(records: &[RecordLayout], id: RecordTy) -> bool {
-    let mut seen: Vec<RecordTy> = Vec::new();
-    let mut work = vec![id];
+fn owns_anything(types: Layouts<'_>, t: Ty) -> bool {
+    let mut seen: Vec<Ty> = Vec::new();
+    let mut work = vec![t];
     while let Some(next) = work.pop() {
         if seen.contains(&next) {
             continue;
         }
         seen.push(next);
-        let Some(layout) = record_layout(records, next) else {
-            continue;
+        let inner: Vec<Ty> = match next.owns() {
+            None => continue,
+            Some(Owns::Record(id)) => record_layout(types.records, id)
+                .map(|l| l.fields.clone())
+                .unwrap_or_default(),
+            Some(Owns::Enum(id)) => enum_layout(types.enums, id)
+                .map(|l| l.variants.iter().flat_map(|v| v.fields.clone()).collect())
+                .unwrap_or_default(),
+            Some(_) => return true,
         };
-        for f in &layout.fields {
-            match f.owns() {
-                None => {}
-                Some(Owns::Record(inner)) => work.push(inner),
-                Some(_) => return true,
-            }
-        }
+        work.extend(inner);
     }
     false
-}
-
-/// Whether a value of this type owns anything at all.
-///
-/// The same question [`Ty::owns`] answers, made exact for a record — which `Ty` cannot do
-/// alone, because the answer is its fields'.
-fn owns_anything(records: &[RecordLayout], t: Ty) -> bool {
-    match t.owns() {
-        None => false,
-        Some(Owns::Record(id)) => record_owns(records, id),
-        Some(_) => true,
-    }
 }
 
 /// How many fixed fields a task's argument block has before its arguments.
@@ -175,7 +199,7 @@ struct Emitter<'a> {
     /// Borrowed from the unit, which got it from the plan: one table for the whole
     /// compilation, so two units that pass a record between them cannot disagree about
     /// where its fields are. See [`RecordLayout`].
-    records: &'a [RecordLayout],
+    types: Layouts<'a>,
     /// Active loops, innermost last. Pushed around a loop's **body** only — a `break` in
     /// a loop's *condition* belongs to the enclosing loop, which is the existing
     /// language's rule (`docs/spec.md`, *Where a loop target binds*). Cleared at every
@@ -232,6 +256,8 @@ struct Emitter<'a> {
     helpers: String,
     /// Which helpers have been generated: `(record, true)` for retain.
     generated: std::collections::BTreeSet<(RecordTy, bool)>,
+    /// The same, for enums.
+    generated_enums: std::collections::BTreeSet<(EnumTy, bool)>,
     /// The argument-block types generated for `spawn` sites, by field list.
     ///
     /// One per distinct argument shape rather than one per site, so two `spawn`s of the
@@ -481,7 +507,7 @@ impl Emitter<'_> {
         let _ = writeln!(
             self.out,
             "  %{slot} = getelementptr {}, ptr %{data}, i64 %{index}",
-            llvm_type(self.records, elem)
+            llvm_type(self.types, elem)
         );
         slot
     }
@@ -544,7 +570,17 @@ impl Emitter<'_> {
             // and it is written once, here, rather than at each place a record is copied.
             Some(Owns::Record(id)) => {
                 if let Some(helper) = self.record_helper(id, true) {
-                    let ty = llvm_type(self.records, Ty::Record(id));
+                    let ty = llvm_type(self.types, Ty::Record(id));
+                    let _ = writeln!(self.out, "  call void @{helper}({ty} %{value})");
+                }
+            }
+            // The active variant's fields, and only those. The helper branches on the
+            // discriminant, so *which* fields exist is decided at runtime — which is the
+            // whole of what a sum type adds to the memory model, expressed as a `switch`
+            // in the emitted program rather than as a case in this compiler.
+            Some(Owns::Enum(id)) => {
+                if let Some(helper) = self.enum_helper(id, true) {
+                    let ty = llvm_type(self.types, Ty::Enum(id));
                     let _ = writeln!(self.out, "  call void @{helper}({ty} %{value})");
                 }
             }
@@ -556,11 +592,11 @@ impl Emitter<'_> {
     /// A record whose every field is an `Int` yields nothing, so it costs nothing —
     /// neither an instruction nor a frame slot.
     fn owning_fields(&self, id: RecordTy) -> Vec<(u32, Ty)> {
-        record_layout(self.records, id).map_or_else(Vec::new, |l| {
+        record_layout(self.types.records, id).map_or_else(Vec::new, |l| {
             l.fields
                 .iter()
                 .enumerate()
-                .filter(|(_, t)| owns_anything(self.records, **t))
+                .filter(|(_, t)| owns_anything(self.types, **t))
                 .map(|(i, t)| (u32::try_from(i).unwrap_or(u32::MAX), *t))
                 .collect()
         })
@@ -568,8 +604,8 @@ impl Emitter<'_> {
 
     /// One field out of a record value already in a register.
     fn extract(&mut self, value: u32, id: RecordTy, at: u32, ty: Ty) -> u32 {
-        let record = llvm_type(self.records, Ty::Record(id));
-        let field = llvm_type(self.records, ty);
+        let record = llvm_type(self.types, Ty::Record(id));
+        let field = llvm_type(self.types, ty);
         let out = self.fresh();
         let _ = writeln!(
             self.out,
@@ -608,7 +644,13 @@ impl Emitter<'_> {
             // tell. Layout order is what this does, which is deterministic and documented.
             Some(Owns::Record(id)) => {
                 if let Some(helper) = self.record_helper(id, false) {
-                    let ty = llvm_type(self.records, Ty::Record(id));
+                    let ty = llvm_type(self.types, Ty::Record(id));
+                    let _ = writeln!(self.out, "  call void @{helper}({ty} %{value})");
+                }
+            }
+            Some(Owns::Enum(id)) => {
+                if let Some(helper) = self.enum_helper(id, false) {
+                    let ty = llvm_type(self.types, Ty::Enum(id));
                     let _ = writeln!(self.out, "  call void @{helper}({ty} %{value})");
                 }
             }
@@ -624,19 +666,19 @@ impl Emitter<'_> {
     /// beside the others rather than into the middle of the one being emitted. Value
     /// numbering restarts, which LLVM requires per function, and is restored afterwards.
     fn record_helper(&mut self, id: RecordTy, retain: bool) -> Option<String> {
-        if !record_owns(self.records, id) {
+        if !owns_anything(self.types, Ty::Record(id)) {
             return None;
         }
         let name = format!(
             "{}.{}",
             if retain { "nz.ret" } else { "nz.rel" },
-            record_layout(self.records, id)?.name.as_str()
+            record_layout(self.types.records, id)?.name.as_str()
         );
         if !self.generated.insert((id, retain)) {
             return Some(name);
         }
 
-        let record = llvm_type(self.records, Ty::Record(id));
+        let record = llvm_type(self.types, Ty::Record(id));
         let saved_out = std::mem::take(&mut self.out);
         let saved_next = self.next;
         let saved_label = self.next_label;
@@ -651,7 +693,7 @@ impl Emitter<'_> {
         // `docs/spec.md` says a record is destroyed by releasing each field and
         // deliberately does not say in which order.
         for (at, ty) in self.owning_fields(id) {
-            let field = llvm_type(self.records, ty);
+            let field = llvm_type(self.types, ty);
             let v = self.fresh();
             let _ = writeln!(
                 self.out,
@@ -672,6 +714,134 @@ impl Emitter<'_> {
         self.next_label = saved_label;
         self.current = saved_current;
         Some(name)
+    }
+
+    /// The symbol of this enum's retain or release helper, generating it if needed.
+    ///
+    /// `None` for an enum no payload field of which owns anything: there is nothing for
+    /// the helper to do, so none is generated and no call is written.
+    ///
+    /// # Why this is one function per enum rather than code at each site
+    ///
+    /// Because the answer is a runtime fact. A record's copy is a fixed sequence of
+    /// retains; an enum's is *a branch and then* a fixed sequence, and which sequence is
+    /// not known where the copy is written. Putting the branch in a generated function
+    /// puts it in the emitted program once per type rather than once per place a value of
+    /// that type is copied — and it is what lets a nested enum's helper call an inner
+    /// one's, so the recursion lives in the program rather than in this compiler.
+    ///
+    /// A variant whose payload owns nothing is left out of the `switch` and reaches the
+    /// exit through its default, so a zero-payload arm costs nothing at all.
+    fn enum_helper(&mut self, id: EnumTy, retain: bool) -> Option<String> {
+        if !owns_anything(self.types, Ty::Enum(id)) {
+            return None;
+        }
+        let name = format!(
+            "{}.{}",
+            if retain { "nz.ret" } else { "nz.rel" },
+            enum_layout(self.types.enums, id)?.name.as_str()
+        );
+        if !self.generated_enums.insert((id, retain)) {
+            return Some(name);
+        }
+
+        let whole = llvm_type(self.types, Ty::Enum(id));
+        let arms = self.owning_variants(id);
+
+        let saved_out = std::mem::take(&mut self.out);
+        let saved_next = self.next;
+        let saved_label = self.next_label;
+        let saved_current = std::mem::take(&mut self.current);
+        self.next = 0;
+        self.next_label = 0;
+        self.current = "entry".to_owned();
+
+        let _ = writeln!(self.out, "\ndefine internal void @{name}({whole} %e) {{");
+        let _ = writeln!(self.out, "entry:");
+        let tag = self.fresh();
+        let _ = writeln!(self.out, "  %{tag} = extractvalue {whole} %e, 0");
+        let done = format!("b{}", self.fresh_label());
+        let labelled: Vec<(OwningVariant, String)> = arms
+            .into_iter()
+            .map(|a| {
+                let label = format!("b{}", self.fresh_label());
+                (a, label)
+            })
+            .collect();
+        // The default is the exit. An unknown discriminant cannot arise in a safe
+        // program — every construction writes one this enum has — and treating it as
+        // "nothing to release" is the answer that stays correct if one ever does.
+        let table = labelled
+            .iter()
+            .map(|(a, label)| format!("i64 {}, label %{label}", a.tag))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let _ = writeln!(self.out, "  switch i64 %{tag}, label %{done} [ {table} ]");
+        for (arm, label) in &labelled {
+            self.open(label);
+            let slot = self.fresh();
+            // The variant's payload is one field of the enum, at its tag plus one: the
+            // discriminant occupies index 0.
+            let _ = writeln!(
+                self.out,
+                "  %{slot} = extractvalue {whole} %e, {}    ; {}",
+                arm.tag + 1,
+                arm.source
+            );
+            for (i, ty) in &arm.owning {
+                let field = llvm_type(self.types, *ty);
+                let v = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{v} = extractvalue {} %{slot}, {i}    ; {field}",
+                    arm.payload
+                );
+                if retain {
+                    self.retain(v, *ty);
+                } else {
+                    self.release(v, *ty);
+                }
+            }
+            let _ = writeln!(self.out, "  br label %{done}");
+        }
+        self.open(&done);
+        let _ = writeln!(self.out, "  ret void");
+        let _ = writeln!(self.out, "}}");
+
+        let body = std::mem::replace(&mut self.out, saved_out);
+        self.helpers.push_str(&body);
+        self.next = saved_next;
+        self.next_label = saved_label;
+        self.current = saved_current;
+        Some(name)
+    }
+
+    /// Every variant of this enum whose payload owns something, with what it owns.
+    ///
+    /// Collected before the helper is written, because writing it borrows `self` mutably
+    /// and reading the layout borrows it immutably.
+    fn owning_variants(&self, id: EnumTy) -> Vec<OwningVariant> {
+        enum_layout(self.types.enums, id).map_or_else(Vec::new, |l| {
+            l.variants
+                .iter()
+                .enumerate()
+                .filter_map(|(tag, v)| {
+                    let owning: Vec<(u32, Ty)> = v
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, t)| owns_anything(self.types, **t))
+                        .map(|(i, t)| (u32::try_from(i).unwrap_or(u32::MAX), *t))
+                        .collect();
+                    (!owning.is_empty()).then(|| OwningVariant {
+                        tag: u32::try_from(tag).unwrap_or(u32::MAX),
+                        payload: v.name.to_string(),
+                        source: v.source.clone(),
+                        owning,
+                    })
+                })
+                .collect()
+        })
     }
 
     /// Drop a reference to something the runtime allocated for itself.
@@ -741,7 +911,7 @@ impl Emitter<'_> {
     ///
     /// A record no field of which owns anything gets no slot and pays for none of this.
     fn record(&mut self, ty: Ty, fields: &[(u32, Expr)], slot: Option<usize>) -> Val {
-        let text = llvm_type(self.records, ty);
+        let text = llvm_type(self.types, ty);
         match slot {
             None => {
                 // Nothing to clean, so the value is built in registers.
@@ -759,7 +929,7 @@ impl Emitter<'_> {
                     let _ = writeln!(
                         self.out,
                         "  %{out} = insertvalue {built}, {} %{v}, {at}",
-                        llvm_type(self.records, field)
+                        llvm_type(self.types, field)
                     );
                     built = format!("{text} %{out}");
                     last = out;
@@ -793,7 +963,7 @@ impl Emitter<'_> {
                     let _ = writeln!(
                         self.out,
                         "  %{out} = insertvalue {text} %{held}, {} %{v}, {at}",
-                        llvm_type(self.records, field)
+                        llvm_type(self.types, field)
                     );
                     let _ = writeln!(self.out, "  store {text} %{out}, ptr %slot{slot}");
                 }
@@ -809,6 +979,226 @@ impl Emitter<'_> {
                 self.own(whole, ty);
                 Val::Of { value: whole, ty }
             }
+        }
+    }
+
+    /// The LLVM name of one variant's payload struct.
+    fn payload_type(&self, enum_ty: Ty, tag: u32) -> String {
+        let Ty::Enum(id) = enum_ty else {
+            return enum_ty.builtin_llvm().to_owned();
+        };
+        enum_layout(self.types.enums, id)
+            .and_then(|l| l.variants.get(tag as usize))
+            .map_or_else(|| "<variant>".to_owned(), |v| v.name.to_string())
+    }
+
+    /// Build an enum value: a discriminant and one variant's payload.
+    ///
+    /// # Why the discriminant goes in last
+    ///
+    /// Because cleanup after a failed construction must not dispatch on a variant the
+    /// value does not have. The slot starts at `zeroinitializer` — discriminant 0, the
+    /// canonically first variant, with an all-zero payload — and stays there until every
+    /// payload field is in place. So a failure part way through releases variant 0's
+    /// fields, finds null in each, and does nothing; and the moment the discriminant
+    /// becomes this variant's, the payload behind it is complete.
+    fn variant(&mut self, ty: Ty, tag: u32, fields: &[(u32, Expr)], slot: Option<usize>) -> Val {
+        let whole = llvm_type(self.types, ty);
+        let payload_ty = self.payload_type(ty, tag);
+        match slot {
+            None => {
+                // Nothing to clean, so the value is built in registers.
+                let mut payload = format!("{payload_ty} zeroinitializer");
+                for (at, value) in fields {
+                    let Val::Of {
+                        value: v,
+                        ty: field,
+                    } = self.expr(value)
+                    else {
+                        return Val::Transferred;
+                    };
+                    let out = self.fresh();
+                    let _ = writeln!(
+                        self.out,
+                        "  %{out} = insertvalue {payload}, {} %{v}, {at}",
+                        llvm_type(self.types, field)
+                    );
+                    payload = format!("{payload_ty} %{out}");
+                }
+                let tagged = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{tagged} = insertvalue {whole} zeroinitializer, i64 {tag}, 0"
+                );
+                let out = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{out} = insertvalue {whole} %{tagged}, {payload}, {}",
+                    tag + 1
+                );
+                Val::Of { value: out, ty }
+            }
+            Some(slot) => {
+                // Zeroed first: the slot is reused each time this expression is reached —
+                // in a loop, for instance — and what a previous round left in it has
+                // already been handed on.
+                let _ = writeln!(
+                    self.out,
+                    "  store {whole} {}, ptr %slot{slot}",
+                    ty.unwind_value()
+                );
+                for (at, value) in fields {
+                    let Val::Of {
+                        value: v,
+                        ty: field,
+                    } = self.expr(value)
+                    else {
+                        return Val::Transferred;
+                    };
+                    // The initialiser's reference moves into the value, which the frame
+                    // now owns. Taking it here is what makes the cleanup on a later
+                    // failure correct rather than a double release.
+                    self.take(v, field);
+                    let held = self.fresh();
+                    let _ = writeln!(self.out, "  %{held} = load {whole}, ptr %slot{slot}");
+                    let payload = self.fresh();
+                    let _ = writeln!(
+                        self.out,
+                        "  %{payload} = extractvalue {whole} %{held}, {}",
+                        tag + 1
+                    );
+                    let filled = self.fresh();
+                    let _ = writeln!(
+                        self.out,
+                        "  %{filled} = insertvalue {payload_ty} %{payload}, {} %{v}, {at}",
+                        llvm_type(self.types, field)
+                    );
+                    let out = self.fresh();
+                    let _ = writeln!(
+                        self.out,
+                        "  %{out} = insertvalue {whole} %{held}, {payload_ty} %{filled}, {}",
+                        tag + 1
+                    );
+                    let _ = writeln!(self.out, "  store {whole} %{out}, ptr %slot{slot}");
+                }
+                // Every field is in place, so the discriminant may be written. Before this
+                // line the slot holds a zero, which releases to nothing.
+                let held = self.fresh();
+                let _ = writeln!(self.out, "  %{held} = load {whole}, ptr %slot{slot}");
+                let tagged = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{tagged} = insertvalue {whole} %{held}, i64 {tag}, 0"
+                );
+                // The value leaves with the references the slot was holding, and the slot
+                // is zeroed so the frame does not release them a second time.
+                let _ = writeln!(
+                    self.out,
+                    "  store {whole} {}, ptr %slot{slot}",
+                    ty.unwind_value()
+                );
+                self.own(tagged, ty);
+                Val::Of { value: tagged, ty }
+            }
+        }
+    }
+
+    /// `match scrutinee { … }` — a `switch` on the discriminant, and a `phi` at the join.
+    ///
+    /// The shape is [`Self::conditional`]'s with N arms, plus the one thing an `if` does
+    /// not need: the value being matched is held in a slot the frame releases, so a
+    /// failure inside any arm gives it back, and the release at the join happens **after**
+    /// each arm has established its own result.
+    fn match_on(
+        &mut self,
+        scrutinee: &Expr,
+        scrutinee_ty: Ty,
+        slot: usize,
+        arms: &[MatchArm],
+    ) -> Val {
+        let whole = llvm_type(self.types, scrutinee_ty);
+        let Val::Of { value: v, ty } = self.expr(scrutinee) else {
+            return Val::Transferred;
+        };
+        // The `match` takes the value over: a temporary is already owned and a binding is
+        // borrowed, and `take` is the one place that difference is settled. From here the
+        // slot holds the reference, so every exit — the join below, a `return` inside an
+        // arm, the unwind block a failure takes — releases it exactly once.
+        self.take(v, ty);
+        let _ = writeln!(self.out, "  store {whole} %{v}, ptr %slot{slot}");
+
+        let held = self.fresh();
+        let _ = writeln!(self.out, "  %{held} = load {whole}, ptr %slot{slot}");
+        let tag = self.fresh();
+        let _ = writeln!(self.out, "  %{tag} = extractvalue {whole} %{held}, 0");
+
+        let join_label = format!("b{}", self.fresh_label());
+        let labels: Vec<String> = arms
+            .iter()
+            .map(|_| format!("b{}", self.fresh_label()))
+            .collect();
+        // Checking has established that every variant has exactly one arm, so the default
+        // is unreachable for any value this program can build. It is written as a branch
+        // to the first arm rather than as `unreachable`: the block must exist for the
+        // instruction to be well formed, and a `switch` whose default is poison would make
+        // a compiler mistake into undefined behaviour instead of a wrong answer.
+        let default = labels.first().cloned().unwrap_or_else(|| join_label.clone());
+        let table = arms
+            .iter()
+            .zip(&labels)
+            .map(|(a, l)| format!("i64 {}, label %{l}", a.tag))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let _ = writeln!(self.out, "  switch i64 %{tag}, label %{default} [ {table} ]");
+
+        let mut incomings: Vec<(u32, Ty, String)> = Vec::new();
+        for (arm, label) in arms.iter().zip(&labels) {
+            self.open(label);
+            if let Incoming::Value { value, ty, from } = self.value_branch(&arm.block, &join_label)
+            {
+                incomings.push((value, ty, from));
+            }
+        }
+
+        let Some(result_ty) = incomings.first().map(|(_, t, _)| *t) else {
+            // No arm arrives: every one transfers control. The join is never opened, and
+            // the value in the slot is released by whichever exit each arm took.
+            return Val::Transferred;
+        };
+
+        self.open(&join_label);
+        let out = self.fresh();
+        let list = incomings
+            .iter()
+            .map(|(v, _, from)| format!("[ %{v}, %{from} ]"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            self.out,
+            "  %{out} = phi {} {list}",
+            llvm_type(self.types, result_ty)
+        );
+        if result_ty.owns().is_some() {
+            for (v, _, _) in &incomings {
+                self.owned.remove(v);
+            }
+            self.own(out, result_ty);
+        }
+        // **After** the result is established, and that ordering is the milestone. Each
+        // arm retained whatever it handed to the join before branching here, so a payload
+        // returned from an arm holds its own reference by the time the value it came out
+        // of is let go.
+        let dying = self.fresh();
+        let _ = writeln!(self.out, "  %{dying} = load {whole}, ptr %slot{slot}");
+        let _ = writeln!(
+            self.out,
+            "  store {whole} {}, ptr %slot{slot}",
+            scrutinee_ty.unwind_value()
+        );
+        self.release(dying, scrutinee_ty);
+        Val::Of {
+            value: out,
+            ty: result_ty,
         }
     }
 
@@ -828,7 +1218,7 @@ impl Emitter<'_> {
         let _ = writeln!(
             self.out,
             "  %{loaded} = load {}, ptr %slot{slot}",
-            llvm_type(self.records, root_ty)
+            llvm_type(self.types, root_ty)
         );
         let mut current = loaded;
         let mut current_ty = root_ty;
@@ -840,7 +1230,7 @@ impl Emitter<'_> {
             let _ = writeln!(
                 self.out,
                 "  %{next} = extractvalue {} %{current}, {at}",
-                llvm_type(self.records, current_ty)
+                llvm_type(self.types, current_ty)
             );
             current = next;
             current_ty = *field_ty;
@@ -856,8 +1246,8 @@ impl Emitter<'_> {
             let _ = writeln!(
                 self.out,
                 "  %{out} = insertvalue {} %{aggregate}, {} %{built}, {at}",
-                llvm_type(self.records, aggregate_ty),
-                llvm_type(self.records, built_ty)
+                llvm_type(self.types, aggregate_ty),
+                llvm_type(self.types, built_ty)
             );
             built = out;
             built_ty = aggregate_ty;
@@ -865,7 +1255,7 @@ impl Emitter<'_> {
         let _ = writeln!(
             self.out,
             "  store {} %{built}, ptr %slot{slot}",
-            llvm_type(self.records, built_ty)
+            llvm_type(self.types, built_ty)
         );
         self.release(old, old_ty);
     }
@@ -894,7 +1284,7 @@ impl Emitter<'_> {
             let _ = writeln!(
                 self.out,
                 "  %{v} = load {}, ptr %slot{slot}",
-                llvm_type(self.records, ty)
+                llvm_type(self.types, ty)
             );
             self.release(v, ty);
         }
@@ -1096,19 +1486,19 @@ impl Emitter<'_> {
                                 let _ = writeln!(
                                     self.out,
                                     "  %{old} = load {}, ptr %slot{slot}",
-                                    llvm_type(self.records, ty)
+                                    llvm_type(self.types, ty)
                                 );
                                 let _ = writeln!(
                                     self.out,
                                     "  store {} %{v}, ptr %slot{slot}",
-                                    llvm_type(self.records, ty)
+                                    llvm_type(self.types, ty)
                                 );
                                 self.release(old, ty);
                             } else {
                                 let _ = writeln!(
                                     self.out,
                                     "  store {} %{v}, ptr %slot{slot}",
-                                    llvm_type(self.records, ty)
+                                    llvm_type(self.types, ty)
                                 );
                             }
                             Reach::FallsThrough
@@ -1166,7 +1556,7 @@ impl Emitter<'_> {
                         self.take(value, ty);
                         self.release_frame();
                         let _ =
-                            writeln!(self.out, "  ret {} %{value}", llvm_type(self.records, ty));
+                            writeln!(self.out, "  ret {} %{value}", llvm_type(self.types, ty));
                     }
                     Reach::Transferred
                 }
@@ -1386,7 +1776,7 @@ impl Emitter<'_> {
             let _ = writeln!(
                 self.out,
                 "  store {} %{value}, ptr %{slot}",
-                llvm_type(self.records, *ty)
+                llvm_type(self.types, *ty)
             );
         }
 
@@ -1421,7 +1811,7 @@ impl Emitter<'_> {
             let _ = writeln!(
                 self.out,
                 "  %{held} = load {}, ptr %{slot}",
-                llvm_type(self.records, *ty)
+                llvm_type(self.types, *ty)
             );
             self.release(held, *ty);
         }
@@ -1483,9 +1873,9 @@ impl Emitter<'_> {
             let _ = writeln!(
                 &mut body,
                 "  %v{i} = load {}, ptr %p{i}",
-                llvm_type(self.records, *ty)
+                llvm_type(self.types, *ty)
             );
-            passed.push(format!("{} %v{i}", llvm_type(self.records, *ty)));
+            passed.push(format!("{} %v{i}", llvm_type(self.types, *ty)));
         }
         // The callee **borrows** these, exactly as an ordinary call does: the reference
         // the spawn site packed is what keeps them alive, and it is given back below,
@@ -1501,15 +1891,15 @@ impl Emitter<'_> {
                 }
                 Some(Owns::Backing) => self.needs_strings = true,
                 Some(Owns::Channel) => self.needs_channels = true,
-                // Nothing: a record's runtime is its fields', and the helper generated
-                // below is what reaches them. Setting flags from a partial walk here would
-                // be a second answer to the same question.
-                Some(Owns::Record(_)) => {}
+                // Nothing: a record's or an enum's runtime is its fields', and the helper
+                // generated below is what reaches them. Setting flags from a partial walk
+                // here would be a second answer to the same question.
+                Some(Owns::Record(_) | Owns::Enum(_)) => {}
             }
         }
         // The task's return value is discarded, which `docs/spec.md` says outright:
         // results travel through channels, so there is one mechanism rather than two.
-        let ret = llvm_type(self.records, ret);
+        let ret = llvm_type(self.types, ret);
         let _ = writeln!(
             &mut body,
             "  %r = call {ret} {callee}({})",
@@ -1554,10 +1944,18 @@ impl Emitter<'_> {
                     let _ = writeln!(&mut body, "  call void @nz.chan_release(ptr %v{i})");
                 }
                 // The same helper the ordinary release path calls, which is why a record
-                // crossing a task boundary needs nothing written here.
+                // or an enum crossing a task boundary needs nothing written here. For an
+                // enum that means the task releases the **active** variant's payload and
+                // nothing else, by the same branch every other release takes.
                 Some(Owns::Record(id)) => {
                     if let Some(helper) = self.record_helper(id, false) {
-                        let t = llvm_type(self.records, *ty);
+                        let t = llvm_type(self.types, *ty);
+                        let _ = writeln!(&mut body, "  call void @{helper}({t} %v{i})");
+                    }
+                }
+                Some(Owns::Enum(id)) => {
+                    if let Some(helper) = self.enum_helper(id, false) {
+                        let t = llvm_type(self.types, *ty);
                         let _ = writeln!(&mut body, "  call void @{helper}({t} %v{i})");
                     }
                 }
@@ -1582,7 +1980,7 @@ impl Emitter<'_> {
         let fields = std::iter::once("i64".to_owned())
             .chain(std::iter::once("ptr".to_owned()))
             .chain(std::iter::once("i64".to_owned()))
-            .chain(types.iter().map(|t| llvm_type(self.records, *t)))
+            .chain(types.iter().map(|t| llvm_type(self.types, *t)))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(self.block_types, "{name} = type {{ {fields} }}");
@@ -1777,7 +2175,7 @@ impl Emitter<'_> {
                 // not take. A borrowed projection has nothing to balance.
                 let borrowed = !self.owned.contains(&b);
                 let out = self.extract(b, id, *at, *ty);
-                if !borrowed && owns_anything(self.records, *ty) {
+                if !borrowed && owns_anything(self.types, *ty) {
                     self.retain(out, *ty);
                     self.own(out, *ty);
                 }
@@ -1813,7 +2211,7 @@ impl Emitter<'_> {
                 let _ = writeln!(
                     self.out,
                     "  %{n} = load {}, ptr %slot{slot}",
-                    llvm_type(self.records, *ty)
+                    llvm_type(self.types, *ty)
                 );
                 Val::Of { value: n, ty: *ty }
             }
@@ -1882,7 +2280,7 @@ impl Emitter<'_> {
                     self.out,
                     "  %{out} = icmp {} {} %{a}, %{b}",
                     op.predicate(),
-                    llvm_type(self.records, *operand_ty)
+                    llvm_type(self.types, *operand_ty)
                 );
                 Val::Of {
                     value: out,
@@ -1905,14 +2303,14 @@ impl Emitter<'_> {
                 }
                 let list = vals
                     .iter()
-                    .map(|(v, t)| format!("{} %{v}", llvm_type(self.records, *t)))
+                    .map(|(v, t)| format!("{} %{v}", llvm_type(self.types, *t)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let out = self.fresh();
                 let _ = writeln!(
                     self.out,
                     "  %{out} = call {} {callee}({list})",
-                    llvm_type(self.records, *ret)
+                    llvm_type(self.types, *ret)
                 );
                 // A callee that failed has already unwound to its own `ret` and handed
                 // back a stand-in value. This is where that is noticed, so the failure
@@ -1945,6 +2343,50 @@ impl Emitter<'_> {
                 }
             }
             Expr::Builtin { op, args, span } => self.builtin(*op, args, *span),
+            Expr::Variant {
+                ty,
+                tag,
+                fields,
+                slot,
+            } => self.variant(*ty, *tag, fields, *slot),
+
+            Expr::Payload {
+                base,
+                base_ty,
+                tag,
+                at,
+                ty,
+            } => {
+                let Val::Of { value: b, .. } = self.expr(base) else {
+                    return Val::Transferred;
+                };
+                let whole = llvm_type(self.types, *base_ty);
+                let payload_ty = self.payload_type(*base_ty, *tag);
+                let slot = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{slot} = extractvalue {whole} %{b}, {}",
+                    tag + 1
+                );
+                let out = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{out} = extractvalue {payload_ty} %{slot}, {at}    ; {}",
+                    llvm_type(self.types, *ty)
+                );
+                // Borrowed, exactly as a record projection is: the value belongs to the
+                // enum the `match` is holding, and whoever takes it over retains it.
+                Val::Of { value: out, ty: *ty }
+            }
+
+            Expr::Match {
+                scrutinee,
+                scrutinee_ty,
+                slot,
+                arms,
+                ..
+            } => self.match_on(scrutinee, *scrutinee_ty, *slot, arms),
+
             Expr::If {
                 cond,
                 then_block,
@@ -2269,7 +2711,7 @@ impl Emitter<'_> {
                 let _ = writeln!(
                     self.out,
                     "  %{v} = load {}, ptr %{slot}",
-                    llvm_type(self.records, elem)
+                    llvm_type(self.types, elem)
                 );
                 // What comes out of a `Strs` gets **its own** reference to the backing.
                 // That is what makes `docs/spec.md`'s promise — a `Str` already read out
@@ -2293,13 +2735,13 @@ impl Emitter<'_> {
                 let _ = writeln!(
                     self.out,
                     "  %{old} = load {}, ptr %{slot}",
-                    llvm_type(self.records, elem)
+                    llvm_type(self.types, elem)
                 );
                 self.retain(arg(2), elem);
                 let _ = writeln!(
                     self.out,
                     "  store {} %{}, ptr %{slot}",
-                    llvm_type(self.records, elem),
+                    llvm_type(self.types, elem),
                     arg(2)
                 );
                 self.release(old, elem);
@@ -2453,13 +2895,13 @@ impl Emitter<'_> {
                 let _ = writeln!(
                     self.out,
                     "  %{slot} = getelementptr {}, ptr %{data}, i64 %{last}",
-                    llvm_type(self.records, elem)
+                    llvm_type(self.types, elem)
                 );
                 let v = self.fresh();
                 let _ = writeln!(
                     self.out,
                     "  %{v} = load {}, ptr %{slot}",
-                    llvm_type(self.records, elem)
+                    llvm_type(self.types, elem)
                 );
                 // The length is written back *after* the value is read, so the item is
                 // still inside the sequence while it is being fetched. Capacity is left
@@ -2501,7 +2943,7 @@ impl Emitter<'_> {
                 let _ = writeln!(
                     self.out,
                     "  %{slot} = getelementptr {}, ptr %{data}, i64 %{len}",
-                    llvm_type(self.records, elem)
+                    llvm_type(self.types, elem)
                 );
                 // The sequence keeps what it is given, so it takes a reference of its
                 // own. The caller's value is untouched and is still valid after the call,
@@ -2511,7 +2953,7 @@ impl Emitter<'_> {
                 let _ = writeln!(
                     self.out,
                     "  store {} %{}, ptr %{slot}",
-                    llvm_type(self.records, elem),
+                    llvm_type(self.types, elem),
                     arg(1)
                 );
                 let grown = self.fresh();
@@ -2666,7 +3108,7 @@ impl Emitter<'_> {
         let _ = writeln!(
             self.out,
             "  %{out} = phi {} {list}",
-            llvm_type(self.records, ty)
+            llvm_type(self.types, ty)
         );
         if ty.owns().is_some() {
             // Each incoming branch handed one reference to the join, so the merged value
@@ -3011,7 +3453,10 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         strings: Vec::new(),
         blobs: Vec::new(),
         names,
-        records: &unit.records,
+        types: Layouts {
+            records: &unit.records,
+            enums: &unit.enums,
+        },
         loops: Vec::new(),
         owned: std::collections::BTreeSet::new(),
         outstanding: Vec::new(),
@@ -3021,6 +3466,7 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         used_unwind: false,
         helpers: String::new(),
         generated: std::collections::BTreeSet::new(),
+        generated_enums: std::collections::BTreeSet::new(),
         blocks: Vec::new(),
         block_types: String::new(),
         tasks: String::new(),
@@ -3054,16 +3500,51 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
     // Only the ones this unit uses, closed over field types — so a record declared in
     // another module and never named here does not appear, and adding one there leaves
     // this unit's text, and therefore its object, untouched.
+    let layouts = Layouts {
+        records: &unit.records,
+        enums: &unit.enums,
+    };
     for r in &unit.records {
         let fields = r
             .fields
             .iter()
-            .map(|t| llvm_type(&unit.records, *t))
+            .map(|t| llvm_type(layouts, *t))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(head, "{} = type {{ {fields} }}    ; {}", r.name, r.source);
     }
     if !unit.records.is_empty() {
+        head.push('\n');
+    }
+
+    // The enum types this unit mentions: one named type per variant's payload, then the
+    // enum itself as a discriminant followed by one slot per variant.
+    //
+    // The payload types come first because the enum's definition names them, and LLVM
+    // requires a named type to be defined before it is used as an aggregate member.
+    // **The order is tag order**, canonical by variant name, which is why moving two
+    // variant declarations changes no byte here either.
+    for e in &unit.enums {
+        for v in &e.variants {
+            let fields = v
+                .fields
+                .iter()
+                .map(|t| llvm_type(layouts, *t))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(
+                head,
+                "{} = type {{ {fields} }}    ; {}.{}",
+                v.name, e.source, v.source
+            );
+        }
+        let slots = std::iter::once("i64".to_owned())
+            .chain(e.variants.iter().map(|v| v.name.to_string()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(head, "{} = type {{ {slots} }}    ; {}", e.name, e.source);
+    }
+    if !unit.enums.is_empty() {
         head.push('\n');
     }
 
@@ -3079,13 +3560,13 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         let params = x
             .params
             .iter()
-            .map(|t| llvm_type(&unit.records, *t))
+            .map(|t| llvm_type(layouts, *t))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(
             head,
             "declare {} {}({params})",
-            llvm_type(&unit.records, x.ret),
+            llvm_type(layouts, x.ret),
             x.symbol
         );
     }
@@ -3877,14 +4358,14 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
         .iter()
         .take(f.params)
         .enumerate()
-        .map(|(i, l)| format!("{} %p{i}", llvm_type(e.records, l.ty)))
+        .map(|(i, l)| format!("{} %p{i}", llvm_type(e.types, l.ty)))
         .collect::<Vec<_>>()
         .join(", ");
     let _ = writeln!(
         e.out,
         "define {}{} {}({params}) {{   ; {}",
         f.linkage.llvm(),
-        llvm_type(e.records, f.ret),
+        llvm_type(e.types, f.ret),
         f.symbol,
         f.name
     );
@@ -3893,7 +4374,7 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
         let _ = writeln!(
             e.out,
             "  %slot{i} = alloca {}            ; {} : {}",
-            llvm_type(e.records, local.ty),
+            llvm_type(e.types, local.ty),
             local.name,
             local.ty.name()
         );
@@ -3907,7 +4388,7 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
         // Asked of the layout table rather than of the type alone: a record owns exactly
         // what its fields own, so one whose every field is an `Int` is not a handle slot
         // and pays for nothing.
-        if !owns_anything(e.records, local.ty) {
+        if !owns_anything(e.types, local.ty) {
             continue;
         }
         // Zeroed, so a slot never written holds a value whose owner is null — and
@@ -3917,7 +4398,7 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
         let _ = writeln!(
             e.out,
             "  store {} {}, ptr %slot{i}",
-            llvm_type(e.records, local.ty),
+            llvm_type(e.types, local.ty),
             local.ty.unwind_value()
         );
         // Parameters are excluded, and that exclusion is rule 2: a callee borrows, so
@@ -3931,7 +4412,7 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
         let _ = writeln!(
             e.out,
             "  store {} %p{i}, ptr %slot{i}",
-            llvm_type(e.records, local.ty)
+            llvm_type(e.types, local.ty)
         );
     }
     match e.block(&f.body) {
@@ -3940,7 +4421,7 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
             // take the reference the caller is about to receive, then let the frame go.
             e.take(value, f.ret);
             e.release_frame();
-            let _ = writeln!(e.out, "  ret {} %{value}", llvm_type(e.records, f.ret));
+            let _ = writeln!(e.out, "  ret {} %{value}", llvm_type(e.types, f.ret));
         }
         // The body transferred, which since M1f is ordinary: every path returned, so the
         // current block already holds its `ret` and **nothing more may be written**.
@@ -3965,7 +4446,7 @@ fn emit_function(e: &mut Emitter<'_>, f: &Function) {
         let _ = writeln!(
             e.out,
             "  ret {} {}",
-            llvm_type(e.records, f.ret),
+            llvm_type(e.types, f.ret),
             f.ret.unwind_value()
         );
     }
@@ -4402,6 +4883,7 @@ mod tests {
             functions,
             externals: Vec::new(),
             records: Vec::new(),
+            enums: Vec::new(),
         }
     }
 

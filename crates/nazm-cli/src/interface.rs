@@ -65,7 +65,7 @@ pub(crate) fn run(path: &Path, with_hash: bool, declared: Option<&Path>) -> Exit
             .collect();
         let mut res = nazm_core::Resolution::default();
         let mut errors = Vec::new();
-        let types = nazm_core::declare_records(&units, &mut res, &mut errors);
+        let types = nazm_core::declare_types(&units, &mut res, &mut errors);
         let deps_of = |u: &nazm_core::Unit<'_>| -> Vec<&nazm_core::UnitInterface> {
             loaded
                 .graph
@@ -75,9 +75,9 @@ pub(crate) fn run(path: &Path, with_hash: bool, declared: Option<&Path>) -> Exit
                 .collect()
         };
         for u in &units {
-            nazm_core::resolve_record_fields(u, &deps_of(u), &mut res, &mut errors);
+            nazm_core::resolve_type_fields(u, &deps_of(u), &mut res, &mut errors);
         }
-        nazm_core::validate_record_layouts(&mut res, &mut errors);
+        nazm_core::validate_type_layouts(&mut res, &mut errors);
         let root = units
             .iter()
             .find(|u| u.module() == ModuleId::ROOT)
@@ -86,7 +86,7 @@ pub(crate) fn run(path: &Path, with_hash: bool, declared: Option<&Path>) -> Exit
         Ok::<_, Vec<nazm_diag::Diagnostic>>(PersistentUnitInterface::published(
             &interface,
             &loaded.graph,
-            res.records(),
+            res.types(),
         ))
     });
 

@@ -9,8 +9,9 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, Span};
 
 use crate::ast::{
-    Assign, BinOp, Block, Expr, Field, FieldInit, Function, Import, Let, Param, Place, PlaceField,
-    Program, Record, Return, Scope, Spawn, Stmt, TypeName, While,
+    Assign, BinOp, Block, Enum, Expr, Field, FieldInit, Function, Import, Let, MatchArm, Param,
+    PatternField, Place, PlaceField, Program, Record, Return, Scope, Spawn, Stmt, TypeName,
+    Variant, While,
 };
 use crate::lexer::{Token, TokenKind};
 
@@ -22,10 +23,9 @@ const RESERVED: &[(&str, &str)] = &[
         "there are no loop labels; `break` leaves the innermost loop",
     ),
     ("loop", "there is no `loop`; write `while true`"),
-    // `struct` left this list in N9, when it became the keyword it was reserving. The
-    // entry existed to refuse a word people would reach for before it worked.
-    ("enum", "there are no variant types yet"),
-    ("match", "there is no pattern matching yet"),
+    // `struct` left this list in N9, and `enum` and `match` in N10, each when it became
+    // the keyword it was reserving. The entries existed to refuse words people would
+    // reach for before they worked.
     // `use` left this list when imports arrived; `mod` stays, because there is no
     // module *declaration* — a file is the unit, and `use` names one by path.
     (
@@ -43,8 +43,8 @@ const SUPPORTED: &str = concat!(
     "the supported subset is functions, `let` and `let mut`, assignment, `while` with ",
     "`break` and `continue`, `return`, `if`/`else` as a statement or an expression, ",
     "arithmetic and comparison over `Int`, `Bool` and `Str`, the `Ints` and `Strs` ",
-    "sequences, `struct` records with named fields, and the built-in operations on them ",
-    "— see docs/spec.md"
+    "sequences, `struct` records with named fields, `enum` variants with `match`, and the ",
+    "built-in operations on them — see docs/spec.md"
 );
 
 #[derive(Debug)]
@@ -85,6 +85,7 @@ pub fn parse_in(file: FileId, tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
     };
     let mut functions = Vec::new();
     let mut records = Vec::new();
+    let mut enums = Vec::new();
     let mut imports = Vec::new();
 
     while !p.at(&TokenKind::Eof) {
@@ -101,20 +102,32 @@ pub fn parse_in(file: FileId, tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
         p.depth = 0;
         p.built = 0;
         p.reported_too_deep = false;
-        // `struct` or `pub struct`. Looking one token past a `pub` is what keeps the two
-        // kinds of item apart without either grammar knowing about the other.
-        let is_record = p.at(&TokenKind::Struct)
-            || (p.at(&TokenKind::Pub)
-                && matches!(
-                    p.tokens.get(p.pos + 1).map(|t| &t.kind),
-                    Some(TokenKind::Struct)
-                ));
-        if is_record {
-            match p.record() {
-                Some(r) => records.push(r),
-                None => p.recover_to_item(),
+        // `struct`/`enum`, each optionally behind a `pub`. Looking one token past a `pub`
+        // is what keeps the kinds of item apart without any grammar knowing about
+        // another's.
+        let after_pub = |p: &Parser<'_>| {
+            if p.at(&TokenKind::Pub) {
+                p.tokens.get(p.pos + 1).map(|t| t.kind.clone())
+            } else {
+                Some(p.peek().clone())
             }
-            continue;
+        };
+        match after_pub(&p) {
+            Some(TokenKind::Struct) => {
+                match p.record() {
+                    Some(r) => records.push(r),
+                    None => p.recover_to_item(),
+                }
+                continue;
+            }
+            Some(TokenKind::Enum) => {
+                match p.enumeration() {
+                    Some(e) => enums.push(e),
+                    None => p.recover_to_item(),
+                }
+                continue;
+            }
+            _ => {}
         }
         match p.function() {
             Some(f) => functions.push(f),
@@ -130,6 +143,7 @@ pub fn parse_in(file: FileId, tokens: &[Token]) -> (Program, Vec<Diagnostic>) {
         Program {
             functions,
             records,
+            enums,
             imports,
         },
         p.errors,
@@ -288,6 +302,7 @@ impl<'a> Parser<'a> {
             && !self.at(&TokenKind::Fn)
             && !self.at(&TokenKind::Pub)
             && !self.at(&TokenKind::Struct)
+            && !self.at(&TokenKind::Enum)
         {
             self.pos += 1;
         }
@@ -464,6 +479,116 @@ impl<'a> Parser<'a> {
             name_span,
             pub_span,
             fields,
+            span: start.join(close),
+        })
+    }
+
+    /// `enum Name { Variant, Other(field: Type, …), … }`, with an optional `pub` in front.
+    ///
+    /// A zero-payload variant is written with no parentheses and a variant with a payload
+    /// names every field, exactly as a record declaration does. There is no second
+    /// spelling for either: `Eof()` in a declaration would be a field list with no fields,
+    /// which is the thing a record is refused for.
+    fn enumeration(&mut self) -> Option<Enum> {
+        let start = self.peek_span();
+        let pub_span = self.at(&TokenKind::Pub).then(|| {
+            let s = self.peek_span();
+            self.advance();
+            s
+        });
+        self.expect(&TokenKind::Enum, "to start an enum")?;
+
+        let name_span = self.peek_span();
+        let name = match self.advance() {
+            TokenKind::Ident(n) => {
+                if self.reserved(&n, name_span) {
+                    return None;
+                }
+                n
+            }
+            other => {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        name_span,
+                        format!("expected an enum name, found {}", other.describe()),
+                    )
+                    .help("an enum is declared `enum State { Ready, Failed(code: Int), }`"),
+                );
+                return None;
+            }
+        };
+
+        self.expect(&TokenKind::LBrace, "to start the variants")?;
+        let mut variants = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            let variant_span = self.peek_span();
+            let variant_name = match self.advance() {
+                TokenKind::Ident(n) => n,
+                other => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            variant_span,
+                            format!("expected a variant name, found {}", other.describe()),
+                        )
+                        .help(
+                            "a variant is written `Name,` or `Name(field: Type,),` — the \
+                             parentheses are the payload, so a variant without one has none",
+                        ),
+                    );
+                    return None;
+                }
+            };
+            let mut fields = Vec::new();
+            let mut last = variant_span;
+            if self.eat(&TokenKind::LParen) {
+                while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+                    let field_span = self.peek_span();
+                    let field_name = match self.advance() {
+                        TokenKind::Ident(n) => n,
+                        other => {
+                            self.errors.push(
+                                Diagnostic::error(
+                                    codes::UNEXPECTED_TOKEN,
+                                    field_span,
+                                    format!("expected a field name, found {}", other.describe()),
+                                )
+                                .help("each payload field is written `name: Type,`"),
+                            );
+                            return None;
+                        }
+                    };
+                    self.expect(&TokenKind::Colon, "after a payload field name")?;
+                    let ty = self.type_name()?;
+                    fields.push(Field {
+                        name: field_name,
+                        name_span: field_span,
+                        span: field_span.join(ty.span),
+                        ty,
+                    });
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+                last = self.expect(&TokenKind::RParen, "to close the payload")?;
+            }
+            variants.push(Variant {
+                name: variant_name,
+                name_span: variant_span,
+                fields,
+                span: variant_span.join(last),
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        let close = self.expect(&TokenKind::RBrace, "to close the variants")?;
+        Some(Enum {
+            name,
+            name_span,
+            pub_span,
+            variants,
             span: start.join(close),
         })
     }
@@ -861,12 +986,16 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// `Name(field: value, …)`, the `(` already seen by the caller's lookahead.
+    /// `( field: value, … )` — the initialiser list a record construction and a variant
+    /// construction share.
     ///
     /// Every field is named, there is no positional form, and a trailing comma is allowed.
     /// Duplicates, omissions and unknown names are the checker's to report: they are
     /// questions about a type, and the parser has not resolved one.
-    fn construction(&mut self, ty: String, ty_span: Span) -> Option<Expr> {
+    ///
+    /// Returns the fields, the closing parenthesis and the deepest subtree any initialiser
+    /// built, because the caller is the node that has to account for it.
+    fn field_inits(&mut self) -> Option<(Vec<FieldInit>, Span, usize)> {
         self.expect(&TokenKind::LParen, "to start the fields")?;
         let mut fields = Vec::new();
         let mut deepest = 0;
@@ -882,8 +1011,8 @@ impl<'a> Parser<'a> {
                             format!("expected a field name, found {}", other.describe()),
                         )
                         .help(
-                            "every field of a record is named when it is built: \
-                             `Point(x: 1, y: 2)`",
+                            "every field is named when a value is built: \
+                             `Point(x: 1, y: 2)`, `State.Failed(code: 1)`",
                         ),
                     );
                     return None;
@@ -903,6 +1032,12 @@ impl<'a> Parser<'a> {
             }
         }
         let close = self.expect(&TokenKind::RParen, "to close the fields")?;
+        Some((fields, close, deepest))
+    }
+
+    /// `Name(field: value, …)`, the `(` already seen by the caller's lookahead.
+    fn construction(&mut self, ty: String, ty_span: Span) -> Option<Expr> {
+        let (fields, close, deepest) = self.field_inits()?;
         self.built(deepest + 1)?;
         Some(Expr::Construct {
             ty,
@@ -910,6 +1045,161 @@ impl<'a> Parser<'a> {
             fields,
             span: ty_span.join(close),
         })
+    }
+
+    /// `Enum.Variant(field: value, …)`, the `.` already seen by the caller's lookahead.
+    ///
+    /// The parentheses are written even when the variant has no payload, because
+    /// `Enum.Variant` alone is exactly the shape of a field projection. See `docs/spec.md`.
+    fn variant_construction(&mut self, ty: String, ty_span: Span) -> Option<Expr> {
+        self.advance(); // `.`
+        let variant_span = self.peek_span();
+        let TokenKind::Ident(variant) = self.advance() else {
+            // Unreachable: the caller looked at this token before calling.
+            return None;
+        };
+        let (fields, close, deepest) = self.field_inits()?;
+        self.built(deepest + 1)?;
+        Some(Expr::Variant {
+            ty,
+            ty_span,
+            variant,
+            variant_span,
+            fields,
+            span: ty_span.join(close),
+        })
+    }
+
+    /// `match scrutinee { Enum.Variant(field: binding) => body, … }`
+    ///
+    /// The `match` keyword is already consumed. The scrutinee is an ordinary expression and
+    /// the arms are a brace-delimited list, exactly as an `if`'s condition and block are —
+    /// there is no second grammar here and no second set of completion rules.
+    fn match_expr(&mut self, start: Span) -> Option<Expr> {
+        let scrutinee = self.expr()?;
+        let mut deepest = self.child();
+        self.expect(&TokenKind::LBrace, "to start the arms")?;
+        let mut arms = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            let ty_span = self.peek_span();
+            let ty = match self.advance() {
+                TokenKind::Ident(n) => n,
+                other => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            ty_span,
+                            format!("expected an enum name, found {}", other.describe()),
+                        )
+                        .help(
+                            "every arm names the variant it selects, qualified by its \
+                             enum: `State.Ready() => 0,`",
+                        ),
+                    );
+                    return None;
+                }
+            };
+            self.expect(&TokenKind::Dot, "between an enum and one of its variants")?;
+            let variant_span = self.peek_span();
+            let variant = match self.advance() {
+                TokenKind::Ident(n) => n,
+                other => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            variant_span,
+                            format!("expected a variant name, found {}", other.describe()),
+                        )
+                        .help("an arm selects one variant: `State.Failed(code: c) => c,`"),
+                    );
+                    return None;
+                }
+            };
+            let fields = self.pattern_fields()?;
+            self.expect(&TokenKind::FatArrow, "between a pattern and its arm")?;
+            let body = self.expr()?;
+            deepest = deepest.max(self.child());
+            arms.push(MatchArm {
+                ty,
+                ty_span,
+                variant,
+                variant_span,
+                fields,
+                span: ty_span.join(body.span()),
+                body,
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        let close = self.expect(&TokenKind::RBrace, "to close the arms")?;
+        self.built(deepest + 1)?;
+        Some(Expr::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+            span: start.join(close),
+        })
+    }
+
+    /// `( field: binding, … )` — a pattern's payload list.
+    ///
+    /// Each field is named and bound to an identifier, or discarded with `_`. Whether every
+    /// field of the variant is present, and whether two bindings share a name, are the
+    /// checker's questions: both are about a variant the parser has not resolved.
+    fn pattern_fields(&mut self) -> Option<Vec<PatternField>> {
+        self.expect(&TokenKind::LParen, "to start the payload")?;
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+            let name_span = self.peek_span();
+            let name = match self.advance() {
+                TokenKind::Ident(n) => n,
+                other => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            name_span,
+                            format!("expected a payload field name, found {}", other.describe()),
+                        )
+                        .help("a pattern names every payload field: `V(left: a, right: _)`"),
+                    );
+                    return None;
+                }
+            };
+            self.expect(&TokenKind::Colon, "after a payload field name")?;
+            let binding_span = self.peek_span();
+            let binding = match self.advance() {
+                TokenKind::Ident(n) => n,
+                other => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            binding_span,
+                            format!("expected a binding or `_`, found {}", other.describe()),
+                        )
+                        .help(
+                            "a payload field is bound to a name or discarded with `_`; \
+                             `_` still leaves the value to the enum, it only declines to \
+                             name it",
+                        ),
+                    );
+                    return None;
+                }
+            };
+            fields.push(PatternField {
+                name,
+                name_span,
+                // `_` is an ordinary identifier to the lexer and a discard here. One
+                // spelling, decided by position: `docs/spec.md` gives `_` its meaning
+                // inside a pattern and nowhere else.
+                binding: (binding != "_").then_some(binding),
+                binding_span,
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RParen, "to close the payload")?;
+        Some(fields)
     }
 
     fn expr(&mut self) -> Option<Expr> {
@@ -1153,6 +1443,22 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 self.advance();
+                // `Enum.Variant(…)` is a variant. Three tokens decide it, and the
+                // decision is total: the language has no methods and no function values,
+                // so a `(` can never follow a field projection and nothing else has this
+                // shape. `docs/spec.md` records why a variant is always parenthesised.
+                let variant = self.at(&TokenKind::Dot)
+                    && matches!(
+                        self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                        Some(TokenKind::Ident(_))
+                    )
+                    && matches!(
+                        self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                        Some(TokenKind::LParen)
+                    );
+                if variant {
+                    return self.variant_construction(name, span);
+                }
                 // `Name(field: …)` is a construction; `f(a, b)` is a call. Two tokens
                 // past the `(` decide it, and the decision is total: no expression can
                 // begin with a name followed by a colon, so neither form can be mistaken
@@ -1192,21 +1498,30 @@ impl<'a> Parser<'a> {
                     Some(Expr::Var { name, span })
                 }
             }
-            TokenKind::Struct => {
-                // A `struct` inside a body is a declaration in the wrong place, not an
-                // expression. Saying which is the difference between one useful error and
-                // a cascade of "expected an expression".
+            TokenKind::Match => {
+                self.advance();
+                self.match_expr(span)
+            }
+            kw @ (TokenKind::Struct | TokenKind::Enum) => {
+                // A declaration inside a body is in the wrong place, not an expression.
+                // Saying which is the difference between one useful error and a cascade of
+                // "expected an expression".
+                let (word, what) = if matches!(kw, TokenKind::Struct) {
+                    ("struct", "A record")
+                } else {
+                    ("enum", "An enum")
+                };
                 self.advance();
                 self.errors.push(
                     Diagnostic::error(
                         codes::UNEXPECTED_TOKEN,
                         span,
-                        "a record can only be declared at the top level",
+                        format!("{} can only be declared at the top level", what.to_lowercase()),
                     )
-                    .help(
-                        "move the `struct` out of the function. Records are module-level \
-                         declarations, like functions",
-                    ),
+                    .help(format!(
+                        "move the `{word}` out of the function. {what} is a module-level \
+                         declaration, like a function",
+                    )),
                 );
                 None
             }
@@ -1512,9 +1827,15 @@ mod ast_depth_tests {
                             stack.push((Node::Expr(a), d + 1));
                         }
                     }
-                    Expr::Construct { fields, .. } => {
+                    Expr::Construct { fields, .. } | Expr::Variant { fields, .. } => {
                         for f in fields {
                             stack.push((Node::Expr(&f.value), d + 1));
+                        }
+                    }
+                    Expr::Match { scrutinee, arms, .. } => {
+                        stack.push((Node::Expr(scrutinee), d + 1));
+                        for a in arms {
+                            stack.push((Node::Expr(&a.body), d + 1));
                         }
                     }
                     Expr::Field { base, .. } => stack.push((Node::Expr(base), d + 1)),

@@ -73,7 +73,14 @@ use crate::digest::{self, Framed};
 /// safety — that every one of the new codes below covers *except* one: `==` on a record
 /// is refused under the existing `N0304`, so the code set alone would not have moved for
 /// it. That is exactly the case this counter exists for.
-pub const SEMANTIC_EPOCH: u32 = 2;
+///
+/// `3` — N10, 2026-09-23. Enums and `match`. The checker gained a sum type, exhaustive
+/// pattern matching and the rules around them — and, the case this counter exists for
+/// again, `enum` and `match` **stopped being refused as reserved words**. A module whose
+/// source contains either was recorded by an N9 build as having a diagnostic; under N10
+/// it has none. The code set moved too, but it would have moved for the additions alone,
+/// and the refusal that went away is not visible in it at all.
+pub const SEMANTIC_EPOCH: u32 = 3;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -91,13 +98,18 @@ pub const CHECKER_CODES: &[&str] = &[
     "CONDITION_NOT_BOOL",
     "DUPLICATE_FIELD",
     "DUPLICATE_FUNCTION",
+    "DUPLICATE_MATCH_ARM",
     "DUPLICATE_TYPE",
+    "DUPLICATE_VARIANT",
+    "EMPTY_ENUM",
     "ILLEGAL_TASK_CAPTURE",
     "IMPORT_COLLIDES_WITH_DEFINITION",
     "INVALID_OPERANDS",
     "INVALID_PROJECTION",
+    "MATCH_ON_NON_ENUM",
     "MISSING_FIELD",
     "MISSING_MAIN",
+    "NON_EXHAUSTIVE_MATCH",
     "NOT_IN_A_LOOP",
     "PRIVATE_DEFINITION",
     "PRIVATE_TYPE_EXPOSED",
@@ -109,9 +121,11 @@ pub const CHECKER_CODES: &[&str] = &[
     "UNDEFINED_VARIABLE",
     "UNKNOWN_FIELD",
     "UNKNOWN_TYPE",
+    "UNKNOWN_VARIANT",
     "UNREACHABLE_STATEMENT",
     "UNSUPPORTED_CONSTRUCT",
     "WRONG_ARGUMENT_COUNT",
+    "WRONG_ENUM_IN_PATTERN",
 ];
 
 /// The checker that produced, or is asking for, a result.

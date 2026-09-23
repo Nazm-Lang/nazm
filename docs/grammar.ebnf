@@ -23,7 +23,8 @@
 (* @example fn main() -> Int { 0 } *)
 (* @example use "other.nz"; fn main() -> Int { 0 } *)
 (* @example struct Point { x: Int, } fn main() -> Int { Point(x: 1).x } *)
-program = { use_item } , { function | record } ;
+(* @example enum State { Ready, } fn main() -> Int { match State.Ready() { State.Ready() => 0, } } *)
+program = { use_item } , { function | record | enumeration } ;
 
 (* @example use "lib/helpers.nz"; fn main() -> Int { 0 } *)
 use_item = "use" , STRING , ";" ;
@@ -58,6 +59,32 @@ fields = field , { "," , field } , [ "," ] ;
 
 (* @example struct P { x: Int, } fn main() -> Int { P(x: 7).x } *)
 field = IDENT , ":" , type ;
+
+(* An enum: a closed set of named variants, exactly one of which is active in any value.
+ * `enum` is the keyword and *enum* is what the semantics call the category — unlike
+ * `struct`/record there is no second word, because none was needed.
+ *
+ * Variant order is written down and means nothing: the discriminant is derived from the
+ * names, so reordering two variants changes neither the type, nor its interface
+ * fingerprint, nor its native representation. See `docs/spec.md`, *Enums*.
+ *)
+(* @example enum State { Ready, Done, } fn main() -> Int { match State.Ready() { State.Ready() => 1, State.Done() => 0, } } *)
+(* @example pub enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } } *)
+enumeration = [ visibility ] , "enum" , IDENT , "{" , [ variants ] , "}" ;
+
+(* @example enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } } *)
+variants = variant , { "," , variant } , [ "," ] ;
+
+(* A variant with no payload is written with **no parentheses**: there is no field list,
+ * exactly as a record with no fields has none. Construction and patterns always write
+ * them, because there the parentheses are what separates a variant from a projection.
+ *)
+(* @example enum E { A, } fn main() -> Int { match E.A() { E.A() => 0, } } *)
+(* @example enum E { V(x: Int, y: Int), } fn main() -> Int { match E.V(x: 1, y: 2) { E.V(x: a, y: b) => a + b, } } *)
+variant = IDENT , [ "(" , [ payload ] , ")" ] ;
+
+(* @example enum E { V(x: Int,), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } } *)
+payload = field , { "," , field } , [ "," ] ;
 
 (* @example fn f(a: Int, b: Str) -> Int { str_len(b) + a } fn main() -> Int { f(1, "x") } *)
 parameters = parameter , { "," , parameter } ;
@@ -165,7 +192,9 @@ atom = INTEGER
      | IDENT
      | call
      | construction
+     | variant_construction
      | if_expression
+     | match_expression
      | "(" , expression , ")" ;
 
 (* @example fn main() -> Int { str_len("abc") } *)
@@ -188,9 +217,46 @@ initialisers = initialiser , { "," , initialiser } , [ "," ] ;
 (* @example struct P { x: Int, } fn main() -> Int { P(x: 1 + 1).x } *)
 initialiser = IDENT , ":" , expression ;
 
+(* Always qualified by the enum, and always parenthesised — including for a variant with
+ * no payload, because `E.V` alone is exactly the shape of a field projection. Told apart
+ * from one by three tokens, `IDENT "." IDENT "("`, which is a decision rather than a
+ * guess: the language has no methods and no function values, so nothing else can put a
+ * `(` after a projection. See `docs/spec.md`, *Variants are named by their enum*.
+ *)
+(* @example enum E { A, } fn main() -> Int { match E.A() { E.A() => 0, } } *)
+(* @example enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1 + 1) { E.V(x: n) => n, } } *)
+variant_construction = IDENT , "." , IDENT , "(" , [ initialisers ] , ")" ;
+
 (* @example fn main() -> Int { ints_set(ints_new(), 0, 1) } *)
 arguments = expression , { "," , expression } ;
 
 (* @example fn main() -> Int { if true { 1 } else { 2 } } *)
 (* @example fn main() -> Int { let mut n = 0; if true { n = 1; } n } *)
 if_expression = "if" , expression , block , [ "else" , ( block | if_expression ) ] ;
+
+(* The one elimination form for an enum. An expression, so it composes wherever one may
+ * appear, and its arms reuse the existing block and completion rules rather than
+ * introducing a second set.
+ *
+ * Every variant gets exactly one arm — there is no `_` arm, deliberately, so that adding
+ * a variant breaks the matches that believed they had handled the whole enum. See
+ * `docs/spec.md`, *Exhaustiveness*.
+ *)
+(* @example enum E { A, B(x: Int), } fn main() -> Int { match E.A() { E.A() => 1, E.B(x: n) => n, } } *)
+(* @example enum E { A(text: Str), } fn main() -> Int { match E.A(text: "hi") { E.A(text: s) => { let n = str_len(s); n }, } } *)
+match_expression = "match" , expression , "{" , [ match_arms ] , "}" ;
+
+(* @example enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } } *)
+match_arms = match_arm , { "," , match_arm } , [ "," ] ;
+
+(* @example enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } } *)
+match_arm = IDENT , "." , IDENT , "(" , [ pattern_fields ] , ")" , "=>" , expression ;
+
+(* @example enum E { V(x: Int, y: Int), } fn main() -> Int { match E.V(x: 1, y: 2) { E.V(x: a, y: _) => a, } } *)
+pattern_fields = pattern_field , { "," , pattern_field } , [ "," ] ;
+
+(* A payload field is bound to a name, or discarded with `_`. `_` declines to name the
+ * value; it does not mean the field is absent and does not mean it is not released.
+ *)
+(* @example enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: _) => 0, } } *)
+pattern_field = IDENT , ":" , IDENT ;

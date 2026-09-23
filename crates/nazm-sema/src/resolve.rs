@@ -28,12 +28,14 @@ use std::collections::HashMap;
 
 use nazm_span::Span;
 
+use crate::enums::{EnumId, Enums};
 use crate::interface::Visibility;
 use crate::intrinsic::Intrinsic;
 use crate::key::{DefKey, DefKind, ModuleKey};
 use crate::module::ModuleId;
 use crate::record::{RecordId, Records};
 use crate::types::Type;
+use crate::udt::UserTypes;
 
 /// A function of this compilation, by position in declaration order.
 ///
@@ -121,16 +123,41 @@ pub struct FieldRef {
     pub field: u32,
 }
 
+/// Which variant of which enum a construction or a pattern names.
+///
+/// **Not a discriminant.** The number the backend writes is chosen from the canonical
+/// order at lowering; what resolution decides is *which variant*, spelled as the enum's
+/// identity and the variant's index in declaration order. A semantic stage that recorded a
+/// tag would have made the representation part of the language's meaning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VariantRef {
+    pub enumeration: EnumId,
+    /// The variant's index in the enum's **declaration order**, which is the session-local
+    /// spelling of `(enum definition, variant name)`. Never persisted.
+    pub variant: u32,
+}
+
+/// Which payload field of which variant an initialiser or a pattern field names.
+///
+/// The enum's answer to [`FieldRef`], and not an offset for the same reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PayloadRef {
+    pub enumeration: EnumId,
+    pub variant: u32,
+    /// The field's index in the variant's declaration order.
+    pub field: u32,
+}
+
 /// Everything resolution decided about one compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Resolution {
     functions: Vec<FnDef>,
-    /// Every record declared in this compilation.
+    /// Every record and enum declared in this compilation.
     ///
-    /// Here rather than beside it, for N1's reason: a record's fields and the properties
+    /// Here rather than beside it, for N1's reason: a user type's fields and the properties
     /// derived from them are resolution's answers, and a backend that built its own table
     /// would be a second resolver. `nazm-lir` reads this and never looks a type name up.
-    records: Records,
+    types: UserTypes,
     /// Name to definition, **per module**.
     ///
     /// One map per module, indexed by [`ModuleId`]. Before N2 this was a single
@@ -147,6 +174,14 @@ pub struct Resolution {
     fields: HashMap<Span, FieldRef>,
     /// Keyed by the span of the **type name** in a record construction.
     constructions: HashMap<Span, RecordId>,
+    /// Keyed by the span of the **variant name** in a variant construction or a pattern.
+    ///
+    /// One map for both, because they are the same question — *which variant is this* —
+    /// asked in two syntactic positions, and two maps would be two chances to disagree.
+    variants: HashMap<Span, VariantRef>,
+    /// Keyed by the span of a **payload field name** in a variant construction or a
+    /// pattern.
+    payloads: HashMap<Span, PayloadRef>,
 }
 
 impl Resolution {
@@ -155,15 +190,37 @@ impl Resolution {
         &self.functions
     }
 
+    /// Every user-defined type this compilation declared.
+    #[must_use]
+    pub fn types(&self) -> &UserTypes {
+        &self.types
+    }
+
+    /// The user-type tables, for the checker that is building them.
+    pub fn types_mut(&mut self) -> &mut UserTypes {
+        &mut self.types
+    }
+
     /// Every record this compilation declared.
     #[must_use]
     pub fn records(&self) -> &Records {
-        &self.records
+        self.types.records()
     }
 
     /// The record table, for the checker that is building it.
     pub fn records_mut(&mut self) -> &mut Records {
-        &mut self.records
+        self.types.records_mut()
+    }
+
+    /// Every enum this compilation declared.
+    #[must_use]
+    pub fn enums(&self) -> &Enums {
+        self.types.enums()
+    }
+
+    /// The enum table, for the checker that is building it.
+    pub fn enums_mut(&mut self) -> &mut Enums {
+        self.types.enums_mut()
     }
 
     /// What the projection whose field name was written at `span` refers to.
@@ -176,6 +233,18 @@ impl Resolution {
     #[must_use]
     pub fn construction(&self, span: Span) -> Option<RecordId> {
         self.constructions.get(&span).copied()
+    }
+
+    /// Which variant the construction or pattern whose variant name is at `span` names.
+    #[must_use]
+    pub fn variant(&self, span: Span) -> Option<VariantRef> {
+        self.variants.get(&span).copied()
+    }
+
+    /// Which payload field the initialiser or pattern field at `span` names.
+    #[must_use]
+    pub fn payload(&self, span: Span) -> Option<PayloadRef> {
+        self.payloads.get(&span).copied()
     }
 
     #[must_use]
@@ -198,12 +267,22 @@ impl Resolution {
     /// [`Self::def_key`], with [`DefKind::Record`].
     #[must_use]
     pub fn record_key(&self, id: RecordId, module: &ModuleKey) -> Option<DefKey> {
-        let def = self.records.get(id)?;
+        let def = self.types.records().get(id)?;
         Some(DefKey::new(
             module.clone(),
             DefKind::Record,
             def.name.clone(),
         ))
+    }
+
+    /// Which logical enum this is, across processes. The same rule, with
+    /// [`DefKind::Enum`]. A *variant* has no key of its own: `docs/spec.md` makes its
+    /// durable meaning this key **and its name**, and nothing persistent has needed a
+    /// composed identity, so none was invented.
+    #[must_use]
+    pub fn enum_key(&self, id: EnumId, module: &ModuleKey) -> Option<DefKey> {
+        let def = self.types.enums().get(id)?;
+        Some(DefKey::new(module.clone(), DefKind::Enum, def.name.clone()))
     }
 
     /// Which logical definition this is, across processes.
@@ -304,5 +383,13 @@ impl Resolution {
 
     pub fn record_construction(&mut self, span: Span, of: RecordId) {
         self.constructions.insert(span, of);
+    }
+
+    pub fn record_variant(&mut self, span: Span, to: VariantRef) {
+        self.variants.insert(span, to);
+    }
+
+    pub fn record_payload(&mut self, span: Span, to: PayloadRef) {
+        self.payloads.insert(span, to);
     }
 }
