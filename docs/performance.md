@@ -245,8 +245,9 @@ hope.
 
 Not a token measurement: bytes, and no tokenizer has been run. For the same five modules,
 what each one's implementation weighs against what its published interface weighs — the
-schema was `nazm.interface/1` when this was measured and is `/2` since N9, which added
-record definitions and moves these numbers for a module that exports one:
+schema was `nazm.interface/1` when this was measured, `/2` since N9 and `/3` since N10, each
+of which added definitions — records, then enums — that move these numbers for a module
+exporting one:
 
 | | source | interface |
 | --- | ---: | ---: |
