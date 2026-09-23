@@ -1891,6 +1891,61 @@ post-order scan also never has a completion *in hand* to return — the node tha
 it is not the node that consumes it. The live flag is the same fact stated at the only place
 this design can ask it, and there is one of it rather than one per consumer.
 
+### No value, as a third completion — N10.2
+
+N10.1's bit said *never completes* and left *completes with no value* inside the type code,
+as `unknown` — which also meant "already reported". N10.2 replaced the bit with the
+reference's three states: `ncomp` in `compiler/analyse.nz` holds `c_value`, `c_unit` or
+`c_diverges` for every node, and nothing reconstructs one from another or from the type.
+
+| Node | Completion |
+| --- | --- |
+| `break`, `continue`, `return` | `Diverges` |
+| an expression statement | its expression's, if that diverges; otherwise `Unit` |
+| `let`, assignment, `while`, `scope`, `spawn` | `Unit` |
+| a block | `Diverges` if a statement is still leaving when the statements end (a tail after it is `N0313`); otherwise its tail's; with no tail, `Unit` |
+| an `if` with no `else` | `Unit`, whatever its branch does: the condition may be false |
+| an `if` with one | the join below |
+| a `match` | its arms folded: one that leaves defers, one with no value makes the whole `Unit` |
+| every other expression | `Value` |
+
+The `if` join is the reference's, in the reference's order — the order is the rule, because
+the first line decides the `Unit` and `Diverges` pairs:
+
+| then | else | result | diagnostic |
+| --- | --- | --- | --- |
+| `Diverges` | anything | the else branch's completion and type | — |
+| anything | `Diverges` | the then branch's | — |
+| `Value(A)` | `Value(A)` | `Value(A)` | — |
+| `Value(A)` | `Value(B)` | `Value(A)` | `N0302` at the else branch's value |
+| `Value(A)` | `Unit`, or the reverse | `Value(A)` | `N0302` at the whole `if` |
+| `Unit` | `Unit` | `Unit` | — |
+
+An expected outer type changes none of it: the reference passes one into the branches for
+recovery only, so `f(if c { 1 } else { "x" })` is `N0302` whatever `f` takes.
+
+**`N0300` is decided in one place.** `value_child` says which children of a node must
+produce a value — every operand, argument and initialiser, the value of a `let`, an
+assignment and a `return`, and the condition of an `if` and a `while`; the scrutinee asks
+the same question where it is finished — and `needs_value` refuses a `Unit` there at the
+child's span, before the node's own rule reads the child's type. `Diverges` is not refused:
+it never produces the contradictory value. After the report the value is read as the
+reference reads it, `expected.unwrap_or(Int)`, so the consequences the reference reports —
+`N0304` for a comparison with a `Str`, `N0342` for a scrutinee — are reported here too, and
+the ones it does not are not.
+
+Two checks the Nazm checker had never made came with it: a body is held to its signature
+(`N0300` at the tail, or at the body when it produces nothing) and so is each `return`.
+And a `match` whose scrutinee is not an enum discards what its arms reported, because the
+reference returns after `N0342` without checking them.
+
+**The emitter changed in one place**, as a consequence. A `match` statement whose arms are a
+value and nothing is `Unit` — the reference accepts it — so the value arm's value has no
+`phi` to go to. `discard_branch_value` drops it inside the arm's own block and releases it if
+it was a temporary, which is what an expression statement does with a value. Before N10.2
+that `match` had its value arm's type and never reached this question; it reached a
+different one, the emitter's stack.
+
 ### What this still does not do
 
 - **No generics**, so no `Option`, no `Result`, and no generic enum of any kind. A

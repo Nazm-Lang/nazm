@@ -1,0 +1,19 @@
+struct P {
+    x: Int,
+}
+struct Q {
+    x: Int,
+}
+enum E {
+    A,
+    V(x: Int),
+}
+enum F {
+    A,
+    V(x: Int),
+}
+fn f(n: Int) -> Int { n }
+fn main() -> Int {
+    let c = true;
+    match (if c { E.A() }) { E.A() => 1, E.V(x: v) => v, }
+}

@@ -1,0 +1,18 @@
+enum E {
+    A,
+    B,
+}
+fn main() -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i < 4 {
+        i = i + 1;
+        let e = if i % 2 == 0 { E.A() } else { E.B() };
+        match e {
+            E.A() => int_to_str(i),
+            E.B() => if i > 2 { n = n + 10; } else { n = n + 1; },
+        };
+        n = n + 1;
+    }
+    n
+}
