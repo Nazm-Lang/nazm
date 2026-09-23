@@ -1,0 +1,7 @@
+pub struct Box {
+    v: Int,
+}
+
+pub fn a_box(n: Int) -> Box {
+    Box(v: n)
+}

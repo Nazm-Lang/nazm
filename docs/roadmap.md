@@ -355,6 +355,33 @@ to one that refers back, and the constitution says in advance what admitting tha
 The alternatives are unchanged and both are smaller: a lossless CST, which wants nothing,
 and `nazm explain-cost`, which wants only writing.
 
+### N10.2 — Selfhost completion and diagnostic parity — **complete, 2026-09-23**
+
+The two gaps N10.1 left, both in programs the reference refuses, closed before generics make
+them expensive. No semantics changed; no accepted program changed meaning, and the Nazm
+compiler's IR for every accepted program in the corpora is byte-identical to N10.1's.
+
+The cause was the same one N10.1 named, one level on. The reference's `Completion` has three
+states and the Nazm checker had two: N10.1 added *never completes*, and *completes with no
+value* was still the type code `unknown`, which also meant "already reported". So a value
+position given nothing was accepted — `let x = if c { 1 };` became `alloca void` — and an
+`if` whose branches disagreed was typed by one of them and handed clang a mistyped `phi`.
+
+| Settled | Where |
+| --- | --- |
+| one completion per node, `Value`, `Unit` or `Diverges`, never inferred from the type | `architecture.md` §7.11 |
+| `N0300` for a value position given nothing, decided in one place, at the reference's span | `compiler/analyse.nz`, `needs_value` |
+| the `if` join in the reference's order: a branch that leaves defers; two values must agree; a value with nothing is `N0302` | the same |
+| a body and a `return` are held to the signature, which the Nazm checker had never done | the same |
+| a `match` refused for its scrutinee checks no arm, as the reference's does not | the same |
+| a `match` of no value discards the value its value arms produce, and gives it back | `compiler/emit.nz`, `discard_branch_value` |
+
+The last is the one emitter change, and it is a consequence rather than a rule: the
+reference accepts `match e { E.A() => int_to_str(i), E.B() => if c { … }, };` as a
+statement, and once the checker stopped giving that `match` its value arm's type, that arm's
+value had nowhere to go. The reference's *native* backend refuses the shape as outside its
+subset; the Nazm compiler compiles it and agrees with the interpreter, strings reclaimed.
+
 ### N10.1 — Transfer expressions and selfhost parity — **complete, 2026-09-23**
 
 A correction between N10 and N11, and no new language: `spec.md` is unchanged. N10's
@@ -396,7 +423,7 @@ What it does **not** settle is recorded in `bootstrap.md`: the self-hosted check
 no `Unit` rule (`N0300`, "this produces no value") and does not compare an `if`'s two branch
 types (`N0302`). Both concern programs the reference refuses, so neither is a divergence in
 the accepted language — but the compiler written in Nazm fails on them rather than refusing
-them by name.
+them by name. *Both closed by N10.2, above.*
 
 ### N10 — Variants and exhaustive pattern matching — **complete, 2026-09-23**
 

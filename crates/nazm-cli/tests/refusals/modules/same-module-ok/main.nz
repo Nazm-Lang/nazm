@@ -1,0 +1,7 @@
+use "a.nz";
+
+fn main() -> Int {
+    let c = true;
+    let x = if c { a_box(1) } else { a_box(2) };
+    x.v
+}

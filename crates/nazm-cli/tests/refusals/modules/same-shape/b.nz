@@ -1,0 +1,7 @@
+pub struct BBox {
+    v: Int,
+}
+
+pub fn b_box(n: Int) -> BBox {
+    BBox(v: n)
+}

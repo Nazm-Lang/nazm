@@ -2261,6 +2261,22 @@ fn emit_phi(out: Strs, next: Ints, owned: Ints, otype: Ints, rowns: Ints,
     n
 }
 
+// A branch that completed with a value, of a construct that has none.
+//
+// A `match` one of whose arms produces nothing is itself a `Unit` — the reference folds it
+// so, and accepts it as a statement — so the arms that did produce a value produce one
+// nobody takes. It is discarded here, as an expression statement discards one: released
+// if it was a temporary, inside the branch's own block, because after the join there is
+// no branch left to attribute it to. Until N10.2 the checker gave such a `match` its value
+// arms' type, and a value arm left its value on the stack for a later node to consume.
+fn discard_branch_value(out: Strs, next: Ints, owned: Ints, otype: Ints, rowns: Ints,
+        vals: Ints, ntype: Ints, k: Int) -> Int {
+    let t = ints_get(ntype, k);
+    if t == 0 { return 0; }
+    let dropped = ints_pop(vals);
+    own_drop(out, next, owned, dropped, t, rowns, otype)
+}
+
 // The loop a `break` or `continue` belongs to, or -1.
 //
 // Walks outward, and a `while` only counts when the path came up through its **body**:
@@ -3213,6 +3229,9 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                 strs_push(phi_blk, strs_get(current, 0));
                                 ints_set(nin, p, ints_get(nin, p) + 1);
                             }
+                            if ints_get(ntype, p) == 0 {
+                                discard_branch_value(out, next, owned, otype, rowns, vals, ntype, k);
+                            }
                         }
                         branch(out, live, blk("j", p));
                         let base = ints_get(own_base, ints_len(own_base) - 1);
@@ -3285,6 +3304,9 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                 ints_push(phi_val, bv);
                                 strs_push(phi_blk, strs_get(current, 0));
                                 ints_set(nin, p, ints_get(nin, p) + 1);
+                            }
+                            if ints_get(ntype, p) == 0 {
+                                discard_branch_value(out, next, owned, otype, rowns, vals, ntype, k);
                             }
                         }
                         branch(out, live, blk("j", p));

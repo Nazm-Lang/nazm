@@ -403,6 +403,17 @@ both native backends, with no transfer involved — `int_to_str(i) == "5"` alloc
 per evaluation and reclaimed none. The interpreter was right. Fixed in both, held by
 `a_string_comparison_gives_back_its_operands`.
 
+**And for refused programs, since N10.2.** The Nazm checker's completion is the
+reference's three states — a value, no value, never finishing — so a value position given
+nothing is `N0300`, an `if` whose branches disagree is `N0302`, and a body or a `return` is
+held to its signature. `the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value`
+compares **code and span** with the reference over 40 programs in
+`crates/nazm-cli/tests/refusals/`, with the Nazm checker both compiled and interpreted, and
+requires the Nazm compiler to refuse each one before emission; one more pair crosses a
+module boundary with two records laid out alike. What is claimed is diagnostic *codes and
+primary spans*, not message text, and not the diagnostics that follow an earlier error in
+the same expression, where the two checkers recover differently (`bootstrap.md`).
+
 **Not claimed.** Whole-language leak freedom as a permanent property; anything about
 variants, generics, or a container able to hold a record; deadlock freedom; user-visible destruction, RAII or any ordering a program can
 observe; a clean sanitizer run. `exit_with` reclaims nothing and reports nothing, which is
@@ -1003,7 +1014,7 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **144** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **158** catalogued defects;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -1076,6 +1087,20 @@ on strings keeping its operands, in each backend. The two repointed —
 `the-self-hosted-emitter-skips-one-release-path` and
 `the-self-hosted-compiler-keeps-what-a-continue-abandons` — were caught as before. Targeted
 batches, not a catalogue run.
+
+*N10.2 added fifteen on 2026-09-23, repointed one, and retired one it superseded, and ran
+the sixteen contained and serial in six batches with nothing else running: **sixteen
+caught, none survived**, none unapplied, none that did not build, no timeout.* They are the
+ways the three completions can collapse into two — no value read as a value, a value that
+never arrives refused as none, an `if` with no `else` taken to leave, a `continue` taken to
+complete — each half of the `if` join taking the wrong branch's type, two types accepted, a
+value with nothing accepted, a `Unit` arm leaving its `match` a value, a body and a
+`return` not held to the signature, the arms of a refused `match` still checked, and the
+emitter's discarded arm value kept, or discarded without being given back. The repointed one
+is N10.1's `N0313` entry, whose line the block's rewrite moved;
+`an-if-is-typed-by-the-branch-that-left` is retired because its rule is now one line of the
+three-state join, which `a-then-branch-that-leaves-still-gives-the-type` mutates exactly.
+Targeted batches, not a catalogue run.
 
 **Limitation** · The **whole-catalogue run timed out unexplained** at its 3600 s deadline
 without reaching injection, and is recorded as incomplete rather than as a result; the
