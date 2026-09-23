@@ -116,6 +116,14 @@ pub enum DefKind {
     /// *Types and functions are separate namespaces* — so `a.nz::fn Point` and
     /// `a.nz::record Point` are two definitions and this is the field that says so.
     Record,
+    /// A user-defined enum. Added by N10, which is the second time a key written under an
+    /// earlier build kept its meaning — the property this field exists for.
+    ///
+    /// Records and enums share the **type** namespace, so `a.nz::record Item` and
+    /// `a.nz::enum Item` are two kinds that cannot both exist in one module. The checker
+    /// refuses the collision; this field is what makes the two identities distinguishable
+    /// when they are in different modules.
+    Enum,
 }
 
 impl DefKind {
@@ -124,6 +132,10 @@ impl DefKind {
         match self {
             Self::Function => "fn",
             Self::Record => "record",
+            // The source keyword, unlike `record`: `docs/spec.md` uses `struct` in source
+            // and *record* for the category, and there is no such pair for an enum — the
+            // keyword and the category are one word, so the identity uses it.
+            Self::Enum => "enum",
         }
     }
 
@@ -132,6 +144,7 @@ impl DefKind {
         match text {
             "fn" => Some(Self::Function),
             "record" => Some(Self::Record),
+            "enum" => Some(Self::Enum),
             _ => None,
         }
     }

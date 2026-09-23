@@ -48,16 +48,16 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_sema::resolve::{Callee, FnId, Resolution};
 use nazm_span::Span;
 use nazm_syntax::{
-    BinOp as AstOp, Block as AstBlock, Expr as AstExpr, Function as AstFn, Program,
-    Spawn as AstSpawn, Stmt as AstStmt,
+    BinOp as AstOp, Block as AstBlock, Expr as AstExpr, Function as AstFn, MatchArm as AstArm,
+    Program, Spawn as AstSpawn, Stmt as AstStmt,
 };
 
 use nazm_sema::key::{DefKey, DefKind};
 use nazm_sema::module::{ModuleGraph, ModuleId};
 
 use crate::ir::{
-    fits, ArithOp, Block, Builtin, CmpOp, Expr, External, Function, Local, Lowering as _, Native,
-    RecordLayout, RecordTy, Stmt, Ty, Unit,
+    fits, ArithOp, Block, Builtin, CmpOp, EnumLayout, EnumTy, Expr, External, Function, Local,
+    Lowering as _, MatchArm, Native, RecordLayout, RecordTy, Stmt, Ty, Unit, VariantLayout,
 };
 use crate::symbol::{Linkage, NativeSymbol, NativeTypeName};
 
@@ -113,6 +113,9 @@ pub struct Plan {
     /// here rather than by each unit for itself. Each unit then publishes the subset it
     /// mentions, which is what keeps one unit's text independent of another's records.
     records: Vec<RecordLayout>,
+    /// By [`EnumTy`], how that enum is laid out and which discriminant each variant has.
+    /// Global and computed once, for the reason the records are.
+    enums: Vec<EnumLayout>,
     entry: NativeSymbol,
 }
 
@@ -140,6 +143,8 @@ struct Ctx<'a> {
     /// laid out in its LLVM text, and a field of record type makes that definition refer
     /// to another named type which must also be defined here.
     used_records: std::collections::BTreeSet<u32>,
+    /// The enum types this unit's text mentions, by the same rule.
+    used_enums: std::collections::BTreeSet<u32>,
     /// Locals of the function being lowered, in slot order, taken from the resolution.
     locals: Vec<Local>,
     /// Call edges, as **resolved definition identities**: the cycle check is a question
@@ -216,6 +221,62 @@ fn record_layouts(res: &Resolution, graph: &ModuleGraph) -> Vec<RecordLayout> {
         .collect()
 }
 
+/// How every enum in this compilation is laid out, and what discriminant each variant has.
+///
+/// One table, computed before any unit is lowered, for the reason the record table is:
+/// two objects that pass an enum between them must agree about its tags and its payload
+/// positions, and the only way to be sure is that neither decided.
+///
+/// The variant order is **canonical by variant name** and the payload order canonical by
+/// field name. Nothing about the author's declaration order reaches the object file, so
+/// moving two variant declarations — an edit the language says means nothing — changes no
+/// byte of it.
+fn enum_layouts(res: &Resolution, graph: &ModuleGraph) -> Vec<EnumLayout> {
+    res.enums()
+        .all()
+        .iter()
+        .enumerate()
+        .map(|(i, def)| {
+            let id = EnumTy(u32::try_from(i).unwrap_or(u32::MAX));
+            let name = match graph.key(def.module) {
+                Some(key) => NativeTypeName::of_definition(&DefKey::new(
+                    key.clone(),
+                    DefKind::Enum,
+                    def.name.clone(),
+                )),
+                None => NativeTypeName::of_unkeyed(def.module, &def.name),
+            };
+            let mut variants: Vec<VariantLayout> = Vec::new();
+            let mut of_declaration = vec![0_u32; def.variants.len()];
+            for (tag, (declared, v)) in def.in_tag_order().enumerate() {
+                if let Some(slot) = of_declaration.get_mut(declared as usize) {
+                    *slot = u32::try_from(tag).unwrap_or(u32::MAX);
+                }
+                let fields: Vec<Ty> = v.in_layout_order().map(|(_, f)| Ty::of(f.ty)).collect();
+                let mut fields_of_declaration = vec![0_u32; v.fields.len()];
+                for (position, (field_declared, _)) in v.in_layout_order().enumerate() {
+                    if let Some(slot) = fields_of_declaration.get_mut(field_declared as usize) {
+                        *slot = u32::try_from(position).unwrap_or(u32::MAX);
+                    }
+                }
+                variants.push(VariantLayout {
+                    source: v.name.clone(),
+                    name: name.member(&v.name),
+                    fields,
+                    of_declaration: fields_of_declaration,
+                });
+            }
+            EnumLayout {
+                id,
+                name,
+                source: def.name.clone(),
+                variants,
+                of_declaration,
+            }
+        })
+        .collect()
+}
+
 impl Ctx<'_> {
     /// Note that this unit's code mentions a type, so its definition travels with it.
     ///
@@ -223,14 +284,47 @@ impl Ctx<'_> {
     /// result. A record whose name never appears in the text is not carried, which is what
     /// keeps this unit's object independent of records declared elsewhere.
     fn note(&mut self, ty: Ty) {
-        if let Ty::Record(id) = ty {
-            self.used_records.insert(id.0);
+        match ty {
+            Ty::Record(id) => {
+                self.used_records.insert(id.0);
+            }
+            Ty::Enum(id) => {
+                self.used_enums.insert(id.0);
+            }
+            _ => {}
         }
     }
 
     /// The layout of a record this compilation declared.
     fn layout(&self, id: RecordTy) -> Option<&RecordLayout> {
         self.plan.records.get(id.index())
+    }
+
+    /// The layout of an enum this compilation declared.
+    fn enum_layout(&self, id: EnumTy) -> Option<&EnumLayout> {
+        self.plan.enums.get(id.index())
+    }
+
+    /// The discriminant of the variant declared at `declared`.
+    ///
+    /// **The layout boundary**, the enum's half. Everything above holds a declaration
+    /// index — which is how a variant's semantic identity is spelled in one session — and
+    /// everything below holds a number. This function is the only place the two meet.
+    fn tag(&self, id: EnumTy, declared: u32) -> Option<u32> {
+        self.enum_layout(id)?
+            .of_declaration
+            .get(declared as usize)
+            .copied()
+    }
+
+    /// Where the payload field declared at `declared` sits in the variant's struct.
+    fn payload_index(&self, id: EnumTy, tag: u32, declared: u32) -> Option<u32> {
+        self.enum_layout(id)?
+            .variants
+            .get(tag as usize)?
+            .of_declaration
+            .get(declared as usize)
+            .copied()
     }
 
     /// Where the field declared at `declared` sits in the LLVM struct.
@@ -333,6 +427,7 @@ pub fn plan(program: &Program, res: &Resolution, graph: &ModuleGraph) -> Result<
     }
 
     let records = record_layouts(res, graph);
+    let enums = enum_layouts(res, graph);
 
     let entry = match res
         .entry()
@@ -376,6 +471,7 @@ pub fn plan(program: &Program, res: &Resolution, graph: &ModuleGraph) -> Result<
         Ok(Plan {
             sig,
             records,
+            enums,
             entry,
         })
     } else {
@@ -417,6 +513,7 @@ pub fn lower_module(
         module,
         externals: Vec::new(),
         used_records: std::collections::BTreeSet::new(),
+        used_enums: std::collections::BTreeSet::new(),
         locals: Vec::new(),
         calls: Vec::new(),
         current: FnId::from_index(0),
@@ -446,18 +543,35 @@ pub fn lower_module(
     // happened to mention them. Two builds of one module produce one text.
     ctx.externals.sort();
 
-    // Closed over field types: a named LLVM type whose definition refers to another must
-    // have that one defined beside it. Iterative, and bounded by the number of records.
-    let mut work: Vec<u32> = ctx.used_records.iter().copied().collect();
-    while let Some(id) = work.pop() {
-        let Some(layout) = plan.records.get(id as usize) else {
-            continue;
+    // Closed over field and payload types: a named LLVM type whose definition refers to
+    // another must have that one defined beside it. One walk over both kinds, because a
+    // record field may be an enum and a payload may be a record. Iterative, and bounded by
+    // the number of definitions.
+    let mut work: Vec<Ty> = ctx
+        .used_records
+        .iter()
+        .map(|id| Ty::Record(RecordTy(*id)))
+        .chain(ctx.used_enums.iter().map(|id| Ty::Enum(EnumTy(*id))))
+        .collect();
+    while let Some(ty) = work.pop() {
+        let inner: Vec<Ty> = match ty {
+            Ty::Record(id) => plan
+                .records
+                .get(id.index())
+                .map(|l| l.fields.clone())
+                .unwrap_or_default(),
+            Ty::Enum(id) => plan
+                .enums
+                .get(id.index())
+                .map(|l| l.variants.iter().flat_map(|v| v.fields.clone()).collect())
+                .unwrap_or_default(),
+            _ => Vec::new(),
         };
-        for f in &layout.fields {
-            if let Ty::Record(inner) = f {
-                if ctx.used_records.insert(inner.0) {
-                    work.push(inner.0);
-                }
+        for t in inner {
+            match t {
+                Ty::Record(r) if ctx.used_records.insert(r.0) => work.push(t),
+                Ty::Enum(e) if ctx.used_enums.insert(e.0) => work.push(t),
+                _ => {}
             }
         }
     }
@@ -465,6 +579,11 @@ pub fn lower_module(
         .used_records
         .iter()
         .filter_map(|id| plan.records.get(*id as usize).cloned())
+        .collect();
+    let enums: Vec<EnumLayout> = ctx
+        .used_enums
+        .iter()
+        .filter_map(|id| plan.enums.get(*id as usize).cloned())
         .collect();
 
     Lowered {
@@ -474,6 +593,7 @@ pub fn lower_module(
             functions,
             externals: ctx.externals,
             records,
+            enums,
         },
         calls: ctx.calls,
         errors: ctx.errors,
@@ -1252,6 +1372,16 @@ fn lower_expr(ctx: &mut Ctx<'_>, e: &AstExpr) -> Option<Expr> {
             span,
             ..
         } => lower_field(ctx, base, *name_span, *span),
+        AstExpr::Variant {
+            variant_span,
+            fields,
+            ..
+        } => lower_variant(ctx, *variant_span, fields),
+        AstExpr::Match {
+            scrutinee,
+            arms,
+            span,
+        } => lower_match(ctx, scrutinee, arms, *span),
         AstExpr::If {
             cond,
             then_block,
@@ -1543,7 +1673,7 @@ fn lower_construct(
     // construction, so it does not pay for the machinery that stops one.
     let slot = ctx
         .res
-        .records()
+        .types()
         .needs_cleanup(nazm_sema::Type::Record(id))
         .then(|| ctx.hidden(ty, "record"));
 
@@ -1551,6 +1681,132 @@ fn lower_construct(
         ty,
         fields: lowered,
         slot,
+    })
+}
+
+/// `Enum.Variant(field: value, …)`.
+///
+/// Which enum and which variant, and which payload field each initialiser fills, are
+/// **read from the resolution**: the checker decided all three, and deciding them again
+/// here would be the second resolver N1 removed. What is decided here — and only here —
+/// is the discriminant and where each field sits.
+fn lower_variant(
+    ctx: &mut Ctx<'_>,
+    variant_span: Span,
+    fields: &[nazm_syntax::FieldInit],
+) -> Option<Expr> {
+    let to = ctx.res.variant(variant_span)?;
+    let ty = Ty::of(nazm_sema::Type::Enum(to.enumeration));
+    ctx.note(ty);
+    let Ty::Enum(eid) = ty else { return None };
+    let tag = ctx.tag(eid, to.variant)?;
+
+    // In the order **written**, which is the order side effects happen in. The payload
+    // index rides along, so emission never has to know the field's name.
+    let mut lowered = Vec::with_capacity(fields.len());
+    for f in fields {
+        let at = ctx
+            .res
+            .payload(f.name_span)
+            .and_then(|p| ctx.payload_index(eid, tag, p.field))?;
+        let value = lower_expr(ctx, &f.value)?;
+        lowered.push((at, value));
+    }
+
+    // A slot only where a payload field of **this variant** owns something. An enum whose
+    // other variants own things costs nothing here: what a construction can leak is what
+    // it has already built, and that is this variant's payload and nothing else.
+    let owns = ctx
+        .enum_layout(eid)
+        .and_then(|l| l.variants.get(tag as usize))
+        .is_some_and(|v| v.fields.iter().any(|t| t.owns().is_some()));
+    let slot = owns.then(|| ctx.hidden(ty, "variant"));
+
+    Some(Expr::Variant {
+        ty,
+        tag,
+        fields: lowered,
+        slot,
+    })
+}
+
+/// `match scrutinee { … }`.
+///
+/// The scrutinee is lowered once into a hidden local this expression owns — which is what
+/// `docs/spec.md`'s *the scrutinee is a value the match owns* means in the backend — and
+/// each arm becomes a block whose head binds the payload fields it names.
+///
+/// A pattern binding is lowered to an ordinary [`Stmt::Let`] over an [`Expr::Payload`].
+/// That is not a convenience: a binding *is* a local that takes a reference to what it
+/// names, and `Stmt::Let` is the one path that already gets take-before-release right when
+/// the same slot is reached again on the next turn of a loop.
+fn lower_match(
+    ctx: &mut Ctx<'_>,
+    scrutinee: &AstExpr,
+    arms: &[AstArm],
+    span: Span,
+) -> Option<Expr> {
+    let lowered = lower_expr(ctx, scrutinee)?;
+    let scrutinee_ty = lowered.ty()?;
+    let Ty::Enum(eid) = scrutinee_ty else {
+        // Unreachable after checking, which refuses a `match` on anything else (`N0342`).
+        ctx.unsupported(span, "a `match` on something that is not an enum");
+        return None;
+    };
+    ctx.note(scrutinee_ty);
+    let slot = ctx.hidden(scrutinee_ty, "match");
+
+    let mut lowered_arms: Vec<MatchArm> = Vec::with_capacity(arms.len());
+    let mut result: Option<Ty> = None;
+    for arm in arms {
+        let to = ctx.res.variant(arm.variant_span)?;
+        let tag = ctx.tag(eid, to.variant)?;
+        let mut stmts: Vec<Stmt> = Vec::new();
+        for f in &arm.fields {
+            // A discard names no binding, so there is nothing to lower — and nothing is
+            // lost: the value is the scrutinee's, and the scrutinee is released whole.
+            let Some(binding) = &f.binding else { continue };
+            let _ = binding;
+            let at = ctx
+                .res
+                .payload(f.name_span)
+                .and_then(|p| ctx.payload_index(eid, tag, p.field))?;
+            let (binding_slot, ty) = ctx.slot_at(f.binding_span)?;
+            ctx.note(ty);
+            stmts.push(Stmt::Let {
+                slot: binding_slot,
+                value: Expr::Payload {
+                    base: Box::new(Expr::Load {
+                        slot,
+                        ty: scrutinee_ty,
+                    }),
+                    base_ty: scrutinee_ty,
+                    tag,
+                    at,
+                    ty,
+                },
+            });
+        }
+        let body = lower_expr(ctx, &arm.body);
+        let block = Block {
+            stmts,
+            result: body.map(Box::new),
+        };
+        if let Some(t) = block.result.as_ref().and_then(|e| e.ty()) {
+            result = Some(t);
+        }
+        lowered_arms.push(MatchArm { tag, block });
+    }
+    if let Some(t) = result {
+        ctx.note(t);
+    }
+
+    Some(Expr::Match {
+        scrutinee: Box::new(lowered),
+        scrutinee_ty,
+        slot,
+        arms: lowered_arms,
+        ty: result,
     })
 }
 

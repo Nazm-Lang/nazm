@@ -27,12 +27,14 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
-use nazm_sema::interface::{Export, RecordExport, UnitInterface, Visibility};
+use nazm_sema::enums::{EnumDef, VariantDef};
+use nazm_sema::interface::{EnumExport, Export, RecordExport, UnitInterface, Visibility};
 use nazm_sema::key::{DefKey, DefKind, ModuleKey};
 use nazm_sema::module::ModuleGraph;
-use nazm_sema::record::{FieldDef, RecordDef, RecordId, Records};
+use nazm_sema::record::{FieldDef, RecordDef};
 use nazm_sema::resolve::FnId;
 use nazm_sema::types::Type;
+use nazm_sema::udt::UserTypes;
 use nazm_sema::ModuleId;
 use nazm_span::Span;
 
@@ -52,8 +54,19 @@ use nazm_span::Span;
 /// **correct**, not that parsing succeeds, and there is no extension of `/1` under which
 /// an old reader stays correct about a record it has no concept of.
 ///
-/// Unknown majors remain refused rather than reinterpreted — including a future `/3`.
-pub const SCHEMA: &str = "nazm.interface/2";
+/// # Why N10 versioned it again rather than extending `/2`
+///
+/// The same argument, one kind over. `/2` had no representation for an enum, so a `/2`
+/// reader handed a `/3` file would meet `lib/token.nz::enum Token` where it expects a
+/// built-in or a record. Adding an optional `enums` field that an old reader ignores is
+/// exactly the bad case: that reader would conclude a module exports a function of a type
+/// it cannot represent, and would answer questions about that module **wrongly** rather
+/// than declining. Compatibility means an old consumer stays correct, and there is no
+/// extension of `/2` under which one stays correct about a variant it has no concept of.
+///
+/// Unknown majors remain refused rather than reinterpreted — including a future `/4`, and
+/// including `/1` and `/2`, which this build no longer reads.
+pub const SCHEMA: &str = "nazm.interface/3";
 
 /// One field of a published record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +77,38 @@ pub struct PersistentField {
     pub name: String,
     /// Its type, in the encoding [`type_name`] produces.
     pub ty: String,
+}
+
+/// One variant of a published enum.
+///
+/// The variant's **name** is its identity, exactly as a field's is. The numeric
+/// discriminant is not here and must not be: `docs/spec.md` makes a variant mean its enum
+/// and its name, and the number a backend assigns is chosen fresh for each build from the
+/// canonical order. A file that wrote the tag would be publishing a representation as a
+/// meaning.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentVariant {
+    pub name: String,
+    /// Its payload fields, sorted by name. Empty for a zero-payload variant.
+    pub fields: Vec<PersistentField>,
+}
+
+/// One enum definition an importer needs, as published.
+///
+/// Closed over payload types the same way [`PersistentRecord`] is closed over field types,
+/// and for the same reason: an importer has to understand every shape a public enum can
+/// hand it, and cannot go and read the module that declared one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentEnum {
+    /// Which logical enum this is: `module::enum Name`.
+    pub def: String,
+    pub name: String,
+    /// Its variants, sorted by name.
+    ///
+    /// Sorted rather than in declaration order, so that moving two variant declarations
+    /// produces identical bytes — which is what makes `docs/spec.md`'s claim that variant
+    /// order is not semantic true of the fingerprint as well as of the language.
+    pub variants: Vec<PersistentVariant>,
 }
 
 /// One record definition an importer needs, as published.
@@ -118,15 +163,20 @@ pub struct PersistentExport {
 /// in every module, and an interface that said `Point` would be telling a reader nothing
 /// about which `Point`. The two encodings cannot be confused: a built-in's name contains
 /// no `::` and a `DefKey`'s always does.
-fn type_name(t: Type, records: &Records, graph: &ModuleGraph) -> Option<String> {
+fn type_name(t: Type, types: &UserTypes, graph: &ModuleGraph) -> Option<String> {
     match t {
         Type::Record(id) => {
-            let def = records.get(id)?;
+            let def = types.records().get(id)?;
             // The record's **own** module, which for a closure entry is not the module
-            // publishing this interface. A `Records` holds a session-local `ModuleId`, so
+            // publishing this interface. The tables hold a session-local `ModuleId`, so
             // the graph is what turns it into something durable.
             let key = graph.key(def.module)?;
             Some(DefKey::new(key.clone(), DefKind::Record, def.name.clone()).to_string())
+        }
+        Type::Enum(id) => {
+            let def = types.enums().get(id)?;
+            let key = graph.key(def.module)?;
+            Some(DefKey::new(key.clone(), DefKind::Enum, def.name.clone()).to_string())
         }
         other => other.builtin_name().map(ToOwned::to_owned),
     }
@@ -150,6 +200,8 @@ pub struct PersistentUnitInterface {
     /// Before the exports, because an export's signature may refer to one of these and a
     /// reader should meet the definitions first.
     pub records: Vec<PersistentRecord>,
+    /// Every enum definition its public surface mentions, sorted by durable identity.
+    pub enums: Vec<PersistentEnum>,
     /// What it offers, sorted by name.
     pub exports: Vec<PersistentExport>,
 }
@@ -164,9 +216,9 @@ pub enum PublishError {
     /// A module it imports has none, and naming a dependency by a session-local id would
     /// be exactly the leak this format exists to prevent.
     DependencyWithoutKey(ModuleId),
-    /// A record its public surface mentions is declared in a module with no durable
-    /// identity, so there is nothing to write the field's type as. The same answer as the
-    /// other two and for the same reason.
+    /// A user-defined type its public surface mentions is declared in a module with no
+    /// durable identity, so there is nothing to write the field's type as. The same answer
+    /// as the other two and for the same reason.
     RecordWithoutKey(ModuleId),
 }
 
@@ -182,7 +234,7 @@ impl std::fmt::Display for PublishError {
                  name its dependencies",
             ),
             Self::RecordWithoutKey(_) => f.write_str(
-                "a record in its public surface is declared in a module with no durable \
+                "a type in its public surface is declared in a module with no durable \
                  identity, so this interface could not name that type",
             ),
         }
@@ -204,12 +256,12 @@ pub enum ReadError {
     UnknownSchema(String),
     /// A module or definition key that is not in the canonical spelling.
     BadKey(String),
-    /// A type name this build does not have, or a record identity this interface does not
-    /// define. A `/2` interface is **closed**: every record a signature or a field names
-    /// is defined in the same file, so a dangling reference is a malformed interface
-    /// rather than something to go and look for.
+    /// A type name this build does not have, or a type identity this interface does not
+    /// define. A `/3` interface is **closed**: every record and enum a signature, a field
+    /// or a payload names is defined in the same file, so a dangling reference is a
+    /// malformed interface rather than something to go and look for.
     UnknownType(String),
-    /// Two records under one identity.
+    /// Two records, two enums, two fields or two variants under one name.
     DuplicateRecord(String),
     /// A definition kind this build does not have.
     UnknownKind(String),
@@ -255,7 +307,7 @@ impl PersistentUnitInterface {
     pub fn published(
         interface: &UnitInterface,
         graph: &ModuleGraph,
-        records: &Records,
+        types: &UserTypes,
     ) -> Result<Self, PublishError> {
         let module = graph
             .key(interface.module())
@@ -276,24 +328,13 @@ impl PersistentUnitInterface {
         // Every record the public surface mentions, each under its own module's key.
         let mut published_records: Vec<PersistentRecord> = Vec::new();
         for r in interface.records() {
-            let Some(def) = records.get(r.def) else {
+            let Some(def) = types.records().get(r.def) else {
                 continue;
             };
             let owner = graph
                 .key(def.module)
                 .ok_or(PublishError::RecordWithoutKey(def.module))?;
-            let mut fields: Vec<PersistentField> = Vec::new();
-            for f in &def.fields {
-                let ty = type_name(f.ty, records, graph)
-                    .ok_or(PublishError::RecordWithoutKey(def.module))?;
-                fields.push(PersistentField {
-                    name: f.name.clone(),
-                    ty,
-                });
-            }
-            // By name: the field list is a set of named fields, and the order the author
-            // declared them in is not part of it.
-            fields.sort_by(|a, b| a.name.cmp(&b.name));
+            let fields = Self::published_fields(&def.fields, types, graph, def.module)?;
             published_records.push(PersistentRecord {
                 def: DefKey::new(owner.clone(), DefKind::Record, def.name.clone()).to_string(),
                 name: def.name.clone(),
@@ -303,12 +344,40 @@ impl PersistentUnitInterface {
         published_records.sort_by(|a, b| a.def.cmp(&b.def));
         published_records.dedup_by(|a, b| a.def == b.def);
 
+        // Every enum, the same way. Variants sorted by name for the reason fields are:
+        // `docs/spec.md` makes variant order non-semantic, and a canonical file is how
+        // that becomes true of the fingerprint rather than merely claimed.
+        let mut published_enums: Vec<PersistentEnum> = Vec::new();
+        for e in interface.enums() {
+            let Some(def) = types.enums().get(e.def) else {
+                continue;
+            };
+            let owner = graph
+                .key(def.module)
+                .ok_or(PublishError::RecordWithoutKey(def.module))?;
+            let mut variants: Vec<PersistentVariant> = Vec::new();
+            for v in &def.variants {
+                variants.push(PersistentVariant {
+                    name: v.name.clone(),
+                    fields: Self::published_fields(&v.fields, types, graph, def.module)?,
+                });
+            }
+            variants.sort_by(|a, b| a.name.cmp(&b.name));
+            published_enums.push(PersistentEnum {
+                def: DefKey::new(owner.clone(), DefKind::Enum, def.name.clone()).to_string(),
+                name: def.name.clone(),
+                variants,
+            });
+        }
+        published_enums.sort_by(|a, b| a.def.cmp(&b.def));
+        published_enums.dedup_by(|a, b| a.def == b.def);
+
         let mut exports: Vec<PersistentExport> = Vec::new();
         for e in interface.exports() {
             let mut params = Vec::with_capacity(e.params.len());
             for t in &e.params {
                 params.push(
-                    type_name(*t, records, graph)
+                    type_name(*t, types, graph)
                         .ok_or_else(|| PublishError::NoModuleKey(interface.module()))?,
                 );
             }
@@ -317,7 +386,7 @@ impl PersistentUnitInterface {
                 name: e.name.clone(),
                 kind: DefKind::Function.as_str().to_owned(),
                 params,
-                ret: type_name(e.ret, records, graph)
+                ret: type_name(e.ret, types, graph)
                     .ok_or_else(|| PublishError::NoModuleKey(interface.module()))?,
             });
         }
@@ -330,8 +399,33 @@ impl PersistentUnitInterface {
             module: module.as_str().to_owned(),
             dependencies,
             records: published_records,
+            enums: published_enums,
             exports,
         })
+    }
+
+    /// One declared field list, published and sorted by name.
+    ///
+    /// Shared by a record's fields and a variant's payload because they are the same
+    /// thing, exactly as the checker's resolution of them is one function.
+    fn published_fields(
+        fields: &[FieldDef],
+        types: &UserTypes,
+        graph: &ModuleGraph,
+        owner: nazm_sema::ModuleId,
+    ) -> Result<Vec<PersistentField>, PublishError> {
+        let mut out: Vec<PersistentField> = Vec::new();
+        for f in fields {
+            let ty = type_name(f.ty, types, graph).ok_or(PublishError::RecordWithoutKey(owner))?;
+            out.push(PersistentField {
+                name: f.name.clone(),
+                ty,
+            });
+        }
+        // By name: the field list is a set of named fields, and the order the author
+        // declared them in is not part of it.
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
     }
 
     /// The canonical bytes of this interface.
@@ -382,13 +476,14 @@ impl PersistentUnitInterface {
             return Err(ReadError::NotCanonical("dependencies".to_owned()));
         }
 
-        // The records first: every type reference in this file must name a built-in or
-        // one of these, and a reader that validated signatures before knowing the record
-        // set would have to guess.
+        // The type definitions first: every type reference in this file must name a
+        // built-in or one of these, and a reader that validated signatures before knowing
+        // the set would have to guess.
         let mut defined: Vec<&str> = Vec::new();
         let mut previous_record: Option<&str> = None;
         for r in &self.records {
-            let key = parse_record_key(&r.def).ok_or_else(|| ReadError::BadKey(r.def.clone()))?;
+            let key = parse_type_key(&r.def, DefKind::Record)
+                .ok_or_else(|| ReadError::BadKey(r.def.clone()))?;
             if key.name() != r.name {
                 return Err(ReadError::NameMismatch(r.def.clone()));
             }
@@ -401,28 +496,53 @@ impl PersistentUnitInterface {
             }
             previous_record = Some(&r.def);
             defined.push(&r.def);
-            let mut previous_field: Option<&str> = None;
-            for f in &r.fields {
-                match previous_field {
-                    Some(p) if p == f.name => {
-                        return Err(ReadError::DuplicateRecord(format!("{}.{}", r.def, f.name)))
+            canonical_fields(&r.def, &r.fields)?;
+        }
+        let mut previous_enum: Option<&str> = None;
+        for e in &self.enums {
+            let key = parse_type_key(&e.def, DefKind::Enum)
+                .ok_or_else(|| ReadError::BadKey(e.def.clone()))?;
+            if key.name() != e.name {
+                return Err(ReadError::NameMismatch(e.def.clone()));
+            }
+            match previous_enum {
+                Some(p) if p == e.def => return Err(ReadError::DuplicateRecord(e.def.clone())),
+                Some(p) if p > e.def.as_str() => {
+                    return Err(ReadError::NotCanonical("enums".to_owned()))
+                }
+                _ => {}
+            }
+            // A record and an enum cannot share a durable identity, because the kind is
+            // part of it — but they can share a *name* across modules, and the list above
+            // is what a type reference is resolved against, so both go in it.
+            previous_enum = Some(&e.def);
+            defined.push(&e.def);
+            let mut previous_variant: Option<&str> = None;
+            for v in &e.variants {
+                match previous_variant {
+                    Some(p) if p == v.name => {
+                        return Err(ReadError::DuplicateRecord(format!("{}.{}", e.def, v.name)))
                     }
-                    Some(p) if p > f.name.as_str() => {
-                        return Err(ReadError::NotCanonical("fields".to_owned()))
+                    Some(p) if p > v.name.as_str() => {
+                        return Err(ReadError::NotCanonical("variants".to_owned()))
                     }
                     _ => {}
                 }
-                previous_field = Some(&f.name);
+                previous_variant = Some(&v.name);
+                canonical_fields(&format!("{}.{}", e.def, v.name), &v.fields)?;
             }
         }
-        // Closed: a field or a signature may name a built-in or a record this file
-        // defines, and nothing else. Checked after the whole set is known, so a forward
-        // reference between two records is fine and a dangling one is not.
-        for r in &self.records {
-            for f in &r.fields {
-                if Type::from_name(&f.ty).is_none() && !defined.contains(&f.ty.as_str()) {
-                    return Err(ReadError::UnknownType(f.ty.clone()));
-                }
+        // Closed: a field, a payload or a signature may name a built-in or a type this
+        // file defines, and nothing else. Checked after the whole set is known, so a
+        // forward reference between two definitions is fine and a dangling one is not.
+        let referenced = self
+            .records
+            .iter()
+            .flat_map(|r| r.fields.iter())
+            .chain(self.enums.iter().flat_map(|e| e.variants.iter()).flat_map(|v| v.fields.iter()));
+        for f in referenced {
+            if Type::from_name(&f.ty).is_none() && !defined.contains(&f.ty.as_str()) {
+                return Err(ReadError::UnknownType(f.ty.clone()));
             }
         }
 
@@ -482,24 +602,33 @@ impl PersistentUnitInterface {
     ///   data — so nothing is lost. A future consumer that needs them has the keys in
     ///   [`Self::dependencies`] and must resolve them to ids itself.
     #[must_use]
-    pub fn rehydrate(&self, module: ModuleId, first: FnId, records: &mut Records) -> UnitInterface {
-        // Two passes, for the reason the checker declares record names before resolving
-        // field types: a field may name a record defined later in this file, and both
-        // orders have to work.
-        let mut ids: HashMap<&str, RecordId> = HashMap::new();
+    pub fn rehydrate(
+        &self,
+        module: ModuleId,
+        first: FnId,
+        types: &mut UserTypes,
+    ) -> UnitInterface {
+        // Two passes, for the reason the checker declares type names before resolving
+        // field types: a field may name a type defined later in this file, and both
+        // orders have to work. One pass over records and enums together, because a record
+        // field may name an enum and a payload may name a record.
+        let mut ids: HashMap<&str, Type> = HashMap::new();
         let own = self.module_key();
-        for r in &self.records {
-            // A record this interface's module declares is one an importer may name. One
-            // from another module is here because a shape mentions it, and naming it
-            // would be the transitive visibility `docs/spec.md` refuses — so it is
-            // declared **without** registering its name.
-            let mine = parse_record_key(&r.def)
+        // A type this interface's module declares is one an importer may name. One from
+        // another module is here because a shape mentions it, and naming it would be the
+        // transitive visibility `docs/spec.md` refuses — so it is declared **without**
+        // registering its name.
+        let mine = |def: &str, kind: DefKind| {
+            parse_type_key(def, kind)
                 .zip(own.as_ref())
-                .is_some_and(|(k, m)| k.module() == m);
+                .is_some_and(|(k, m)| k.module() == m)
+        };
+        for r in &self.records {
+            let nameable = mine(&r.def, DefKind::Record);
             let def = RecordDef {
                 name: r.name.clone(),
                 module,
-                visibility: if mine {
+                visibility: if nameable {
                     Visibility::Exported
                 } else {
                     Visibility::Private
@@ -510,32 +639,61 @@ impl PersistentUnitInterface {
                 name_span: Span::synthetic(),
                 fields: Vec::new(),
                 layout: Vec::new(),
-                // No declaration to go back to. Nothing reads `decl` for a record that
-                // came from an interface, because there is no tree it indexes into.
+                // No declaration to go back to. Nothing reads `decl` for a type that came
+                // from an interface, because there is no tree it indexes into.
                 decl: u32::MAX,
             };
-            let id = if mine {
-                records.declare(def)
+            let id = if nameable {
+                types.records_mut().declare(def)
             } else {
-                records.declare_unnamed(def)
+                types.records_mut().declare_unnamed(def)
             };
-            ids.insert(&r.def, id);
+            ids.insert(&r.def, Type::Record(id));
+        }
+        for e in &self.enums {
+            let nameable = mine(&e.def, DefKind::Enum);
+            let def = EnumDef {
+                name: e.name.clone(),
+                module,
+                visibility: if nameable {
+                    Visibility::Exported
+                } else {
+                    Visibility::Private
+                },
+                name_span: Span::synthetic(),
+                variants: Vec::new(),
+                order: Vec::new(),
+                decl: u32::MAX,
+            };
+            let id = if nameable {
+                types.enums_mut().declare(def)
+            } else {
+                types.enums_mut().declare_unnamed(def)
+            };
+            ids.insert(&e.def, Type::Enum(id));
         }
         for r in &self.records {
-            let Some(id) = ids.get(r.def.as_str()).copied() else {
+            let Some(Type::Record(id)) = ids.get(r.def.as_str()).copied() else {
                 continue;
             };
-            let fields = r
-                .fields
+            let fields = read_fields(&r.fields, &ids);
+            types.records_mut().complete(id, fields);
+        }
+        for e in &self.enums {
+            let Some(Type::Enum(id)) = ids.get(e.def.as_str()).copied() else {
+                continue;
+            };
+            let variants = e
+                .variants
                 .iter()
-                .map(|f| FieldDef {
-                    name: f.name.clone(),
-                    ty: read_type(&f.ty, &ids),
+                .map(|v| VariantDef {
+                    name: v.name.clone(),
                     name_span: Span::synthetic(),
-                    ty_span: Span::synthetic(),
+                    fields: read_fields(&v.fields, &ids),
+                    layout: Vec::new(),
                 })
                 .collect();
-            records.complete(id, fields);
+            types.enums_mut().complete(id, variants);
         }
 
         let exports = self
@@ -553,17 +711,26 @@ impl PersistentUnitInterface {
         let record_exports = self
             .records
             .iter()
-            .filter_map(|r| {
-                let def = ids.get(r.def.as_str()).copied()?;
-                Some(RecordExport {
+            .filter_map(|r| match ids.get(r.def.as_str()).copied() {
+                Some(Type::Record(def)) => Some(RecordExport {
                     def,
-                    nameable: parse_record_key(&r.def)
-                        .zip(own.as_ref())
-                        .is_some_and(|(k, m)| k.module() == m),
-                })
+                    nameable: mine(&r.def, DefKind::Record),
+                }),
+                _ => None,
             })
             .collect();
-        UnitInterface::new(module, exports, record_exports, Vec::new())
+        let enum_exports = self
+            .enums
+            .iter()
+            .filter_map(|e| match ids.get(e.def.as_str()).copied() {
+                Some(Type::Enum(def)) => Some(EnumExport {
+                    def,
+                    nameable: mine(&e.def, DefKind::Enum),
+                }),
+                _ => None,
+            })
+            .collect();
+        UnitInterface::new(module, exports, record_exports, enum_exports, Vec::new())
     }
 
     /// This module's durable identity. Validated on read, so this cannot fail afterwards.
@@ -573,32 +740,65 @@ impl PersistentUnitInterface {
     }
 }
 
-/// Split `module::record Name` back into a key.
+/// Split `module::record Name` or `module::enum Name` back into a key.
 ///
 /// Written out rather than given to `DefKey` as a parser, because a `DefKey` is a value a
 /// compilation computes and this is the one place a *file* claims to be one. Anything that
-/// is not in the canonical spelling is refused rather than repaired.
-fn parse_record_key(text: &str) -> Option<DefKey> {
+/// is not in the canonical spelling is refused rather than repaired, and a key whose kind
+/// is not the one the caller is reading is refused rather than accepted under the wrong
+/// heading — an enum listed among the records is a file that disagrees with itself.
+fn parse_type_key(text: &str, want: DefKind) -> Option<DefKey> {
     let (module, rest) = text.split_once("::")?;
     let (kind, name) = rest.split_once(' ')?;
-    if DefKind::parse(kind)? != DefKind::Record {
+    if DefKind::parse(kind)? != want {
         return None;
     }
     if name.is_empty() || name.contains(' ') {
         return None;
     }
-    Some(DefKey::new(
-        ModuleKey::parse(module)?,
-        DefKind::Record,
-        name,
-    ))
+    Some(DefKey::new(ModuleKey::parse(module)?, want, name))
+}
+
+/// A published field list must be sorted by name with no duplicate.
+///
+/// `owner` is only for the message. Checked rather than assumed, because a file is data:
+/// bytes that deserialise are still something else's output, and two orderings of one
+/// field set would be two files for one interface and two fingerprints for one meaning.
+fn canonical_fields(owner: &str, fields: &[PersistentField]) -> Result<(), ReadError> {
+    let mut previous: Option<&str> = None;
+    for f in fields {
+        match previous {
+            Some(p) if p == f.name => {
+                return Err(ReadError::DuplicateRecord(format!("{owner}.{}", f.name)))
+            }
+            Some(p) if p > f.name.as_str() => {
+                return Err(ReadError::NotCanonical("fields".to_owned()))
+            }
+            _ => {}
+        }
+        previous = Some(&f.name);
+    }
+    Ok(())
+}
+
+/// A published field list, as this compilation's fields.
+fn read_fields(fields: &[PersistentField], ids: &HashMap<&str, Type>) -> Vec<FieldDef> {
+    fields
+        .iter()
+        .map(|f| FieldDef {
+            name: f.name.clone(),
+            ty: read_type(&f.ty, ids),
+            name_span: Span::synthetic(),
+            ty_span: Span::synthetic(),
+        })
+        .collect()
 }
 
 /// A published type string, as a [`Type`] in the reading compilation.
 ///
 /// Validation has already established that every name is either a built-in or one of this
-/// file's records, so the fallback is unreachable; it is `Int` rather than a panic for the
+/// file's types, so the fallback is unreachable; it is `Int` rather than a panic for the
 /// same reason the checker continues as `Int` after an unknown type.
-fn read_type(text: &str, ids: &HashMap<&str, RecordId>) -> Type {
-    Type::from_name(text).unwrap_or_else(|| ids.get(text).copied().map_or(Type::Int, Type::Record))
+fn read_type(text: &str, ids: &HashMap<&str, Type>) -> Type {
+    Type::from_name(text).unwrap_or_else(|| ids.get(text).copied().unwrap_or(Type::Int))
 }

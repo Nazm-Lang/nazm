@@ -143,27 +143,56 @@ pub mod codes {
     // an unknown type name is `N0305`, `==` on a record is `N0304`, and an ambiguous or
     // colliding imported name is `N0207`/`N0208`. A code per syntax spelling would make
     // the set larger and mean less.
-    /// Two records declared with one name in one module.
+    /// Two types declared with one name in one module. Records and enums share the type
+    /// namespace, so `struct Item` beside `enum Item` is this.
     pub const DUPLICATE_TYPE: Code = Code::new("N0330");
-    /// A record declared with a built-in type's name. Built-ins may not be shadowed:
+    /// A type declared with a built-in type's name. Built-ins may not be shadowed:
     /// `Int` means the same thing in every module of every program.
     pub const BUILTIN_TYPE_REDEFINED: Code = Code::new("N0331");
-    /// Two fields of one record with one name.
+    /// Two fields of one record, or of one variant's payload, with one name. Also a
+    /// pattern that names one payload field twice.
     pub const DUPLICATE_FIELD: Code = Code::new("N0332");
-    /// A field named in a construction or a projection that the record does not have.
+    /// A field named in a construction, a projection or a pattern that the record or
+    /// variant does not have.
     pub const UNKNOWN_FIELD: Code = Code::new("N0333");
-    /// A construction that does not give every field a value. There are no defaults.
+    /// A construction that does not give every field a value, or a pattern that does not
+    /// name every payload field. There are no defaults and there is no rest pattern.
     pub const MISSING_FIELD: Code = Code::new("N0334");
-    /// `.field` on something that is not a record.
+    /// `.field` on something that is not a record — including an enum, whose payload is
+    /// reached by `match` and not by projection.
     pub const INVALID_PROJECTION: Code = Code::new("N0335");
-    /// A record that contains itself by value, directly or through others. Not a safety
-    /// problem — a layout that does not exist.
+    /// A user-defined type that contains itself by value, directly or through others. Not
+    /// a safety problem — a layout that does not exist.
     pub const RECURSIVE_RECORD: Code = Code::new("N0336");
-    /// A public function or record whose signature or fields name a private record, which
-    /// an importer could not resolve.
+    /// A public function, record or enum whose signature, fields or payloads name a
+    /// private type, which an importer could not resolve.
     pub const PRIVATE_TYPE_EXPOSED: Code = Code::new("N0337");
-    /// Records nested inside records past the stated bound.
+    /// User-defined types nested inside one another past the stated bound.
     pub const TYPE_NESTING_TOO_DEEP: Code = Code::new("N0338");
+
+    // Enums and pattern matching. N10 allocated seven codes and renumbered none, and
+    // reused an existing code wherever the failure is the same *semantic category*: a
+    // missing payload field in a pattern is `N0334` because it is the same mistake as a
+    // missing field in a construction, a payload type mismatch is `N0300`, `==` on an
+    // enum is `N0304`, a private payload type is `N0337`, and a layout cycle through a
+    // variant is `N0336`. What is genuinely new is what only a sum type can get wrong.
+    /// An enum with no variants. A type with no values raises `Never` semantics the
+    /// language has not settled, so it is refused rather than admitted by accident.
+    pub const EMPTY_ENUM: Code = Code::new("N0339");
+    /// Two variants of one enum with one name.
+    pub const DUPLICATE_VARIANT: Code = Code::new("N0340");
+    /// A variant named in a construction or a pattern that the enum does not have.
+    pub const UNKNOWN_VARIANT: Code = Code::new("N0341");
+    /// `match` on a value that is not an enum. There is no literal or record matching.
+    pub const MATCH_ON_NON_ENUM: Code = Code::new("N0342");
+    /// A `match` that does not name every variant of its enum. There is no wildcard arm
+    /// and no runtime trap standing in for this check.
+    pub const NON_EXHAUSTIVE_MATCH: Code = Code::new("N0343");
+    /// A `match` that names one variant twice. The second arm can never be selected.
+    pub const DUPLICATE_MATCH_ARM: Code = Code::new("N0344");
+    /// A pattern whose variant belongs to a different enum than the scrutinee. There is
+    /// no structural variant matching.
+    pub const WRONG_ENUM_IN_PATTERN: Code = Code::new("N0345");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -40,7 +40,7 @@ use nazm_cache::{
 use nazm_core::sema::interface::UnitInterface;
 use nazm_core::sema::key::ModuleKey;
 use nazm_core::sema::module::{ModuleGraph, ModuleId};
-use nazm_core::sema::record::Records;
+use nazm_core::sema::udt::UserTypes;
 use nazm_iface::{InterfaceHash, PersistentUnitInterface};
 use nazm_span::SourceMap;
 
@@ -102,7 +102,7 @@ impl<'a> Cache<'a> {
 }
 
 impl nazm_core::Reuse for Cache<'_> {
-    fn plan(&mut self, graph: &ModuleGraph, interfaces: &[UnitInterface], records: &Records) {
+    fn plan(&mut self, graph: &ModuleGraph, interfaces: &[UnitInterface], types: &UserTypes) {
         // First, what each module *is* and what it offers. Both are functions of that
         // module alone, so this pass needs no order and a cycle costs it nothing.
         self.entries = graph
@@ -113,7 +113,7 @@ impl nazm_core::Reuse for Cache<'_> {
                     .map(|f| SourceFingerprint::of(self.map.text(f).as_bytes()));
                 let published = interfaces
                     .get(m.index())
-                    .and_then(|i| PersistentUnitInterface::published(i, graph, records).ok());
+                    .and_then(|i| PersistentUnitInterface::published(i, graph, types).ok());
                 let interface = published.as_ref().and_then(|p| InterfaceHash::of(p).ok());
                 Entry {
                     key: graph.key(m).cloned(),

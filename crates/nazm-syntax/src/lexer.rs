@@ -44,6 +44,12 @@ pub enum TokenKind {
     /// `struct` — the declaration keyword for a record. `docs/spec.md` explains why the
     /// keyword and the semantic category are spelled differently.
     Struct,
+    /// `enum` — the declaration keyword for a closed sum type. Reserved by name since
+    /// v0.1 and refused with *"there are no variant types yet"* until N10.
+    Enum,
+    /// `match` — the one elimination form for an enum. Reserved by name since v0.1 and
+    /// refused with *"there is no pattern matching yet"* until N10.
+    Match,
 
     // Punctuation
     LParen,
@@ -52,10 +58,16 @@ pub enum TokenKind {
     RBrace,
     Comma,
     Colon,
-    /// `.` — field projection. Never part of a number: `docs/spec.md` has no float.
+    /// `.` — field projection, and the separator between an enum and one of its
+    /// variants. Never part of a number: `docs/spec.md` has no float.
     Dot,
     Semi,
     Arrow,
+    /// `=>` — between a `match` pattern and the arm it selects.
+    ///
+    /// Its own token rather than `=` followed by `>`: written as two, `x = > 1` would be
+    /// accepted, and a two-character operator is exactly how `->` and `==` already work.
+    FatArrow,
     Eq,
 
     // Operators
@@ -103,6 +115,8 @@ impl TokenKind {
         Self::Scope,
         Self::Spawn,
         Self::Struct,
+        Self::Enum,
+        Self::Match,
         Self::LParen,
         Self::RParen,
         Self::LBrace,
@@ -112,6 +126,7 @@ impl TokenKind {
         Self::Dot,
         Self::Semi,
         Self::Arrow,
+        Self::FatArrow,
         Self::Eq,
         Self::Plus,
         Self::Minus,
@@ -154,6 +169,8 @@ impl TokenKind {
             Self::Scope => Some("scope"),
             Self::Spawn => Some("spawn"),
             Self::Struct => Some("struct"),
+            Self::Enum => Some("enum"),
+            Self::Match => Some("match"),
             Self::LParen => Some("("),
             Self::RParen => Some(")"),
             Self::LBrace => Some("{"),
@@ -163,6 +180,7 @@ impl TokenKind {
             Self::Dot => Some("."),
             Self::Semi => Some(";"),
             Self::Arrow => Some("->"),
+            Self::FatArrow => Some("=>"),
             Self::Eq => Some("="),
             Self::Plus => Some("+"),
             Self::Minus => Some("-"),
@@ -202,6 +220,8 @@ impl TokenKind {
             Self::Scope => "`scope`".to_owned(),
             Self::Spawn => "`spawn`".to_owned(),
             Self::Struct => "`struct`".to_owned(),
+            Self::Enum => "`enum`".to_owned(),
+            Self::Match => "`match`".to_owned(),
             Self::LParen => "`(`".to_owned(),
             Self::RParen => "`)`".to_owned(),
             Self::LBrace => "`{`".to_owned(),
@@ -211,6 +231,7 @@ impl TokenKind {
             Self::Dot => "`.`".to_owned(),
             Self::Semi => "`;`".to_owned(),
             Self::Arrow => "`->`".to_owned(),
+            Self::FatArrow => "`=>`".to_owned(),
             Self::Eq => "`=`".to_owned(),
             Self::Plus => "`+`".to_owned(),
             Self::Minus => "`-`".to_owned(),
@@ -349,6 +370,8 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
                 "return" => TokenKind::Return,
                 "use" => TokenKind::Use,
                 "struct" => TokenKind::Struct,
+                "enum" => TokenKind::Enum,
+                "match" => TokenKind::Match,
                 "scope" => TokenKind::Scope,
                 "spawn" => TokenKind::Spawn,
                 _ => TokenKind::Ident(word.to_owned()),
@@ -399,6 +422,7 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
         let (kind, width) = match two {
             Some((b'-', b'>')) => (Some(TokenKind::Arrow), 2),
             Some((b'=', b'=')) => (Some(TokenKind::EqEq), 2),
+            Some((b'=', b'>')) => (Some(TokenKind::FatArrow), 2),
             Some((b'!', b'=')) => (Some(TokenKind::NotEq), 2),
             Some((b'<', b'=')) => (Some(TokenKind::LtEq), 2),
             Some((b'>', b'=')) => (Some(TokenKind::GtEq), 2),

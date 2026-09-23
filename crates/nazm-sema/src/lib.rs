@@ -38,6 +38,7 @@
 //! a build system as a key. What durable identity would have to be is
 //! `docs/research-register.md` R2 and R3, and it is deliberately not this.
 
+pub mod enums;
 pub mod interface;
 pub mod intrinsic;
 pub mod key;
@@ -45,11 +46,16 @@ pub mod module;
 pub mod record;
 pub mod resolve;
 pub mod types;
+pub mod udt;
 
-pub use interface::{reachable_records, Export, RecordExport, UnitInterface, Visibility};
+pub use enums::{EnumDef, EnumId, Enums, VariantDef};
+pub use interface::{
+    reachable_types, EnumExport, Export, RecordExport, UnitInterface, Visibility,
+};
 pub use intrinsic::Intrinsic;
 pub use key::{DefKey, DefKind, ModuleKey};
 pub use module::{Dependency, ModuleGraph, ModuleId};
-pub use record::{FieldDef, LayoutCycle, RecordDef, RecordId, Records, TaskUnsafe};
-pub use resolve::{Callee, FieldRef, FnDef, FnId, LocalDef, Resolution};
+pub use record::{FieldDef, RecordDef, RecordId, Records, TaskUnsafe};
+pub use resolve::{Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Resolution, VariantRef};
 pub use types::Type;
+pub use udt::{CycleEdge, LayoutCycle, TypeNode, UserTypes, MAX_TYPE_DEPTH};

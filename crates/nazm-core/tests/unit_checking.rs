@@ -60,6 +60,7 @@ fn interface_of_b(module: nazm_core::sema::ModuleId) -> UnitInterface {
         }],
         Vec::new(),
         Vec::new(),
+        Vec::new(),
     )
 }
 
@@ -116,6 +117,7 @@ fn without_that_interface_the_same_module_is_refused() {
     // B exists and exports nothing.
     let empty = UnitInterface::new(
         graph.ids().nth(1).unwrap(),
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
