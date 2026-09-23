@@ -49,8 +49,9 @@ running anything, and `nazm test` runs a directory of programs against recorded 
 | `Chan` | A bounded queue of `Int`, by reference. The one type designed to be shared between tasks |
 | a `struct` you declare | A **record**: a value with named fields, each keeping its own type's rules |
 | an `enum` you declare | One of a fixed set of named **variants**, each with its own named fields |
+| `Vec[T]` | A growable sequence of **any** type — records, enums, strings, other `Vec`s — by reference |
 
-`Ints`, `Strs` and `Chan` are handles: two bindings of one sequence are the same storage,
+`Ints`, `Strs`, `Vec[T]` and `Chan` are handles: two bindings of one sequence are the same storage,
 and `==` is not offered on them, because it would have to mean either identity or
 contents and the language has not chosen. A sequence may **not** be passed to a task; a
 channel may, and its operations are the synchronisation.
@@ -149,6 +150,61 @@ it happens to hold: `enum Work { None, Values(xs: Ints), }` may not cross even w
 
 An enum and a record can contain one another, and an enum can contain an enum. What is
 refused is a circle — the same layout-with-no-size refusal a record gets.
+
+## Generics, and `Vec[T]`
+
+A record, an enum or a function may take **type parameters**, written in square brackets
+after its name, and a type is applied to arguments the same way.
+
+```nazm
+struct Pair[A, B] {
+    first: A,
+    second: B,
+}
+
+enum Maybe[T] {
+    None,
+    Some(value: T),
+}
+
+fn or_else[T](m: Maybe[T], fallback: T) -> T {
+    match m {
+        Maybe.None() => fallback,
+        Maybe.Some(value: v) => v,
+    }
+}
+
+fn main() -> Int {
+    let pairs = vec_new[Pair[Int, Str]]();
+    vec_push(pairs, Pair[Int, Str](first: 7, second: "nazm"));
+    let p = vec_get(pairs, 0);
+    p.first + or_else(Maybe[Int].Some(value: 35), 0)
+}
+```
+
+Six things to know, and then you know generics:
+
+- **A generic function is checked once, for every `T` at once.** So its body can only do
+  what every type can: bind a `T`, pass it, return it, store it, push it into a `Vec[T]`.
+  It cannot add two `T`s, compare them with `==`, read a field of one or pass one to a task
+  — there is no way to say "only for types that can", so none of those is offered.
+- **A call's type arguments come from its arguments, or you write them.** `or_else(m, 0)`
+  works out `T` from `m`; `vec_new[Int]()` has no argument to work it out from, so it is
+  written. What the result is *used for* never decides it.
+- **Building a generic value names its arguments.** `Pair[Int, Str](first: …)` and
+  `Maybe[Int].None()`, never `Pair(…)`. A **pattern** is the other way round —
+  `Maybe.Some(value: v)` — because the value being matched already has one type.
+- **Parameter order means something; parameter names do not.** `Pair[B, A]` is a different
+  definition from `Pair[A, B]`, and renaming `T` to `Value` everywhere changes nothing at all.
+- **`Vec[T]` is a sequence, like `Ints`.** `let b = a;` shares it, and `==` is not offered.
+  `vec_get(xs, i)` gives you **your own copy** of an element; `vec_set(xs, i, v)` replaces
+  one; `vec_push` appends and `vec_pop` removes the last. There is no `xs[i]` — to change a
+  field of a record in a `Vec`, get it, change the copy, and set it back.
+- **A type cannot own itself through a `Vec`.** `struct Node { children: Vec[Node], }` is
+  refused: a value of it could hold itself, and nothing would ever reclaim it. `Vec[Vec[Int]]`
+  and a record holding a `Vec[Str]` are fine — the refusal is only for a circle.
+
+A `Vec` may not be passed to a task, whatever it holds, for the reason an `Ints` may not.
 
 ## Memory: what you do not have to do
 
