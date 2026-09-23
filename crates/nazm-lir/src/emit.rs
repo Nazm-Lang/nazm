@@ -1191,14 +1191,20 @@ impl Emitter<'_> {
         // to the first arm rather than as `unreachable`: the block must exist for the
         // instruction to be well formed, and a `switch` whose default is poison would make
         // a compiler mistake into undefined behaviour instead of a wrong answer.
-        let default = labels.first().cloned().unwrap_or_else(|| join_label.clone());
+        let default = labels
+            .first()
+            .cloned()
+            .unwrap_or_else(|| join_label.clone());
         let table = arms
             .iter()
             .zip(&labels)
             .map(|(a, l)| format!("i64 {}, label %{l}", a.tag))
             .collect::<Vec<_>>()
             .join(" ");
-        let _ = writeln!(self.out, "  switch i64 %{tag}, label %{default} [ {table} ]");
+        let _ = writeln!(
+            self.out,
+            "  switch i64 %{tag}, label %{default} [ {table} ]"
+        );
 
         let mut incomings: Vec<(u32, Ty, String)> = Vec::new();
         for (arm, label) in arms.iter().zip(&labels) {
@@ -1642,8 +1648,7 @@ impl Emitter<'_> {
                         // the frame's and are released just below.
                         self.release_temporaries();
                         self.release_frame();
-                        let _ =
-                            writeln!(self.out, "  ret {} %{value}", llvm_type(self.types, ty));
+                        let _ = writeln!(self.out, "  ret {} %{value}", llvm_type(self.types, ty));
                     }
                     Reach::Transferred
                 }
@@ -2472,7 +2477,10 @@ impl Emitter<'_> {
                 );
                 // Borrowed, exactly as a record projection is: the value belongs to the
                 // enum the `match` is holding, and whoever takes it over retains it.
-                Val::Of { value: out, ty: *ty }
+                Val::Of {
+                    value: out,
+                    ty: *ty,
+                }
             }
 
             Expr::Match {

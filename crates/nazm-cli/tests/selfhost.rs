@@ -567,13 +567,7 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
                 let pattern = a
                     .fields
                     .iter()
-                    .map(|f| {
-                        format!(
-                            "{}:{}",
-                            f.name,
-                            f.binding.as_deref().unwrap_or("_")
-                        )
-                    })
+                    .map(|f| format!("{}:{}", f.name, f.binding.as_deref().unwrap_or("_")))
                     .collect::<Vec<_>>()
                     .join(",");
                 push_node(
