@@ -339,9 +339,11 @@ divergence was real, it was a year of milestones old in compiler time, and **no 
 passed a record to a task through this compiler** — the gap was in the corpus.
 
 **The digest moved a third time**, for the same reason and with the same property intact:
-`3491dfed…` (N9) → the value in this milestone's report (enums and `match`, an enum in the
-compiler's own source, and the task-block fix). `ir: identical`, executables byte-identical
-once the linker UUID is removed, and C2 = C3.
+`1ce9aafb…` (N8) → `3ecf0921…` → `3491dfed…` (N9) → `8030ecbb…` (enums and `match`, an enum
+in the compiler's own source, and the task-block fix). `ir: identical`, executables
+byte-identical once the linker UUID is removed, and C2 = C3 over 14 conformance cases, 7 of
+them multi-module. Preserving the old number by declining the change would have been
+preserving the number rather than the property it stands for.
 
 ## 6. Reproducing it
 

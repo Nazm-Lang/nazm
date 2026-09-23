@@ -159,11 +159,12 @@ rather than exempted: 84 of its 224 functions are `pub`, 140 are private, and si
 `ModuleKey` is its normalised path relative to the compilation's source root, and a
 definition's `DefKey` is that key plus its kind and name
 (`crates/nazm-sema/src/key.rs`). `nazm interface FILE` writes a module's interface as
-`nazm.interface/2` — durable keys, canonical type names, exported **record definitions**
-closed over their field types, no spans, no session ids (`crates/nazm-iface/`) — and
-`--hash` fingerprints it with BLAKE3. It was `/1` until N9; a `/1` file describes a
-language with no records, so reading one as a `/2` would be believing a module offers less
-than it does, and both directions are refused rather than reinterpreted. The session ids are
+`nazm.interface/3` — durable keys, canonical type names, exported **record and enum
+definitions** closed over their field and payload types, no spans, no session ids, no
+discriminants (`crates/nazm-iface/`) — and `--hash` fingerprints it with BLAKE3. It was
+`/1` until N9 and `/2` until N10; a `/1` file describes a language with no records and a
+`/2` one a language with no enums, so reading either as a `/3` would be believing a module
+offers less than it does, and every direction is refused rather than reinterpreted. The session ids are
 unchanged and were not renamed; both layers coexist.
 
 `crates/nazm-cli/tests/durable_identity.rs` establishes it across real boundaries: the same
