@@ -312,32 +312,65 @@ fn check_failed(out: Strs, next: Ints, current: Strs, live: Ints,
 // are the thread handle, so the list the scope joins holds one pointer per task and needs
 // no second allocation; the next sixteen are where this task leaves its diagnostic if it
 // fails, which the join reads after `pthread_join` — a happens-before edge, so no lock.
+// The trampoline's release lines, which go into the task's own buffer rather than the
+// function being emitted — so they cannot share `emit_release`, and an exhaustive `match`
+// is what keeps the two in step.
+fn task_release(t: Strs, head: Str, i: Int) -> Int {
+    strs_push(t, str_concat(str_concat("  call void ", head),
+            str_concat(int_to_str(i), ")")));
+    0
+}
+
+fn task_release_backing(t: Strs, i: Int) -> Int {
+    strs_push(t, str_concat(str_concat(str_concat("  %o", int_to_str(i)),
+            " = extractvalue { ptr, i64, ptr } %v"), str_concat(int_to_str(i), ", 2")));
+    strs_push(t, str_concat(str_concat("  call void @nz.str_release(ptr %o",
+            int_to_str(i)), ")"));
+    0
+}
+
+fn task_release_helper(t: Strs, r: Int, ty: Int, i: Int) -> Int {
+    strs_push(t, str_concat(str_concat(str_concat("  call void @nz.rl", int_to_str(r)),
+            str_concat("(", llvm_type(ty))),
+            str_concat(str_concat(" %v", int_to_str(i)), ")")));
+    0
+}
+
 fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, tasks: Strs,
-        owned: Ints, vals: Ints, nar: Ints, ntype: Ints, kids: Ints, kid_first: Ints,
-        fnames: Strs, fret: Ints, k: Int, callee: Int, at: Str, rowns: Ints,
-        otype: Ints) -> Int {
+        blocks: Strs, owned: Ints, vals: Ints, nar: Ints, ntype: Ints, kids: Ints,
+        kid_first: Ints, fnames: Strs, fret: Ints, k: Int, callee: Int, at: Str,
+        rowns: Ints, otype: Ints) -> Int {
     let argc = ints_get(nar, k);
     // Popped in reverse, then read back in source order.
     let args = ints_new();
     let mut a = 0;
     while a < argc { ints_push(args, ints_pop(vals)); a = a + 1; }
 
-    // The handle at 0, the diagnostic at 8 and 16, then each argument at its own offset.
-    // `Str` is twenty-four bytes and everything else eight, which keeps every offset a
-    // multiple of eight and so correctly aligned for whatever is stored there.
-    let offs = ints_new();
-    let mut size = 24;
+    // A **named LLVM type** for the argument block rather than hand-computed byte
+    // offsets: `{ i64 handle, ptr message, i64 length, … arguments }`. The first three are
+    // fixed, because `@nz.spawn` writes the thread handle at offset 0 and the join reads
+    // the diagnostic at 8 and 16 from the runtime's own C.
+    //
+    // It used to be arithmetic — twenty-four bytes for a `Str` and eight for everything
+    // else — and that was true of every type the language had when it was written. A
+    // record is neither: `struct M { text: Str, }` is twenty-four bytes and was given
+    // eight, so the store ran past its slot and the task read the next argument's bytes as
+    // its own. Letting LLVM compute the layout is the only version of this that stays
+    // correct when a type is added.
+    let block = str_concat("%nz.blk", int_to_str(strs_len(tasks)));
+    let mut fields = "i64, ptr, i64";
     let mut i = 0;
     while i < argc {
         let t = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
-        ints_push(offs, size);
-        if t == t_str() { size = size + 24; } else { size = size + 8; }
+        fields = str_concat(str_concat(fields, ", "), llvm_type(t));
         i = i + 1;
     }
+    strs_push(blocks, str_concat(str_concat(block, " = type { "), str_concat(fields, " }")));
 
     let blk = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(blk)),
-            str_concat(" = call ptr @malloc(i64 ", str_concat(int_to_str(size), ")"))));
+            str_concat(str_concat(" = call ptr @malloc(i64 ptrtoint (ptr getelementptr (",
+            block), str_concat(", ptr null, i32 1) to i64))", ""))));
     let bad = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(bad)),
             str_concat(" = icmp eq ptr ", str_concat(v(blk), ", null"))));
@@ -348,11 +381,13 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     // would report.
     let ep = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(ep)),
-            str_concat(" = getelementptr i8, ptr ", str_concat(v(blk), ", i64 8"))));
+            str_concat(str_concat(" = getelementptr ", block),
+            str_concat(", ptr ", str_concat(v(blk), ", i64 0, i32 1")))));
     add_line(out, str_concat(str_concat("  store ptr null, ptr ", v(ep)), ""));
     let lp = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(lp)),
-            str_concat(" = getelementptr i8, ptr ", str_concat(v(blk), ", i64 16"))));
+            str_concat(str_concat(" = getelementptr ", block),
+            str_concat(", ptr ", str_concat(v(blk), ", i64 0, i32 2")))));
     add_line(out, str_concat(str_concat("  store i64 0, ptr ", v(lp)), ""));
 
     // The block **takes** each argument's reference and the trampoline gives it back when
@@ -365,8 +400,9 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
         let value = ints_get(args, argc - 1 - i);
         let slot = take_number(next);
         add_line(out, str_concat(str_concat("  ", v(slot)),
-                str_concat(str_concat(" = getelementptr i8, ptr ", v(blk)),
-                str_concat(", i64 ", int_to_str(ints_get(offs, i))))));
+                str_concat(str_concat(str_concat(" = getelementptr ", block),
+                str_concat(", ptr ", v(blk))),
+                str_concat(", i64 0, i32 ", int_to_str(i + 3)))));
         own_keep(out, next, owned, value, t, rowns, otype);
         add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(t)),
                 str_concat(" ", v(value))),
@@ -386,8 +422,8 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     while i < argc {
         let ty = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
         strs_push(t, str_concat(str_concat("  %p", int_to_str(i)),
-                str_concat(" = getelementptr i8, ptr %a, i64 ",
-                int_to_str(ints_get(offs, i)))));
+                str_concat(str_concat(" = getelementptr ", block),
+                str_concat(", ptr %a, i64 0, i32 ", int_to_str(i + 3)))));
         strs_push(t, str_concat(str_concat(str_concat("  %v", int_to_str(i)), " = load "),
                 str_concat(str_concat(llvm_type(ty), ", ptr %p"), int_to_str(i))));
         if i > 0 { passed = str_concat(passed, ", "); }
@@ -411,9 +447,11 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     strs_push(t, "publish:");
     strs_push(t, "  %em = load ptr, ptr @nz.errmsg");
     strs_push(t, "  %el = load i64, ptr @nz.errlen");
-    strs_push(t, "  %emp = getelementptr i8, ptr %a, i64 8");
+    strs_push(t, str_concat(str_concat("  %emp = getelementptr ", block),
+            ", ptr %a, i64 0, i32 1"));
     strs_push(t, "  store ptr %em, ptr %emp");
-    strs_push(t, "  %elp = getelementptr i8, ptr %a, i64 16");
+    strs_push(t, str_concat(str_concat("  %elp = getelementptr ", block),
+            ", ptr %a, i64 0, i32 2"));
     strs_push(t, "  store i64 %el, ptr %elp");
     strs_push(t, "  br label %finished");
     strs_push(t, "finished:");
@@ -424,26 +462,20 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     i = 0;
     while i < argc {
         let ty = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
-        let o = owns(ty, rowns);
-        if o == 1 {
-            strs_push(t, str_concat(str_concat("  call void @nz.seq_release(ptr %v",
-                    int_to_str(i)), ")"));
-        }
-        if o == 2 {
-            strs_push(t, str_concat(str_concat("  call void @nz.strs_release(ptr %v",
-                    int_to_str(i)), ")"));
-        }
-        if o == 3 {
-            strs_push(t, str_concat(str_concat(str_concat("  %o", int_to_str(i)),
-                    " = extractvalue { ptr, i64, ptr } %v"),
-                    str_concat(int_to_str(i), ", 2")));
-            strs_push(t, str_concat(str_concat("  call void @nz.str_release(ptr %o",
-                    int_to_str(i)), ")"));
-        }
-        if o == 4 {
-            strs_push(t, str_concat(str_concat("  call void @nz.chan_release(ptr %v",
-                    int_to_str(i)), ")"));
-        }
+        // The last two arms were missing until N10 asked this `match` to be exhaustive: a
+        // record crossing a task boundary was packed with a reference taken and given
+        // back by nobody, so every spawn over one leaked its fields. `unspawn` — the path
+        // a task that never started takes — went through `emit_release` and was always
+        // right, which is why only a task that *did* start showed it.
+        match owns(ty, rowns) {
+            Owning.Nothing() => 0,
+            Owning.Sequence() => task_release(t, "@nz.seq_release(ptr %v", i),
+            Owning.Strings() => task_release(t, "@nz.strs_release(ptr %v", i),
+            Owning.Backing() => task_release_backing(t, i),
+            Owning.Channel() => task_release(t, "@nz.chan_release(ptr %v", i),
+            Owning.Record(at: r) => task_release_helper(t, r, ty, i),
+            Owning.Enum(at: r) => task_release_helper(t, r, ty, i),
+        };
         i = i + 1;
     }
     strs_push(t, "  ret ptr null");
@@ -455,7 +487,7 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
     add_line(out, str_concat(str_concat("  ", v(rc)),
             str_concat(str_concat(" = call i32 @nz.spawn(ptr ", v(tids)),
             str_concat(str_concat(", ptr ", name), str_concat(str_concat(", ptr ", v(blk)), ")")))));
-    unspawn(out, next, ntype, kids, kid_first, offs, blk, k, argc, rc, current, live, rowns);
+    unspawn(out, next, ntype, kids, kid_first, block, blk, k, argc, rc, current, live, rowns);
     let oom = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(oom)),
             str_concat(" = icmp eq i32 ", str_concat(v(rc), ", -1"))));
@@ -472,7 +504,8 @@ fn emit_spawn(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, task
 // Emitted between `@nz.spawn` returning non-zero and the guard that reports it: the one
 // path where a program is already out of resources must not also be the path that leaks.
 fn unspawn(out: Strs, next: Ints, ntype: Ints, kids: Ints, kid_first: Ints,
-        offs: Ints, blk: Int, k: Int, argc: Int, rc: Int, current: Strs, live: Ints, rowns: Ints) -> Int {
+        block: Str, blk: Int, k: Int, argc: Int, rc: Int, current: Strs, live: Ints,
+        rowns: Ints) -> Int {
     let started = take_number(next);
     add_line(out, str_concat(str_concat("  ", v(started)),
             str_concat(" = icmp eq i32 ", str_concat(v(rc), ", 0"))));
@@ -485,11 +518,12 @@ fn unspawn(out: Strs, next: Ints, ntype: Ints, kids: Ints, kid_first: Ints,
     let mut i = 0;
     while i < argc {
         let t = ints_get(ntype, ints_get(kids, ints_get(kid_first, k) + i));
-        if owns(t, rowns) != 0 {
+        if owns_anything(t, rowns) {
             let slot = take_number(next);
             add_line(out, str_concat(str_concat("  ", v(slot)),
-                    str_concat(str_concat(" = getelementptr i8, ptr ", v(blk)),
-                    str_concat(", i64 ", int_to_str(ints_get(offs, i))))));
+                    str_concat(str_concat(str_concat(" = getelementptr ", block),
+                    str_concat(", ptr ", v(blk))),
+                    str_concat(", i64 0, i32 ", int_to_str(i + 3)))));
             let held = take_number(next);
             add_line(out, str_concat(str_concat("  ", v(held)),
                     str_concat(str_concat(" = load ", llvm_type(t)),
@@ -745,7 +779,7 @@ fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
                 q = q + 1;
             }
             let n = take_number(next);
-            if owns(ints_get(ntype, k), rowns) != 0 {
+            if owns_anything(ints_get(ntype, k), rowns) {
                 own_add(owned, otype, n, ints_get(ntype, k));
             }
             let mut line = str_concat(str_concat("  ", v(n)),
@@ -985,7 +1019,7 @@ fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
         let from_temporary = own_has(owned, base);
         let got = record_field(out, next, base, bt, at);
         if from_temporary {
-            if owns(t, rowns) != 0 {
+            if owns_anything(t, rowns) {
                 emit_retain(out, next, got, t, rowns);
                 own_add(owned, otype, got, t);
             }
@@ -1019,7 +1053,7 @@ fn record_helper(out: Strs, next: Ints, r: Int, retain: Bool, rowns: Ints,
     while pos < ints_get(rcount, r) {
         let decl = layout_field(rfirst, rcount, rfname, r, pos);
         let ft = ints_get(rftype, ints_get(rfirst, r) + decl);
-        if owns(ft, rowns) != 0 {
+        if owns_anything(ft, rowns) {
             let n = take_number(next);
             add_line(out, str_concat(str_concat("  ", v(n)),
                     str_concat(str_concat(" = extractvalue ", ty),
@@ -1060,7 +1094,7 @@ fn enum_helper(out: Strs, next: Ints, r: Int, retain: Bool, rowns: Ints,
     while pos < ints_get(rcount, r) {
         let decl = layout_field(rfirst, rcount, rfname, r, pos);
         let vt = ints_get(rftype, ints_get(rfirst, r) + decl);
-        if owns(vt, rowns) != 0 { ints_push(tags, pos); }
+        if owns_anything(vt, rowns) { ints_push(tags, pos); }
         pos = pos + 1;
     }
     let done = str_concat("b", int_to_str(take_label(next)));
@@ -1274,28 +1308,59 @@ fn make_str(out: Strs, next: Ints, ptr: Int, len: Int, owner: Str) -> Int {
 // leave the moment something consumes one, so it holds a handful at a time and a linear
 // scan is the right shape.
 
-// What a value of this type owns: 0 nothing, 1 an `Ints`, 2 a `Strs`, 3 a string backing,
-// 4 a channel. One classification, so adding a type means answering here rather than
-// finding every site that retains.
-// What a value of this type owns, as a small code the retain and release paths dispatch
-// on. `5` is a record, which owns **whatever its fields own** — nothing of its own, no
-// header and no count — and is therefore the one answer that depends on the program
-// rather than on the type alone. `rowns` is that answer, computed once.
-fn owns(t: Int, rowns: Ints) -> Int {
-    if t == t_ints() { return 1; }
-    if t == t_strs() { return 2; }
-    if t == t_str() { return 3; }
-    if t == t_chan() { return 4; }
+// What a value of this type owns, and therefore what has to happen when something takes
+// one on or lets one go.
+//
+// **The first enum in this compiler's own source**, and it is here because the language
+// could not say what the code meant. This was a small integer: `0` nothing, `1` an `Ints`,
+// `3` a string backing, `5` a record. Every caller compared it against a number, the two
+// cases that carry an index recomputed it from `t` at each site, and a code the function
+// never returns was indistinguishable from one it does. N10 added a seventh and every one
+// of those comparisons had to be found by hand.
+//
+// As an enum, the dispatch is exhaustive — adding a kind stops the retain and release
+// paths compiling until both have answered — and the index a record or an enum needs is
+// **in the value that says it needs one**, so the two cannot disagree.
+enum Owning {
+    Nothing,
+    Sequence,
+    Strings,
+    Backing,
+    Channel,
+    Record(at: Int),
+    Enum(at: Int),
+}
+
+fn owns(t: Int, rowns: Ints) -> Owning {
+    if t == t_ints() { return Owning.Sequence(); }
+    if t == t_strs() { return Owning.Strings(); }
+    if t == t_str() { return Owning.Backing(); }
+    if t == t_chan() { return Owning.Channel(); }
     if is_record(t) {
         if record_of(t) < ints_len(rowns) {
-            // 5 is a record: every field. 6 is an enum: the **active** variant's fields,
-            // which is a runtime question and therefore a branch in the generated helper.
-            if ints_get(rowns, record_of(t)) == 1 { return 5; }
-            if ints_get(rowns, record_of(t)) == 2 { return 6; }
+            // A record owns every field; an enum owns the **active** variant's, which is a
+            // runtime question and therefore a branch in the generated helper. `rowns`
+            // says which, computed once after the fields are known.
+            if ints_get(rowns, record_of(t)) == 1 { return Owning.Record(at: record_of(t)); }
+            if ints_get(rowns, record_of(t)) == 2 { return Owning.Enum(at: record_of(t)); }
         }
-        return 0;
+        return Owning.Nothing();
     }
-    0
+    Owning.Nothing()
+}
+
+// Whether a value of this type owns anything at all — the question most sites ask, and the
+// one an exhaustive `match` answers once rather than at each of them.
+fn owns_anything(t: Int, rowns: Ints) -> Bool {
+    match owns(t, rowns) {
+        Owning.Nothing() => false,
+        Owning.Sequence() => true,
+        Owning.Strings() => true,
+        Owning.Backing() => true,
+        Owning.Channel() => true,
+        Owning.Record(at: _) => true,
+        Owning.Enum(at: _) => true,
+    }
 }
 
 // Remove `n` from the set, answering whether it was there.
@@ -1352,77 +1417,59 @@ fn release_temporaries(out: Strs, next: Ints, owned: Ints, otype: Ints, rowns: I
     0
 }
 
-// Add a reference to whatever this value owns.
-fn emit_retain(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
-    let o = owns(t, rowns);
-    if o == 0 { return 0; }
-    if o == 6 {
-        // An enum's helper is the same shape as a record's from out here — one call — and
-        // a switch on the discriminant on the inside. That is the whole of what a sum
-        // type adds to the memory model, and it is in the emitted program rather than in
-        // this compiler.
-        add_line(out, str_concat(str_concat(str_concat("  call void @nz.rt",
-                int_to_str(record_of(t))), str_concat("(", llvm_type(t))),
-                str_concat(str_concat(" ", v(value)), ")")));
-        return 0;
-    }
-    if o == 5 {
-        // One generated helper per record per direction, rather than the field walk
-        // inlined here. A record copied in forty places then emits forty calls instead of
-        // forty copies of the walk — and, because a nested record's helper calls the
-        // inner record's, the recursion lives in the emitted program rather than in this
-        // compiler, which has none.
-        add_line(out, str_concat(str_concat(str_concat("  call void @nz.rt",
-                int_to_str(record_of(t))), str_concat("(", llvm_type(t))),
-                str_concat(str_concat(" ", v(value)), ")")));
-        return 0;
-    }
-    if o == 3 {
-        let owner = field(out, next, value, "2");
-        add_line(out, str_concat(str_concat("  call void @nz.str_retain(ptr ", v(owner)), ")"));
-        return 0;
-    }
-    if o == 4 {
-        add_line(out, str_concat(str_concat("  call void @nz.chan_retain(ptr ", v(value)), ")"));
-        return 0;
-    }
-    add_line(out, str_concat(str_concat("  call void @nz.arr_retain(ptr ", v(value)), ")"));
+// One `call void` line to a runtime function, which is the shape every retain and release
+// takes. `head` is the callee and the open bracket; `arg` is the operand.
+fn runtime_call(out: Strs, head: Str, arg: Str) -> Int {
+    add_line(out, str_concat(str_concat("  call void ", head), str_concat(arg, ")")));
     0
 }
 
-// Drop a reference. The storage goes when the last one does.
-fn emit_release(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
-    let o = owns(t, rowns);
-    if o == 0 { return 0; }
-    if o == 6 {
-        add_line(out, str_concat(str_concat(str_concat("  call void @nz.rl",
-                int_to_str(record_of(t))), str_concat("(", llvm_type(t))),
-                str_concat(str_concat(" ", v(value)), ")")));
-        return 0;
-    }
-    if o == 5 {
-        add_line(out, str_concat(str_concat(str_concat("  call void @nz.rl",
-                int_to_str(record_of(t))), str_concat("(", llvm_type(t))),
-                str_concat(str_concat(" ", v(value)), ")")));
-        return 0;
-    }
-    if o == 1 {
-        add_line(out, str_concat(str_concat("  call void @nz.seq_release(ptr ", v(value)), ")"));
-        return 0;
-    }
-    if o == 2 {
-        // A `Strs` releases every element's backing before its own storage, which is why
-        // it cannot share the helper an `Ints` uses.
-        add_line(out, str_concat(str_concat("  call void @nz.strs_release(ptr ", v(value)), ")"));
-        return 0;
-    }
-    if o == 3 {
-        let owner = field(out, next, value, "2");
-        add_line(out, str_concat(str_concat("  call void @nz.str_release(ptr ", v(owner)), ")"));
-        return 0;
-    }
-    add_line(out, str_concat(str_concat("  call void @nz.chan_release(ptr ", v(value)), ")"));
+// A generated helper, named by its definition's index and taking the whole value. One per
+// record and per enum per direction, so the walk — and, for an enum, the branch on the
+// discriminant — lives in the emitted program rather than in this compiler, which has no
+// recursion to walk with.
+fn helper_call(out: Strs, prefix: Str, r: Int, t: Int, value: Int) -> Int {
+    add_line(out, str_concat(str_concat(str_concat("  call void ", prefix),
+            str_concat(int_to_str(r), str_concat("(", llvm_type(t)))),
+            str_concat(str_concat(" ", v(value)), ")")));
     0
+}
+
+// A string's backing is named by the value's third field, which may be null — a literal
+// and a process argument own nothing, and acting on null is what says so.
+fn backing_call(out: Strs, next: Ints, head: Str, value: Int) -> Int {
+    let owner = field(out, next, value, "2");
+    runtime_call(out, head, v(owner))
+}
+
+// Add a reference to whatever this value owns.
+fn emit_retain(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
+    match owns(t, rowns) {
+        Owning.Nothing() => 0,
+        Owning.Sequence() => runtime_call(out, "@nz.arr_retain(ptr ", v(value)),
+        Owning.Strings() => runtime_call(out, "@nz.arr_retain(ptr ", v(value)),
+        Owning.Backing() => backing_call(out, next, "@nz.str_retain(ptr ", value),
+        Owning.Channel() => runtime_call(out, "@nz.chan_retain(ptr ", v(value)),
+        Owning.Record(at: r) => helper_call(out, "@nz.rt", r, t, value),
+        Owning.Enum(at: r) => helper_call(out, "@nz.rt", r, t, value),
+    }
+}
+
+// Drop a reference. The storage goes when the last one does.
+//
+// A `Strs` releases every element's backing before its own storage, which is why it cannot
+// share the runtime function an `Ints` uses — the one asymmetry between this and the
+// retain above.
+fn emit_release(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
+    match owns(t, rowns) {
+        Owning.Nothing() => 0,
+        Owning.Sequence() => runtime_call(out, "@nz.seq_release(ptr ", v(value)),
+        Owning.Strings() => runtime_call(out, "@nz.strs_release(ptr ", v(value)),
+        Owning.Backing() => backing_call(out, next, "@nz.str_release(ptr ", value),
+        Owning.Channel() => runtime_call(out, "@nz.chan_release(ptr ", v(value)),
+        Owning.Record(at: r) => helper_call(out, "@nz.rl", r, t, value),
+        Owning.Enum(at: r) => helper_call(out, "@nz.rl", r, t, value),
+    }
 }
 
 // Make `value` a reference this code owns, retaining it if it was only borrowed.
@@ -1431,7 +1478,7 @@ fn emit_release(out: Strs, next: Ints, value: Int, t: Int, rowns: Ints) -> Int {
 // keeps what it is given. A value that was already owned is handed on unchanged, which is
 // what keeps `let xs = ints_new();` free of traffic.
 fn own_keep(out: Strs, next: Ints, owned: Ints, value: Int, t: Int, rowns: Ints, otype: Ints) -> Int {
-    if owns(t, rowns) == 0 { return 0; }
+    if owns_anything(t, rowns) == false { return 0; }
     if own_take(owned, otype, value) == 1 { return 0; }
     emit_retain(out, next, value, t, rowns)
 }
@@ -1439,7 +1486,7 @@ fn own_keep(out: Strs, next: Ints, owned: Ints, value: Int, t: Int, rowns: Ints,
 // Release a reference nothing took over: a temporary a callee only borrowed, or a
 // statement whose value was discarded. Both are ordinary; neither is an error.
 fn own_drop(out: Strs, next: Ints, owned: Ints, value: Int, t: Int, rowns: Ints, otype: Ints) -> Int {
-    if owns(t, rowns) == 0 { return 0; }
+    if owns_anything(t, rowns) == false { return 0; }
     if own_take(owned, otype, value) == 0 { return 0; }
     emit_release(out, next, value, t, rowns)
 }
@@ -1456,7 +1503,7 @@ fn release_frame(out: Strs, next: Ints, frame: Ints, rowns: Ints) -> Int {
     let mut i = 0;
     while i < ints_len(frame) {
         let t = ints_get(frame, i);
-        if owns(t, rowns) != 0 {
+        if owns_anything(t, rowns) {
             let n = take_number(next);
             add_line(out, str_concat(str_concat("  ", v(n)),
                     str_concat(str_concat(" = load ", llvm_type(t)),
@@ -1493,7 +1540,7 @@ fn string_data(out: Strs, next: Ints, own: Int) -> Int {
 // `a = a` — and the re-execution of a `let` in a loop with the same value — cannot drop the
 // count to zero between the two steps and free storage that is about to be stored again.
 fn store_binding(out: Strs, next: Ints, owned: Ints, value: Int, vt: Int, slot: Int, rowns: Ints, otype: Ints) -> Int {
-    if owns(vt, rowns) == 0 {
+    if owns_anything(vt, rowns) == false {
         add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(vt)),
                 str_concat(" ", v(value))),
                 str_concat(", ptr %slot", int_to_str(slot))));
@@ -2289,7 +2336,7 @@ fn open_function(out: Strs, current: Strs, live: Ints, next: Ints, vals: Ints,
     sl = 0;
     while sl < slots {
         let st = ints_get(frame, sl);
-        if owns(st, rowns) != 0 {
+        if owns_anything(st, rowns) {
             add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(st)),
                     str_concat(" ", unwind_value(st))),
                     str_concat(", ptr %slot", int_to_str(sl))));
@@ -2455,7 +2502,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         naux: Ints, nslot: Ints, ntype: Ints, ncallee: Ints,
         parent: Ints, childno: Ints, substart: Ints, kids: Ints, kid_first: Ints,
         fnames: Strs, fret: Ints, fowner: Ints, mstart: Ints,
-        out: Strs, msgs: Strs, blobs: Strs, tasks: Strs, nrec: Ints, rowns: Ints,
+        out: Strs, msgs: Strs, blobs: Strs, tasks: Strs, blocks: Strs, nrec: Ints, rowns: Ints,
         rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Int {
     let next = ints_new();
     ints_push(next, 0);
@@ -2585,7 +2632,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
             check_failed(out, next, current, live, owned, otype, rowns);
         } else {
             if kind == n_spawn() {
-                emit_spawn(out, msgs, next, current, live, tasks, owned, vals, nar, ntype,
+                emit_spawn(out, msgs, next, current, live, tasks, blocks, owned, vals, nar, ntype,
                         kids, kid_first, fnames, fret, k, ints_get(ncallee, k),
                         position(src, path, from), rowns, otype);
             } else {
@@ -2640,7 +2687,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                 // this expression now holds. Rule 2: the arguments were only
                                 // borrowed, so a temporary passed in is still nobody's and is
                                 // dropped here.
-                                if owns(ints_get(ntype, k), rowns) != 0 { own_add(owned, otype, n, ints_get(ntype, k)); }
+                                if owns_anything(ints_get(ntype, k), rowns) { own_add(owned, otype, n, ints_get(ntype, k)); }
                                 drop_arguments(out, next, owned, ordered, ntype, kids, kid_first, k, argc, rowns, otype);
                                 ints_push(vals, n);
                             }
@@ -2684,7 +2731,7 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                     // arrived.
                                                     own_take(owned, otype, av);
                                                     own_take(owned, otype, bv);
-                                                    if owns(ints_get(ntype, k), rowns) != 0 { own_add(owned, otype, n, ints_get(ntype, k)); }
+                                                    if owns_anything(ints_get(ntype, k), rowns) { own_add(owned, otype, n, ints_get(ntype, k)); }
                                                     add_line(out, str_concat(str_concat("  ", v(n)),
                                                             str_concat(str_concat(str_concat(" = phi ", llvm_type(ints_get(ntype, k))),
                                                             str_concat(" [ ", v(av))),
@@ -3201,6 +3248,8 @@ fn main() -> Int {
     // One trampoline per `spawn` site, accumulated while the body is emitted and appended
     // after it. Its length is also how the runtime knows whether any of this is reached.
     let tasks = strs_new();
+    // One named type per spawn site, for the block its arguments travel in.
+    let blocks = strs_new();
     let parent = ints_new();
     let childno = ints_new();
     let substart = ints_new();
@@ -3210,7 +3259,7 @@ fn main() -> Int {
     refuse_recursion(src, path, nk, nst, ntx, parent, ncallee, fnames, fowner, mstart);
     emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
             parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
-            body, msgs, blobs, tasks, nrec, rowns, rfirst, rcount, rfname, rftype);
+            body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype);
 
     // Whether this program can reach a channel. A `spawn` is not the only way: a program
     // may create one, send to it and receive from it without ever starting a task, and
@@ -3303,6 +3352,12 @@ fn main() -> Int {
                     strs_get(rnames, edef))));
         }
         edef = edef + 1;
+    }
+    // The argument-block types, one per spawn site, after the user types they may name.
+    let mut bl = 0;
+    while bl < strs_len(blocks) {
+        add_line(head, strs_get(blocks, bl));
+        bl = bl + 1;
     }
     add_line(head, "declare i32 @memcmp(ptr, ptr, i64)");
     add_line(head, "declare i32 @snprintf(ptr noundef, i64, ptr noundef, ...)");
@@ -3887,7 +3942,7 @@ fn pop_sequence(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, ow
     add_line(out, str_concat(str_concat("  store i64 ", v(last)), str_concat(", ptr ", v(handle))));
     // A **transfer**: shortening the sequence gives up its reference and this expression
     // takes that same one over. No retain, no release, and the count is unchanged.
-    if owns(et, rowns) != 0 { own_add(owned, otype, value, et); }
+    if owns_anything(et, rowns) { own_add(owned, otype, value, et); }
     value
 }
 

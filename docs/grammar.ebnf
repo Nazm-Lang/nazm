@@ -81,7 +81,7 @@ variants = variant , { "," , variant } , [ "," ] ;
  *)
 (* @example enum E { A, } fn main() -> Int { match E.A() { E.A() => 0, } } *)
 (* @example enum E { V(x: Int, y: Int), } fn main() -> Int { match E.V(x: 1, y: 2) { E.V(x: a, y: b) => a + b, } } *)
-variant = IDENT , [ "(" , [ payload ] , ")" ] ;
+variant = IDENT , [ "(" , payload , ")" ] ;
 
 (* @example enum E { V(x: Int,), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } } *)
 payload = field , { "," , field } , [ "," ] ;

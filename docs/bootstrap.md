@@ -324,9 +324,24 @@ variants in **none** of the orders that matter, so a compiler that took the pars
 for the canonical one would build one value and read another. `modules/exported-enum` sends
 an enum with an owning payload across a module boundary, inside a record, and back.
 
+**It also uses one.** `enum Owning { Nothing, Sequence, Strings, Backing, Channel,
+Record(at: Int), Enum(at: Int) }` replaced the small integer `owns` returned in
+`compiler/emit.nz`, so S — the source this chain compiles with itself — now contains an enum
+as well as a record, and C1, C2 and C3 each compile one. `architecture.md` §7.11 says why
+that structure and not another: it is the case where the value is returned and never stored,
+which is the only case a container is not needed for.
+
+**And making that dispatch exhaustive found an N9 defect in this compiler.** A record passed
+to a task produced a wrong answer and leaked its fields: the argument block's offsets were
+arithmetic that predated records, and the trampoline released four kinds of value and not a
+record's. The block is a named LLVM type now, as the reference emitter's always was. The
+divergence was real, it was a year of milestones old in compiler time, and **no N9 test
+passed a record to a task through this compiler** — the gap was in the corpus.
+
 **The digest moved a third time**, for the same reason and with the same property intact:
-`3491dfed…` (N9) → `f420f23a…` (enums and `match`). `ir: identical`, executables
-byte-identical once the linker UUID is removed, and C2 = C3.
+`3491dfed…` (N9) → the value in this milestone's report (enums and `match`, an enum in the
+compiler's own source, and the task-block fix). `ir: identical`, executables byte-identical
+once the linker UUID is removed, and C2 = C3.
 
 ## 6. Reproducing it
 
