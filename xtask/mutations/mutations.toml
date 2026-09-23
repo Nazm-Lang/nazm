@@ -1550,3 +1550,286 @@ replace = """            if retain {
             } else {
                 emit_release(out, next, n, ft, rowns);
             }"""
+
+# --- N10: enums and pattern matching ----------------------------------------------------
+#
+# What only a sum type can get wrong, which is everything that turns on *which fields
+# exist being a runtime fact*: coverage, the discriminant, and releasing the arm the value
+# is actually in.
+
+[[mutation]]
+name = "a-match-need-not-cover-every-variant"
+why = """
+stops reporting the variants a `match` leaves out, so a closed enum silently becomes an
+open one: a program compiles with a variant it has no arm for, and reaches a `switch` whose
+default was only ever a structural requirement. `docs/spec.md` gives the checker the
+language's meaning precisely so that this cannot be deferred to the backend
+"""
+file = "crates/nazm-core/src/check.rs"
+find = "        if !missing.is_empty() && !unresolved {"
+replace = "        if false {"
+
+[[mutation]]
+name = "a-variant-may-have-two-arms"
+why = """
+accepts a second arm for a variant the `match` already covers. The discriminant selects
+exactly one, so the later arm can never run — and coverage now counts an arm that is dead
+towards a variant that is uncovered, which is how a non-exhaustive match passes the check
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """            if let Some(Some(first)) = covered.get(at as usize).copied() {"""
+replace = """            if let Some(None) = covered.get(at as usize).copied() {
+                let _ = arm.variant_span;
+            }
+            if let Some(Some(first)) = None::<Option<Span>> {"""
+
+[[mutation]]
+name = "a-pattern-may-name-another-enums-variant"
+why = """
+stops checking that a pattern's enum is the scrutinee's, so `B.Ready(…)` matches an `A`
+whenever both happen to have a `Ready`. Nominality is the whole of what makes two
+identically shaped enums two types, and structural matching would undo it silently — the
+arm would bind payload fields of a variant the value does not have
+"""
+file = "crates/nazm-core/src/check.rs"
+find = "            if named != id {"
+replace = "            if false {"
+
+[[mutation]]
+name = "a-pattern-need-not-name-every-payload-field"
+why = """
+lets a pattern leave a payload field out. The rule exists for evolution: adding a field
+must break the patterns that did not know about it rather than letting them ignore new
+state, and this is exactly the silence it was written to prevent
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """        let missing = self.missing_payload_fields(id, at, &named);
+        if !missing.is_empty() {"""
+replace = """        let missing = self.missing_payload_fields(id, at, &named);
+        if false {"""
+
+[[mutation]]
+name = "a-public-enum-may-leak-a-private-payload-type"
+why = """
+stops checking an exported enum's payload types, so a module publishes a variant whose
+payload an importer must name to match it and cannot. The closure has to run through both
+kinds; this removes the enum half and leaves the record half in place, which is the
+version that looks like it works
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """        let payloads: Vec<(Type, Span)> = def
+            .variants
+            .iter()
+            .flat_map(|v| v.fields.iter().map(|f| (f.ty, f.ty_span)))
+            .collect();"""
+replace = "        let payloads: Vec<(Type, Span)> = Vec::new();"
+
+[[mutation]]
+name = "an-enums-properties-come-from-its-first-variant"
+why = """
+derives every property of an enum — cleanup, task safety, containment — from the first
+variant alone. Task safety is a statement about the **type**, so an enum whose second
+variant holds an `Ints` would cross into a task while holding its first; and an enum whose
+only owning payload is in a later variant would get no cleanup at all
+"""
+file = "crates/nazm-sema/src/udt.rs"
+find = "                    for (vi, v) in def.variants.iter().enumerate() {"
+replace = "                    for (vi, v) in def.variants.iter().enumerate().take(1) {"
+
+[[mutation]]
+name = "a-discriminant-follows-the-parser"
+why = """
+numbers variants in declaration order rather than canonically by name, so moving two
+variant declarations — an edit `docs/spec.md` says means nothing — changes the emitted
+representation. Two units of one build would still agree with each other, which is why
+only an edit that must change no byte can see it
+"""
+file = "crates/nazm-sema/src/enums.rs"
+find = """        order.sort_by(|a, b| {
+            let name = |i: &u32| variants.get(*i as usize).map_or("", |v| v.name.as_str());
+            name(a).cmp(name(b))
+        });"""
+replace = "        let _ = &order;"
+
+[[mutation]]
+name = "a-payload-is-laid-out-in-the-order-it-was-written"
+why = """
+the same, one level down: a variant's payload fields keep their declaration order instead
+of the canonical one, so reordering two of them changes the object file. `docs/spec.md`
+makes both orders non-semantic, and the only way either claim is true is that neither
+reaches the layout
+"""
+file = "crates/nazm-sema/src/enums.rs"
+find = """            layout.sort_by(|a, b| {
+                let name = |i: &u32| v.fields.get(*i as usize).map_or("", |f| f.name.as_str());
+                name(a).cmp(name(b))
+            });"""
+replace = "            let _ = &layout;"
+
+[[mutation]]
+name = "a-published-enum-keeps-its-source-order"
+why = """
+writes the variants into the persisted interface in declaration order, so reordering two
+of them moves the fingerprint and re-checks every importer for an edit that means nothing.
+The interface is where a claim about order stops being a claim and becomes bytes
+"""
+file = "crates/nazm-iface/src/wire.rs"
+find = "            variants.sort_by(|a, b| a.name.cmp(&b.name));"
+replace = "            let _ = &variants;"
+
+[[mutation]]
+name = "an-exported-enum-is-left-out-of-the-interface"
+why = """
+publishes a module's records and not its enums, so an importer checking against the
+persisted interface alone cannot resolve an enum its signatures name or match on one it is
+handed. N3's boundary held because an interface was sufficient; this makes it insufficient
+and silent
+"""
+file = "crates/nazm-sema/src/interface.rs"
+find = """    pub fn enums(&self) -> &[EnumExport] {
+        &self.enums
+    }"""
+replace = """    pub fn enums(&self) -> &[EnumExport] {
+        &self.enums[..0]
+    }"""
+
+[[mutation]]
+name = "an-enum-helper-branches-on-the-wrong-tag"
+why = """
+shifts every entry of the generated helper's jump table by one, so a value releases the
+fields of the variant *next* to the one it holds. The counters see it as a leak in one
+direction and a double release in the other, and no behavioural test would: the values a
+program computes are unaffected
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """            .map(|(a, label)| format!("i64 {}, label %{label}", a.tag))"""
+replace = """            .map(|(a, label)| format!("i64 {}, label %{label}", a.tag + 1))"""
+
+[[mutation]]
+name = "an-enum-copy-takes-no-reference"
+why = """
+generates a retain helper that walks to the active variant's fields and then does nothing,
+so a copied enum holds a reference nobody counted. The first of the two values to die
+frees storage the second is still naming — which is a use-after-free that the values a
+program computes will not show
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                if retain {
+                    self.retain(v, *ty);
+                } else {
+                    self.release(v, *ty);
+                }"""
+replace = """                if retain {
+                } else {
+                    self.release(v, *ty);
+                }"""
+
+[[mutation]]
+name = "a-match-does-not-take-over-the-value-it-matches"
+why = """
+stops the `match` taking a reference to the value it is given, while still releasing it at
+the join. A binding matched twice is freed twice, and the second `match` reads storage the
+first gave back — the ordering `docs/spec.md` states as *the scrutinee is a value the match
+owns* expressed as its absence
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """        self.take(v, ty);
+        let _ = writeln!(self.out, "  store {whole} %{v}, ptr %slot{slot}");"""
+replace = """        let _ = ty;
+        let _ = writeln!(self.out, "  store {whole} %{v}, ptr %slot{slot}");"""
+
+[[mutation]]
+name = "a-match-never-lets-go-of-what-it-matched"
+why = """
+leaves the value a `match` owns in its slot and releases nothing, so every `match` over a
+temporary leaks its payload. Invisible to every behavioural test — the arm still produces
+the right answer — and visible to the counters, which is what they are for
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = "        self.release(dying, scrutinee_ty);"
+replace = "        let _ = dying;"
+
+[[mutation]]
+name = "a-partly-built-variant-is-not-cleaned"
+why = """
+builds every variant in registers, so a payload initialiser that fails after an earlier one
+produced a heap string leaves it unreachable from the frame's cleanup. The one path where
+the program was already failing becomes the one that leaks
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = """    let slot = owns.then(|| ctx.hidden(ty, "variant"));"""
+replace = "    let slot = None;"
+
+[[mutation]]
+name = "a-task-does-not-give-back-the-enum-it-borrowed"
+why = """
+packs an enum into a task's argument block and never releases it when the task finishes, so
+every spawn over one leaks its active payload. A sequence and a channel are still released,
+which is the version that looks like it works
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                Some(Owns::Enum(id)) => {
+                    if let Some(helper) = self.enum_helper(id, false) {
+                        let t = llvm_type(self.types, *ty);
+                        let _ = writeln!(&mut body, "  call void @{helper}({t} %v{i})");
+                    }
+                }"""
+replace = """                Some(Owns::Enum(_)) => {}"""
+
+[[mutation]]
+name = "the-self-hosted-checker-skips-exhaustiveness"
+why = """
+takes the coverage check out of the **Nazm-written** checker, so the two compilers accept
+different languages: the reference refuses a `match` that leaves a variant out and the
+self-hosted one does not. N2.1's standard is that they agree on what they accept, and a
+divergence in a refusal is the half that behavioural tests never reach
+"""
+file = "compiler/analyse.nz"
+find = """                        if missing != "" {
+                            report(dcode, dstart, dend, dmsg, "N0343", from, to,
+                                    str_concat("this `match` does not cover ", missing));
+                        }"""
+replace = """                        if missing == "!" {
+                            report(dcode, dstart, dend, dmsg, "N0343", from, to,
+                                    str_concat("this `match` does not cover ", missing));
+                        }"""
+
+[[mutation]]
+name = "the-self-hosted-emitter-does-not-take-over-a-payload"
+why = """
+stops the **Nazm-written** emitter taking over the reference a payload initialiser
+produced, so a variant holds storage nobody counted: the temporary's release frees it while
+the value is still naming it. The two compilers still compute the same answers, which is
+why only a differential test that compares what their programs *reclaimed* can see it
+"""
+file = "compiler/emit.nz"
+find = """            own_keep(out, next, owned, value, ft, rowns, otype);
+            let held = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(held)),
+                    str_concat(str_concat(" = load ", ty),
+                    str_concat(", ptr %slot", int_to_str(slot)))));
+            let payload = take_number(next);"""
+replace = """            let held = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(held)),
+                    str_concat(str_concat(" = load ", ty),
+                    str_concat(", ptr %slot", int_to_str(slot)))));
+            let payload = take_number(next);"""
+
+[[mutation]]
+name = "a-variant-slot-keeps-what-the-last-round-left-in-it"
+why = """
+stops zeroing the assembly slot before a variant is built, so a construction reached twice
+— in a loop — inherits the discriminant and payload of the round before. The references in
+it were handed on when that value left, and cleanup finds them a second time. The values
+the program computes are unaffected; the counters are not
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                let _ = writeln!(
+                    self.out,
+                    "  store {whole} {}, ptr %slot{slot}",
+                    ty.unwind_value()
+                );
+                // The discriminant, before any payload: see above.
+                let empty = self.fresh();"""
+replace = """                // The discriminant, before any payload: see above.
+                let empty = self.fresh();"""
