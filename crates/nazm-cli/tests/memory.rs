@@ -2095,6 +2095,31 @@ fn a_vec_element_replaced_by_a_copy_of_itself_survives_the_allocator() {
 }
 
 #[test]
+fn an_unbound_vec_read_outlives_the_element_being_replaced() {
+    // Found by mutation: `vec_get` handing out the vector's own reference changed no count,
+    // because every shape in this file bound what it read — and a binding takes a reference
+    // of its own. Here the read is an argument, still in hand while the next argument
+    // replaces the element it came from; the noise inside the callee is what would reuse
+    // the block. `vec_get`'s own copy is the only thing keeping `s` valid.
+    let r = both(
+        r#"fn first_byte_later(s: Str, n: Int) -> Int {
+    let noise = vec_new[Str]();
+    let mut i = 0;
+    while i < 64 { vec_push(noise, str_concat("zz", "zz")); i = i + 1; }
+    str_byte(s, 0) + n * 0
+}
+fn main() -> Int {
+    let xs = vec_new[Str]();
+    vec_push(xs, str_concat("ab", "cd"));
+    first_byte_later(vec_get(xs, 0), vec_set(xs, 0, int_to_str(7)))
+}
+"#,
+    );
+    assert_eq!(r.value, "97");
+    assert_eq!(r.strings.live, 0, "{r:?}");
+}
+
+#[test]
 fn a_failed_vec_operation_gives_back_what_the_frame_held() {
     // An index outside the vector fails with `N0405` in both implementations, at the call,
     // and the failure path releases the vector and every string in it.
