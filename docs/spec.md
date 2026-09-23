@@ -368,6 +368,342 @@ says which *Nazm modules* may name the type. There is no `repr`, no FFI layout, 
 serialisation format and no storage layout; each of those needs an explicit contract and
 none is made here.
 
+### Enums — the second user-defined type, and the first sum
+
+Settled by N10, 2026-09-23. An **enum** is a nominal sum type: a closed set of named
+variants, exactly one of which is active in any value, each carrying its own named payload
+fields.
+
+```nazm
+pub enum Token {
+    Eof,
+    Number(value: Int),
+    Name(text: Str),
+    Pair(left: Int, right: Int),
+}
+```
+
+`enum` and `match` were both reserved by name from the beginning —
+`crates/nazm-syntax/src/parser.rs` refused them with *"there are no variant types yet"* and
+*"there is no pattern matching yet"* — so the keywords were chosen before this milestone
+and N10 only stopped refusing them. There is no `variant`, `union`, `case` or `switch`: one
+concept gets one spelling, the rule `struct`/record already follows.
+
+#### Exactly one variant is active, and that is a runtime fact
+
+A record owns every field it declares. An enum value owns **the fields of its active
+variant and nothing else**. That difference is the whole of what N10 adds to the memory
+constitution, and it is a runtime fact rather than a static one: which fields exist is
+determined by a discriminant the value carries.
+
+An enum has a nominal identity, an active variant identity, and the payload values of that
+variant. It has no object identity of its own — no address-of, no `==`, no way to observe
+that two bindings came from one value. Two separately declared enums are different types
+however identical their variants, exactly as two records are.
+
+#### Declaration
+
+A zero-payload variant is written with no parentheses; a variant with payload fields names
+each one and its type, exactly as a record field is written.
+
+```nazm
+enum State {
+    Ready,
+    Failed(code: Int, why: Str),
+}
+```
+
+The declaration has no parentheses for `Ready` because there is no field list to write, and
+a record with no fields is refused for the same reason. Construction and patterns always
+write them — see below — because there the parentheses are what separates a variant from a
+field projection.
+
+**An enum with no variants is refused** (`N0339`). A type with no values raises
+`Never`/uninhabited semantics — what a function returning one means, whether a `match` on
+one is vacuously exhaustive — that this language has not settled, and inventing an answer
+as a side effect of allowing `enum Never {}` would settle it by accident.
+
+**An enum with one variant is allowed.** It is a nominal sum type with one family of
+inhabitants, and it is not silently a record: `match` still names the variant, and adding a
+second variant later is an ordinary edit rather than a change of kind.
+
+#### Variants are named by their enum
+
+```nazm
+Token.Eof()
+Token.Number(value: 42)
+```
+
+A variant is never injected into the ordinary value namespace. Three consequences, all of
+them the point:
+
+- the same variant name may exist in many enums, so `enum A { Ready, }` and
+  `enum B { Ready, }` coexist and `A.Ready()` and `B.Ready()` are different values of
+  different types;
+- importing a module brings in no constructor names;
+- a reader and the parser both learn the nominal owner from the same two tokens.
+
+**The parentheses are not optional, including for a zero-payload variant.** `Token.Eof`
+alone is exactly the shape of a field projection out of a binding called `Token`, and the
+language would then need to know which it was before it knew what `Token` referred to.
+`IDENT . IDENT (` is a decision the parser can make from three tokens, and it is a decision
+rather than a guess: there are no methods and no function values, so nothing else in the
+language can put a `(` after a projection.
+
+#### Construction names every payload field
+
+```nazm
+Token.Pair(
+    left: 1,
+    right: 2,
+)
+```
+
+Every payload field exactly once, by name, with no unknown field, no duplicate, and a value
+of the declared type. There is no positional form, no default value and no update syntax —
+the same law records follow, for the same reason: declaration position is not an API.
+
+Initialisers are evaluated **exactly once, in the order they are written**, whatever order
+the payload is physically stored in:
+
+```nazm
+Token.Pair(
+    right: f(),
+    left: g(),
+)
+```
+
+evaluates `f()` and then `g()`. Evaluation order, semantic field identity and physical
+layout are three different things and this specification keeps them apart.
+
+**If an initialiser fails, no enum value ever becomes live.** The values already produced
+are released, the failing one never becomes a field, and the initialisers after it are never
+evaluated. The discriminant is written only once every payload field has been established,
+so cleanup after a partial construction never dispatches on a variant the value does not
+yet have.
+
+#### An enum is a value, and its active payload keeps its own semantics
+
+```nazm
+enum Data {
+    Text(value: Str),
+    Numbers(value: Ints),
+    Channel(value: Chan),
+}
+
+let a = Data.Numbers(value: ints_new());
+let b = a;
+```
+
+After `let b = a` both values have the same active variant and the same payload values, and
+each payload value obeys **its own type's existing law** — unchanged, and unchanged by being
+inside an enum:
+
+| Active variant | After `let b = a` |
+| --- | --- |
+| `Text` | two `Str` values with the same bytes; sharing unobservable |
+| `Numbers` | **two references to one sequence**; a push through either is visible through both |
+| `Channel` | two references to one channel |
+
+**The inactive variants own nothing.** `Text` does not hold a `Str` while `Numbers` is
+active; there is no inactive payload, semantically, and no copy or release operation is
+performed for one. That is not an optimisation, it is what a sum type means.
+
+So the memory constitution still needs no new kind of value. Like a record, an enum is a
+composition of existing kinds — the difference is only *which* composition applies:
+
+| | Record | Enum |
+| --- | --- | --- |
+| **copy** | copy or share every field, by that field's rule | copy the discriminant, then copy or share **the active variant's** fields |
+| **destroy** | release every field | release **the active variant's** fields |
+| **needs cleanup** | some field does, recursively | some field of **some** variant does, recursively |
+| **may cross into a task** | every field may, recursively | every field of **every** variant may, recursively |
+
+The last row is deliberately not symmetric with the first two. Copy and destroy are runtime
+operations and ask about the value; task safety is a **type-level** guarantee and asks about
+the type. `enum Work { None, Values(xs: Ints), }` may not cross into a task even while it
+holds `None`, because what a `spawn` is given is a value of a type, and no flow-sensitive
+escape is offered.
+
+#### Variant and payload-field order are not part of what an enum means
+
+Moving two variant declarations, or two payload-field declarations, changes nothing: not
+what the program means, not the interface fingerprint, and not the native representation.
+The persisted interface sorts variants and fields by name and the backend assigns
+discriminants and lays payloads out in the same canonical order, so the claim is made true
+rather than asserted.
+
+Initialiser evaluation order is a separate question and is the order written, as above.
+
+#### `match` is an expression
+
+```nazm
+let n = match token {
+    Token.Number(value: n) => n,
+    Token.Name(text: _) => 0,
+    Token.Pair(left: a, right: _) => a,
+    Token.Eof() => -1,
+};
+```
+
+It composes wherever an expression may appear, including as a statement, as a `return`
+operand and as an initialiser, and it reuses the existing block and completion rules rather
+than introducing a second set. An arm body is an expression, and a block is an expression,
+so `=> { let n = str_len(s); n },` is the ordinary block, not a statement grammar of its own.
+
+Every arm of a value-producing `match` produces the same type. There is no union inference
+and no implicit conversion. An arm that transfers control — `return`, `break`, `continue` —
+produces no value and constrains nothing, exactly as a branch of an `if` does.
+
+**The scrutinee is evaluated exactly once**, before any arm is selected, and the `match`
+holds that value for as long as the selected arm runs. The scrutinee is a value the `match`
+owns, not the caller's storage: `match make_token() { … }` has a clear owner for the
+temporary, and `match t { … }` leaves `t` untouched and independent. A `match` does not
+consume the binding it reads.
+
+The discriminant selects exactly one arm. There is no fallthrough, no backtracking and no
+guard, so an expression in an unselected arm never runs.
+
+#### Patterns name every payload field
+
+```nazm
+Token.Pair(
+    left: x,
+    right: _,
+)
+```
+
+A variant pattern names **every payload field of that variant, exactly once**, either
+binding it to a name or discarding it with `_`. There is no `..` rest syntax, and that is an
+evolution property rather than pedantry: adding a payload field makes existing patterns
+fail to check instead of silently ignoring new state.
+
+`_` means *introduce no binding*. It does not mean *forget this field*: the value is still
+the enum's, and it is still released when the `match`'s scrutinee dies. Two payload fields
+may both be `_`; two bindings may not share a name.
+
+Bindings are **borrowed, immutable views of the payload held by the match's scrutinee**,
+live only inside the arm that introduced them. Matching does not consume the payload. A
+binding that names an owned mutable handle borrows the handle, so `E.Values(items: xs) =>
+ints_push(xs, 1)` mutates the referenced sequence — *immutable binding* is a statement about
+the name, never about the storage it refers to.
+
+If an arm's value is a payload — `Token.Name(text: s) => s` — the result takes its own
+reference to whatever backs it **before** the arm's bindings end and before the scrutinee is
+released. That is the same rule *A projection produces a value* already states for records,
+applied to a value whose fields are a runtime fact.
+
+A pattern's variant must belong to the scrutinee's enum. `B.Ready(…)` against an `A` is
+refused even if both enums have a `Ready`; there is no structural variant matching.
+
+#### Exhaustiveness
+
+Every `match` must name **every variant of its enum, exactly once**.
+
+- a missing variant is `N0344`, and the diagnostic lists the variants that are missing;
+- a repeated variant is `N0345`, reported at the second arm;
+- there is **no `_ => …` catch-all arm** in N10.
+
+No runtime trap substitutes for the check. A valid program's discriminant always has a
+statically known arm, so an unreachable default exists in the generated code as a structural
+requirement of the instruction set and never as language semantics.
+
+The absent wildcard is a decision about evolution, not an oversight. While the language is
+young, adding a variant *should* break every importer that believed it had handled the whole
+enum. A `non_exhaustive`-style opt-out, and the wildcard that goes with it, is a later
+design that must be made deliberately.
+
+#### `match` is the only elimination form
+
+There is no `is`, no `instanceof`, no `tag()` and no `variant_name()`. The discriminant is
+representation, not a value a program can read.
+
+There is also **no payload projection outside a pattern**: `value.payload` is not written,
+because which fields exist depends on the active variant. To change an enum value, assign a
+whole new one.
+
+#### Assignment and replacement
+
+```nazm
+let mut x = E.Text(value: "a");
+x = E.Values(items: ints_new());
+```
+
+The new value is fully evaluated and owned first, then the old value's **active** payload is
+released, then the discriminant and payload are replaced. Self-assignment, and a new value
+backed by the same allocation as the old one, are safe consequences of that order rather
+than special cases.
+
+#### Records and enums compose, in both directions
+
+A record field may be an enum, an enum payload field may be a record, and an enum payload
+field may be another enum. Copy, release, task safety and layout all recurse through both
+kinds. Nothing is derived from which kind happens to be on the outside.
+
+#### Recursion is refused as an impossible layout
+
+```nazm
+enum List { End, Next(rest: List), }     // N0336
+struct A { b: B, }                       // N0336
+enum B { Value(a: A), }
+```
+
+The rule N9 stated over records is stated over **every inline user-defined value type**: a
+chain of by-value containment that returns to where it started describes a value that
+contains itself, and no finite layout exists. Records and enums form one containment graph
+and the cycle is refused wherever it runs.
+
+It is not secretly boxed, and it is not forbidden forever: the refusal is of an **inline
+infinite layout**, so a later type that holds its contents somewhere else — a box, an arena
+handle, a generic container — makes the same shape expressible without this rule changing.
+
+Enums and records nested inside one another are bounded at 32 levels (`N0338`), for the
+reason records already were: each level multiplies the copy and cleanup code generated for
+the outer value.
+
+#### Visibility, and the API being closed
+
+An enum is private to its module unless it is written `pub`, exactly as a record is. For a
+public enum, **every variant and every payload shape is part of the public type** — there is
+no per-variant visibility and no private variant inside a public enum, because either would
+be an opaque or open enum and neither has been designed.
+
+A public type may not expose a private one (`N0337`), and the check runs recursively through
+records and enums together: a public enum whose payload is a public record whose field is a
+private enum is refused, because an importer needs that type to understand the shape it was
+given.
+
+#### Adding a variant is a breaking change, deliberately
+
+For an exported enum, adding, removing or renaming a variant — or adding, removing or
+retyping a payload field — changes the module's interface fingerprint, which re-checks every
+importer, which rejects every `match` that is no longer exhaustive. A rename is a removal and
+an addition; no lineage is invented.
+
+That is the intended cost of a closed enum with no wildcard arm, and it is why the
+discriminant is not a stable identity: the *meaning* of a variant is its enum and its name,
+and the number the backend gives it is chosen fresh for each build.
+
+#### What enums are not, in N10
+
+No generics, so no `Option`, no `Result` and no generic enum of any kind — a monomorphic
+`enum MaybeInt { None, Some(value: Int), }` is an ordinary user declaration and the language
+offers no built-in like it. No typed errors, no `throw`, no `?`, no `try`: an enum can model
+a result by hand, and that is not an error-handling feature.
+
+No literal, record, tuple, range or or-patterns; no guards; no top-level wildcard; no `let`
+destructuring; no by-move or mutable patterns; no match ergonomics inferred from ownership.
+Pattern matching in N10 selects a variant and binds its named payload fields, and nothing
+else.
+
+**No derived equality.** `a == b` on enums is `N0304`, for the reason records are: equality
+would have to decide what a sequence payload means, and the language has not chosen.
+
+**`pub` still promises nothing about a binary.** An enum's discriminant values, its payload
+layout, its size and its calling convention are compiler-private and may change between
+builds. There is no `repr`, no C ABI, no FFI layout, no serialisation format and no storage
+layout.
+
 ## Settled for v0.2 — mutation and iteration
 
 ### Mutation is opt-in and visible at the binding
@@ -916,11 +1252,18 @@ ones, and a composition of leaves is a leaf. The claim therefore now covers `Int
 type that can refer to another value indirectly — a pointer, a reference, or a generic
 container able to hold a record — and none of those exists.
 
+**N10 extended the refusal rather than the argument.** An enum holds its active payload by
+value too, so records and enums form **one** inline-containment graph and a cycle anywhere
+in it is refused by the same rule and the same code. An enum adds no new kind of value
+either: it is a composition of existing kinds of which one is live at a time, and a choice
+between leaves is a leaf. The claim now covers every record **and every enum** built from
+the six built-in types. What would end it is unchanged and still absent.
+
 #### What is not promised
 
 - **Leak freedom for a whole program, as a permanent property.** Every heap-backed type
   the language *currently has* is reclaimed, which is a claim about `Int`, `Bool`, `Str`,
-  `Ints`, `Strs`, `Chan` and records composed of them, and about nothing else. It rests on the cycle argument below,
+  `Ints`, `Strs`, `Chan` and the records and enums composed of them, and about nothing else. It rests on the cycle argument below,
   which is a fact about this type system rather than about counting in general: the first
   recursive user-defined type ends it, and the paragraph after next says in advance what
   admitting one requires. `capability-matrix.md` states the scope per type rather than as
@@ -931,11 +1274,13 @@ container able to hold a record — and none of those exists.
 - **Deadlock freedom.** Unchanged, and still not promised.
 - **A destructor.** There is no user-visible destruction, no RAII and no ordering a program
   can observe, because nothing a program can write runs at reclamation. A record is
-  destroyed by releasing each of its fields, and the order between fields is deliberately
-  unspecified — no program can observe it, and fixing it in the specification would be
-  promising something the language has no way to let anyone use.
-- **Zero-cost record copying.** A record with many owning fields costs one reference
-  adjustment per owning field, per copy. The design leaves that optimisable — a copy whose
+  destroyed by releasing each of its fields, an enum by releasing the fields of its active
+  variant, and the order between fields is deliberately unspecified — no program can observe
+  it, and fixing it in the specification would be promising something the language has no
+  way to let anyone use.
+- **Zero-cost record or enum copying.** A record with many owning fields costs one reference
+  adjustment per owning field, per copy; an enum costs a branch on its discriminant and then
+  the same, for the active variant alone. The design leaves that optimisable — a copy whose
   source dies immediately after needs no traffic at all — and until it is measured, nothing
   here claims it is free. `docs/performance.md` carries the numbers.
 
@@ -1485,8 +1830,10 @@ floating point. A program using any of them is rejected by name rather than misp
 something else.
 
 **Corrected 2026-09-23.** This list also named **user-defined types**, which N9 added:
-`struct` declares a record, and the section *Records* above is the law. Variants, pattern
-matching, generics, traits and methods remain absent and remain refused by name.
+`struct` declares a record, and the section *Records* above is the law. It then named
+**variants and pattern matching**, which N10 added: `enum` declares a closed sum type and
+`match` eliminates one, and the section *Enums* above is the law. Generics, traits and
+methods remain absent and remain refused by name.
 
 **Corrected 2026-09-21.** This list also named **I/O, modules and string concatenation**,
 and the paragraph below it said there was deliberately no `print` — while all three are
