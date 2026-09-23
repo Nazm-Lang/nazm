@@ -174,6 +174,18 @@ impl NativeTypeName {
         Self(format!("nz.tu.{}.{}", module.index(), encode(name)))
     }
 
+    /// The name for something inside this type: one variant's payload struct.
+    ///
+    /// Derived from the enum's name rather than minted separately, so a variant's native
+    /// type is as deterministic as its enum's and cannot collide with another enum's
+    /// variant of the same name. A variant name is an identifier, so the encoding has
+    /// nothing to escape — it is applied anyway, because the reason to encode is that a
+    /// name is data and that is true of every one of them.
+    #[must_use]
+    pub fn member(&self, name: &str) -> Self {
+        Self(format!("{}.{}", self.0, encode(name)))
+    }
+
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

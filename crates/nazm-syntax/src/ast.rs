@@ -15,6 +15,13 @@ pub struct Program {
     /// module may declare a record `Point` and a function `Point` and they do not
     /// collide. `docs/spec.md`, *Types and functions are separate namespaces*.
     pub records: Vec<Record>,
+    /// `enum` declarations, in source order.
+    ///
+    /// A third list rather than one list of items, because the three are three different
+    /// shapes and a consumer that wants functions should not have to filter. Records and
+    /// enums share the **type namespace** — a module may not declare both under one name
+    /// — and the checker, which can see both lists, is what says so.
+    pub enums: Vec<Enum>,
     /// `use "path";` items, in source order.
     ///
     /// The parser records them and does nothing else with them: resolving a path means
@@ -62,6 +69,39 @@ pub struct Field {
     pub name: String,
     pub name_span: Span,
     pub ty: TypeName,
+    pub span: Span,
+}
+
+/// `enum Name { Variant, Other(field: Type), … }`
+///
+/// One keyword and one category, unlike `struct`/record: `docs/spec.md` says why there is
+/// no second spelling for either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Enum {
+    pub name: String,
+    pub name_span: Span,
+    /// Where `pub` was written, if it was. Syntax, not meaning.
+    pub pub_span: Option<Span>,
+    /// The variants, in the order written.
+    ///
+    /// Order is recorded because a reader wrote it and a formatter must preserve it. It is
+    /// **not** part of what the type means: `docs/spec.md` makes reordering two variants a
+    /// no-op for the language, for the interface fingerprint and for the discriminant the
+    /// backend assigns.
+    pub variants: Vec<Variant>,
+    pub span: Span,
+}
+
+/// One declared variant: `Name` or `Name(field: Type, …)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Variant {
+    pub name: String,
+    pub name_span: Span,
+    /// The payload fields, in the order written. Empty for a zero-payload variant, which
+    /// is written with **no parentheses** — there is no field list, exactly as a record
+    /// with no fields has none. Construction and patterns always write them, because
+    /// there the parentheses are what separates a variant from a field projection.
+    pub fields: Vec<Field>,
     pub span: Span,
 }
 
@@ -228,6 +268,40 @@ pub struct PlaceField {
     pub name_span: Span,
 }
 
+/// One arm of a `match`: a variant pattern and the expression it selects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArm {
+    /// The enum named before the `.`. Resolved against the type namespace, and required to
+    /// be the scrutinee's own enum — there is no structural variant matching.
+    pub ty: String,
+    pub ty_span: Span,
+    pub variant: String,
+    /// Where the variant name is written — the span resolution keys this arm by.
+    pub variant_span: Span,
+    /// Every payload field of the variant, exactly once. `docs/spec.md` requires the
+    /// pattern to account for all of them, so that adding a payload field breaks old
+    /// patterns instead of letting them ignore new state.
+    pub fields: Vec<PatternField>,
+    pub body: Expr,
+    pub span: Span,
+}
+
+/// One field of a pattern: `name: binding` or `name: _`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatternField {
+    /// The payload field's name, which is how it is identified.
+    pub name: String,
+    /// Where the field name is written — the span resolution keys this access by.
+    pub name_span: Span,
+    /// The name the payload is bound to, or `None` for `_`.
+    ///
+    /// `_` means *introduce no binding*; it does not mean the field is not there and does
+    /// not mean it is not released. `docs/spec.md` says so, because the opposite reading
+    /// is the one that leaks.
+    pub binding: Option<String>,
+    pub binding_span: Span,
+}
+
 /// One field of a construction: `name: value`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldInit {
@@ -305,6 +379,31 @@ pub enum Expr {
         fields: Vec<FieldInit>,
         span: Span,
     },
+    /// `Token.Number(value: 42)` — build a value of an enum by naming one of its variants.
+    ///
+    /// Always qualified by the enum, and always parenthesised, including for a variant
+    /// with no payload: `docs/spec.md` gives both reasons. `IDENT . IDENT (` is what
+    /// distinguishes this from a projection, and it is a decision rather than a guess —
+    /// there are no methods and no function values, so nothing else can put a `(` after a
+    /// field read.
+    Variant {
+        ty: String,
+        ty_span: Span,
+        variant: String,
+        /// Where the variant name is written — the span resolution keys this by.
+        variant_span: Span,
+        fields: Vec<FieldInit>,
+        span: Span,
+    },
+    /// `match scrutinee { Enum.Variant(field: binding) => body, … }`
+    ///
+    /// An expression, because the language has one notion of a value-producing construct
+    /// and a second statement-only form would be a second set of completion rules.
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+        span: Span,
+    },
     /// `expr.name` — project a field out of a record.
     ///
     /// The base is an expression, not a name, so `make().value` and `a.b.c` are the same
@@ -341,6 +440,8 @@ impl Expr {
             | Self::Binary { span, .. }
             | Self::Call { span, .. }
             | Self::Construct { span, .. }
+            | Self::Variant { span, .. }
+            | Self::Match { span, .. }
             | Self::Field { span, .. }
             | Self::If { span, .. } => span,
             Self::Block(b) => &b.span,
@@ -358,6 +459,8 @@ impl Expr {
             | Self::Binary { span, .. }
             | Self::Call { span, .. }
             | Self::Construct { span, .. }
+            | Self::Variant { span, .. }
+            | Self::Match { span, .. }
             | Self::Field { span, .. }
             | Self::If { span, .. } => *span,
             Self::Block(b) => b.span,

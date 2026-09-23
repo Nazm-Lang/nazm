@@ -187,6 +187,36 @@ fn ends_a_value(k: &TokenKind) -> bool {
     )
 }
 
+/// Whether this token continues whatever the `}` before it was part of.
+///
+/// The closed list, written as one rule rather than as an exception per construct: a
+/// closer, a separator, a projection or an operator all mean the expression is not over,
+/// and everything else means it is. A `}` is deliberately absent — two closing braces are
+/// two blocks ending, and each ends its own line.
+fn continues_the_line(next: Option<&TokenKind>) -> bool {
+    matches!(
+        next,
+        Some(
+            TokenKind::Else
+                | TokenKind::Semi
+                | TokenKind::Comma
+                | TokenKind::RParen
+                | TokenKind::Dot
+                | TokenKind::Plus
+                | TokenKind::Minus
+                | TokenKind::Star
+                | TokenKind::Slash
+                | TokenKind::Percent
+                | TokenKind::EqEq
+                | TokenKind::NotEq
+                | TokenKind::Lt
+                | TokenKind::LtEq
+                | TokenKind::Gt
+                | TokenKind::GtEq
+        )
+    )
+}
+
 struct Printer<'a> {
     text: &'a str,
     layout: &'a Layout,
@@ -338,9 +368,14 @@ impl<'a> Printer<'a> {
                 self.continuing = false;
                 self.break_line();
             }
-            // `} else` stays on one line, and so does everything inside a block written
-            // on one line. Every other `}` ends the line.
-            TokenKind::RBrace if next != Some(&TokenKind::Else) && !self.in_inline() => {
+            // A `}` ends the line unless what follows **continues the same expression or
+            // statement**. `} else` was the only case while blocks appeared only as an
+            // `if`'s branches; N10 made `match` an expression, so `let n = match … { … };`
+            // and `f(match … { … })` are ordinary, and a break before the `;` or the `)`
+            // put punctuation on a line of its own. It did that for `let x = if c { 1 }
+            // else { 2 };` too, which was a defect nobody had met because an `if`
+            // initialiser written on one line is rare and a `match` one is not.
+            TokenKind::RBrace if !continues_the_line(next) && !self.in_inline() => {
                 self.continuing = false;
                 self.break_line();
             }

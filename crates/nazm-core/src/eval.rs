@@ -10,8 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use nazm_diag::{codes, Diagnostic};
-use nazm_syntax::{Assign, BinOp, Block, Expr, Function, Place, Program, Stmt, While};
+use nazm_span::Span;
+use nazm_syntax::{Assign, BinOp, Block, Expr, Function, MatchArm, Place, Program, Stmt, While};
 
+use nazm_sema::enums::EnumId;
 use nazm_sema::intrinsic::Intrinsic;
 use nazm_sema::module::ModuleId;
 use nazm_sema::record::RecordId;
@@ -91,6 +93,14 @@ pub enum Value {
     /// So composition is not implemented here; it *is* the field types' behaviour, which
     /// is exactly the property N9 exists to test.
     Record(Rec),
+    /// A user-defined enum: a discriminant and **only the active variant's payload**.
+    ///
+    /// The representation is the semantics. There is no slot for an inactive variant and
+    /// nothing to clone for one, so "copy only the active payload" and "release only the
+    /// active payload" are not rules this has to follow — they are the only things it can
+    /// do. `docs/spec.md` says an inactive variant owns nothing, and a value that carried
+    /// storage for one would have made that a promise rather than a fact.
+    Enum(EnumVal),
 }
 
 /// A record value: which record it is, and its fields in **declaration order**.
@@ -119,6 +129,42 @@ impl Rec {
 
     fn field_mut(&mut self, at: u32) -> Option<&mut Value> {
         self.fields.get_mut(at as usize)
+    }
+}
+
+/// An enum value: which enum, which variant, and that variant's payload in **declaration
+/// order**.
+///
+/// Declaration order rather than the canonical tag or layout order, for the reason [`Rec`]
+/// keeps declaration order: this is the interpreter, and an index here answers the same
+/// question [`PayloadRef`](nazm_sema::PayloadRef) does. The numeric discriminant a backend
+/// assigns is not here and is not needed — the variant is named by its position in the
+/// definition, which is what resolution decided.
+#[derive(Debug, Clone)]
+pub struct EnumVal {
+    def: EnumId,
+    variant: u32,
+    fields: Vec<Value>,
+}
+
+impl EnumVal {
+    #[must_use]
+    pub fn new(def: EnumId, variant: u32, fields: Vec<Value>) -> Self {
+        Self {
+            def,
+            variant,
+            fields,
+        }
+    }
+
+    #[must_use]
+    pub fn variant(&self) -> u32 {
+        self.variant
+    }
+
+    #[must_use]
+    pub fn field(&self, at: u32) -> Option<&Value> {
+        self.fields.get(at as usize)
     }
 }
 
@@ -214,6 +260,11 @@ impl PartialEq for Value {
             // offer `==` on a record, and `N0304` refuses it — and defined so that the
             // rest of `Value` can still be compared.
             (Self::Record(a), Self::Record(b)) => a.def == b.def && a.fields == b.fields,
+            // Same enum, same active variant, equal payloads. Also never observable —
+            // `N0304` refuses `==` on an enum for the reason it refuses one on a record.
+            (Self::Enum(a), Self::Enum(b)) => {
+                a.def == b.def && a.variant == b.variant && a.fields == b.fields
+            }
             _ => false,
         }
     }
@@ -440,6 +491,7 @@ impl std::fmt::Display for Value {
             // A record is never a program's result — `main` returns `Int` — so this is
             // for diagnostics, and says what it is rather than dumping it.
             Self::Record(r) => write!(f, "record({} fields)", r.fields.len()),
+            Self::Enum(e) => write!(f, "variant {}({} fields)", e.variant, e.fields.len()),
         }
     }
 }
@@ -817,7 +869,86 @@ impl Interpreter {
     }
 
     /// Run a block in its own scope.
+    /// `match scrutinee { … }`.
+    ///
+    /// The scrutinee is evaluated **once**, into a value this expression owns, and the arm
+    /// runs with the payload bound into a scope of its own. `docs/spec.md` specifies value
+    /// evaluation rather than a borrow of the caller's storage, so `match x { … }` leaves
+    /// `x` untouched and `match make() { … }` has a clear owner for the temporary.
+    ///
+    /// The bindings are **clones of the payload values**, which is the same operation a
+    /// projection out of a record performs and the same rule: what comes out holds its own
+    /// reference to whatever backs it, so an arm may return it and it survives the
+    /// scrutinee. The scrutinee is dropped when this function returns, after the arm's
+    /// value has been established — which is the ordering the whole milestone turns on.
+    fn match_expr(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        span: Span,
+        env: &mut Env,
+    ) -> Result<Flow, RuntimeError> {
+        let value = take!(self, scrutinee, env);
+        let Value::Enum(subject) = value else {
+            return Err(RuntimeError {
+                diagnostic: Box::new(Diagnostic::error(
+                    codes::MATCH_ON_NON_ENUM,
+                    scrutinee.span(),
+                    "this is not an enum",
+                )),
+            });
+        };
+        // The discriminant selects the arm. Checking has established that exactly one arm
+        // names each variant, so the first match is the only match and there is no
+        // fallthrough to express.
+        let Some(arm) = arms.iter().find(|a| {
+            self.res
+                .variant(a.variant_span)
+                .is_some_and(|v| v.enumeration == subject.def && v.variant == subject.variant)
+        }) else {
+            // Unreachable for a checked program: `N0343` refuses a `match` that leaves a
+            // variant uncovered. Reported rather than assumed away, and deliberately not
+            // as a language-visible trap — it says the compiler is wrong, not the program.
+            return Err(RuntimeError {
+                diagnostic: Box::new(
+                    Diagnostic::error(
+                        codes::NON_EXHAUSTIVE_MATCH,
+                        span,
+                        "no arm covers this value's variant",
+                    )
+                    .help("this is a bug in the compiler: exhaustiveness is checked"),
+                ),
+            });
+        };
+        let mut frame = Frame::default();
+        for f in &arm.fields {
+            let Some(name) = &f.binding else { continue };
+            let Some(at) = self.res.payload(f.name_span) else {
+                continue;
+            };
+            let Some(v) = subject.field(at.field) else {
+                return Err(RuntimeError {
+                    diagnostic: Box::new(Diagnostic::error(
+                        codes::UNKNOWN_FIELD,
+                        f.name_span,
+                        "this variant has no such payload field",
+                    )),
+                });
+            };
+            frame.insert(name.clone(), v.clone());
+        }
+        env.push(frame);
+        let out = self.eval(&arm.body, env);
+        env.pop();
+        // `subject` is dropped here, after the arm's value has been established — which is
+        // what keeps a returned payload valid. A `_` field is in `subject` like any other
+        // and goes with it; declining to name a value is not declining to own it.
+        out
+    }
+
     fn block(&mut self, b: &Block, env: &mut Env) -> Result<Flow, RuntimeError> {
+
+
         env.push(Frame::default());
         let out = self.block_inner(b, env);
         env.pop();
@@ -1667,6 +1798,62 @@ impl Interpreter {
                 Value::Record(Rec::new(def, values))
             }
 
+            Expr::Variant {
+                ty_span,
+                variant_span,
+                fields,
+                ..
+            } => {
+                // In the order written, like a record construction, and the same drop on
+                // the way out: a failure part way through takes the `Vec` with it, which
+                // releases whatever the earlier initialisers had taken. The discriminant
+                // is only written once every payload field exists, so no partially built
+                // value is ever a value of a variant.
+                let Some(to) = self.res.variant(*variant_span) else {
+                    return Err(RuntimeError {
+                        diagnostic: Box::new(Diagnostic::error(
+                            codes::UNKNOWN_VARIANT,
+                            *variant_span,
+                            "this variant was not resolved",
+                        )),
+                    });
+                };
+                let arity = self
+                    .res
+                    .enums()
+                    .get(to.enumeration)
+                    .and_then(|d| d.variants.get(to.variant as usize))
+                    .map_or(0, |v| v.fields.len());
+                let mut built: Vec<Option<Value>> = vec![None; arity];
+                for f in fields {
+                    let v = take!(self, &f.value, env);
+                    let at = self.res.payload(f.name_span).map(|p| p.field as usize);
+                    if let Some(slot) = at.and_then(|i| built.get_mut(i)) {
+                        *slot = Some(v);
+                    }
+                }
+                let mut values = Vec::with_capacity(arity);
+                for v in built {
+                    match v {
+                        Some(v) => values.push(v),
+                        None => {
+                            return Err(RuntimeError {
+                                diagnostic: Box::new(Diagnostic::error(
+                                    codes::MISSING_FIELD,
+                                    *ty_span,
+                                    "a payload field was given no value",
+                                )),
+                            })
+                        }
+                    }
+                }
+                Value::Enum(EnumVal::new(to.enumeration, to.variant, values))
+            }
+
+            Expr::Match { scrutinee, arms, span } => {
+                return self.match_expr(scrutinee, arms, *span, env);
+            }
+
             Expr::Field {
                 base, name_span, ..
             } => {
@@ -1898,5 +2085,6 @@ fn type_name(v: &Value) -> &'static str {
         // Only reached by a built-in handed the wrong type, which checking has already
         // refused — and no built-in takes a record, so no message can name one usefully.
         Value::Record(_) => "a record",
+        Value::Enum(_) => "an enum",
     }
 }

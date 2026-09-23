@@ -9,7 +9,9 @@
 //! scope**. That is what this table is: the definitions, and the derivations over them.
 //!
 //! [`Type::Record`](crate::Type) therefore carries a [`RecordId`] and nothing else, and
-//! every property a consumer wants is a method here. The alternative — copying a field
+//! every property a consumer wants is derived from the fields — in
+//! [`UserTypes`](crate::UserTypes) since N10, because a record field may now be an enum
+//! and the walk crosses both tables. The alternative — copying a field
 //! list into the type — would make two records with the same fields the same type, which
 //! `docs/spec.md` refuses (records are nominal).
 //!
@@ -27,22 +29,6 @@ use nazm_span::Span;
 use crate::interface::Visibility;
 use crate::module::ModuleId;
 use crate::types::Type;
-
-/// How deeply records may contain records by value.
-///
-/// A bound rather than a stack: computing a layout, a copy or a drop walks the
-/// containment graph, and `docs/architecture.md`'s rule about recursion with the shape of
-/// the input applies to *type* structure too. Cycles are already refused
-/// ([`Records::layout_cycle`]), so the graph is finite — but finite is not bounded, and a
-/// thousand-deep chain would still overflow whichever consumer recursed first.
-///
-/// 32 rather than the parser's 512, and the two measure different things: that one bounds
-/// how deeply one *expression* nests, which a generator reaches easily, while this bounds
-/// how deeply a *type* contains types. Each level here multiplies the copy and drop code
-/// generated for every value of the outer type, so the cost is in the emitted program
-/// rather than in the compiler's stack. Nothing hand-written comes near it, and a program
-/// that does is refused by name rather than by a crash.
-pub const MAX_RECORD_DEPTH: usize = 32;
 
 /// A record of this compilation, by declaration order.
 ///
@@ -120,15 +106,6 @@ impl RecordDef {
             .iter()
             .filter_map(|i| self.fields.get(*i as usize).map(|f| (*i, f)))
     }
-}
-
-/// Why a record's fields cannot be laid out.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LayoutCycle {
-    /// The records in the cycle, starting and ending at the same one.
-    pub through: Vec<RecordId>,
-    /// The field that closes it: `(record, index into its declaration-order fields)`.
-    pub via: (RecordId, u32),
 }
 
 /// Why a record may not cross into a task, and which field is responsible.
@@ -247,213 +224,4 @@ impl Records {
         }
     }
 
-    // ---- derived properties ----
-
-    /// How a type is spelled for a reader.
-    ///
-    /// Built-ins spell themselves; a record spells its declared name. Not an identity —
-    /// two modules may each declare `Thing` and this returns `Thing` for both, which is
-    /// correct for a message and wrong for anything that compares. Comparison is
-    /// [`Type`]'s own `Eq`, over ids.
-    #[must_use]
-    pub fn show(&self, t: Type) -> &str {
-        match t {
-            Type::Record(id) => self.get(id).map_or("<unknown record>", |r| r.name.as_str()),
-            other => other.builtin_name().unwrap_or("<unknown type>"),
-        }
-    }
-
-    /// Whether a value of this type owns anything that has to be released.
-    ///
-    /// The one derivation `docs/architecture.md` §7.9 asks for, extended: a record needs
-    /// cleanup exactly when some field does, recursively. Consumers do not each walk the
-    /// fields — the interpreter, the lowerer and the emitter all ask this.
-    ///
-    /// Iterative rather than recursive, with an explicit worklist, because the depth is a
-    /// property of the program.
-    #[must_use]
-    pub fn needs_cleanup(&self, t: Type) -> bool {
-        let Type::Record(root) = t else {
-            return !matches!(t, Type::Int | Type::Bool);
-        };
-        let mut seen = vec![false; self.defs.len()];
-        let mut work = vec![root];
-        while let Some(id) = work.pop() {
-            if seen.get(id.index()).copied().unwrap_or(true) {
-                continue;
-            }
-            if let Some(s) = seen.get_mut(id.index()) {
-                *s = true;
-            }
-            let Some(def) = self.get(id) else { continue };
-            for f in &def.fields {
-                match f.ty {
-                    Type::Int | Type::Bool => {}
-                    Type::Record(inner) => work.push(inner),
-                    // Str, Ints, Strs, Chan: every one of them owns something since N8.
-                    _ => return true,
-                }
-            }
-        }
-        false
-    }
-
-    /// Whether a value of this type may be passed to a task, and if not, why.
-    ///
-    /// `Ok(())` or the **field path** that makes it illegal. `docs/spec.md`'s rule is
-    /// that a sequence may not cross; a record inherits that from its fields rather than
-    /// carrying a marker, so `Outer { inner: Inner { values: Ints } }` is refused and the
-    /// diagnostic can say `inner.values`.
-    ///
-    /// Depth-first over the declaration order, so the path reported is the first one a
-    /// reader would find.
-    ///
-    /// # Errors
-    ///
-    /// [`TaskUnsafe`] naming the field path and the type that cannot cross.
-    pub fn task_safety(&self, t: Type) -> Result<(), TaskUnsafe> {
-        if !matches!(t, Type::Record(_)) {
-            return if t.may_cross_into_a_task() {
-                Ok(())
-            } else {
-                Err(TaskUnsafe {
-                    path: Vec::new(),
-                    ty: t,
-                })
-            };
-        }
-        // An explicit stack of (record, next field to look at), so the walk is bounded by
-        // the heap rather than by the host's frame size. `path` mirrors it.
-        let Type::Record(root) = t else {
-            return Ok(());
-        };
-        let mut stack: Vec<(RecordId, usize)> = vec![(root, 0)];
-        let mut path: Vec<String> = Vec::new();
-        while let Some((id, at)) = stack.pop() {
-            let Some(def) = self.get(id) else { continue };
-            let Some(f) = def.fields.get(at) else {
-                path.pop();
-                continue;
-            };
-            stack.push((id, at + 1));
-            match f.ty {
-                Type::Record(inner) => {
-                    path.push(f.name.clone());
-                    stack.push((inner, 0));
-                }
-                other if !other.may_cross_into_a_task() => {
-                    path.push(f.name.clone());
-                    return Err(TaskUnsafe { path, ty: other });
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    /// The inline-containment cycle this record is part of, if it is part of one.
-    ///
-    /// A record contains its fields **by value**, so a chain of record fields that
-    /// returns to where it started describes a value that contains itself — no finite
-    /// layout exists. `docs/spec.md` refuses it as an impossible layout rather than as a
-    /// memory-safety problem, and the rule is stated over inline containment so that a
-    /// future indirection can break a cycle without this rule having to change.
-    ///
-    /// Iterative depth-first with an explicit stack.
-    #[must_use]
-    pub fn layout_cycle(&self, start: RecordId) -> Option<LayoutCycle> {
-        // 0 unvisited, 1 on the current path, 2 finished.
-        let mut state = vec![0_u8; self.defs.len()];
-        let mut path: Vec<RecordId> = Vec::new();
-        let mut stack: Vec<(RecordId, usize)> = vec![(start, 0)];
-        while let Some((id, at)) = stack.pop() {
-            if at == 0 {
-                match state.get(id.index()).copied() {
-                    Some(1) => {
-                        // Found it: the cycle is the suffix of `path` from this record on.
-                        let from = path.iter().position(|p| *p == id)?;
-                        let mut through: Vec<RecordId> = path.get(from..)?.to_vec();
-                        let last = *through.last()?;
-                        let via = self
-                            .get(last)?
-                            .fields
-                            .iter()
-                            .position(|f| f.ty == Type::Record(id))?;
-                        through.push(id);
-                        return Some(LayoutCycle {
-                            through,
-                            via: (last, u32::try_from(via).unwrap_or(u32::MAX)),
-                        });
-                    }
-                    Some(2) => continue,
-                    _ => {}
-                }
-                if let Some(s) = state.get_mut(id.index()) {
-                    *s = 1;
-                }
-                path.push(id);
-            }
-            let Some(def) = self.get(id) else { continue };
-            let next = def
-                .fields
-                .iter()
-                .enumerate()
-                .skip(at)
-                .find_map(|(i, f)| match f.ty {
-                    Type::Record(inner) => Some((i, inner)),
-                    _ => None,
-                });
-            match next {
-                Some((i, inner)) => {
-                    stack.push((id, i + 1));
-                    stack.push((inner, 0));
-                }
-                None => {
-                    if let Some(s) = state.get_mut(id.index()) {
-                        *s = 2;
-                    }
-                    path.pop();
-                }
-            }
-        }
-        None
-    }
-
-    /// How deeply this type nests records inside records, counting itself as 1.
-    ///
-    /// `None` when the chain is longer than [`MAX_RECORD_DEPTH`]. Only meaningful once
-    /// [`Self::layout_cycle`] has found nothing — a cycle has no depth, and this would
-    /// walk it forever. The caller checks cycles first, which is the order
-    /// `docs/spec.md`'s declaration stages are written in.
-    #[must_use]
-    pub fn depth(&self, t: Type) -> Option<usize> {
-        let Type::Record(root) = t else {
-            return Some(0);
-        };
-        // (record, next field) with an explicit stack; the deepest the stack ever got is
-        // the answer, and exceeding the bound stops the walk rather than the process.
-        let mut stack: Vec<(RecordId, usize)> = vec![(root, 0)];
-        let mut deepest = 1;
-        while let Some((id, at)) = stack.pop() {
-            let Some(def) = self.get(id) else { continue };
-            let next = def
-                .fields
-                .iter()
-                .enumerate()
-                .skip(at)
-                .find_map(|(i, f)| match f.ty {
-                    Type::Record(inner) => Some((i, inner)),
-                    _ => None,
-                });
-            if let Some((i, inner)) = next {
-                stack.push((id, i + 1));
-                stack.push((inner, 0));
-                deepest = deepest.max(stack.len());
-                if deepest > MAX_RECORD_DEPTH {
-                    return None;
-                }
-            }
-        }
-        Some(deepest)
-    }
 }
