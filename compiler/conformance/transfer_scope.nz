@@ -1,0 +1,22 @@
+fn send(out: Chan, n: Int) -> Int {
+    if chan_send(out, n) { 1 } else { 0 }
+}
+fn main() -> Int {
+    let out = chan_new(8);
+    let got = ints_new();
+    let mut i = 0;
+    let mut total = 0;
+    while i < 3 {
+        i = i + 1;
+        scope {
+            spawn send(out, i * 10);
+            total = total + (if i == 2 { continue; } else { i });
+        }
+    }
+    let mut k = 0;
+    while k < 3 {
+        if chan_recv(out, got) { 0 } else { 0 };
+        k = k + 1;
+    }
+    total * 1000 + ints_get(got, 0) + ints_get(got, 1) + ints_get(got, 2)
+}

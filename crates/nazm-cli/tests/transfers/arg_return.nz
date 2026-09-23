@@ -1,0 +1,11 @@
+fn pick(a: Str, b: Int) -> Int { str_len(a) + b }
+fn go(stop: Int) -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 5 {
+        i = i + 1;
+        total = total + pick(int_to_str(i * 11), if i == stop { return total * 10; } else { i });
+    }
+    total
+}
+fn main() -> Int { go(3) + go(9) }

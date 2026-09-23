@@ -387,6 +387,22 @@ builds eight programs with both compilers and requires the same reclamation repo
 each. Between N7 and N8 the two disagreed for a whole milestone and every behavioural test
 passed throughout, which is what the gate exists to prevent.
 
+**Completion is part of it since N10.1.** A `break`, `continue` or `return` inside a value
+position — an argument, an operand, an initialiser, a condition, a scrutinee, an arm, the
+operand of `return` — produces no value on that path in either compiler, and
+`a_transfer_in_a_value_position_is_never_a_value` holds it: 32 programs in
+`crates/nazm-cli/tests/transfers/`, each run by the interpreter, the reference backend, and
+the Nazm-written compiler compiled **and** interpreted, whose IR must be byte-identical,
+against a value written by hand and a reclamation report that must match and be zero live.
+Before it the compiler written in Nazm passed `void` operands for the shape
+`pick(int_to_str(i), if i == 1 { continue; } else { i })` and failed inside itself for a
+construct whose branches all left. `architecture.md` §7.11 has the mechanism.
+
+**And one leak the reference shared.** `==` on two strings never gave its operands back, in
+both native backends, with no transfer involved — `int_to_str(i) == "5"` allocated a string
+per evaluation and reclaimed none. The interpreter was right. Fixed in both, held by
+`a_string_comparison_gives_back_its_operands`.
+
 **Not claimed.** Whole-language leak freedom as a permanent property; anything about
 variants, generics, or a container able to hold a record; deadlock freedom; user-visible destruction, RAII or any ordering a program can
 observe; a clean sanitizer run. `exit_with` reclaims nothing and reports nothing, which is
@@ -671,6 +687,12 @@ against a written expectation *and* the interpreter), **then compiled by the com
 written in Nazm** — `compiler/emit.nz` carries the task and channel runtime. Every test
 carries a deadline, so a hang fails by name. Static rules are real: `N0320` for `spawn`
 outside a `scope`, `N0321` for a sequence crossing into a task.
+
+*Narrowed in N10.1:* the compiler written in Nazm joined a scope when control fell off its
+end or failed, and not when a `break`, `continue` or `return` left it — so a task that failed
+inside a scope a `break` left was never waited for and its failure never taken on. The
+reference and the interpreter were right. Held by the `scope_*_joins` cases in
+`crates/nazm-cli/tests/transfers/`.
 
 **Limitation** · One OS thread per task and nothing more. No M:N, no work stealing, no
 fairness, no task density, no timeouts, and **no cancellation beyond closing a channel**.
@@ -966,8 +988,10 @@ concurrency. `crates/nazm-cli/src/test.rs` — `nazm test` runs every case inter
 native and requires agreement. `crates/nazm-cli/tests/selfhost.rs` — the Nazm-written
 lexer, parser and checker against the Rust ones, token-for-token and span-for-span, over
 every `.nz` in the tree including their own sources, and eleven programs built by **both**
-compilers and required to report the same reclamation. `compiler/bootstrap.sh` — six
-conformance cases, six multi-module ones, under C2, C3 and the interpreter.
+compilers and required to report the same reclamation — plus, since N10.1, the 32-case
+transfer corpus run five ways. `compiler/bootstrap.sh` — thirteen conformance cases, six of
+them the N10.1 transfer shapes and one the original reproducer byte for byte, and seven
+multi-module ones, under C2, C3 and the interpreter.
 
 **Limitation** · The interpreter is the oracle, so a shared specification error is
 invisible to all five. `docs/spec.md` names what must be settled before
@@ -979,7 +1003,7 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **131** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **144** catalogued defects;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -1038,6 +1062,20 @@ described a defect, because the slot it zeroes is zero on every path that reache
 one: a transfer that keeps the temporaries, one that keeps the values being built, one that
 releases the temporaries of the loop *around* it — a premature free rather than a leak —
 and the same omission in the self-hosted emitter.
+
+*N10.1 added thirteen on 2026-09-23, repointed two whose text the correction moved, and
+ran all fifteen contained and serial in five batches of three, with nothing else running:
+**fifteen caught, none survived**, none unapplied, none that did not build, no timeout.* Each
+puts back one half of the missing representation or one thing the audit found: an `if`
+typed by the branch that left — the root cause — a join opened that no branch reached, for
+an `if` and for a `match`; a node emitted though control never reaches it, and the same for
+assignment alone; a `phi` read from a fixed two incomings; an unreachable node's operands
+left on the stack; a `break` and a `return` that leave a `scope` without joining it; the
+Nazm checker silent after a transfer; a value that never arrives given no type; and `==`
+on strings keeping its operands, in each backend. The two repointed —
+`the-self-hosted-emitter-skips-one-release-path` and
+`the-self-hosted-compiler-keeps-what-a-continue-abandons` — were caught as before. Targeted
+batches, not a catalogue run.
 
 **Limitation** · The **whole-catalogue run timed out unexplained** at its 3600 s deadline
 without reaching injection, and is recorded as incomplete rather than as a result; the

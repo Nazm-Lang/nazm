@@ -355,6 +355,49 @@ to one that refers back, and the constitution says in advance what admitting tha
 The alternatives are unchanged and both are smaller: a lossless CST, which wants nothing,
 and `nazm explain-cost`, which wants only writing.
 
+### N10.1 — Transfer expressions and selfhost parity — **complete, 2026-09-23**
+
+A correction between N10 and N11, and no new language: `spec.md` is unchanged. N10's
+evidence exposed one older divergence, and it had to close before the type system gets more
+complex, because what it is about — whether an expression produced a value — is what every
+generic container will ask of every element.
+
+```nazm
+let v = pick(int_to_str(i), if i == 1 { continue; } else { i });
+```
+
+The reference compiled it, and the compiler written in Nazm emitted `void %24` as the
+second argument. The cause was **completion not being represented**: its checker kept one
+integer per node, in which a statement, an error and a branch that leaves were all
+`unknown`, and it typed an `if` by its then-branch; its emitter opened every join whether a
+branch reached it or not. The repair is one bit per node in each — *never completes* in the
+checker, *is the block live* in the emitter, asked in one place — and `architecture.md`
+§7.11 says why that and not an enum.
+
+The audit that followed found three more, and each is a transfer rule the reference already
+had:
+
+| Found | Since | Now |
+| --- | --- | --- |
+| a `break`, `continue` or `return` out of a `scope` did not join it, so a task's failure was lost and a value printed instead | N7, selfhost only | joined, innermost first, as the reference's `join_through` |
+| a statement after one that leaves was compiled rather than refused (`N0313`) | always, selfhost only | refused, once per run, as the reference refuses it |
+| a value that never arrives was `unknown` where no type is expected, so a `match` over one was accepted and a `let` of one had a slot of no type | always, selfhost only | `Int`, the reference's `value_type(e, None)` |
+
+And one that was not the Nazm compiler's: `==` on two strings never gave its operands back,
+in **both** native backends, with no transfer anywhere near it. The interpreter was right.
+
+| Settled | Where |
+| --- | --- |
+| a transfer is never a value: no operand, no incoming, no store, no call is emitted for it | `architecture.md` §7.11 |
+| interpreted and compiled, the compiler written in Nazm emits byte-identical IR for every case | `a_transfer_in_a_value_position_is_never_a_value` |
+| the original reproducer is permanent, byte for byte, in the corpus and in the conformance set C2 and C3 compile | `crates/nazm-cli/tests/transfers/`, `compiler/conformance/transfer_argument.nz` |
+
+What it does **not** settle is recorded in `bootstrap.md`: the self-hosted checker still has
+no `Unit` rule (`N0300`, "this produces no value") and does not compare an `if`'s two branch
+types (`N0302`). Both concern programs the reference refuses, so neither is a divergence in
+the accepted language — but the compiler written in Nazm fails on them rather than refusing
+them by name.
+
 ### N10 — Variants and exhaustive pattern matching — **complete, 2026-09-23**
 
 `enum State { Ready, Done(code: Int), }` with `match`. Closed nominal sum types with named

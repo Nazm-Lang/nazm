@@ -1,0 +1,13 @@
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 5 {
+        i = i + 1;
+        if i < 4 {
+            let v = if i == 3 { break; } else { continue; };
+            total = total + v;
+        }
+        total = total + 1;
+    }
+    total * 10 + i
+}

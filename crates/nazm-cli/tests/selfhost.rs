@@ -997,9 +997,13 @@ fn sorted_diagnostics(lines: &str) -> Vec<(String, u32, u32)> {
 /// learned module ownership and visibility. Before that it could not produce them, and
 /// leaving them out of the reference's side was hiding a divergence rather than scoping a
 /// comparison.
+///
+/// `N0313` joined it in N10.1, when the Nazm checker learned which children never
+/// complete. Until then it accepted `continue; i = i + 10;` and the emitter compiled the
+/// statement the reference refuses.
 const COMPARABLE: &[&str] = &[
     "N0200", "N0201", "N0203", "N0204", "N0206", "N0207", "N0208", "N0300", "N0301", "N0303",
-    "N0304", "N0310", "N0320", "N0321",
+    "N0304", "N0310", "N0313", "N0320", "N0321",
 ];
 
 #[test]
@@ -1081,6 +1085,22 @@ fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
         "fn m() -> Int { let mut b = true; b = 1; 0 }",
         // A parameter is never mutable.
         "fn f(a: Int) -> Int { a = 2; a }\nfn m() -> Int { f(1) }",
+
+        // --- completion (N10.1) ----------------------------------------------------
+        // Clean: a branch that leaves contributes no type, so the other one decides —
+        // the Nazm checker took the then-branch's `unknown` as the whole `if`'s type.
+        "fn m() -> Int { let mut i = 0; let mut t = 0; while i < 3 { i = i + 1; t = t + if i == 1 { continue; } else { i }; } t }",
+        "fn m() -> Int { let mut i = 0; let mut t = 0; while i < 3 { i = i + 1; t = t + if i == 1 { i } else { break; }; } t }",
+        "fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; let v = if i == 1 { continue; } else { break; }; } i }",
+        // What follows a statement that leaves can never run: once per run of them, and
+        // a tail after one is reported too.
+        "fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; if i > 1 { continue; } else { break; }; i = i + 10; } i }",
+        "fn m() -> Int { return 1; 2 }",
+        "fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; break; let a = 1; let b = 2; } i }",
+        "fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; continue; i = 5; break; i = 6; } i }",
+        // A value that never arrives, where nothing says what it should be, is `Int`: so
+        // comparing it with a `Str` is refused, exactly as the reference refuses it.
+        "fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; let b = (if i == 1 { continue; } else { break; }) == \"a\"; } i }",
     ];
 
     for source in sources {
@@ -1170,6 +1190,11 @@ fn the_nazm_checker_agrees_with_the_reference_on_enums_and_matching() {
         "enum E { A, B, } fn m() -> Int { let n = match E.A() { E.A() => 1, E.B() => \"t\", }; n }",
         "enum E { A(x: Int, y: Int), } fn m() -> Int { match E.A(x: 1, y: 2) { E.A(x: a, y: a) => a, } }",
         "enum E { A(x: Int), } fn m() -> Int { match E.A(x: 1) { E.A(x: v) => v, } + v }",
+        // N10.1: a scrutinee that is an `if` with one branch leaving is the other branch's
+        // enum, so its payload names are bound — and one with both leaving is an `Int`,
+        // which a `match` refuses.
+        "enum E { A, T(v: Str), } fn m() -> Int { let mut i = 0; let mut t = 0; while i < 3 { i = i + 1; t = t + match (if i == 1 { continue; } else { E.T(v: \"ab\") }) { E.A() => 0, E.T(v: s) => str_len(s), }; } t }",
+        "enum E { A, B, } fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; let n = match (if i == 1 { continue; } else { break; }) { E.A() => 1, E.B() => 2, }; } i }",
     ];
 
     for source in sources {
@@ -1834,6 +1859,203 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
                 .nth(3)
                 .unwrap_or("live=?");
             assert_eq!(live, "live=0", "{class} left behind:\n{line}\n{source}");
+        }
+    }
+}
+
+/// The text of an operand position that holds a value nobody produced.
+///
+/// Not every `void`: `call void @nz.release(…)`, `ret void` and `define void` are what a
+/// runtime helper legitimately is. What is never legitimate is a `void` **with a value
+/// after it** — an argument, a `phi`, a `store`, a `ret` of one — or a slot of that type,
+/// and those are the forms the Nazm-written emitter produced for a transfer in a value
+/// position until N10.1: `call i64 @nz.f0({ ptr, i64, ptr } %19, void %24)`.
+fn fake_operand(ir: &str) -> Option<&str> {
+    ir.lines().find(|l| {
+        l.contains("void %")
+            || l.contains("alloca void")
+            || l.contains("phi void")
+            || l.contains("store void")
+    })
+}
+
+#[test]
+fn a_transfer_in_a_value_position_is_never_a_value() {
+    // N10.1. `break`, `continue` and `return` may sit inside anything used as a value — an
+    // argument, an operand, an initialiser, a condition, a scrutinee, an arm — and when
+    // one runs, the enclosing expression has no value on that path and never will. The
+    // compiler written in Nazm got this wrong in two places that agreed with each other:
+    // its checker typed `if c { continue; } else { i }` by the branch that left, so the
+    // `if` had no value, and its emitter opened every join whether or not a branch
+    // reached it, so a construct whose branches all left handed its parent an empty
+    // stack. The first passed `void %24` to a call; the second popped someone else's
+    // value, or failed with `N0405` inside the compiler.
+    //
+    // Each case in `tests/transfers/` is run **five** ways, and all five must agree: the
+    // interpreter, the reference native backend, and the Nazm-written compiler both
+    // compiled and interpreted — whose IR must be byte-identical, because they are one
+    // program — and the executable that IR assembles to. The value and the exit status
+    // are written down by hand in `.expected`, so an answer all five share can still be
+    // wrong; the reclamation counts are compared rather than written, and must also be
+    // zero live.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    let corpus = repo_root().join("crates/nazm-cli/tests/transfers");
+    let mut cases: Vec<PathBuf> = std::fs::read_dir(&corpus)
+        .expect("read the transfer corpus")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "nz"))
+        .collect();
+    cases.sort();
+    // A corpus that quietly lost its files would pass every assertion below.
+    assert!(cases.len() >= 32, "only {} transfer cases", cases.len());
+
+    fn memory_line(stderr: &str) -> String {
+        stderr
+            .lines()
+            .find(|l| l.starts_with("nazm-memory:"))
+            .unwrap_or_else(|| panic!("no memory report in: {stderr}"))
+            .to_owned()
+    }
+    fn failure_code(stderr: &str) -> Option<String> {
+        let at = stderr.find("error[")?;
+        stderr.get(at + 6..at + 11).map(ToOwned::to_owned)
+    }
+
+    for file in &cases {
+        let name = file.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
+        let expected = std::fs::read_to_string(file.with_extension("expected"))
+            .expect("every case has an .expected");
+        let expected = expected.trim();
+        let wants_failure = expected.strip_prefix("fails ");
+
+        // The interpreter: the semantic oracle this backend is compared against.
+        let interp = Command::new(NAZM)
+            .args(["run", file.to_str().unwrap()])
+            .env(nazm_lir::MEMORY_VARIABLE, "1")
+            .output()
+            .expect("run nazm run");
+        let interp_err = String::from_utf8_lossy(&interp.stderr).into_owned();
+
+        // The reference native backend.
+        let ours = dir.path().join(format!("{name}-reference"));
+        let built = Command::new(NAZM)
+            .args(["build", file.to_str().unwrap(), "-o"])
+            .arg(&ours)
+            .output()
+            .expect("run nazm build");
+        assert!(
+            built.status.success(),
+            "{name}: the reference compiler refused: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+
+        // The Nazm-written compiler, compiled.
+        let (rc, ir, ir_err) = run_stage(&emitter, file);
+        assert_eq!(rc, Some(0), "{name}: the Nazm compiler refused:\n{ir_err}");
+        assert!(
+            fake_operand(&ir).is_none(),
+            "{name}: a value nobody produced reached an operand: {:?}",
+            fake_operand(&ir)
+        );
+
+        // The same compiler, interpreted. One program in two execution forms, so the
+        // output is one output — a difference is a defect in whichever form is wrong.
+        let interpreted = Command::new(NAZM)
+            .args(["run", "compiler/emit.nz", "--", file.to_str().unwrap()])
+            .current_dir(repo_root())
+            .output()
+            .expect("interpret the Nazm compiler");
+        assert!(
+            interpreted.status.success(),
+            "{name}: the interpreted Nazm compiler failed: {}",
+            String::from_utf8_lossy(&interpreted.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&interpreted.stdout) == ir,
+            "{name}: the Nazm compiler emits different IR interpreted and compiled"
+        );
+
+        let ll = dir.path().join(format!("{name}.ll"));
+        std::fs::write(&ll, &ir).expect("write IR");
+        let theirs = dir.path().join(format!("{name}-selfhost"));
+        let assembled = Command::new("clang")
+            .args(["-Wno-override-module", "-lpthread", "-o"])
+            .arg(&theirs)
+            .arg(&ll)
+            .output()
+            .expect("run clang");
+        assert!(
+            assembled.status.success(),
+            "{name}: clang rejected IR from the Nazm compiler:\n{}",
+            String::from_utf8_lossy(&assembled.stderr)
+        );
+
+        let run = |exe: &Path| {
+            run_bounded(
+                common::bounded_exe(exe).env(nazm_lir::MEMORY_VARIABLE, "1"),
+                std::time::Duration::from_secs(60),
+            )
+            .expect("the compiled program hung")
+        };
+        let (ref_code, ref_out, ref_err) = run(&ours);
+        let (sh_code, sh_out, sh_err) = run(&theirs);
+
+        match wants_failure {
+            Some(code) => {
+                for (who, status, err) in [
+                    ("interpreter", interp.status.code(), interp_err.as_str()),
+                    ("reference", ref_code, ref_err.as_str()),
+                    ("selfhost", sh_code, sh_err.as_str()),
+                ] {
+                    assert_eq!(status, Some(2), "{name}: {who} did not fail:\n{err}");
+                    assert_eq!(
+                        failure_code(err).as_deref(),
+                        Some(code),
+                        "{name}: {who} failed differently:\n{err}"
+                    );
+                }
+            }
+            None => {
+                assert_eq!(
+                    interp.status.code(),
+                    Some(0),
+                    "{name}: interpreter: {interp_err}"
+                );
+                assert_eq!(ref_code, Some(0), "{name}: reference: {ref_err}");
+                assert_eq!(sh_code, Some(0), "{name}: selfhost: {sh_err}");
+                let interp_out = String::from_utf8_lossy(&interp.stdout).into_owned();
+                for (who, out) in [
+                    ("interpreter", interp_out.as_str()),
+                    ("reference", ref_out.as_str()),
+                    ("selfhost", sh_out.as_str()),
+                ] {
+                    assert_eq!(out.trim(), expected, "{name}: {who} gave the wrong answer");
+                }
+            }
+        }
+
+        // Reclamation, on the success paths and the failing ones: what was produced
+        // before a transfer is given back exactly once, in every form.
+        let line = memory_line(&interp_err);
+        assert_eq!(
+            memory_line(&ref_err),
+            line,
+            "{name}: reference reclaimed differently"
+        );
+        assert_eq!(
+            memory_line(&sh_err),
+            line,
+            "{name}: selfhost reclaimed differently"
+        );
+        for class in ["sequences", "strings", "channels"] {
+            let live = line
+                .split_whitespace()
+                .skip_while(|w| *w != class)
+                .nth(3)
+                .unwrap_or("live=?");
+            assert_eq!(live, "live=0", "{name}: {class} left behind:\n{line}");
         }
     }
 }

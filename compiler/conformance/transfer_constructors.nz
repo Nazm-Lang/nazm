@@ -1,0 +1,23 @@
+enum Shape {
+    Empty,
+    Named(label: Str, size: Int),
+}
+struct Event {
+    note: Str,
+    shape: Shape,
+}
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 4 {
+        i = i + 1;
+        let e = Event(note: int_to_str(i * 5),
+                shape: Shape.Named(label: str_concat("L", int_to_str(i)),
+                size: if i == 3 { continue; } else { i }));
+        total = total + str_len(e.note) + match e.shape {
+            Shape.Empty() => 0,
+            Shape.Named(label: l, size: n) => str_len(l) + n,
+        };
+    }
+    total
+}

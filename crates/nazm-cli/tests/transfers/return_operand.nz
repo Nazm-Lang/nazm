@@ -1,0 +1,17 @@
+fn go() -> Int {
+    let mut i = 0;
+    while i < 5 {
+        i = i + 1;
+        return if i < 3 { continue; } else { i * 100 };
+    }
+    0
+}
+fn text() -> Str {
+    let mut i = 0;
+    while i < 5 {
+        i = i + 1;
+        return if i < 2 { continue; } else { int_to_str(i * 1000) };
+    }
+    ""
+}
+fn main() -> Int { go() + str_len(text()) }

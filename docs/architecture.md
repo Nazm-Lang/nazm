@@ -1832,6 +1832,65 @@ take. The second is that **a mutation that survives is a question, not a verdict
 one was answered by three defects and a fourth finding, that the mutation no longer
 describes a defect at all, and it was replaced by four that do.
 
+### A transfer in a value position, in the compiler written in Nazm — N10.1
+
+The paragraph above says the Nazm-written emitter needed only a smaller fix. That was true of
+what the transfer *gives back* and said nothing about what it *produces*, and the shape the
+table above opens with did not compile at all:
+
+```nazm
+let v = pick(int_to_str(i), if i == 1 { continue; } else { i });
+```
+
+The reference represents completion once, as a type: the checker's `Completion { Value(T),
+Unit, Diverges }` and the emitter's `Val { Of { value, ty }, Transferred }`, and nothing
+consumes an operand without matching on it. The compiler written in Nazm had neither half.
+
+- **The checker** kept one integer per node, and `unknown` meant three things — a statement,
+  an error already reported, and a branch that leaves. A two-branch `if` took its
+  then-branch's type, so the `if` above had *no value*. The call's argument list was then
+  built from that type, and `llvm_type(unknown)` is `"void"`: `call i64 @nz.f0({ ptr, i64,
+  ptr } %19, void %24)`, which clang refuses. Records and variants took their field types
+  from the declaration instead, so the same shape there compiled — correctly, by accident,
+  because the else-branch's value happened to be left on the stack exactly where the
+  constructor looked.
+- **The emitter** is a post-order scan, and it opened every join whether or not a branch
+  reached it. A construct whose branches all left therefore handed its parent an empty
+  stack, and the parent popped a value somebody else had pushed: `N0405` inside the
+  compiler, or a real value in the wrong operand.
+
+The repair is one bit per node in each half. `ndiv` in `compiler/analyse.nz` records that a
+node **never completes** — the reference's `Diverges`, kept beside the type rather than in
+it, because a type code is also what a slot and an operand are given. An `if` or a `match`
+is typed by the branches that complete; a value position with no expectation of its own
+sees a diverging value as `Int`, which is the reference's `value_type(e, None)`; and what
+follows a child that leaves is refused as `N0313`, which this checker had never reported.
+
+In the emitter, **whether the block being written is live is the one answer**, and it is
+asked in one place, `unreachable_here`. A node reached while it is not was never evaluated,
+so nothing is emitted for it — no call with an argument missing, no store of a value nobody
+produced, no arithmetic on half its operands — and what its operands left on the stack is
+discarded down to the depth recorded where its subtree began, because the transfer already
+gave back what they held. Nothing reopens a block except a construct whose dispatch really
+was emitted (`opened`), and a join is opened only if some branch reached it (`joined`). A
+`phi` is built from the incomings that arrived (`nin`, and `emit_phi` shared by `if` and
+`match`), so a branch that transferred contributes nothing rather than a stand-in.
+
+Two things were found by the audit that followed, and both are transfer rules the reference
+had and this compiler did not. **A `break`, a `continue` or a `return` out of a `scope` did
+not join it**, since N7: a task that failed inside a scope a `break` left was never waited
+for, so the program printed a value where the reference stopped with the task's diagnostic.
+`join_from` is the reference's `join_through`, and `unwind` uses it too. And **`==` on two
+strings kept its operands**, in both native backends and with no transfer involved: a
+temporary compared was never reclaimed. Rule 2 says a comparison borrows, as a call does.
+
+**Why not the enum N10 made available.** `enum EmitCompletion { Value(value: Int, ty: Int),
+Transferred }` is the shape the reference has, and it does not fit here for the reason N10G
+gave: the emitter's operand stack is an `Ints`, and no container can hold an enum. A
+post-order scan also never has a completion *in hand* to return — the node that would return
+it is not the node that consumes it. The live flag is the same fact stated at the only place
+this design can ask it, and there is one of it rather than one per consumer.
+
 ### What this still does not do
 
 - **No generics**, so no `Option`, no `Result`, and no generic enum of any kind. A

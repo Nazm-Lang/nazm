@@ -1,0 +1,12 @@
+fn main() -> Int {
+    let mut s = str_concat("a", "b");
+    let mut i = 0;
+    while i < 5 {
+        i = i + 1;
+        if i < 3 {
+            s = if i == 1 { continue; } else { break; };
+        }
+        s = int_to_str(i * 1000);
+    }
+    str_len(s) * 10 + i
+}

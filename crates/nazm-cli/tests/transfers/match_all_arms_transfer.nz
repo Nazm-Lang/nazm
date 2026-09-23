@@ -1,0 +1,20 @@
+enum E {
+    Absent,
+    Text(value: Str),
+}
+fn pick(a: Str, b: Int) -> Int { str_len(a) + b }
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 4 {
+        i = i + 1;
+        if i < 3 {
+            total = total + pick(int_to_str(i), match E.Text(value: int_to_str(i)) {
+                E.Absent() => if i > 0 { break; } else { continue; },
+                E.Text(value: s) => if i == 2 { break; } else { continue; },
+            });
+        }
+        total = total + 1;
+    }
+    total * 10 + i
+}

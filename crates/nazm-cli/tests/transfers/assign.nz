@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let mut s = str_concat("a", "b");
+    let mut i = 0;
+    let mut seen = 0;
+    while i < 4 {
+        i = i + 1;
+        s = if i == 2 { continue; } else { int_to_str(i * 111) };
+        seen = seen + str_len(s);
+    }
+    seen * 1000 + str_len(s)
+}
