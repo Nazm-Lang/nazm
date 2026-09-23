@@ -535,11 +535,12 @@ impl PersistentUnitInterface {
         // Closed: a field, a payload or a signature may name a built-in or a type this
         // file defines, and nothing else. Checked after the whole set is known, so a
         // forward reference between two definitions is fine and a dangling one is not.
-        let referenced = self
-            .records
-            .iter()
-            .flat_map(|r| r.fields.iter())
-            .chain(self.enums.iter().flat_map(|e| e.variants.iter()).flat_map(|v| v.fields.iter()));
+        let referenced = self.records.iter().flat_map(|r| r.fields.iter()).chain(
+            self.enums
+                .iter()
+                .flat_map(|e| e.variants.iter())
+                .flat_map(|v| v.fields.iter()),
+        );
         for f in referenced {
             if Type::from_name(&f.ty).is_none() && !defined.contains(&f.ty.as_str()) {
                 return Err(ReadError::UnknownType(f.ty.clone()));
@@ -602,12 +603,7 @@ impl PersistentUnitInterface {
     ///   data — so nothing is lost. A future consumer that needs them has the keys in
     ///   [`Self::dependencies`] and must resolve them to ids itself.
     #[must_use]
-    pub fn rehydrate(
-        &self,
-        module: ModuleId,
-        first: FnId,
-        types: &mut UserTypes,
-    ) -> UnitInterface {
+    pub fn rehydrate(&self, module: ModuleId, first: FnId, types: &mut UserTypes) -> UnitInterface {
         // Two passes, for the reason the checker declares type names before resolving
         // field types: a field may name a type defined later in this file, and both
         // orders have to work. One pass over records and enums together, because a record

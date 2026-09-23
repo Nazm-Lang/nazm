@@ -1238,7 +1238,10 @@ fn an_enum_type_is_named_from_its_durable_identity_and_not_its_position() {
     let (an, bn) = (names_in(&a), names_in(&b));
     assert!(!an.is_empty() && !bn.is_empty(), "{an:?} {bn:?}");
     for x in &an {
-        assert!(!bn.contains(x), "two modules' `Thing` share a native name: {x}");
+        assert!(
+            !bn.contains(x),
+            "two modules' `Thing` share a native name: {x}"
+        );
     }
     assert!(an.iter().all(|n| n.contains("a_2Enz")), "{an:?}");
     assert!(bn.iter().all(|n| n.contains("b_2Enz")), "{bn:?}");

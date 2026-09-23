@@ -49,9 +49,7 @@ pub mod types;
 pub mod udt;
 
 pub use enums::{EnumDef, EnumId, Enums, VariantDef};
-pub use interface::{
-    reachable_types, EnumExport, Export, RecordExport, UnitInterface, Visibility,
-};
+pub use interface::{reachable_types, EnumExport, Export, RecordExport, UnitInterface, Visibility};
 pub use intrinsic::Intrinsic;
 pub use key::{DefKey, DefKind, ModuleKey};
 pub use module::{Dependency, ModuleGraph, ModuleId};
