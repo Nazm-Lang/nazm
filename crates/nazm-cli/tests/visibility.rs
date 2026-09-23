@@ -618,3 +618,159 @@ fn a_layout_cycle_across_modules_is_refused() {
         "N0336",
     );
 }
+
+// --- enums across a module boundary -----------------------------------------------------
+//
+// The same law as a record's, with one addition that is the milestone's: an importer that
+// can see an enum can *match* it, so what crosses the boundary is every variant and every
+// payload shape — and adding a variant is therefore a change to the public type.
+
+#[test]
+fn an_exported_enum_is_named_constructed_and_matched_by_an_importer() {
+    let out = both_ways(&[
+        (
+            "main.nz",
+            "use \"state.nz\";\n\
+             fn weight(s: State) -> Int { match s { State.Ready() => 2, \
+             State.Done(code: c) => c, } }\n\
+             fn main() -> Int { weight(State.Done(code: 40)) + weight(State.Ready()) }\n",
+        ),
+        (
+            "state.nz",
+            "pub enum State {\n    Ready,\n    Done(code: Int),\n}\n",
+        ),
+    ]);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn an_enum_returned_across_a_module_boundary_keeps_its_active_payload() {
+    // The library's frame exits and the caller still holds a valid string — through
+    // independently generated objects in the compiled one, which is where the two sides
+    // have to agree about the discriminant as well as the layout.
+    let out = both_ways(&[
+        (
+            "main.nz",
+            "use \"state.nz\";\n\
+             fn weight(s: State) -> Int { match s { State.Ready() => 0, \
+             State.Failed(why: w, code: c) => str_len(w) + c, } }\n\
+             fn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    \
+             while i < 10 {\n        total = total + weight(failure(i));\n        i = i + 1;\n    }\n    \
+             total\n}\n",
+        ),
+        (
+            "state.nz",
+            "pub enum State {\n    Ready,\n    Failed(why: Str, code: Int),\n}\n\
+             pub fn failure(n: Int) -> State {\n    \
+             State.Failed(why: str_concat(\"e\", int_to_str(n)), code: n)\n}\n",
+        ),
+    ]);
+    assert_eq!(out, "65");
+}
+
+#[test]
+fn a_private_enum_is_not_nameable_from_an_importer() {
+    refused(
+        &[
+            (
+                "main.nz",
+                "use \"state.nz\";\nfn main() -> Int { match Hidden.A() { Hidden.A() => 1, } }\n",
+            ),
+            ("state.nz", "enum Hidden {\n    A,\n}\n"),
+        ],
+        "N0305",
+    );
+}
+
+#[test]
+fn a_public_enum_may_not_expose_a_private_type_through_a_payload() {
+    // An importer needs the payload's type to match the variant, and cannot name it.
+    refused(
+        &[
+            ("main.nz", "use \"state.nz\";\nfn main() -> Int { 0 }\n"),
+            (
+                "state.nz",
+                "struct Secret {\n    value: Int,\n}\n\
+                 pub enum Public {\n    Hidden(v: Secret),\n}\n",
+            ),
+        ],
+        "N0337",
+    );
+}
+
+#[test]
+fn a_public_record_may_not_expose_a_private_enum_through_a_field() {
+    // The closure runs through both kinds, so this is the same refusal one kind over.
+    refused(
+        &[
+            ("main.nz", "use \"state.nz\";\nfn main() -> Int { 0 }\n"),
+            (
+                "state.nz",
+                "enum Secret {\n    A,\n}\n\
+                 pub struct Public {\n    s: Secret,\n}\n",
+            ),
+        ],
+        "N0337",
+    );
+}
+
+#[test]
+fn the_same_enum_name_in_two_modules_is_two_types() {
+    // Neither imported module exports the name, so all three may own it — and they are
+    // different types, with different native identities and different discriminants, in
+    // one program.
+    let out = both_ways(&[
+        (
+            "main.nz",
+            "use \"a.nz\";\nuse \"b.nz\";\n\
+             enum State { Here, }\n\
+             fn main() -> Int {\n    \
+             match State.Here() { State.Here() => 1, } + from_a() + from_b()\n}\n",
+        ),
+        (
+            "a.nz",
+            "enum State { Alpha, Beta(n: Int), }\n\
+             pub fn from_a() -> Int { match State.Beta(n: 10) { State.Alpha() => 0, \
+             State.Beta(n: n) => n, } }\n",
+        ),
+        (
+            "b.nz",
+            "enum State { Only(s: Str), }\n\
+             pub fn from_b() -> Int { match State.Only(s: \"abc\") { State.Only(s: s) => str_len(s), } }\n",
+        ),
+    ]);
+    assert_eq!(out, "14");
+}
+
+#[test]
+fn a_layout_cycle_through_an_enum_across_modules_is_refused() {
+    refused(
+        &[
+            ("main.nz", "use \"a.nz\";\nfn main() -> Int { 0 }\n"),
+            ("a.nz", "use \"b.nz\";\npub struct Ay {\n    b: Bee,\n}\n"),
+            ("b.nz", "use \"a.nz\";\npub enum Bee {\n    V(a: Ay),\n}\n"),
+        ],
+        "N0336",
+    );
+}
+
+#[test]
+fn an_enum_payload_reaches_a_third_modules_shape_through_the_interface() {
+    // The closure, one kind over: `main` never imports `deep.nz`, cannot name `Inner`,
+    // and still has to understand the shape `State.V` hands it in order to match on it.
+    let out = both_ways(&[
+        (
+            "main.nz",
+            "use \"state.nz\";\n\
+             fn main() -> Int { match make() { State.V(i: i) => i.n, } }\n",
+        ),
+        (
+            "state.nz",
+            "use \"deep.nz\";\n\
+             pub enum State {\n    V(i: Inner),\n}\n\
+             pub fn make() -> State { State.V(i: Inner(n: 42)) }\n",
+        ),
+        ("deep.nz", "pub struct Inner {\n    n: Int,\n}\n"),
+    ]);
+    assert_eq!(out, "42");
+}

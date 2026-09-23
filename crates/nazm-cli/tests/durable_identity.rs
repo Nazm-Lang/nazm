@@ -704,3 +704,194 @@ fn a_dependent_checks_records_against_a_deserialised_interface_with_the_dependen
         "a removed field should be refused: {errors:#?}"
     );
 }
+
+#[test]
+fn an_exported_enum_is_published_with_its_variants_and_durable_identity() {
+    // The canonical form, pinned: variants sorted by name, payload fields sorted by name,
+    // the enum under its durable identity, and the private companion absent. The source
+    // declares them in none of those orders, which is what makes this an assertion about
+    // canonicalisation rather than about the parser.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "m.nz",
+        "pub enum State {\n    Ready,\n    Failed(why: Str, code: Int),\n    Done(code: Int),\n}\n\
+         enum Hidden {\n    Never,\n}\n\
+         pub fn start() -> State { State.Ready() }\n\
+         fn secret() -> Int { match Hidden.Never() { Hidden.Never() => 1, } }\n",
+    );
+    let json = interface_of(&dir.path().join("m.nz"));
+    assert_eq!(
+        json,
+        "{\"schema\":\"nazm.interface/3\",\"module\":\"m.nz\",\"dependencies\":[],\
+         \"records\":[],\
+         \"enums\":[{\"def\":\"m.nz::enum State\",\"name\":\"State\",\"variants\":[\
+         {\"name\":\"Done\",\"fields\":[{\"name\":\"code\",\"ty\":\"Int\"}]},\
+         {\"name\":\"Failed\",\"fields\":[{\"name\":\"code\",\"ty\":\"Int\"},\
+         {\"name\":\"why\",\"ty\":\"Str\"}]},\
+         {\"name\":\"Ready\",\"fields\":[]}]}],\
+         \"exports\":[{\"def\":\"m.nz::fn start\",\"name\":\"start\",\"kind\":\"fn\",\
+         \"params\":[],\"ret\":\"m.nz::enum State\"}]}"
+    );
+    assert!(!json.contains("Hidden"), "{json}");
+    // The numeric discriminant is representation, not meaning, and is nowhere in this.
+    assert!(!json.contains("tag"), "{json}");
+}
+
+#[test]
+fn the_enum_invalidation_table_is_what_the_fingerprint_actually_does() {
+    // §59, run rather than asserted in prose. Each row is an edit and what it must do to
+    // the fingerprint — and the "unchanged" rows are the ones that would be easy to get
+    // wrong by taking the parser's order for the canonical one.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let hash_of = |source: &str| -> String {
+        write(dir.path(), "m.nz", source);
+        let json = interface_of(&dir.path().join("m.nz"));
+        let parsed = PersistentUnitInterface::from_json(&json).expect("valid");
+        InterfaceHash::of(&parsed).expect("hashable").to_string()
+    };
+
+    const BASE: &str = "pub enum State {\n    Ready,\n    Done(code: Int, why: Str),\n}\n\
+                        pub fn start() -> State { State.Ready() }\n";
+    let base = hash_of(BASE);
+
+    // Unchanged: reordering variants, reordering payload fields, and a private enum
+    // added — none of them is a change to what this module offers.
+    assert_eq!(
+        base,
+        hash_of(
+            "pub enum State {\n    Done(code: Int, why: Str),\n    Ready,\n}\n\
+             pub fn start() -> State { State.Ready() }\n"
+        ),
+        "reordering variants moved the fingerprint"
+    );
+    assert_eq!(
+        base,
+        hash_of(
+            "pub enum State {\n    Ready,\n    Done(why: Str, code: Int),\n}\n\
+             pub fn start() -> State { State.Ready() }\n"
+        ),
+        "reordering payload fields moved the fingerprint"
+    );
+    assert_eq!(
+        base,
+        hash_of(&format!("{BASE}enum Private {{\n    A,\n}}\n")),
+        "a private enum moved the fingerprint"
+    );
+
+    // Changed: a variant added, renamed or removed; a payload field added or retyped.
+    for (what, source) in [
+        (
+            "a variant added",
+            "pub enum State {\n    Ready,\n    Done(code: Int, why: Str),\n    Failed,\n}\n\
+             pub fn start() -> State { State.Ready() }\n",
+        ),
+        (
+            "a variant renamed",
+            "pub enum State {\n    Waiting,\n    Done(code: Int, why: Str),\n}\n\
+             pub fn start() -> State { State.Waiting() }\n",
+        ),
+        (
+            "a payload field added",
+            "pub enum State {\n    Ready,\n    Done(code: Int, why: Str, at: Int),\n}\n\
+             pub fn start() -> State { State.Ready() }\n",
+        ),
+        (
+            "a payload field retyped",
+            "pub enum State {\n    Ready,\n    Done(code: Str, why: Str),\n}\n\
+             pub fn start() -> State { State.Ready() }\n",
+        ),
+        (
+            "a payload field removed",
+            "pub enum State {\n    Ready,\n    Done(code: Int),\n}\n\
+             pub fn start() -> State { State.Ready() }\n",
+        ),
+    ] {
+        assert_ne!(base, hash_of(source), "{what} did not move the fingerprint");
+    }
+}
+
+#[test]
+fn a_dependent_checks_enums_against_a_deserialised_interface_with_the_dependency_deleted() {
+    // §60. Construction, exhaustive matching, payload bindings and an enum-valued
+    // signature, all checked from bytes alone with the dependency's source not on disk.
+    // Then the same source against an interface with a variant removed, which must be
+    // refused — otherwise the first half proves only that nothing was checked.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub enum State {\n    Ready,\n    Done(code: Int, why: Str),\n}\n\
+         pub fn start() -> State { State.Ready() }\n",
+    );
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\n\
+         fn weight(s: State) -> Int { match s { State.Ready() => 1, \
+         State.Done(code: c, why: w) => c + str_len(w), } }\n\
+         fn main() -> Int { weight(start()) + weight(State.Done(code: 2, why: \"ab\")) }\n",
+    );
+
+    let published = interface_of(&dir.path().join("b.nz"));
+    std::fs::remove_file(dir.path().join("b.nz")).expect("remove B");
+    assert!(!dir.path().join("b.nz").exists());
+
+    let a_source = std::fs::read_to_string(dir.path().join("a.nz")).expect("read A");
+    let (program, parse_errors) = nazm_core::__syntax::parse_source(&a_source);
+    assert!(parse_errors.is_empty(), "{parse_errors:#?}");
+
+    let mut graph = ModuleGraph::default();
+    let a = graph.add(FileId::ROOT, ModuleKey::relative("a.nz"));
+    let b = graph.add(
+        FileId::from_index(1),
+        PersistentUnitInterface::from_json(&published)
+            .expect("valid")
+            .module_key(),
+    );
+    graph.import(a, b, nazm_span::Span::synthetic());
+
+    let check_against = |json: &str| -> Vec<nazm_diag::Diagnostic> {
+        let iface = PersistentUnitInterface::from_json(json).expect("a valid interface");
+        let units = [nazm_core::Unit::of(&program, &graph, a)];
+        let mut res = Resolution::default();
+        let mut errors = Vec::new();
+        let rehydrated = iface.rehydrate(b, FnId::from_index(4096), res.types_mut());
+        nazm_core::declare_types(&units, &mut res, &mut errors);
+        nazm_core::declare_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+        nazm_core::check_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+        errors
+    };
+
+    assert!(
+        check_against(&published).is_empty(),
+        "A should check against B's persisted interface alone: {:#?}",
+        check_against(&published)
+    );
+
+    // The negative half, twice: an interface whose enum lost a variant — so A's `match`
+    // names one that does not exist — and one that **gained** a variant, so A's `match`
+    // is no longer exhaustive. The second is the shape §44 is about.
+    let without = published.replace(",{\"name\":\"Ready\",\"fields\":[]}", "");
+    assert_ne!(without, published, "the interface was not narrowed");
+    let errors = check_against(&without);
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.code == nazm_diag::codes::UNKNOWN_VARIANT),
+        "a removed variant should be refused: {errors:#?}"
+    );
+
+    let widened = published.replace(
+        "{\"name\":\"Ready\",\"fields\":[]}",
+        "{\"name\":\"Ready\",\"fields\":[]},{\"name\":\"Waiting\",\"fields\":[]}",
+    );
+    assert_ne!(widened, published, "the interface was not widened");
+    let errors = check_against(&widened);
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.code == nazm_diag::codes::NON_EXHAUSTIVE_MATCH),
+        "an added variant should make the importer's match non-exhaustive: {errors:#?}"
+    );
+}
