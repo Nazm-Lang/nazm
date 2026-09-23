@@ -602,3 +602,18 @@ fn a_type_named_vec_cannot_be_declared() {
         0,
     );
 }
+
+#[test]
+fn inference_does_not_unify_two_generic_definitions_of_one_shape() {
+    // Found by mutation: an `A[Int]` passed where `B[T]` is declared settled `T = Int` and
+    // was accepted, because nothing compared the definitions — two generic records with the
+    // same fields and arity are two types, before and after inference.
+    refused(
+        "struct A[T] { v: T, }\nstruct B[T] { v: T, }\n\
+         fn un[T](b: B[T]) -> T { b.v }\n\
+         fn main() -> Int { un(A[Int](v: 1)) }",
+        codes::TYPE_MISMATCH,
+        "A[Int](v: 1)",
+        0,
+    );
+}

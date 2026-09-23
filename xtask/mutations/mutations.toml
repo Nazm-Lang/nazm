@@ -2248,3 +2248,282 @@ find = """    let dropped = ints_pop(vals);
     own_drop(out, next, owned, dropped, t, rowns, otype)"""
 replace = """    let dropped = ints_pop(vals);
     dropped"""
+
+# --- N11: generics and `Vec[T]` -------------------------------------------------------
+#
+# Retired before it landed: `vec_set` releasing the old element before taking the new one,
+# in either compiler. Run twice, serially and uncontended, and survived both times, and the
+# reason is that it is **equivalent** under the current rules rather than unobserved: the
+# order matters only when the new value's one reference is the slot being replaced, and
+# `vec_get` always hands out a reference of its own — so no program can give `vec_set`
+# such a value. The order is kept anyway, for the day a borrowed path into a slot exists;
+# `vec-get-returns-a-borrowed-element` is the mutation that holds the half that is live.
+
+[[mutation]]
+name = "a-parameter-is-read-by-first-position"
+why = """
+substitution ignores which parameter a use names and gives every one the first argument, so `Pair[Int, Str]`'s second field is an `Int` — parameter order is semantic and this forgets it
+"""
+file = "crates/nazm-sema/src/generic.rs"
+find = "                args.get(p.index as usize).copied().unwrap_or(Type::Int)"
+replace = "                args.first().copied().unwrap_or(Type::Int)"
+
+[[mutation]]
+name = "the-wrong-number-of-type-arguments-is-accepted"
+why = """
+a generic definition written with too many or too few arguments is padded or truncated silently instead of refused with `N0353`
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """        (Some(mut args), n) => {
+            if args.len() != n {
+                errors.push(wrong_arity("""
+replace = """        (Some(mut args), n) => {
+            if args.len() != n && false {
+                errors.push(wrong_arity("""
+
+[[mutation]]
+name = "inference-keeps-the-first-conflicting-type"
+why = """
+a parameter two arguments settle differently keeps the first one's type, so `same(1, "x")` is a mismatch of the second argument rather than the conflict `N0355` names
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """                    Some((t, from)) => Err(Unify::Conflict {
+                        param: p,
+                        earlier: t,
+                        from,
+                    }),"""
+replace = "                    Some((_, _)) => Ok(()),"
+
+[[mutation]]
+name = "a-type-parameter-may-be-compared"
+why = """
+an unconstrained `T` is given `==`, which not every type supports — the refusal that keeps a generic body to what every type can do
+"""
+file = "crates/nazm-core/src/check.rs"
+find = "                    && !lt.is_param()"
+replace = ""
+
+[[mutation]]
+name = "two-generic-definitions-of-one-shape-unify"
+why = """
+an argument of one generic definition settles a parameter written against another with the same arity — nominal typing forgotten inside inference
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """                if types.definition_of(formal) != types.definition_of(actual)
+                    || std::mem::discriminant(&formal) != std::mem::discriminant(&actual)"""
+replace = "                if std::mem::discriminant(&formal) != std::mem::discriminant(&actual)"
+
+[[mutation]]
+name = "the-interface-persists-parameter-names"
+why = """
+a persisted generic definition carries its parameters' spelling as well as their count, so alpha-renaming `[T]` to `[Value]` changes the interface's bytes and its hash
+"""
+file = "crates/nazm-iface/src/wire.rs"
+find = "                generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),"
+replace = "                generics: u32::try_from(e.type_params.len() + e.type_params.iter().map(String::len).sum::<usize>()).unwrap_or(u32::MAX),"
+
+[[mutation]]
+name = "an-instance-symbol-keeps-only-its-first-argument"
+why = """
+`swap[Int, Str]` and `swap[Int, Bool]` get one symbol, so two different instances are one definition to the linker
+"""
+file = "crates/nazm-lir/src/symbol.rs"
+find = """    pub fn of_instance(base: &Self, args: &[String]) -> Self {
+        Self(format!("{}.g.{}", base.0, encode(&args.join(","))))
+    }
+
+    /// The name itself, with no sigil."""
+replace = """    pub fn of_instance(base: &Self, args: &[String]) -> Self {
+        Self(format!("{}.g.{}", base.0, encode(args.first().map_or("", String::as_str))))
+    }
+
+    /// The name itself, with no sigil."""
+
+[[mutation]]
+name = "an-instance-requested-twice-is-planned-twice"
+why = """
+the planner stops deduplicating the instances concrete code asks for, so two calls to `identity[Int]` plan two definitions of one symbol
+"""
+file = "crates/nazm-lir/src/instance.rs"
+find = """                    if !seen.contains_key(&key) {
+                        seen.insert(key.clone(), order.len());
+                        order.push((key.clone(), site.span));
+                        work.push_back((key, site.span));
+                    }"""
+replace = """                    seen.insert(key.clone(), order.len());
+                    order.push((key.clone(), site.span));
+                    work.push_back((key, site.span));"""
+
+[[mutation]]
+name = "the-planner-skips-calls-made-by-an-instance"
+why = """
+an instance's own calls to generic functions are never planned, so `twice[T]` calling `id[T]` links against an instance nobody built
+"""
+file = "crates/nazm-lir/src/instance.rs"
+find = """                let next = InstanceKey { def: g, args };
+                if !seen.contains_key(&next) {"""
+replace = """                let next = InstanceKey { def: g, args };
+                if false && !seen.contains_key(&next) {"""
+
+[[mutation]]
+name = "polymorphic-recursion-is-not-an-expanding-cycle"
+why = """
+no call is counted as expanding, so `grow[T]` calling `grow[Vec[T]]` is found by the instance budget instead of refused by name at the call that expands
+"""
+file = "crates/nazm-lir/src/instance.rs"
+find = "                    let expanding = *t != Type::Param(param);"
+replace = "                    let expanding = false && *t != Type::Param(param);"
+
+[[mutation]]
+name = "vec-push-does-not-take-its-own-reference"
+why = """
+`vec_push` stores the caller's value without a reference of its own, so the element is freed while the vector still holds it
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                // The vector keeps what it is given, so it takes a copy of its own; the
+                // caller's value is untouched, which is rule 2.
+                self.retain(arg(1), elem);"""
+replace = """                // The vector keeps what it is given, so it takes a copy of its own; the
+                // caller's value is untouched, which is rule 2."""
+
+[[mutation]]
+name = "vec-get-returns-a-borrowed-element"
+why = """
+`vec_get` hands out the vector's own reference, so an element read and then overwritten — or popped — is freed under its reader
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                // lesson, generic.
+                if elem.owns().is_some() {
+                    self.take(v, elem);
+                    self.own(v, elem);
+                }"""
+replace = "                // lesson, generic."
+
+[[mutation]]
+name = "vec-pop-copies-instead-of-transferring"
+why = """
+`vec_pop` retains the element it takes out, so the vector's reference is never given up and every popped element leaks
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                // expression holds that same one. No retain and no release.
+                if elem.owns().is_some() {
+                    self.own(v, elem);
+                }"""
+replace = """                // expression holds that same one. No retain and no release.
+                if elem.owns().is_some() {
+                    self.take(v, elem);
+                    self.own(v, elem);
+                }"""
+
+[[mutation]]
+name = "a-vec-is-freed-without-its-elements"
+why = """
+the last release of a `Vec` of owning elements frees its storage and never releases what it held
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = "        self.release(v, layout.elem);"
+replace = ""
+
+[[mutation]]
+name = "a-vec-hides-what-it-owns"
+why = """
+the ownership graph does not follow a `Vec` to its element, so `struct Node { children: Vec[Node] }` is accepted and its values can own themselves
+"""
+file = "crates/nazm-sema/src/udt.rs"
+find = "                    self.owned_by(e, COUNTED, via, uses, out);"
+replace = ""
+
+[[mutation]]
+name = "a-parameter-no-field-uses-counts-as-used"
+why = """
+every parameter of a generic definition is taken to be stored, inline and counted, so `Tag[T] { n: Int }` applied to its own record is refused — acyclic nesting over-rejected
+"""
+file = "crates/nazm-sema/src/udt.rs"
+find = "                        used |= self.reaches_param(ty, p, &uses);"
+replace = "                        used |= self.reaches_param(ty, p, &uses) | INLINE | COUNTED;"
+
+[[mutation]]
+name = "selfhost-accepts-the-wrong-number-of-type-arguments"
+why = """
+the **Nazm-written** checker pads or truncates a generic type's arguments without `N0353`, so the two compilers accept different languages
+"""
+file = "compiler/analyse.nz"
+find = """                        if written != arity {
+                            report(diags, "N0353", at, end,"""
+replace = """                        if written == 0 - 7 {
+                            report(diags, "N0353", at, end,"""
+
+[[mutation]]
+name = "selfhost-inference-keeps-the-first-type"
+why = """
+the **Nazm-written** checker settles a conflicting parameter to its first type silently, where the reference reports `N0355`
+"""
+file = "compiler/analyse.nz"
+find = """                if ints_get(sval, p) != x {
+                    if ints_get(sval, p) != t_unknown() {"""
+replace = """                if ints_get(sval, p) == 0 - 7 {
+                    if ints_get(sval, p) != t_unknown() {"""
+
+[[mutation]]
+name = "selfhost-lets-a-parameter-be-compared"
+why = """
+the **Nazm-written** checker gives an unconstrained `T` equality
+"""
+file = "compiler/analyse.nz"
+find = "            if is_param(l) { ok = false; }"
+replace = ""
+
+[[mutation]]
+name = "selfhost-substitutes-by-first-position"
+why = """
+the **Nazm-written** compiler's substitution gives every parameter the first argument, so an instance of `Pair[A, B]` has two fields of type `A`
+"""
+file = "compiler/analyse.nz"
+find = "                if at < ints_len(args) { ints_push(to, ints_get(args, at)); } else { ints_push(to, x); }"
+replace = "                if at < ints_len(args) { ints_push(to, ints_get(args, 0)); } else { ints_push(to, x); }"
+
+[[mutation]]
+name = "selfhost-a-vec-hides-what-it-owns"
+why = """
+the **Nazm-written** checker's ownership graph does not follow a `Vec` to its element, so it accepts `Node { children: Vec[Node] }`
+"""
+file = "compiler/analyse.nz"
+find = """                    if is_vec(t) {
+                        ints_push(work, ints_get(tb.args, ints_get(tb.afirst, entry_of(t))));
+                        ints_push(wreach, counted_reach());
+                    }"""
+replace = """                    if is_vec(t) {
+                        ints_len(work);
+                    }"""
+
+[[mutation]]
+name = "selfhost-vec-get-returns-a-borrowed-element"
+why = """
+the **Nazm-written** emitter's `vec_get` hands out the vector's own reference
+"""
+file = "compiler/emit.nz"
+find = """        if owns_anything(elem, rowns) {
+            emit_retain(out, next, got, elem, rowns);
+            own_add(owned, otype, got, elem);
+        }
+        return got;"""
+replace = "        return got;"
+
+[[mutation]]
+name = "selfhost-a-vec-is-freed-without-its-elements"
+why = """
+the **Nazm-written** emitter's `Vec` release helper frees the storage and never releases the elements
+"""
+file = "compiler/emit.nz"
+find = """            str_concat(str_concat(" = load ", et), ", ptr %e")));
+    emit_release(out, next, n, elem, rowns);"""
+replace = """            str_concat(str_concat(" = load ", et), ", ptr %e")));"""
+
+[[mutation]]
+name = "selfhost-the-planner-skips-calls-made-by-an-instance"
+why = """
+the **Nazm-written** emitter never plans an instance's own calls to generic functions, so it calls an instance it never emitted
+"""
+file = "compiler/emit.nz"
+find = "                        callee_inst = request_instance(ints_get(fnode_of, f), cargs, inst_fn,"
+replace = "                        callee_inst = 0 - 1 + 0 * request_instance(ints_get(fnode_of, f), cargs, inst_fn,"
