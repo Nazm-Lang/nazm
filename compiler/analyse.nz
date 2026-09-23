@@ -406,17 +406,63 @@ fn agrees(a: Int, b: Int) -> Bool {
     a == b
 }
 
+// How a node finishes, in one array beside its type — the reference's `Completion`.
+//
+// `Value` falls off the end with a value, whose type is the node's `ntype`. `Unit` falls
+// off the end with **no** value: a statement, an `if` with no `else`, a block with no
+// tail. `Diverges` never falls off the end: every path returns, breaks or continues.
+// Three states, never inferred from one another and never from the type: until N10.2 the
+// type code `unknown` meant a statement, an error already reported **and** a construct that
+// produces no value, so `let x = if c { 1 };` reached the emitter and was allocated as
+// `alloca void`. `unknown` means only "already reported" now.
+fn c_value() -> Int { 0 }
+fn c_unit() -> Int { 1 }
+fn c_diverges() -> Int { 2 }
+
 // The type a value position with **no expectation of its own** sees: the reference's
-// `value_type(e, None)`, which says `Diverges => Int`. A value that never arrives is
-// otherwise `unknown`, and `unknown` agrees with everything — so this compiler accepted
-// `match (if c { break; } else { continue; }) { … }`, a `match` over an `Int` the
-// reference refuses, and gave a `let` of one a slot with no type. Where a position does
-// expect a type the reference answers with that one, which is what `agrees` already does.
-fn as_value(t: Int, ndiv: Ints, node: Int) -> Int {
-    if ints_get(ndiv, node) == 1 {
+// `value_type(e, None)`, which answers `Int` for a value that never arrives and for one
+// that does not exist. Where a position does expect a type the reference answers with
+// that one, which is what `agrees` already does with `unknown`.
+fn as_value(t: Int, ncomp: Ints, node: Int) -> Int {
+    if ints_get(ncomp, node) != c_value() {
         if t == t_unknown() { return t_int(); }
     }
     t
+}
+
+// `N0300`, once, where a value is required and the node produces none. The one place the
+// rule is decided: every value position asks this and nothing else, so a `Unit` operand is
+// refused before any operator, field or parameter looks at its type. A node that diverges
+// is not refused — it never produces the contradictory value — and one that failed is not
+// refused twice.
+fn needs_value(ncomp: Ints, node: Int, nst: Ints, nen: Ints,
+        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+    if ints_get(ncomp, node) == c_unit() {
+        report(dcode, dstart, dend, dmsg, "N0300", ints_get(nst, node), ints_get(nen, node),
+                "this produces no value");
+        return 1;
+    }
+    0
+}
+
+// Which children of a node must produce a value: `-1` for all of them, a child's number
+// for that one alone, `-2` for none. Written once, beside `needs_value`, because the answer
+// is a property of the node kind and the reference answers it in one place too — its
+// `value_type` calls.
+fn value_child(kind: Int) -> Int {
+    if kind == n_bin() { return 0 - 1; }
+    if kind == n_neg() { return 0 - 1; }
+    if kind == n_call() { return 0 - 1; }
+    if kind == n_spawn() { return 0 - 1; }
+    if kind == n_construct() { return 0 - 1; }
+    if kind == n_makevariant() { return 0 - 1; }
+    if kind == n_fieldread() { return 0 - 1; }
+    if kind == n_let() { return 0; }
+    if kind == n_assign() { return 0; }
+    if kind == n_return() { return 0; }
+    if kind == n_if() { return 0; }
+    if kind == n_while() { return 0; }
+    0 - 2
 }
 
 pub fn after_colon(s: Str) -> Str {
@@ -1407,20 +1453,25 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
     let nmut = ints_new();
     let nslotof = ints_new();
     let ts = ints_new(); // the type stack: one entry per finished child
-    // Whether each node **never completes**: every path through it returns, breaks or
-    // continues. The reference's `Completion::Diverges`, kept beside the type rather than
-    // in it, because a type code is also what a binding, a slot and an operand are given
-    // and "never finishes" is none of those. `unknown` on `ts` answers "no value" and
-    // cannot say why — a statement, an error, or a transfer — and the `if` that took its
-    // then-branch's `unknown` as its own type made `if c { continue; } else { i }` a
-    // value-less expression, which is how the emitter came to pass `void %24` to a call.
-    let ndiv = ints_new();
-    while ints_len(ndiv) < ints_len(nk) { ints_push(ndiv, 0); }
+    // How each node finishes — `c_value`, `c_unit` or `c_diverges` — the one answer every
+    // consumer reads. N10.1 kept a single bit here, *never completes*, and left "produces
+    // no value" folded into the type's `unknown`; N10.2 made it the reference's three.
+    let ncomp = ints_new();
+    while ints_len(ncomp) < ints_len(nk) { ints_push(ncomp, c_value()); }
+    // The declared result of the function being checked, for `return` and for the body.
+    // One slot: functions do not nest.
+    let cur_ret = ints_new();
+    ints_push(cur_ret, t_unknown());
     // One entry per `match` now open, innermost last: the enum its scrutinee named, and
     // the variants its arms have covered so far as a comma-delimited list. A stack
     // because a `match` may appear inside an arm of another.
     let menum = ints_new();
     let mcov = strs_new();
+    // Per open `match`, how many diagnostics existed once its scrutinee was refused as not
+    // an enum, or `-1`. The reference checks no arm of such a `match` — it returns after
+    // `N0342` — so what the arms would say is discarded at the `match`, and a payload name
+    // bound by an arm that could never run is not reported as undefined.
+    let mdiag = ints_new();
     let inscope = ints_new();
     scope_flags(nk, nar, kids, kid_first, inscope);
     // One entry per node, so the emitter can index it directly. `-1` is "no slot".
@@ -1476,10 +1527,12 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // because each arm needs it and none can reach it by then.
                 let mk = (v - 1) / 3;
                 let scrutinee = ints_get(kids, ints_get(kid_first, mk));
-                let st = as_value(ints_get(ts, ints_len(ts) - 1), ndiv, scrutinee);
+                needs_value(ncomp, scrutinee, nst, nen, dcode, dstart, dend, dmsg);
+                let st = as_value(ints_get(ts, ints_len(ts) - 1), ncomp, scrutinee);
                 ints_set(ts, ints_len(ts) - 1, st);
                 ints_push(menum, st);
                 strs_push(mcov, "");
+                let mut silenced = 0 - 1;
                 if is_enum(st, rkind) == false {
                     if st != t_unknown() {
                         let c = ints_get(kids, ints_get(kid_first, mk));
@@ -1487,8 +1540,10 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                                 ints_get(nst, c), ints_get(nen, c),
                                 str_concat(str_concat("`match` needs an enum, but this is `",
                                 show_type(st, rnames)), "`"));
+                        silenced = strs_len(dcode);
                     }
                 }
+                ints_push(mdiag, silenced);
                 continue;
             }
             // --- finish: the children's types are the top of `ts` ---------------------
@@ -1503,9 +1558,35 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             let from = ints_get(nst, k);
             let to = ints_get(nen, k);
 
+            // A statement completes with nothing unless it leaves; the ones that can leave
+            // say so in their own rules below.
+            if kind == n_let() { ints_set(ncomp, k, c_unit()); }
+            if kind == n_assign() { ints_set(ncomp, k, c_unit()); }
+            if kind == n_while() { ints_set(ncomp, k, c_unit()); }
+            if kind == n_scope() { ints_set(ncomp, k, c_unit()); }
+            if kind == n_spawn() { ints_set(ncomp, k, c_unit()); }
+
+            // Where a value is required and a child produces none: `N0300`, here and only
+            // here, before the node's own rule looks at the child's type.
+            let wants = value_child(kind);
+            if wants == 0 - 1 {
+                let mut vc = 0;
+                while vc < arity {
+                    needs_value(ncomp, ints_get(kids, first + vc), nst, nen,
+                            dcode, dstart, dend, dmsg);
+                    vc = vc + 1;
+                }
+            }
+            if wants >= 0 {
+                if wants < arity {
+                    needs_value(ncomp, ints_get(kids, first + wants), nst, nen,
+                            dcode, dstart, dend, dmsg);
+                }
+            }
+
             if kind == n_bin() {
-                let r = as_value(ints_pop(ts), ndiv, ints_get(kids, first + 1));
-                let l = as_value(ints_pop(ts), ndiv, ints_get(kids, first));
+                let r = as_value(ints_pop(ts), ncomp, ints_get(kids, first + 1));
+                let l = as_value(ints_pop(ts), ncomp, ints_get(kids, first));
                 // The operator's own span, from the auxiliary column: the reference
                 // points `N0304` at the operator, and the node's span covers both
                 // operands instead.
@@ -1571,7 +1652,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 continue;
             }
             if kind == n_fieldread() {
-                let base = as_value(ints_pop(ts), ndiv, ints_get(kids, first));
+                let base = as_value(ints_pop(ts), ncomp, ints_get(kids, first));
                 if is_enum(base, rkind) {
                     report(dcode, dstart, dend, dmsg, "N0335", from, to,
                             str_concat(str_concat(str_concat(str_concat("`",
@@ -1644,27 +1725,50 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 let t = ints_pop(ts);
                 ints_push(ts, t);
                 ints_set(ntype, k, t);
-                ints_set(ndiv, k, ints_get(ndiv, ints_get(kids, first + arity - 1)));
+                ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first + arity - 1)));
                 continue;
             }
             if kind == n_match() {
+                let silenced = ints_pop(mdiag);
+                if silenced >= 0 {
+                    while strs_len(dcode) > silenced {
+                        strs_pop(dcode);
+                        ints_pop(dstart);
+                        ints_pop(dend);
+                        strs_pop(dmsg);
+                    }
+                }
                 // Children: the scrutinee, then one arm each. Every arm must agree, and
                 // an arm that transfers control constrains nothing — the same rule an
                 // `if`'s branches follow.
                 let mut result = t_unknown();
-                // Every arm leaving is the `match` leaving. No arm is a `match` over an
-                // enum with no variants, which checking refuses before this matters.
-                let mut every_arm_leaves = 1;
+                // The arms' completions folded as the reference folds them: an arm that
+                // leaves defers to the others, and one arm with no value makes the whole
+                // `match` produce none — reported by whatever wanted the value, not here.
+                // `-1` is "no arm yet"; a `match` with none is refused elsewhere.
+                let mut fold = 0 - 1;
                 let mut a = 1;
                 while a < arity {
-                    if ints_get(ndiv, ints_get(kids, first + a)) == 0 { every_arm_leaves = 0; }
+                    let arm_c = ints_get(ncomp, ints_get(kids, first + a));
+                    if fold == 0 - 1 {
+                        fold = arm_c;
+                    } else {
+                        if fold == c_diverges() {
+                            fold = arm_c;
+                        } else {
+                            if arm_c == c_unit() { fold = c_unit(); }
+                        }
+                    }
                     let armt = ints_get(ts, ints_len(ts) - arity + a);
                     if armt != t_unknown() {
                         if result == t_unknown() {
                             result = armt;
                         } else {
                             if agrees(armt, result) == false {
-                                let c = ints_get(kids, first + a);
+                                // At the arm's body, as the reference reports it.
+                                let arm = ints_get(kids, first + a);
+                                let c = ints_get(kids,
+                                        ints_get(kid_first, arm) + ints_get(nar, arm) - 1);
                                 report(dcode, dstart, dend, dmsg, "N0302",
                                         ints_get(nst, c), ints_get(nen, c),
                                         str_concat(str_concat(str_concat(str_concat(
@@ -1706,9 +1810,13 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 }
                 let mut left = 0;
                 while left < arity { ints_pop(ts); left = left + 1; }
+                if fold >= 0 { ints_set(ncomp, k, fold); }
+                // A `match` with no value has no type, whatever its value arms said.
+                if fold != c_value() {
+                    if fold >= 0 { result = t_unknown(); }
+                }
                 ints_push(ts, result);
                 ints_set(ntype, k, result);
-                if arity > 1 { ints_set(ndiv, k, every_arm_leaves); }
                 continue;
             }
             if kind == n_call() {
@@ -1737,21 +1845,65 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                             type_name(cond_t)), "`"));
                 }
                 if arity == 3 {
-                    // `(Diverges, other) | (other, Diverges) => other`: a branch that
-                    // leaves contributes no type, so the other one decides. Both leaving
-                    // is a `Diverges` the `if` inherits, and its type stays `unknown`.
+                    // The reference's join, in the reference's order. A branch that leaves
+                    // defers to the other one, whatever the other one is — so a `Unit`
+                    // with a `Diverges` is `Unit`, and both leaving is the `if` leaving.
+                    // Two values must agree (`N0302` at the else branch's value); a value
+                    // and nothing is `N0302` at the whole `if`. Either way the `if` then
+                    // carries the value it has, so what contains it is not refused twice.
                     let then_b = ints_get(kids, first + 1);
                     let else_b = ints_get(kids, first + 2);
-                    if ints_get(ndiv, then_b) == 1 {
-                        ints_push(ts, else_t);
+                    let tc = ints_get(ncomp, then_b);
+                    let ec = ints_get(ncomp, else_b);
+                    let mut t = t_unknown();
+                    let mut c = c_unit();
+                    if tc == c_diverges() {
+                        c = ec;
+                        t = else_t;
                     } else {
-                        ints_push(ts, then_t);
+                        if ec == c_diverges() {
+                            c = tc;
+                            t = then_t;
+                        } else {
+                            if tc == c_value() {
+                                c = c_value();
+                                t = then_t;
+                                if ec == c_value() {
+                                    if agrees(then_t, else_t) == false {
+                                        let tail = ints_get(kids,
+                                                ints_get(kid_first, else_b) + ints_get(nar, else_b) - 1);
+                                        report(dcode, dstart, dend, dmsg, "N0302",
+                                                ints_get(nst, tail), ints_get(nen, tail),
+                                                str_concat(str_concat(str_concat(str_concat(
+                                                "this branch is `", show_type(else_t, rnames)),
+                                                "`, but the other is `"),
+                                                show_type(then_t, rnames)), "`"));
+                                    }
+                                    if t == t_unknown() { t = else_t; }
+                                } else {
+                                    report(dcode, dstart, dend, dmsg, "N0302", from, to,
+                                            str_concat(str_concat("one branch produces `",
+                                            show_type(then_t, rnames)),
+                                            "` and the other produces nothing"));
+                                }
+                            } else {
+                                if ec == c_value() {
+                                    c = c_value();
+                                    t = else_t;
+                                    report(dcode, dstart, dend, dmsg, "N0302", from, to,
+                                            str_concat(str_concat("one branch produces `",
+                                            show_type(else_t, rnames)),
+                                            "` and the other produces nothing"));
+                                }
+                            }
+                        }
                     }
-                    if ints_get(ndiv, then_b) == 1 {
-                        ints_set(ndiv, k, ints_get(ndiv, else_b));
-                    }
+                    ints_set(ncomp, k, c);
+                    ints_push(ts, t);
                 } else {
-                    // No `else`: the condition may be false, so the `if` always completes.
+                    // No `else`: the condition may be false, so the `if` always completes,
+                    // and with nothing — whatever its branch does.
+                    ints_set(ncomp, k, c_unit());
                     ints_push(ts, t_unknown());
                 }
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
@@ -1768,22 +1920,39 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // it rather than compiling it away: `N0313`, once, then the child after it
                 // is checked afresh — `diverged_at = None`, exactly. Until N10.1 this
                 // compiler said nothing, compiled `continue; i = i + 10;` and ran it.
+                //
+                // The statements first, then the tail if there is one — the reference's
+                // loop, including which completion the block ends with: a block whose last
+                // statement leaves is `Diverges` (and a tail after it is refused too); one
+                // with a tail is the tail's; one with neither is `Unit`.
+                let has_tail = text == "tail";
+                let mut stmts = arity;
+                if has_tail { stmts = arity - 1; }
                 let mut left = 0;
                 let mut d = 0;
-                while d < arity {
+                while d < stmts {
                     let child = ints_get(kids, first + d);
                     if left == 1 {
                         report(dcode, dstart, dend, dmsg, "N0313",
                                 ints_get(nst, child), ints_get(nen, child), "this can never run");
                         left = 0;
                     }
-                    // A statement that leaves makes the block leave, and so does a tail
-                    // that does.
-                    if ints_get(ndiv, child) == 1 {
-                        ints_set(ndiv, k, 1);
-                        left = 1;
-                    }
+                    if ints_get(ncomp, child) == c_diverges() { left = 1; }
                     d = d + 1;
+                }
+                if left == 1 {
+                    if has_tail {
+                        let tail = ints_get(kids, first + arity - 1);
+                        report(dcode, dstart, dend, dmsg, "N0313",
+                                ints_get(nst, tail), ints_get(nen, tail), "this can never run");
+                    }
+                    ints_set(ncomp, k, c_diverges());
+                } else {
+                    if has_tail {
+                        ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first + arity - 1)));
+                    } else {
+                        ints_set(ncomp, k, c_unit());
+                    }
                 }
                 d = 0;
                 while d < arity {
@@ -1794,6 +1963,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                     }
                     d = d + 1;
                 }
+                if ints_get(ncomp, k) != c_value() { t = t_unknown(); }
                 ints_push(ts, t);
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
@@ -1803,7 +1973,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // and the value is given it too, because that is where the emitter reads a
                 // slot's type from. Without it the emitter allocated `alloca void`. Nothing
                 // else is read off a node that is never reached.
-                let t = as_value(ints_pop(ts), ndiv, ints_get(kids, first));
+                let t = as_value(ints_pop(ts), ncomp, ints_get(kids, first));
                 ints_set(ntype, ints_get(kids, first), t);
                 let slot = ints_get(counter, 0);
                 ints_set(counter, 0, slot + 1);
@@ -1917,7 +2087,21 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 continue;
             }
             if kind == n_return() {
-                ints_set(ndiv, k, 1);
+                ints_set(ncomp, k, c_diverges());
+                // `check_return`: the value must be what the function returns, reported at
+                // the value. One that does not exist was refused above, and one that never
+                // arrives is whatever the signature says.
+                let rv = ints_get(kids, first);
+                let got = ints_get(ts, ints_len(ts) - 1);
+                if ints_get(ncomp, rv) == c_value() {
+                    if agrees(got, ints_get(cur_ret, 0)) == false {
+                        report(dcode, dstart, dend, dmsg, "N0300",
+                                ints_get(nst, rv), ints_get(nen, rv),
+                                str_concat(str_concat(str_concat(str_concat("this returns `",
+                                show_type(got, rnames)), "`, but the function returns `"),
+                                show_type(ints_get(cur_ret, 0), rnames)), "`"));
+                    }
+                }
                 ints_pop(ts);
                 ints_push(ts, t_unknown());
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
@@ -1927,13 +2111,41 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // `Stmt::Expr(e) => check_expr(e).diverges()`: the only statement whose
                 // divergence is its expression's. A `let` of a diverging value does not
                 // diverge — the reference says `false` — and neither does a `while`.
-                ints_set(ndiv, k, ints_get(ndiv, ints_get(kids, first)));
+                if ints_get(ncomp, ints_get(kids, first)) == c_diverges() {
+                    ints_set(ncomp, k, c_diverges());
+                } else {
+                    ints_set(ncomp, k, c_unit());
+                }
                 ints_pop(ts);
                 ints_push(ts, t_unknown());
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
             if kind == n_fn() {
+                // The body against the signature, as the reference checks it: a body that
+                // returned on every path needs nothing; one with a value must have the
+                // declared type, reported at its tail; one with none is refused whole.
+                let body = ints_get(kids, first + arity - 1);
+                let declared = ints_get(nrec, k);
+                let bc = ints_get(ncomp, body);
+                if bc == c_value() {
+                    let bt = ints_get(ts, ints_len(ts) - 1);
+                    if agrees(bt, declared) == false {
+                        let tail = ints_get(kids, ints_get(kid_first, body) + ints_get(nar, body) - 1);
+                        report(dcode, dstart, dend, dmsg, "N0300",
+                                ints_get(nst, tail), ints_get(nen, tail),
+                                str_concat(str_concat(str_concat(str_concat(str_concat("`",
+                                before_colon(text)), "` returns `"), show_type(bt, rnames)),
+                                "`, but its signature says `"), str_concat(show_type(declared, rnames), "`")));
+                    }
+                }
+                if bc == c_unit() {
+                    report(dcode, dstart, dend, dmsg, "N0300",
+                            ints_get(nst, body), ints_get(nen, body),
+                            str_concat(str_concat(str_concat("`", before_colon(text)),
+                            "` must produce a `"), str_concat(show_type(declared, rnames),
+                            "`, but this body does not")));
+                }
                 let mut d = 0;
                 while d < arity { ints_pop(ts); d = d + 1; }
                 // How many slots this function's entry block must allocate.
@@ -2014,12 +2226,12 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             continue;
         }
         if kind == n_break() {
-            ints_set(ndiv, entry, 1);
+            ints_set(ncomp, entry, c_diverges());
             ints_push(ts, t_unknown());
             continue;
         }
         if kind == n_continue() {
-            ints_set(ndiv, entry, 1);
+            ints_set(ncomp, entry, c_diverges());
             ints_push(ts, t_unknown());
             continue;
         }
@@ -2198,6 +2410,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
         if kind == n_fn() {
             // Slots are per function: a caller's local and a callee's cannot share one.
             ints_set(counter, 0, 0);
+            ints_set(cur_ret, 0, ints_get(nrec, entry));
             ints_push(marks, strs_len(names));
             ints_push(work, mark_leave(entry));
         }

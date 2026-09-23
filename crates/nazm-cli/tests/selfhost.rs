@@ -1001,15 +1001,20 @@ fn sorted_diagnostics(lines: &str) -> Vec<(String, u32, u32)> {
 /// `N0313` joined it in N10.1, when the Nazm checker learned which children never
 /// complete. Until then it accepted `continue; i = i + 10;` and the emitter compiled the
 /// statement the reference refuses.
+///
+/// `N0302` joined it in N10.2, when the Nazm checker learned the reference's `if` join —
+/// two values must agree, and a value with nothing is refused — and `N0300` began to cover
+/// what it had never covered: a value position given nothing, and a body or a `return`
+/// against its signature.
 const COMPARABLE: &[&str] = &[
     "N0200", "N0201", "N0203", "N0204", "N0206", "N0207", "N0208", "N0300", "N0301", "N0303",
-    "N0304", "N0310", "N0313", "N0320", "N0321",
+    "N0302", "N0304", "N0310", "N0313", "N0320", "N0321",
 ];
 
 #[test]
 fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
     // **Scope, stated:** `compiler/check.nz` reports `N0200`, `N0201`, `N0300`, `N0301`,
-    // `N0303`, `N0304` and `N0310`, and nothing else — no `N0204`, no unreachable-code
+    // `N0302`, `N0303`, `N0304`, `N0310` and `N0313` among the codes compared here — no `N0204`, no unreachable-code
     // or shadowing rules. The sources below are chosen so those are the only errors the
     // reference finds, because a checker compared only on programs it happens to accept
     // would agree with everything.
@@ -1132,6 +1137,204 @@ fn the_nazm_checker_agrees_with_the_reference_on_names_and_types() {
             Some(i32::from(!theirs.is_empty())),
             "wrong exit status for {source:?}"
         );
+    }
+}
+
+#[test]
+fn the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value() {
+    // N10.2. The reference's `Completion` has three states — a value, **no** value, and
+    // never finishing — and the Nazm checker had two: `unknown` stood for "no value" as
+    // well as for "already reported", so a value position given nothing was accepted and
+    // the emitter allocated `alloca void`, and an `if` whose branches disagreed was typed
+    // by one of them and handed clang a mistyped `phi`. Refused programs only — which is
+    // why no accepted-language test could see it.
+    //
+    // Every case in `tests/refusals/` is checked four ways, and all four must agree on
+    // code **and** span: the reference, the Nazm checker compiled and interpreted, and a
+    // written expectation. The Nazm compiler must then refuse it by the checker's code —
+    // exit 1, before emission — or accept it, for the controls whose name starts `ok_`.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let checker = build_checker(dir.path());
+    let emitter = build_emitter(dir.path());
+    let corpus = repo_root().join("crates/nazm-cli/tests/refusals");
+    let mut cases: Vec<PathBuf> = std::fs::read_dir(&corpus)
+        .expect("read the refusal corpus")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "nz"))
+        .collect();
+    cases.sort();
+    assert!(cases.len() >= 40, "only {} refusal cases", cases.len());
+
+    for file in &cases {
+        let name = file.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
+        let source = std::fs::read_to_string(file).expect("read case");
+        let written = std::fs::read_to_string(file.with_extension("expected"))
+            .expect("every case has an .expected");
+        let written: Vec<String> = match written.trim() {
+            "ok" => Vec::new(),
+            codes => codes.split_whitespace().map(ToOwned::to_owned).collect(),
+        };
+
+        let mut theirs: Vec<(String, u32, u32)> = nazm_core::check_source(&source)
+            .into_iter()
+            .map(|d| {
+                (
+                    d.code.as_str().to_owned(),
+                    d.primary.span.start,
+                    d.primary.span.end,
+                )
+            })
+            .collect();
+        theirs.sort();
+        let codes: Vec<String> = theirs.iter().map(|(c, _, _)| c.clone()).collect();
+        assert_eq!(
+            codes, written,
+            "{name}: the reference no longer says what was written"
+        );
+
+        let (status, compiled, _) = run_stage(&checker, file);
+        assert_eq!(
+            sorted_diagnostics(&compiled),
+            theirs,
+            "{name}: the compiled checker differs"
+        );
+        assert_eq!(
+            status,
+            Some(i32::from(!theirs.is_empty())),
+            "{name}: the compiled checker's exit status"
+        );
+        let interpreted = Command::new(NAZM)
+            .args(["run", "compiler/check.nz", "--", file.to_str().unwrap()])
+            .current_dir(repo_root())
+            .output()
+            .expect("interpret the Nazm checker");
+        assert_eq!(
+            sorted_diagnostics(&String::from_utf8_lossy(&interpreted.stdout)),
+            theirs,
+            "{name}: the interpreted checker differs"
+        );
+
+        // And the refusal happens **before** emission: the compiler stops with the
+        // checker's code rather than writing IR that clang or the runtime would find wrong.
+        let (rc, ir, err) = run_stage(&emitter, file);
+        if theirs.is_empty() {
+            assert_eq!(
+                rc,
+                Some(0),
+                "{name}: the Nazm compiler refused a control:\n{err}"
+            );
+            // A control is also run, against the interpreter: several are statements whose
+            // `match` produces nothing while an arm produces a value, which the emitter
+            // must discard — and give back — rather than leave for a later node to take.
+            let ll = dir.path().join(format!("{name}.ll"));
+            std::fs::write(&ll, &ir).expect("write IR");
+            let exe = dir.path().join(format!("{name}-selfhost"));
+            let assembled = Command::new("clang")
+                .args(["-Wno-override-module", "-lpthread", "-o"])
+                .arg(&exe)
+                .arg(&ll)
+                .output()
+                .expect("run clang");
+            assert!(
+                assembled.status.success(),
+                "{name}: clang rejected the Nazm compiler's IR:\n{}",
+                String::from_utf8_lossy(&assembled.stderr)
+            );
+            let (code, out, run_err) = run_bounded(
+                common::bounded_exe(&exe).env(nazm_lir::MEMORY_VARIABLE, "1"),
+                std::time::Duration::from_secs(60),
+            )
+            .expect("the compiled control hung");
+            let interp = Command::new(NAZM)
+                .args(["run", file.to_str().unwrap()])
+                .env(nazm_lir::MEMORY_VARIABLE, "1")
+                .output()
+                .expect("run nazm run");
+            assert_eq!(code, Some(0), "{name}: {run_err}");
+            assert_eq!(
+                out.trim(),
+                String::from_utf8_lossy(&interp.stdout).trim(),
+                "{name}: the compiled control disagrees with the interpreter"
+            );
+            let memory = |text: &str| {
+                text.lines()
+                    .find(|l| l.starts_with("nazm-memory:"))
+                    .map(ToOwned::to_owned)
+            };
+            let line = memory(&run_err);
+            assert_eq!(
+                line,
+                memory(&String::from_utf8_lossy(&interp.stderr)),
+                "{name}"
+            );
+            assert!(
+                line.as_deref()
+                    .is_some_and(|l| l.matches("live=0").count() == 3),
+                "{name}: left something behind: {line:?}"
+            );
+        } else {
+            assert_eq!(
+                rc,
+                Some(1),
+                "{name}: the Nazm compiler did not refuse:\n{err}"
+            );
+            let code = selfhost_code(&err).unwrap_or_default();
+            assert!(
+                codes.contains(&code),
+                "{name}: refused as {code}, not {codes:?}"
+            );
+        }
+    }
+
+    // Nominal identity across a module boundary: two records laid out alike, exported by
+    // two modules, are two types. The Nazm checker's driver sees one file, so the Nazm
+    // compiler — which resolves imports itself — is what is compared, in both forms.
+    for (case, want) in [("same-shape", Some("N0302")), ("same-module-ok", None)] {
+        let main = corpus.join("modules").join(case).join("main.nz");
+        let reference = Command::new(NAZM)
+            .args(["check", "--no-cache", main.to_str().unwrap()])
+            .output()
+            .expect("run nazm check");
+        let ref_err = String::from_utf8_lossy(&reference.stderr).into_owned();
+        assert_eq!(
+            reference_code(&ref_err).as_deref(),
+            want,
+            "{case}: reference:\n{ref_err}"
+        );
+        let (rc, _, err) = run_stage(&emitter, &main);
+        let interpreted = Command::new(NAZM)
+            .args(["run", "compiler/emit.nz", "--", main.to_str().unwrap()])
+            .current_dir(repo_root())
+            .output()
+            .expect("interpret the Nazm compiler");
+        let int_err = String::from_utf8_lossy(&interpreted.stderr).into_owned();
+        assert_eq!(
+            selfhost_code(&err).as_deref(),
+            want,
+            "{case}: compiled:\n{err}"
+        );
+        assert_eq!(
+            selfhost_code(&int_err).as_deref(),
+            want,
+            "{case}: interpreted:\n{int_err}"
+        );
+        assert_eq!(rc, Some(i32::from(want.is_some())), "{case}: exit status");
+        if want.is_some() {
+            // The same position, `line:column`, in all three.
+            assert!(
+                ref_err.contains("main.nz:6:38"),
+                "{case}: reference position:\n{ref_err}"
+            );
+            assert!(
+                err.contains("main.nz:6:38"),
+                "{case}: compiled position:\n{err}"
+            );
+            assert!(
+                int_err.contains("main.nz:6:38"),
+                "{case}: interpreted position:\n{int_err}"
+            );
+        }
     }
 }
 

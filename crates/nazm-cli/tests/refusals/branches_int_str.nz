@@ -1,0 +1,20 @@
+struct P {
+    x: Int,
+}
+struct Q {
+    x: Int,
+}
+enum E {
+    A,
+    V(x: Int),
+}
+enum F {
+    A,
+    V(x: Int),
+}
+fn f(n: Int) -> Int { n }
+fn main() -> Int {
+    let c = true;
+    let x = if c { 1 } else { "x" };
+    0
+}

@@ -1,0 +1,22 @@
+struct P {
+    x: Int,
+}
+struct Q {
+    x: Int,
+}
+enum E {
+    A,
+    V(x: Int),
+}
+enum F {
+    A,
+    V(x: Int),
+}
+fn f(n: Int) -> Int { n }
+fn main() -> Int {
+    let c = true;
+    let mut n = 0;
+    if (if c { true }) { n = 1; };
+    while (if c { false }) { n = 2; }
+    n
+}

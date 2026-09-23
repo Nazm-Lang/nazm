@@ -1881,22 +1881,10 @@ replace = """                                                            join_fr
 # folded a transfer into `unknown`, and its emitter opened every join and emitted every
 # node. These put back each half of that, and the two things the audit found alongside it.
 
-[[mutation]]
-name = "an-if-is-typed-by-the-branch-that-left"
-why = """
-the root cause of N10.1, put back: the Nazm checker types a two-branch `if` by its
-then-branch whatever that branch does, so `if c { continue; } else { i }` has no value
-and the emitter passes `void %24` to the call it is an argument of. Every program where
-the then-branch is the one that leaves is affected; the ones where the else-branch leaves
-are not, which is why a corpus of one shape did not find it
-"""
-file = "compiler/analyse.nz"
-find = """                    if ints_get(ndiv, then_b) == 1 {
-                        ints_push(ts, else_t);
-                    } else {
-                        ints_push(ts, then_t);
-                    }"""
-replace = """                    ints_push(ts, then_t);"""
+# `an-if-is-typed-by-the-branch-that-left` (N10.1) is retired, not lost: N10.2 rewrote the
+# `if` join as the reference's three-state one, and the rule it attacked — a branch that
+# leaves gives the `if` the other branch's type — is now one line, which
+# `a-then-branch-that-leaves-still-gives-the-type` mutates exactly.
 
 [[mutation]]
 name = "a-join-no-branch-reached-is-opened-anyway"
@@ -2012,9 +2000,8 @@ the Nazm checker stops reporting `N0313`, so `continue; i = i + 10;` is accepted
 emitter compiles a statement the reference refuses — which is what it did until N10.1
 """
 file = "compiler/analyse.nz"
-find = """                        ints_set(ndiv, k, 1);
-                        left = 1;"""
-replace = """                        ints_set(ndiv, k, 1);"""
+find = """                    if ints_get(ncomp, child) == c_diverges() { left = 1; }"""
+replace = """                    if ints_get(ncomp, child) == 99 { left = 1; }"""
 
 [[mutation]]
 name = "a-value-that-never-arrives-has-no-type"
@@ -2058,3 +2045,182 @@ find = """                                                                      
                                                                                             own_drop(out, next, owned, b, ot, rowns, otype);
 """
 replace = """"""
+
+
+# --- N10.2: a value, no value, and never finishing ---------------------------------------
+#
+# The Nazm checker had two of the reference's three completions. These put back each way
+# the third could collapse into the other two, each half of the `if` join, the checks against
+# a signature it gained, and the one emitter rule that followed from a `match` of no value.
+
+[[mutation]]
+name = "unit-is-read-as-a-value"
+why = """
+the gap N10.2 closed, put back: a value position given nothing is not refused, so
+`let x = if c { 1 };` is accepted and the emitter allocates `alloca void`. `unknown` meant
+"no value" and "already reported" at once, and this is what that looked like
+"""
+file = "compiler/analyse.nz"
+find = """    if ints_get(ncomp, node) == c_unit() {"""
+replace = """    if ints_get(ncomp, node) == 99 {"""
+
+[[mutation]]
+name = "a-diverging-value-is-refused-as-no-value"
+why = """
+the opposite confusion: `N0300` for a value that never arrives. `pick(s, if c {
+continue; } else { i })` is refused though it never produces a contradictory value — the
+N10.1 corpus, every case of it
+"""
+file = "compiler/analyse.nz"
+find = """    if ints_get(ncomp, node) == c_unit() {"""
+replace = """    if ints_get(ncomp, node) != c_value() {"""
+
+[[mutation]]
+name = "an-if-with-no-else-leaves-instead-of-completing"
+why = """
+an `if` with no `else` is taken to never complete, rather than to complete with nothing.
+A value position given one is no longer refused, and a statement after one is refused as
+unreachable when the condition may simply be false
+"""
+file = "compiler/analyse.nz"
+find = """                    ints_set(ncomp, k, c_unit());
+                    ints_push(ts, t_unknown());"""
+replace = """                    ints_set(ncomp, k, c_diverges());
+                    ints_push(ts, t_unknown());"""
+
+[[mutation]]
+name = "a-continue-completes-with-nothing"
+why = """
+a `continue` is taken to complete with no value rather than to leave, so the branch that
+holds one is `Unit`, and `if c { continue; } else { i }` becomes a value with nothing —
+refused with `N0302` where the reference accepts it
+"""
+file = "compiler/analyse.nz"
+find = """        if kind == n_continue() {
+            ints_set(ncomp, entry, c_diverges());"""
+replace = """        if kind == n_continue() {
+            ints_set(ncomp, entry, c_unit());"""
+
+[[mutation]]
+name = "a-then-branch-that-leaves-still-gives-the-type"
+why = """
+when the then-branch leaves, the `if` takes the then-branch's type — which is none — rather
+than the else-branch's. The shape of N10.1's original defect, now in the three-state join
+"""
+file = "compiler/analyse.nz"
+find = """                        c = ec;
+                        t = else_t;"""
+replace = """                        c = ec;
+                        t = then_t;"""
+
+[[mutation]]
+name = "an-else-branch-that-leaves-takes-the-type"
+why = """
+the mirror: when the else-branch leaves, the `if` takes the else-branch's type, which is
+none, so `if c { i } else { break; }` has no value
+"""
+file = "compiler/analyse.nz"
+find = """                            c = tc;
+                            t = then_t;"""
+replace = """                            c = tc;
+                            t = else_t;"""
+
+[[mutation]]
+name = "branches-of-two-types-are-accepted"
+why = """
+two branches with values of different types are accepted, and the `if` is given the first
+one's. `if c { 1 } else { "x" }` then reaches the emitter as a `phi` of an `i64` and a
+string, which clang refuses — the checker's job, found by the assembler
+"""
+file = "compiler/analyse.nz"
+find = """if agrees(then_t, else_t) == false {"""
+replace = """if false {"""
+
+[[mutation]]
+name = "a-value-and-nothing-are-accepted"
+why = """
+a branch with a value beside one with none is accepted as the value — the reference
+refuses it at the whole `if` with `N0302`
+"""
+file = "compiler/analyse.nz"
+find = """                                } else {
+                                    report(dcode, dstart, dend, dmsg, "N0302", from, to,"""
+replace = """                                } else {
+                                    report(dcode, dstart, dend, dmsg, "N9999", from, to,"""
+
+[[mutation]]
+name = "a-unit-arm-leaves-the-match-a-value"
+why = """
+an arm that produces nothing no longer makes its `match` produce nothing: the `match` is
+given its value arms' type, so one in a value position is not refused, and one in a
+statement leaves the value arms' values on the emitter's stack
+"""
+file = "compiler/analyse.nz"
+find = """if arm_c == c_unit() { fold = c_unit(); }"""
+replace = """if arm_c == 99 { fold = c_unit(); }"""
+
+[[mutation]]
+name = "a-body-is-not-held-to-its-signature"
+why = """
+a function whose tail has the wrong type is accepted: `fn g() -> Int { "text" }`. The
+Nazm checker never compared the two before N10.2, and the reference always has
+"""
+file = "compiler/analyse.nz"
+find = """if bc == c_value() {"""
+replace = """if bc == 99 {"""
+
+[[mutation]]
+name = "a-body-with-no-value-is-accepted"
+why = """
+a function whose body produces nothing is accepted, and returns whatever the emitter
+leaves on its stack
+"""
+file = "compiler/analyse.nz"
+find = """if bc == c_unit() {"""
+replace = """if bc == 99 {"""
+
+[[mutation]]
+name = "a-return-is-not-held-to-its-signature"
+why = """
+`return "text";` in a function returning `Int` is accepted
+"""
+file = "compiler/analyse.nz"
+find = """if agrees(got, ints_get(cur_ret, 0)) == false {"""
+replace = """if false {"""
+
+[[mutation]]
+name = "the-arms-of-a-refused-match-are-still-checked"
+why = """
+a `match` refused because its scrutinee is not an enum still reports what its arms say —
+a payload name the reference never binds, reported as undefined. The reference checks no
+arm of such a `match`
+"""
+file = "compiler/analyse.nz"
+find = """if silenced >= 0 {"""
+replace = """if silenced >= 99999999 {"""
+
+[[mutation]]
+name = "a-discarded-arm-value-stays-on-the-stack"
+why = """
+the emitter's half: an arm that produces a value in a `match` that produces none leaves
+its value for a later node to consume. N10.2 made such a `match` typeless, and this is what
+a typeless `match` did before it knew to discard
+"""
+file = "compiler/emit.nz"
+find = """    if t == 0 { return 0; }
+    let dropped = ints_pop(vals);
+    own_drop(out, next, owned, dropped, t, rowns, otype)"""
+replace = """    if t == 0 { return 0; }
+    0"""
+
+[[mutation]]
+name = "a-discarded-arm-value-is-not-given-back"
+why = """
+the value is discarded but not released, so a string an arm built and nobody wanted is
+allocated and never reclaimed — invisible to every value, visible to the counters
+"""
+file = "compiler/emit.nz"
+find = """    let dropped = ints_pop(vals);
+    own_drop(out, next, owned, dropped, t, rowns, otype)"""
+replace = """    let dropped = ints_pop(vals);
+    dropped"""

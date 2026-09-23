@@ -1,0 +1,8 @@
+use "a.nz";
+use "b.nz";
+
+fn main() -> Int {
+    let c = true;
+    let x = if c { a_box(1) } else { b_box(1) };
+    0
+}

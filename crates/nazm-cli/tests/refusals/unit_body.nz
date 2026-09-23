@@ -1,0 +1,19 @@
+struct P {
+    x: Int,
+}
+struct Q {
+    x: Int,
+}
+enum E {
+    A,
+    V(x: Int),
+}
+enum F {
+    A,
+    V(x: Int),
+}
+fn f(n: Int) -> Int { n }
+fn g() -> Int {
+    let x = 1;
+}
+fn main() -> Int { g() }

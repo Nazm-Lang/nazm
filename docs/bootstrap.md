@@ -404,7 +404,7 @@ two branches (`N0302`). Each concerns only programs the reference refuses, so ne
 divergence in the accepted language; but for those programs this compiler emits IR clang
 refuses, or fails with `N0405`, rather than refusing by name. That, and N2's bare block,
 are the known differences, and the second of them is still the only one a program the
-reference accepts can reach.
+reference accepts can reach. *The first two were closed by N10.2, below.*
 
 The corpus carries all of it: `crates/nazm-cli/tests/transfers/` holds 32 programs, the
 original among them byte for byte, run five ways; and six of them are conformance cases
@@ -414,6 +414,34 @@ here, so C2 and C3 compile them too.
 `ir: identical`, executables byte-identical once the linker UUID is removed, and C2 = C3
 with the reference over 20 conformance cases, 7 of them multi-module, at 8,959 source
 lines.
+
+### No value, as a third completion — N10.2, 2026-09-23
+
+The two refused-program differences recorded above are closed. The Nazm checker now has the
+reference's three completions — a value, no value, never finishing — in one array beside
+the type, and `unknown` means only "already reported". A value position given nothing is
+`N0300`; an `if` whose branches disagree, or one with a value and one without, is `N0302`;
+a body and a `return` are held to the signature, which this checker had never done at all.
+
+`crates/nazm-cli/tests/refusals/` holds forty programs, and each is checked by the reference
+and by the Nazm checker compiled and interpreted, on code **and** span. All agree, and the
+Nazm compiler refuses every refused one before it emits anything. One pair crosses a module
+boundary: two records laid out alike from two modules are two types, `N0302` at the same
+line and column in the reference and in the Nazm compiler, compiled and interpreted.
+
+**Accepted programs did not move.** The Nazm compiler's IR for all 58 accepted programs in
+the transfer corpus, the conformance corpus and `examples/` is byte-identical to N10.1's.
+
+**What is still not the same.** When an expression has *already* failed, the two checkers
+recover differently: the reference gives it the expected type, or `Int`, and may then report
+a consequence; this checker gives it `unknown`, which agrees with everything, and reports
+none. Every comparison above is of programs whose first error is the one being tested, and
+that is the scope of the claim. The bare block of N2 is unchanged.
+
+**The digest moved a sixth time**, with the property intact: `ce458be3…` (N10.1) →
+`37785cef…`. `ir: identical`, executables byte-identical once the linker UUID is removed,
+C2 = C3 with the reference over 20 conformance cases, 7 of them multi-module, at 9,194
+source lines.
 
 ## 6. Reproducing it
 
