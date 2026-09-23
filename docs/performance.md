@@ -529,6 +529,79 @@ is visible rather than mysterious — its node arena gained two columns and it n
 record table of its own. What is being claimed here is only that neither grew unexpectedly,
 and that both still fit the 4,096 MiB the runbook allows them.
 
+### Enums — measured 2026-09-23, and the cost is a branch and some space
+
+N10 added closed sum types. An enum allocates nothing of its own either, so there are two
+questions: what a value **costs in space**, because the representation is not a union; and
+what selecting on one **costs in time**, because copy and release now branch.
+
+Median of five, extremes dropped, `-O2`, Darwin arm64. The process floor on this machine is
+**6.5 ms**, and a row at or under it is not a measurement.
+
+**Space, computed by LLVM's own layout** for the types the compiler emits. The right-hand
+column is what an ideal tagged union would be — the tag plus the largest payload — and the
+gap is the cost of one slot per variant:
+
+| Enum | Ours | Ideal union | |
+| --- | ---: | ---: | --- |
+| `{ A, B, C(n: Int) }` | 16 | 16 | zero-payload variants are size 0 |
+| `{ Empty, Text(value: Str) }` | 32 | 32 | one owning variant costs nothing extra |
+| `{ A(v: Str), B(v: Str), C(v: Str) }` | **80** | 32 | 2.5× |
+| `{ Nothing, Rec(r: Big), Small(n: Int), Wide(a: Str, b: Str) }` | **120** | 64 | 1.9× |
+| the record `Big { a: Str, b: Str, c: Int }`, for scale | 56 | 56 | |
+
+**So the waste is exactly proportional to how many variants carry a payload**, and it is
+nothing at all when one does. `architecture.md` §7.11 says why this form was chosen over a
+sized payload area — an arithmetic mistake in the second is a buffer overflow rather than a
+compile error — and `spec.md` promises nothing about an enum's size, so it can change.
+
+**Time**, `-O2`:
+
+| Workload | Without an enum | With one | |
+| --- | ---: | ---: | --- |
+| 30M selections on a tag | 26.3 ms (an `Int` and an `if`) | **26.2 ms** | not measurable |
+| 3M of the same | 5.4 ms | 5.2 ms | both under the floor |
+| 1M × build, copy twice, read a `Str` | 71.5 ms | **81.4 ms** | +10 ns per round |
+| 1M of the same over a record payload | 71.5 ms | **81.5 ms** | +10 ns per round |
+| 3M cross-module calls | 15.6 ms (two `Int` calls) | **11.9 ms** | one call instead of two |
+
+A scalar enum costs nothing a hand-rolled integer tag does not. An enum that **owns**
+something costs about ten nanoseconds a round more than the payload alone: a branch on the
+discriminant, and a larger aggregate to move. The last row is the same shape records
+produced and for the same reason — returning one value instead of making two calls.
+
+At `-O0`, where the generated helpers are real calls rather than inlined, the cost appears
+and is the branch:
+
+| Workload | Without | With | |
+| --- | ---: | ---: | --- |
+| 3M selections on a tag | 19.7 ms | 23.3 ms | +1.2 ns per round |
+| 1M × copy a `Str` twice | 78.6 ms | 104.6 ms | +26 ns per round |
+| 1M of the same over a record payload | 83.2 ms | 117.9 ms | +35 ns per round |
+
+**Peak resident memory**, `-O2`:
+
+| Workload | Live set | Peak |
+| --- | --- | ---: |
+| 80,000 short-lived enums of two heap strings | one value | **1.73 MiB** |
+| 80,000 short-lived records of the same two strings | one record | 1.72 MiB |
+| empty program | — | 1.67 MiB |
+
+That is the scaling claim: a value holding heap strings costs what the strings cost, and an
+enum costs what the same record does. The count of live backings does not grow with the
+number of values ever built.
+
+**Executable size**, `-O0`, where the helpers survive. An enum whose payloads own nothing is
+**byte-identical** to the same program written with an integer tag and an `if` (51,480
+bytes both). One that owns something costs **+144 bytes** over the same program without it,
+against a record's +120 — the difference is the `switch` the enum's two helpers carry.
+
+**The compiler itself**, Darwin arm64 host, release binary, `compiler/emit.nz` now 4,221
+lines (was 3,756): `nazm check --no-cache` 10 ms, peak 12.6 MiB; `nazm build --no-cache
+--opt-level 0` 720 ms, peak 57.7 MiB, and 120 ms with a warm object cache. These are not
+comparable with N8's or N9's figures for the same command — different binary and different
+cache state — and are recorded as a baseline rather than as a delta.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

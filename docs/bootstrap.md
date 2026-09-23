@@ -259,10 +259,13 @@ declared root to change.
   path instead, because it can — the emitted runtime has no `realpath`.
 - **Nothing is freed** — *until N8, which closed it*. See §1; the design stated it, and
   `capability-matrix.md` area 4 carries the current status and the acceptance condition.
-- **A record's native type name is its index**, `%nz.t<n>`, exactly as a function's symbol
-  is `@nz.f<n>`. Sound because this compiler emits one LLVM module for a whole program, and
-  the same limitation N5 removed for the reference compiler and deliberately not for this
-  one. It is one limitation, not two: whatever fixes the symbols fixes the type names.
+- **A record's or an enum's native type name is its index**, `%nz.t<n>`, exactly as a
+  function's symbol is `@nz.f<n>`. Sound because this compiler emits one LLVM module for a
+  whole program, and the same limitation N5 removed for the reference compiler and
+  deliberately not for this one. It is one limitation, not three: whatever fixes the symbols
+  fixes the type names.
+- **A bare block is not an expression here**, so a `match` arm's body may not be one. See
+  §5's N10 note; the limitation is N2's and predates enums.
 - **The chain cannot run uncontained**, by design. See §6.
 
 ### Records, and what the chain now carries — N9, 2026-09-23
@@ -291,6 +294,39 @@ is what matters, and it held at every step —
 `1ce9aafb…` (N8) → `3ecf0921…` (records) → `3491dfed…` (a record in the compiler's own
 source). Preserving an old digest by declining the change would have been preserving the
 number rather than the property it stands for.
+
+### Enums, and the one divergence this document has to record — N10, 2026-09-23
+
+The compiler written in Nazm understands enums and `match`: `enum`, `match` and `=>` in the
+lexer; declarations, variant construction and arms in the parser; a data model in the
+analyser that is **one flag** on the table N9 already had — an enum is a record whose fields
+are its variants, and a variant is a record whose fields are its payload — and, in the
+emitter, tagged aggregates with generated helpers that switch on the discriminant and then
+call the variant's own.
+
+Parity is compared on **codes rather than spans**, and that is a limitation of the
+comparison rather than of either compiler: the self-hosted parser records one span per arm,
+so a diagnostic about a payload field inside a pattern points at the arm where the reference
+points at the field. Forty cases compare what each compiler *decides*, which is what N2.1 is
+about.
+
+**There is one divergence, and it is N2's.** A bare block used as an expression is still
+refused by name in the self-hosted parser, so an arm body there may be `n + 1` but not
+`{ let n = str_len(s); n }`. The reference accepts both. N10 did not introduce the
+limitation and did not remove it; it made it reachable in one more position, and
+`compiler/*.nz` and the corpus are written without it.
+
+The corpus grew again: `compiler/conformance/enums.nz` covers every variant shape, both
+directions of composition with records, nesting, a payload returned from an arm,
+replacement across variants and within one, two hundred short-lived values with heap
+payloads and an inactive owning variant that must cost nothing — and it declares its
+variants in **none** of the orders that matter, so a compiler that took the parser's order
+for the canonical one would build one value and read another. `modules/exported-enum` sends
+an enum with an owning payload across a module boundary, inside a record, and back.
+
+**The digest moved a third time**, for the same reason and with the same property intact:
+`3491dfed…` (N9) → `f420f23a…` (enums and `match`). `ir: identical`, executables
+byte-identical once the linker UUID is removed, and C2 = C3.
 
 ## 6. Reproducing it
 

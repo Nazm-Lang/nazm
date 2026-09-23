@@ -268,12 +268,12 @@ fn absent_features_are_refused_by_name() {
     for (src, word) in [
         ("fn main() -> Int { loop { 1 } }", "loop"),
         ("fn main() -> Int { for x in y { 1 } }", "for"),
-        ("fn main() -> Int { match 1 { } }", "match"),
-        // `print` was on this list until B3, and `struct` until N9, when each stopped
-        // being a name held for a feature that did not exist and became the feature. A
-        // reserved word earns its place by naming something absent; once it arrives,
-        // reserving it would be refusing the thing it was reserving. What `struct` in a
-        // *body* gets instead is the case below.
+        ("fn main() -> Int { impl S { } }", "impl"),
+        // `print` was on this list until B3, `struct` until N9, and `enum` and `match`
+        // until N10 — each stopped being a name held for a feature that did not exist and
+        // became the feature. A reserved word earns its place by naming something absent;
+        // once it arrives, reserving it would be refusing the thing it was reserving.
+        // What `struct` and `enum` in a *body* get instead is the case below.
     ] {
         match run(src) {
             Outcome::CheckFailed(ds) => {
@@ -287,6 +287,17 @@ fn absent_features_are_refused_by_name() {
             other => panic!("`{word}` should be refused, got {other:?}"),
         }
     }
+}
+
+#[test]
+fn match_is_no_longer_refused_by_name_and_is_refused_by_meaning() {
+    // The other half of the note above, checked rather than asserted: `match` reaches the
+    // checker now, and what refuses `match 1 { }` is the rule that a `match` needs an
+    // enum — not a reserved word.
+    assert_eq!(
+        sole_error("fn main() -> Int { match 1 { } }"),
+        codes::MATCH_ON_NON_ENUM
+    );
 }
 
 #[test]
