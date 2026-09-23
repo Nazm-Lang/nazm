@@ -1,0 +1,40 @@
+// An enum exported across a module boundary, with an owning payload, a private companion
+// that never reaches the interface, and a public record that carries the enum.
+
+pub enum State {
+    Failed(why: Str, code: Int),
+    Ready,
+    Done(code: Int),
+}
+
+enum Hidden {
+    Never(n: Int),
+}
+
+pub struct Report {
+    state: State,
+    label: Str,
+}
+
+pub fn ready() -> State {
+    State.Ready()
+}
+
+// Returns a value built here, with a heap-backed payload, to a caller in another module:
+// the callee's frame exits and the caller still holds a valid string.
+pub fn failure(n: Int) -> State {
+    State.Failed(why: str_concat("e", int_to_str(n)), code: n)
+}
+
+pub fn wrap(s: State) -> Report {
+    Report(state: s, label: str_concat("r", "eport"))
+}
+
+// Never exported, never reachable from the interface, and still compiled.
+fn unused() -> Int {
+    match Hidden.Never(n: 1) { Hidden.Never(n: n) => n, }
+}
+
+pub fn unused_public() -> Int {
+    unused()
+}

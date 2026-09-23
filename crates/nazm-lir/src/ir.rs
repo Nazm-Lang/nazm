@@ -701,10 +701,11 @@ pub enum Expr {
     /// `slot` is a hidden local to assemble into, present exactly when some payload field
     /// of this variant owns something, and it exists for the reason a record's does: an
     /// initialiser that fails after an earlier one has produced a heap string must not leak
-    /// it. **The discriminant is written last**, after every payload field is in place, so
-    /// a partially built value is a zero — the canonically first variant with an empty
-    /// payload — and cleanup on the failure path never dispatches on a variant the value
-    /// does not have.
+    /// it. **The discriminant is written first**, before any payload field, so that cleanup
+    /// on the failure path dispatches on a valid tag and releases exactly the fields that
+    /// exist — the ones already stored, and the rest as null. Writing it last would have
+    /// left the slot saying variant 0 while variant 3's payload was being filled, and the
+    /// leak would have been on the one path the program was already failing on.
     Variant {
         ty: Ty,
         /// The discriminant, decided at lowering from the canonical order.

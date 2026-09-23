@@ -25,6 +25,8 @@ fn refuse_unimplemented(kinds: Ints, starts: Ints, i: Int) -> Int {
     let t = kind_at(kinds, i);
     let mut what = "";
     if t == k_lbrace() { what = "a block used as an expression"; }
+    if t == k_enum() { what = "an enum declared inside a function"; }
+    if t == k_struct() { what = "a record declared inside a function"; }
     if what == "" { return 0; }
     die(str_concat(what, ": not implemented yet in this parser"), start_at(starts, i));
     0
@@ -71,6 +73,14 @@ pub fn n_record() -> Int { 22 }
 pub fn n_structfield() -> Int { 23 }
 pub fn n_construct() -> Int { 24 }
 pub fn n_fieldread() -> Int { 25 }
+// Enums, added by N10. A declaration, its variants and their payload fields; a variant
+// construction; one arm of a `match`; and the `match` itself.
+pub fn n_enum() -> Int { 26 }
+pub fn n_variant() -> Int { 27 }
+pub fn n_payload() -> Int { 28 }
+pub fn n_makevariant() -> Int { 29 }
+pub fn n_arm() -> Int { 30 }
+pub fn n_match() -> Int { 31 }
 
 pub fn node_name(k: Int) -> Str {
     if k == n_int() { return "int"; }
@@ -98,6 +108,12 @@ pub fn node_name(k: Int) -> Str {
     if k == n_structfield() { return "structfield"; }
     if k == n_construct() { return "construct"; }
     if k == n_fieldread() { return "field"; }
+    if k == n_enum() { return "enum"; }
+    if k == n_variant() { return "variant"; }
+    if k == n_payload() { return "payload"; }
+    if k == n_makevariant() { return "makevariant"; }
+    if k == n_arm() { return "arm"; }
+    if k == n_match() { return "match"; }
     "?"
 }
 
@@ -165,6 +181,12 @@ fn sent_if() -> Int { 93 }
 // `IDENT ( IDENT :` — which is a decision rather than a guess, because no argument
 // expression can begin with a name followed by a colon.
 fn sent_construct() -> Int { 94 }
+// A `match`, suspended at its `{` exactly as an `if` is suspended at its block's.
+fn sent_match() -> Int { 95 }
+// A variant construction. Told from a projection by three tokens — `IDENT . IDENT (` —
+// which is a decision rather than a guess, because the language has no methods and no
+// function values, so nothing else can put a `(` after a field read.
+fn sent_variant() -> Int { 96 }
 
 // --- the arena ---------------------------------------------------------------------
 
@@ -314,7 +336,49 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 i = i + 1;
                 continue;
             }
+            if t == k_match() {
+                // The scrutinee is an ordinary expression, exactly as an `if`'s condition
+                // is, and the sentinel is what tells the `{` after it what it belongs to.
+                ints_push(ops, sent_match());
+                ints_push(opat, start_at(starts, i));
+                i = i + 1;
+                continue;
+            }
             if t == k_ident() {
+                if making_variant(kinds, i) {
+                    // `E.V(…)`. The enum and the variant are one name for the node's
+                    // text, because what a variant *is* is its enum and its name.
+                    let ename = text_at(texts, i);
+                    let at = start_at(starts, i);
+                    let vname = text_at(texts, i + 2);
+                    let qualified = str_concat(str_concat(ename, "."), vname);
+                    i = i + 4;
+                    if kind_at(kinds, i) == k_rparen() {
+                        // A variant with no payload is still written with its brackets,
+                        // and is complete without ever opening a frame.
+                        emit(nk, nar, nst, nen, ntx, n_makevariant(), 0, at, end_at(ends, i),
+                                str_concat(qualified, "()"));
+                        ints_push(vs, at);
+                        ints_push(ve, end_at(ends, i));
+                        i = i + 1;
+                        done_primary = true;
+                    } else {
+                        if kind_at(kinds, i) != k_ident() {
+                            die("expected a payload field name", start_at(starts, i));
+                        }
+                        if kind_at(kinds, i + 1) != k_colon() {
+                            die("expected `:` after a payload field name", start_at(starts, i + 1));
+                        }
+                        ints_push(ops, sent_variant());
+                        ints_push(opat, at);
+                        strs_push(cname, qualified);
+                        ints_push(cargs, 0);
+                        strs_push(cfields, text_at(texts, i));
+                        i = i + 2;
+                        continue;
+                    }
+                }
+                if done_primary == false {
                 if constructing(kinds, i) {
                     // `Name(field: …)`. The sentinel is a second kind of bracket rather
                     // than a flag on the call one, so the closing `)` cannot build the
@@ -354,6 +418,7 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     ints_push(ve, end_at(ends, i));
                     i = i + 1;
                     done_primary = true;
+                }
                 }
             }
 
@@ -409,6 +474,17 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     ints_set(status, 0, 1);
                     return i;
                 }
+                if innermost_is_match(ops, base) {
+                    // The scrutinee is complete. The arms are the main loop's business,
+                    // and the stacks stay exactly as they are — the scrutinee's operand
+                    // entry sits under the sentinel until the `match` node is built.
+                    while ints_len(ops) > base {
+                        if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 { break; }
+                        reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx, naux);
+                    }
+                    ints_set(status, 0, 2);
+                    return i;
+                }
             }
 
             let p = prec_of(n);
@@ -428,10 +504,46 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
             }
 
             if n == k_comma() {
+                // Inside a `match`, a comma at the top of an arm body ends it. The
+                // operator stack says whether the comma is instead separating arguments
+                // of a call or a construction nested in that body.
+                if ints_get(status, 1) > 0 {
+                    if innermost_is_call(ops, base) == false {
+                        while ints_len(ops) > base {
+                            if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 {
+                                die("this bracket is never closed", ints_get(opat, ints_len(opat) - 1));
+                            }
+                            reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx, naux);
+                        }
+                        pop_val(vs, ve);
+                        ints_set(status, 0, 0);
+                        return i;
+                    }
+                }
                 if innermost_is_call(ops, base) == false { return i; }
                 while ints_len(ops) > base {
                     if prec_of(ints_get(ops, ints_len(ops) - 1)) == 0 { break; }
                     reduce(ops, opat, vs, ve, nk, nar, nst, nen, ntx, naux);
+                }
+                if ints_get(ops, ints_len(ops) - 1) == sent_variant() {
+                    // A trailing comma is allowed and ends the list, so it must not count
+                    // as another initialiser.
+                    if kind_at(kinds, i + 1) == k_rparen() {
+                        i = i + 1;
+                        continue;
+                    }
+                    if kind_at(kinds, i + 1) != k_ident() {
+                        die("expected a payload field name", start_at(starts, i + 1));
+                    }
+                    if kind_at(kinds, i + 2) != k_colon() {
+                        die("expected `:` after a payload field name", start_at(starts, i + 2));
+                    }
+                    strs_set(cfields, strs_len(cfields) - 1,
+                            str_concat(str_concat(strs_get(cfields, strs_len(cfields) - 1), ","),
+                            text_at(texts, i + 1)));
+                    ints_set(cargs, ints_len(cargs) - 1, ints_get(cargs, ints_len(cargs) - 1) + 1);
+                    i = i + 3;
+                    break;
                 }
                 if ints_get(ops, ints_len(ops) - 1) == sent_construct() {
                     // A trailing comma is allowed and ends the list, so it must not count
@@ -473,6 +585,25 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                     continue;
                 }
                 if top == sent_if() { return i; }
+                if top == sent_match() { return i; }
+                if top == sent_variant() {
+                    let at = ints_get(opat, ints_len(opat) - 1);
+                    pop_op(ops, opat);
+                    let argc = ints_get(cargs, ints_len(cargs) - 1) + 1;
+                    let name = strs_get(cname, strs_len(cname) - 1);
+                    let fields = strs_get(cfields, strs_len(cfields) - 1);
+                    pop_call(cname, cargs);
+                    strs_pop(cfields);
+                    let to = end_at(ends, i);
+                    let mut left = 0;
+                    while left < argc { pop_val(vs, ve); left = left + 1; }
+                    emit(nk, nar, nst, nen, ntx, n_makevariant(), argc, at, to,
+                            str_concat(str_concat(str_concat(name, "("), fields), ")"));
+                    ints_push(vs, at);
+                    ints_push(ve, to);
+                    i = i + 1;
+                    continue;
+                }
                 if top == sent_construct() {
                     let at = ints_get(opat, ints_len(opat) - 1);
                     pop_op(ops, opat);
@@ -551,6 +682,22 @@ fn innermost_is_if(ops: Ints, base: Int) -> Bool {
     while i >= base {
         let v = ints_get(ops, i);
         if v == sent_if() { return true; }
+        if v == sent_match() { return false; }
+        if v == sent_call() { return false; }
+        if v == sent_paren() { return false; }
+        i = i - 1;
+    }
+    false
+}
+
+// The same question for a `match`: whether the `{` now in hand closes a scrutinee or
+// belongs to something nested inside it.
+fn innermost_is_match(ops: Ints, base: Int) -> Bool {
+    let mut i = ints_len(ops) - 1;
+    while i >= base {
+        let v = ints_get(ops, i);
+        if v == sent_match() { return true; }
+        if v == sent_if() { return false; }
         if v == sent_call() { return false; }
         if v == sent_paren() { return false; }
         i = i - 1;
@@ -579,14 +726,24 @@ fn constructing(kinds: Ints, i: Int) -> Bool {
     kind_at(kinds, i + 3) == k_colon()
 }
 
+// `IDENT . IDENT (` — a variant construction rather than a field read. Total, because
+// there are no methods and no function values, so a `(` can never follow a projection.
+fn making_variant(kinds: Ints, i: Int) -> Bool {
+    if kind_at(kinds, i + 1) != k_dot() { return false; }
+    if kind_at(kinds, i + 2) != k_ident() { return false; }
+    kind_at(kinds, i + 3) == k_lparen()
+}
+
 fn innermost_is_call(ops: Ints, base: Int) -> Bool {
     let mut i = ints_len(ops) - 1;
     while i >= base {
         let v = ints_get(ops, i);
         if v == sent_call() { return true; }
         if v == sent_construct() { return true; }
+        if v == sent_variant() { return true; }
         if v == sent_paren() { return false; }
         if v == sent_if() { return false; }
+        if v == sent_match() { return false; }
         i = i - 1;
     }
     false
@@ -653,6 +810,67 @@ fn pend_return() -> Int { 3 }
 fn pend_while() -> Int { 4 }
 fn pend_stmt() -> Int { 5 }
 fn pend_spawn() -> Int { 6 }
+// The body of one `match` arm. The pattern is already read and travels on `ptext`.
+fn pend_arm() -> Int { 7 }
+
+// `Enum.Variant(field: binding, …)` — one arm's pattern, as the text its node carries.
+// Returns the index just past the `)`; the pattern text is pushed onto `out`.
+//
+// A field binds a name or is discarded with `_`, which is an ordinary identifier to the
+// lexer and a discard only here. `docs/spec.md` gives `_` its meaning inside a pattern
+// and nowhere else, so nothing before this point has to know about it.
+fn read_pattern(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs) -> Int {
+    if kind_at(kinds, i) != k_ident() {
+        die("expected an enum name", start_at(starts, i));
+    }
+    let ename = text_at(texts, i);
+    let mut at = i + 1;
+    at = expect(kinds, starts, at, k_dot(), "expected `.` between an enum and its variant");
+    if kind_at(kinds, at) != k_ident() {
+        die("expected a variant name", start_at(starts, at));
+    }
+    let vname = text_at(texts, at);
+    at = at + 1;
+    at = expect(kinds, starts, at, k_lparen(), "expected `(` to start the payload");
+    let mut text = str_concat(str_concat(str_concat(ename, "."), vname), "(");
+    let mut first = true;
+    while kind_at(kinds, at) != k_rparen() {
+        if first == false { text = str_concat(text, ","); }
+        first = false;
+        if kind_at(kinds, at) != k_ident() {
+            die("expected a payload field name", start_at(starts, at));
+        }
+        let fname = text_at(texts, at);
+        at = at + 1;
+        at = expect(kinds, starts, at, k_colon(), "expected `:` after a payload field name");
+        if kind_at(kinds, at) != k_ident() {
+            die("expected a binding or `_`", start_at(starts, at));
+        }
+        let bname = text_at(texts, at);
+        at = at + 1;
+        text = str_concat(str_concat(str_concat(text, fname), ":"), bname);
+        if kind_at(kinds, at) == k_comma() { at = at + 1; }
+    }
+    at = at + 1;
+    strs_push(out, str_concat(text, ")"));
+    at
+}
+
+// Read one arm's pattern and open a pending expression for its body. Returns the index
+// of the body's first token.
+fn begin_arm(kinds: Ints, starts: Ints, texts: Strs, i: Int,
+        pk: Ints, pstart: Ints, ptext: Strs, pdepth: Ints, pbase: Ints,
+        fk: Ints, ops: Ints, status: Ints) -> Int {
+    let at = start_at(starts, i);
+    let next = read_pattern(kinds, starts, texts, i, ptext);
+    ints_push(pk, pend_arm());
+    ints_push(pstart, at);
+    ints_push(pdepth, ints_len(fk));
+    ints_push(pbase, ints_len(ops));
+    // One more arm body open, which is what lets a `,` at the top of one end it.
+    ints_set(status, 1, ints_get(status, 1) + 1);
+    expect(kinds, starts, next, k_fatarrow(), "expected `=>` after a pattern")
+}
 
 fn push_frame(fk: Ints, fstart: Ints, fcount: Ints, ftail: Ints, faux: Ints, fparams: Ints,
         fvis: Ints, ftext: Strs, kind: Int, start: Int, aux: Int, params: Int, vis: Int,
@@ -724,6 +942,11 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
     let ve = ints_new();
     let status = ints_new();
     ints_push(status, 0);
+    // How many `match` arm bodies are open, innermost included. A comma at the top of one
+    // ends it; everywhere else a comma separates arguments.
+    ints_push(status, 0);
+    // Arms read so far, one entry per open `match`.
+    let marms = ints_new();
 
     // What the expression being parsed is *for*, innermost last.
     let pk = ints_new();
@@ -759,6 +982,31 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                         frame_if_then(), brace, 0, 0, 0, "");
                 continue;
             }
+            if ints_get(status, 0) == 2 {
+                // Suspended at a `match`'s `{`: the scrutinee is done, and the arms are
+                // read here. Each arm's body is an ordinary pending expression, which is
+                // why an `if` inside one works without any machinery of its own.
+                i = i + 1;
+                ints_push(marms, 0);
+                if kind_at(kinds, i) == k_rbrace() {
+                    // No arms. The checker refuses it as non-exhaustive; the parser has
+                    // nothing to object to.
+                    let close = end_at(ends, i);
+                    i = i + 1;
+                    ints_pop(marms);
+                    let mat = ints_get(opat, ints_len(opat) - 1);
+                    pop_op(ops, opat);
+                    pop_val(vs, ve);
+                    emit(nk, nar, nst, nen, ntx, n_match(), 1, mat, close, "");
+                    ints_push(vs, mat);
+                    ints_push(ve, close);
+                    resuming = true;
+                    continue;
+                }
+                i = begin_arm(kinds, starts, texts, i, pk, pstart, ptext, pdepth, pbase,
+                        fk, ops, status);
+                continue;
+            }
             // The expression finished. Complete whatever it was for.
             let what = top(pk);
             let at = top(pstart);
@@ -774,6 +1022,36 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start a loop body");
                 push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
                         frame_while(), brace, at, 0, 0, "");
+                continue;
+            }
+            if what == pend_arm() {
+                ints_set(status, 1, ints_get(status, 1) - 1);
+                emit(nk, nar, nst, nen, ntx, n_arm(), 1, at, end_at(ends, i - 1), text);
+                ints_set(marms, ints_len(marms) - 1, ints_get(marms, ints_len(marms) - 1) + 1);
+                if kind_at(kinds, i) == k_comma() {
+                    i = i + 1;
+                    if kind_at(kinds, i) != k_rbrace() {
+                        i = begin_arm(kinds, starts, texts, i, pk, pstart, ptext, pdepth,
+                                pbase, fk, ops, status);
+                        continue;
+                    }
+                }
+                if kind_at(kinds, i) != k_rbrace() {
+                    die("expected `,` or `}` after an arm", start_at(starts, i));
+                }
+                let close = end_at(ends, i);
+                i = i + 1;
+                let arms = ints_get(marms, ints_len(marms) - 1);
+                ints_pop(marms);
+                // The scrutinee's operand entry has been waiting under the sentinel since
+                // the `{`; the arms are already in the arena in order.
+                let mat = ints_get(opat, ints_len(opat) - 1);
+                pop_op(ops, opat);
+                pop_val(vs, ve);
+                emit(nk, nar, nst, nen, ntx, n_match(), arms + 1, mat, close, "");
+                ints_push(vs, mat);
+                ints_push(ve, close);
+                resuming = true;
                 continue;
             }
             if what == pend_stmt() {
@@ -879,6 +1157,64 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 let close = end_at(ends, i);
                 i = i + 1;
                 emit(nk, nar, nst, nen, ntx, n_record(), nfields, fn_start, close, rname);
+                set_aux(naux, nk, vis);
+                items = items + 1;
+                continue;
+            }
+
+            // `enum Name { Variant, Other(field: Type), … }`. Two loops rather than one,
+            // because a variant may carry a payload and a payload is a field list —
+            // which is the same shape a record's fields are, deliberately.
+            if kind_at(kinds, i) == k_enum() {
+                i = i + 1;
+                if kind_at(kinds, i) != k_ident() {
+                    die("expected an enum name", start_at(starts, i));
+                }
+                let ename = text_at(texts, i);
+                i = i + 1;
+                i = expect(kinds, starts, i, k_lbrace(), "expected `{` to start the variants");
+                let mut nvariants = 0;
+                while kind_at(kinds, i) != k_rbrace() {
+                    if kind_at(kinds, i) != k_ident() {
+                        die("expected a variant name", start_at(starts, i));
+                    }
+                    let vname = text_at(texts, i);
+                    let vat = start_at(starts, i);
+                    let mut vto = end_at(ends, i);
+                    i = i + 1;
+                    let mut npayload = 0;
+                    if kind_at(kinds, i) == k_lparen() {
+                        i = i + 1;
+                        while kind_at(kinds, i) != k_rparen() {
+                            if kind_at(kinds, i) != k_ident() {
+                                die("expected a payload field name", start_at(starts, i));
+                            }
+                            let pname = text_at(texts, i);
+                            let pat = start_at(starts, i);
+                            i = i + 1;
+                            i = expect(kinds, starts, i, k_colon(),
+                                    "expected `:` after a payload field name");
+                            if kind_at(kinds, i) != k_ident() {
+                                die("expected a payload field type", start_at(starts, i));
+                            }
+                            let ptype = text_at(texts, i);
+                            let pto = end_at(ends, i);
+                            i = i + 1;
+                            emit(nk, nar, nst, nen, ntx, n_payload(), 0, pat, pto,
+                                    str_concat(str_concat(pname, ":"), ptype));
+                            npayload = npayload + 1;
+                            if kind_at(kinds, i) == k_comma() { i = i + 1; }
+                        }
+                        vto = end_at(ends, i);
+                        i = i + 1;
+                    }
+                    emit(nk, nar, nst, nen, ntx, n_variant(), npayload, vat, vto, vname);
+                    nvariants = nvariants + 1;
+                    if kind_at(kinds, i) == k_comma() { i = i + 1; }
+                }
+                let eclose = end_at(ends, i);
+                i = i + 1;
+                emit(nk, nar, nst, nen, ntx, n_enum(), nvariants, fn_start, eclose, ename);
                 set_aux(naux, nk, vis);
                 items = items + 1;
                 continue;
