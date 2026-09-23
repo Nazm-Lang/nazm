@@ -148,6 +148,53 @@ model; neither has been tried.
 
 ---
 
+### N10 asked the second of those three questions, 2026-09-23. Status: still **SUPPORTED,
+not VERIFIED.**
+
+*"No variant has been asked it"* was one of the three gaps N9 left. N10 asked it: closed
+nominal enums with named payload fields, eliminated by exhaustive `match`, composing with
+records in both directions. The answer, on the same terms as before, is that the
+invalidating result did not appear — **a payload that is sometimes there needed no region,
+no lifetime and no annotation either.**
+
+What the experiment adds to the evidence, and what it does not:
+
+* **the surface model held where the ownership question became dynamic.** A record's copy
+  is a fixed walk; an enum's is a branch and then a walk, and which walk is a value the
+  program carries. That is the first place the language's memory rules could not be
+  answered statically, and the surface did not have to change to accommodate it: `let b =
+  a` still means what it meant, and a pattern binding is a borrowed view of a payload with
+  nothing written down about how long it lives;
+* **the ergonomics were tested where they are sharpest** — a payload returned out of the
+  arm that matched it, out of a value dying on the same line. `take_name` is four lines and
+  says nothing about lifetimes. That shape is the variant equivalent of N8's return-order
+  tests, and it is the one a surface model without regions most plausibly cannot express;
+* **the exhaustiveness rule is an ergonomic cost, honestly.** No wildcard arm means adding
+  a variant breaks every importer that believed it had handled the whole enum. That is
+  intended while the language is young and it is a real friction, and a later
+  `non_exhaustive` design will have to weigh it;
+* **and the compiler still does not use one.** The dogfood assessment is below, and the
+  answer is the same as N9's for the same reason: the structures are parallel arrays, and
+  a tagged node kind stored in an `Ints` cannot become an enum without a container that can
+  hold one.
+
+**Why still SUPPORTED and not VERIFIED.** Two of the three gaps N9 named are open, and one
+of them is the same one:
+
+* **no container has been asked the question.** Unchanged, and now the sharper of the two:
+  `Vec[Token]` is what the self-hosted compiler would need to use an enum for anything, and
+  it is what would let an element's payload be mutated in place;
+* **copy elision is still folklore.** Unchanged, and an enum makes it slightly worse: a
+  copy now costs a branch as well as the reference adjustments, and nothing says when
+  either may be elided;
+* what N10 *closed* is the variant question, and closing it moved nothing else.
+
+**Evidence needed next** · Unchanged, and now with a name: a generic container holding a
+record or an enum, which is `Vec[T]`. It is the prerequisite for the dogfood this item has
+now failed to reach twice, and that repetition is itself the finding.
+
+---
+
 ## R2 · Content-addressed semantic IR pays for itself
 
 **Hypothesis** · Normalising each top-level definition after type checking — names erased

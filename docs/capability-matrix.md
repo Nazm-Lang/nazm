@@ -239,11 +239,12 @@ exist.
 ### 3. Type system — PARTIAL
 
 **Evidence** · Six built-in types, `crates/nazm-sema/src/types.rs`: `Int`, `Bool`, `Str`,
-`Ints`, `Strs`, `Chan` — **and, since N9, user-defined records**. Local inference for
-`let`; parameters and returns always written. Completion analysis decides whether a block
-produces a value, which is what lets one `if` serve both statement and value position.
-Codes `N0300`–`N0314` and `N0330`–`N0338`. 114 behavioural tests in
-`crates/nazm-core/tests/language.rs`, 33 in `crates/nazm-core/tests/records.rs`.
+`Ints`, `Strs`, `Chan` — **and, since N9, user-defined records; since N10, user-defined
+enums**. Local inference for `let`; parameters and returns always written. Completion
+analysis decides whether a block produces a value, which is what lets one `if` serve both
+statement and value position. Codes `N0300`–`N0314` and `N0330`–`N0345`. 114 behavioural
+tests in `crates/nazm-core/tests/language.rs`, 33 in `crates/nazm-core/tests/records.rs`,
+46 in `crates/nazm-core/tests/enums.rs`.
 
 *N9, 2026-09-23.* `struct Point { x: Int, y: Int, }` — nominal value records with named
 fields, named construction, projection, field replacement through a projection path,
@@ -254,18 +255,34 @@ copy, destroy — is **derived from its fields**, recursively, and that composit
 than the syntax is what the milestone was for. `docs/spec.md`, *Records*, is the law;
 `architecture.md` §7.10 is the implementation.
 
-**Limitation** · No variants or tagged unions, no pattern matching, no generics, no traits,
-no methods or `impl`, no closures or function values, no unit type, no `Option`, no
-`Never`, no derived equality on a record, no field-level visibility, no default field
-values, no record update syntax. Seven keywords remain reserved and refused by name rather
-than silently absent (`crates/nazm-syntax/src/parser.rs`); `struct` left that list in N9
-for the same reason `print` did in B3 — a reserved word earns its place by naming
-something absent. A record cannot be put in a sequence, because there is no container that
-can hold one.
+*N10, 2026-09-23.* `enum State { Ready, Done(code: Int), }` with `match` — closed nominal
+sum types with named payload fields, qualified construction, exhaustive variant matching
+with named payload bindings, and composition with records in both directions. The
+milestone's question was not whether enums compile but whether the ownership model holds
+when **which fields exist is a runtime fact**: copy and release act on the active variant
+alone, derived and dispatched in the emitted program, while task safety stays a property of
+the **type** and quantifies over every variant. `docs/spec.md`, *Enums*, is the law;
+`architecture.md` §7.11 is the implementation.
 
-**Next dependency** · Variants, which need a payload shape and now have one. Then pattern
-matching, then generics — and a generic container is what would let a record be stored in
-a collection, which is also what would end the cycle argument area 4 rests on.
+Three constructs are verified rather than partial: **records**, **closed enums**, and
+**exhaustive variant match**. What surrounds them is not.
+
+**Limitation** · No generics, so no `Option`, no `Result` and no generic enum of any kind;
+no traits, no methods or `impl`, no closures or function values, no unit type, no `Never`.
+No derived equality on a record or an enum. No field-level or per-variant visibility, no
+default field values, no record update syntax. The pattern language is variant selection
+with named payload bindings and `_` — no top-level wildcard arm, no guards, no or-patterns,
+no literal, record, tuple or range patterns, and no `let` destructuring. Five keywords
+remain reserved and refused by name rather than silently absent
+(`crates/nazm-syntax/src/parser.rs`); `struct` left that list in N9 and `enum` and `match`
+in N10, for the same reason `print` did in B3 — a reserved word earns its place by naming
+something absent. Neither a record nor an enum can be put in a sequence, because there is
+no container that can hold one.
+
+**Next dependency** · Generics. A monomorphic `enum MaybeInt { None, Some(value: Int), }`
+is already expressible, which is the evidence that the semantic kernel is ready for generic
+algebraic data types — and a generic container is what would let a record or an enum be
+stored in a collection, which is also what would end the cycle argument area 4 rests on.
 
 **Accepted when** · Chosen by the milestone that needs it, not by completeness.
 
