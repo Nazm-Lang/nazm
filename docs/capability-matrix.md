@@ -307,8 +307,14 @@ a record owns exactly what its fields own, recursively, and copy, destroy, clean
 task safety are all **derived** rather than declared. The cycle argument survives because
 `docs/spec.md`'s *Cycles* was satisfied the first way it offered — the type system refuses
 containment cycles (`N0336`), because a record holds its fields by value and a cycle has
-no finite layout. **Variants and generics are still not covered**, and a generic container
-able to hold a record is what would end the argument.
+no finite layout.
+
+*N10, 2026-09-23, extended it to variants.* An enum owns exactly what its **active**
+variant's payload owns: copy, destroy and cleanup dispatch on the discriminant in the
+emitted program, and an inactive variant is ownership-inert. A payload is held inline like
+a field, so the same refusal (`N0336`) covers a containment cycle through a variant, across
+modules too. **Generics are still not covered**, and a generic container able to hold a
+record or an enum is what would end the argument.
 
 **Evidence** · `docs/spec.md`'s *memory constitution* settles assignment, parameters,
 returns, aliasing, mutation, reclamation, cross-task transfer, cycles and cost visibility
@@ -323,6 +329,7 @@ dispatches on. No program that was legal before changed its meaning.
 | `Ints`, `Strs` | a reference-counted header; a `Strs` releases every element's backing first | **VERIFIED** |
 | `Chan` | a reference-counted header, with its ring, mutex and condition variable | **VERIFIED** |
 | a **record** | none of its own — an inline aggregate whose fields own what they own | **VERIFIED**, composed: one generated retain and release helper per record that owns anything, and none at all for one that does not |
+| an **enum** | none of its own — an inline discriminant and payload slots; only the active variant's payload owns anything | **VERIFIED** since N10: one generated helper pair per enum that owns anything, dispatching on the discriminant |
 | a `spawn`'s argument block, a file path's terminated copy | runtime-internal | **VERIFIED** — freed since N8; each was one `malloc` per operation before |
 | a literal's constant, the process's `argv` | not this program's | **not reclaimed, correctly.** Nothing allocated them and nothing may free them |
 
@@ -351,6 +358,15 @@ explicit return, a projection out of a temporary, a failed constructor at one an
 levels, a failing replacement expression, a task-safe record crossing into two siblings, a
 record built in one branch of an `if`, four hundred short-lived records against a constant
 live set, and three cases where a failure leaves while a temporary is still in hand.
+
+*The 14 enum cases added by N10* cover: an inactive owning variant owning nothing, a
+zero-payload variant beside owning ones, a copy retaining the active payload once, a
+payload returned out of an arm (and still valid after the allocator reused the block), a
+discarded payload, replacement across variants, a failed payload initialiser, a failure
+inside an arm, a matched sequence handle, a constant live set of short-lived enums, an enum
+inside a record and a record inside an enum, a nested enum, and an enum crossing into two
+tasks. The Nazm-written compiler is held to the same counts by four enum programs in
+`the_nazm_written_compiler_emits_the_same_memory_semantics`.
 
 **Two of those were written because a mutation survived**, and the pair is the lesson.
 Removing `strs_get`'s own reference broke nothing the suite could see, because a binding
@@ -415,7 +431,7 @@ primary spans*, not message text, and not the diagnostics that follow an earlier
 the same expression, where the two checkers recover differently (`bootstrap.md`).
 
 **Not claimed.** Whole-language leak freedom as a permanent property; anything about
-variants, generics, or a container able to hold a record; deadlock freedom; user-visible destruction, RAII or any ordering a program can
+generics, or a container able to hold a record or an enum; deadlock freedom; user-visible destruction, RAII or any ordering a program can
 observe; a clean sanitizer run. `exit_with` reclaims nothing and reports nothing, which is
 correct and is tested so nobody later treats it as a bug.
 
@@ -426,8 +442,9 @@ are false now, and the second was still true between N7 and N8. **Whole-language
 freedom is still NOT VERIFIED and is still not claimed** — the sentence above about types
 that do not exist is the reason, and it is not a formality.
 
-**Next dependency** · A variant type, and after it a generic container. Either can hold a
-record, and a container that can hold a record is what makes a cycle expressible again —
+**Next dependency** · A generic container (N10 supplied the variant type, and an enum's
+payload is held inline, so it did not reopen the argument). A container that can hold a
+record or an enum is what makes a cycle expressible again —
 at which point `docs/spec.md`'s *Cycles* has to be satisfied a second time, and refusing
 inline containment will no longer be enough.
 
