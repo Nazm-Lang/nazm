@@ -1740,6 +1740,23 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
              ints_get(got, 0) + ints_get(got, 1)\n}\n",
             "20",
         ),
+        // Leaving an expression that never finishes — the other three ways out of one.
+        // The failure path has given back what a half-evaluated expression was holding
+        // since N9; `break`, `continue` and `return` gave back nothing, in both backends
+        // and since N8. A record abandoned part way, an enum abandoned part way, and an
+        // arm that leaves the loop before the `match` reaches its join.
+        (
+            "struct R {\n    a: Str,\n    b: Int,\n}\n\
+             enum E {\n    Absent,\n    Value(a: Str, b: Int),\n}\n\
+             fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    \
+             while i < 4 {\n        i = i + 1;\n        \
+             let r = R(a: int_to_str(i), b: if i == 1 { continue; } else { i });\n        \
+             let v = E.Value(a: int_to_str(i), b: if i == 2 { continue; } else { r.b });\n        \
+             total = total + match v { E.Absent() => 0, \
+             E.Value(a: s, b: n) => if i == 3 { continue; } else { n }, };\n    }\n    \
+             total\n}\n",
+            "4",
+        ),
     ];
 
     /// The `nazm-memory:` line, which both compilers' programs print under the same

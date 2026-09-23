@@ -1529,3 +1529,140 @@ fn an_enum_crossing_into_a_task_carries_its_active_payload_and_no_other() {
     assert_eq!(r.channels, expected(1), "{r:?}");
     assert_eq!(r.sequences, expected(1), "{r:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Leaving an expression that never finishes
+//
+// The failure path has released what a half-evaluated expression was holding since N9 —
+// `release_temporaries`, written up in `emit.rs`. `break`, `continue` and `return` are
+// the other three ways out of one and released nothing, which is a defect of **N8's**:
+// every ingredient existed then, no shape in the corpus had a control transfer out of a
+// partially evaluated expression, and the surviving N10 mutation
+// `a-variant-slot-keeps-what-the-last-round-left-in-it` is what pointed at the
+// neighbourhood. The interpreter was right in every one of these; the native backend was
+// not, and the compiler written in Nazm was not either.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_continue_out_of_a_half_evaluated_call_gives_back_what_it_held() {
+    // The smallest shape, and the one with no user-defined type in it at all: one
+    // argument has been produced, the next leaves the loop, and the call never happens.
+    let r = both(
+        "fn pick(a: Str, b: Int) -> Int {\n    str_len(a) + b\n}\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    \
+         while i < 3 {\n        i = i + 1;\n        \
+         total = total + pick(int_to_str(i), if i == 1 { continue; } else { i });\n    }\n    \
+         total\n}\n",
+    );
+    assert_eq!(r.value, "7");
+    assert_eq!(r.strings, expected(3), "{r:?}");
+}
+
+#[test]
+fn a_break_out_of_a_half_evaluated_call_gives_back_what_it_held() {
+    // The same, leaving the loop for good — so the value is not even re-reached, and the
+    // frame's own cleanup is not what saves it.
+    let r = both(
+        "fn pick(a: Str, b: Int) -> Int {\n    str_len(a) + b\n}\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    \
+         while i < 3 {\n        i = i + 1;\n        \
+         total = total + pick(int_to_str(i), if i == 2 { break; } else { i });\n    }\n    \
+         total\n}\n",
+    );
+    assert_eq!(r.value, "2");
+    assert_eq!(r.strings, expected(2), "{r:?}");
+}
+
+#[test]
+fn a_return_out_of_a_half_evaluated_call_gives_back_what_it_held() {
+    // `return` leaves the frame, so the slots are released by the ordinary path — but a
+    // temporary in a register is not in a slot, which is exactly the hole.
+    let r = both(
+        "fn pick(a: Str, b: Int) -> Int {\n    str_len(a) + b\n}\n\
+         fn go() -> Int {\n    let mut i = 0;\n    \
+         while i < 3 {\n        i = i + 1;\n        \
+         let v = pick(int_to_str(i), if i == 1 { return 7; } else { i });\n    }\n    0\n}\n\
+         fn main() -> Int {\n    go()\n}\n",
+    );
+    assert_eq!(r.value, "7");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_continue_out_of_a_half_built_record_gives_back_its_fields() {
+    // N9's half of it. The record is assembled in a slot, so the round that abandons it
+    // leaves the string there — and the next round zeroes the slot, which is not the same
+    // thing as releasing it.
+    let r = both(
+        "struct R {\n    a: Str,\n    b: Int,\n}\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    \
+         while i < 3 {\n        i = i + 1;\n        \
+         let v = R(a: int_to_str(i), b: if i == 1 { continue; } else { i });\n        \
+         total = total + v.b;\n    }\n    total\n}\n",
+    );
+    assert_eq!(r.value, "5");
+    assert_eq!(r.strings, expected(3), "{r:?}");
+}
+
+#[test]
+fn a_continue_out_of_a_half_built_variant_gives_back_its_payload() {
+    // N10's half, and the one the mutation named. The discriminant is already written, so
+    // what the slot holds is a valid value of the enum — which is what makes releasing it
+    // the right thing to do rather than an impossibility.
+    let r = both(
+        "enum E {\n    Absent,\n    Value(a: Str, b: Int),\n}\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    \
+         while i < 3 {\n        i = i + 1;\n        \
+         let v = E.Value(a: int_to_str(i), b: if i == 1 { continue; } else { i });\n        \
+         total = total + match v { E.Absent() => 0, E.Value(a: s, b: n) => n, };\n    }\n    \
+         total\n}\n",
+    );
+    assert_eq!(r.value, "5");
+    assert_eq!(r.strings, expected(3), "{r:?}");
+}
+
+#[test]
+fn a_continue_out_of_an_arm_gives_back_the_value_being_matched() {
+    // The scrutinee lives in a slot for exactly as long as an arm may need it, and an arm
+    // that leaves the loop is an arm that never reaches the join where it is released.
+    let r = both(
+        "enum E {\n    Absent,\n    Text(value: Str),\n}\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    \
+         while i < 3 {\n        i = i + 1;\n        \
+         total = total + match E.Text(value: int_to_str(i)) {\n            \
+         E.Absent() => 0,\n            \
+         E.Text(value: s) => if i == 1 { continue; } else { str_len(s) },\n        };\n    }\n    \
+         total\n}\n",
+    );
+    assert_eq!(r.value, "2");
+    assert_eq!(r.strings, expected(3), "{r:?}");
+}
+
+#[test]
+fn a_transfer_gives_back_only_what_the_loop_it_leaves_was_holding() {
+    // The opposite mistake, and a premature free rather than a leak. The string is
+    // produced **before** the inner loop and read after it, so a `continue` inside that
+    // loop must not touch it: releasing everything outstanding would free storage the
+    // call is about to read.
+    //
+    // The counters cannot see this one, and that is the point of the shape. A premature
+    // release brings the count to zero and frees; the ordinary release afterwards finds
+    // freed memory and counts nothing, so `allocated` and `reclaimed` come out equal
+    // either way — the same blindness `architecture.md` §7.10 records for a replacement
+    // that releases before it takes. So the string's **bytes** are read, after thirty
+    // allocations have been given every chance to reuse them. Clean: 49 + 3. Broken: the
+    // first byte of whatever moved in.
+    let r = both(
+        "fn pick(a: Str, b: Int) -> Int {\n    str_byte(a, 0) + b\n}\n\
+         fn main() -> Int {\n    let mut j = 0;\n    \
+         pick(int_to_str(1234), if j == 0 {\n        \
+         while j < 3 {\n            j = j + 1;\n            \
+         if j == 2 {\n                continue;\n            }\n        }\n        \
+         let mut k = 0;\n        let mut noise = \"\";\n        \
+         while k < 30 {\n            noise = str_concat(noise, \"wxyz\");\n            \
+         k = k + 1;\n        }\n        \
+         j + str_len(noise) - 120\n    } else {\n        0\n    })\n}\n",
+    );
+    assert_eq!(r.value, "52");
+    assert_eq!(r.strings, expected(31), "{r:?}");
+}

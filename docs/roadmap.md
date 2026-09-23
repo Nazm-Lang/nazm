@@ -389,11 +389,13 @@ between leaves is a leaf.
 | `nazm.interface/3`, closed over the payload types its public surface mentions | `architecture.md` §7.3, extended |
 
 Evidence: the numbers are in the milestone report and in `bootstrap.md`; what they cover is
-the contained suite, selfhost parity, a new C2 = C3 fixpoint, eighteen new mutations, and
+the contained suite, selfhost parity, a new C2 = C3 fixpoint, twenty-two new mutations, and
 the interface and cache behaviour that variant addition is supposed to move. The compiler
 written in Nazm uses an enum of its own — and making that one dispatch exhaustive found a
 defect N9 had shipped, where a record passed to a task produced a wrong answer and leaked
-its fields.
+its fields. A mutation that *survived* found a second one, older: leaving a half-evaluated
+expression by `break`, `continue` or `return` gave back nothing it was holding, in both
+backends, since N8. `spec.md`'s rule 4a now says it and `architecture.md` §7.11 says how.
 
 ### N9 — User-defined records — **complete, 2026-09-23**
 

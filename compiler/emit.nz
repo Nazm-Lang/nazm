@@ -855,8 +855,10 @@ fn emit_record_node(out: Strs, next: Ints, vals: Ints, owned: Ints,
             ints_push(vals, whole);
             return 1;
         }
-        // Zeroed, then the **discriminant, before any payload**. Cleanup after a failed
-        // initialiser finds the fields to release by dispatching on the tag, so a tag
+        // Zeroed — the slot is already zero on every path that reaches here, and this
+        // store is what makes that a local fact — and then the **discriminant, before any
+        // payload**. Cleanup after a failed initialiser finds the fields to release by
+        // dispatching on the tag, so a tag
         // written last would send it looking at variant 0's fields while variant `tag`'s
         // were the ones already taken — and everything produced so far would leak on the
         // one path the program was already failing on.
@@ -1409,10 +1411,58 @@ fn own_add(owned: Ints, otype: Ints, n: Int, t: Int) -> Int {
 // control never takes. Written at each failure site rather than in the one block they all
 // reach, because which temporaries are outstanding is a property of the program point.
 fn release_temporaries(out: Strs, next: Ints, owned: Ints, otype: Ints, rowns: Ints) -> Int {
-    let mut i = 0;
+    release_temporaries_from(out, next, owned, otype, rowns, 0)
+}
+
+// The same, for the temporaries produced from `from` onwards.
+//
+// A failure leaves the function, so it releases everything. A `break` or a `continue`
+// leaves one loop and must not touch what an expression **around** that loop is still
+// holding: releasing that would be a premature free rather than a leak.
+fn release_temporaries_from(out: Strs, next: Ints, owned: Ints, otype: Ints, rowns: Ints,
+        from: Int) -> Int {
+    let mut i = from;
     while i < ints_len(owned) {
         emit_release(out, next, ints_get(owned, i), ints_get(otype, i), rowns);
         i = i + 1;
+    }
+    0
+}
+
+// Everything a `break` or a `continue` abandons: the temporaries this loop's body
+// produced, and the values the `match`es opened inside it are holding.
+fn leave_loop(out: Strs, next: Ints, owned: Ints, otype: Ints, rowns: Ints, mslots: Ints,
+        mstyp: Ints, loop_own: Ints, loop_m: Ints) -> Int {
+    if ints_len(loop_own) == 0 {
+        return 0;
+    }
+    release_temporaries_from(out, next, owned, otype, rowns,
+            ints_get(loop_own, ints_len(loop_own) - 1));
+    release_matched(out, next, mslots, mstyp, rowns,
+            ints_get(loop_m, ints_len(loop_m) - 1))
+}
+
+// Give back every value a `match` is holding from `from` inwards, on a path that stays in
+// the frame.
+//
+// The slot is the frame's, so a failure and a `return` release it by the ordinary path. A
+// `break` or a `continue` takes neither: it carries on in this frame, and the next turn of
+// the loop stores over the slot. Zeroed once released, so the frame's own cleanup finds
+// null and does nothing.
+fn release_matched(out: Strs, next: Ints, mslots: Ints, mstyp: Ints, rowns: Ints,
+        from: Int) -> Int {
+    let mut i = ints_len(mslots);
+    while i > from {
+        i = i - 1;
+        let t = ints_get(mstyp, i);
+        let dying = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(dying)),
+                str_concat(str_concat(" = load ", llvm_type(t)),
+                str_concat(", ptr %slot", int_to_str(ints_get(mslots, i))))));
+        add_line(out, str_concat(str_concat(str_concat("  store ", llvm_type(t)),
+                str_concat(" ", unwind_value(t))),
+                str_concat(", ptr %slot", int_to_str(ints_get(mslots, i)))));
+        emit_release(out, next, dying, t, rowns);
     }
     0
 }
@@ -2578,6 +2628,16 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
     // How long `owned` was when each branch opened, innermost last. See the boundary
     // between two children below.
     let own_base = ints_new();
+    // How long `owned` and `mslots` were when each **loop** started, innermost last.
+    // `own_base` cannot answer this: inside an arm its top is the arm's base, and a
+    // `break` there is leaving the whole loop, temporaries the loop body produced before
+    // the `match` included.
+    let loop_own = ints_new();
+    let loop_m = ints_new();
+    // The slots of the `match`es currently holding a value, innermost last, with their
+    // scrutinee types beside them.
+    let mslots = ints_new();
+    let mstyp = ints_new();
     // One entry per `if`, holding the value and predecessor its branches contributed.
     let phi_val = ints_new();
     let phi_blk = strs_new();
@@ -2744,11 +2804,18 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                 if kind == n_break() {
                                                     let w = enclosing_loop(nk, parent, childno, k);
                                                     if w < 0 { refuse("a `break` with no loop to leave", position(src, path, from)); }
+                                                    // The expression this is leaving never finishes, so what it
+                                                    // was holding is nobody's: the temporaries this loop produced
+                                                    // and the values the `match`es inside it hold.
+                                                    leave_loop(out, next, owned, otype, rowns, mslots, mstyp,
+                                                            loop_own, loop_m);
                                                     branch(out, live, blk("x", w));
                                                 } else {
                                                     if kind == n_continue() {
                                                         let w = enclosing_loop(nk, parent, childno, k);
                                                         if w < 0 { refuse("a `continue` with no loop to repeat", position(src, path, from)); }
+                                                        leave_loop(out, next, owned, otype, rowns, mslots, mstyp,
+                                                                loop_own, loop_m);
                                                         // The header, never the body: `continue` re-evaluates the condition.
                                                         branch(out, live, blk("h", w));
                                                     } else {
@@ -2761,6 +2828,11 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                             // — otherwise returning a local would release the
                                                             // storage it is returning.
                                                             own_keep(out, next, owned, value, vt, rowns, otype);
+                                                            // Taken over first, so releasing what this
+                                                            // statement still holds cannot reach the value
+                                                            // being returned. The slots are the frame's and
+                                                            // go just below.
+                                                            release_temporaries(out, next, owned, otype, rowns);
                                                             release_frame(out, next, frame, rowns);
                                                             add_line(out, str_concat(str_concat("  ret ", llvm_type(vt)), str_concat(" ", v(value))));
                                                             ints_set(live, 0, 0);
@@ -2941,6 +3013,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     open_block(out, current, live, blk("y", p));
                     // The body's temporaries do not dominate the exit either.
                     ints_push(own_base, ints_len(owned));
+                    ints_push(loop_own, ints_len(owned));
+                    ints_push(loop_m, ints_len(mslots));
                 } else {
                     // The back edge targets the header, so the condition runs again.
                     branch(out, live, blk("h", p));
@@ -2950,6 +3024,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                         ints_pop(otype);
                     }
                     ints_pop(own_base);
+                    ints_pop(loop_own);
+                    ints_pop(loop_m);
                     open_block(out, current, live, blk("x", p));
                 }
             }
@@ -2994,6 +3070,10 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     open_block(out, current, live, blk("a", first_arm));
                     arm_bindings(out, next, ntx, nslot, nrec, first_arm, mslot, et,
                             owned, otype, rowns, rfirst, rcount, rfname, rftype);
+                    // Held from here until the join, so a `break` or a `continue` out of
+                    // an arm gives it back instead of leaving it for the next turn.
+                    ints_push(mslots, mslot);
+                    ints_push(mstyp, et);
                     // What an arm creates is not visible to its siblings, exactly as an
                     // `if` branch's is not.
                     ints_push(own_base, ints_len(owned));
@@ -3016,6 +3096,9 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                     }
                     if which == parity - 1 {
                         ints_pop(own_base);
+                        // No arm is inside it any more; the join below releases it.
+                        ints_pop(mslots);
+                        ints_pop(mstyp);
                         open_block(out, current, live, blk("j", p));
                     } else {
                         let arm = ints_get(kids, ints_get(kid_first, p) + which + 1);

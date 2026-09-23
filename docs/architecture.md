@@ -1770,6 +1770,68 @@ module boundaries, were returned on both edges and were copied in loops, and **n
 passed one to a task through the self-hosted compiler.** The gap was in the corpus, not in
 the design.
 
+### Leaving an expression that never finishes, which was wrong in four places
+
+The surviving mutation of the milestone is the one worth writing down, because what it
+found was not the defect it described.
+
+`a-variant-slot-keeps-what-the-last-round-left-in-it` removes the store that zeroes a
+variant's assembly slot before the value is built, and the suite still passed. Working out
+*why* it passed is what found three real defects — and then showed that the mutation itself
+had become inert, because the slot is zero on every path that reaches it.
+
+The real rule is **4a** in `spec.md`, and it was satisfied on one of four paths. A
+half-evaluated expression holds things: arguments already produced, fields already stored
+into a record's or a variant's slot, and the value a `match` is holding while an arm runs.
+There are four ways to leave it part way through, and only the first gave any of them back:
+
+| Leaving by | Register temporaries | The frame's slots |
+| --- | --- | --- |
+| a failure | released — N9, `release_temporaries` | released — the shared unwind block |
+| `return` | **leaked** | released — `release_frame` |
+| `break` | **leaked** | **leaked**, because the next turn stores over the slot |
+| `continue` | **leaked** | **leaked**, the same way |
+
+Three shapes, all of them expressible since N8 and none of them in the corpus:
+
+```nazm
+while i < 3 { i = i + 1;
+    let v = pick(int_to_str(i), if i == 1 { continue; } else { i });   // the argument
+    let r = R(a: int_to_str(i), b: if i == 1 { continue; } else { i }); // the record
+    total = total + match E.Text(value: int_to_str(i)) {                // the scrutinee
+        E.Absent() => 0,
+        E.Text(value: s) => if i == 1 { continue; } else { str_len(s) },
+    };
+}
+```
+
+Each leaked one string per abandoned round, in **both** backends and in the compiler
+written in Nazm, since N8. The interpreter was right in every one of them, which is the
+usual direction and why `memory.rs` runs the same program through both.
+
+The fix is the one N9 already wrote for failures, on the other three paths. `transfer`
+releases the temporaries this loop produced and the slots it is part way through filling;
+`Stmt::Return` releases the temporaries, because the slots are the frame's and it is about
+to release those anyway. Two depths make it exact rather than approximate — `Targets`
+records how many temporaries were outstanding and how many slots were in flight when the
+loop started, the same distinction `scope_depth` already drew for tasks. Releasing more
+than that is not a leak but a **premature free**: a string produced before the loop and
+read after it is still wanted. That one is invisible to the counters for the same reason
+§7.10's survivor was — the premature release frees, and the ordinary release afterwards
+finds freed memory and counts nothing, so both numbers come out equal — so
+`a_transfer_gives_back_only_what_the_loop_it_leaves_was_holding` reads the string's
+**bytes** after thirty allocations have had every chance to reuse them.
+
+The Nazm-written emitter needed the same fix and a smaller version of it: a post-order
+stack machine has no half-filled construction slot — the initialisers are complete before
+the node is reached — so only the temporaries and the `match` slots are at stake there.
+
+Two things this says, and they are the same two N9's task-block defect said. The first is
+that the rule was right and the implementation satisfied it on the path a test happened to
+take. The second is that **a mutation that survives is a question, not a verdict**: this
+one was answered by three defects and a fourth finding, that the mutation no longer
+describes a defect at all, and it was replaced by four that do.
+
 ### What this still does not do
 
 - **No generics**, so no `Option`, no `Result`, and no generic enum of any kind. A

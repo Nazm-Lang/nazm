@@ -245,7 +245,7 @@ enums**. Local inference for `let`; parameters and returns always written. Compl
 analysis decides whether a block produces a value, which is what lets one `if` serve both
 statement and value position. Codes `N0300`–`N0314` and `N0330`–`N0345`. 114 behavioural
 tests in `crates/nazm-core/tests/language.rs`, 33 in `crates/nazm-core/tests/records.rs`,
-46 in `crates/nazm-core/tests/enums.rs`.
+47 in `crates/nazm-core/tests/enums.rs`.
 
 *N9, 2026-09-23.* `struct Point { x: Int, y: Int, }` — nominal value records with named
 fields, named construction, projection, field replacement through a projection path,
@@ -572,7 +572,7 @@ key without anyone having enumerated them, and the invocation runs with an envir
 built from nothing plus ten named variables, because `CCC_OVERRIDE_OPTIONS`, `SDKROOT` and
 `MACOSX_DEPLOYMENT_TARGET` were each measured to change the object.
 
-Twenty-two cases in `crates/nazm-cli/tests/native_cache.rs` and eighteen in
+Thirty-three cases in `crates/nazm-cli/tests/native_cache.rs` and eighteen in
 `crates/nazm-cache/tests/objects.rs`. The precision ones: a dependency's body change and an
 export the caller never calls each recompile one unit of seven; a comment that moves no
 emitted position recompiles nothing, and one above a fallible operation recompiles the unit
@@ -979,7 +979,7 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **109** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **131** catalogued defects;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -1016,6 +1016,28 @@ replacement that releases before it takes is invisible to the reclamation counte
 both orders end with the same two numbers. The one that did not compile is a different
 verdict and was reported as one rather than folded into a pass — which is what the
 seven-verdict distinction exists for.
+
+*N10 added twenty-two on 2026-09-23 and ran all twenty-two contained and serial, in five
+batches, with nothing else running.* Eighteen attack the composition becoming dynamic: an
+enum's properties taken from one variant, a discriminant from the parser rather than from
+the names, a payload laid out as written, a published enum in source order, an exported
+enum missing from the interface, a helper branching on the wrong tag, a copy that takes no
+reference, a `match` that does not take over what it matches and one that never lets go, a
+partly built variant left uncleaned, a task that does not give back what it borrowed, the
+five checker rules — coverage, a repeated arm, another enum's variant, a missing payload
+field, a private payload type — and the **self-hosted** checker skipping exhaustiveness and
+the self-hosted emitter not taking over a payload.
+
+Four more came out of the one that survived, and they are the interesting ones.
+`a-variant-slot-keeps-what-the-last-round-left-in-it` was injected, compiled, and the suite
+still passed. Asking why found that a `break`, a `continue` or a `return` out of a
+half-evaluated expression gave back nothing it was holding — a defect of **N8's**, in both
+backends and in the compiler written in Nazm — and then that the mutation itself no longer
+described a defect, because the slot it zeroes is zero on every path that reaches it.
+`architecture.md` §7.11 writes it up. It was retired and replaced by four that do describe
+one: a transfer that keeps the temporaries, one that keeps the values being built, one that
+releases the temporaries of the loop *around* it — a premature free rather than a leak —
+and the same omission in the self-hosted emitter.
 
 **Limitation** · The **whole-catalogue run timed out unexplained** at its 3600 s deadline
 without reaching injection, and is recorded as incomplete rather than as a result; the

@@ -594,14 +594,15 @@ released. That is the same rule *A projection produces a value* already states f
 applied to a value whose fields are a runtime fact.
 
 A pattern's variant must belong to the scrutinee's enum. `B.Ready(…)` against an `A` is
-refused even if both enums have a `Ready`; there is no structural variant matching.
+refused (`N0345`) even if both enums have a `Ready`; there is no structural variant
+matching.
 
 #### Exhaustiveness
 
 Every `match` must name **every variant of its enum, exactly once**.
 
-- a missing variant is `N0344`, and the diagnostic lists the variants that are missing;
-- a repeated variant is `N0345`, reported at the second arm;
+- a missing variant is `N0343`, and the diagnostic lists the variants that are missing;
+- a repeated variant is `N0344`, reported at the second arm;
 - there is **no `_ => …` catch-all arm** in N10.
 
 No runtime trap substitutes for the check. A valid program's discriminant always has a
@@ -1156,6 +1157,16 @@ out of a `return`. An implementation may reclaim later than this and may not rec
 earlier. It is deliberately not stated *how*: reference counting, an escape analysis, and a
 region scheme all satisfy it, and `architecture.md` §7.7 records which one is implemented
 and why.
+
+**4a. An expression that never finishes still gives back what it had produced.** There are
+four ways to leave one part way through — a run-time failure, `return`, `break` and
+`continue` — and every one of them is an ordinary death for the values already in hand:
+the arguments already evaluated, the fields already stored into a half-built record, the
+payload already stored into a half-built variant, and the value a `match` is holding while
+an arm runs. None of them is reachable by the program again, so each is reclaimed then and
+not later. `E.Value(a: f(), b: if done { continue; } else { g() })` reclaims what `f()`
+produced, on the turn that abandons it, and a value produced **before** a loop and wanted
+after it is untouched by a `break` inside that loop.
 
 This is where the milestone's scope is stated rather than implied:
 
