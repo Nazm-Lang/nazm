@@ -1,0 +1,10 @@
+fn main() -> Int {
+    let mut i = 0;
+    let mut hits = 0;
+    while i < 5 {
+        i = i + 1;
+        if (if i == 2 { continue; } else { i }) > 3 { hits = hits + 10; } else { hits = hits + 1; }
+        if int_to_str(i) == (if i == 4 { continue; } else { "5" }) { hits = hits + 100; }
+    }
+    hits
+}

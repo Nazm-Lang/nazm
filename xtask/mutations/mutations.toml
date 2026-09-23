@@ -1310,9 +1310,9 @@ Only a differential test that compares what the two compilers' programs *reclaim
 it, which is what `the_nazm_written_compiler_emits_the_same_memory_semantics` is for
 """
 file = "compiler/emit.nz"
-find = """                                                                                                    own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);
-                                                                                                    release_frame(out, next, frame, rowns);"""
-replace = """                                                                                                    own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);"""
+find = """                                                                                                        own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);
+                                                                                                        release_frame(out, next, frame, rowns);"""
+replace = """                                                                                                        own_keep(out, next, owned, tv, ints_get(nrec, k), rowns, otype);"""
 
 
 # --- N9: records -----------------------------------------------------------------------
@@ -1865,7 +1865,196 @@ reclamation while agreeing about every value, which is the divergence a differen
 test exists to catch
 """
 file = "compiler/emit.nz"
-find = """                                                        leave_loop(out, next, owned, otype, rowns, mslots, mstyp,
-                                                                loop_own, loop_m);
-                                                        // The header, never the body: `continue` re-evaluates the condition."""
-replace = """                                                        // The header, never the body: `continue` re-evaluates the condition."""
+find = """                                                            leave_loop(out, next, owned, otype, rowns, mslots, mstyp,
+                                                                    loop_own, loop_m);
+                                                            join_from(out, next, current, live,
+                                                                    ints_get(loop_scope, ints_len(loop_scope) - 1));
+                                                            // The header, never the body: `continue` re-evaluates the condition."""
+replace = """                                                            join_from(out, next, current, live,
+                                                                    ints_get(loop_scope, ints_len(loop_scope) - 1));
+                                                            // The header, never the body: `continue` re-evaluates the condition."""
+
+
+# --- N10.1: a transfer in a value position -------------------------------------------
+#
+# The Nazm-written compiler had no representation of "this expression left": its checker
+# folded a transfer into `unknown`, and its emitter opened every join and emitted every
+# node. These put back each half of that, and the two things the audit found alongside it.
+
+[[mutation]]
+name = "an-if-is-typed-by-the-branch-that-left"
+why = """
+the root cause of N10.1, put back: the Nazm checker types a two-branch `if` by its
+then-branch whatever that branch does, so `if c { continue; } else { i }` has no value
+and the emitter passes `void %24` to the call it is an argument of. Every program where
+the then-branch is the one that leaves is affected; the ones where the else-branch leaves
+are not, which is why a corpus of one shape did not find it
+"""
+file = "compiler/analyse.nz"
+find = """                    if ints_get(ndiv, then_b) == 1 {
+                        ints_push(ts, else_t);
+                    } else {
+                        ints_push(ts, then_t);
+                    }"""
+replace = """                    ints_push(ts, then_t);"""
+
+[[mutation]]
+name = "a-join-no-branch-reached-is-opened-anyway"
+why = """
+opens an `if`'s join even when both branches left, which is how every join was opened
+until N10.1. The block has no predecessor, so it is valid IR — and the parent of the `if`
+is emitted into it, popping a value neither branch pushed. `N0405` inside the compiler, or
+someone else's value as an operand
+"""
+file = "compiler/emit.nz"
+find = """                            // Only if a branch reached it. Both leaving is the whole `if`
+                            // leaving, and what contains it is on no path.
+                            if ints_get(joined, p) == 1 {
+                                open_block(out, current, live, blk("j", p));
+                            }"""
+replace = """                            open_block(out, current, live, blk("j", p));"""
+
+[[mutation]]
+name = "a-match-join-no-arm-reached-is-opened-anyway"
+why = """
+the same for a `match` whose every arm left: its join is opened and what contains the
+`match` is emitted as though it had a value
+"""
+file = "compiler/emit.nz"
+find = """                            // Opened only if some arm reached it. Otherwise the `match` never
+                            // completes and everything after it is on no path.
+                            if ints_get(joined, p) == 1 {
+                                open_block(out, current, live, blk("j", p));
+                            }"""
+replace = """                            open_block(out, current, live, blk("j", p));"""
+
+[[mutation]]
+name = "an-unreachable-node-is-emitted-anyway"
+why = """
+takes away the one answer the emitter asks — is the block being written live — so a
+call is emitted after one of its arguments left, an assignment stores a value nobody
+produced, and an operator runs on half its operands. Every instruction lands after a
+terminator
+"""
+file = "compiler/emit.nz"
+find = """fn unreachable_here(live: Ints, kind: Int) -> Bool {
+    if ints_get(live, 0) == 1 { return false; }"""
+replace = """fn unreachable_here(live: Ints, kind: Int) -> Bool {
+    if kind > 0 { return false; }"""
+
+[[mutation]]
+name = "an-unreachable-assignment-is-emitted-anyway"
+why = """
+exempts only assignment from the rule: a `s = if c { continue; } else { break; };` is
+emitted though its value never arrives. The one statement whose half-emission changes a
+place the program can still read
+"""
+file = "compiler/emit.nz"
+find = """    if kind == n_payload() { return false; }
+    true
+}"""
+replace = """    if kind == n_payload() { return false; }
+    if kind == n_assign() { return false; }
+    true
+}"""
+
+[[mutation]]
+name = "an-if-with-one-incoming-reads-two"
+why = """
+builds every value `if`'s `phi` from two incomings whether or not both branches reached
+the join — the fixed count N10 had. The second is a value another construct pushed, named
+with a block that is not a predecessor
+"""
+file = "compiler/emit.nz"
+find = """                                                                phi_val, phi_blk, ints_get(nin, k), ints_get(ntype, k)));"""
+replace = """                                                                phi_val, phi_blk, 2, ints_get(ntype, k)));"""
+
+[[mutation]]
+name = "an-unreachable-nodes-operands-stay-on-the-stack"
+why = """
+leaves on `vals` what the operands of an unreachable node produced before control
+left. Every pop after it is off by those values, so a later, reachable node consumes one
+that belongs to a path that no longer exists
+"""
+file = "compiler/emit.nz"
+find = """                while ints_len(vals) > floor { ints_pop(vals); }"""
+replace = """                let _kept = floor;"""
+
+[[mutation]]
+name = "a-break-out-of-a-scope-does-not-join-it"
+why = """
+a `break` leaves the `scope` it is inside without waiting for the scope's tasks, which is
+what the Nazm-written compiler did from N7 to N10.1: a task that failed is never joined,
+its failure is never taken on, and the program prints a value where the reference stops
+with the task's diagnostic
+"""
+file = "compiler/emit.nz"
+find = """                                                        join_from(out, next, current, live,
+                                                                ints_get(loop_scope, ints_len(loop_scope) - 1));
+                                                        branch(out, live, blk("x", w));"""
+replace = """                                                        branch(out, live, blk("x", w));"""
+
+[[mutation]]
+name = "a-return-out-of-a-scope-does-not-join-it"
+why = """
+the same for `return`: the frame is left with the scope's tasks still running and their
+failure unseen
+"""
+file = "compiler/emit.nz"
+find = """                                                                join_from(out, next, current, live, 2);
+                                                                // Rule 3."""
+replace = """                                                                // Rule 3."""
+
+[[mutation]]
+name = "the-self-hosted-checker-says-nothing-after-a-transfer"
+why = """
+the Nazm checker stops reporting `N0313`, so `continue; i = i + 10;` is accepted and the
+emitter compiles a statement the reference refuses — which is what it did until N10.1
+"""
+file = "compiler/analyse.nz"
+find = """                        ints_set(ndiv, k, 1);
+                        left = 1;"""
+replace = """                        ints_set(ndiv, k, 1);"""
+
+[[mutation]]
+name = "a-value-that-never-arrives-has-no-type"
+why = """
+a value position with no expectation of its own sees `unknown` for a value that never
+arrives instead of the reference's `Int`: a `let` of one gets a slot with no type, and a
+`match` over one is accepted where the reference refuses it
+"""
+file = "compiler/analyse.nz"
+find = """        if t == t_unknown() { return t_int(); }
+    }
+    t
+}"""
+replace = """        if t == t_unknown() { return t; }
+    }
+    t
+}"""
+
+[[mutation]]
+name = "a-string-comparison-keeps-its-operands"
+why = """
+the leak both native backends had in `==` on strings until N10.1, with no transfer
+anywhere near it: the operands are borrowed and never given back, so a temporary compared
+is allocated and never reclaimed. The interpreter was right, which is what `memory.rs`
+compares against
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """                    self.drop_temporary(a, Ty::Str);
+                    self.drop_temporary(b, Ty::Str);
+"""
+replace = """"""
+
+[[mutation]]
+name = "the-self-hosted-string-comparison-keeps-its-operands"
+why = """
+the same leak in the Nazm-written emitter, which the selfhost suite's reclamation
+comparison is what catches
+"""
+file = "compiler/emit.nz"
+find = """                                                                                            own_drop(out, next, owned, a, ot, rowns, otype);
+                                                                                            own_drop(out, next, owned, b, ot, rowns, otype);
+"""
+replace = """"""

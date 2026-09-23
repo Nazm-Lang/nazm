@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 4 {
+        i = i + 1;
+        total = total + str_len(str_concat(int_to_str(i * 7), if i == 2 { continue; } else { int_to_str(i) }));
+    }
+    total
+}

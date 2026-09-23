@@ -1,0 +1,12 @@
+fn boom(n: Int) -> Int { 10 / n }
+fn main() -> Int {
+    let mut i = 0;
+    while i < 3 {
+        i = i + 1;
+        scope {
+            spawn boom(0);
+            if i == 1 { break; }
+        }
+    }
+    i
+}

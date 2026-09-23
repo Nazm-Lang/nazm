@@ -1,0 +1,19 @@
+fn note(log: Ints, x: Int) -> Int {
+    ints_push(log, x);
+    x
+}
+fn three(a: Str, b: Str, c: Str) -> Int { str_len(a) * 100 + str_len(b) * 10 + str_len(c) }
+fn main() -> Int {
+    let log = ints_new();
+    let mut i = 0;
+    let mut total = 0;
+    while i < 4 {
+        i = i + 1;
+        total = total + three(
+                if i == 1 { continue; } else { int_to_str(note(log, 10 + i)) },
+                if i == 2 { continue; } else { int_to_str(note(log, 200 + i)) },
+                if i == 3 { continue; } else { int_to_str(note(log, 3000 + i)) }
+                );
+    }
+    total * 100 + ints_len(log)
+}

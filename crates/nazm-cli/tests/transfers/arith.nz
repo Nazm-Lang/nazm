@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 4 {
+        i = i + 1;
+        total = total + (if i == 1 { continue; } else { i });
+        total = (if i == 2 { continue; } else { total }) + 1000;
+        total = total - (if i == 3 { break; } else { 1 });
+    }
+    total
+}

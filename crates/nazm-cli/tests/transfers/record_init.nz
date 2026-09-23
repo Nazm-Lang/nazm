@@ -1,0 +1,21 @@
+struct R {
+    first: Str,
+    second: Str,
+    third: Int,
+}
+fn later(log: Ints, x: Int) -> Int {
+    ints_push(log, x);
+    x
+}
+fn main() -> Int {
+    let log = ints_new();
+    let mut i = 0;
+    let mut total = 0;
+    while i < 4 {
+        i = i + 1;
+        let r = R(first: int_to_str(i), second: str_concat("x", int_to_str(i)),
+                third: if i == 2 { continue; } else { later(log, i) });
+        total = total + str_len(r.first) + str_len(r.second) + r.third;
+    }
+    total * 10 + ints_len(log)
+}

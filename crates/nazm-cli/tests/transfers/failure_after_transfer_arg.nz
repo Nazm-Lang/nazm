@@ -1,0 +1,10 @@
+fn pick(a: Str, b: Int) -> Int { str_len(a) + b }
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 4 {
+        i = i + 1;
+        total = total + pick(int_to_str(i), if i == 1 { continue; } else { 10 / (3 - i) });
+    }
+    total
+}

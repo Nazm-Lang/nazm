@@ -1,0 +1,17 @@
+enum E {
+    Absent,
+    Text(value: Str),
+}
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 4 {
+        i = i + 1;
+        let e = if i == 4 { E.Absent() } else { E.Text(value: int_to_str(i)) };
+        total = total + match e {
+            E.Absent() => if i == 4 { break; } else { 0 },
+            E.Text(value: s) => if i == 1 { continue; } else { str_len(s) + i },
+        };
+    }
+    total * 10 + i
+}
