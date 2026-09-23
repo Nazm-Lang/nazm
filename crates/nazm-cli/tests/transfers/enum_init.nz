@@ -1,0 +1,15 @@
+enum E {
+    Absent,
+    Two(first: Str, second: Str, third: Int),
+}
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 4 {
+        i = i + 1;
+        let e = E.Two(first: int_to_str(i), second: str_concat("y", int_to_str(i)),
+                third: if i == 3 { break; } else { i });
+        total = total + match e { E.Absent() => 0, E.Two(first: a, second: b, third: n) => str_len(a) + str_len(b) + n, };
+    }
+    total * 10 + i
+}

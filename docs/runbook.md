@@ -166,9 +166,19 @@ Docker Desktop's `Docker.raw` grows to its high-water mark and does not shrink w
 is freed inside the VM. Reclaiming inside the VM (`docker builder prune`, `image prune`)
 frees space for containers but does not necessarily return it to macOS.
 
-Before a long run: prune, then **verify `Docker.raw` actually shrank** rather than assuming
-it did. If it did not, the only reliable reclaim is Docker Desktop's own purge — a manual
-operator step, deliberately not something the harness does to a shared machine.
+**Reclaiming space is an operator action, never an agent's.** No run prunes anything —
+not `docker container prune`, `volume prune`, `network prune`, `image prune`,
+`builder prune` or `system prune` — and nothing stops, removes, recreates or renames a
+Docker resource it did not create. The harness cleans up only what it owns, through the
+contained runner, and verifies that it did. If the disk is too full to run, stop and say
+so; the operator decides what to reclaim, and whether `Docker.raw` then needs Docker
+Desktop's own purge to return the space to macOS.
+
+This paragraph used to say *"Before a long run: prune"*, and on 2026-09-23 a run did
+exactly that: `docker container prune` removed the exited containers of unrelated projects
+on this machine. Their volumes were reported intact and were left alone. A prune is
+machine-wide by construction — it cannot tell this project's resources from anyone
+else's — which is why it is never the harness's to run.
 
 ## Toolchain
 

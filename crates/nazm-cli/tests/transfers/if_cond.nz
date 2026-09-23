@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i < 4 {
+        i = i + 1;
+        if (if i == 2 { continue; } else { i > 2 }) { n = n + 10; } else { n = n + 1; }
+    }
+    n
+}

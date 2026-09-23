@@ -1666,3 +1666,80 @@ fn a_transfer_gives_back_only_what_the_loop_it_leaves_was_holding() {
     assert_eq!(r.value, "52");
     assert_eq!(r.strings, expected(31), "{r:?}");
 }
+
+// ---------------------------------------------------------------------------
+// N10.1: a transfer in a value position, and a comparison that kept its operands
+//
+// The reference backend was right about every transfer shape below and the compiler
+// written in Nazm was not; these hold the reference to the answers the selfhost suite
+// compares against. The comparison is the exception — it was wrong in **both** native
+// backends, with no transfer anywhere near it, and the interpreter was right.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_string_comparison_gives_back_its_operands() {
+    // `int_to_str(i)` is a temporary and `==` only borrows it, exactly as a call does, so
+    // it is nobody's once the answer exists. Both native backends leaked it on every
+    // evaluation until N10.1: allocated 5, reclaimed 0.
+    let r = both(
+        "fn main() -> Int {\n    let mut i = 0;\n    let mut hits = 0;\n    \
+         while i < 5 {\n        i = i + 1;\n        \
+         if int_to_str(i) == \"5\" { hits = hits + 100; }\n        \
+         if \"x\" != str_concat(\"x\", int_to_str(i)) { hits = hits + 1; }\n    }\n    \
+         hits\n}\n",
+    );
+    assert_eq!(r.value, "105");
+    assert_eq!(r.strings, expected(15), "{r:?}");
+}
+
+#[test]
+fn a_transfer_in_one_argument_evaluates_the_earlier_ones_and_none_after() {
+    // Three arguments, each of which leaves on a different round. The log is the
+    // evaluation order made visible: an argument after the one that left never runs, so
+    // round two notes one value and round three two. `23406` is `three("14", "204",
+    // "3004")` from the only round that finished, and six notes.
+    let r = both(
+        "fn note(log: Ints, x: Int) -> Int {\n    ints_push(log, x);\n    x\n}\n\
+         fn three(a: Str, b: Str, c: Str) -> Int { str_len(a) * 100 + str_len(b) * 10 + str_len(c) }\n\
+         fn main() -> Int {\n    let log = ints_new();\n    let mut i = 0;\n    let mut total = 0;\n    \
+         while i < 4 {\n        i = i + 1;\n        \
+         total = total + three(\n            \
+         if i == 1 { continue; } else { int_to_str(note(log, 10 + i)) },\n            \
+         if i == 2 { continue; } else { int_to_str(note(log, 200 + i)) },\n            \
+         if i == 3 { continue; } else { int_to_str(note(log, 3000 + i)) }\n        );\n    }\n    \
+         total * 100 + ints_len(log)\n}\n",
+    );
+    assert_eq!(r.value, "23406");
+    assert_eq!(r.strings, expected(6), "{r:?}");
+}
+
+#[test]
+fn an_assignment_whose_value_leaves_keeps_what_the_place_held() {
+    // Every round leaves before the store, so the string made before the loop is the one
+    // read after it — unreleased, unreplaced, and released exactly once at the end.
+    let r = both(
+        "fn main() -> Int {\n    let mut s = str_concat(\"kept\", \"!\");\n    let mut i = 0;\n    \
+         while i < 3 {\n        i = i + 1;\n        \
+         s = if i >= 1 { continue; } else { int_to_str(i) };\n    }\n    \
+         str_len(s) * 10 + str_byte(s, 0) - 100\n}\n",
+    );
+    assert_eq!(r.value, "57");
+    assert_eq!(r.strings, expected(1), "{r:?}");
+}
+
+#[test]
+fn a_value_whose_every_branch_leaves_makes_nothing_after_it_run() {
+    // Both branches leave, so the `if` has no value on any path, `pick` is never called,
+    // and the `+ 100` after it never runs either. The string argument was produced first
+    // and is given back on both ways out.
+    let r = both(
+        "fn pick(a: Str, b: Int) -> Int { str_len(a) + b }\n\
+         fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    \
+         while i < 5 {\n        i = i + 1;\n        \
+         if i < 3 {\n            \
+         total = total + pick(int_to_str(i), if i == 1 { continue; } else { break; });\n        }\n        \
+         total = total + 100;\n    }\n    total + i\n}\n",
+    );
+    assert_eq!(r.value, "2");
+    assert_eq!(r.strings, expected(2), "{r:?}");
+}

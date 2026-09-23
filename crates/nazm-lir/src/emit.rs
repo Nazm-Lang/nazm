@@ -2369,6 +2369,13 @@ impl Emitter<'_> {
                 // `!=` reach here.
                 if *operand_ty == Ty::Str {
                     let out = self.string_equality(a, b, *op == crate::ir::CmpOp::NotEq);
+                    // Rule 2: a comparison borrows its operands exactly as a call does,
+                    // so a temporary compared is still nobody's once the answer exists.
+                    // `int_to_str(i) == "5"` leaked the left-hand string on every
+                    // evaluation until N10.1, here and in the compiler written in Nazm,
+                    // and the interpreter was right.
+                    self.drop_temporary(a, Ty::Str);
+                    self.drop_temporary(b, Ty::Str);
                     return Val::Of {
                         value: out,
                         ty: Ty::Bool,

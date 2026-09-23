@@ -354,6 +354,67 @@ linker UUID is removed, and C2 = C3 over 14 conformance cases, 7 of them multi-m
 8,724 source lines. Preserving the old number by declining the change would have been
 preserving the number rather than the property it stands for.
 
+### A transfer in a value position, the divergence N10 left open — N10.1, 2026-09-23
+
+N10's evidence exposed one divergence older than N10, and it is recorded here rather than
+written out of the history above:
+
+```nazm
+let v = pick(int_to_str(i), if i == 1 { continue; } else { i });
+```
+
+The reference checked, interpreted and compiled this to `7` with every string reclaimed.
+The compiler written in Nazm — interpreted, as C1, as C2 and as C3, identically, because
+they are one program — emitted `call i64 @nz.f0({ ptr, i64, ptr } %19, void %24)`, which
+clang refuses. Its neighbours were worse: with the other branch leaving, or both, it failed
+**inside itself** with `N0405 this sequence is empty` at `compiler/emit.nz:2887`, exit 2. A
+`let`, a `return`, a comparison and an assignment of the same shape each produced a
+different `void` operand, and a `match` over one reported "`s` is not defined". One string
+comparison compiled, ran, answered correctly, and leaked three strings.
+
+**The exit status 133 recorded against an intermediate state of this work did not reproduce
+at `2f0cba9`** in any of those forms, under the selfhost suite's 512 MiB address-space ceiling
+or without it. 133 is 128 + `SIGTRAP` on the contained runner's aarch64 Linux — the signal
+`llvm.trap` raises there, measured — and neither emitter's runtime contains `llvm.trap`.
+Reaching an `unreachable` at `-O0` was measured too, and it does *not* trap: control falls
+into whatever follows. So the most that can be said of the unreproduced 133 is that it
+belongs to no committed tree, and that the class of defect it would have been — emitted code
+running on past a point that was never meant to be reached — is the class this correction
+removes: every accepted case now emits valid IR, and the reachable paths through it are the
+ones the reference has.
+
+**The cause was one representation missing twice.** The checker folded "this never
+completes" into `unknown`, which also meant a statement and an error, and typed an `if` by
+its then-branch; the emitter opened every join whether any branch reached it. Records
+survived by accident — their field types came from the declaration — which is why N9's and
+N10's corpora, full of record and variant transfers, never saw it. `architecture.md` §7.11
+has the repair.
+
+**And the audit found three more, all of them rules the reference already kept.** A
+`break`, a `continue` or a `return` out of a `scope` did not join it, so a task that failed
+there was never waited for and the program printed `1` where the reference stopped with
+`N0401`. A statement after one that leaves was compiled rather than refused as `N0313`. And
+a value that never arrives was `unknown` where the reference makes it `Int`, so
+`match (if c { break; } else { continue; }) { … }` was accepted. A fifth finding was not
+this compiler's alone: `==` on two strings leaked its operands in **both** native backends.
+
+**What is still not the same, stated.** The self-hosted checker has no `Unit` rule — the
+reference's `N0300`, *this produces no value* — and does not compare the types of an `if`'s
+two branches (`N0302`). Each concerns only programs the reference refuses, so neither is a
+divergence in the accepted language; but for those programs this compiler emits IR clang
+refuses, or fails with `N0405`, rather than refusing by name. That, and N2's bare block,
+are the known differences, and the second of them is still the only one a program the
+reference accepts can reach.
+
+The corpus carries all of it: `crates/nazm-cli/tests/transfers/` holds 32 programs, the
+original among them byte for byte, run five ways; and six of them are conformance cases
+here, so C2 and C3 compile them too.
+
+**The digest moved a fifth time**, and the property held: `ba8615e4…` (N10) → `ce458be3…`.
+`ir: identical`, executables byte-identical once the linker UUID is removed, and C2 = C3
+with the reference over 20 conformance cases, 7 of them multi-module, at 8,959 source
+lines.
+
 ## 6. Reproducing it
 
 ```sh

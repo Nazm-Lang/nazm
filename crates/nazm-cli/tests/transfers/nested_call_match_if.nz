@@ -1,0 +1,21 @@
+enum E {
+    Absent,
+    Text(value: Str),
+}
+fn pick(a: Str, b: Int, c: Str) -> Int { str_len(a) * 100 + b * 10 + str_len(c) }
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 4 {
+        i = i + 1;
+        total = total + pick(
+                int_to_str(i * 1111),
+                match E.Text(value: int_to_str(i)) {
+            E.Absent() => 0,
+            E.Text(value: s) => if i == 2 { continue; } else { str_len(s) + i },
+        },
+                str_concat("z", int_to_str(i))
+                );
+    }
+    total
+}
