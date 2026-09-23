@@ -176,6 +176,38 @@ pub fn t_record(i: Int) -> Int { t_record_base() + i }
 pub fn is_record(t: Int) -> Bool { t >= t_record_base() }
 pub fn record_of(t: Int) -> Int { t - t_record_base() }
 
+// --- an enum is a record whose fields are its variants ----------------------------------
+//
+// N10 adds no second table. An enum occupies an entry of the record table whose "fields"
+// are its **variants**, each named and each typed as another entry — the variant, whose
+// own fields are its payload. `rkind` is what says which of the three an entry is:
+//
+//     0  a record      its fields are its fields
+//     1  an enum       its fields are its variants
+//     2  a variant     its fields are its payload, and no module owns its name
+//
+// That is not a trick to save a table. Every derivation N9 wrote over records is already
+// the derivation N10 needs over enums: *needs cleanup* is some field of some variant,
+// which is the same walk; a containment cycle through a variant is the same cycle; and
+// the task-safety path comes out as `work.Values.items` — the variant named on the way —
+// because a variant genuinely is a step in the path. What a record and an enum **do**
+// differ in is how a value of one is built and eliminated, and that is written out at each
+// of those two places rather than hidden here.
+pub fn rk_record() -> Int { 0 }
+pub fn rk_enum() -> Int { 1 }
+pub fn rk_variant() -> Int { 2 }
+
+pub fn is_enum_entry(rkind: Ints, r: Int) -> Bool {
+    if r < 0 { return false; }
+    if r >= ints_len(rkind) { return false; }
+    ints_get(rkind, r) == rk_enum()
+}
+
+pub fn is_enum(t: Int, rkind: Ints) -> Bool {
+    if is_record(t) == false { return false; }
+    is_enum_entry(rkind, record_of(t))
+}
+
 pub fn type_of_name(name: Str) -> Int {
     if name == "Int" { return t_int(); }
     if name == "Bool" { return t_bool(); }
@@ -397,6 +429,10 @@ pub fn after_colon(s: Str) -> Str {
 
 fn mark_finish(k: Int) -> Int { 0 - (3 * k + 2) }
 fn mark_leave(k: Int) -> Int { 0 - (3 * k + 3) }
+// A `match`, between its scrutinee and its arms. The scrutinee's type is what every arm's
+// pattern is checked against, and it is not known until the scrutinee has finished — so
+// there is a mark where an `if` needs none.
+fn mark_scrutinee(k: Int) -> Int { 0 - (3 * k + 1) }
 
 fn lookup_type(names: Strs, ntypes: Ints, want: Str) -> Int {
     let mut i = strs_len(names) - 1;
@@ -657,10 +693,15 @@ pub fn project(base: Int, name: Str, from: Int, to: Int,
 
 pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
         mstart: Ints, rnames: Strs, rowner: Ints, rpub: Ints, rat: Ints, rnode: Ints,
+        rkind: Ints, kids: Ints, kid_first: Ints,
         dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
     let mut k = 0;
     while k < ints_len(nk) {
-        if ints_get(nk, k) == n_record() {
+        let this = ints_get(nk, k);
+        let mut declares = 0;
+        if this == n_record() { declares = 1; }
+        if this == n_enum() { declares = 1; }
+        if declares == 1 {
             let name = strs_get(ntx, k);
             let owner = module_at(mstart, ints_get(nst, k));
             let at = ints_get(nst, k);
@@ -685,6 +726,28 @@ pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, nau
                 ints_push(rpub, ints_get(naux, k));
                 ints_push(rat, at);
                 ints_push(rnode, k);
+                if this == n_enum() {
+                    ints_push(rkind, rk_enum());
+                    // One entry per variant, straight after the enum's own. A variant is
+                    // owned by no module — `rowner` is -1 — so no type name resolves to
+                    // one, which is what keeps a variant from being written as a type.
+                    let arity = ints_get(nar, k);
+                    let first = ints_get(kid_first, k);
+                    let mut v = 0;
+                    while v < arity {
+                        let child = ints_get(kids, first + v);
+                        strs_push(rnames, str_concat(str_concat(name, "."),
+                                strs_get(ntx, child)));
+                        ints_push(rowner, 0 - 1);
+                        ints_push(rpub, ints_get(naux, k));
+                        ints_push(rat, ints_get(nst, child));
+                        ints_push(rnode, child);
+                        ints_push(rkind, rk_variant());
+                        v = v + 1;
+                    }
+                } else {
+                    ints_push(rkind, rk_record());
+                }
             }
         }
         k = k + 1;
@@ -747,18 +810,64 @@ pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modu
 // Stage 0b: resolve every record's field types, and refuse a record with none.
 pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs,
         kids: Ints, kid_first: Ints,
-        rnames: Strs, rowner: Ints, rat: Ints, rnode: Ints,
+        rnames: Strs, rowner: Ints, rat: Ints, rnode: Ints, rkind: Ints,
         rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, rfat: Ints,
         tmod: Ints, tname: Strs, trec: Ints,
         dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
     let mut r = 0;
     while r < strs_len(rnames) {
         let k = ints_get(rnode, r);
-        let owner = ints_get(rowner, r);
+        let mut owner = ints_get(rowner, r);
         ints_push(rfirst, strs_len(rfname));
         let arity = ints_get(nar, k);
         let first = ints_get(kid_first, k);
         let mut kept = 0;
+
+        // An enum's fields are its **variants**: each named as it was written, and typed
+        // as the entry that carries its payload. Those entries were allocated straight
+        // after the enum's own, in declaration order, so their indices are known without
+        // a second pass.
+        if ints_get(rkind, r) == rk_enum() {
+            let mut v = 0;
+            while v < arity {
+                let child = ints_get(kids, first + v);
+                let vname = strs_get(ntx, child);
+                let mut duplicate = 0;
+                let mut d = 0;
+                while d < kept {
+                    if strs_get(rfname, ints_get(rfirst, r) + d) == vname {
+                        report(dcode, dstart, dend, dmsg, "N0340", ints_get(nst, child),
+                                ints_get(nen, child),
+                                str_concat(str_concat(str_concat(str_concat("`",
+                                strs_get(rnames, r)), "` has two variants called `"),
+                                vname), "`"));
+                        duplicate = 1;
+                    }
+                    d = d + 1;
+                }
+                if duplicate == 0 {
+                    strs_push(rfname, vname);
+                    ints_push(rftype, t_record(r + 1 + v));
+                    ints_push(rfat, ints_get(nst, child));
+                    kept = kept + 1;
+                }
+                v = v + 1;
+            }
+            ints_push(rcount, kept);
+            if kept == 0 {
+                report(dcode, dstart, dend, dmsg, "N0339", ints_get(rat, r),
+                        ints_get(rat, r) + str_len(strs_get(rnames, r)),
+                        str_concat(str_concat("`", strs_get(rnames, r)),
+                        "` has no variants, which is not supported yet"));
+            }
+            r = r + 1;
+            continue;
+        }
+        // A variant's payload is resolved in the module that declares its enum, which
+        // `rowner` does not carry — a variant is owned by no module as a type.
+        if ints_get(rkind, r) == rk_variant() {
+            owner = module_at_of(rowner, rkind, r);
+        }
         let mut i = 0;
         while i < arity {
             let child = ints_get(kids, first + i);
@@ -793,15 +902,116 @@ pub fn resolve_record_fields(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Str
             i = i + 1;
         }
         ints_push(rcount, kept);
+        // A record with no fields is refused for a reason about the grammar; a **variant**
+        // with none is ordinary, and is written with no parentheses at all.
         if kept == 0 {
-            report(dcode, dstart, dend, dmsg, "N0101", ints_get(rat, r),
-                    ints_get(rat, r) + str_len(strs_get(rnames, r)),
-                    str_concat(str_concat("`", strs_get(rnames, r)),
-                    "` has no fields, which is not supported yet"));
+            if ints_get(rkind, r) == rk_record() {
+                report(dcode, dstart, dend, dmsg, "N0101", ints_get(rat, r),
+                        ints_get(rat, r) + str_len(strs_get(rnames, r)),
+                        str_concat(str_concat("`", strs_get(rnames, r)),
+                        "` has no fields, which is not supported yet"));
+            }
         }
         r = r + 1;
     }
     strs_len(rfname)
+}
+
+// Every field of a construction, against the declaration it names.
+//
+// One function for a record and for a variant, because it is one law: every field exactly
+// once, by name, with no unknown field, no duplicate and the declared type. `r` is the
+// entry that owns the field list — the record itself, or the variant whose payload it is.
+// The values are already on the type stack, the last `arity` of them, in written order.
+fn check_fields(text: Str, arity: Int, r: Int, ts: Ints, kids: Ints, first: Int,
+        nst: Ints, nen: Ints, rnames: Strs,
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, from: Int, to: Int,
+        dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
+    let given = ints_new();
+    let mut g = 0;
+    while g < ints_get(rcount, r) { ints_push(given, 0); g = g + 1; }
+    let mut a = 0;
+    while a < arity {
+        let fname = field_name_at(text, a);
+        let got = ints_get(ts, ints_len(ts) - arity + a);
+        let c = ints_get(kids, first + a);
+        let at = field_index(rfirst, rcount, rfname, r, fname);
+        if at < 0 {
+            report(dcode, dstart, dend, dmsg, "N0333",
+                    ints_get(nst, c), ints_get(nen, c),
+                    str_concat(str_concat(str_concat(str_concat("`",
+                    strs_get(rnames, r)), "` has no field `"), fname), "`"));
+        } else {
+            if ints_get(given, at) == 1 {
+                report(dcode, dstart, dend, dmsg, "N0332",
+                        ints_get(nst, c), ints_get(nen, c),
+                        str_concat(str_concat("`", fname), "` is given a value twice"));
+            }
+            ints_set(given, at, 1);
+            let want = field_type(rfirst, rftype, r, at);
+            if agrees(got, want) == false {
+                let head = str_concat(str_concat("`", fname), "` is `");
+                report(dcode, dstart, dend, dmsg, "N0300",
+                        ints_get(nst, c), ints_get(nen, c),
+                        str_concat(str_concat(str_concat(str_concat(head,
+                        show_type(want, rnames)), "`, but this is `"),
+                        show_type(got, rnames)), "`"));
+            }
+        }
+        a = a + 1;
+    }
+    let mut missing = "";
+    let mut m = 0;
+    while m < ints_get(rcount, r) {
+        if ints_get(given, m) == 0 {
+            if missing != "" { missing = str_concat(missing, ", "); }
+            missing = str_concat(str_concat(missing, "`"),
+                    str_concat(strs_get(rfname, ints_get(rfirst, r) + m), "`"));
+        }
+        m = m + 1;
+    }
+    if missing != "" {
+        let head = str_concat(str_concat("this `", strs_get(rnames, r)),
+                "` does not give a value for ");
+        report(dcode, dstart, dend, dmsg, "N0334", from, to, str_concat(head, missing));
+    }
+    0
+}
+
+// Whether `want` is one of the comma-delimited names in `list`.
+fn listed(list: Str, want: Str) -> Bool {
+    let mut i = 0;
+    let mut item = "";
+    while i < str_len(list) {
+        let b = str_byte(list, i);
+        if b == 44 {
+            if item == want { return true; }
+            item = "";
+        } else {
+            item = str_concat(item, str_slice(list, i, i + 1));
+        }
+        i = i + 1;
+    }
+    item == want
+}
+
+// The word a diagnostic uses for a declaration of this kind.
+fn entry_kind(rkind: Ints, r: Int) -> Str {
+    if ints_get(rkind, r) == rk_enum() { return "enum"; }
+    "record"
+}
+
+// The module that declares the enum a variant belongs to.
+//
+// A variant's own `rowner` is -1, because no module owns its name as a type. Its enum is
+// the nearest entry before it that is not a variant, which is where they were allocated.
+fn module_at_of(rowner: Ints, rkind: Ints, r: Int) -> Int {
+    let mut i = r;
+    while i >= 0 {
+        if ints_get(rkind, i) != rk_variant() { return ints_get(rowner, i); }
+        i = i - 1;
+    }
+    0 - 1
 }
 
 // Stage 0c: refuse records that cannot be laid out.
@@ -874,26 +1084,48 @@ pub fn check_record_layouts(rnames: Strs, rat: Ints, rfirst: Ints, rcount: Ints,
 // an intermediate record must itself be public to appear in a public signature, and its
 // own declaration is checked the same way, so the recursion is distributed and one
 // mistake still produces one diagnostic.
+//
+// A **variant** entry is transparent here. It has no module and no `pub` of its own —
+// `docs/spec.md` gives an enum no per-variant visibility — so the question is about the
+// types its payload names, and those are asked about instead.
 pub fn check_private_types(t: Int, at: Int, to: Int, kind: Str, who: Str,
-        rnames: Strs, rpub: Ints,
+        rnames: Strs, rpub: Ints, rkind: Ints, rfirst: Ints, rcount: Ints, rftype: Ints,
         dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
-    if is_record(t) == false { return 0; }
-    let r = record_of(t);
-    if r >= strs_len(rnames) { return 0; }
-    if ints_get(rpub, r) == 1 { return 0; }
-    let head = str_concat(str_concat("this public ", kind), " exposes `");
-    report(dcode, dstart, dend, dmsg, "N0337", at, to,
-            str_concat(str_concat(head, strs_get(rnames, r)),
-            "`, which is private to this module"));
     let unused = who;
-    1
+    if is_record(t) == false { return 0; }
+    if record_of(t) >= strs_len(rnames) { return 0; }
+    // A worklist rather than a call: a variant is transparent, so reaching the types it
+    // names is a walk — and this compiler has no recursion to walk with.
+    let work = ints_new();
+    ints_push(work, record_of(t));
+    let mut found = 0;
+    while ints_len(work) > 0 {
+        let e = ints_pop(work);
+        if ints_get(rkind, e) == rk_variant() {
+            let mut i = 0;
+            while i < ints_get(rcount, e) {
+                let ft = ints_get(rftype, ints_get(rfirst, e) + i);
+                if is_record(ft) { ints_push(work, record_of(ft)); }
+                i = i + 1;
+            }
+        } else {
+            if ints_get(rpub, e) == 0 {
+                let head = str_concat(str_concat("this public ", kind), " exposes `");
+                report(dcode, dstart, dend, dmsg, "N0337", at, to,
+                        str_concat(str_concat(head, strs_get(rnames, e)),
+                        "`, which is private to this module"));
+                found = found + 1;
+            }
+        }
+    }
+    found
 }
 
 pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints,
         kids: Ints, kid_first: Ints, mstart: Ints,
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
         fowner: Ints, fpub: Ints, bnames: Strs,
-        rnames: Strs, rowner: Ints, rpub: Ints, rat: Ints,
+        rnames: Strs, rowner: Ints, rpub: Ints, rat: Ints, rkind: Ints,
         rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, rfat: Ints,
         tmod: Ints, tname: Strs, trec: Ints,
         dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
@@ -901,13 +1133,16 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
     // at the place the private name is written.
     let mut r = 0;
     while r < strs_len(rnames) {
+        // A variant is not a public item of its own: its enum is, and the enum's fields
+        // are the variants, so the walk reaches every payload type through them.
+        if ints_get(rkind, r) == rk_variant() { r = r + 1; continue; }
         if ints_get(rpub, r) == 1 {
             let mut i = 0;
             while i < ints_get(rcount, r) {
                 let at = ints_get(rfat, ints_get(rfirst, r) + i);
                 check_private_types(ints_get(rftype, ints_get(rfirst, r) + i), at, at + 1,
-                        "record", strs_get(rnames, r), rnames, rpub,
-                        dcode, dstart, dend, dmsg);
+                        entry_kind(rkind, r), strs_get(rnames, r), rnames, rpub, rkind,
+                        rfirst, rcount, rftype, dcode, dstart, dend, dmsg);
                 i = i + 1;
             }
         }
@@ -952,7 +1187,8 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
                 ints_push(fpub, ints_get(naux, k));
                 if ints_get(naux, k) == 1 {
                     check_private_types(rt, ints_get(nst, k), ints_get(nst, k) + str_len(name),
-                            "function", name, rnames, rpub, dcode, dstart, dend, dmsg);
+                            "function", name, rnames, rpub, rkind, rfirst, rcount, rftype,
+                            dcode, dstart, dend, dmsg);
                 }
                 // Every child but the last is a parameter; the last is the body.
                 let arity = ints_get(nar, k);
@@ -969,7 +1205,8 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
                     }
                     if ints_get(naux, k) == 1 {
                         check_private_types(pt, ints_get(nst, child), ints_get(nen, child),
-                                "function", name, rnames, rpub, dcode, dstart, dend, dmsg);
+                                "function", name, rnames, rpub, rkind, rfirst, rcount,
+                                rftype, dcode, dstart, dend, dmsg);
                     }
                     ints_push(fparams, pt);
                     p = p + 1;
@@ -1146,7 +1383,8 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
         fowner: Ints, fpub: Ints, vmod: Ints, vname: Strs, vfn: Ints,
         bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
-        rnames: Strs, rowner: Ints, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
+        rnames: Strs, rowner: Ints, rkind: Ints,
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
         tmod: Ints, tname: Strs, trec: Ints,
         dcode: Strs, dstart: Ints, dend: Ints, dmsg: Strs) -> Int {
     let work = ints_new();
@@ -1156,6 +1394,11 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
     let nmut = ints_new();
     let nslotof = ints_new();
     let ts = ints_new(); // the type stack: one entry per finished child
+    // One entry per `match` now open, innermost last: the enum its scrutinee named, and
+    // the variants its arms have covered so far as a comma-delimited list. A stack
+    // because a `match` may appear inside an arm of another.
+    let menum = ints_new();
+    let mcov = strs_new();
     let inscope = ints_new();
     scope_flags(nk, nar, kids, kid_first, inscope);
     // One entry per node, so the emitter can index it directly. `-1` is "no slot".
@@ -1203,6 +1446,25 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             let v = 0 - entry;
             if v % 3 == 0 {
                 scope_close(marks, names, ntypes, nmut, nslotof);
+                continue;
+            }
+            if v % 3 == 1 {
+                // The scrutinee has finished and its type is on top of the stack. It stays
+                // there — the `match` node pops it with the arms — and is remembered here
+                // because each arm needs it and none can reach it by then.
+                let mk = (v - 1) / 3;
+                let st = ints_get(ts, ints_len(ts) - 1);
+                ints_push(menum, st);
+                strs_push(mcov, "");
+                if is_enum(st, rkind) == false {
+                    if st != t_unknown() {
+                        let c = ints_get(kids, ints_get(kid_first, mk));
+                        report(dcode, dstart, dend, dmsg, "N0342",
+                                ints_get(nst, c), ints_get(nen, c),
+                                str_concat(str_concat("`match` needs an enum, but this is `",
+                                show_type(st, rnames)), "`"));
+                    }
+                }
                 continue;
             }
             // --- finish: the children's types are the top of `ts` ---------------------
@@ -1265,57 +1527,9 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                     continue;
                 }
                 ints_set(nrec, k, r);
-                // The given names, in the order written, against the declaration.
-                let given = ints_new();
-                let mut g = 0;
-                while g < ints_get(rcount, r) { ints_push(given, 0); g = g + 1; }
-                let mut a = 0;
-                while a < arity {
-                    let fname = field_name_at(text, a);
-                    let got = ints_get(ts, ints_len(ts) - arity + a);
-                    let c = ints_get(kids, first + a);
-                    let at = field_index(rfirst, rcount, rfname, r, fname);
-                    if at < 0 {
-                        report(dcode, dstart, dend, dmsg, "N0333",
-                                ints_get(nst, c), ints_get(nen, c),
-                                str_concat(str_concat(str_concat(str_concat("`",
-                                strs_get(rnames, r)), "` has no field `"), fname), "`"));
-                    } else {
-                        if ints_get(given, at) == 1 {
-                            report(dcode, dstart, dend, dmsg, "N0332",
-                                    ints_get(nst, c), ints_get(nen, c),
-                                    str_concat(str_concat("`", fname),
-                                    "` is given a value twice"));
-                        }
-                        ints_set(given, at, 1);
-                        let want = field_type(rfirst, rftype, r, at);
-                        if agrees(got, want) == false {
-                            let head = str_concat(str_concat("`", fname), "` is `");
-                            report(dcode, dstart, dend, dmsg, "N0300",
-                                    ints_get(nst, c), ints_get(nen, c),
-                                    str_concat(str_concat(str_concat(str_concat(head,
-                                    show_type(want, rnames)), "`, but this is `"),
-                                    show_type(got, rnames)), "`"));
-                        }
-                    }
-                    a = a + 1;
-                }
-                let mut missing = "";
-                let mut m = 0;
-                while m < ints_get(rcount, r) {
-                    if ints_get(given, m) == 0 {
-                        if missing != "" { missing = str_concat(missing, ", "); }
-                        missing = str_concat(str_concat(missing, "`"),
-                                str_concat(strs_get(rfname, ints_get(rfirst, r) + m), "`"));
-                    }
-                    m = m + 1;
-                }
-                if missing != "" {
-                    let head = str_concat(str_concat("this `", strs_get(rnames, r)),
-                            "` does not give a value for ");
-                    report(dcode, dstart, dend, dmsg, "N0334", from, to,
-                            str_concat(head, missing));
-                }
+                check_fields(text, arity, r, ts, kids, first, nst, nen, rnames,
+                        rfirst, rcount, rfname, rftype, from, to,
+                        dcode, dstart, dend, dmsg);
                 // A construction that owns something is assembled in a hidden slot, so
                 // that an initialiser failing after an earlier one produced a heap string
                 // releases it: a value held only in a register is not reachable from the
@@ -1334,10 +1548,137 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             }
             if kind == n_fieldread() {
                 let base = ints_pop(ts);
+                if is_enum(base, rkind) {
+                    report(dcode, dstart, dend, dmsg, "N0335", from, to,
+                            str_concat(str_concat(str_concat(str_concat("`",
+                            show_type(base, rnames)), "` is not a record, so `."), text),
+                            "` has nothing to read"));
+                    ints_push(ts, t_unknown());
+                    ints_set(ntype, k, t_unknown());
+                    continue;
+                }
                 let t = project(base, text, from, to, rnames, rfirst, rcount, rfname, rftype,
                         nrec, k, dcode, dstart, dend, dmsg);
                 ints_push(ts, t);
                 ints_set(ntype, k, t);
+                continue;
+            }
+            // `E.V(…)` — the same law a record construction follows, applied to the fields
+            // of one variant. The variant is an entry of the record table, so the check is
+            // the construction check with a different entry and a different result type.
+            if kind == n_makevariant() {
+                let qualified = before_paren(text);
+                let en = before_dot(qualified);
+                let vn = after_dot(qualified);
+                let owner = module_at(mstart, from);
+                let et = type_in(en, owner, rnames, rowner, tmod, tname, trec);
+                let mut v = 0 - 1;
+                if is_enum(et, rkind) {
+                    let at = field_index(rfirst, rcount, rfname, record_of(et), vn);
+                    if at < 0 {
+                        report(dcode, dstart, dend, dmsg, "N0341", from, to,
+                                str_concat(str_concat(str_concat(str_concat("`", en),
+                                "` has no variant `"), vn), "`"));
+                    } else {
+                        v = record_of(field_type(rfirst, rftype, record_of(et), at));
+                    }
+                } else {
+                    if et == t_unknown() {
+                        report(dcode, dstart, dend, dmsg, "N0305", from, from + str_len(en),
+                                str_concat(str_concat("`", en), "` is not a type"));
+                    } else {
+                        report(dcode, dstart, dend, dmsg, "N0341", from, from + str_len(en),
+                                str_concat(str_concat("`", en),
+                                "` is not an enum, so it has no variants"));
+                    }
+                }
+                if v < 0 {
+                    let mut drop = 0;
+                    while drop < arity { ints_pop(ts); drop = drop + 1; }
+                    ints_push(ts, t_unknown());
+                    ints_set(ntype, k, t_unknown());
+                    continue;
+                }
+                ints_set(nrec, k, v);
+                check_fields(text, arity, v, ts, kids, first, nst, nen, rnames,
+                        rfirst, rcount, rfname, rftype, from, to,
+                        dcode, dstart, dend, dmsg);
+                if needs_cleanup(et, rfirst, rcount, rftype) {
+                    let slot = ints_get(counter, 0);
+                    ints_set(counter, 0, slot + 1);
+                    ints_set(nslot, k, slot);
+                }
+                let mut gone = 0;
+                while gone < arity { ints_pop(ts); gone = gone + 1; }
+                ints_push(ts, et);
+                ints_set(ntype, k, et);
+                continue;
+            }
+            if kind == n_arm() {
+                // The body's type is the arm's. The bindings were made when this node was
+                // visited and go out of scope with the mark pushed there.
+                let t = ints_pop(ts);
+                ints_push(ts, t);
+                ints_set(ntype, k, t);
+                continue;
+            }
+            if kind == n_match() {
+                // Children: the scrutinee, then one arm each. Every arm must agree, and
+                // an arm that transfers control constrains nothing — the same rule an
+                // `if`'s branches follow.
+                let mut result = t_unknown();
+                let mut a = 1;
+                while a < arity {
+                    let armt = ints_get(ts, ints_len(ts) - arity + a);
+                    if armt != t_unknown() {
+                        if result == t_unknown() {
+                            result = armt;
+                        } else {
+                            if agrees(armt, result) == false {
+                                let c = ints_get(kids, first + a);
+                                report(dcode, dstart, dend, dmsg, "N0302",
+                                        ints_get(nst, c), ints_get(nen, c),
+                                        str_concat(str_concat(str_concat(str_concat(
+                                        "this arm is `", show_type(armt, rnames)),
+                                        "`, but an earlier one is `"),
+                                        show_type(result, rnames)), "`"));
+                            }
+                        }
+                    }
+                    a = a + 1;
+                }
+                let et = ints_get(menum, ints_len(menum) - 1);
+                let covered = strs_get(mcov, strs_len(mcov) - 1);
+                ints_pop(menum);
+                strs_pop(mcov);
+                if is_enum(et, rkind) {
+                    // Exhaustiveness: every variant, exactly once. Not reported when an
+                    // arm named a variant this enum does not have — the checker does not
+                    // know which one was meant, and saying so twice is one mistake
+                    // reported twice.
+                    if covered != "!" {
+                        let r = record_of(et);
+                        let mut missing = "";
+                        let mut m = 0;
+                        while m < ints_get(rcount, r) {
+                            let vname = strs_get(rfname, ints_get(rfirst, r) + m);
+                            if listed(covered, vname) == false {
+                                if missing != "" { missing = str_concat(missing, ", "); }
+                                missing = str_concat(str_concat(missing, "`"),
+                                        str_concat(vname, "`"));
+                            }
+                            m = m + 1;
+                        }
+                        if missing != "" {
+                            report(dcode, dstart, dend, dmsg, "N0343", from, to,
+                                    str_concat("this `match` does not cover ", missing));
+                        }
+                    }
+                }
+                let mut left = 0;
+                while left < arity { ints_pop(ts); left = left + 1; }
+                ints_push(ts, result);
+                ints_set(ntype, k, result);
                 continue;
             }
             if kind == n_call() {
@@ -1535,6 +1876,25 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 ints_set(ntype, k, t_unknown());
                 continue;
             }
+            if kind == n_payload() {
+                ints_push(ts, t_unknown());
+                ints_set(ntype, k, t_unknown());
+                continue;
+            }
+            if kind == n_variant() {
+                let mut d = 0;
+                while d < arity { ints_pop(ts); d = d + 1; }
+                ints_push(ts, t_unknown());
+                ints_set(ntype, k, t_unknown());
+                continue;
+            }
+            if kind == n_enum() {
+                let mut d = 0;
+                while d < arity { ints_pop(ts); d = d + 1; }
+                ints_push(ts, t_unknown());
+                ints_set(ntype, k, t_unknown());
+                continue;
+            }
             if kind == n_record() {
                 let mut d = 0;
                 while d < arity { ints_pop(ts); d = d + 1; }
@@ -1604,6 +1964,152 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             bind(names, ntypes, nmut, nslotof, before_colon(text),
                     ints_get(nrec, entry), 0, slot);
             ints_push(ts, t_unknown());
+            continue;
+        }
+
+        if kind == n_match() {
+            // A slot of its own for the value being matched. The `match` owns it, so a
+            // failure anywhere inside an arm gives it back by the ordinary frame path,
+            // and each arm reads its payload out of it.
+            let mslot = ints_get(counter, 0);
+            ints_set(counter, 0, mslot + 1);
+            ints_set(nslot, entry, mslot);
+            // The scrutinee, then a mark, then the arms: an arm's pattern is checked
+            // against a type that does not exist until the scrutinee has been.
+            ints_push(work, mark_finish(entry));
+            let mut a = arity - 1;
+            while a >= 1 {
+                ints_push(work, ints_get(kids, first + a));
+                a = a - 1;
+            }
+            ints_push(work, mark_scrutinee(entry));
+            if arity >= 1 { ints_push(work, ints_get(kids, first)); }
+            continue;
+        }
+
+        if kind == n_arm() {
+            // `E.V(field: binding, …)`. The variant is resolved here and the bindings are
+            // made here, because the body is a child and must see them.
+            let et = ints_get(menum, ints_len(menum) - 1);
+            let qualified = before_paren(text);
+            let en = before_dot(qualified);
+            let vn = after_dot(qualified);
+            let owner = module_at(mstart, ints_get(nst, entry));
+            let named = type_in(en, owner, rnames, rowner, tmod, tname, trec);
+            let mut v = 0 - 1;
+            if is_enum(et, rkind) {
+                if named != et {
+                    report(dcode, dstart, dend, dmsg, "N0345", ints_get(nst, entry),
+                            ints_get(nst, entry) + str_len(en),
+                            str_concat(str_concat(str_concat(str_concat(
+                            "this pattern is a `", show_type(named, rnames)),
+                            "`, but the value is a `"), show_type(et, rnames)), "`"));
+                    strs_set(mcov, strs_len(mcov) - 1, "!");
+                } else {
+                    let r = record_of(et);
+                    let at = field_index(rfirst, rcount, rfname, r, vn);
+                    if at < 0 {
+                        report(dcode, dstart, dend, dmsg, "N0341", ints_get(nst, entry),
+                                ints_get(nen, entry),
+                                str_concat(str_concat(str_concat(str_concat("`", en),
+                                "` has no variant `"), vn), "`"));
+                        strs_set(mcov, strs_len(mcov) - 1, "!");
+                    } else {
+                        let seen = strs_get(mcov, strs_len(mcov) - 1);
+                        if seen != "!" {
+                            if listed(seen, vn) {
+                                report(dcode, dstart, dend, dmsg, "N0344",
+                                        ints_get(nst, entry), ints_get(nen, entry),
+                                        str_concat(str_concat(str_concat(str_concat("`",
+                                        en), "."), vn), "` already has an arm"));
+                            } else {
+                                if seen == "" {
+                                    strs_set(mcov, strs_len(mcov) - 1, vn);
+                                } else {
+                                    strs_set(mcov, strs_len(mcov) - 1,
+                                            str_concat(str_concat(seen, ","), vn));
+                                }
+                            }
+                        }
+                        v = record_of(field_type(rfirst, rftype, r, at));
+                    }
+                }
+            }
+            ints_set(nrec, entry, v);
+            ints_push(marks, strs_len(names));
+            ints_push(work, mark_leave(entry));
+            if v >= 0 {
+                // One slot per payload field, in declaration order, whether or not the
+                // pattern names it. A discard leaves its slot untouched, which costs an
+                // `alloca` and nothing else — and it means the emitter needs one number
+                // rather than a list.
+                let base = ints_get(counter, 0);
+                ints_set(counter, 0, base + ints_get(rcount, v));
+                ints_set(nslot, entry, base);
+                let bound = ints_new();
+                let mut b = 0;
+                while b < ints_get(rcount, v) { ints_push(bound, 0); b = b + 1; }
+                let mut n = 0;
+                while true {
+                    let item = field_name_at(text, n);
+                    if item == "" { break; }
+                    let fname = before_colon(item);
+                    let binding = after_colon(item);
+                    let at = field_index(rfirst, rcount, rfname, v, fname);
+                    if at < 0 {
+                        report(dcode, dstart, dend, dmsg, "N0333", ints_get(nst, entry),
+                                ints_get(nen, entry),
+                                str_concat(str_concat(str_concat(str_concat("`",
+                                strs_get(rnames, v)), "` has no payload field `"),
+                                fname), "`"));
+                    } else {
+                        if ints_get(bound, at) == 1 {
+                            report(dcode, dstart, dend, dmsg, "N0332", ints_get(nst, entry),
+                                    ints_get(nen, entry),
+                                    str_concat(str_concat("this pattern names `", fname),
+                                    "` twice"));
+                        }
+                        ints_set(bound, at, 1);
+                        if binding != "_" {
+                            if scope_has(names, binding) {
+                                let mut shadow = 0;
+                                let mut q = strs_len(names) - 1;
+                                while q >= ints_get(marks, ints_len(marks) - 1) {
+                                    if strs_get(names, q) == binding { shadow = 1; }
+                                    q = q - 1;
+                                }
+                                if shadow == 1 {
+                                    report(dcode, dstart, dend, dmsg, "N0202",
+                                            ints_get(nst, entry), ints_get(nen, entry),
+                                            str_concat(str_concat("`", binding),
+                                            "` is bound twice by this pattern"));
+                                }
+                            }
+                            bind(names, ntypes, nmut, nslotof, binding,
+                                    field_type(rfirst, rftype, v, at), 0, base + at);
+                        }
+                    }
+                    n = n + 1;
+                }
+                let mut missing = "";
+                let mut m = 0;
+                while m < ints_get(rcount, v) {
+                    if ints_get(bound, m) == 0 {
+                        if missing != "" { missing = str_concat(missing, ", "); }
+                        missing = str_concat(str_concat(missing, "`"),
+                                str_concat(strs_get(rfname, ints_get(rfirst, v) + m), "`"));
+                    }
+                    m = m + 1;
+                }
+                if missing != "" {
+                    report(dcode, dstart, dend, dmsg, "N0334", ints_get(nst, entry),
+                            ints_get(nen, entry),
+                            str_concat(str_concat(str_concat("this pattern does not name ",
+                            missing), " of `"), str_concat(strs_get(rnames, v), "`")));
+                }
+            }
+            ints_push(work, mark_finish(entry));
+            if arity >= 1 { ints_push(work, ints_get(kids, first)); }
             continue;
         }
 

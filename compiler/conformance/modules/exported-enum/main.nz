@@ -1,0 +1,26 @@
+use "state.nz";
+
+// An enum parameter, borrowed: the caller keeps its own after the call.
+fn weight(s: State) -> Int {
+    match s {
+        State.Ready() => 1,
+        State.Done(code: c) => c,
+        State.Failed(why: w, code: c) => str_len(w) + c,
+    }
+}
+
+fn main() -> Int {
+    let mut total = weight(ready());
+    let mut i = 0;
+    while i < 10 {
+        let s = failure(i);
+        total = total + weight(s) + weight(s);
+        i = i + 1;
+    }
+    // A value built in this module from the imported enum, and one carried inside an
+    // imported record.
+    let here = State.Done(code: 5);
+    let r = wrap(here);
+    total = total + weight(r.state) + str_len(r.label);
+    total + unused_public()
+}
