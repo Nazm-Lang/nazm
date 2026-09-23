@@ -1538,7 +1538,10 @@ impl<'a> Parser<'a> {
                     Diagnostic::error(
                         codes::UNEXPECTED_TOKEN,
                         span,
-                        format!("{} can only be declared at the top level", what.to_lowercase()),
+                        format!(
+                            "{} can only be declared at the top level",
+                            what.to_lowercase()
+                        ),
                     )
                     .help(format!(
                         "move the `{word}` out of the function. {what} is a module-level \
@@ -1854,7 +1857,9 @@ mod ast_depth_tests {
                             stack.push((Node::Expr(&f.value), d + 1));
                         }
                     }
-                    Expr::Match { scrutinee, arms, .. } => {
+                    Expr::Match {
+                        scrutinee, arms, ..
+                    } => {
                         stack.push((Node::Expr(scrutinee), d + 1));
                         for a in arms {
                             stack.push((Node::Expr(&a.body), d + 1));

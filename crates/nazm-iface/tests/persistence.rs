@@ -8,15 +8,15 @@
 
 use nazm_iface::wire::{PersistentUnitInterface, ReadError};
 use nazm_iface::{InterfaceHash, SCHEMA};
+use nazm_sema::enums::{EnumDef, VariantDef};
+use nazm_sema::interface::Visibility;
 use nazm_sema::interface::{EnumExport, Export, UnitInterface};
 use nazm_sema::key::ModuleKey;
 use nazm_sema::module::ModuleGraph;
-use nazm_sema::enums::{EnumDef, VariantDef};
-use nazm_sema::interface::Visibility;
 use nazm_sema::record::FieldDef;
-use nazm_sema::udt::UserTypes;
 use nazm_sema::resolve::FnId;
 use nazm_sema::types::Type;
+use nazm_sema::udt::UserTypes;
 use nazm_span::{FileId, Span};
 
 /// A graph of two modules, `a.nz` importing `lib/b.nz`, with durable keys.
@@ -506,7 +506,9 @@ fn adding_or_renaming_a_variant_changes_the_fingerprint_and_reordering_does_not(
     let base = hash(r#"{"name":"Done","fields":[]},{"name":"Ready","fields":[]}"#);
     assert_ne!(
         base,
-        hash(r#"{"name":"Done","fields":[]},{"name":"Failed","fields":[]},{"name":"Ready","fields":[]}"#),
+        hash(
+            r#"{"name":"Done","fields":[]},{"name":"Failed","fields":[]},{"name":"Ready","fields":[]}"#
+        ),
         "adding a variant"
     );
     assert_ne!(
@@ -516,7 +518,9 @@ fn adding_or_renaming_a_variant_changes_the_fingerprint_and_reordering_does_not(
     );
     assert_ne!(
         base,
-        hash(r#"{"name":"Done","fields":[{"name":"code","ty":"Int"}]},{"name":"Ready","fields":[]}"#),
+        hash(
+            r#"{"name":"Done","fields":[{"name":"code","ty":"Int"}]},{"name":"Ready","fields":[]}"#
+        ),
         "adding a payload field"
     );
 }

@@ -24,7 +24,9 @@ use nazm_sema::interface::{
 use nazm_sema::intrinsic::Intrinsic;
 use nazm_sema::module::{Dependency, ModuleGraph, ModuleId};
 use nazm_sema::record::{FieldDef, RecordDef, RecordId};
-use nazm_sema::resolve::{Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Resolution, VariantRef};
+use nazm_sema::resolve::{
+    Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Resolution, VariantRef,
+};
 use nazm_sema::types::Type;
 use nazm_sema::udt::{TypeNode, UserTypes, MAX_TYPE_DEPTH};
 
@@ -808,7 +810,8 @@ pub fn validate_type_layouts(res: &mut Resolution, errors: &mut Vec<Diagnostic>)
             .iter()
             .map(|n| res.types().show(n.ty()))
             .collect();
-        let Some((field_span, start_span)) = closing_field(res, &cycle.via).zip(node_span(res, *node))
+        let Some((field_span, start_span)) =
+            closing_field(res, &cycle.via).zip(node_span(res, *node))
         else {
             continue;
         };
@@ -1245,13 +1248,7 @@ pub fn declare_unit(
         }
     }
 
-    UnitInterface::new(
-        unit.module,
-        exports,
-        records,
-        enums,
-        unit.imports.to_vec(),
-    )
+    UnitInterface::new(unit.module, exports, records, enums, unit.imports.to_vec())
 }
 
 /// Report a public item that names a private user-defined type.
@@ -1808,7 +1805,10 @@ impl Checker<'_> {
                         f.name_span,
                         format!("`{owner}` has no payload field `{}`", f.name),
                     )
-                    .secondary(self.variant_span(id, at).unwrap_or(ty_span), "declared here"),
+                    .secondary(
+                        self.variant_span(id, at).unwrap_or(ty_span),
+                        "declared here",
+                    ),
                 );
                 self.check_expr(&f.value, None);
                 continue;
@@ -1859,7 +1859,10 @@ impl Checker<'_> {
                     span,
                     format!("this `{owner}` does not give a value for {list}"),
                 )
-                .secondary(self.variant_span(id, at).unwrap_or(ty_span), "declared here")
+                .secondary(
+                    self.variant_span(id, at).unwrap_or(ty_span),
+                    "declared here",
+                )
                 .help(
                     "every payload field is given a value when a variant is built. There \
                      are no default values",

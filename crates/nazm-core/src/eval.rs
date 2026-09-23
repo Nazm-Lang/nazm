@@ -947,8 +947,6 @@ impl Interpreter {
     }
 
     fn block(&mut self, b: &Block, env: &mut Env) -> Result<Flow, RuntimeError> {
-
-
         env.push(Frame::default());
         let out = self.block_inner(b, env);
         env.pop();
@@ -1850,7 +1848,11 @@ impl Interpreter {
                 Value::Enum(EnumVal::new(to.enumeration, to.variant, values))
             }
 
-            Expr::Match { scrutinee, arms, span } => {
+            Expr::Match {
+                scrutinee,
+                arms,
+                span,
+            } => {
                 return self.match_expr(scrutinee, arms, *span, env);
             }
 
