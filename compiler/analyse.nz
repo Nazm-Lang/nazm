@@ -1759,16 +1759,26 @@ fn agrees(a: Int, b: Int) -> Bool {
 // type code `unknown` meant a statement, an error already reported **and** a construct that
 // produces no value, so `let x = if c { 1 };` reached the emitter and was allocated as
 // `alloca void`. `unknown` means only "already reported" now.
-fn c_value() -> Int { 0 }
-fn c_unit() -> Int { 1 }
-fn c_diverges() -> Int { 2 }
+//
+// **An enum since N13**, and for the reason `Owning` in `compiler/emit.nz` became one in
+// N10: this was `0`, `1` and `2` in an `Ints`, so any other integer could be stored in a
+// node's completion and read back as a state the checker does not have, and "no arm yet" in
+// a `match`'s fold was a fourth value, `-1`, that only a comparison against a number kept
+// apart from the three. Now a completion is one of three variants and nothing else, the
+// fold's "not yet" is an `Option`, and every test of one compares two `Completion`s with
+// the derived `==` rather than two integers.
+enum Completion {
+    Value,
+    Unit,
+    Diverges,
+}
 
 // The type a value position with **no expectation of its own** sees: the reference's
 // `value_type(e, None)`, which answers `Int` for a value that never arrives and for one
 // that does not exist. Where a position does expect a type the reference answers with
 // that one, which is what `agrees` already does with `unknown`.
-fn as_value(t: Int, ncomp: Ints, node: Int) -> Int {
-    if ints_get(ncomp, node) != c_value() {
+fn as_value(t: Int, ncomp: Vec[Completion], node: Int) -> Int {
+    if vec_get(ncomp, node) != Completion.Value() {
         if t == t_unknown() { return t_int(); }
     }
     t
@@ -1779,9 +1789,9 @@ fn as_value(t: Int, ncomp: Ints, node: Int) -> Int {
 // refused before any operator, field or parameter looks at its type. A node that diverges
 // is not refused — it never produces the contradictory value — and one that failed is not
 // refused twice.
-fn needs_value(ncomp: Ints, node: Int, nst: Ints, nen: Ints,
+fn needs_value(ncomp: Vec[Completion], node: Int, nst: Ints, nen: Ints,
         diags: Vec[Diag]) -> Int {
-    if ints_get(ncomp, node) == c_unit() {
+    if vec_get(ncomp, node) == Completion.Unit() {
         report(diags, "N0300", ints_get(nst, node), ints_get(nen, node),
                 "this produces no value");
         return 1;
@@ -2931,11 +2941,11 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
     let nmut = ints_new();
     let nslotof = ints_new();
     let ts = ints_new(); // the type stack: one entry per finished child
-    // How each node finishes — `c_value`, `c_unit` or `c_diverges` — the one answer every
-    // consumer reads. N10.1 kept a single bit here, *never completes*, and left "produces
-    // no value" folded into the type's `unknown`; N10.2 made it the reference's three.
-    let ncomp = ints_new();
-    while ints_len(ncomp) < ints_len(nk) { ints_push(ncomp, c_value()); }
+    // How each node finishes — a `Completion` — the one answer every consumer reads. N10.1
+    // kept a single bit here, *never completes*, and left "produces no value" folded into
+    // the type's `unknown`; N10.2 made it the reference's three, and N13 an enum of them.
+    let ncomp = vec_new[Completion]();
+    while vec_len(ncomp) < ints_len(nk) { vec_push(ncomp, Completion.Value()); }
     // The declared result of the function being checked, for `return` and for the body.
     // One slot: functions do not nest.
     let cur_ret = ints_new();
@@ -3027,11 +3037,11 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
 
             // A statement completes with nothing unless it leaves; the ones that can leave
             // say so in their own rules below.
-            if kind == n_let() { ints_set(ncomp, k, c_unit()); }
-            if kind == n_assign() { ints_set(ncomp, k, c_unit()); }
-            if kind == n_while() { ints_set(ncomp, k, c_unit()); }
-            if kind == n_scope() { ints_set(ncomp, k, c_unit()); }
-            if kind == n_spawn() { ints_set(ncomp, k, c_unit()); }
+            if kind == n_let() { vec_set(ncomp, k, Completion.Unit()); }
+            if kind == n_assign() { vec_set(ncomp, k, Completion.Unit()); }
+            if kind == n_while() { vec_set(ncomp, k, Completion.Unit()); }
+            if kind == n_scope() { vec_set(ncomp, k, Completion.Unit()); }
+            if kind == n_spawn() { vec_set(ncomp, k, Completion.Unit()); }
 
             // Where a value is required and a child produces none: `N0300`, here and only
             // here, before the node's own rule looks at the child's type.
@@ -3156,11 +3166,11 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             if kind == n_propagate() {
                 let operand = ints_get(kids, first);
                 let ot = ints_pop(ts);
-                if ints_get(ncomp, operand) != c_value() {
+                if vec_get(ncomp, operand) != Completion.Value() {
                     // No value to take apart. Refused above if it has none at all; one that
                     // never arrives transfers, and so does this.
-                    if ints_get(ncomp, operand) == c_diverges() {
-                        ints_set(ncomp, k, c_diverges());
+                    if vec_get(ncomp, operand) == Completion.Diverges() {
+                        vec_set(ncomp, k, Completion.Diverges());
                     }
                     ints_push(ts, t_unknown());
                     ints_set(ntype, k, t_unknown());
@@ -3311,7 +3321,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 let t = ints_pop(ts);
                 ints_push(ts, t);
                 ints_set(ntype, k, t);
-                ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first + arity - 1)));
+                vec_set(ncomp, k, vec_get(ncomp, ints_get(kids, first + arity - 1)));
                 continue;
             }
             if kind == n_match() {
@@ -3326,20 +3336,23 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // The arms' completions folded as the reference folds them: an arm that
                 // leaves defers to the others, and one arm with no value makes the whole
                 // `match` produce none — reported by whatever wanted the value, not here.
-                // `-1` is "no arm yet"; a `match` with none is refused elsewhere.
-                let mut fold = 0 - 1;
+                // `None` is "no arm yet"; a `match` with none is refused elsewhere.
+                let mut fold = Option[Completion].None();
                 let mut a = 1;
                 while a < arity {
-                    let arm_c = ints_get(ncomp, ints_get(kids, first + a));
-                    if fold == 0 - 1 {
-                        fold = arm_c;
-                    } else {
-                        if fold == c_diverges() {
-                            fold = arm_c;
-                        } else {
-                            if arm_c == c_unit() { fold = c_unit(); }
-                        }
-                    }
+                    let arm_c = vec_get(ncomp, ints_get(kids, first + a));
+                    match fold {
+                        Option.None() => { fold = Option[Completion].Some(value: arm_c); },
+                        Option.Some(value: so_far) => {
+                            if so_far == Completion.Diverges() {
+                                fold = Option[Completion].Some(value: arm_c);
+                            } else {
+                                if arm_c == Completion.Unit() {
+                                    fold = Option[Completion].Some(value: Completion.Unit());
+                                }
+                            }
+                        },
+                    };
                     let armt = ints_get(ts, ints_len(ts) - arity + a);
                     if armt != t_unknown() {
                         if result == t_unknown() {
@@ -3391,11 +3404,14 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 }
                 let mut left = 0;
                 while left < arity { ints_pop(ts); left = left + 1; }
-                if fold >= 0 { ints_set(ncomp, k, fold); }
                 // A `match` with no value has no type, whatever its value arms said.
-                if fold != c_value() {
-                    if fold >= 0 { result = t_unknown(); }
-                }
+                match fold {
+                    Option.None() => { },
+                    Option.Some(value: folded) => {
+                        vec_set(ncomp, k, folded);
+                        if folded != Completion.Value() { result = t_unknown(); }
+                    },
+                };
                 ints_push(ts, result);
                 ints_set(ntype, k, result);
                 continue;
@@ -3435,22 +3451,22 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                     // carries the value it has, so what contains it is not refused twice.
                     let then_b = ints_get(kids, first + 1);
                     let else_b = ints_get(kids, first + 2);
-                    let tc = ints_get(ncomp, then_b);
-                    let ec = ints_get(ncomp, else_b);
+                    let tc = vec_get(ncomp, then_b);
+                    let ec = vec_get(ncomp, else_b);
                     let mut t = t_unknown();
-                    let mut c = c_unit();
-                    if tc == c_diverges() {
+                    let mut c = Completion.Unit();
+                    if tc == Completion.Diverges() {
                         c = ec;
                         t = else_t;
                     } else {
-                        if ec == c_diverges() {
+                        if ec == Completion.Diverges() {
                             c = tc;
                             t = then_t;
                         } else {
-                            if tc == c_value() {
-                                c = c_value();
+                            if tc == Completion.Value() {
+                                c = Completion.Value();
                                 t = then_t;
-                                if ec == c_value() {
+                                if ec == Completion.Value() {
                                     if agrees(then_t, else_t) == false {
                                         let tail = ints_get(kids,
                                                 ints_get(kid_first, else_b) + ints_get(nar, else_b) - 1);
@@ -3469,8 +3485,8 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                                             "` and the other produces nothing"));
                                 }
                             } else {
-                                if ec == c_value() {
-                                    c = c_value();
+                                if ec == Completion.Value() {
+                                    c = Completion.Value();
                                     t = else_t;
                                     report(diags, "N0302", from, to,
                                             str_concat(str_concat("one branch produces `",
@@ -3480,12 +3496,12 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                             }
                         }
                     }
-                    ints_set(ncomp, k, c);
+                    vec_set(ncomp, k, c);
                     ints_push(ts, t);
                 } else {
                     // No `else`: the condition may be false, so the `if` always completes,
                     // and with nothing — whatever its branch does.
-                    ints_set(ncomp, k, c_unit());
+                    vec_set(ncomp, k, Completion.Unit());
                     ints_push(ts, t_unknown());
                 }
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
@@ -3500,7 +3516,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             // same type, `check_expr(Block) => check_block` in the reference. Its one
             // child already left the one entry on `ts` this node owes.
             if kind == n_blockexpr() {
-                ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first)));
+                vec_set(ncomp, k, vec_get(ncomp, ints_get(kids, first)));
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
@@ -3527,7 +3543,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                                 ints_get(nst, child), ints_get(nen, child), "this can never run");
                         left = 0;
                     }
-                    if ints_get(ncomp, child) == c_diverges() { left = 1; }
+                    if vec_get(ncomp, child) == Completion.Diverges() { left = 1; }
                     d = d + 1;
                 }
                 if left == 1 {
@@ -3536,12 +3552,12 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                         report(diags, "N0313",
                                 ints_get(nst, tail), ints_get(nen, tail), "this can never run");
                     }
-                    ints_set(ncomp, k, c_diverges());
+                    vec_set(ncomp, k, Completion.Diverges());
                 } else {
                     if has_tail {
-                        ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first + arity - 1)));
+                        vec_set(ncomp, k, vec_get(ncomp, ints_get(kids, first + arity - 1)));
                     } else {
-                        ints_set(ncomp, k, c_unit());
+                        vec_set(ncomp, k, Completion.Unit());
                     }
                 }
                 d = 0;
@@ -3553,7 +3569,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                     }
                     d = d + 1;
                 }
-                if ints_get(ncomp, k) != c_value() { t = t_unknown(); }
+                if vec_get(ncomp, k) != Completion.Value() { t = t_unknown(); }
                 ints_push(ts, t);
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
@@ -3697,13 +3713,13 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 continue;
             }
             if kind == n_return() {
-                ints_set(ncomp, k, c_diverges());
+                vec_set(ncomp, k, Completion.Diverges());
                 // `check_return`: the value must be what the function returns, reported at
                 // the value. One that does not exist was refused above, and one that never
                 // arrives is whatever the signature says.
                 let rv = ints_get(kids, first);
                 let got = ints_get(ts, ints_len(ts) - 1);
-                if ints_get(ncomp, rv) == c_value() {
+                if vec_get(ncomp, rv) == Completion.Value() {
                     if agrees(got, ints_get(cur_ret, 0)) == false {
                         report(diags, "N0300",
                                 ints_get(nst, rv), ints_get(nen, rv),
@@ -3721,10 +3737,10 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // `Stmt::Expr(e) => check_expr(e).diverges()`: the only statement whose
                 // divergence is its expression's. A `let` of a diverging value does not
                 // diverge — the reference says `false` — and neither does a `while`.
-                if ints_get(ncomp, ints_get(kids, first)) == c_diverges() {
-                    ints_set(ncomp, k, c_diverges());
+                if vec_get(ncomp, ints_get(kids, first)) == Completion.Diverges() {
+                    vec_set(ncomp, k, Completion.Diverges());
                 } else {
-                    ints_set(ncomp, k, c_unit());
+                    vec_set(ncomp, k, Completion.Unit());
                 }
                 ints_pop(ts);
                 ints_push(ts, t_unknown());
@@ -3737,8 +3753,8 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // declared type, reported at its tail; one with none is refused whole.
                 let body = ints_get(kids, first + arity - 1);
                 let declared = ints_get(nrec, k);
-                let bc = ints_get(ncomp, body);
-                if bc == c_value() {
+                let bc = vec_get(ncomp, body);
+                if bc == Completion.Value() {
                     let bt = ints_get(ts, ints_len(ts) - 1);
                     if agrees(bt, declared) == false {
                         let tail = ints_get(kids, ints_get(kid_first, body) + ints_get(nar, body) - 1);
@@ -3749,7 +3765,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                                 "`, but its signature says `"), str_concat(show_type(declared, rnames), "`")));
                     }
                 }
-                if bc == c_unit() {
+                if bc == Completion.Unit() {
                     report(diags, "N0300",
                             ints_get(nst, body), ints_get(nen, body),
                             str_concat(str_concat(str_concat("`", before_colon(text)),
@@ -3836,12 +3852,12 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             continue;
         }
         if kind == n_break() {
-            ints_set(ncomp, entry, c_diverges());
+            vec_set(ncomp, entry, Completion.Diverges());
             ints_push(ts, t_unknown());
             continue;
         }
         if kind == n_continue() {
-            ints_set(ncomp, entry, c_diverges());
+            vec_set(ncomp, entry, Completion.Diverges());
             ints_push(ts, t_unknown());
             continue;
         }
@@ -4155,7 +4171,7 @@ fn check_call(text: Str, argc: Int, ts: Ints, from: Int, to: Int,
         fowner: Ints, fpub: Ints, vmod: Ints, vname: Strs, vfn: Ints,
         mfirst: Ints, mcount: Ints, mto: Ints,
         bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
-        tb: Table, fgen: Ints, fgc: Ints, bgen: Ints, tscope: Ints, ncomp: Ints,
+        tb: Table, fgen: Ints, fgc: Ints, bgen: Ints, tscope: Ints, ncomp: Vec[Completion],
         ntfirst: Ints, ntargs: Ints, tmod: Ints, tname: Strs, trec: Ints,
         diags: Vec[Diag]) -> Int {
     // `name[T@9]`: the callee, then any type arguments written after it.
@@ -4267,7 +4283,7 @@ fn check_call(text: Str, argc: Int, ts: Ints, from: Int, to: Int,
 // `sfrom[i]` the argument that settled it — `-1` for the written type arguments.
 fn check_generic_call(name: Str, written: Str, argc: Int, got: Ints, from: Int, to: Int,
         kids: Ints, first: Int, nst: Ints, nen: Ints, node: Int, want_first: Int,
-        params: Ints, ret: Int, generics: Ints, tb: Table, tscope: Ints, ncomp: Ints,
+        params: Ints, ret: Int, generics: Ints, tb: Table, tscope: Ints, ncomp: Vec[Completion],
         ntfirst: Ints, ntargs: Ints, here: Int, tmod: Ints, tname: Strs, trec: Ints,
         diags: Vec[Diag]) -> Int {
     let n = ints_len(generics);
@@ -4328,13 +4344,13 @@ fn check_generic_call(name: Str, written: Str, argc: Int, got: Ints, from: Int, 
                         str_concat(show_type(actual, tb.names), "`")));
             }
         } else {
-            let c = ints_get(ncomp, arg);
-            if c == c_unit() {
+            let c = vec_get(ncomp, arg);
+            if c == Completion.Unit() {
                 // No value — refused already where it is written. Its parameters are
                 // excused, so the one mistake is not reported twice.
                 excuse(tb, formal, generics, excused);
             }
-            if c == c_value() {
+            if c == Completion.Value() {
                 let conflict = ints_new();
                 let outcome = unify(tb, formal, actual, generics, solved, sval, sfrom, a, conflict);
                 if outcome == 2 {
