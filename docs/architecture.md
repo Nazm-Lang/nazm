@@ -2374,6 +2374,123 @@ duplicate and collision checks report from the `Some` arm, and `applies_core_res
 - **The self-hosted compiler still emits one LLVM module**, and still has no durable keys
   beyond the prelude's.
 
+*N13 answered the first of these: enums compare now, and `analyse.nz`'s completion states
+are one (§7.15).*
+
+## 7.15 Equality: a derived capability, and a helper per compared type — settled by N13, 2026-09-25
+
+`docs/spec.md`, *Equality is derived*, is the law. This is how the two compilers implement
+it, and the decisions that are implementation rather than language.
+
+### One derivation, beside the others, and independent of them
+
+`UserTypes::equality(t) -> Result<(), NoEquality>` in `crates/nazm-sema/src/udt.rs` is the
+whole rule. It sits beside `needs_cleanup` and `task_safety` because it is the same kind of
+answer — a property of a type derived from what it contains — and walks the same
+containment graph through `contained`, which for a record is its fields and for an enum every
+payload field of every variant. What it does **not** do is consult either of them: a `Str`
+needs cleanup and compares; a `Chan` may cross into a task and does not compare; `Vec[Int]`
+does neither. Leaves: `Int`, `Bool` and `Str` have equality; `Ints`, `Strs`, `Vec`, `Chan`
+and `Param` do not. The walk is iterative, depth-first over declaration order so the
+reported path is the one a reader finds first, and keeps a visited set, so it ends even on a
+program whose containment cycle is being refused in the same run. It is not memoised:
+answers are asked once per `==`, and each is linear in the definitions reachable from the
+type, which no measurement has shown to matter.
+
+The checker's `check_binary` is the one consumer: `lt == rt && types.equality(lt).is_ok()`.
+Type equality is id equality, so the nominal rule is the representation's — two records of
+one shape are two `RecordId`s — and an applied type is its interned instance, whose fields
+are already substituted: `Box[Int]` is answered over `value: Int`, `Box[T]` over
+`value: T`, and nothing in the rule knows generics exist. `Option` and `Result` are
+instances of prelude enums and are answered the same way; no code names them.
+
+The refusal stays `N0304`. The derived path (`NoEquality::path`) makes its message say which
+component is responsible, `inner.values` or `work.Held.items`, in the task-safety path's
+spelling.
+
+### Persisted interfaces carry nothing new
+
+An interface already carries each exported record's and enum's fields and variants, with
+their types, under durable identity — which is exactly the input the derivation reads. So an
+importer that has only the interface derives equality for the imported type exactly as the
+declaring module does (`a_dependent_derives_equality_from_a_deserialised_interface_with_the_dependency_deleted`),
+and no `equality_capable` fact is written that could disagree with the shape it summarises.
+The schema stays `nazm.interface/4`, and an unchanged public type has the same bytes and the
+same `InterfaceHash` it had before N13; the pinned-interface tests are unchanged.
+
+The checker's own identity moves instead: `SEMANTIC_EPOCH` 5 → 6, because the conditions
+under which `N0304` is raised changed and the code set did not. `CheckerIdentity::at_epoch`
+lets a test stand in for the epoch-5 checker, and an entry that build would have filed is a
+miss (`an_entry_from_the_checker_before_derived_equality_is_never_read`).
+
+### The interpreter: the language's relation, not the host's
+
+`eval.rs`'s `equal(a, b) -> Option<bool>` is `==`, written out: `Int` and `Bool` by value,
+`Str` by `bytes()`, a record over its fields, an enum by variant and then over that variant's
+fields. An enum value carries only its active payload, so there is nothing inactive to read.
+No definition id is compared — checking already guaranteed one type — and `Value`'s own
+`PartialEq`, which compares sequences by identity so the rest of `Value` can derive things,
+is not what `==` evaluates. `!=` is `!equal`, computed once.
+
+### Native code: a helper per compared type
+
+A record or enum comparison lowers to `Expr::Compare` exactly as a `Str` one does, and the
+emitter calls `@nz.eq.<type>(T %a, T %b) -> i1`, generated on first use in the unit:
+
+- **A record** extracts each field in **layout order** — canonical, by field name — compares
+  it (`icmp`, the `Str` length-then-`memcmp` branch, or the field type's own helper), and
+  branches to `false` at the first difference. Comparing is pure, so the order cannot be
+  observed; canonical order makes the helper's bytes independent of how the declaration was
+  written, and a program whose fields, variants and payload fields are written in another
+  order emits byte-identical IR (`declaration_order_changes_no_byte_of_the_program`).
+- **An enum** compares discriminants and branches to `false` if they differ, before any slot
+  is read. Equal ones `switch` to the variant's arm, which extracts that variant's slot — tag
+  plus one — from both operands and compares its payload fields; a zero-payload variant has
+  no arm and reaches `true` through the default. An inactive slot is never extracted.
+- **`!=`** is the helper's answer and an `xor i1 …, true`. There is no second helper.
+
+Helpers are `internal`, named from the type's `NativeTypeName` — the durable identity with
+its canonical type arguments, so `Box[Int]` and `Box[Str]` get two and a comparison written
+twice gets one — and duplicated in each unit that compares the type. No symbol is exported,
+so no ABI is promised and the object cache needs nothing new: a changed comparison is changed
+LLVM, which is a changed `ObjectKey`. The recursion over a nested type is calls between
+helpers, in the emitted program, as retain and release already are.
+
+**Ownership** is the `Str` comparison's, generalised: both operands are evaluated, left then
+right; the helper borrows them and retains nothing; after the answer exists each operand that
+is a temporary is released once (`drop_temporary`). A bound operand is untouched. An operand
+that transfers leaves before the helper is called, and what the other side built is released
+by the unwinding that already exists.
+
+### The compiler written in Nazm
+
+`analyse.nz` has the same derivation, `equality_blocker`, over the same table: an enum's
+fields are its variants and a variant's are its payload, so one walk covers both kinds, as
+`task_unsafe_path` already did. `emit.nz` emits the same helper shape, `@nz.eq<entry>`,
+generated after every function for each entry a comparison reached, each adding the entries
+its own fields compare. The two compilers' helpers are not textually identical — the
+self-hosted one delegates a variant's payload to the variant entry's helper — and nothing
+requires them to be: both are compared on answers and on reclamation, not on text.
+
+### The dogfood
+
+`analyse.nz`'s completion was `c_value() = 0`, `c_unit() = 1`, `c_diverges() = 2` stored in
+an `Ints`, with a fourth value, `-1`, meaning "no arm yet" in a `match`'s fold. It is
+`enum Completion { Value, Unit, Diverges }` in a `Vec[Completion]` now, the fold is an
+`Option[Completion]`, and its twenty comparisons are `Completion == Completion`. An integer
+that is not a completion can no longer be stored as one — which is also why nine historical
+mutations that compared a completion with `99` had to be rewritten: the state they
+simulated is no longer expressible.
+
+### What this still does not do
+
+- **No abstraction over equality.** `fn same[T](a: T, b: T)` is refused and has to be: there
+  is no way to say "`T` has equality", and N13 added none.
+- **No sequence or channel equality**, and so none for anything that contains one.
+- **No ordering, hashing or custom equality** on a user type.
+- **An enum is still one slot per variant**, so an equality helper for a wide enum extracts
+  from an aggregate larger than a tagged union would be; the helper reads only one slot.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

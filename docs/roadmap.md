@@ -370,15 +370,44 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
-### N13 — recommended next: derived equality on records and enums
+### After N13, in dependency order
 
-N12's dogfood found the wall N11's did, from the other side; N12.1 removed one of the two
-bricks. The compiler can now take an `Option` apart in a block arm in every stage of the
-chain, and does. What it still cannot do is turn a tag into the enum it stands for, because
-the tag is *compared* — and equality on a user type is a missing rule, not a missing
-backend capability. It needs no trait.
+| | Depends on | Why not before |
+| --- | --- | --- |
+| **Constrained generics — a way for a definition to require a capability of `T`** | generics ✓, derived equality ✓ | N13's finding, and the first program that needs one: a concrete `Box[Int]` compares, and `fn same_box[T](a: Box[T], b: Box[T])` cannot, because nothing can say "`T` has equality". Equality is the one capability the language now derives for concrete types that a generic body cannot ask for. What the mechanism is — a trait, a built-in bound, something else — is the milestone's decision, not this table's |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+| Sequence and channel equality | a decision | still unmade on purpose: same storage or same contents. N13 refuses it and everything containing it |
+| A compact enum representation | variants ✓, `Vec[T]` ✓ | unchanged; an equality helper reads one slot of the one-slot-per-variant aggregate |
+| Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
+| A lossless CST | nothing above | unchanged; still independent |
 
-The alternatives are unchanged and smaller: a lossless CST, and `nazm explain-cost`.
+**Recommended next: constrained generics** — recommended from N13's evidence, not
+committed to. The alternatives are unchanged and smaller: a lossless CST, and
+`nazm explain-cost`.
+
+### N13 — Derived structural equality — **complete, 2026-09-25**
+
+`==` and `!=` apply to two operands of one type when that type has equality, and for a
+record, an enum or a concrete generic instance it is **derived**: every field, every payload
+field of every variant, after substitution. `Option` and `Result` get it as the ordinary
+enums they are. `Vec`, `Ints`, `Strs`, `Chan` and an unconstrained `T` do not have it, and
+neither does anything that contains one.
+
+| Settled | Where |
+| --- | --- |
+| the rule, nominal and static over every variant | `docs/spec.md`, *Equality is derived* |
+| one derivation beside cleanup and task safety, independent of both | `crates/nazm-sema/src/udt.rs`, `architecture.md` §7.15 |
+| the interpreter's relation, and a native helper per compared type — tags first, then the active slot alone | `crates/nazm-core/src/eval.rs`, `crates/nazm-lir/src/emit.rs` |
+| the same derivation and helpers in the compiler written in Nazm | `compiler/analyse.nz`, `compiler/emit.nz` |
+| `SEMANTIC_EPOCH` 5 → 6; interface schema unchanged at `nazm.interface/4` | `crates/nazm-cache/src/identity.rs` |
+| the compiler's completion states an enum, compared with `==` | `compiler/analyse.nz`, `performance.md` |
+| a new fixpoint, `76598c43…` | `bootstrap.md` |
+
+Mutation evidence: 33 new mutations and 13 repointed, each with its regression test; one
+targeted campaign of 58 — 57 caught (45 at tier 1, 12 at tier 2, none at tier 3), 1 survivor
+investigated and retired as unobservable on this platform (`capability-matrix.md` §30).
+
+**N14 has not started.**
 
 ### N12.2 — Mutation harness v2 — **complete, 2026-09-25**
 
@@ -397,9 +426,8 @@ catalogue ran for the first time**: 233 of 233 accounted for in 10,686 s.
 | the N13 mutation-authoring workflow: regression test, entry, verified killer | `docs/runbook.md` |
 | found on the way: N12.1's group kill did nothing in the container, `memory.rs` had no deadline, two catalogue entries had drifted, one was equivalent | `docs/capability-matrix.md` §30 |
 
-**N13 has not started.** It is still derived equality, below, and each of its mutations is
-expected to arrive with its semantic regression test and a killer verified by
-`--verify-killer`.
+*N13 followed it: its mutations arrived with their regression tests and killers verified by
+`--verify-killer` (above).*
 
 ### N12.1 — Core prelude identity and native value-block parity — **complete, 2026-09-24**
 

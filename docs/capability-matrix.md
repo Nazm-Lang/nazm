@@ -38,9 +38,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,255 passed, 0 failed, 13 ignored, across 63 suites**, run through
-`cargo xtask contained tests` at N12.2 (2026-09-25); the thirteen ignored are the xtask
-lifecycle tests, run on their own (13 of 13 passed, contained). N12.1 ended at 1,211 across
+**Current suite: 1,291 passed, 0 failed, 13 ignored, across 65 suites**, run contained at
+N13 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
+13 passed, contained). N12.2 ended at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -314,9 +314,37 @@ now also compiles natively in both compilers, which is area 9's and area 10's ro
 than this one's. What this row gains is the first `Option` doing real work inside the
 compiler: `record_owned` returns `Option[Int]` instead of a `-1`.
 
-Five constructs are verified rather than partial: **records**, **closed enums**,
-**exhaustive variant match**, **first-order generics with `Vec[T]`** and **typed `Result`
-propagation**. What surrounds them is not. Typed errors are **not** effects: a `Result` in a
+*N13, 2026-09-25.* **Derived structural equality.** `==` and `!=` apply to two operands of
+one type when that type has equality, and for a user type it is derived, never declared:
+a record has it exactly when every field does, an enum exactly when every payload field of
+**every** variant does, and a concrete generic instance after substitution — so
+`Option[Int]` and `Result[Int, Str]` have it as ordinary enums, with no rule naming them.
+One derivation, `UserTypes::equality` in `crates/nazm-sema/src/udt.rs`, beside cleanup and
+task safety and independent of both; the checker asks it and nothing else, and its refusal
+names the blocking component (`Outer`'s `inner.values`). No code was added — the rule moved
+under `N0304` — so `SEMANTIC_EPOCH` went 5 → 6; the interface schema is unchanged at
+`nazm.interface/4`. 20 tests in `crates/nazm-core/tests/equality.rs` with code and span, 11
+native ones in `crates/nazm-cli/tests/equality.rs` at `-O0` and `-O2` with every memory
+counter, `the_nazm_checker_agrees_with_the_reference_on_equality` comparing both checkers on
+30 programs by code **and** span, and the interface-only case with the dependency deleted.
+`docs/spec.md`, *Equality is derived*, is the law; `architecture.md` §7.15 is the
+implementation.
+
+| | equality |
+| --- | --- |
+| `Int`, `Bool`, `Str` (primitive) | VERIFIED, unchanged — `Str` by its bytes |
+| record, derived | VERIFIED |
+| enum, derived over every variant | VERIFIED |
+| concrete generic instance, after substitution | VERIFIED |
+| `Option[T]` / `Result[T, E]`, inherited as ordinary enums | VERIFIED |
+| `Vec[T]`, `Ints`, `Strs` — sequence equality | absent, deliberately |
+| `Chan` | absent, deliberately |
+| equality over a constrained type parameter | absent — no constraint mechanism |
+| custom (user-defined) equality | absent |
+
+Six constructs are verified rather than partial: **records**, **closed enums**,
+**exhaustive variant match**, **first-order generics with `Vec[T]`**, **typed `Result`
+propagation** and **derived structural equality**. What surrounds them is not. Typed errors are **not** effects: a `Result` in a
 signature is a return type, and area 5 is unchanged.
 
 **Limitation** · Generics are unconstrained: no traits, no constraints, no methods or
@@ -324,7 +352,10 @@ signature is a return type, and area 5 is unchanged.
 methods and no conversion between error types, and `main` cannot return one; no higher kinds, const generics, defaults, variance or specialisation; no
 indexing syntax on a `Vec`; no `spawn` of a generic function. No closures or function
 values, no unit type, no `Never`.
-No derived equality on a record or an enum. No field-level or per-variant visibility, no
+Equality cannot be abstracted over: `fn same[T](a: T, b: T)` is refused, and so is
+`fn same_box[T](a: Box[T], b: Box[T])`, while a concrete `Box[Int]` compares — nothing can
+say "`T` has equality". No ordering, hashing or custom equality on any user type, and no
+equality at all on a sequence, a `Vec` or a `Chan`. No field-level or per-variant visibility, no
 default field values, no record update syntax. The pattern language is variant selection
 with named payload bindings and `_` — no top-level wildcard arm, no guards, no or-patterns,
 no literal, record, tuple or range patterns, and no `let` destructuring. Five keywords
@@ -334,10 +365,13 @@ in N10, for the same reason `print` did in B3 — a reserved word earns its plac
 something absent. *Until N11 this said neither a record nor an enum could be put in a
 sequence; `Vec[T]` holds either.*
 
-**Next dependency** · Equality on user types: what the N11 dogfood could not use and N12.1
-still cannot — the compiler's integer tags need `==` on an enum (`roadmap.md`, N13). *Until
-N12 this named typed errors, which N12 added; until N12.1 it also named blocks as values in
-the native backends, which N12.1 added.*
+**Next dependency** · A way for a generic definition to require a capability of its
+parameter — constrained generics — which is the one thing N13 found equality cannot do
+without: a concrete `Box[Int]` compares and a generic body over `Box[T]` cannot say it
+wants one that does (`research-register.md`, *Derived equality composes; abstraction over
+it does not*). *Until N13 this named equality on user types, which N13 added and the
+compiler's completion states now use; until N12 it named typed errors; until N12.1 blocks
+as values in the native backends.*
 
 **Accepted when** · Chosen by the milestone that needs it, not by completeness.
 
@@ -1160,9 +1194,9 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **233** catalogued defects (158 when
-this sentence was first written), **38** of them with a verified killer and all of them
-owned by one of nine focused profiles;
+**Evidence** · `xtask/mutations/mutations.toml` holds **265** catalogued defects (158 when
+this sentence was first written, 233 at N12.2), **77** of them with a verified killer and all
+of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -1367,6 +1401,31 @@ problems, each accounted for rather than folded into a pass:
   same verdict. The effect is observed; no test *asserts* it. Open — the cases must move
   out of process, which is a change to those crates' tests and not N12.2's to make.
 
+*N13 (2026-09-25) added thirty-three and repointed thirteen,* each new one written with the
+semantic test that observes it and its killer confirmed by `--verify-killer` before it was
+committed. They break the capability derivation (a `Vec`, a sequence, a `Chan` given
+equality; only the first component, only the first variant, no nested type walked), the
+checker (two types of one shape compared, a refusal that names nothing), the interpreter
+(first field only, variants not compared, `!=` not the negation, `Str` by length), the
+native helpers (first field only, tags not compared, a zero-payload variant unequal to
+itself, arms in the wrong order, `!=` not negated, each temporary leaked, helper names
+without their type arguments, operands released before they are read), the Nazm-written
+checker and emitter (the same families), and the dogfooded completion fold. Nine of the
+thirteen repointed entries compared a completion with `99`; the enum made that
+inexpressible, so they became typed (`x != x`) — the invalid state they simulated no longer
+exists. **Campaign `418a5e5921b866cc`, targeted, one session, 1,997 s:** the 33 new, the 13
+repointed and 12 existing entries whose target code N13's diff touched or sits beside — 58
+selected, 58 finalized. **57 caught**, 45 at tier 1 and 12 at tier 2, none at tier 3; no
+timeout, no runner error, nothing unapplied or unusable, no crash; the workspace suite ran
+once. **1 SURVIVED**: `n13-native-operands-are-released-before-they-are-compared`, a
+use-after-free that reads freed storage nothing has reused, so every answer and every counter
+is right. glibc 2.41 in the image ignores `MALLOC_PERTURB_` and `glibc.malloc.perturb`
+(measured), and a sanitizer is a framework this project does not use, so it is **retired
+with that evidence** in the catalogue — not caught, and not called equivalent. Three
+candidate killers were refuted by verification and not used. The whole catalogue was not
+re-run: N13 did not change the harness, and the two open MUTANT CRASH entries were not
+reached by it.
+
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a
 verdict it could not get); N12.1's process-group kills used `kill -KILL -<pgid>`, which
@@ -1438,6 +1497,14 @@ executables byte-identical as well.
 prelude by the key `@core/prelude` rather than as the last module, and its checker takes an
 `Option[Int]` apart where it used to test for `-1`. The corpus has 28 cases, 11 of them
 multi-module, and 12 refusals. The fixpoint moved to `a9ead258…` at 12,164 source lines,
+runnable executables byte-identical too.
+
+**Since N13** the compiler written in Nazm derives equality and emits it — a helper per
+compared record and enum, a tag comparison and then the active slot alone — and uses it on
+itself: a node's completion is an `enum Completion` in a `Vec[Completion]` rather than `0`,
+`1` or `2` in an `Ints`, compared with `==`. The corpus has 30 cases, 12 of them
+multi-module (one compares an imported record, enum and `Option[Point]`), and 19 refusals,
+seven of them equality's. The fixpoint moved to `76598c43…` at 12,412 source lines,
 runnable executables byte-identical too.
 
 **Next dependency** · None.
