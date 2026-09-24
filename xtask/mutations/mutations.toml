@@ -117,6 +117,7 @@ find = """                return Disposition::Quarantine {
                     reason: format!("cleanup could not be verified: {e}"),
                 };"""
 replace = "                return Disposition::Clean;"
+killers = [{ package = "nazm-bench", test = "sandbox_lifecycle", name = "an_unverifiable_cleanup_quarantines_rather_than_passing" }]
 
 [[mutation]]
 name = "ownership-recorded-after-creation"
@@ -352,6 +353,7 @@ replace = """    fn leave(&mut self) {}"""
 #   documents — but stack exhaustion is only observable out of process, and the only
 #   out-of-process vehicle here is a binary that happens to have enough. Catalogued as
 #   uncovered rather than as caught.
+killers = [{ package = "nazm-syntax", lib = true, name = "parser::ast_depth_tests::the_counter_tracks_the_tree_at_the_edge_of_each_shape" }]
 
 [[mutation]]
 name = "a-chain-forgets-its-operands-depth"
@@ -923,6 +925,7 @@ tightening a rule would then leave every previously written entry reachable and 
 file = "crates/nazm-cache/src/key.rs"
 find = "        f.field(&checker.to_string())"
 replace = "        f.field(\"\")"
+killers = [{ package = "nazm-cache", test = "store", name = "an_entry_from_another_checker_is_unreachable" }]
 
 [[mutation]]
 name = "the-check-key-forgets-which-module-it-is"
@@ -2073,6 +2076,7 @@ find = """                    self.drop_temporary(a, Ty::Str);
                     self.drop_temporary(b, Ty::Str);
 """
 replace = """"""
+killers = [{ package = "nazm-cli", test = "memory", name = "a_string_comparison_gives_back_its_operands" }]
 
 [[mutation]]
 name = "the-self-hosted-string-comparison-keeps-its-operands"
@@ -2208,6 +2212,7 @@ Nazm checker never compared the two before N10.2, and the reference always has
 file = "compiler/analyse.nz"
 find = """if bc == c_value() {"""
 replace = """if bc == 99 {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "a-body-with-no-value-is-accepted"
@@ -2318,6 +2323,7 @@ an unconstrained `T` is given `==`, which not every type supports — the refusa
 file = "crates/nazm-core/src/check.rs"
 find = "                    && !lt.is_param()"
 replace = ""
+killers = [{ package = "nazm-core", test = "generics", name = "a_type_parameter_supports_no_equality" }]
 
 [[mutation]]
 name = "two-generic-definitions-of-one-shape-unify"
@@ -2354,6 +2360,7 @@ replace = """    pub fn of_instance(base: &Self, args: &[String]) -> Self {
     }
 
     /// The name itself, with no sigil."""
+killers = [{ package = "nazm-cli", test = "generics", name = "two_instances_that_differ_only_in_a_later_argument_are_two_functions" }]
 
 [[mutation]]
 name = "an-instance-requested-twice-is-planned-twice"
@@ -2563,6 +2570,7 @@ replace = """        let _ = def;
         if self.res.enums().get(id).is_none_or(|d| d.name != nazm_sema::prelude::RESULT) {
             return None;
         }"""
+killers = [{ package = "nazm-core", test = "results", name = "a_project_result_is_refused_and_is_not_what_question_mark_propagates" }]
 
 [[mutation]]
 name = "question-mark-recognises-result-by-shape"
@@ -2664,6 +2672,7 @@ an enum two persisted interfaces carry is rehydrated twice, so the `Result` in B
 file = "crates/nazm-iface/src/wire.rs"
 find = "            if let Some(TypeNode::Enum(id)) = seen.known.get(&e.def).copied() {"
 replace = "            if let Some(TypeNode::Enum(id)) = None::<TypeNode> {"
+killers = [{ package = "nazm-cli", test = "prelude", name = "a_dependent_checks_propagation_from_persisted_interfaces_with_the_dependency_deleted" }]
 
 [[mutation]]
 name = "lowered-propagation-tests-the-error-tag"
@@ -2800,6 +2809,7 @@ find = """    join_from(out, next, current, live, 2);
 replace = """    release_temporaries(out, next, owned, otype, rowns);
     release_frame(out, next, frame, rowns);
     add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_propagates_with_the_same_memory_semantics" }]
 
 [[mutation]]
 name = "selfhost-propagation-leaks-earlier-temporaries"
