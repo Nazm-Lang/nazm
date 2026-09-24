@@ -67,6 +67,10 @@ pub enum TokenKind {
     /// variants. Never part of a number: `docs/spec.md` has no float.
     Dot,
     Semi,
+    /// `?` — propagation, N12: postfix, after an operand whose type is the core prelude's
+    /// `Result`. One character with one meaning; `??` is two of them, not a token of its
+    /// own, so `r??` removes two `Result` layers exactly as `(r?)?` does.
+    Question,
     Arrow,
     /// `=>` — between a `match` pattern and the arm it selects.
     ///
@@ -132,6 +136,7 @@ impl TokenKind {
         Self::Colon,
         Self::Dot,
         Self::Semi,
+        Self::Question,
         Self::Arrow,
         Self::FatArrow,
         Self::Eq,
@@ -188,6 +193,7 @@ impl TokenKind {
             Self::Colon => Some(":"),
             Self::Dot => Some("."),
             Self::Semi => Some(";"),
+            Self::Question => Some("?"),
             Self::Arrow => Some("->"),
             Self::FatArrow => Some("=>"),
             Self::Eq => Some("="),
@@ -241,6 +247,7 @@ impl TokenKind {
             Self::Colon => "`:`".to_owned(),
             Self::Dot => "`.`".to_owned(),
             Self::Semi => "`;`".to_owned(),
+            Self::Question => "`?`".to_owned(),
             Self::Arrow => "`->`".to_owned(),
             Self::FatArrow => "`=>`".to_owned(),
             Self::Eq => "`=`".to_owned(),
@@ -459,6 +466,7 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
             b':' => Some(TokenKind::Colon),
             b'.' => Some(TokenKind::Dot),
             b';' => Some(TokenKind::Semi),
+            b'?' => Some(TokenKind::Question),
             b'=' => Some(TokenKind::Eq),
             b'+' => Some(TokenKind::Plus),
             b'-' => Some(TokenKind::Minus),

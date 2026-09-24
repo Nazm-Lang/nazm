@@ -280,3 +280,65 @@ fn path_index(mpath: Strs, want: Str) -> Int {
     }
     0 - 1
 }
+
+// --- the core prelude, N12 ------------------------------------------------------------
+
+/// Add the core prelude — the file at `core` — as the **last** module, and make every
+/// module already loaded import it. Returns the buffer with the prelude's text appended.
+///
+/// The same shape the reference loader gives a compilation: the prelude after every
+/// project module, so no project offset moves, and an ordinary import edge from each of
+/// them, so what a module may name and what it depends on treat the prelude as a module it
+/// had written `use` for. The edges point at no `use` line because none was written; a
+/// diagnostic about the prelude points at the declaration instead. `docs/spec.md`, *The
+/// core prelude*.
+///
+/// **Its identity is this position**: the last module of the compilation is the prelude,
+/// by construction here and nowhere else. This compiler's modules are session-local
+/// indices — it has no durable keys — so this is the strongest identity it has, and it is
+/// one no project file can take: a project module is always loaded before this runs.
+pub fn attach_core(core: Str, src: Str, mpath: Strs, mstart: Ints, mfirst: Ints,
+        mcount: Ints, mto: Ints, mat: Ints) -> Str {
+    if file_exists(core) == false {
+        eprint(str_concat(str_concat("cannot find the core prelude ", core),
+                str_from_byte(10)));
+        exit_with(2);
+    }
+    let me = strs_len(mpath);
+    // Every module's edges, then the prelude, rebuilt in module order so each module's
+    // slice of `mto`/`mat` stays contiguous.
+    let to = ints_new();
+    let at = ints_new();
+    let mut m = 0;
+    while m < me {
+        let first = ints_get(mfirst, m);
+        let n = ints_get(mcount, m);
+        ints_set(mfirst, m, ints_len(to));
+        let mut e = 0;
+        while e < n {
+            ints_push(to, ints_get(mto, first + e));
+            ints_push(at, ints_get(mat, first + e));
+            e = e + 1;
+        }
+        ints_push(to, me);
+        ints_push(at, 0 - 1);
+        ints_set(mcount, m, n + 1);
+        m = m + 1;
+    }
+    while ints_len(mto) > 0 { ints_pop(mto); }
+    while ints_len(mat) > 0 { ints_pop(mat); }
+    let mut c = 0;
+    while c < ints_len(to) {
+        ints_push(mto, ints_get(to, c));
+        ints_push(mat, ints_get(at, c));
+        c = c + 1;
+    }
+    strs_push(mpath, normalise(core));
+    ints_push(mstart, str_len(src) + 1);
+    ints_push(mfirst, ints_len(mto));
+    ints_push(mcount, 0);
+    str_concat(str_concat(src, str_from_byte(10)), read_file(core))
+}
+
+/// The core prelude's module: the last one. See [`attach_core`].
+pub fn core_module(mstart: Ints) -> Int { ints_len(mstart) - 1 }

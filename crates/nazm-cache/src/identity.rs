@@ -88,7 +88,17 @@ use crate::digest::{self, Framed};
 /// `N0304`, passing one to a task under `N0321` — that reuse old codes; and the interface
 /// schema a dependency's fingerprint is taken over changed shape. The counter is what makes
 /// every N10 entry unreachable regardless of which of those a given module touched.
-pub const SEMANTIC_EPOCH: u32 = 4;
+///
+/// `5` — N12, 2026-09-24. The core prelude and `?`. The code set moved for the four new
+/// codes, and three changes it would not show: `?` stopped being an unknown character, so
+/// a module containing one was recorded by an N11 build as having a lexical error and may
+/// have none now; a module that declared its own `Result` or `Option` was clean under N11
+/// and is refused now under a code that did not exist, but the same would be true of a
+/// module that merely *mentions* `Result` — unknown under N11, a core type now — which
+/// changes no code at all; and every module gained a dependency it did not write. That
+/// last one is in each `CheckKey` already, as an import like any other. The counter covers
+/// the first two, which are rules, not inputs.
+pub const SEMANTIC_EPOCH: u32 = 5;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -125,8 +135,12 @@ pub const CHECKER_CODES: &[&str] = &[
     "NON_EXHAUSTIVE_MATCH",
     "NOT_IN_A_LOOP",
     "OWNERSHIP_CYCLE",
+    "PRELUDE_TYPE_REDECLARED",
     "PRIVATE_DEFINITION",
     "PRIVATE_TYPE_EXPOSED",
+    "PROPAGATE_ERROR_MISMATCH",
+    "PROPAGATE_NON_RESULT",
+    "PROPAGATE_OUTSIDE_RESULT",
     "RECURSIVE_RECORD",
     "SPAWN_OUTSIDE_SCOPE",
     "TYPE_ARGUMENTS_ON_NON_GENERIC",

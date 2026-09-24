@@ -85,11 +85,11 @@ fn a_marker_gives_a_module_one_identity_whichever_file_was_named() {
     let from_app = published(dir.path(), &["app.nz"]);
     let from_tool = published(dir.path(), &["tool.nz"]);
     assert!(
-        from_app.contains(r#""dependencies":["lib/common.nz"]"#),
+        from_app.contains(r#""dependencies":["@core/prelude","lib/common.nz"]"#),
         "{from_app}"
     );
     assert!(
-        from_tool.contains(r#""dependencies":["lib/common.nz"]"#),
+        from_tool.contains(r#""dependencies":["@core/prelude","lib/common.nz"]"#),
         "{from_tool}"
     );
 }
@@ -106,7 +106,7 @@ fn without_a_marker_the_key_still_depends_on_which_file_was_named() {
     assert!(alone.contains(r#""module":"common.nz""#), "{alone}");
     let from_app = published(dir.path(), &["app.nz"]);
     assert!(
-        from_app.contains(r#""dependencies":["lib/common.nz"]"#),
+        from_app.contains(r#""dependencies":["@core/prelude","lib/common.nz"]"#),
         "{from_app}"
     );
 }

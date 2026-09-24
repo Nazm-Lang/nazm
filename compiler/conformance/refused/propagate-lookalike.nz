@@ -1,0 +1,14 @@
+// expect: N0360
+// An enum shaped exactly like `Result` is a different definition, so `?` refuses it.
+enum MyResult[T, E] {
+    Ok(value: T),
+    Err(error: E),
+}
+
+fn through(r: MyResult[Int, Str]) -> Result[Int, Str] {
+    Result[Int, Str].Ok(value: r?)
+}
+
+fn main() -> Int {
+    0
+}

@@ -81,6 +81,9 @@ pub fn n_payload() -> Int { 28 }
 pub fn n_makevariant() -> Int { 29 }
 pub fn n_arm() -> Int { 30 }
 pub fn n_match() -> Int { 31 }
+// `operand?` — N12's propagation. One child, the operand; the node's span runs from the
+// operand's start to the end of the `?`, so the `?` itself is the node's last byte.
+pub fn n_propagate() -> Int { 32 }
 
 pub fn node_name(k: Int) -> Str {
     if k == n_int() { return "int"; }
@@ -114,6 +117,7 @@ pub fn node_name(k: Int) -> Str {
     if k == n_makevariant() { return "makevariant"; }
     if k == n_arm() { return "arm"; }
     if k == n_match() { return "match"; }
+    if k == n_propagate() { return "propagate"; }
     "?"
 }
 
@@ -458,8 +462,20 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
             // A projection binds tighter than anything, **including a pending unary
             // minus**: `-p.x` is `-(p.x)`, because the reference parser reads a field
             // chain as part of the operand rather than as an operator over it. Handled
-            // before the unary reduction below for exactly that reason.
-            while kind_at(kinds, i) == k_dot() {
+            // before the unary reduction below for exactly that reason. `?` is the other
+            // postfix and binds the same way, in any order with `.`: `make()?.x`, `-r?`.
+            while true {
+                if kind_at(kinds, i) == k_question() {
+                    let at = ints_get(vs, ints_len(vs) - 1);
+                    let to = end_at(ends, i);
+                    pop_val(vs, ve);
+                    emit(nk, nar, nst, nen, ntx, n_propagate(), 1, at, to, "");
+                    ints_push(vs, at);
+                    ints_push(ve, to);
+                    i = i + 1;
+                    continue;
+                }
+                if kind_at(kinds, i) != k_dot() { break; }
                 if kind_at(kinds, i + 1) != k_ident() {
                     die("expected a field name after `.`", start_at(starts, i + 1));
                 }

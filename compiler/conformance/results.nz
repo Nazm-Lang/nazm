@@ -1,0 +1,160 @@
+// N12: `Result`, `Option` and `?` — ordinary generic enums from the core prelude, and one
+// propagation operator — across every position a propagation can leave from.
+
+struct Oops {
+    code: Int,
+    why: Str,
+}
+
+enum Shape {
+    Named(label: Str),
+    Plain,
+}
+
+struct Three {
+    a: Str,
+    b: Int,
+}
+
+fn leaf(fail: Bool, n: Int) -> Result[Int, Oops] {
+    if fail {
+        return Result[Int, Oops].Err(error: Oops(code: n, why: str_concat("leaf-", int_to_str(n))));
+    }
+    Result[Int, Oops].Ok(value: n)
+}
+
+// Only the error crosses: the success type is the function's own.
+fn named(fail: Bool) -> Result[Str, Oops] {
+    let n = leaf(fail, 7)?;
+    Result[Str, Oops].Ok(value: int_to_str(n * 111))
+}
+
+// Twice through, and one function further out.
+fn middle(fail: Bool) -> Result[Int, Oops] {
+    Result[Int, Oops].Ok(value: leaf(fail, 5)? + 1)
+}
+
+fn outer(fail: Bool) -> Result[Int, Oops] {
+    Result[Int, Oops].Ok(value: middle(fail)? * 10)
+}
+
+// From a loop: the function returns, not the loop.
+fn summed(stop: Int) -> Result[Int, Oops] {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 10 {
+        total = total + leaf(i == stop, i)?;
+        i = i + 1;
+    }
+    Result[Int, Oops].Ok(value: total)
+}
+
+// From an argument, with an owning argument before it and a call after it that never runs.
+fn later(log: Ints) -> Str {
+    ints_push(log, 1);
+    "later"
+}
+
+fn consume(a: Str, b: Int, c: Str) -> Int {
+    str_len(a) + b + str_len(c)
+}
+
+fn called(log: Ints, fail: Bool) -> Result[Int, Oops] {
+    Result[Int, Oops].Ok(value: consume(int_to_str(1000), leaf(fail, 2)?, later(log)))
+}
+
+// From an initialiser, with an owning field built before it.
+fn built(fail: Bool) -> Result[Three, Oops] {
+    Result[Three, Oops].Ok(value: Three(a: int_to_str(12), b: leaf(fail, 3)?))
+}
+
+// Generic: nothing is asked of `T` or `E` but to be moved.
+fn pass[T, E](r: Result[T, E]) -> Result[T, E] {
+    let v = r?;
+    Result[T, E].Ok(value: v)
+}
+
+// One `?` per layer.
+fn layered(n: Int) -> Result[Result[Int, Str], Str] {
+    Result[Result[Int, Str], Str].Ok(value: Result[Int, Str].Ok(value: n))
+}
+
+fn unwrapped(n: Int) -> Result[Int, Str] {
+    let a = layered(n)??;
+    let b = (layered(n + 1)?)?;
+    Result[Int, Str].Ok(value: a + b)
+}
+
+// A scrutinee that propagates.
+fn shape(n: Int) -> Result[Shape, Oops] {
+    if n == 0 {
+        return Result[Shape, Oops].Err(error: Oops(code: 9, why: "no shape"));
+    }
+    Result[Shape, Oops].Ok(value: Shape.Named(label: str_concat("shape-", int_to_str(n))))
+}
+
+fn measured(n: Int) -> Result[Int, Oops] {
+    let k = match shape(n)? {
+        Shape.Named(label: l) => str_len(l),
+        Shape.Plain() => 0,
+    };
+    Result[Int, Oops].Ok(value: k)
+}
+
+fn read(r: Result[Int, Oops]) -> Int {
+    match r {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => 0 - e.code,
+    }
+}
+
+fn get(o: Option[Str]) -> Int {
+    match o {
+        Option.None() => 100,
+        Option.Some(value: s) => str_len(s),
+    }
+}
+
+fn main() -> Int {
+    let log = ints_new();
+    let a = match named(false) {
+        Result.Ok(value: s) => str_len(s),
+        Result.Err(error: e) => 0,
+    };
+    let b = match outer(true) {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => e.code * 100 + str_len(e.why),
+    };
+    let c = read(outer(false)) + read(summed(4)) + read(summed(20));
+    let d = read(called(log, true)) + read(called(log, false)) + ints_len(log);
+    let e = match built(true) {
+        Result.Ok(value: t) => 0,
+        Result.Err(error: o) => o.code,
+    } + match built(false) {
+        Result.Ok(value: t) => str_len(t.a) + t.b,
+        Result.Err(error: o) => 0,
+    };
+    let f = match pass(Result[Str, Int].Err(error: 40)) {
+        Result.Ok(value: s) => 0,
+        Result.Err(error: n) => n,
+    } + match unwrapped(3) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: s) => 0,
+    };
+    let g = read(measured(4)) + read(measured(0)) + get(Option[Str].None()) + get(Option[Str].Some(value: "ab"));
+    print(int_to_str(a));
+    print(" ");
+    print(int_to_str(b));
+    print(" ");
+    print(int_to_str(c));
+    print(" ");
+    print(int_to_str(d));
+    print(" ");
+    print(int_to_str(e));
+    print(" ");
+    print(int_to_str(f));
+    print(" ");
+    print(int_to_str(g));
+    print(str_from_byte(10));
+    a + b + c + d + e + f + g
+}

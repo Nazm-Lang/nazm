@@ -65,6 +65,26 @@ pub fn run(source: &str) -> Outcome {
 /// the loader, because that is the only form that knows what a span belongs to.
 const ONE_FILE: &str = "<input>";
 
+/// A compilation of one file: that file as the root module, and the core prelude.
+///
+/// The prelude is part of every compilation, including this one — `docs/spec.md`, *The
+/// core prelude* — so a program given as a string sees `Result` and `Option` exactly as a
+/// program read from disk does. It comes **after** the file, so the file is still
+/// `FileId::ROOT` and every span in it means what it meant before.
+#[must_use]
+pub fn one_file(source: &str) -> (nazm_span::SourceMap, sema::ModuleGraph) {
+    let map = nazm_span::SourceMap::from_parts(vec![
+        (ONE_FILE.to_owned(), source.to_owned()),
+        (
+            sema::prelude::FILE_NAME.to_owned(),
+            sema::prelude::SOURCE.to_owned(),
+        ),
+    ]);
+    let mut graph = sema::ModuleGraph::single();
+    graph.attach_prelude(nazm_span::FileId::from_index(1));
+    (map, graph)
+}
+
 /// As [`run`], with explicit budgets.
 ///
 /// The budgets are the interpreter's, not the language's — see `docs/spec.md`. They exist
@@ -81,12 +101,8 @@ pub fn run_with_limits(source: &str, limits: eval::Limits) -> Outcome {
 /// and compiled — a native `argv[0]` is a path nobody should depend on.
 #[must_use]
 pub fn run_with(source: &str, limits: eval::Limits, args: Vec<String>) -> Outcome {
-    run_map(
-        &nazm_span::SourceMap::single(ONE_FILE, source),
-        &sema::ModuleGraph::single(),
-        limits,
-        args,
-    )
+    let (map, graph) = one_file(source);
+    run_map(&map, &graph, limits, args)
 }
 
 /// As [`run_with`], over every file of a compilation.
@@ -161,10 +177,8 @@ fn pipeline(
 /// with the shape of the tree, and neither has anything to do with call depth.
 #[must_use]
 pub fn check_source(source: &str) -> Vec<nazm_diag::Diagnostic> {
-    check_map(
-        &nazm_span::SourceMap::single(ONE_FILE, source),
-        &sema::ModuleGraph::single(),
-    )
+    let (map, graph) = one_file(source);
+    check_map(&map, &graph)
 }
 
 /// As [`check_source`], over every file of a compilation, reusing what `reuse` allows.
@@ -258,11 +272,8 @@ where
     T: Send,
     F: FnOnce(&__syntax::Program, &Resolution) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
 {
-    on_checked_map(
-        &nazm_span::SourceMap::single(ONE_FILE, source),
-        &sema::ModuleGraph::single(),
-        f,
-    )
+    let (map, graph) = one_file(source);
+    on_checked_map(&map, &graph, f)
 }
 
 /// As [`on_checked`], over every file of a compilation.

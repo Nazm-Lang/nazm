@@ -205,7 +205,14 @@ unary = [ "-" ] , primary ;
 (* @example fn main() -> Int { if false { 1 } else { 0 } } *)
 (* @example fn main() -> Int { str_len("a name") } *)
 (* @example struct P { x: Int, } fn main() -> Int { P(x: 1).x } *)
-primary = atom , { "." , IDENT } ;
+(* `?` is a postfix beside projection, in any order and any number: `r?`, `make()?.x`,
+ * `r??`. It binds tighter than negation, so `-r?` is `-(r?)`. Whether the operand is a
+ * `Result` — and the core prelude's one — is the checker's question, not the grammar's.
+ * See `docs/spec.md`, *Propagation*.
+ *)
+(* @example fn f(r: Result[Int, Str]) -> Result[Int, Str] { Result[Int, Str].Ok(value: r? + 1) } fn main() -> Int { 0 } *)
+(* @example struct P { x: Int, } fn f(r: Result[P, Str]) -> Result[Int, Str] { Result[Int, Str].Ok(value: -r?.x) } fn main() -> Int { 0 } *)
+primary = atom , { "." , IDENT | "?" } ;
 
 (* @example fn main() -> Int { 1 } *)
 atom = INTEGER

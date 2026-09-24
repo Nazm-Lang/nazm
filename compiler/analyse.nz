@@ -24,6 +24,7 @@
 // Output: one diagnostic per line, `CODE|start|end|message`, to standard output. Exits 1
 // if there were any, 0 if not.
 
+use "lex.nz";
 use "parse.nz";
 use "module.nz";
 
@@ -1719,6 +1720,7 @@ fn value_child(kind: Int) -> Int {
     if kind == n_construct() { return 0 - 1; }
     if kind == n_makevariant() { return 0 - 1; }
     if kind == n_fieldread() { return 0 - 1; }
+    if kind == n_propagate() { return 0 - 1; }
     if kind == n_let() { return 0; }
     if kind == n_assign() { return 0; }
     if kind == n_return() { return 0; }
@@ -2139,9 +2141,14 @@ pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, nau
 // go wrong — the same rule, the same codes and the same reasoning as the function
 // namespace's, because it is the same rule.
 pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: Int,
-        rnames: Strs, rowner: Ints, rpub: Ints,
+        rnames: Strs, rowner: Ints, rpub: Ints, rat: Ints,
         tmod: Ints, tname: Strs, trec: Ints,
         diags: Vec[Diag]) -> Int {
+    // The core prelude is the last module (`attach_core`), and every other module imports
+    // it with no `use` written. A collision with one of its names is therefore reported at
+    // the **declaration** that took the name, under its own code — there is no import line
+    // to point at, and the rule is that the name is reserved.
+    let core = modules - 1;
     let mut m = 0;
     while m < modules {
         let first = ints_get(mfirst, m);
@@ -2158,11 +2165,36 @@ pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modu
                 if offered == 1 {
                     let name = strs_get(rnames, r);
                     let mut taken = 1;
-                    if record_owned(rnames, rowner, m, name) >= 0 {
-                        report(diags, "N0208", at, at + 1,
-                                str_concat(str_concat("this import brings in the type `", name),
-                                "`, which this module declares"));
+                    let own = record_owned(rnames, rowner, m, name);
+                    if own >= 0 {
+                        if target == core {
+                            let named = ints_get(rat, own);
+                            report(diags, "N0363", named, named + str_len(name),
+                                    str_concat(str_concat("`", name),
+                                    "` is a core prelude type"));
+                        } else {
+                            report(diags, "N0208", at, at + 1,
+                                    str_concat(str_concat("this import brings in the type `", name),
+                                    "`, which this module declares"));
+                        }
                         taken = 0;
+                    }
+                    if taken == 1 {
+                        if target == core {
+                            // Only reachable when another import exports a prelude name,
+                            // which that module was already refused for declaring. The
+                            // prelude's meaning stands, and nothing more is said.
+                            let mut q = 0;
+                            while q < ints_len(tmod) {
+                                if ints_get(tmod, q) == m {
+                                    if strs_get(tname, q) == name {
+                                        ints_set(trec, q, r);
+                                        taken = 0;
+                                    }
+                                }
+                                q = q + 1;
+                            }
+                        }
                     }
                     if taken == 1 {
                         if record_imported(tmod, tname, trec, m, name) >= 0 {
@@ -3024,6 +3056,79 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 while drop2 < arity { ints_pop(ts); drop2 = drop2 + 1; }
                 ints_push(ts, t);
                 ints_set(ntype, k, t);
+                continue;
+            }
+            // `operand?`, N12. The operand must be an application of the core prelude's
+            // `Result` — by **definition**, the entry the prelude module declares, never a
+            // name or a shape — and so must the function's declared result, with the very
+            // same error type. The node is the operand's success type; the error path is
+            // an ordinary `return`, so the node completes exactly as its operand does.
+            // Every refusal points at the `?`, the node's last byte.
+            if kind == n_propagate() {
+                let operand = ints_get(kids, first);
+                let ot = ints_pop(ts);
+                if ints_get(ncomp, operand) != c_value() {
+                    // No value to take apart. Refused above if it has none at all; one that
+                    // never arrives transfers, and so does this.
+                    if ints_get(ncomp, operand) == c_diverges() {
+                        ints_set(ncomp, k, c_diverges());
+                    }
+                    ints_push(ts, t_unknown());
+                    ints_set(ntype, k, t_unknown());
+                    continue;
+                }
+                let q = to - 1;
+                let result_decl = record_owned(rnames, rowner, core_module(mstart), "Result");
+                let mut is_result = false;
+                if result_decl >= 0 {
+                    if definition_of(tb, ot) == result_decl { is_result = true; }
+                }
+                if is_result == false {
+                    if ot != t_unknown() {
+                        report(diags, "N0360", q, q + 1,
+                                str_concat(str_concat("`?` needs a `Result`, but this is `",
+                                show_type(ot, rnames)), "`"));
+                    }
+                    ints_push(ts, t_unknown());
+                    ints_set(ntype, k, t_unknown());
+                    continue;
+                }
+                let parts = type_args(tb, ot);
+                let ok = ints_get(parts, 0);
+                let fr = ints_get(cur_ret, 0);
+                let mut returns_result = false;
+                if definition_of(tb, fr) == result_decl { returns_result = true; }
+                if returns_result == false {
+                    report(diags, "N0361", q, q + 1,
+                            str_concat(str_concat(
+                            "`?` can only be used in a function that returns a `Result`, and this one returns `",
+                            show_type(fr, rnames)), "`"));
+                    ints_push(ts, ok);
+                    ints_set(ntype, k, ok);
+                    continue;
+                }
+                let into_err = ints_get(type_args(tb, fr), 1);
+                if ints_get(parts, 1) != into_err {
+                    report(diags, "N0362", q, q + 1,
+                            str_concat(str_concat(str_concat(str_concat(
+                            "this `?` propagates a `", show_type(ints_get(parts, 1), rnames)),
+                            "`, but the function's error type is `"),
+                            show_type(into_err, rnames)), "`"));
+                    ints_push(ts, ok);
+                    ints_set(ntype, k, ok);
+                    continue;
+                }
+                // For emission: which variant is the success — the operand's own `Ok`
+                // entry, as an arm records the variant it matched — and a hidden slot the
+                // frame releases, holding the operand while it is taken apart.
+                let e = record_of(ot);
+                let at = field_index(rfirst, rcount, rfname, e, "Ok");
+                ints_set(nrec, k, record_of(field_type(rfirst, rftype, e, at)));
+                let slot = ints_get(counter, 0);
+                ints_set(counter, 0, slot + 1);
+                ints_set(nslot, k, slot);
+                ints_push(ts, ok);
+                ints_set(ntype, k, ok);
                 continue;
             }
             if kind == n_fieldread() {
@@ -4301,4 +4406,162 @@ fn unify(tb: Table, formal: Int, actual: Int, generics: Ints, solved: Ints, sval
         return 1;
     }
     0
+}
+
+// --- the front end as one stage, N12 --------------------------------------------------
+
+/// What the front end established about a program that checked: its tree, what every node
+/// was resolved to, the type table and the function table — everything emission reads,
+/// and nothing it would have to decide again.
+pub struct Checked {
+    nk: Ints,
+    nar: Ints,
+    nst: Ints,
+    nen: Ints,
+    ntx: Strs,
+    naux: Ints,
+    kids: Ints,
+    kid_first: Ints,
+    nslot: Ints,
+    ntype: Ints,
+    ncallee: Ints,
+    nrec: Ints,
+    ntfirst: Ints,
+    ntargs: Ints,
+    tb: Table,
+    fnames: Strs,
+    fret: Ints,
+    fowner: Ints,
+    fgc: Ints,
+    entry: Int,
+}
+
+/// Lex, parse and check a loaded program: its tables, or every diagnostic it earned.
+///
+/// **A stage boundary, and the only one that fails this way.** Inside, every pass still
+/// collects into one `Vec[Diag]` and keeps going, so a program with three mistakes reports
+/// three — recovery is the checker's job and a first error must not end it. What does end
+/// is the stage: a program with any diagnostic has no checked tables to hand on, so the
+/// answer is the one or the other, and the type says so. Until N12 each driver ran these
+/// passes itself, threaded the sink through them, and then asked `vec_len(diags) > 0`.
+pub fn check_program(src: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: Ints,
+        mto: Ints, mat: Ints) -> Result[Checked, Vec[Diag]] {
+    let kinds = ints_new();
+    let starts = ints_new();
+    let ends = ints_new();
+    let texts = strs_new();
+    lex(src, kinds, starts, ends, texts);
+
+    let nk = ints_new();
+    let nar = ints_new();
+    let nst = ints_new();
+    let nen = ints_new();
+    let ntx = strs_new();
+    let naux = ints_new();
+    parse_program(kinds, starts, ends, texts, nk, nar, nst, nen, ntx, naux);
+
+    let kids = ints_new();
+    let kid_first = ints_new();
+    build_children(nk, nar, kids, kid_first);
+
+    // The built-ins share the ordinary function namespace, exactly as `docs/spec.md`
+    // says, so a call to one is not an undefined function — and a definition may not take
+    // one of their names, which is why they are collected first.
+    let bnames = strs_new();
+    let bret = ints_new();
+    let bfirst = ints_new();
+    let bcount = ints_new();
+    let bparams = ints_new();
+    builtins(bnames, bret, bfirst, bcount, bparams);
+
+    let diags = vec_new[Diag]();
+
+    // Records, in three stages before any signature. Names first, for the whole
+    // compilation, because a field's type may name a record declared later or in another
+    // module; then the field types; then the layouts those fields describe. `docs/spec.md`
+    // orders them and says why declaration order is not a dependency.
+    let rnames = strs_new();
+    let rowner = ints_new();
+    let rpub = ints_new();
+    let rat = ints_new();
+    let rnode = ints_new();
+    // What each entry is: a record, an enum, one of an enum's variants, a `Vec` or a type
+    // parameter. See `analyse.nz`, *an enum is a record whose fields are its variants*,
+    // and *generics*.
+    let rkind = ints_new();
+    let rfirst = ints_new();
+    let rcount = ints_new();
+    let rfname = strs_new();
+    let rftype = ints_new();
+    let rfat = ints_new();
+    let tb = new_table(rnames, rowner, rpub, rat, rnode, rkind, rfirst, rcount,
+            rfname, rftype, rfat);
+    let tmod = ints_new();
+    let tname = strs_new();
+    let trec = ints_new();
+    collect_records(nk, nar, nst, nen, ntx, naux, mstart, tb, kids, kid_first,
+            diags);
+    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath),
+            rnames, rowner, rpub, rat, tmod, tname, trec, diags);
+    resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first, tb,
+            tmod, tname, trec, diags);
+    check_ownership(tb, diags);
+    // The generic built-ins' `T` and `Vec[T]`, now that there is a table to hold them.
+    let bgen = ints_new();
+    generic_builtins(tb, bnames, bret, bparams, bgen);
+
+    // Signatures before any body, so a forward reference resolves — the same two-pass
+    // shape `nazm-lir::lower` uses, and for the same reason. The declared types go on the
+    // `fn` and `param` nodes as they are resolved, so those arrays exist first.
+    let nslot = ints_new();
+    let ntype = ints_new();
+    let ncallee = ints_new();
+    let nrec = ints_new();
+    // The types a node carries beyond its own: a function's type parameters, and what a
+    // generic call settled its callee's to — `[count, t1, …]` in `ntargs`, from
+    // `ntfirst[node]`.
+    let ntfirst = ints_new();
+    let ntargs = ints_new();
+    let fnames = strs_new();
+    let fret = ints_new();
+    let ffirst = ints_new();
+    let fcount = ints_new();
+    let fparams = ints_new();
+    let fowner = ints_new();
+    let fpub = ints_new();
+    let fgen = ints_new();
+    let fgc = ints_new();
+    collect_signatures(nk, nar, nst, nen, ntx, naux, kids, kid_first, mstart,
+            fnames, fret, ffirst, fcount, fparams, fowner, fpub, fgen, fgc, bnames, tb,
+            nrec, ntfirst, ntargs, tmod, tname, trec,
+            diags);
+
+    // What each module's imports bring in, and the collisions that creates. Nothing here
+    // for a one-module program, and it still runs: the pass is not conditional on there
+    // being more than one module.
+    let vmod = ints_new();
+    let vname = strs_new();
+    let vfn = ints_new();
+    check_imports(mfirst, mcount, mto, mat, strs_len(mpath), fnames, fowner, fpub,
+            vmod, vname, vfn, diags);
+
+    let entry = entry_point(fnames, fowner, diags);
+
+    check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee, nrec,
+            kids, kid_first, ints_len(nk) - 1,
+            mstart, mfirst, mcount, mto,
+            fnames, fret, ffirst, fcount, fparams,
+            fowner, fpub, vmod, vname, vfn,
+            bnames, bret, bfirst, bcount, bparams,
+            tb, fgen, fgc, bgen, ntfirst, ntargs,
+            tmod, tname, trec,
+            diags);
+
+    if vec_len(diags) > 0 {
+        return Result[Checked, Vec[Diag]].Err(error: diags);
+    }
+    Result[Checked, Vec[Diag]].Ok(value: Checked(nk: nk, nar: nar, nst: nst, nen: nen,
+            ntx: ntx, naux: naux, kids: kids, kid_first: kid_first, nslot: nslot,
+            ntype: ntype, ncallee: ncallee, nrec: nrec, ntfirst: ntfirst, ntargs: ntargs,
+            tb: tb, fnames: fnames, fret: fret, fowner: fowner, fgc: fgc, entry: entry))
 }
