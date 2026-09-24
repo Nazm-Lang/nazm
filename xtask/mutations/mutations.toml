@@ -2050,8 +2050,9 @@ the Nazm checker stops reporting `N0313`, so `continue; i = i + 10;` is accepted
 emitter compiles a statement the reference refuses — which is what it did until N10.1
 """
 file = "compiler/analyse.nz"
-find = """                    if ints_get(ncomp, child) == c_diverges() { left = 1; }"""
-replace = """                    if ints_get(ncomp, child) == 99 { left = 1; }"""
+find = """                    if vec_get(ncomp, child) == Completion.Diverges() { left = 1; }"""
+replace = """                    if vec_get(ncomp, child) != vec_get(ncomp, child) { left = 1; }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "a-value-that-never-arrives-has-no-type"
@@ -2092,10 +2093,12 @@ the same leak in the Nazm-written emitter, which the selfhost suite's reclamatio
 comparison is what catches
 """
 file = "compiler/emit.nz"
-find = """                                                                                            own_drop(out, next, owned, a, ot, rowns, otype);
+find = """                                                                                        if ot == t_str() {
+                                                                                            own_drop(out, next, owned, a, ot, rowns, otype);
                                                                                             own_drop(out, next, owned, b, ot, rowns, otype);
 """
-replace = """"""
+replace = """                                                                                        if ot == t_str() {
+"""
 
 
 # --- N10.2: a value, no value, and never finishing ---------------------------------------
@@ -2112,8 +2115,9 @@ the gap N10.2 closed, put back: a value position given nothing is not refused, s
 "no value" and "already reported" at once, and this is what that looked like
 """
 file = "compiler/analyse.nz"
-find = """    if ints_get(ncomp, node) == c_unit() {"""
-replace = """    if ints_get(ncomp, node) == 99 {"""
+find = """    if vec_get(ncomp, node) == Completion.Unit() {"""
+replace = """    if vec_get(ncomp, node) != vec_get(ncomp, node) {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "a-diverging-value-is-refused-as-no-value"
@@ -2123,8 +2127,9 @@ continue; } else { i })` is refused though it never produces a contradictory val
 N10.1 corpus, every case of it
 """
 file = "compiler/analyse.nz"
-find = """    if ints_get(ncomp, node) == c_unit() {"""
-replace = """    if ints_get(ncomp, node) != c_value() {"""
+find = """    if vec_get(ncomp, node) == Completion.Unit() {"""
+replace = """    if vec_get(ncomp, node) != Completion.Value() {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "an-if-with-no-else-leaves-instead-of-completing"
@@ -2134,10 +2139,11 @@ A value position given one is no longer refused, and a statement after one is re
 unreachable when the condition may simply be false
 """
 file = "compiler/analyse.nz"
-find = """                    ints_set(ncomp, k, c_unit());
+find = """                    vec_set(ncomp, k, Completion.Unit());
                     ints_push(ts, t_unknown());"""
-replace = """                    ints_set(ncomp, k, c_diverges());
+replace = """                    vec_set(ncomp, k, Completion.Diverges());
                     ints_push(ts, t_unknown());"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "a-continue-completes-with-nothing"
@@ -2148,9 +2154,10 @@ refused with `N0302` where the reference accepts it
 """
 file = "compiler/analyse.nz"
 find = """        if kind == n_continue() {
-            ints_set(ncomp, entry, c_diverges());"""
+            vec_set(ncomp, entry, Completion.Diverges());"""
 replace = """        if kind == n_continue() {
-            ints_set(ncomp, entry, c_unit());"""
+            vec_set(ncomp, entry, Completion.Unit());"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "a-then-branch-that-leaves-still-gives-the-type"
@@ -2207,8 +2214,8 @@ given its value arms' type, so one in a value position is not refused, and one i
 statement leaves the value arms' values on the emitter's stack
 """
 file = "compiler/analyse.nz"
-find = """if arm_c == c_unit() { fold = c_unit(); }"""
-replace = """if arm_c == 99 { fold = c_unit(); }"""
+find = """                                if arm_c == Completion.Unit() {"""
+replace = """                                if arm_c != arm_c {"""
 
 [[mutation]]
 name = "a-body-is-not-held-to-its-signature"
@@ -2217,8 +2224,8 @@ a function whose tail has the wrong type is accepted: `fn g() -> Int { "text" }`
 Nazm checker never compared the two before N10.2, and the reference always has
 """
 file = "compiler/analyse.nz"
-find = """if bc == c_value() {"""
-replace = """if bc == 99 {"""
+find = """if bc == Completion.Value() {"""
+replace = """if bc != bc {"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
@@ -2228,8 +2235,9 @@ a function whose body produces nothing is accepted, and returns whatever the emi
 leaves on its stack
 """
 file = "compiler/analyse.nz"
-find = """if bc == c_unit() {"""
-replace = """if bc == 99 {"""
+find = """if bc == Completion.Unit() {"""
+replace = """if bc != bc {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value" }]
 
 [[mutation]]
 name = "a-return-is-not-held-to-its-signature"
@@ -2327,9 +2335,9 @@ name = "a-type-parameter-may-be-compared"
 why = """
 an unconstrained `T` is given `==`, which not every type supports — the refusal that keeps a generic body to what every type can do
 """
-file = "crates/nazm-core/src/check.rs"
-find = "                    && !lt.is_param()"
-replace = ""
+file = "crates/nazm-sema/src/udt.rs"
+find = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str);"
+replace = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str | Type::Param(_));"
 killers = [{ package = "nazm-core", test = "generics", name = "a_type_parameter_supports_no_equality" }]
 
 [[mutation]]
@@ -2500,8 +2508,10 @@ why = """
 the **Nazm-written** checker gives an unconstrained `T` equality
 """
 file = "compiler/analyse.nz"
-find = "            if is_param(l) { ok = false; }"
-replace = ""
+find = """    if is_vec(t) { return true; }
+    if is_param(t) { return true; }"""
+replace = """    if is_vec(t) { return true; }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_equality" }]
 
 [[mutation]]
 name = "selfhost-substitutes-by-first-position"
@@ -3080,9 +3090,9 @@ the **Nazm-written** checker gives a block written as an expression a value what
 """
 file = "compiler/analyse.nz"
 find = """            if kind == n_blockexpr() {
-                ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first)));"""
+                vec_set(ncomp, k, vec_get(ncomp, ints_get(kids, first)));"""
 replace = """            if kind == n_blockexpr() {
-                ints_set(ncomp, k, c_value());"""
+                vec_set(ncomp, k, Completion.Value());"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_value_blocks" }]
 
 [[mutation]]
@@ -3092,10 +3102,10 @@ the **Nazm-written** checker treats a block expression that always leaves as pro
 """
 file = "compiler/analyse.nz"
 find = """            if kind == n_blockexpr() {
-                ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first)));"""
+                vec_set(ncomp, k, vec_get(ncomp, ints_get(kids, first)));"""
 replace = """            if kind == n_blockexpr() {
-                ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first)));
-                if ints_get(ncomp, k) == c_diverges() { ints_set(ncomp, k, c_unit()); }"""
+                vec_set(ncomp, k, vec_get(ncomp, ints_get(kids, first)));
+                if vec_get(ncomp, k) == Completion.Diverges() { vec_set(ncomp, k, Completion.Unit()); }"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_value_blocks" }]
 
 [[mutation]]
@@ -3306,3 +3316,321 @@ targets = [
     { package = "nazm-bench", test = "execution_boundary" },
     { package = "nazm-bench", test = "sandbox_lifecycle" },
 ]
+
+# --- N13: derived structural equality ------------------------------------------------------
+#
+# Each entry was written with the semantic test that observes it and carries the killer
+# `cargo xtask contained mutate --verify-killer` confirmed. The capability is derived in one
+# place per checker, run in one place per implementation, and these break each of them.
+
+[[mutation]]
+name = "n13-a-vec-has-equality"
+why = "`Vec[T]` is given `==`, which would have to mean the same storage or the same contents — the choice the language has not made"
+file = "crates/nazm-sema/src/udt.rs"
+find = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str);"
+replace = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str | Type::Vec(_));"
+killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
+
+[[mutation]]
+name = "n13-a-sequence-has-equality"
+why = "`Ints` and `Strs` are given `==`, for the same unmade choice"
+file = "crates/nazm-sema/src/udt.rs"
+find = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str);"
+replace = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str | Type::Ints | Type::Strs);"
+killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
+
+[[mutation]]
+name = "n13-a-chan-has-equality"
+why = "`Chan` is given `==`, exposing a channel's identity as a value"
+file = "crates/nazm-sema/src/udt.rs"
+find = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str);"
+replace = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str | Type::Chan);"
+killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
+
+[[mutation]]
+name = "n13-a-type-answers-for-its-first-component-only"
+why = "the capability walk looks at each definition's first field or payload field and no further, so `struct B { ok: Int, values: Vec[Int] }` compares"
+file = "crates/nazm-sema/src/udt.rs"
+find = """            stack.push((node, at + 1, pushed));
+            match TypeNode::of(ty) {"""
+replace = """            match TypeNode::of(ty) {"""
+killers = [{ package = "nazm-core", test = "equality", name = "a_record_has_equality_exactly_when_every_field_does" }]
+
+[[mutation]]
+name = "n13-an-enum-answers-for-its-first-variant-only"
+why = "the capability walk skips every variant after the first, so `enum Work { Empty, Values(value: Vec[Int]) }` compares — the flow-insensitive rule broken the way a value-based reading would break it"
+file = "crates/nazm-sema/src/udt.rs"
+find = """            stack.push((node, at + 1, pushed));
+            match TypeNode::of(ty) {"""
+replace = """            stack.push((node, at + 1, pushed));
+            if variant.is_some_and(|v| v > 0) {
+                continue;
+            }
+            match TypeNode::of(ty) {"""
+killers = [{ package = "nazm-core", test = "equality", name = "an_enum_has_equality_only_when_every_variant_does" }]
+
+[[mutation]]
+name = "n13-a-nested-type-is-not-walked"
+why = "a record or enum inside another is taken to compare without looking inside it, so `struct D { inner: B }` compares when `B` does not"
+file = "crates/nazm-sema/src/udt.rs"
+find = """                    path.extend(names);
+                    stack.push((inner, 0, n));
+                }
+                None if leaf(ty) => {}"""
+replace = """                    let _ = (names, n);
+                }
+                None if leaf(ty) => {}"""
+killers = [{ package = "nazm-core", test = "equality", name = "a_type_without_equality_anywhere_inside_blocks_the_whole" }]
+
+[[mutation]]
+name = "n13-two-types-of-one-shape-compare"
+why = "the same-type requirement is dropped: `A(x: 1) == B(x: 1)` is accepted for two records of one shape — structural cross-nominal equality"
+file = "crates/nazm-core/src/check.rs"
+find = "            BinOp::Eq | BinOp::NotEq => lt == rt && self.res.types().equality(lt).is_ok(),"
+replace = "            BinOp::Eq | BinOp::NotEq => self.res.types().equality(lt).is_ok(),"
+killers = [{ package = "nazm-core", test = "equality", name = "two_types_of_one_shape_are_never_compared" }]
+
+[[mutation]]
+name = "n13-a-refusal-names-no-component"
+why = "the refusal stops naming the field path that blocks equality, so `Outer` is refused without saying `inner.values` is why"
+file = "crates/nazm-core/src/check.rs"
+find = "            let detail = if let Some(why) = blocked.filter(|w| !w.path.is_empty()) {"
+replace = "            let detail = if let Some(why) = blocked.filter(|w| w.path.is_empty()) {"
+killers = [{ package = "nazm-core", test = "equality", name = "a_refusal_names_the_component_that_has_no_equality" }]
+
+[[mutation]]
+name = "n13-interpreted-records-compare-their-first-field-only"
+why = "the interpreter compares a record's first field and stops, so `Point(x: 1, y: 2) == Point(x: 1, y: 9)`"
+file = "crates/nazm-core/src/eval.rs"
+find = """        for (x, y) in xs.iter().zip(ys) {
+            if !equal(x, y)? {
+                return Some(false);
+            }
+        }
+        Some(true)"""
+replace = """        match (xs.first(), ys.first()) {
+            (Some(x), Some(y)) => equal(x, y),
+            _ => Some(true),
+        }"""
+killers = [{ package = "nazm-core", test = "equality", name = "a_record_is_equal_when_every_field_is" }]
+
+[[mutation]]
+name = "n13-interpreted-variants-are-not-compared"
+why = "the interpreter compares payloads without first comparing variants, so `Left(n: 1) == Right(n: 1)`"
+file = "crates/nazm-core/src/eval.rs"
+find = """            if x.variant != y.variant {
+                return Some(false);
+            }"""
+replace = ""
+killers = [{ package = "nazm-core", test = "equality", name = "an_enum_compares_its_variant_and_then_that_variant_s_payload" }]
+
+[[mutation]]
+name = "n13-interpreted-inequality-is-not-the-negation"
+why = "`!=` answers what `==` answers — a second relation that drifted from the first"
+file = "crates/nazm-core/src/eval.rs"
+find = "            (BinOp::NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(false))),"
+replace = "            (BinOp::NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(true))),"
+killers = [{ package = "nazm-core", test = "equality", name = "a_record_is_equal_when_every_field_is" }]
+
+[[mutation]]
+name = "n13-interpreted-strings-compare-by-length"
+why = "the primitive `Str` law changes: two strings of one length are equal whatever their bytes"
+file = "crates/nazm-core/src/eval.rs"
+find = "        (Value::Str(x), Value::Str(y)) => Some(x.bytes() == y.bytes()),"
+replace = "        (Value::Str(x), Value::Str(y)) => Some(x.len() == y.len()),"
+killers = [{ package = "nazm-core", test = "equality", name = "primitive_equality_is_what_it_was" }]
+
+[[mutation]]
+name = "n13-native-records-compare-their-first-field-only"
+why = "the native record helper compares the first field in layout order and returns"
+file = "crates/nazm-lir/src/emit.rs"
+find = "                for (at, fty) in fields.into_iter().enumerate() {"
+replace = "                for (at, fty) in fields.into_iter().enumerate().take(1) {"
+killers = [{ package = "nazm-cli", test = "equality", name = "record_equality_compiles_to_the_interpreter_s_answer" }]
+
+[[mutation]]
+name = "n13-native-tags-are-not-compared"
+why = "the native enum helper dispatches on the left operand's variant without comparing it to the right's, so `None == Some(value: 0)`"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                let _ = writeln!(
+                    self.out,
+                    "  br i1 %{same}, label %{dispatch}, label %{differ}"
+                );"""
+replace = """                let _ = (same, &differ);
+                let _ = writeln!(self.out, "  br label %{dispatch}");"""
+killers = [{ package = "nazm-cli", test = "equality", name = "enum_equality_compiles_to_the_interpreter_s_answer" }]
+
+[[mutation]]
+name = "n13-native-a-zero-payload-variant-is-unequal-to-itself"
+why = "the native enum helper's `switch` default — the variants that carry nothing — answers false, so `None == None` is false"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                let _ = writeln!(self.out, "  switch i64 %{ta}, label %{equal} [ {table} ]");"""
+replace = """                let _ = writeln!(self.out, "  switch i64 %{ta}, label %{differ} [ {table} ]");"""
+killers = [{ package = "nazm-cli", test = "equality", name = "enum_equality_compiles_to_the_interpreter_s_answer" }]
+
+[[mutation]]
+name = "n13-native-arms-follow-another-order"
+why = "the native enum helper numbers its arms in reverse of canonical tag order, so a variant is compared through another's slot"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                let arms: Vec<(u32, VariantLayout, String)> = variants
+                    .into_iter()
+                    .enumerate()"""
+replace = """                let arms: Vec<(u32, VariantLayout, String)> = variants
+                    .into_iter()
+                    .rev()
+                    .enumerate()"""
+killers = [{ package = "nazm-cli", test = "equality", name = "enum_equality_compiles_to_the_interpreter_s_answer" }]
+
+[[mutation]]
+name = "n13-native-inequality-is-not-negated"
+why = "native `!=` on a record or an enum calls the helper and does not negate it"
+file = "crates/nazm-lir/src/emit.rs"
+find = "                    let out = if *op == crate::ir::CmpOp::NotEq {"
+replace = "                    let out = if false {"
+killers = [{ package = "nazm-cli", test = "equality", name = "record_equality_compiles_to_the_interpreter_s_answer" }]
+
+[[mutation]]
+name = "n13-native-the-left-temporary-leaks"
+why = "the left operand of a native record or enum comparison is not released, so `make() == make()` leaks its strings"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                    self.drop_temporary(a, *operand_ty);
+                    self.drop_temporary(b, *operand_ty);
+                    return Val::Of {"""
+replace = """                    self.drop_temporary(b, *operand_ty);
+                    return Val::Of {"""
+killers = [{ package = "nazm-cli", test = "equality", name = "owning_temporaries_live_through_the_comparison_and_are_released_once" }]
+
+[[mutation]]
+name = "n13-native-the-right-temporary-leaks"
+why = "the right operand of a native record or enum comparison is not released"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                    self.drop_temporary(a, *operand_ty);
+                    self.drop_temporary(b, *operand_ty);
+                    return Val::Of {"""
+replace = """                    self.drop_temporary(a, *operand_ty);
+                    return Val::Of {"""
+killers = [{ package = "nazm-cli", test = "equality", name = "owning_temporaries_live_through_the_comparison_and_are_released_once" }]
+
+# Retired by N13, 2026-09-25: `n13-native-operands-are-released-before-they-are-compared`
+# moved the two `drop_temporary` calls above the equality helper's call, so the helper reads
+# operands whose storage was just freed. Campaign 418a5e5921b866cc: SURVIVED, the workspace
+# suite passing last. Investigated, not equivalent in intent — it is a use-after-free — but
+# unobservable here: nothing allocates between the release and the read, so the freed
+# bytes are unchanged and every answer and every memory counter is right. glibc 2.41 in the
+# contained image ignores `MALLOC_PERTURB_` and `glibc.malloc.perturb` (measured with a
+# C probe), and a sanitizer is a framework this project does not use. Observing it needs
+# freed storage poisoned by the runtime itself; until something does, an entry that can
+# only survive is not evidence.
+
+[[mutation]]
+name = "n13-native-helper-names-omit-type-arguments"
+why = "a native equality helper is named by its definition's source name, so `Box[Int]` and `Box[Str]` claim one symbol"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                record_layout(self.types.records, id).map(|l| l.name.as_str().to_owned())"""
+replace = """                record_layout(self.types.records, id).map(|l| l.source.split('[').next().unwrap_or("").to_owned())"""
+killers = [{ package = "nazm-cli", test = "equality", name = "a_helper_is_named_by_the_type_s_durable_identity_and_its_arguments" }]
+
+[[mutation]]
+name = "n13-selfhost-a-vec-has-equality"
+why = "the **Nazm-written** checker gives `Vec[T]` equality"
+file = "compiler/analyse.nz"
+find = """    if t == t_chan() { return true; }
+    if is_vec(t) { return true; }"""
+replace = """    if t == t_chan() { return true; }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_equality" }]
+
+[[mutation]]
+name = "n13-selfhost-a-chan-has-equality"
+why = "the **Nazm-written** checker gives `Chan` equality"
+file = "compiler/analyse.nz"
+find = """    if t == t_chan() { return true; }
+    if is_vec(t) { return true; }"""
+replace = """    if is_vec(t) { return true; }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_equality" }]
+
+[[mutation]]
+name = "n13-selfhost-a-nested-type-is-not-walked"
+why = "the **Nazm-written** checker takes a record or enum inside another to compare without looking inside it"
+file = "compiler/analyse.nz"
+find = """                if contains(seen, record_of(ft)) == false {
+                    ints_push(seen, record_of(ft));"""
+replace = """                if false {
+                    ints_push(seen, record_of(ft));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_equality" }]
+
+[[mutation]]
+name = "n13-selfhost-two-types-of-one-shape-compare"
+why = "the **Nazm-written** checker drops the same-type requirement for `==`"
+file = "compiler/analyse.nz"
+find = "            if agrees(l, r) == false { ok = false; }"
+replace = ""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_equality" }]
+
+[[mutation]]
+name = "n13-selfhost-tags-are-not-compared"
+why = "the **Nazm-written** emitter's enum helper dispatches on the left operand's variant without comparing tags"
+file = "compiler/emit.nz"
+find = """        add_line(out, str_concat(str_concat("  br i1 ", v(same)), ", label %bsw, label %bne"));"""
+replace = """        add_line(out, "  br label %bsw");"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
+
+[[mutation]]
+name = "n13-selfhost-a-zero-payload-variant-is-unequal-to-itself"
+why = "the **Nazm-written** emitter's enum helper answers false through the `switch` default"
+file = "compiler/emit.nz"
+find = """                str_concat(", label %beq [ ", str_concat(table, "]"))));"""
+replace = """                str_concat(", label %bne [ ", str_concat(table, "]"))));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
+
+[[mutation]]
+name = "n13-selfhost-the-wrong-slot-is-compared"
+why = "the **Nazm-written** emitter's enum helper reads the right operand's payload from the next variant's slot"
+file = "compiler/emit.nz"
+find = """                    str_concat(" %b, ", int_to_str(at + 1)))));"""
+replace = """                    str_concat(" %b, ", int_to_str(at + 2)))));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
+
+[[mutation]]
+name = "n13-selfhost-records-compare-their-first-field-only"
+why = "the **Nazm-written** emitter's record helper compares the first field in layout order and stops"
+file = "compiler/emit.nz"
+find = """            equal_or_leave(out, current, live, next, c);
+            pos = pos + 1;"""
+replace = """            equal_or_leave(out, current, live, next, c);
+            pos = pos + ints_get(rcount, r);"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
+
+[[mutation]]
+name = "n13-selfhost-inequality-is-not-negated"
+why = "the **Nazm-written** emitter's `!=` on a record or an enum calls the helper and does not negate it"
+file = "compiler/emit.nz"
+find = "    if negate == false { return same; }"
+replace = "    if negate == negate { return same; }"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
+
+[[mutation]]
+name = "n13-selfhost-compared-temporaries-leak"
+why = "the **Nazm-written** emitter releases neither operand of a record or enum comparison"
+file = "compiler/emit.nz"
+find = """                                                                                        if is_record(ot) {
+                                                                                            own_drop(out, next, owned, a, ot, rowns, otype);
+                                                                                            own_drop(out, next, owned, b, ot, rowns, otype);
+                                                                                        }"""
+replace = ""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics" }]
+
+[[mutation]]
+name = "n13-dogfood-a-unit-arm-defers-like-a-diverging-one"
+why = "the dogfooded completion fold lets the arm after a `Unit` one replace it, as only a diverging one may — so a `match` of an arm with no value and one with a value is taken to have a value"
+file = "compiler/analyse.nz"
+find = "                            if so_far == Completion.Diverges() {"
+replace = "                            if so_far == Completion.Unit() {"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_value_blocks" }]
+
+[[mutation]]
+name = "n13-dogfood-the-first-arm-is-always-a-value"
+why = "the dogfooded completion fold starts from `Value` whatever the first arm completes with, so a `match` whose arms all leave is taken to produce one"
+file = "compiler/analyse.nz"
+find = "                        Option.None() => { fold = Option[Completion].Some(value: arm_c); },"
+replace = "                        Option.None() => { fold = Option[Completion].Some(value: Completion.Value()); },"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_value_blocks" }]
