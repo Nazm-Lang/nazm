@@ -596,6 +596,34 @@ executables byte-identical once the linker UUID is removed and the runnable form
 conformance cases (12 of them multi-module) and 19 refusals agreeing across C2, C3 and the
 reference, at 12,412 source lines.
 
+### A type parameter that requires equality — N14, 2026-09-25
+
+*The parser.* `T: Equality` is written into the parameter list's text after the parameter's
+position — `[T@5=Equality@8]` — where every existing reader of that text stops, and the
+reference parse-tree dump carries it the same way, so parser parity covers it.
+
+*The checker.* The table's new `req` column marks a parameter whose declaration requires
+equality; `has_no_equality` reads it for a parameter, which is the reference's single
+assumption point; `check_generic_call` checks every argument by `equality_blocker` and reports
+`N0364` at the reference's spans; an unknown capability is `N0365` and a requirement on a
+record's or enum's parameter `N0101`. The emitter needed no change: instances are concrete.
+
+*Dogfood:* none. The compiler has no generic helper that needs a capability — its searches are
+over `Ints` and `Strs` — and none was invented.
+
+**What the chain now carries.** `compiler/conformance/requirements.nz` — bounded bodies at
+`Int`, `Str`, a record, an enum, `Box[T]`, `Option[T]`, `Result[T, E]`, and a forwarded call —
+a module case that calls and forwards to an imported bounded function, including a
+`count_same[T: Equality]` over a `Vec[T]`, and six refusals: an unconstrained `T` compared
+(`N0304`), a `Vec`, a `Chan` and an `Option[Vec[Int]]` holding `None` given to a bounded
+parameter, an unconstrained wrapper forwarding (`N0364`), and two bounded parameters compared
+(`N0304`).
+
+**The digest moved an eleventh time**: `76598c43…` (N13) → `0e1a40e6…`. `ir: identical`,
+executables byte-identical once the linker UUID is removed and the runnable forms too, 32
+conformance cases (13 of them multi-module) and 25 refusals agreeing across C2, C3 and the
+reference, at 12,543 source lines.
+
 ## 6. Reproducing it
 
 ```sh

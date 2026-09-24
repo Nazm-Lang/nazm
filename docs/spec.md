@@ -798,8 +798,10 @@ language supports: it may be bound, copied by its own law, passed, returned, sto
 field or a payload of a generic type, pushed into a `Vec[T]` and taken out of one. It may
 **not** be added, ordered, compared with `==` (`N0304`), projected (`N0335`), matched
 (`N0342`), used as a condition (`N0301`) or passed to a task (`N0321`), because none of those
-is valid for every type — and the language has no constraint that could say "for these
-types only". `fn equal[T](a: T, b: T) -> Bool { a == b }` is refused at its definition.
+is valid for every type. `fn equal[T](a: T, b: T) -> Bool { a == b }` is refused at its
+definition. Since N14 one constraint exists: a parameter declared `T: Equality` may be
+compared with `==` — *A type parameter may require equality* owns it. Nothing else can be
+required, so the rest of this list is unchanged.
 
 #### Calling a generic function
 
@@ -1087,11 +1089,13 @@ compared cannot be compared at all: given `enum Work { Empty, Values(value: Vec[
 is not known and a guarantee about a type is about every one of its values. This is the
 rule task safety follows, for the same reason.
 
-**Generic bodies are unchanged.** A concrete `Box[Int]` compares, and
+**Generic bodies need a requirement.** A concrete `Box[Int]` compares, and without one
 `fn same[T](a: T, b: T) -> Bool { a == b }` is still refused at its definition, as is
 `fn same_box[T](a: Box[T], b: Box[T]) -> Bool { a == b }`: inside the body `Box[T]` has a
 field of an unconstrained type, so it has no equality either. Nothing is inferred, deferred to
-an instantiation, or accepted because some caller would pass a comparable type.
+an instantiation, or accepted because some caller would pass a comparable type. *(N14: a
+definition that declares `T: Equality` may compare both — see* A type parameter may require
+equality *below.)*
 
 **`Option` and `Result` have no rule of their own.** They are the core prelude's ordinary
 generic enums, so `Option[Int]` and `Result[Int, Str]` compare and `Option[Vec[Int]]` does
@@ -1112,6 +1116,44 @@ customisable: a type cannot define its own `==`. Not identity: no value's addres
 handle is compared. Not ordering: `< <= > >=` remain `Int`-only. Not hashing. And not
 defined on sequences, vectors or channels, deliberately, by the rule that stops a record
 containing one from comparing.
+
+### A type parameter may require equality
+
+Settled by N14, 2026-09-25. A generic function may state that one of its type parameters
+ranges only over types that have equality:
+
+```nazm
+fn same[T: Equality](a: T, b: T) -> Bool {
+    a == b
+}
+```
+
+**The law.** A type parameter may carry an explicit equality requirement, written
+`T: Equality`. Inside that definition the parameter has built-in equality, and so does every
+composite whose equality derives from it by the rule above — `Box[T]`, `Option[T]`,
+`Result[T, E]` when both `T` and `E` require it. Every type argument, written or inferred,
+must satisfy the requirement by the same rule: a concrete type satisfies it exactly when it
+has equality, and a caller's own type parameter exactly when *its* declaration requires it.
+Requirements are checked statically, and they create no user-defined equality: `==` means
+what *Equality is derived* says it means, for every type, with or without one.
+
+| | |
+| --- | --- |
+| **Syntax** | `[T: Equality]` — one requirement per parameter, no list. `Equality` is the only one. It is not a type and nothing declares it: it means something only after the `:`, so no record, enum or import can shadow it, and a record named `Equality` is an ordinary record |
+| **Identity** | A requirement belongs to the parameter — its owner and position — never to its name. Renaming `T` changes nothing, in the program or in its interface |
+| **The body** | Checked once, against what the requirements guarantee. Nothing is inferred from what the body does: an unconstrained `T` still has no equality, and `fn same[T](a: T, b: T) -> Bool { a == b }` is still refused (`N0304`) |
+| **The arguments** | Each is checked when the call is: written or inferred, `N0364` names the argument and the component responsible. `same(v, v)` for a `Vec[Int]`, `same(Work.Empty(), …)` for an enum with a `Vec` in any variant, and `same(o, o)` for an `Option[Vec[Int]]` holding `None` are all refused — a requirement is satisfied by a type, never by a value |
+| **Forwarding** | A generic caller may pass its own parameter to a bounded callee only if its own declaration requires the same: `fn wrap[T: Equality](a: T, b: T) -> Bool { same(a, b) }` is accepted, the same without `: Equality` is `N0364` |
+| **Nominality** | Unchanged. Two parameters that both require equality are still two types, and `a: A == b: B` is refused |
+| **Where** | Only on a function's parameters. A requirement on a record's or an enum's parameter is refused (`N0101`, not supported yet) rather than parsed and ignored |
+| **Interfaces** | A public function's requirements are part of what it offers. They are persisted by position (`nazm.interface/5`), an importer is held to them when checking against the interface alone, and adding or removing one moves the interface's fingerprint |
+| **At run time** | Nothing. A requirement is a fact for the checker: no dictionary, no descriptor and no test is emitted, and an instance of `same` at `Int` is the same instructions as a hand-written `same_int` |
+
+**What this is not.** Not a trait: there is no declaration of a capability, no `impl`, no
+method, and nothing a program can implement or override. Not an inference: the requirement is
+written where the parameter is declared, so a body edit cannot change which callers are
+valid. Not a second equality: a bound proves that an operand's type is in `==`'s domain and
+says nothing about what `==` does there.
 
 ## Settled for v0.2 — mutation and iteration
 

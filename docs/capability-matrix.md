@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,291 passed, 0 failed, 13 ignored, across 65 suites**, run contained at
-N13 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
-13 passed, contained). N12.2 ended at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,317 passed, 0 failed, 13 ignored, across 67 suites**, run contained at
+N14 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
+13 passed, contained). N13 ended at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -343,9 +343,35 @@ implementation.
 | equality over a constrained type parameter | absent — no constraint mechanism |
 | custom (user-defined) equality | absent |
 
-Six constructs are verified rather than partial: **records**, **closed enums**,
+*N14, 2026-09-25.* **A type parameter may require equality.** `fn same[T: Equality](a: T,
+b: T) -> Bool { a == b }` is accepted, the same without `: Equality` is still refused, and
+every argument — written or inferred, concrete or a caller's own parameter — is checked
+against the requirement by N13's one derivation, which now reads a required parameter as
+having equality. So `Box[T]`, `Option[T]` and `Result[T, E]` with both required compare
+inside a bounded body, `Vec[Int]` and `Option[Vec[Int]]` never satisfy it, and an
+unconstrained wrapper cannot forward to a bounded callee. One compiler-owned capability,
+`Equality`, on function parameters only; nothing is emitted at run time. Codes `N0364`,
+`N0365`; `SEMANTIC_EPOCH` 6 → 7 and the interface schema `/4` → `/5`, which persists each
+export's required positions. 14 tests in `crates/nazm-core/tests/constraints.rs` with code
+and span, 3 native ones in `crates/nazm-cli/tests/constraints.rs`, interface-only and cache
+cases in `durable_identity.rs` and `incremental.rs`, and
+`the_nazm_checker_agrees_with_the_reference_on_requirements` comparing both checkers on 23
+programs by code **and** span. `docs/spec.md`, *A type parameter may require equality*, is
+the law; `architecture.md` §7.16 is the implementation.
+
+| | status |
+| --- | --- |
+| first-order generics | VERIFIED |
+| a generic parameter that requires the built-in equality capability | VERIFIED |
+| a requirement on a record's or an enum's parameter | refused (`N0101`), deferred |
+| any other capability, user-defined traits, `impl`, methods | absent |
+| custom equality, sequence or channel equality, ordering, hashing | absent |
+| higher kinds, const generics, specialisation | absent |
+
+Seven constructs are verified rather than partial: **records**, **closed enums**,
 **exhaustive variant match**, **first-order generics with `Vec[T]`**, **typed `Result`
-propagation** and **derived structural equality**. What surrounds them is not. Typed errors are **not** effects: a `Result` in a
+propagation**, **derived structural equality** and **equality-requiring type parameters**.
+None of that is a trait system, and this row does not say it is. What surrounds them is not. Typed errors are **not** effects: a `Result` in a
 signature is a return type, and area 5 is unchanged.
 
 **Limitation** · Generics are unconstrained: no traits, no constraints, no methods or
@@ -353,9 +379,9 @@ signature is a return type, and area 5 is unchanged.
 methods and no conversion between error types, and `main` cannot return one; no higher kinds, const generics, defaults, variance or specialisation; no
 indexing syntax on a `Vec`; no `spawn` of a generic function. No closures or function
 values, no unit type, no `Never`.
-Equality cannot be abstracted over: `fn same[T](a: T, b: T)` is refused, and so is
-`fn same_box[T](a: Box[T], b: Box[T])`, while a concrete `Box[Int]` compares — nothing can
-say "`T` has equality". No ordering, hashing or custom equality on any user type, and no
+Equality is the only thing a generic definition can require of `T` (N14): nothing can say
+"`T` can be ordered", "hashed" or "passed to a task", and no program can declare a
+capability of its own. No ordering, hashing or custom equality on any user type, and no
 equality at all on a sequence, a `Vec` or a `Chan`. No field-level or per-variant visibility, no
 default field values, no record update syntax. The pattern language is variant selection
 with named payload bindings and `_` — no top-level wildcard arm, no guards, no or-patterns,
@@ -366,13 +392,11 @@ in N10, for the same reason `print` did in B3 — a reserved word earns its plac
 something absent. *Until N11 this said neither a record nor an enum could be put in a
 sequence; `Vec[T]` holds either.*
 
-**Next dependency** · A way for a generic definition to require a capability of its
-parameter — constrained generics — which is the one thing N13 found equality cannot do
-without: a concrete `Box[Int]` compares and a generic body over `Box[T]` cannot say it
-wants one that does (`research-register.md`, *Derived equality composes; abstraction over
-it does not*). *Until N13 this named equality on user types, which N13 added and the
-compiler's completion states now use; until N12 it named typed errors; until N12.1 blocks
-as values in the native backends.*
+**Next dependency** · None forced by a program yet. N14's requirement covered the need N13
+exposed with one built-in capability, and its dogfood found no compiler code that wanted
+another (`research-register.md`, N14). *Until N14 this named constrained generics, which N14
+added for equality; until N13 equality on user types; until N12 typed errors; until N12.1
+blocks as values in the native backends.*
 
 **Accepted when** · Chosen by the milestone that needs it, not by completeness.
 
@@ -1195,8 +1219,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **266** catalogued defects (158 when
-this sentence was first written, 233 at N12.2), **77** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **288** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13), **99** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -1431,6 +1455,20 @@ candidate killers were refuted by verification and not used. The whole catalogue
 re-run: N13 did not change the harness, and the two open MUTANT CRASH entries were not
 reached by it.
 
+*N14 (2026-09-25) added twenty-two and repointed six,* each with its test and a killer
+verified by `--verify-killer` (27 of 27 verified). They break the body rule (a requirement
+ignored, never recorded, keyed by position across owners), what may be written (any name a
+capability, a record's parameter allowed), the call (arguments never checked, only the first,
+written or inferred ones skipped, a caller's parameter always satisfying), the interface (a
+requirement not published, not read back, not validated, the schema or the epoch left
+behind), the parser, and the Nazm-written parser and checker. **Campaign
+`05f7bfb4d7869a2d`, targeted, one session, 1,025 s:** the 22 new, the 6 repointed, and 12
+existing entries on the code N14 changed or beside it — among them N13's four capability-walk
+and nominality mutants, because N14 changed that walk's leaf rule. **40 of 40 caught**, 36 at
+tier 1 and 4 at tier 2; no survivor, nothing unusable or unapplied, no crash, no timeout; the
+workspace suite never ran. N14 did not touch the native equality code, so N13's known
+use-after-free survivor was not re-run and stays as it was: live, SURVIVED, no killer.
+
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a
 verdict it could not get); N12.1's process-group kills used `kill -KILL -<pgid>`, which
@@ -1514,6 +1552,14 @@ itself: a node's completion is an `enum Completion` in a `Vec[Completion]` rathe
 multi-module (one compares an imported record, enum and `Option[Point]`), and 19 refusals,
 seven of them equality's. The fixpoint moved to `76598c43…` at 12,412 source lines,
 runnable executables byte-identical too.
+
+**Since N14** the compiler written in Nazm parses `T: Equality`, records it on the parameter's
+entry, reads it in the one place equality is derived, and checks every call's type arguments
+against it at the reference's spans. The corpus has 32 cases, 13 of them multi-module (one
+calls and forwards to an imported bounded function, including a `count_same[T: Equality]`
+over a `Vec[T]`), and 25 refusals, six of them requirements'. No compiler code uses a
+requirement: the audit found none that needs one. The fixpoint moved to `0e1a40e6…` at 12,543
+source lines, runnable executables byte-identical too.
 
 **Next dependency** · None.
 
