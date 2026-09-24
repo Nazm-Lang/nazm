@@ -287,6 +287,25 @@ states were three integers in an `Ints`, with a fourth meaning "no arm yet", and
 written: the invalid state they simulated is not a value of the type. Performance moved
 within noise (`performance.md`). Status unchanged.
 
+### N14 let a generic definition require equality, 2026-09-25. Status: still **SUPPORTED, not VERIFIED**.
+
+**One built-in capability requirement solved the abstraction N13 could not express.**
+`fn same_box[T: Equality](a: Box[T], b: Box[T])` is valid, and nothing new was needed to make
+it so beyond recording which parameters require equality: N13's single derivation, reading a
+required parameter as having equality, gives `Box[T]`, `Option[T]` and `Result[T, E]` their
+answers under the body's assumptions, and the same derivation checks every argument at the
+call. No solver, no implication graph, no dictionary, no runtime cost — an instance at `Int`
+is the instructions a hand-written `same_int` is.
+
+**What it did not expose is a need for user-defined traits.** Nothing in N14's
+implementation reached for one, and its dogfood audit found no generic helper in the
+compiler that needed any capability at all: the compiler's membership searches are over
+`Ints` and `Strs`, not `Vec[T]`, and the `Vec`s it has are never searched. So the evidence
+says the immediate need was a *built-in* capability requirement, and that a full trait system
+is **not yet justified** by any program here — the next one would have to be forced by code
+that needs behaviour the language cannot derive (an ordering it has not chosen, a conversion
+between error types), not by the symmetry of having one bound.
+
 ---
 
 ## R2 · Content-addressed semantic IR pays for itself

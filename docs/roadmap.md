@@ -370,6 +370,45 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N14, in dependency order
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| **A lossless CST** | nothing above | still independent, still the last AI-native item, and now the largest item nothing blocks |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | N14 covered the one abstraction a program needed with a built-in requirement, and its dogfood found no code wanting another. The next capability should be forced by code that needs behaviour the language cannot derive — an ordering, a conversion between error types — not by the symmetry of having one bound |
+| A requirement on a record's or an enum's parameter | a requirement ✓ | refused today; would need every instance checked wherever it is written, and no program needs it |
+| Cross-unit inlining of generic instances | native units ✓ | measured by N14: an instance lives in its own unit, so `same[Int]` costs a call a hand-written `same_int` does not (`performance.md`) — with or without a requirement |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+| A compact enum representation | variants ✓, `Vec[T]` ✓ | unchanged |
+| Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
+
+**Recommended next: a lossless CST** — the item nothing blocks and nothing has displaced, now
+that the equality wall is gone. Not traits: no program here yet needs user-defined behaviour
+abstraction, and N14's evidence is that the built-in requirement met the need N13 exposed.
+
+### N14 — A type parameter may require equality — **complete, 2026-09-25**
+
+`fn same[T: Equality](a: T, b: T) -> Bool { a == b }` is valid; without `: Equality` it is
+still refused. Every argument, written or inferred, concrete or a caller's own parameter, is
+checked against the requirement by N13's one derivation, so `Box[T]`, `Option[T]` and
+`Result[T, E]` with both required compare in a bounded body and `Vec[Int]` never satisfies it.
+
+| Settled | Where |
+| --- | --- |
+| the rule, one built-in capability, functions only, statically checked | `docs/spec.md`, *A type parameter may require equality* |
+| one set of required parameters, read by N13's derivation and nowhere else | `crates/nazm-sema/src/udt.rs`, `generic.rs`, `architecture.md` §7.16 |
+| call satisfaction, forwarding, `N0364`/`N0365` | `crates/nazm-core/src/check.rs` |
+| `nazm.interface/5`, requirements persisted by position; `SEMANTIC_EPOCH` 6 → 7 | `crates/nazm-iface/src/wire.rs`, `crates/nazm-cache/src/identity.rs` |
+| nothing at run time | `crates/nazm-cli/tests/constraints.rs` |
+| the same rule in the compiler written in Nazm; a new fixpoint, `0e1a40e6…` | `compiler/`, `bootstrap.md` |
+
+Mutation evidence: 22 new and 6 repointed, 27 killers verified; one targeted campaign of 40 —
+40 caught (36 at tier 1, 4 at tier 2), no survivor (`capability-matrix.md` §30). No honest
+dogfood candidate: the compiler has no generic helper that needs a capability.
+
+**N15 has not started.**
+
 ### After N13, in dependency order
 
 | | Depends on | Why not before |
@@ -382,7 +421,7 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | A lossless CST | nothing above | unchanged; still independent |
 
 **Recommended next: constrained generics** — recommended from N13's evidence, not
-committed to. The alternatives are unchanged and smaller: a lossless CST, and
+committed to. *N14 took it (above).* The alternatives are unchanged and smaller: a lossless CST, and
 `nazm explain-cost`.
 
 ### N13 — Derived structural equality — **complete, 2026-09-25**
@@ -408,7 +447,7 @@ targeted campaign of 58 — 57 caught (45 at tier 1, 12 at tier 2, none at tier 
 genuine survivor, a use-after-free no supported configuration can observe, kept live as a
 known limitation (`capability-matrix.md` §30).
 
-**N14 has not started.**
+*N14 followed it (above).*
 
 ### N12.2 — Mutation harness v2 — **complete, 2026-09-25**
 

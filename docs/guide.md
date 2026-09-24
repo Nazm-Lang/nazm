@@ -188,8 +188,9 @@ Six things to know, and then you know generics:
 
 - **A generic function is checked once, for every `T` at once.** So its body can only do
   what every type can: bind a `T`, pass it, return it, store it, push it into a `Vec[T]`.
-  It cannot add two `T`s, compare them with `==`, read a field of one or pass one to a task
-  — there is no way to say "only for types that can", so none of those is offered.
+  It cannot add two `T`s, read a field of one or pass one to a task — there is no way to say
+  "only for types that can", so none of those is offered. Comparing two `T`s with `==` is the
+  one exception, and only when the function declares `T: Equality` (see *Equality*).
 - **A call's type arguments come from its arguments, or you write them.** `or_else(m, 0)`
   works out `T` from `m`; `vec_new[Int]()` has no argument to work it out from, so it is
   written. What the result is *used for* never decides it.
@@ -227,9 +228,24 @@ contain; there is nothing to declare:
   same rule.
 - **Not comparable:** `Vec[T]`, `Ints`, `Strs` and `Chan`, anything that contains one, and an
   unconstrained `T` inside a generic function — `fn same[T](a: T, b: T) -> Bool { a == b }`
-  is refused, because nothing can say "only for types that have `==`".
+  is refused, because `T` might be any of those. Declaring the requirement is the way out.
 
-`docs/spec.md`, *Equality is derived*, has the full rule.
+A generic function that needs `==` on `T` **says so** where `T` is declared:
+
+```nazm
+fn same[T: Equality](a: T, b: T) -> Bool { a == b }
+```
+
+Inside it `T` can be compared, and so can `Box[T]` or `Option[T]`. Every caller must pass a
+type that has equality — `same(1, 2)`, `same(Point(…), Point(…))` and `same(Box[Int](…), …)`
+are fine, `same(v, v)` for a `Vec[Int]` is refused, and so is an `Option[Vec[Int]]` even when
+it holds `None`. A generic caller can pass its own `T` on only if its `T` says
+`: Equality` too. `Equality` is the only requirement there is, it adds nothing at run time —
+the compiled `same` at `Int` is the same code as one written for `Int` — and it is not a way
+to define your own `==`: what `==` means is still worked out from the type.
+
+`docs/spec.md`, *Equality is derived* and *A type parameter may require equality*, have the
+full rules.
 
 ## Errors as values: `Result`, `Option`, and `?`
 
@@ -357,7 +373,8 @@ accepts.
 | `program` | `{ use_item } , { function \| record \| enumeration }` |
 | `use_item` | `"use" , STRING , ";"` |
 | `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , block` |
-| `type_parameters` | `"[" , IDENT , { "," , IDENT } , "]"` |
+| `type_parameters` | `"[" , type_parameter , { "," , type_parameter } , "]"` |
+| `type_parameter` | `IDENT , [ ":" , IDENT ]` |
 | `visibility` | `"pub"` |
 | `record` | `[ visibility ] , "struct" , IDENT , [ type_parameters ] , "{" , [ fields ] , "}"` |
 | `fields` | `field , { "," , field } , [ "," ]` |
@@ -463,10 +480,10 @@ fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") }
 ### `type_parameters`
 
 ```ebnf
-type_parameters = "[" , IDENT , { "," , IDENT } , "]" ;
+type_parameters = "[" , type_parameter , { "," , type_parameter } , "]" ;
 ```
 
-A generic declaration's parameters: at least one name, no trailing comma. A parameter
+A generic declaration's parameters: at least one, no trailing comma. A parameter
 is a **position** — renaming one changes nothing — and it is a type and nothing else.
 Which names may be one (not a built-in type, not `Vec`, not twice) is the checker's
 question. See `docs/spec.md`, *Generics*.
@@ -477,6 +494,22 @@ struct Pair[A, B] { first: A, second: B, } fn main() -> Int { 0 }
 
 ```nazm
 enum Maybe[T] { None, Some(value: T), } fn main() -> Int { 0 }
+```
+
+### `type_parameter`
+
+```ebnf
+type_parameter = IDENT , [ ":" , IDENT ] ;
+```
+
+A parameter may require a capability of every type it stands for: one name after a
+`:`, and no list. `Equality` is the only capability, only a function's parameter may
+require it, and inside the function the parameter then has `==`. The name is not a
+type and nothing declares it. See `docs/spec.md`, *A type parameter may require
+equality*.
+
+```nazm
+fn same[T: Equality](a: T, b: T) -> Bool { a == b } fn main() -> Int { if same(1, 1) { 1 } else { 0 } }
 ```
 
 ### `visibility`
