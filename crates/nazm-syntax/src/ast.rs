@@ -174,9 +174,21 @@ impl TypeName {
     }
 }
 
-/// One declared type parameter: `T` in `fn identity[T](…)`.
+/// One declared type parameter: `T` in `fn identity[T](…)`, or `T: Equality` in
+/// `fn same[T: Equality](…)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeParam {
+    pub name: String,
+    pub span: Span,
+    /// The capability the parameter is required to have, as written — `Equality` — or
+    /// `None`. N14. Which names mean a capability, and where a requirement may be written,
+    /// is the checker's question.
+    pub requires: Option<Requirement>,
+}
+
+/// A written capability requirement on a type parameter: the name after the `:`. N14.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Requirement {
     pub name: String,
     pub span: Span,
 }
