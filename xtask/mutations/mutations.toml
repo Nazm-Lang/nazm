@@ -8,6 +8,22 @@
 # development a replacement silently matched nothing (cargo fmt had rewrapped the target),
 # the suite passed, and the result was indistinguishable from a surviving mutation. So a
 # no-op replacement is now a hard error, not a pass.
+#
+# Since N12.2 an entry may also say where its defect is seen, so a campaign can stop as
+# soon as a member of the suite has seen it:
+#
+#   killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_str_tail_survives_its_local" }]
+#
+# names tests, exactly (package, one of `lib = true` / `test = "…"` / `bin = "…"`, and the
+# full libtest path), that were *verified* to pass without the mutant and fail with it:
+# `cargo xtask contained mutate --verify-killer NAME --killer PKG:test=T:PATH`. Never
+# written from intuition, and never an arbitrary command: the harness builds the
+# invocation. `profile = "…"` overrides the profile chosen from the `[[profile]]` whose
+# `owns` is the longest prefix of `file`; naming one without a killer requires a
+# `no_killer = "…"` reason.
+#
+# A killer or a profile can make a campaign faster. Neither can make it report SURVIVED:
+# only the workspace suite does that. See `docs/runbook.md`, "Mutation campaigns".
 
 [[mutation]]
 name = "acceptance-rate-denominator"
@@ -2698,6 +2714,7 @@ the **Nazm-written** checker accepts `?` on any enum, so an `Option` or a lookal
 file = "compiler/analyse.nz"
 find = "        Option.Some(value: decl) => definition_of(tb, t) == decl,"
 replace = "        Option.Some(value: decl) => is_enum(t, tb.kind),"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_propagation" }]
 
 [[mutation]]
 name = "selfhost-question-mark-ignores-the-error-type"
@@ -2727,6 +2744,7 @@ find = """                            if target == core {
                                 let named = ints_get(rat, own);"""
 replace = """                            if false {
                                 let named = ints_get(rat, own);"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_propagation" }]
 
 [[mutation]]
 name = "selfhost-the-prelude-is-not-imported"
@@ -2828,6 +2846,7 @@ the **Nazm-written** checker takes whichever module is last as the core prelude,
 file = "compiler/module.nz"
 find = "        if strs_get(mpath, m) == core_key() { return m; }"
 replace = "        if m == strs_len(mpath) - 1 { return m; }"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_finds_the_prelude_by_its_key_wherever_it_is_loaded" }]
 
 [[mutation]]
 name = "selfhost-any-module-called-prelude-is-the-core"
@@ -2839,6 +2858,7 @@ find = "        if strs_get(mpath, m) == core_key() { return m; }"
 replace = """        if str_len(strs_get(mpath, m)) >= 7 {
             if str_slice(strs_get(mpath, m), str_len(strs_get(mpath, m)) - 7, str_len(strs_get(mpath, m))) == "prelude" { return m; }
         }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_project_file_cannot_take_the_prelude_s_key" }]
 
 [[mutation]]
 name = "selfhost-a-project-path-keeps-the-core-namespace"
@@ -2848,6 +2868,7 @@ the **Nazm-written** loader keeps a project file's `@core/…` path as its key, 
 file = "compiler/module.nz"
 find = """            strs_set(mpath, p, str_concat("./", strs_get(mpath, p)));"""
 replace = """            strs_set(mpath, p, strs_get(mpath, p));"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "a_project_file_cannot_take_the_prelude_s_key" }]
 
 [[mutation]]
 name = "selfhost-the-core-loses-its-key-when-loaded"
@@ -2859,6 +2880,7 @@ find = """    strs_push(mpath, core_key());
     ints_push(mstart, str_len(src) + 1);"""
 replace = """    strs_push(mpath, normalise(core));
     ints_push(mstart, str_len(src) + 1);"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_finds_the_prelude_by_its_key_wherever_it_is_loaded" }]
 
 [[mutation]]
 name = "selfhost-the-root-module-s-result-is-the-core-one"
@@ -2868,6 +2890,7 @@ the **Nazm-written** checker looks for `Result` in the root module instead of th
 file = "compiler/analyse.nz"
 find = """    let core_result = record_owned(rnames, rowner, core, "Result");"""
 replace = """    let core_result = record_owned(rnames, rowner, 0, "Result");"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_finds_the_prelude_by_its_key_wherever_it_is_loaded" }]
 
 [[mutation]]
 name = "selfhost-reserved-names-follow-position"
@@ -2877,6 +2900,7 @@ the **Nazm-written** checker's prelude-name collision rule is asked of the last 
 file = "compiler/analyse.nz"
 find = "    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath), core,"
 replace = "    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath), strs_len(mpath) - 1,"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_finds_the_prelude_by_its_key_wherever_it_is_loaded" }]
 
 [[mutation]]
 name = "the-prelude-is-whichever-module-is-last"
@@ -2888,6 +2912,7 @@ find = "            .position(|m| m.key.as_ref().is_some_and(ModuleKey::is_prelu
 replace = "            .rposition(|_| true)"
 
 # --- N12.1: a block used as a value, in the reference backend ------------------------------
+killers = [{ package = "nazm-sema", lib = true, name = "module::tests::the_prelude_is_found_by_its_key_wherever_it_sits" }]
 
 [[mutation]]
 name = "lowered-arm-block-drops-its-statements"
@@ -2897,6 +2922,7 @@ an arm written as a block keeps only its tail, so the statements before it — t
 file = "crates/nazm-lir/src/lower.rs"
 find = "                stmts.extend(inner.stmts);"
 replace = "                let _ = inner.stmts;"
+killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_pattern_binding_returned_through_an_arm_block_outlives_the_scrutinee" }]
 
 [[mutation]]
 name = "a-bare-block-is-emitted-as-its-tail-alone"
@@ -2909,6 +2935,7 @@ replace = """            Expr::Block(b) => match &b.result {
                 Some(e) => self.expr(e),
                 None => Val::Transferred,
             },"""
+killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_str_tail_survives_its_local" }]
 
 [[mutation]]
 name = "a-block-value-is-released-as-it-leaves"
@@ -2924,6 +2951,7 @@ replace = """            Expr::Block(b) => {
                 }
                 v
             }"""
+killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_str_tail_survives_its_local" }]
 
 [[mutation]]
 name = "a-statement-block-is-skipped"
@@ -2933,6 +2961,7 @@ a block written as a statement lowers to nothing, so its assignments never happe
 file = "crates/nazm-lir/src/lower.rs"
 find = "        AstExpr::Block(b) => lower_body(ctx, b),"
 replace = "        AstExpr::Block(_) => (Vec::new(), Ends::FallsThrough),"
+killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_statement_match_whose_arms_produce_nothing_assigns_in_place" }]
 
 [[mutation]]
 name = "a-statement-match-claims-every-arm-leaves"
@@ -2944,6 +2973,7 @@ find = """        if ends == Ends::FallsThrough {
             every_arm_leaves = false;
         }"""
 replace = "        let _ = ends;"
+killers = [{ package = "nazm-cli", test = "memory", name = "a_matched_sequence_handle_is_the_one_it_names" }]
 
 [[mutation]]
 name = "a-statement-match-arm-does-not-rejoin"
@@ -2958,6 +2988,7 @@ find = """            if self.stmts(&arm.body) == Reach::FallsThrough {
 replace = """            if self.stmts(&arm.body) == Reach::FallsThrough {
                 arrives = true;
             }"""
+killers = [{ package = "nazm-cli", test = "memory", name = "a_matched_sequence_handle_is_the_one_it_names" }]
 
 [[mutation]]
 name = "a-statement-match-never-lets-go-of-what-it-matched"
@@ -2971,6 +3002,7 @@ find = """        self.open(&cont);
 replace = """        self.open(&cont);
         self.building.pop();
         Reach::FallsThrough"""
+killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_statement_match_whose_arms_produce_nothing_assigns_in_place" }]
 
 [[mutation]]
 name = "an-emitted-block-uses-its-tail-after-a-transfer"
@@ -2986,6 +3018,7 @@ replace = """        let _ = self.stmts(&b.stmts);
         match &b.result {"""
 
 # --- N12.1: a block used as a value, in the compiler written in Nazm -----------------------
+killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_match_whose_arms_all_leave_produces_no_value" }]
 
 [[mutation]]
 name = "selfhost-a-block-operand-is-not-parsed"
@@ -2997,6 +3030,7 @@ find = """                ints_set(status, 0, 3);
                 return i;"""
 replace = """                die("a block used as an expression: not implemented yet in this parser", start_at(starts, i));
                 return i;"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_parser_produces_the_same_tree_as_the_reference" }]
 
 [[mutation]]
 name = "selfhost-a-block-operand-loses-its-span"
@@ -3010,6 +3044,7 @@ find = """                emit(nk, nar, nst, nen, ntx, n_blockexpr(), 1, start, 
 replace = """                emit(nk, nar, nst, nen, ntx, n_blockexpr(), 1, start, close, "");
                 ints_push(vs, start);
                 ints_push(ve, start);"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_parser_produces_the_same_tree_as_the_reference" }]
 
 [[mutation]]
 name = "selfhost-a-statement-block-needs-a-semicolon"
@@ -3019,6 +3054,7 @@ the **Nazm-written** parser does not treat a statement that starts with `{` as b
 file = "compiler/parse.nz"
 find = "        if t == k_lbrace() { blocklike = 1; }"
 replace = "        if t == k_lbrace() { blocklike = 0; }"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_parser_produces_the_same_tree_as_the_reference" }]
 
 [[mutation]]
 name = "selfhost-every-block-expression-is-a-value"
@@ -3030,6 +3066,7 @@ find = """            if kind == n_blockexpr() {
                 ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first)));"""
 replace = """            if kind == n_blockexpr() {
                 ints_set(ncomp, k, c_value());"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_value_blocks" }]
 
 [[mutation]]
 name = "selfhost-a-diverging-block-expression-is-unit"
@@ -3042,6 +3079,7 @@ find = """            if kind == n_blockexpr() {
 replace = """            if kind == n_blockexpr() {
                 ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first)));
                 if ints_get(ncomp, k) == c_diverges() { ints_set(ncomp, k, c_unit()); }"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_value_blocks" }]
 
 [[mutation]]
 name = "selfhost-a-block-expression-is-emitted-as-something"
@@ -3053,6 +3091,7 @@ find = "    if kind == n_blockexpr() { return true; }"
 replace = "    if kind == n_blockexpr() { return false; }"
 
 # --- N12.1: the `Option` dogfood in the checker written in Nazm -----------------------------
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_compiler_compiles_value_blocks_with_the_same_memory_semantics" }]
 
 [[mutation]]
 name = "selfhost-a-missing-declaration-is-found"
@@ -3070,6 +3109,7 @@ replace = """            if strs_get(rnames, i) == name { return Option[Int].Som
         i = i + 1;
     }
     Option[Int].Some(value: 0)"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_accepts_the_compiler_it_is_part_of" }]
 
 [[mutation]]
 name = "selfhost-no-core-result-is-the-definition-of-a-non-record"
@@ -3081,6 +3121,7 @@ find = """        Option.None() => false,
         Option.Some(value: decl) => definition_of(tb, t) == decl,"""
 replace = """        Option.None() => definition_of(tb, t) == 0 - 1,
         Option.Some(value: decl) => definition_of(tb, t) == decl,"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_finds_the_prelude_by_its_key_wherever_it_is_loaded" }]
 
 [[mutation]]
 name = "selfhost-a-duplicate-declaration-check-has-its-arms-reversed"
@@ -3094,6 +3135,7 @@ find = """                match record_owned(rnames, rowner, owner, name) {
 replace = """                match record_owned(rnames, rowner, owner, name) {
                     Option.Some(value: _) => { },
                     Option.None() => {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_accepts_the_compiler_it_is_part_of" }]
 
 [[mutation]]
 name = "selfhost-a-module-s-own-type-is-not-found"
@@ -3103,3 +3145,147 @@ the **Nazm-written** checker's type lookup discards the declaration it found, so
 file = "compiler/analyse.nz"
 find = "        Option.Some(value: own) => t_record(own),"
 replace = "        Option.Some(value: own) => t_unknown(),"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_enums_and_matching" }]
+
+# ---------------------------------------------------------------------------------------
+# Focused profiles: tier 2.
+#
+# Whole test targets that observe the subsystem a mutated file belongs to, run when an
+# entry has no killer or its killers passed. A profile is an optimisation and nothing
+# more: a profile that passes escalates to the workspace suite, so a profile that is too
+# narrow costs time and cannot produce a false survivor. Ownership is by path prefix, the
+# longest wins, and no two profiles own the same prefix.
+#
+# Measured cost, one CPU, one test thread (2026-09-24): selfhost 118 s, build 55 s,
+# concurrent 47 s, xtask 12 s, memory 10 s, native_cache 7 s, everything else under 5 s.
+# The workspace suite is about 228 s. `build` and `concurrent` are left out of every
+# profile on purpose: together they are 100 s and a quarter of all tests, and a defect
+# only they see still reaches them at tier 3.
+# ---------------------------------------------------------------------------------------
+
+[[profile]]
+name = "selfhost"
+why = "the Nazm-written compiler is observed by the differential and conformance tests in selfhost.rs, which build it from compiler/*.nz and compare it with the reference"
+owns = ["compiler/", "library/"]
+targets = [{ package = "nazm-cli", test = "selfhost" }]
+
+[[profile]]
+name = "native"
+why = "lowering and emission are observed by compiling and running programs: memory semantics, value blocks, units, propagation, generics, the prelude and the object cache"
+owns = ["crates/nazm-lir/"]
+targets = [
+    { package = "nazm-lir", lib = true },
+    { package = "nazm-cli", test = "memory" },
+    { package = "nazm-cli", test = "value_blocks" },
+    { package = "nazm-cli", test = "native_units" },
+    { package = "nazm-cli", test = "propagation" },
+    { package = "nazm-cli", test = "generics" },
+    { package = "nazm-cli", test = "prelude" },
+    { package = "nazm-cli", test = "native_cache" },
+]
+
+[[profile]]
+name = "checker"
+why = "the reference checker and interpreter are observed by nazm-core's own suites and by the CLI's refusal, code and resolution tests"
+owns = ["crates/nazm-core/"]
+targets = [
+    { package = "nazm-core", lib = true },
+    { package = "nazm-core", test = "language" },
+    { package = "nazm-core", test = "results" },
+    { package = "nazm-core", test = "records" },
+    { package = "nazm-core", test = "enums" },
+    { package = "nazm-core", test = "generics" },
+    { package = "nazm-core", test = "concurrency" },
+    { package = "nazm-core", test = "unit_checking" },
+    { package = "nazm-cli", test = "codes" },
+    { package = "nazm-cli", test = "prelude" },
+    { package = "nazm-cli", test = "propagation" },
+    { package = "nazm-cli", test = "resolution" },
+    { package = "nazm-cli", test = "visibility" },
+]
+
+[[profile]]
+name = "syntax"
+why = "the parser is observed by its own suites, the formatter, and every language test that parses a program"
+owns = ["crates/nazm-syntax/"]
+targets = [
+    { package = "nazm-syntax", lib = true },
+    { package = "nazm-syntax", test = "grammar" },
+    { package = "nazm-syntax", test = "format" },
+    { package = "nazm-core", test = "language" },
+    { package = "nazm-core", test = "records" },
+    { package = "nazm-core", test = "enums" },
+]
+
+[[profile]]
+name = "semantics"
+why = "types, modules and interfaces are observed by nazm-sema's own tests, nazm-core's checking suites and the CLI's resolution, visibility and identity tests"
+owns = ["crates/nazm-sema/"]
+targets = [
+    { package = "nazm-sema", lib = true },
+    { package = "nazm-core", lib = true },
+    { package = "nazm-core", test = "unit_checking" },
+    { package = "nazm-core", test = "records" },
+    { package = "nazm-core", test = "enums" },
+    { package = "nazm-core", test = "generics" },
+    { package = "nazm-cli", test = "resolution" },
+    { package = "nazm-cli", test = "visibility" },
+    { package = "nazm-cli", test = "prelude" },
+    { package = "nazm-cli", test = "incremental" },
+    { package = "nazm-cli", test = "durable_identity" },
+]
+
+[[profile]]
+name = "interface"
+why = "the persisted interface is observed by its round-trip tests and by the CLI's incremental, identity and schema tests"
+owns = ["crates/nazm-iface/"]
+targets = [
+    { package = "nazm-iface", lib = true },
+    { package = "nazm-iface", test = "persistence" },
+    { package = "nazm-cli", test = "incremental" },
+    { package = "nazm-cli", test = "durable_identity" },
+    { package = "nazm-cli", test = "schemas" },
+    { package = "nazm-cli", test = "visibility" },
+]
+
+[[profile]]
+name = "cache"
+why = "cache keys and stores are observed by nazm-cache's own suites and by the CLI's incremental, object-cache and identity tests"
+owns = ["crates/nazm-cache/"]
+targets = [
+    { package = "nazm-cache", lib = true },
+    { package = "nazm-cache", test = "objects" },
+    { package = "nazm-cache", test = "store" },
+    { package = "nazm-cli", test = "incremental" },
+    { package = "nazm-cli", test = "native_cache" },
+    { package = "nazm-cli", test = "durable_identity" },
+    { package = "nazm-cli", test = "source_identity" },
+]
+
+[[profile]]
+name = "cli"
+why = "the driver is observed by its own unit tests and the CLI suites for loading, source roots, checking and resolution"
+owns = ["crates/nazm-cli/src/"]
+targets = [
+    { package = "nazm-cli", bin = "nazm" },
+    { package = "nazm-cli", test = "cli" },
+    { package = "nazm-cli", test = "source_root" },
+    { package = "nazm-cli", test = "incremental" },
+    { package = "nazm-cli", test = "resolution" },
+    { package = "nazm-cli", test = "visibility" },
+    { package = "nazm-cli", test = "schemas" },
+    { package = "nazm-cli", test = "workflow" },
+]
+
+[[profile]]
+name = "bench"
+why = "the agent-cost harness is observed by its own library, binary and boundary suites, all fast"
+owns = ["crates/nazm-bench/"]
+targets = [
+    { package = "nazm-bench", lib = true },
+    { package = "nazm-bench", bin = "nazm-bench" },
+    { package = "nazm-bench", test = "docker_argv" },
+    { package = "nazm-bench", test = "docker_boundary" },
+    { package = "nazm-bench", test = "execution_boundary" },
+    { package = "nazm-bench", test = "sandbox_lifecycle" },
+]
