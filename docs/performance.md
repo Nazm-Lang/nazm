@@ -687,6 +687,97 @@ The same output, a little less IR and memory, and no claim about speed: 1% of wa
 inside the noise of one run to the next. What the migration bought is the invariant — a code
 cannot be pushed without its message — not a number.
 
+### Typed errors — measured 2026-09-24, and `?` costs what the `match` it means costs
+
+N12 added `Result`, `Option` and `?`. Measured **contained, Linux aarch64**
+(`nazm-contained:1.98.1`, one CPU), release compiler, median of five by a nanosecond clock,
+as for N11. The programs are `target/n12/perf/gen.py`; the raw output is
+`target/n12/perf/results.txt`.
+
+**Layout** — read off the emitted IR. An enum is one slot per variant (N10's choice), so a
+`Result` carries both payloads:
+
+| Type | bytes | an ideal tagged union | |
+| --- | ---: | ---: | --- |
+| `Result[Int, Int]` | 24 | 16 | tag 8, `Err` 8, `Ok` 8 |
+| `Result[Str, Str]` | 56 | 32 | two 24-byte strings |
+| `Result[Large, Small]`, a 72-byte record and an 8-byte one | 88 | 80 | the small variant's size is the overhead |
+| `Result[Int, Vec[Diag]]` | 24 | 16 | a `Vec` is one pointer |
+| `Option[Int]` | 16 | 16 | `None` is empty |
+| `Option[Str]` | 32 | 32 | |
+| `Option[Rec]`, a 32-byte record | 40 | 40 | |
+
+`Option` costs nothing over a tagged union, because `None` has no payload; `Result` costs the
+smaller variant. No niche is used anywhere — `Option[Str]` is not a null pointer — and none is
+promised; a compact representation is a later milestone that can start from this table.
+
+**Explicit `match` against `?`** — the same function spelled both ways, 20,000,000 calls,
+each taking apart a `Result[Int, Oops]` from a leaf and returning its own:
+
+| | `match` | `?` |
+| --- | ---: | ---: |
+| success, `-O2` | 21.3 ms | 21.3 ms |
+| error, `-O2` | 19.4 ms | 19.2 ms |
+| success, `-O0` | 284.2 ms | 288.7 ms |
+| error, `-O0` | 353.0 ms | 350.0 ms |
+
+**No difference**, which is the expected result: `?` lowers to the `match` (`architecture.md`
+§7.13), and every gap above is inside run-to-run noise. At `-O0` a propagation is about 14 ns
+of the loop; at `-O2` the leaf and the `match` fold.
+
+**Propagation depth** — a static chain `f100 → f99 → … → f0`, each level `f(k-1)(…)? + 1`,
+the top called 1,000,000 times:
+
+| Depth | `nazm check` | `nazm build` | IR | executable | success, `-O0` | error, `-O0` |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1.5 ms | 72 ms | 23 KB | 71,648 B | 15.0 ms | 18.4 ms |
+| 10 | 1.7 ms | 81 ms | 69 KB | 72,128 B | 80.5 ms | 92.5 ms |
+| 100 | 3.2 ms | 135 ms | 537 KB | 77,088 B | 1,070 ms | 1,197 ms |
+
+Linear throughout: about 5.1 KB of IR, 55 bytes of executable and 0.6 ms of build per level,
+and 10–12 ns per level per call unoptimised. The chain is static, so the stack is the depth of
+ordinary calls and nothing more; an error at depth 100 travels a hundred returns and costs a
+little more than a success because each return releases the `Result` it took apart.
+
+**Code per generic instance** — `pass[T, E](r: Result[T, E]) -> Result[T, E]` instantiated for
+1, 10 and 50 records, once returning `r` and once written `let v = r?; Result[T, E].Ok(value: v)`:
+
+| Instances | IR, plain | IR, with `?` | executable, plain | executable, with `?` |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 29 KB | 39 KB | 73,056 B | 73,072 B |
+| 10 | 185 KB | 282 KB | 78,224 B | 78,456 B |
+| 50 | 886 KB | 1,379 KB | 166,880 B | 233,608 B |
+
+From 10 to 50 instances a plain instance costs 17.5 KB of IR and 2.2 KB of executable, one with
+`?` 27.4 KB and 3.9 KB: the propagation's two blocks, its tag test and the error path's
+release of the frame are duplicated in **every** instance, as monomorphisation duplicates
+everything. No cross-instance deduplication was added. A warm rebuild of the 50-instance
+program compiles **0** units and **0** instances (`native.instances.compiled = 0`).
+
+**The dogfood** — the Nazm-written compiler's front end as one stage returning
+`Result[Checked, Vec[Diag]]`, with `emit_program` beginning `check_program(…)?`. C1 (built by
+the reference) compiling `compiler/emit.nz`, three runs each, against the same compiler with
+the migration mechanically undone (`target/n12/dogfood/`):
+
+| | before | after |
+| --- | ---: | ---: |
+| source lines, `compiler/*.nz` | 12,227 | 12,216 |
+| `check.nz` / `emit.nz` / `analyse.nz` | 171 / 5,236 / 4,409 | **64** / 5,174 / 4,567 |
+| front-end pipelines written out | 2 | **1** |
+| drivers testing `vec_len(diags) > 0` to decide whether to continue | 2 | 1 (`check.nz`'s output) |
+| driver lines threading the diagnostic sink, `check.nz` + `emit.nz`'s `main` | 12 + 12 | 4 + 0 (the four print it) |
+| tables declared by `check.nz` | 57 | 7 |
+| wall | 10.93–10.97 s | 11.04–11.09 s |
+| peak RSS | 55.4–56.8 MiB | 54.6–55.4 MiB |
+| emitted IR | 6,332,226 B | 6,360,949 B |
+| C2 executable | 1,987,168 B | 1,987,712 B |
+| C2 compiling itself | 10.97 s | 11.03 s |
+
+What moved is the structure: the front end exists once, and `check.nz` lost two-thirds of its
+lines. The cost is 0.45% more IR and about 1% more time — consistent across the runs, and too
+small to attribute with one session's measurements; no speed claim is made in either
+direction. The C2 and C3 of the migrated compiler emit identical IR.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

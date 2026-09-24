@@ -240,6 +240,19 @@ it stays affordable depends on a specification that does not exist.
 tested against the get-change-set shape, and a second real migration — one where the
 elements are updated in place in a loop — measured before and after.
 
+### N12 added typed errors as values, 2026-09-24. Status: still **SUPPORTED, not VERIFIED**.
+
+A failure became a value like any other, and the value model needed nothing new for it:
+`Result` and `Option` are ordinary enums, a propagated `Vec[Diag]` is one handle through
+every return, and the front end's `Result[Checked, Vec[Diag]]` carries twenty handles in a
+record without copying a table. So the evidence this item gains is that **value semantics
+absorbed error handling without a second model** — no exception object, no unwinding, no
+ownership rule special to failures. What N12 adds to the cost side is small and measured
+(`performance.md`): `?` on success is a retain of the payload and a release of the
+`Result`, which is the pair copy elision would remove, and the explicit form of an early
+return from an arm is awkward in the native subset because an arm cannot be a block there.
+Neither changes the status.
+
 ---
 
 ## R2 · Content-addressed semantic IR pays for itself
@@ -321,6 +334,17 @@ it; that is the method the eventual content-addressed key would be held to.
 
 **Status: RESEARCH.** Unchanged. The prerequisites are met and two neighbouring results
 exist; the hypothesis is untested, and N6 narrowed where it would have to be tested.
+
+**N12 found the identity rule a persisted-interface design has to state, 2026-09-24.**
+An interface carries every type its exported shapes mention, including other modules'.
+Rehydrated one at a time, each interface gave those types a fresh identity, so two
+interfaces that both mentioned the core `Result` produced two `Result`s — invisible until a
+consumer compared them, and fatal to `?` checked from interfaces alone. The fix is the rule
+this item's design implies: a definition is identified by its `DefKey` across **every**
+interface one compilation reads, so a type met twice is one type
+(`PersistentUnitInterface::rehydrate_into`). A hash-keyed design would need the same rule
+for the same reason, and would have hidden the defect the same way until something shared a
+type. Status unchanged.
 
 ---
 
