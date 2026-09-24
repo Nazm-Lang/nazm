@@ -38,9 +38,10 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,211 passed, 0 failed, 6 ignored, across 63 suites**, run through
-`cargo xtask contained run "cargo test --locked --workspace --jobs 1 --no-fail-fast -- --test-threads 1"`
-at N12.1 (2026-09-24). N12 ended at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
+**Current suite: 1,255 passed, 0 failed, 13 ignored, across 63 suites**, run through
+`cargo xtask contained tests` at N12.2 (2026-09-25); the thirteen ignored are the xtask
+lifecycle tests, run on their own (13 of 13 passed, contained). N12.1 ended at 1,211 across
+63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
 
