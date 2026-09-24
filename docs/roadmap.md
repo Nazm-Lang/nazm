@@ -404,8 +404,9 @@ neither does anything that contains one.
 | a new fixpoint, `76598c43…` | `bootstrap.md` |
 
 Mutation evidence: 33 new mutations and 13 repointed, each with its regression test; one
-targeted campaign of 58 — 57 caught (45 at tier 1, 12 at tier 2, none at tier 3), 1 survivor
-investigated and retired as unobservable on this platform (`capability-matrix.md` §30).
+targeted campaign of 58 — 57 caught (45 at tier 1, 12 at tier 2, none at tier 3) and one
+genuine survivor, a use-after-free no supported configuration can observe, kept live as a
+known limitation (`capability-matrix.md` §30).
 
 **N14 has not started.**
 
