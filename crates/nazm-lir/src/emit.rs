@@ -51,7 +51,7 @@ use crate::names::SourceNames;
 
 use crate::ir::{
     ArithOp, Block, Builtin, EnumLayout, EnumTy, Expr, Function, Lowering as _, MatchArm, Owns,
-    RecordLayout, RecordTy, StatementArm, Stmt, Ty, Unit, VecLayout, VecTy,
+    RecordLayout, RecordTy, StatementArm, Stmt, Ty, Unit, VariantLayout, VecLayout, VecTy,
 };
 use crate::symbol::NativeSymbol;
 
@@ -276,6 +276,8 @@ struct Emitter<'a> {
     generated_enums: std::collections::BTreeSet<(EnumTy, bool)>,
     /// The per-`Vec` release helpers generated, by element type. N11.
     generated_vecs: std::collections::BTreeSet<VecTy>,
+    /// The equality helpers generated, by record or enum type. N13.
+    generated_eq: std::collections::BTreeSet<Ty>,
     /// The argument-block types generated for `spawn` sites, by field list.
     ///
     /// One per distinct argument shape rather than one per site, so two `spawn`s of the
@@ -949,6 +951,195 @@ impl Emitter<'_> {
         self.next_label = saved_label;
         self.current = saved_current;
         Some(name)
+    }
+
+    /// `==` on two values of one type with equality, as an `i1`. N13.
+    ///
+    /// Borrowing: nothing is retained or released here, because comparing reads and the
+    /// caller owns both operands. `Int` and `Bool` are an `icmp`; a `Str` is its bytes;
+    /// a record or an enum is its helper. Checking has refused every other type
+    /// (`N0304`), and lowering refuses it again rather than let an `icmp` on a handle's
+    /// pointer answer a question the language has not asked.
+    fn equality(&mut self, a: u32, b: u32, ty: Ty) -> u32 {
+        match ty {
+            Ty::Str => self.string_equality(a, b, false),
+            Ty::Record(_) | Ty::Enum(_) => {
+                let helper = self.equality_helper(ty);
+                let t = llvm_type(self.types, ty);
+                let out = self.fresh();
+                let _ = writeln!(self.out, "  %{out} = call i1 @{helper}({t} %{a}, {t} %{b})");
+                out
+            }
+            _ => {
+                let t = llvm_type(self.types, ty);
+                let out = self.fresh();
+                let _ = writeln!(self.out, "  %{out} = icmp eq {t} %{a}, %{b}");
+                out
+            }
+        }
+    }
+
+    /// The symbol of this record's or enum's equality helper, generating it if needed.
+    /// N13.
+    ///
+    /// # Why a helper, and why this shape
+    ///
+    /// For the reason the retain and release helpers are one per type: a nested type's
+    /// helper calls the inner one's, so the recursion over the type lives in the
+    /// *emitted* program rather than in this compiler's stack, and a comparison written in
+    /// forty places is forty calls rather than forty copies of a walk. Named from the
+    /// type's [`NativeTypeName`], which is derived from its durable identity and its
+    /// concrete arguments — never from an id of this session — and `internal`, so each unit
+    /// that compares a type carries its own copy and no symbol is promised to anyone.
+    ///
+    /// A **record** compares its fields in layout order, which is canonical by field name,
+    /// and returns `false` at the first that differs: comparing is pure, so the order is
+    /// not observable, and canonical order makes the helper's text independent of how the
+    /// declaration was written.
+    ///
+    /// An **enum** compares discriminants first, and different variants are unequal with
+    /// nothing else read. Equal discriminants `switch` to that variant's payload, and only
+    /// that slot is extracted: an inactive slot holds zeros no operation reads, and this
+    /// is not the first. A zero-payload variant reaches `true` through the `switch`'s
+    /// default, so it costs no block of its own.
+    fn equality_helper(&mut self, ty: Ty) -> String {
+        let name = match ty {
+            Ty::Record(id) => {
+                record_layout(self.types.records, id).map(|l| l.name.as_str().to_owned())
+            }
+            Ty::Enum(id) => enum_layout(self.types.enums, id).map(|l| l.name.as_str().to_owned()),
+            _ => None,
+        }
+        .unwrap_or_default();
+        let name = format!("nz.eq.{name}");
+        if !self.generated_eq.insert(ty) {
+            return name;
+        }
+        let whole = llvm_type(self.types, ty);
+
+        let saved_out = std::mem::take(&mut self.out);
+        let saved_next = self.next;
+        let saved_label = self.next_label;
+        let saved_current = std::mem::take(&mut self.current);
+        self.next = 0;
+        self.next_label = 0;
+        self.current = "entry".to_owned();
+
+        let _ = writeln!(
+            self.out,
+            "\ndefine internal i1 @{name}({whole} %a, {whole} %b) {{"
+        );
+        let _ = writeln!(self.out, "entry:");
+        let differ = format!("b{}", self.fresh_label());
+        match ty {
+            Ty::Record(id) => {
+                let fields = record_layout(self.types.records, id)
+                    .map(|l| l.fields.clone())
+                    .unwrap_or_default();
+                for (at, fty) in fields.into_iter().enumerate() {
+                    let at = u32::try_from(at).unwrap_or(u32::MAX);
+                    let x = self.extract_from(ty, 'a', at, fty);
+                    let y = self.extract_from(ty, 'b', at, fty);
+                    self.equal_or_leave(x, y, fty, &differ);
+                }
+                let _ = writeln!(self.out, "  ret i1 true");
+            }
+            Ty::Enum(id) => {
+                let variants = enum_layout(self.types.enums, id)
+                    .map(|l| l.variants.clone())
+                    .unwrap_or_default();
+                let (ta, tb) = (self.fresh(), self.fresh());
+                let _ = writeln!(self.out, "  %{ta} = extractvalue {whole} %a, 0");
+                let _ = writeln!(self.out, "  %{tb} = extractvalue {whole} %b, 0");
+                let same = self.fresh();
+                let _ = writeln!(self.out, "  %{same} = icmp eq i64 %{ta}, %{tb}");
+                let dispatch = format!("b{}", self.fresh_label());
+                let equal = format!("b{}", self.fresh_label());
+                let _ = writeln!(
+                    self.out,
+                    "  br i1 %{same}, label %{dispatch}, label %{differ}"
+                );
+                self.open(&dispatch);
+                let arms: Vec<(u32, VariantLayout, String)> = variants
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, v)| !v.fields.is_empty())
+                    .map(|(tag, v)| {
+                        let label = format!("b{}", self.fresh_label());
+                        (u32::try_from(tag).unwrap_or(u32::MAX), v, label)
+                    })
+                    .collect();
+                let table = arms
+                    .iter()
+                    .map(|(tag, _, label)| format!("i64 {tag}, label %{label}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let _ = writeln!(self.out, "  switch i64 %{ta}, label %{equal} [ {table} ]");
+                for (tag, variant, label) in arms {
+                    self.open(&label);
+                    let (pa, pb) = (self.fresh(), self.fresh());
+                    let _ = writeln!(
+                        self.out,
+                        "  %{pa} = extractvalue {whole} %a, {}    ; {}",
+                        tag + 1,
+                        variant.source
+                    );
+                    let _ = writeln!(self.out, "  %{pb} = extractvalue {whole} %b, {}", tag + 1);
+                    for (at, fty) in variant.fields.iter().enumerate() {
+                        let field = llvm_type(self.types, *fty);
+                        let (x, y) = (self.fresh(), self.fresh());
+                        let _ = writeln!(
+                            self.out,
+                            "  %{x} = extractvalue {} %{pa}, {at}    ; {field}",
+                            variant.name
+                        );
+                        let _ = writeln!(
+                            self.out,
+                            "  %{y} = extractvalue {} %{pb}, {at}",
+                            variant.name
+                        );
+                        self.equal_or_leave(x, y, *fty, &differ);
+                    }
+                    let _ = writeln!(self.out, "  br label %{equal}");
+                }
+                self.open(&equal);
+                let _ = writeln!(self.out, "  ret i1 true");
+            }
+            _ => {
+                let _ = writeln!(self.out, "  ret i1 false");
+            }
+        }
+        self.open(&differ);
+        let _ = writeln!(self.out, "  ret i1 false");
+        let _ = writeln!(self.out, "}}");
+
+        let body = std::mem::replace(&mut self.out, saved_out);
+        self.helpers.push_str(&body);
+        self.next = saved_next;
+        self.next_label = saved_label;
+        self.current = saved_current;
+        name
+    }
+
+    /// One field of a helper's parameter `%a` or `%b`, by layout position.
+    fn extract_from(&mut self, ty: Ty, param: char, at: u32, field: Ty) -> u32 {
+        let whole = llvm_type(self.types, ty);
+        let shown = llvm_type(self.types, field);
+        let out = self.fresh();
+        let _ = writeln!(
+            self.out,
+            "  %{out} = extractvalue {whole} %{param}, {at}    ; {shown}"
+        );
+        out
+    }
+
+    /// Compare one component and leave for `differ` if it is unequal; otherwise carry on
+    /// in a fresh block.
+    fn equal_or_leave(&mut self, x: u32, y: u32, ty: Ty, differ: &str) {
+        let same = self.equality(x, y, ty);
+        let next = format!("b{}", self.fresh_label());
+        let _ = writeln!(self.out, "  br i1 %{same}, label %{next}, label %{differ}");
+        self.open(&next);
     }
 
     /// Every variant of this enum whose payload owns something, with what it owns.
@@ -2582,6 +2773,26 @@ impl Emitter<'_> {
                         ty: Ty::Bool,
                     };
                 }
+                // A record or an enum: its equality helper, N13. `!=` is the negation of
+                // that one answer, never a second walk. The operands are borrowed exactly
+                // as a `Str`'s are, so a temporary compared is released once, here, after
+                // the answer exists.
+                if matches!(operand_ty, Ty::Record(_) | Ty::Enum(_)) {
+                    let same = self.equality(a, b, *operand_ty);
+                    let out = if *op == crate::ir::CmpOp::NotEq {
+                        let flipped = self.fresh();
+                        let _ = writeln!(self.out, "  %{flipped} = xor i1 %{same}, true");
+                        flipped
+                    } else {
+                        same
+                    };
+                    self.drop_temporary(a, *operand_ty);
+                    self.drop_temporary(b, *operand_ty);
+                    return Val::Of {
+                        value: out,
+                        ty: Ty::Bool,
+                    };
+                }
                 let out = self.fresh();
                 // No guard, because no comparison can fail: `icmp` on two `i64`s or two
                 // `i1`s is total.
@@ -3991,6 +4202,7 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         helpers: String::new(),
         generated: std::collections::BTreeSet::new(),
         generated_enums: std::collections::BTreeSet::new(),
+        generated_eq: std::collections::BTreeSet::new(),
         generated_vecs: std::collections::BTreeSet::new(),
         blocks: Vec::new(),
         block_types: String::new(),
