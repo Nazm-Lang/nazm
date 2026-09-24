@@ -1,0 +1,4 @@
+// expect: N0364
+// A `Vec` has no equality, so it cannot be what `T: Equality` stands for.
+fn same[T: Equality](a: T, b: T) -> Bool { a == b }
+fn main() -> Int { let v = vec_new[Int](); if same(v, v) { 1 } else { 0 } }

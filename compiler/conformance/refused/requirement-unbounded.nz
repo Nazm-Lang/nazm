@@ -1,0 +1,4 @@
+// expect: N0304
+// An unconstrained `T` has no equality, whatever its callers pass.
+fn same[T](a: T, b: T) -> Bool { a == b }
+fn main() -> Int { if same(1, 1) { 1 } else { 0 } }

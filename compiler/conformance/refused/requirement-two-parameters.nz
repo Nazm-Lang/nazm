@@ -1,0 +1,4 @@
+// expect: N0304
+// Two parameters that each require equality are still two types.
+fn wrong[A: Equality, B: Equality](a: A, b: B) -> Bool { a == b }
+fn main() -> Int { 0 }

@@ -1,0 +1,5 @@
+// expect: N0364
+// A generic caller may pass on only what it requires itself.
+fn same[T: Equality](a: T, b: T) -> Bool { a == b }
+fn wrap[T](a: T, b: T) -> Bool { same(a, b) }
+fn main() -> Int { 0 }
