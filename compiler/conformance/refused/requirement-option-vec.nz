@@ -1,0 +1,4 @@
+// expect: N0364
+// An `Option` of a type without equality has none, and is decided by its type, not its value.
+fn same[T: Equality](a: T, b: T) -> Bool { a == b }
+fn main() -> Int { let o = Option[Vec[Int]].None(); if same(o, o) { 1 } else { 0 } }

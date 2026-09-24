@@ -1,0 +1,20 @@
+use "model.nz";
+
+struct Tag {
+    name: Str,
+}
+
+fn forward[T: Equality](a: T, b: T) -> Bool {
+    same(a, b)
+}
+
+fn main() -> Int {
+    let tags = vec_new[Tag]();
+    vec_push(tags, Tag(name: str_concat("a", "")));
+    vec_push(tags, Tag(name: "b"));
+    vec_push(tags, Tag(name: str_concat("", "a")));
+    let mut total = count_same(tags, Tag(name: "a"));
+    if forward(Tag(name: "b"), Tag(name: "b")) { total = total + 10; }
+    if same(Option[Int].None(), Option[Int].Some(value: 1)) { total = total + 100; }
+    total
+}
