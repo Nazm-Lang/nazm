@@ -242,6 +242,17 @@ pub mod codes {
     pub const PROPAGATE_ERROR_MISMATCH: Code = Code::new("N0362");
     /// A project type named like one of the core prelude's, which every module sees.
     pub const PRELUDE_TYPE_REDECLARED: Code = Code::new("N0363");
+
+    // N14: a type parameter may require equality. `==` on a parameter whose declaration does
+    // not require it is still `N0304`; a requirement written on a record's or an enum's
+    // parameter, which N14 does not support, is `N0101`.
+    /// A type argument, written or inferred, that does not have a capability its parameter
+    /// requires — a concrete type without equality, or a caller's own parameter whose
+    /// declaration does not require it.
+    pub const UNSATISFIED_REQUIREMENT: Code = Code::new("N0364");
+    /// A requirement naming something that is not a capability: `T: Ord`. `Equality` is
+    /// the only one.
+    pub const UNKNOWN_REQUIREMENT: Code = Code::new("N0365");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

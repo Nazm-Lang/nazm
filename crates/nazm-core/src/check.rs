@@ -592,6 +592,7 @@ pub fn declare_types(
                 instance: None,
             });
             res.types_mut().name_params(ParamOwner::Record(id), params);
+            declared_requirements(&r.type_params, ParamOwner::Record(id), res, errors);
             if visibility.is_exported() {
                 records.push(RecordExport {
                     def: id,
@@ -617,6 +618,7 @@ pub fn declare_types(
                 instance: None,
             });
             res.types_mut().name_params(ParamOwner::Enum(id), params);
+            declared_requirements(&e.type_params, ParamOwner::Enum(id), res, errors);
             if visibility.is_exported() {
                 enums.push(EnumExport {
                     def: id,
@@ -729,6 +731,66 @@ fn declared_type_params(params: &[WrittenParam], errors: &mut Vec<Diagnostic>) -
         names.push(p.name.clone());
     }
     names
+}
+
+/// The one capability a type parameter may require. N14.
+///
+/// Not a type and not a declaration: a name that means something only after the `:` in a
+/// type parameter list, so no record, enum or import can shadow it and it shadows nothing.
+pub const EQUALITY: &str = "Equality";
+
+/// What a declaration's type parameters require, recorded against each parameter's
+/// identity — its owner and position. N14.
+///
+/// Only a function's parameters may carry a requirement. One on a record's or an enum's is
+/// refused (`N0101`) rather than parsed and ignored: every instance of such a type would
+/// have to be checked wherever it is written, and nothing needs that yet. A name that is
+/// not a capability is `N0365`.
+fn declared_requirements(
+    params: &[WrittenParam],
+    owner: ParamOwner,
+    res: &mut Resolution,
+    errors: &mut Vec<Diagnostic>,
+) {
+    for (i, p) in params.iter().enumerate() {
+        let Some(req) = &p.requires else {
+            continue;
+        };
+        if !matches!(owner, ParamOwner::Function(_)) {
+            errors.push(
+                Diagnostic::error(
+                    codes::UNSUPPORTED_CONSTRUCT,
+                    req.span,
+                    "a requirement on a record's or an enum's type parameter is not supported yet",
+                )
+                .help(
+                    "require the capability where it is used: a function can say \
+                     `fn same[T: Equality](a: Box[T], b: Box[T]) -> Bool`",
+                ),
+            );
+            continue;
+        }
+        if req.name != EQUALITY {
+            errors.push(
+                Diagnostic::error(
+                    codes::UNKNOWN_REQUIREMENT,
+                    req.span,
+                    format!(
+                        "`{}` is not a capability a type parameter can require",
+                        req.name
+                    ),
+                )
+                .help(
+                    "the one capability is `Equality`: `fn same[T: Equality](a: T, b: T) -> Bool`",
+                ),
+            );
+            continue;
+        }
+        res.types_mut().require_equality(TypeParam {
+            owner,
+            index: u32::try_from(i).unwrap_or(u32::MAX),
+        });
+    }
 }
 
 /// The written name of the one generic built-in type.
@@ -1518,6 +1580,7 @@ pub fn declare_unit(
         debug_assert_eq!(declared, id);
         res.types_mut()
             .name_params(ParamOwner::Function(id), generics.clone());
+        declared_requirements(&f.type_params, ParamOwner::Function(id), res, errors);
 
         if visibility.is_exported() {
             // A public signature naming a private record would publish a type the
@@ -4054,6 +4117,72 @@ impl Checker<'_> {
             );
         }
 
+        // What each parameter's declaration requires, of the argument it was given (N14).
+        // Asked of the one derivation `==` asks, so a concrete argument answers by N13's rule
+        // and a caller's own parameter answers by its declaration: forwarding a `T` to a
+        // callee that requires equality works exactly when the caller's `T` requires it too.
+        // Written or inferred makes no difference to the rule, only to where it is reported.
+        for (i, s) in solved.iter().enumerate() {
+            let Some((t, from)) = *s else {
+                continue;
+            };
+            let param = TypeParam {
+                owner,
+                index: u32::try_from(i).unwrap_or(u32::MAX),
+            };
+            if !self.res.types().requires_equality(param) {
+                continue;
+            }
+            let Err(why) = self.res.types().equality(t) else {
+                continue;
+            };
+            let p = self.res.types().param_name(param);
+            let shown = self.show(t);
+            let detail = if let Type::Param(_) = t {
+                format!("this `{shown}` is a type parameter whose declaration does not require it")
+            } else if why.path.is_empty() {
+                format!("`{shown}` has no equality")
+            } else {
+                format!(
+                    "its `{}` is a `{}`, which has no equality",
+                    why.path.join("."),
+                    self.show(why.ty)
+                )
+            };
+            // A written argument is reported at the callee, where `N0353` reports the list;
+            // an inferred one at the argument it was inferred from.
+            let place = if from == WRITTEN {
+                at
+            } else {
+                args.get(from).map_or(at, Expr::span)
+            };
+            self.errors.push(
+                Diagnostic::error(
+                    codes::UNSATISFIED_REQUIREMENT,
+                    place,
+                    if let Type::Param(_) = t {
+                        format!("`{name}` requires `{p}: {EQUALITY}`, and {detail}")
+                    } else {
+                        format!(
+                            "`{name}` requires `{p}: {EQUALITY}`, and `{p}` is `{shown}` here: \
+                             {detail}"
+                        )
+                    },
+                )
+                .secondary(sig.name_span, "declared here")
+                .help(if let Type::Param(_) = t {
+                    format!(
+                        "a generic definition may pass on only what it requires itself: \
+                         declare `{shown}: {EQUALITY}`"
+                    )
+                } else {
+                    "equality is derived from what a type contains; a sequence, a `Vec` or a \
+                     `Chan` anywhere inside a type gives it none"
+                        .to_owned()
+                }),
+            );
+        }
+
         let settled: Vec<Type> = solved
             .iter()
             .map(|s| s.map_or(Type::Int, |(t, _)| t))
@@ -4192,6 +4321,12 @@ impl Checker<'_> {
                 BinOp::Eq | BinOp::NotEq if lt == rt => self.res.types().equality(lt).err(),
                 _ => None,
             };
+            // A type parameter without a requirement is the one blocker the author can lift
+            // where they stand, by declaring it (N14); say so, naming the parameter.
+            let unrequired = blocked.as_ref().and_then(|w| match w.ty {
+                Type::Param(_) => Some(self.show(w.ty)),
+                _ => None,
+            });
             let detail = if let Some(why) = blocked.filter(|w| !w.path.is_empty()) {
                 format!(
                     "`{}` does not apply to `{slt}`: its `{}` is a `{}`, which has no equality",
@@ -4204,11 +4339,16 @@ impl Checker<'_> {
             } else {
                 format!("`{}` cannot {verb} `{slt}` with `{srt}`", op.symbol())
             };
-            self.errors.push(
-                Diagnostic::error(codes::INVALID_OPERANDS, op_span, detail)
-                    .secondary(lhs_span, format!("this is `{slt}`"))
-                    .secondary(rhs_span, format!("this is `{srt}`")),
-            );
+            let mut refusal = Diagnostic::error(codes::INVALID_OPERANDS, op_span, detail)
+                .secondary(lhs_span, format!("this is `{slt}`"))
+                .secondary(rhs_span, format!("this is `{srt}`"));
+            if let Some(p) = unrequired {
+                refusal = refusal.help(format!(
+                    "`{p}` is not known to have equality, because its declaration does not \
+                     require it; a definition that compares one declares `{p}: {EQUALITY}`"
+                ));
+            }
+            self.errors.push(refusal);
 
             // The operands were wrong, so this expression has no honest type. Reporting
             // the operator's usual one produces a second error about a mismatch the
