@@ -566,6 +566,36 @@ whole-declaration spans for the declaration diagnostics that are not compared; m
 keyed by normalised rather than canonical path. The prelude is the only module whose key
 is not a path.
 
+### Derived equality, and the first enum comparison in the compiler — N13, 2026-09-25
+
+*The checker.* `equality_blocker` in `analyse.nz` is the reference's `UserTypes::equality`
+over the same table — an enum's fields are its variants and a variant's are its payload, so
+one walk answers both kinds — and `check_binary` refuses `==` exactly when the reference
+does, at the same span with the same code. `the_nazm_checker_agrees_with_the_reference_on_equality`
+compares the two on 30 programs, 20 of them refusals.
+
+*The emitter.* A comparison of two records or two enums calls `@nz.eq<entry>`, generated
+after every function for each entry a comparison reached. A record's helper compares fields
+in layout order and leaves at the first difference; an enum's compares tags, then `switch`es
+to the variant's slot and hands it to the variant's own helper. Both operands are released
+after the answer, as a `Str` comparison's already were.
+
+*The compiler uses what it compiles.* A node's completion was `0`, `1` or `2` in an `Ints`,
+with `-1` for "no arm yet" in a `match`'s fold. It is an `enum Completion` in a
+`Vec[Completion]`, the fold is an `Option[Completion]`, and every test of one is an enum
+`==` — so every stage of the chain compiles enum equality in the compiler itself.
+
+**What the chain now carries.** `compiler/conformance/equality.nz` — records with a heap
+field built separately, different and equal variants, `Option[Int]`, `Result[Int, Str]` and
+`Box[Shape]` — a module case comparing an imported record, enum and `Option[Point]`, and
+seven refusals, all `N0304`: a `Vec`, an `Ints`, a `Chan`, a record holding a `Vec`, an enum
+with one variant holding one, a generic body over `Box[T]`, and two records of one shape.
+
+**The digest moved a tenth time**: `a9ead258…` (N12.1) → `76598c43…`. `ir: identical`,
+executables byte-identical once the linker UUID is removed and the runnable forms too, 30
+conformance cases (12 of them multi-module) and 19 refusals agreeing across C2, C3 and the
+reference, at 12,412 source lines.
+
 ## 6. Reproducing it
 
 ```sh
