@@ -357,10 +357,10 @@ No variants, no pattern matching, no generics, no traits, no methods, no `impl`,
 closures, no `Option` or `Result`, no user-defined destructors, no operator overloading, no
 inheritance, no field-level visibility, no default values, no update syntax.
 
-**No derived equality.** `a == b` on records is `N0304`. Equality would have to decide what
-a sequence field means — the same storage or the same contents — and the language has not
-chosen; sequences and channels are refused by `==` for the same reason and records join
-them rather than get an exception.
+**Equality is derived, since N13.** `a == b` on two records of one type compares their
+fields, and is refused (`N0304`) when any field has no equality — a sequence field would
+force the language to decide whether equality means the same storage or the same contents,
+and it has not chosen. *Equality is derived* below owns the rule.
 
 **`pub` still promises nothing about a binary.** A record's layout, its field offsets, its
 size and its calling convention are compiler-private and may change between builds. `pub`
@@ -397,8 +397,9 @@ constitution, and it is a runtime fact rather than a static one: which fields ex
 determined by a discriminant the value carries.
 
 An enum has a nominal identity, an active variant identity, and the payload values of that
-variant. It has no object identity of its own — no address-of, no `==`, no way to observe
-that two bindings came from one value. Two separately declared enums are different types
+variant. It has no object identity of its own — no address-of, no identity comparison, no
+way to observe that two bindings came from one value; the `==` N13 derives compares values,
+not identities. Two separately declared enums are different types
 however identical their variants, exactly as two records are.
 
 #### Declaration
@@ -699,8 +700,9 @@ destructuring; no by-move or mutable patterns; no match ergonomics inferred from
 Pattern matching in N10 selects a variant and binds its named payload fields, and nothing
 else.
 
-**No derived equality.** `a == b` on enums is `N0304`, for the reason records are: equality
-would have to decide what a sequence payload means, and the language has not chosen.
+**Equality is derived, since N13.** `a == b` on two enum values of one type compares their
+variants and then the active variant's payload, and is refused (`N0304`) when a payload field
+of **any** variant has no equality. *Equality is derived* below owns the rule.
 
 **`pub` still promises nothing about a binary.** An enum's discriminant values, its payload
 layout, its size and its calling convention are compiler-private and may change between
@@ -1048,6 +1050,68 @@ would need a propagation protocol, and traits do not exist.
 
 **`main` is unchanged.** It returns `Int`, so a program handles its errors itself with a
 `match` and decides what they mean; nothing maps an `Err` to an exit status.
+
+### Equality is derived — `==` on the value types that can have it
+
+Settled by N13, 2026-09-25. Built-in `==` and `!=` apply to two operands of **one** type,
+and only when the language defines equality for that type. For a user-defined type it is
+not declared, written or opted into: it is **derived** from what the type contains.
+
+| type | built-in equality |
+| --- | --- |
+| `Int`, `Bool` | yes — the same value |
+| `Str` | yes — the same bytes (*Strings are bytes*). A shared backing makes nothing equal, and separate backings make nothing unequal |
+| a record | yes exactly when **every field's** type has equality |
+| an enum | yes exactly when **every payload field of every variant** has equality |
+| a concrete instance of a generic record or enum — `Box[Int]`, `Option[Str]`, `Result[Int, Str]` | derived as above, over its fields **after substitution** |
+| `Ints`, `Strs`, `Vec[T]`, `Chan` | **no** — a handle's equality would have to mean the same storage or the same contents, and the language has chosen neither |
+| an unconstrained type parameter `T` | **no** — `==` is not valid for every type, and there is no constraint that could say "for these types only" |
+
+A type with no equality is refused where it is compared, with `N0304`, and the message names
+the first component responsible: `Outer`'s `inner.values` is a `Vec[Int]`.
+
+**One type, nominally.** Two records with identical fields are two types and cannot be
+compared, nor can `Box[Int]` and `Box[Str]`, `Option[Int]` and `Option[Str]`, or `A[Int]`
+and `B[Int]`. Nothing converts, implicitly or otherwise.
+
+**What it means.** Two records are equal when every corresponding field is equal under that
+field type's equality — two records built separately with equal fields are equal, because
+a record has no identity. Two enum values are equal when they hold the **same variant** and
+that variant's payload fields are pairwise equal; different variants are unequal, and their
+payloads are not compared. A zero-payload variant is equal to itself, and an inactive
+variant is never inspected. `!=` is the negation of `==`, always.
+
+**Decided from the type, never from the value.** An enum with one variant that cannot be
+compared cannot be compared at all: given `enum Work { Empty, Values(value: Vec[Int]), }`,
+`Work.Empty() == Work.Empty()` is refused, because `==` is checked where the active variant
+is not known and a guarantee about a type is about every one of its values. This is the
+rule task safety follows, for the same reason.
+
+**Generic bodies are unchanged.** A concrete `Box[Int]` compares, and
+`fn same[T](a: T, b: T) -> Bool { a == b }` is still refused at its definition, as is
+`fn same_box[T](a: Box[T], b: Box[T]) -> Bool { a == b }`: inside the body `Box[T]` has a
+field of an unconstrained type, so it has no equality either. Nothing is inferred, deferred to
+an instantiation, or accepted because some caller would pass a comparable type.
+
+**`Option` and `Result` have no rule of their own.** They are the core prelude's ordinary
+generic enums, so `Option[Int]` and `Result[Int, Str]` compare and `Option[Vec[Int]]` does
+not, by the rule above.
+
+**Order is not meaning.** Declaration order of fields, of variants and of payload fields is
+not part of what a type means, and not part of what its equality means either.
+
+**Evaluation.** The left operand is evaluated, then the right, each once, and then they are
+compared. An operand that leaves — returns, breaks, continues or propagates — leaves no
+comparison behind, and what the other side already built is released on the way out.
+Comparing observes: a bound operand is still usable afterwards, and a temporary operand is
+released once the answer exists. Comparing is pure, so the order in which fields are
+compared is not observable, and an implementation may stop at the first unequal one.
+
+**What equality is not.** Not declared: there is no `derive`, no `Eq` and no trait. Not
+customisable: a type cannot define its own `==`. Not identity: no value's address, owner or
+handle is compared. Not ordering: `< <= > >=` remain `Int`-only. Not hashing. And not
+defined on sequences, vectors or channels, deliberately, by the rule that stops a record
+containing one from comparing.
 
 ## Settled for v0.2 — mutation and iteration
 

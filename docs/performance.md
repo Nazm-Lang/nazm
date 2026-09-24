@@ -838,6 +838,65 @@ moves by one 64 KiB page between runs of unrelated compilers here — N12's own 
 measured in the same session, gave 1,922,176 B — so it is not attributed to the migration.
 C2 and C3 of the migrated compiler emit identical IR.
 
+### Derived equality — measured 2026-09-25, and at `-O2` it is the fields' comparisons
+
+N13 made records, enums and their generic instances comparable, each through a helper the
+emitter generates per compared type. Two questions: what a comparison costs against the
+scalar comparisons it stands for, and what the helpers cost in code.
+
+**Time.** Contained (Linux aarch64, 1 CPU), median of five, one comparison per iteration with
+operands built from the loop counter so nothing is loop-invariant; 10M iterations at `-O0`,
+30M at `-O2`. The rows are the programs in `target/n13/bench/` at the N13 commit.
+
+| Workload | `-O0`, 10M | `-O2`, 30M |
+| --- | ---: | ---: |
+| `Int` baseline — `(i % 8) == ((i / 2) % 8)` | 56 ms | 14 ms |
+| `Str` baseline — two literals chosen by parity | 157 ms | 176 ms |
+| record `{ x, y: Int }`, equal a quarter of the time | 71 ms | 15 ms |
+| record, unequal in the first field in layout order | 31 ms | 0 ms — folded |
+| record, unequal in the last field | 60 ms | 14 ms |
+| nested record (two records and an `Int`) | 94 ms | 14 ms |
+| enum, different variants | 57 ms | 0 ms — folded |
+| enum, same variant, payload compared | 78 ms | 15 ms |
+| enum, same variant, payload always unequal | 38 ms | 0 ms — folded |
+| `Option[Int]`, both `Some` | 78 ms | 14 ms |
+| `Result[Int, Str]`, both `Ok` | 88 ms | 15 ms |
+
+At `-O2` the helpers are inlined and a composite comparison costs what its field comparisons
+cost: every row that compares is within a millisecond of the `Int` baseline over 30M, and
+the rows LLVM can decide from the construction — different variants, a first field that
+always differs — are folded away with the loop. **At `-O0`** the helper is a real call: about
+**1.5 ns** per comparison over the baseline for a two-field record, 3.8 ns for the nested
+one, 2.2 ns for an enum's tag and payload, and 3.2 ns for a `Result` — and less than the
+baseline where the first comparison decides (the unequal-early record and different-variant
+enum stop there). The `Str` rows are the existing `memcmp` path and are not changed by N13.
+No zero-cost claim is made for `-O0`.
+
+**Code.** One helper per compared record or enum per unit, generated only when a comparison
+reaches it — a type nobody compares carries none — and one per instance: `Box[Int]` and
+`Box[Str]` are two. A nested type's helper calls its fields' helpers (the nested row above
+has two). Against the `Int` baseline program, the two-field record's helper adds 1,011 bytes
+of unoptimised IR and 56 bytes of executable at `-O0`; the enum's adds 2,293 bytes of IR; a
+`Result[Int, Str]`'s, which compares a `Str` arm too, 2,828. At `-O2` every executable is
+within 24 bytes of the baseline's 72,928. **Across units** a helper is `internal` and
+duplicated: a record compared in two modules is emitted once in each (measured: one helper
+in each of the two units, none in the entry or runtime units). Nothing is exported, so no
+symbol is promised.
+
+**The dogfood** — the compiler's completion states as an enum, compared with `==` —
+measured by the bootstrap of record before and after, contained:
+
+| | before | after |
+| --- | ---: | ---: |
+| `analyse.nz` lines | 4,662 | 4,678 |
+| C2 IR | 6,486,154 B | 6,488,724 B (+2,570, +0.04%) |
+| C2 executable | 1,922,560 B | 1,922,496 B (−64) |
+| C2 compiling `emit.nz`, median of 3 | 11.64 s, 54.2 MB peak | 11.65 s, 54.0 MB peak |
+| C2 compiling `check.nz`, median of 3 | 3.30 s, 25.8 MB peak | 3.29 s, 25.8 MB peak |
+
+Every difference is within noise; none is claimed. What changed is what a completion can be:
+three variants rather than any `Int`, and "no arm yet" an `Option` rather than `-1`.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

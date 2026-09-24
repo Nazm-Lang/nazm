@@ -261,6 +261,32 @@ the rule every value already follows. And the `Option` dogfood (`record_owned`) 
 `-1` meaning *not a record*: a sentinel is a value that participates in comparisons it was
 never meant for, and an enum is not. Status unchanged.
 
+### N13 derived equality, 2026-09-25. Status: still **SUPPORTED, not VERIFIED** — and one new finding.
+
+**Derived equality composes; abstraction over it does not.** Structural `==` composed
+successfully through every nominal value type whose components already have equality —
+records, enums over every variant, concrete generic instances after substitution, and
+`Option` and `Result` as the ordinary enums they are — with no declaration, no rule naming
+a type, and no new ownership rule: comparing borrows, and a compared temporary is released
+once, which is the rule a `Str` comparison already followed. The value model gained a
+capability and needed nothing for it.
+
+What did **not** compose is generic abstraction over that capability. After N13 a concrete
+`Box[Int]` has equality and `fn same_box[T](a: Box[T], b: Box[T]) -> Bool { a == b }` does
+not, nor does `fn same[T](a: T, b: T)`, because nothing can say "`T` has equality" — Nazm has
+no constraint or trait mechanism, and checking a generic body once, parametrically, is
+exactly what makes the refusal correct. This is the first capability the language derives
+for concrete types that a generic definition cannot ask for, and it is the evidence that may
+justify a constrained-generics milestone; it does not settle what such a mechanism looks
+like, and N13 did not begin one.
+
+The dogfood adds the second observation R1 has been collecting: `analyse.nz`'s completion
+states were three integers in an `Ints`, with a fourth meaning "no arm yet", and are an
+`enum Completion` in a `Vec[Completion]` and an `Option[Completion]` now, compared with
+`==`. Nine historical mutations that compared a completion with `99` could no longer be
+written: the invalid state they simulated is not a value of the type. Performance moved
+within noise (`performance.md`). Status unchanged.
+
 ---
 
 ## R2 · Content-addressed semantic IR pays for itself
