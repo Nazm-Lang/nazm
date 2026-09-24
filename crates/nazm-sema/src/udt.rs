@@ -359,7 +359,15 @@ impl UserTypes {
     ///
     /// [`NoEquality`] naming the field path and the type that has no equality.
     pub fn equality(&self, t: Type) -> Result<(), NoEquality> {
-        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str);
+        // A type parameter has equality exactly when its declaration requires it (N14):
+        // that is what the body may assume, and every argument is checked against it where
+        // the definition is used. One rule, so `T`, `Box[T]` and `Result[T, E]` all answer
+        // from it and nothing about bounds is written anywhere else.
+        let leaf = |t: Type| match t {
+            Type::Int | Type::Bool | Type::Str => true,
+            Type::Param(p) => self.requires_equality(p),
+            _ => false,
+        };
         let Some(root) = TypeNode::of(t) else {
             return if leaf(t) {
                 Ok(())
