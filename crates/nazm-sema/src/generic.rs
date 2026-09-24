@@ -69,6 +69,14 @@ pub struct Generics {
     names: HashMap<ParamOwner, Vec<String>>,
     /// Instances interned in total, against [`INSTANCE_BUDGET`].
     created: usize,
+    /// The type parameters whose declaration requires equality — `T` in
+    /// `fn same[T: Equality]`. N14. Keyed by the parameter itself, its owner and position,
+    /// never by its name: a requirement belongs to the position, as the parameter does.
+    ///
+    /// This is the whole of the assumption environment. A parameter appears only inside its
+    /// own declaration, so one set for the compilation answers "what may this body assume
+    /// about `T`" for every body at once.
+    equality: std::collections::BTreeSet<TypeParam>,
 }
 
 impl UserTypes {
@@ -105,6 +113,18 @@ impl UserTypes {
     /// Record the names of one declaration's type parameters, for messages.
     pub fn name_params(&mut self, owner: ParamOwner, names: Vec<String>) {
         self.generics_mut().names.insert(owner, names);
+    }
+
+    /// Record that a type parameter's declaration requires equality. N14.
+    pub fn require_equality(&mut self, p: TypeParam) {
+        self.generics_mut().equality.insert(p);
+    }
+
+    /// Whether a type parameter's declaration requires equality — and so whether, inside
+    /// that declaration, it has it. N14.
+    #[must_use]
+    pub fn requires_equality(&self, p: TypeParam) -> bool {
+        self.generics().equality.contains(&p)
     }
 
     /// How many type parameters an owner declared, as recorded by [`Self::name_params`].

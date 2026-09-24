@@ -107,7 +107,15 @@ use crate::digest::{self, Framed};
 /// A cached entry records only a module that checked cleanly, so no N12 entry could claim a
 /// program N13 refuses; what the counter guarantees is the general rule, that no entry is
 /// ever read by a checker other than the one that wrote it.
-pub const SEMANTIC_EPOCH: u32 = 6;
+///
+/// `7` — N14, 2026-09-25. A type parameter may require equality. The code set moved for two
+/// new codes (`N0364`, `N0365`), and one change it would not show: `==` on a type parameter
+/// whose declaration requires `Equality` — and on `Box[T]`, `Option[T]` and every composite
+/// derived from one — moved from refused to accepted under the existing `N0304`. The
+/// interface schema moved too (`/5`), which reaches every dependent's key through its
+/// dependencies' fingerprints; the counter is what covers a module's *own* body, which the
+/// schema does not.
+pub const SEMANTIC_EPOCH: u32 = 7;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -158,9 +166,11 @@ pub const CHECKER_CODES: &[&str] = &[
     "UNDEFINED_FUNCTION",
     "UNDEFINED_VARIABLE",
     "UNKNOWN_FIELD",
+    "UNKNOWN_REQUIREMENT",
     "UNKNOWN_TYPE",
     "UNKNOWN_VARIANT",
     "UNREACHABLE_STATEMENT",
+    "UNSATISFIED_REQUIREMENT",
     "UNSUPPORTED_CONSTRUCT",
     "WRONG_ARGUMENT_COUNT",
     "WRONG_ENUM_IN_PATTERN",

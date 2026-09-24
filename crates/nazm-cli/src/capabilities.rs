@@ -117,6 +117,20 @@ const CONSTRUCTS: &[ConstructRow] = &[
                    refused (N0357)",
     },
     ConstructRow {
+        name: "`==` and `!=` derived on records, enums and concrete generic instances",
+        interpreted: true,
+        compiled: true,
+        evidence: "nazm-core/tests/equality.rs, nazm-cli/tests/equality.rs; none on a \
+                   sequence, a `Vec` or a `Chan`, or on anything containing one",
+    },
+    ConstructRow {
+        name: "a type parameter that requires equality: `fn same[T: Equality]`",
+        interpreted: true,
+        compiled: true,
+        evidence: "nazm-core/tests/constraints.rs, nazm-cli/tests/constraints.rs; functions \
+                   only, `Equality` the only requirement, nothing emitted at run time",
+    },
+    ConstructRow {
         name: "modules: `use`, relative resolution, diamonds, cycles",
         interpreted: true,
         compiled: true,
