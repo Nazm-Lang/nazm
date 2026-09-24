@@ -9,7 +9,7 @@
 //! the interpreter's table is where the name came from.
 //!
 //! What it cannot do is invent knowledge the tables do not hold. Whether a *construct*
-//! compiles — `scope`, recursion, a bare block as an expression — is decided by code in
+//! compiles — `scope`, recursion, a block used as an expression — is decided by code in
 //! `nazm-lir::lower`, not by a table, so those are listed here with the evidence named:
 //! each is a claim this file makes and the test suite checks, and each says which test.
 
@@ -91,10 +91,10 @@ const CONSTRUCTS: &[ConstructRow] = &[
         evidence: "nazm-cli/tests/build.rs",
     },
     ConstructRow {
-        name: "a bare block used as an expression",
+        name: "a block used as an expression: a `match` arm, an initialiser, an argument",
         interpreted: true,
-        compiled: false,
-        evidence: "refused by name; a separate scoping question (docs/spec.md)",
+        compiled: true,
+        evidence: "nazm-cli/tests/value_blocks.rs; the Nazm-written compiler too (selfhost.rs)",
     },
     ConstructRow {
         name: "`struct` records: named fields, construction, projection, replacement",

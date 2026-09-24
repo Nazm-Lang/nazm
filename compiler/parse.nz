@@ -24,7 +24,6 @@
 fn refuse_unimplemented(kinds: Ints, starts: Ints, i: Int) -> Int {
     let t = kind_at(kinds, i);
     let mut what = "";
-    if t == k_lbrace() { what = "a block used as an expression"; }
     if t == k_enum() { what = "an enum declared inside a function"; }
     if t == k_struct() { what = "a record declared inside a function"; }
     if what == "" { return 0; }
@@ -38,10 +37,10 @@ fn refuse_unimplemented(kinds: Ints, starts: Ints, i: Int) -> Int {
 // minus, `+ - * / %`, the six comparisons with their real precedence and associativity,
 // parentheses, calls of any arity).
 //
-// **`if` is not parsed yet**, and neither is a bare block used as an expression. Both
-// suspend an expression part-way to parse a block, which the shunting-yard stacks cannot
-// yet express; that is the next increment. A construct outside the scope is refused by
-// name at its own position, never misparsed.
+// An `if`, a `match` and a block used as an expression (N12.1) all suspend an expression
+// part-way to parse a block: the expression stays on the shared stacks and the frame
+// machine below parses the block, then resumes it. A construct outside the scope is
+// refused by name at its own position, never misparsed.
 
 use "lex.nz";
 
@@ -84,6 +83,10 @@ pub fn n_match() -> Int { 31 }
 // `operand?` — N12's propagation. One child, the operand; the node's span runs from the
 // operand's start to the end of the `?`, so the `?` itself is the node's last byte.
 pub fn n_propagate() -> Int { 32 }
+// `{ statements; tail }` written where an expression is — N12.1. One child, the `block`
+// node, spanning the same bytes: the wrapper is the reference AST's `Expr::Block`, and it
+// is what tells a block used as a value from a branch's or a body's.
+pub fn n_blockexpr() -> Int { 33 }
 
 pub fn node_name(k: Int) -> Str {
     if k == n_int() { return "int"; }
@@ -118,6 +121,7 @@ pub fn node_name(k: Int) -> Str {
     if k == n_arm() { return "arm"; }
     if k == n_match() { return "match"; }
     if k == n_propagate() { return "propagate"; }
+    if k == n_blockexpr() { return "blockexpr"; }
     "?"
 }
 
@@ -339,6 +343,14 @@ fn parse_expr(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, from: Int,
                 ints_push(opat, start_at(starts, i));
                 i = i + 1;
                 continue;
+            }
+            if t == k_lbrace() {
+                // A block where an operand is expected: the block *is* the operand. The
+                // frame machine parses it, and this expression resumes after it exactly as
+                // it resumes after an `if` — with the operators written before the block
+                // still on the stack, untouched, because nothing about them is complete.
+                ints_set(status, 0, 3);
+                return i;
             }
             if t == k_match() {
                 // The scrutinee is an ordinary expression, exactly as an `if`'s condition
@@ -956,6 +968,9 @@ fn frame_while() -> Int { 2 }
 fn frame_if_then() -> Int { 3 }
 fn frame_if_else() -> Int { 4 }
 fn frame_scope() -> Int { 5 }
+// A block written as an expression: the expression that reached it is suspended underneath,
+// and resumes with the block as its operand once the block closes.
+fn frame_blockexpr() -> Int { 6 }
 
 // What to do once the expression now being parsed finally completes. It is a stack
 // because an `if` can suspend an expression that was itself the value of a `let`, and
@@ -1143,6 +1158,16 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 i = i + 1;
                 push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
                         frame_if_then(), brace, 0, 0, 0, "");
+                continue;
+            }
+            if ints_get(status, 0) == 3 {
+                // Suspended at a block used as an operand. Reset here, because the next
+                // thing to read this word is whatever the block's first statement is.
+                ints_set(status, 0, 0);
+                let brace = start_at(starts, i);
+                i = i + 1;
+                push_frame(fk, fstart, fcount, ftail, faux, fparams, fvis, ftext,
+                        frame_blockexpr(), brace, 0, 0, 0, "");
                 continue;
             }
             if ints_get(status, 0) == 2 {
@@ -1488,6 +1513,15 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 resuming = true;
                 continue;
             }
+            if kind == frame_blockexpr() {
+                // The block is the operand the suspended expression was waiting for, with
+                // the block's own span — the brace to the brace, as the reference's is.
+                emit(nk, nar, nst, nen, ntx, n_blockexpr(), 1, start, close, "");
+                ints_push(vs, start);
+                ints_push(ve, close);
+                resuming = true;
+                continue;
+            }
             if kind == frame_scope() {
                 // The block is the one child, and the `scope` spans from its keyword to
                 // the closing brace — the shape `selfhost.rs` writes down for it.
@@ -1645,7 +1679,10 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         ints_push(pdepth, ints_len(fk));
         ints_push(pbase, ints_len(ops));
         ints_push(pstart, start_at(starts, i));
-        if t == k_if() {
+        let mut blocklike = 0;
+        if t == k_if() { blocklike = 1; }
+        if t == k_lbrace() { blocklike = 1; }
+        if blocklike == 1 {
             strs_push(ptext, "blocklike");
         } else {
             strs_push(ptext, "");

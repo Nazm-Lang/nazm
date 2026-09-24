@@ -342,6 +342,53 @@ fn a_dependent_checks_propagation_from_persisted_interfaces_with_the_dependency_
 }
 
 #[test]
+fn a_dependent_checks_value_block_arms_from_persisted_interfaces_with_the_dependency_deleted() {
+    // N12.1 §84. Arm blocks over B's enum and over an `Option` B returns, checked against
+    // B's interface and the prelude's alone: block parity did not come to need bodies.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let a = "use \"b.nz\";\n\
+        fn score(n: Int) -> Int {\n    let base = match token(n) {\n        \
+        Token.Word(text: s) => {\n            let w = s;\n            str_len(w)\n        },\n        \
+        Token.End() => {\n            return 0;\n        },\n    };\n    \
+        base + match find(n) {\n        Option.None() => {\n            0\n        },\n        \
+        Option.Some(value: f) => {\n            let g = f;\n            str_len(g)\n        },\n    }\n}\n\
+        fn main() -> Int { score(3) }\n";
+    write(dir.path(), "nazm.root", "");
+    write(dir.path(), "a.nz", a);
+    write(
+        dir.path(),
+        "b.nz",
+        "pub enum Token {\n    Word(text: Str),\n    End,\n}\n\
+         pub fn token(n: Int) -> Token {\n    if n == 0 { return Token.End(); }\n    Token.Word(text: int_to_str(n))\n}\n\
+         pub fn find(n: Int) -> Option[Str] {\n    if n > 3 { return Option[Str].Some(value: int_to_str(n)); }\n    Option[Str].None()\n}\n",
+    );
+    let b_json = interface_of(dir.path(), "b.nz");
+    std::fs::remove_file(dir.path().join("b.nz")).expect("remove B");
+    let core_json = prelude_interface();
+    for prelude_first in [true, false] {
+        let errors = check_against(a, &b_json, &core_json, prelude_first);
+        assert!(
+            errors.is_empty(),
+            "prelude first: {prelude_first}: {errors:#?}"
+        );
+    }
+    // And the negative half: an arm block of the wrong type is still refused from the
+    // interfaces, so the pass above is the blocks being checked rather than skipped.
+    let wrong = a.replace(
+        "let g = f;\n            str_len(g)",
+        "let g = f;\n            g",
+    );
+    assert_ne!(wrong, a);
+    let errors = check_against(&wrong, &b_json, &core_json, true);
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.code == nazm_diag::codes::BRANCH_TYPES_DIFFER),
+        "{errors:#?}"
+    );
+}
+
+#[test]
 fn every_module_s_check_entry_depends_on_the_prelude_s_interface() {
     // §11: the implicit import is a dependency like any other, so a module's stored entry
     // names the prelude's key and the exact interface hash it was checked against — which

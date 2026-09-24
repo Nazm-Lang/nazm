@@ -1,0 +1,231 @@
+// N12.1: a block used as a value — a `match` arm, a `let` initialiser, an argument, a field
+// initialiser, an operand — and the completions it can have: a value, nothing, or a
+// transfer that contributes nothing to the join it leaves.
+
+struct Item {
+    name: Str,
+    tags: Ints,
+}
+
+enum Shape {
+    Named(text: Str),
+    Plain,
+}
+
+enum Step {
+    Leave,
+    Keep,
+    Try,
+}
+
+fn item(n: Int) -> Item {
+    let tags = ints_new();
+    ints_push(tags, n);
+    Item(name: str_concat("item-", int_to_str(n)), tags: tags)
+}
+
+// Arm blocks over the prelude's `Option`, the payload handed back through a local.
+fn text(o: Option[Str]) -> Str {
+    match o {
+        Option.None() => {
+            let d = str_concat("no", "ne");
+            d
+        },
+        Option.Some(value: s) => {
+            let x = s;
+            x
+        },
+    }
+}
+
+// Arm blocks producing a generic `T`: nothing is done to it but handing it on.
+fn choose[T](x: Option[T], fallback: T) -> T {
+    match x {
+        Option.None() => {
+            fallback
+        },
+        Option.Some(value: v) => {
+            let w = v;
+            w
+        },
+    }
+}
+
+fn attempt(ok: Bool) -> Result[Int, Str] {
+    if ok {
+        return Result[Int, Str].Ok(value: 5);
+    }
+    Result[Int, Str].Err(error: str_concat("x", "y"))
+}
+
+// Three arms: one returns, one produces a value from its block, one propagates with `?`.
+// Only the second reaches the join.
+fn step(s: Step, ok: Bool) -> Result[Int, Str] {
+    let v = match s {
+        Step.Leave() => {
+            let gone = int_to_str(1);
+            return Result[Int, Str].Ok(value: 100);
+        },
+        Step.Keep() => {
+            let k = str_concat("ab", "c");
+            str_len(k)
+        },
+        Step.Try() => {
+            let held = int_to_str(22);
+            attempt(ok)? + str_len(held)
+        },
+    };
+    Result[Int, Str].Ok(value: v)
+}
+
+fn show(r: Result[Int, Str]) -> Int {
+    match r {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => 0 - str_len(e),
+    }
+}
+
+// A block argument that leaves: nothing after it runs, and the call is never made.
+fn later(log: Ints) -> Str {
+    ints_push(log, 1);
+    str_concat("late", "r")
+}
+
+fn consume(a: Str, b: Str, c: Str) -> Int {
+    str_len(a) + str_len(b) + str_len(c)
+}
+
+fn call(fail: Bool, log: Ints) -> Int {
+    consume(int_to_str(12345), {
+        let t = str_concat("mid-", int_to_str(1));
+        if fail {
+            return 0 - 1;
+        }
+        t
+    }, later(log))
+}
+
+// Block field initialisers, one of which leaves half-way through a construction.
+fn build(fail: Bool) -> Int {
+    let it = Item(name: str_concat("nm-", int_to_str(7)), tags: {
+        let ts = ints_new();
+        ints_push(ts, 3);
+        if fail {
+            return 0 - 1;
+        }
+        ts
+    });
+    let sh = Shape.Named(text: {
+        let l = int_to_str(4444);
+        l
+    });
+    str_len(it.name) * 100 + ints_get(it.tags, 0) * 10 + match sh {
+        Shape.Named(text: l) => str_len(l),
+        Shape.Plain() => 0,
+    }
+}
+
+// Every arm leaves: the `match` has no value and no join.
+fn leaves(o: Option[Str]) -> Int {
+    let n = match o {
+        Option.None() => {
+            let s = int_to_str(11);
+            return str_len(s);
+        },
+        Option.Some(value: v) => {
+            return str_len(v) * 10;
+        },
+    };
+    n
+}
+
+// A `break` and a `continue` out of arm blocks inside a loop.
+fn looped() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 10 {
+        i = i + 1;
+        let o = if i % 2 == 0 { Option[Str].Some(value: int_to_str(i * 100)) } else { Option[Str].None() };
+        let v = match o {
+            Option.None() => {
+                continue;
+            },
+            Option.Some(value: s) => {
+                if i == 8 {
+                    break;
+                }
+                s
+            },
+        };
+        total = total + str_len(v);
+    }
+    total
+}
+
+// Arms that produce nothing, in a statement-position `match`, and a statement block.
+fn assigned() -> Int {
+    let mut name = str_concat("start", "");
+    let mut i = 0;
+    while i < 6 {
+        let o = if i % 3 == 0 { Option[Str].None() } else { Option[Str].Some(value: int_to_str(i * 1000)) };
+        match o {
+            Option.None() => {
+                name = str_concat(name, ".");
+            },
+            Option.Some(value: s) => {
+                name = s;
+            },
+        };
+        i = i + 1;
+    }
+    {
+        let copy = str_concat(name, "!");
+        name = copy;
+    }
+    str_len(name)
+}
+
+// A block producing a `Result`, propagated once.
+fn once(log: Ints, ok: Bool) -> Result[Int, Str] {
+    let a = ({
+        ints_push(log, 1);
+        let r = attempt(ok);
+        r
+    })?;
+    Result[Int, Str].Ok(value: a * 2)
+}
+
+fn main() -> Int {
+    let a = str_len(text(Option[Str].Some(value: str_concat("some-", int_to_str(42))))) * 10 + str_len(text(Option[Str].None()));
+    let b = str_len(choose(Option[Str].None(), int_to_str(1234))) * 10 + ints_get(choose(Option[Item].Some(value: item(6)), item(9)).tags, 0);
+    let c = show(step(Step.Leave(), true)) + show(step(Step.Keep(), true)) + show(step(Step.Try(), true)) + show(step(Step.Try(), false));
+    let log = ints_new();
+    let d = call(false, log) * 10 + call(true, log) + ints_len(log);
+    let e = build(false) * 10 + build(true);
+    let f = leaves(Option[Str].None()) + leaves(Option[Str].Some(value: "abc"));
+    let g = looped() * 100 + assigned();
+    let h = show(once(log, true)) * 10 + show(once(log, false)) + ints_len(log);
+    let x = {
+        let one = { 1 };
+        one + { let two = 2; two } * -{ 3 }
+    };
+    print(int_to_str(a));
+    print(" ");
+    print(int_to_str(b));
+    print(" ");
+    print(int_to_str(c));
+    print(" ");
+    print(int_to_str(d));
+    print(" ");
+    print(int_to_str(e));
+    print(" ");
+    print(int_to_str(f));
+    print(" ");
+    print(int_to_str(g));
+    print(" ");
+    print(int_to_str(h));
+    print(" ");
+    print(int_to_str(x));
+    print(str_from_byte(10));
+    a + b + c + d + e + f + g + h + x
+}

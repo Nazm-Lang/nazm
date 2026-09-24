@@ -1,0 +1,19 @@
+// expect: N0300
+// An arm block with no tail produces nothing, so the `match` produces nothing, and a
+// `let` needs a value. There is no `Unit` value for either compiler to invent.
+fn f(o: Option[Int]) -> Int {
+    let mut z = 0;
+    let x = match o {
+        Option.None() => {
+            z = 1;
+        },
+        Option.Some(value: v) => {
+            v
+        },
+    };
+    x
+}
+
+fn main() -> Int {
+    f(Option[Int].None())
+}
