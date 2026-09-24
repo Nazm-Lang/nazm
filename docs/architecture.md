@@ -2491,6 +2491,94 @@ simulated is no longer expressible.
 - **An enum is still one slot per variant**, so an equality helper for a wide enum extracts
   from an aggregate larger than a tagged union would be; the helper reads only one slot.
 
+## 7.16 A requirement on a type parameter: one set, read by one derivation — settled by N14, 2026-09-25
+
+`docs/spec.md`, *A type parameter may require equality*, is the law. N13 found the wall:
+a concrete `Box[Int]` compares and a generic body over `Box[T]` cannot say it wants one
+that does. N14 is the smallest mechanism that lets it say so.
+
+### Why a built-in requirement and not a trait
+
+Three shapes were compared. A **trait-shaped bound** (`T: Eq`) reads as the first half of a
+trait system — it invites `impl Eq for`, which would contradict N13's rule that equality is
+derived and cannot be written — and would need a namespace in which user traits could later
+live, decided now for no program. **Another spelling** (`T: ==`, `requires equality(T)`)
+avoids a name but is either an operator in a type position or a second clause form. A
+**built-in capability requirement**, `T: Equality`, is one name in one position: it reuses
+the `:` a field already uses for "has this type", names the capability rather than a
+declaration, and commits to nothing a future constraint system would have to undo — a trait
+system could later make `Equality` one of its members, or not.
+
+### Representation: an assumption environment of one set
+
+`Generics::equality: BTreeSet<TypeParam>` holds every parameter whose declaration requires
+equality, keyed by the parameter's identity — its owner and position — never by its name.
+That set *is* the assumption environment. A parameter only appears inside its own
+declaration, so one set for the compilation answers "what may this body assume" for every
+body at once, and no environment has to be threaded through checking.
+
+`UserTypes::equality` — N13's single derivation — reads it in exactly one place: the leaf
+rule for `Type::Param(p)` is `requires_equality(p)`. Everything else follows from the walk
+that already existed: `Box[T]` is an interned instance whose field is `T`, so it derives
+equality exactly when `T` does; `Result[T, E]` needs both; `Vec[T]` is a leaf with none. No
+bounded-parameter case is written in the operator, in record or enum logic, or in the core
+prelude, and termination is the walk's (a visited set over definitions).
+
+### Checking
+
+* **Declaration** (`declare_unit`): `declared_requirements` records `T: Equality` for a
+  function's parameter, refuses an unknown name (`N0365`) and a requirement on a record's or
+  enum's parameter (`N0101`, not supported yet: every instance of such a type would have to
+  be checked wherever it is written).
+* **The body**: unchanged code. `check_binary` already asks `equality(lt)`; a required `T`
+  now answers yes. The body is checked once.
+* **A call** (`check_generic_call`): after the type arguments are settled — written or
+  inferred, by the unchanged N11 rules — each argument of a required parameter is asked
+  `equality(arg)`. A concrete argument answers by what it contains; a caller's own
+  parameter by *its* requirement, which is what makes forwarding work exactly when the
+  caller requires the same. `N0364` is reported at the callee for a written argument and at
+  the argument an inferred one came from, with N13's blocking path.
+
+### Interfaces and caches
+
+`nazm.interface/5` adds `requires_equality` — ascending positions, absent when empty — to
+each exported function; the reader validates it and rehydration re-records it, so an
+importer checked against the interface alone is held to the requirement. A `/4` file could
+not say it, and a `/4` reader handed a `/5` file could not honour it, so the major moved.
+Because the field is by position, renaming a parameter changes no byte; because it is in the
+interface, adding or removing a public requirement moves its `InterfaceHash`, which reaches
+every importer's `CheckKey` through its dependencies — the existing invalidation path, with
+nothing added. A private function's requirement is not in any interface and rechecks only
+its own module. `SEMANTIC_EPOCH` moved 6 → 7 for the module's own body: `==` on a required
+parameter moved from refused to accepted under the existing `N0304`.
+
+### Native code: nothing
+
+Native generics are monomorphised, so by the time a body is lowered every parameter is a
+concrete type and `==` on it is N13's comparison — an `icmp`, the `Str` comparison, or a
+concrete helper. The requirement is not in the IR, the object key or the program: the
+instance of `same[T: Equality]` at `Int` is instruction for instruction a hand-written
+`same_int` (`a_requirement_leaves_no_trace_in_the_program`). The interpreter is parametric
+and compares values, so it has nothing to do either.
+
+### The compiler written in Nazm
+
+The parser writes a requirement into the parameter list's text after the parameter's
+position — `[T@5=Equality@8]` — where every existing reader of that text stops, so only the
+checker's `requirement_of` sees it. The table gains a `req` column, `1` for a parameter
+whose declaration requires equality; `has_no_equality` reads it for a parameter, which puts
+the assumption environment in the same one place as the reference's; `check_generic_call`
+checks each argument by `equality_blocker`, at the reference's spans. The emitter needed no
+change.
+
+### What this still does not do
+
+- **Only equality.** No other capability can be required, and nothing lets a program declare
+  one.
+- **Only functions.** A record's or enum's parameter cannot carry a requirement.
+- **No user-defined behaviour behind a bound.** `==` is N13's everywhere; a bound only proves
+  an operand is in its domain.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

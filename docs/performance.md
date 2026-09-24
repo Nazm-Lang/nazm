@@ -897,6 +897,48 @@ measured by the bootstrap of record before and after, contained:
 Every difference is within noise; none is claimed. What changed is what a completion can be:
 three variants rather than any `Int`, and "no arm yet" an `Option` rather than `-1`.
 
+### Equality requirements — measured 2026-09-25, and the requirement itself costs nothing
+
+N14 lets a generic function require equality of `T`. A requirement is a fact for the checker,
+so the questions are what it costs to check and publish, and whether anything of it reaches
+the program. Contained (Linux aarch64, 1 CPU), median of five; programs in
+`target/n14/bench/` at the N14 commit.
+
+**Checking**, release `nazm check --no-cache` on 200 generic functions each called once:
+bounded and compared, 4 ms; the same 200 as concrete `Int` functions, 4 ms; unbounded, 4 ms;
+200 refused calls, 5 ms. All at the process floor — no cost is measurable, and none is
+claimed either way.
+
+**The interface.** `pub fn same[T](…)` publishes 226 bytes; `pub fn same[T: Equality](…)`
+250 — the 24 bytes of `"requires_equality":[0],`. Renaming `T` to `Value` gives identical bytes
+and an identical `InterfaceHash`; adding the requirement moves it. A function that requires
+nothing is written exactly as before the field existed.
+
+**The program.** One comparison per iteration, operands built from the loop counter:
+
+| Workload | `-O0`, 10M | `-O2`, 30M | exe `-O2` |
+| --- | ---: | ---: | ---: |
+| hand-written `same_int(a: Int, b: Int)` | 70 ms | **15 ms** | 72,936 B |
+| unbounded generic call at `Int` (`keep[T]`) | 88 ms | 50 ms | 73,072 B |
+| bounded `same[T: Equality]` at `Int` | 72 ms | 50 ms | 73,048 B |
+| … at a two-field record | 82 ms | 50 ms | 73,096 B |
+| … at an enum, same variant | 91 ms | 54 ms | 73,088 B |
+| … at `Box[Int]` | 83 ms | 50 ms | 73,096 B |
+| … at `Str` (the `memcmp` path) | 180 ms | 342 ms | 73,120 B |
+
+**The requirement adds nothing**: a bounded instance runs as fast as an unbounded generic
+call, and its IR body is the concrete function's instruction for instruction
+(`a_requirement_leaves_no_trace_in_the_program`) — no dictionary, descriptor or test exists.
+**What does cost is genericity, and it predates N14**: an instance is defined in a unit of its
+own and is external to every caller (`architecture.md` §7.5), so at `-O2` the call is not
+inlined and `same[Int]` costs 50 ms where an inlined `same_int` costs 15. That is recorded as
+the cross-unit-inlining item in `roadmap.md`, not as a cost of requirements. The `Str` row is
+slower at `-O2` than at `-O0` over three times the iterations for the same reason — the call
+survives — and is not a regression of N14.
+
+**Dogfood**: none. No compiler code uses a requirement, so the bootstrap's size and speed
+moved only by the checker's own new code (`bootstrap.md`).
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
