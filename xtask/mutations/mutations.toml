@@ -865,10 +865,12 @@ new signature contradicts — a stale accept, which is the failure a fingerprint
 prevent
 """
 file = "crates/nazm-iface/src/wire.rs"
-find = """                generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),
-                params,"""
-replace = """                generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),
-                params: Vec::new(),"""
+find = """                    .collect(),
+                params,
+                ret: persist(e.ret, types, graph)"""
+replace = """                    .collect(),
+                params: Vec::new(),
+                ret: persist(e.ret, types, graph)"""
 
 [[mutation]]
 name = "an-unknown-interface-version-is-read-as-this-one"
@@ -2333,11 +2335,11 @@ replace = "                    Some((_, _)) => Ok(()),"
 [[mutation]]
 name = "a-type-parameter-may-be-compared"
 why = """
-an unconstrained `T` is given `==`, which not every type supports — the refusal that keeps a generic body to what every type can do
+an unconstrained `T` is given `==`, which not every type supports, as though every parameter required `Equality` — the refusal that keeps a generic body to what every type can do
 """
 file = "crates/nazm-sema/src/udt.rs"
-find = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str);"
-replace = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str | Type::Param(_));"
+find = "            Type::Param(p) => self.requires_equality(p),"
+replace = "            Type::Param(_) => true,"
 killers = [{ package = "nazm-core", test = "generics", name = "a_type_parameter_supports_no_equality" }]
 
 [[mutation]]
@@ -2508,9 +2510,12 @@ why = """
 the **Nazm-written** checker gives an unconstrained `T` equality
 """
 file = "compiler/analyse.nz"
-find = """    if is_vec(t) { return true; }
-    if is_param(t) { return true; }"""
-replace = """    if is_vec(t) { return true; }"""
+find = """            if ints_get(req, entry_of(t)) == 1 { return false; }
+        }
+        return true;"""
+replace = """            if ints_get(req, entry_of(t)) == 1 { return false; }
+        }
+        return false;"""
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_equality" }]
 
 [[mutation]]
@@ -3327,24 +3332,24 @@ targets = [
 name = "n13-a-vec-has-equality"
 why = "`Vec[T]` is given `==`, which would have to mean the same storage or the same contents — the choice the language has not made"
 file = "crates/nazm-sema/src/udt.rs"
-find = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str);"
-replace = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str | Type::Vec(_));"
+find = "            Type::Int | Type::Bool | Type::Str => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Vec(_) => true,"
 killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
 
 [[mutation]]
 name = "n13-a-sequence-has-equality"
 why = "`Ints` and `Strs` are given `==`, for the same unmade choice"
 file = "crates/nazm-sema/src/udt.rs"
-find = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str);"
-replace = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str | Type::Ints | Type::Strs);"
+find = "            Type::Int | Type::Bool | Type::Str => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Ints | Type::Strs => true,"
 killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
 
 [[mutation]]
 name = "n13-a-chan-has-equality"
 why = "`Chan` is given `==`, exposing a channel's identity as a value"
 file = "crates/nazm-sema/src/udt.rs"
-find = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str);"
-replace = "        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str | Type::Chan);"
+find = "            Type::Int | Type::Bool | Type::Str => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Chan => true,"
 killers = [{ package = "nazm-core", test = "equality", name = "handles_still_have_no_equality" }]
 
 [[mutation]]
@@ -3636,3 +3641,216 @@ file = "compiler/analyse.nz"
 find = "                        Option.None() => { fold = Option[Completion].Some(value: arm_c); },"
 replace = "                        Option.None() => { fold = Option[Completion].Some(value: Completion.Value()); },"
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_value_blocks" }]
+
+# --- N14: a type parameter may require equality -----------------------------------------
+#
+# Each entry was written with the semantic test that observes it and carries the killer
+# `--verify-killer` confirmed. The requirement is recorded in one place per checker, read
+# in one place (N13's equality derivation), checked at calls in one place, and persisted in
+# the interface; these break each of them.
+
+[[mutation]]
+name = "n14-a-requirement-gives-the-body-nothing"
+why = "a parameter's requirement is ignored where equality is derived, so `fn same[T: Equality](a: T, b: T) -> Bool { a == b }` is refused"
+file = "crates/nazm-sema/src/udt.rs"
+find = "            Type::Param(p) => self.requires_equality(p),"
+replace = "            Type::Param(_) => false,"
+killers = [{ package = "nazm-core", test = "constraints", name = "a_required_parameter_has_equality_in_its_body" }]
+
+[[mutation]]
+name = "n14-a-requirement-is-never-recorded"
+why = "the checker reads a requirement and does not record it, so the body it guards is refused"
+file = "crates/nazm-core/src/check.rs"
+find = """        res.types_mut().require_equality(TypeParam {
+            owner,
+            index: u32::try_from(i).unwrap_or(u32::MAX),
+        });"""
+replace = """        let _ = i;"""
+killers = [{ package = "nazm-core", test = "constraints", name = "a_required_parameter_has_equality_in_its_body" }]
+
+[[mutation]]
+name = "n14-a-requirement-reaches-every-owner"
+why = "a requirement is keyed by position alone, so `same[T: Equality]` gives every other declaration's first parameter equality too"
+file = "crates/nazm-sema/src/generic.rs"
+find = "        self.generics().equality.contains(&p)"
+replace = "        self.generics().equality.iter().any(|q| q.index == p.index)"
+killers = [{ package = "nazm-core", test = "constraints", name = "a_requirement_belongs_to_the_position_not_the_name" }]
+
+[[mutation]]
+name = "n14-any-name-is-a-capability"
+why = "the requirement's name is not checked, so `T: Ord` means `T: Equality`"
+file = "crates/nazm-core/src/check.rs"
+find = "        if req.name != EQUALITY {"
+replace = "        if false {"
+killers = [{ package = "nazm-core", test = "constraints", name = "equality_is_the_only_capability_and_only_a_function_may_require_it" }]
+
+[[mutation]]
+name = "n14-a-record-may-require-equality"
+why = "a requirement on a record's or an enum's parameter is accepted and then enforced nowhere"
+file = "crates/nazm-core/src/check.rs"
+find = "        if !matches!(owner, ParamOwner::Function(_)) {"
+replace = "        if false {"
+killers = [{ package = "nazm-core", test = "constraints", name = "equality_is_the_only_capability_and_only_a_function_may_require_it" }]
+
+[[mutation]]
+name = "n14-arguments-are-not-checked"
+why = "a call's type arguments are never checked against the requirements, so `same(v, v)` for a `Vec` is accepted"
+file = "crates/nazm-core/src/check.rs"
+find = "            if !self.res.types().requires_equality(param) {"
+replace = "            if true {"
+killers = [{ package = "nazm-core", test = "constraints", name = "a_concrete_argument_without_equality_is_refused_where_it_was_given" }]
+
+[[mutation]]
+name = "n14-only-the-first-parameter-is-checked"
+why = "only a call's first type argument is checked against its requirement"
+file = "crates/nazm-core/src/check.rs"
+find = "        for (i, s) in solved.iter().enumerate() {"
+replace = "        for (i, s) in solved.iter().enumerate().take(1) {"
+killers = [{ package = "nazm-core", test = "constraints", name = "every_required_parameter_is_checked_not_only_the_first" }]
+
+[[mutation]]
+name = "n14-a-caller-s-parameter-always-satisfies"
+why = "a generic caller's own parameter is taken to satisfy any requirement, so an unconstrained wrapper forwards to a bounded callee"
+file = "crates/nazm-core/src/check.rs"
+find = """            let Err(why) = self.res.types().equality(t) else {
+                continue;
+            };
+            let p = self.res.types().param_name(param);"""
+replace = """            let checked = if let Type::Param(_) = t { Ok(()) } else { self.res.types().equality(t) };
+            let Err(why) = checked else {
+                continue;
+            };
+            let p = self.res.types().param_name(param);"""
+killers = [{ package = "nazm-core", test = "constraints", name = "a_generic_caller_may_pass_on_only_what_it_requires_itself" }]
+
+[[mutation]]
+name = "n14-written-arguments-bypass-the-requirement"
+why = "a type argument written at the call is not checked, so `same[Box[Vec[Int]]](a, a)` is accepted"
+file = "crates/nazm-core/src/check.rs"
+find = """            let Some((t, from)) = *s else {
+                continue;
+            };"""
+replace = """            let Some((t, from)) = *s else {
+                continue;
+            };
+            if from == WRITTEN {
+                continue;
+            }"""
+killers = [{ package = "nazm-core", test = "constraints", name = "a_written_argument_without_equality_is_refused_at_the_callee" }]
+
+[[mutation]]
+name = "n14-inferred-arguments-bypass-the-requirement"
+why = "a type argument inferred from the arguments is not checked — inference bypasses the requirement"
+file = "crates/nazm-core/src/check.rs"
+find = """            let Some((t, from)) = *s else {
+                continue;
+            };"""
+replace = """            let Some((t, from)) = *s else {
+                continue;
+            };
+            if from != WRITTEN {
+                continue;
+            }"""
+killers = [{ package = "nazm-core", test = "constraints", name = "a_concrete_argument_without_equality_is_refused_where_it_was_given" }]
+
+[[mutation]]
+name = "n14-a-requirement-is-not-published"
+why = "a public requirement is left out of the interface, so an importer checked from bytes accepts calls the requirement refuses"
+file = "crates/nazm-iface/src/wire.rs"
+find = """                    .filter(|&index| {
+                        types.requires_equality(TypeParam {"""
+replace = """                    .filter(|&index| {
+                        false && types.requires_equality(TypeParam {"""
+killers = [{ package = "nazm-cli", test = "durable_identity", name = "a_dependent_is_held_to_a_requirement_read_from_a_deserialised_interface" }]
+
+[[mutation]]
+name = "n14-a-requirement-is-not-read-back"
+why = "a requirement in a persisted interface is not rehydrated, so a source-deleted dependency's bound is lost"
+file = "crates/nazm-iface/src/wire.rs"
+find = "                types.require_equality(TypeParam { owner, index });"
+replace = "                let _ = index;"
+killers = [{ package = "nazm-cli", test = "durable_identity", name = "a_dependent_is_held_to_a_requirement_read_from_a_deserialised_interface" }]
+
+[[mutation]]
+name = "n14-requirements-are-not-canonical"
+why = "a persisted requirement list out of order, repeated or out of range is read as though it were canonical"
+file = "crates/nazm-iface/src/wire.rs"
+find = """            if e.requires_equality
+                .windows(2)
+                .any(|w| w.first() >= w.last())
+                || e.requires_equality.iter().any(|&p| p >= e.generics)
+            {"""
+replace = """            if false {"""
+killers = [{ package = "nazm-iface", test = "persistence", name = "a_requirement_is_written_by_position_and_read_back_canonically" }]
+
+[[mutation]]
+name = "n14-the-interface-schema-stays"
+why = "the interface keeps the `/4` name for a shape that now carries requirements, so a `/4` file with none is read as a `/5` one"
+file = "crates/nazm-iface/src/wire.rs"
+find = """pub const SCHEMA: &str = "nazm.interface/5";"""
+replace = """pub const SCHEMA: &str = "nazm.interface/4";"""
+killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_schema_is_refused_and_never_read_as_this_one" }]
+
+[[mutation]]
+name = "n14-the-epoch-stays"
+why = "`SEMANTIC_EPOCH` is not bumped for a rule that moved under an existing code, so an N13 entry is filed where an N14 one is looked for"
+file = "crates/nazm-cache/src/identity.rs"
+find = "pub const SEMANTIC_EPOCH: u32 = 7;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 6;"
+killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
+
+[[mutation]]
+name = "n14-the-parser-drops-the-requirement"
+why = "the parser accepts `T: Equality` and records nothing, so the requirement is silently absent"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                            TokenKind::Ident(r) => Some(Requirement { name: r, span: at }),"
+replace = "                            TokenKind::Ident(r) => { let _ = (r, at); None }"
+killers = [{ package = "nazm-syntax", test = "format", name = "a_requirement_is_written_one_way" }]
+
+[[mutation]]
+name = "n14-selfhost-a-requirement-is-never-recorded"
+why = "the **Nazm-written** checker reads `T: Equality` and records nothing, so the bounded body is refused"
+file = "compiler/analyse.nz"
+find = "                    ints_set(tb.req, p, 1);"
+replace = "                    ints_set(tb.req, p, 0);"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_requirements" }]
+
+[[mutation]]
+name = "n14-selfhost-arguments-are-not-checked"
+why = "the **Nazm-written** checker never checks a call's type arguments against the requirement"
+file = "compiler/analyse.nz"
+find = "            if ints_get(tb.req, entry_of(ints_get(generics, g))) == 1 {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_requirements" }]
+
+[[mutation]]
+name = "n14-selfhost-any-name-is-a-capability"
+why = "the **Nazm-written** checker takes any requirement name to mean `Equality`"
+file = "compiler/analyse.nz"
+find = """                if cap == "Equality" {"""
+replace = """                if true {"""
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_requirements" }]
+
+[[mutation]]
+name = "n14-selfhost-a-record-may-require-equality"
+why = "the **Nazm-written** checker accepts a requirement on a record's or an enum's parameter"
+file = "compiler/analyse.nz"
+find = "            if allow == false {"
+replace = "            if false {"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_requirements" }]
+
+[[mutation]]
+name = "n14-selfhost-the-requirement-lands-on-the-next-parameter"
+why = "the **Nazm-written** checker reads each parameter's requirement from the item after it, so `[A: Equality, B]` requires `B`"
+file = "compiler/analyse.nz"
+find = "            if item == n {"
+replace = "            if item == n + 1 {"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_checker_agrees_with_the_reference_on_requirements" }]
+
+[[mutation]]
+name = "n14-selfhost-parser-refuses-the-requirement"
+why = "the **Nazm-written** parser does not read `T: Equality`, and refuses a program the reference parses"
+file = "compiler/parse.nz"
+find = "        if kind_at(kinds, at) == k_colon() {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_parser_produces_the_same_tree_as_the_reference" }]
