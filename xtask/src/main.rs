@@ -5,10 +5,13 @@
 //! the project makes about its own structure that no linter can see.
 
 mod bench;
+mod campaign;
 mod contained;
 mod guide;
 mod metadata;
 mod mutate;
+mod plan;
+mod procs;
 mod rules;
 
 use std::process::{Command, ExitCode};
@@ -64,32 +67,8 @@ fn main() -> ExitCode {
             }
         },
         Some("mutate") => {
-            // `--only NAME` selects by substring, repeatably. Nothing else is accepted:
-            // a typo that silently ran the whole catalogue, or none of it, would waste
-            // hours either way.
             let rest: Vec<String> = args.collect();
-            let mut only = Vec::new();
-            let mut i = 0;
-            while i < rest.len() {
-                match rest.get(i).map(String::as_str) {
-                    Some("--only") => match rest.get(i + 1) {
-                        Some(name) => {
-                            only.push(name.clone());
-                            i += 2;
-                        }
-                        None => {
-                            eprintln!("mutate: --only needs a mutation name");
-                            return ExitCode::FAILURE;
-                        }
-                    },
-                    Some(other) => {
-                        eprintln!("mutate: unknown option {other}");
-                        return ExitCode::FAILURE;
-                    }
-                    None => break,
-                }
-            }
-            report(&[("mutation coverage", run_mutations(&only))])
+            mutate_cli(&rest)
         }
         // Documented, because it is now the *only* way to recover an interrupted run:
         // `mutate` refuses rather than repairing, since it cannot establish that the
@@ -102,6 +81,7 @@ fn main() -> ExitCode {
         // so they are not mistaken for an interface.
         Some("mutate-run") => mutate_run(&mut args),
         Some("mutate-hold") => mutate_hold(&mut args),
+        Some("mutate-exec") => mutate_exec(&mut args),
         Some("contained") => {
             let rest: Vec<String> = args.collect();
             run_contained(&rest)
@@ -138,9 +118,17 @@ fn help() {
            guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
            bench           measure; --save records a baseline, --check compares to one,\n  \
                            --runs N sets the repetitions (default 5)\n  \
-           mutate          inject catalogued defects; each must be caught.\n  \
-                           --only NAME selects by substring, repeatably, because each\n  \
-                           entry costs a full build and test run\n  \
+           mutate          inject catalogued defects; each must be caught. Run it as\n  \
+                           `cargo xtask contained mutate`, never directly on a checkout.\n  \
+                           --only NAME        select by substring, repeatably\n  \
+                           --strategy S       targeted (default: killer, profile, suite)\n  \
+                                              or full (the suite for every mutant)\n  \
+                           --plan             print what each mutant would run; runs nothing\n  \
+                           --resume           reuse verdicts journaled by this exact campaign\n  \
+                           --budget-secs N    stop starting mutants after N seconds\n  \
+                           --verify-killer M  prove candidate killers for mutation M:\n  \
+                                              pass pristine, fail mutated, pass restored\n  \
+                           --killer P:T:NAME  a candidate, T = lib | test=X | bin=X\n  \
            mutate-recover  repair a tree an interrupted mutation run left mutated;\n  \
                            needs --confirm-no-writers, and read what it prints first\n  \
            help            this message\n"
@@ -1426,6 +1414,16 @@ fn check_mutations_apply() -> Result<(), Vec<String>> {
         }
     }
 
+    // The typed schema, and everything about killers and profiles that can be checked
+    // without building: unknown fields, duplicate names, a killer or profile target
+    // that does not exist, an ignored killer, a profile named without a killer and
+    // without a reason. A stale killer fails here in milliseconds rather than in a
+    // campaign an hour in; the campaign still re-checks against the built binary.
+    match plan::load(std::path::Path::new(CATALOGUE)) {
+        Err(e) => bad.push(e),
+        Ok(cat) => bad.extend(plan::validate(std::path::Path::new("."), &cat)),
+    }
+
     if bad.is_empty() {
         Ok(())
     } else {
@@ -1739,20 +1737,248 @@ fn mutate_run(args: &mut impl Iterator<Item = String>) -> ExitCode {
         return ExitCode::FAILURE;
     };
     // The lifecycle tests want the whole of whatever catalogue they point at, so no
-    // filter here.
-    match mutate::run_all(
+    // filter here. They do choose the strategy, and whether to resume.
+    let mut o = mutate::Options::new(
         std::path::Path::new(&root),
         std::path::Path::new(&catalogue),
-        &[],
-    ) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(problems) => {
-            for p in problems {
-                println!("problem: {p}");
+    );
+    if let Some(s) = f.get("strategy") {
+        match campaign::Strategy::parse(s) {
+            Some(s) => o.strategy = s,
+            None => {
+                eprintln!("unknown strategy {s}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    o.resume = f.contains_key("resume");
+    if let Some(d) = f.get("campaign-dir") {
+        o.campaign_dir = Some(std::path::PathBuf::from(d));
+    }
+    if let Some(n) = f.get("killer-deadline-secs").and_then(|n| n.parse().ok()) {
+        o.deadlines.killer_secs = n;
+    }
+    if let Some(n) = f.get("profile-deadline-secs").and_then(|n| n.parse().ok()) {
+        o.deadlines.profile_target_secs = n;
+    }
+    if let Some(n) = f.get("broad-deadline-secs").and_then(|n| n.parse().ok()) {
+        o.deadlines.broad_secs = n;
+    }
+    if let Some(n) = f.get("budget-secs").and_then(|n| n.parse().ok()) {
+        o.budget = Some(std::time::Duration::from_secs(n));
+    }
+    finish_campaign(mutate::run_all(&o))
+}
+
+/// Exit status for a campaign: 0 clean, 1 problems or refused, 3 incomplete. Incomplete
+/// is its own code so a supervisor can resume it without mistaking it for either.
+fn finish_campaign(end: mutate::End) -> ExitCode {
+    match end {
+        mutate::End::Clean => {
+            println!("ok    mutation coverage");
+            ExitCode::SUCCESS
+        }
+        mutate::End::Problems(p) | mutate::End::Refused(p) => {
+            println!("FAIL  mutation coverage");
+            for x in p {
+                println!("problem: {x}");
             }
             ExitCode::FAILURE
         }
+        mutate::End::Incomplete(p) => {
+            println!("INCOMPLETE mutation coverage");
+            for x in p {
+                println!("problem: {x}");
+            }
+            ExitCode::from(3)
+        }
     }
+}
+
+/// `cargo xtask mutate …`. Every option is parsed strictly: a typo that silently ran the
+/// whole catalogue, or none of it, would waste hours either way.
+fn mutate_cli(rest: &[String]) -> ExitCode {
+    let Some(root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() else {
+        eprintln!("could not locate workspace root");
+        return ExitCode::FAILURE;
+    };
+    let catalogue = root.join("xtask/mutations/mutations.toml");
+    let mut o = mutate::Options::new(root, &catalogue);
+    let mut plan_only = false;
+    let mut verify: Vec<String> = Vec::new();
+    let mut candidates = Vec::new();
+    let mut i = 0;
+    let value = |i: usize, what: &str| -> Result<String, ExitCode> {
+        rest.get(i + 1).cloned().ok_or_else(|| {
+            eprintln!("mutate: {what} needs a value");
+            ExitCode::FAILURE
+        })
+    };
+    while let Some(arg) = rest.get(i) {
+        let step = match arg.as_str() {
+            "--only" => match value(i, "--only") {
+                Ok(v) => {
+                    o.only.push(v);
+                    2
+                }
+                Err(e) => return e,
+            },
+            "--strategy" => match value(i, "--strategy").map(|v| campaign::Strategy::parse(&v)) {
+                Ok(Some(s)) => {
+                    o.strategy = s;
+                    2
+                }
+                Ok(None) => {
+                    eprintln!("mutate: --strategy is `targeted` or `full`");
+                    return ExitCode::FAILURE;
+                }
+                Err(e) => return e,
+            },
+            "--plan" => {
+                plan_only = true;
+                1
+            }
+            "--resume" => {
+                o.resume = true;
+                1
+            }
+            "--reset-derived-caches" => {
+                o.reset_derived = true;
+                1
+            }
+            "--export-journal" => {
+                o.export_journal = true;
+                1
+            }
+            "--budget-secs" => match value(i, "--budget-secs").map(|v| v.parse::<u64>()) {
+                Ok(Ok(n)) => {
+                    o.budget = Some(std::time::Duration::from_secs(n));
+                    2
+                }
+                Ok(Err(_)) => {
+                    eprintln!("mutate: --budget-secs needs a whole number");
+                    return ExitCode::FAILURE;
+                }
+                Err(e) => return e,
+            },
+            "--campaign-dir" => match value(i, "--campaign-dir") {
+                Ok(v) => {
+                    o.campaign_dir = Some(v.into());
+                    2
+                }
+                Err(e) => return e,
+            },
+            "--resume-from" => match value(i, "--resume-from") {
+                Ok(v) => {
+                    o.resume_from = Some(v.into());
+                    2
+                }
+                Err(e) => return e,
+            },
+            "--source-commit" => match value(i, "--source-commit") {
+                Ok(v) => {
+                    o.source_commit = Some(v);
+                    2
+                }
+                Err(e) => return e,
+            },
+            "--verify-killer" => match value(i, "--verify-killer") {
+                Ok(v) => {
+                    verify.push(v);
+                    2
+                }
+                Err(e) => return e,
+            },
+            "--killer" => match value(i, "--killer").map(|v| mutate::parse_killer(&v)) {
+                Ok(Ok(k)) => {
+                    candidates.push(k);
+                    2
+                }
+                Ok(Err(e)) => {
+                    eprintln!("mutate: {e}");
+                    return ExitCode::FAILURE;
+                }
+                Err(e) => return e,
+            },
+            other => {
+                eprintln!("mutate: unknown option {other}");
+                return ExitCode::FAILURE;
+            }
+        };
+        i += step;
+    }
+    if !candidates.is_empty() && verify.len() != 1 {
+        eprintln!("mutate: --killer names candidates for exactly one --verify-killer");
+        return ExitCode::FAILURE;
+    }
+    if plan_only {
+        return match mutate::plan_only(root, &catalogue, &o.only) {
+            Ok(text) => {
+                print!("{text}");
+                ExitCode::SUCCESS
+            }
+            Err(problems) => {
+                for p in problems {
+                    println!("problem: {p}");
+                }
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if !verify.is_empty() {
+        // One after another, each with its own pristine, mutated and restored builds,
+        // so a session pays its cold build once for all of them.
+        let mut failed = false;
+        for name in &verify {
+            println!("verifying killers for {name}");
+            match mutate::verify_killer(&o, name, &candidates) {
+                Ok(report) => print!("{report}"),
+                Err(problems) => {
+                    failed = true;
+                    for p in problems {
+                        println!("problem: {p}");
+                    }
+                }
+            }
+        }
+        return if failed {
+            println!("FAIL  killer verification");
+            ExitCode::FAILURE
+        } else {
+            println!("ok    killer verification");
+            ExitCode::SUCCESS
+        };
+    }
+    finish_campaign(mutate::run_all(&o))
+}
+
+/// Run one script through the harness's subprocess runner and report how it ended.
+///
+/// Hidden, for the lifecycle tests: the watchdog can only be shown to work by killing
+/// the process that armed it, which a test can do to this process and not to itself.
+fn mutate_exec(args: &mut impl Iterator<Item = String>) -> ExitCode {
+    let f = flags(args);
+    let Ok(script) = need(&f, "script") else {
+        return ExitCode::FAILURE;
+    };
+    let secs = f
+        .get("deadline-secs")
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(60);
+    let r = procs::run(&procs::Invocation {
+        program: "sh".to_owned(),
+        args: vec!["-c".to_owned(), script],
+        cwd: std::env::current_dir().unwrap_or_default(),
+        env: Vec::new(),
+        deadline: std::time::Duration::from_secs(secs),
+    });
+    println!(
+        "ended {:?} after {:.1}s, swept {}",
+        r.ended,
+        r.elapsed.as_secs_f64(),
+        r.swept
+    );
+    ExitCode::SUCCESS
 }
 
 /// Take the lock, announce it, and hold it until told to stop.
@@ -1818,14 +2044,6 @@ fn mutate_recover(args: &mut impl Iterator<Item = String>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-fn run_mutations(only: &[String]) -> Result<(), Vec<String>> {
-    let Some(root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() else {
-        return Err(vec!["could not locate workspace root".to_owned()]);
-    };
-    let catalogue = root.join("xtask/mutations/mutations.toml");
-    mutate::run_all(root, &catalogue, only)
 }
 
 /// `cargo xtask contained <workload>` — the only sanctioned way to run a generated
@@ -1958,15 +2176,63 @@ fn run_contained(args: &[String]) -> ExitCode {
             // The catalogue edits sources, so it needs a tree of its own. `/src` is
             // read-only and stays that way; the copy is disposable and lives on the
             // capped writable layer. `.git` is excluded because nothing here reads it.
+            //
+            // `.nazm` is excluded too, and the runner is told the copy is disposable so
+            // it clears derived caches before every test step (`campaign::reset_derived`
+            // says why: a check entry is keyed by the checker's declared identity, which
+            // a mutant shares with the pristine checker).
+            //
+            // One container is one campaign session: one cold build, one baseline, then
+            // every mutant against the same target directory. A session that runs out of
+            // budget ends *incomplete* and `--resume` continues it from the journal.
             bounds.deadline = Duration::from_secs(3000);
-            let only: String = args.iter().skip(1).map(|a| format!(" {a}")).collect();
+            let passed = match mutate_passthrough(args.get(1..).unwrap_or_default()) {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("contained: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let commit = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&repo)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .filter(|c| c.chars().all(|ch| ch.is_ascii_hexdigit()))
+                .unwrap_or_default();
+            let commit = if commit.is_empty() {
+                String::new()
+            } else {
+                format!(" --source-commit {commit}")
+            };
+            // Budget: stop starting mutants with enough of the deadline left for the one
+            // in flight to finish in the ordinary case. Past it, the session is
+            // incomplete and resumable, not failed.
+            let budget = if passed.contains("--budget-secs")
+                || passed.contains("--plan")
+                || passed.contains("--verify-killer")
+            {
+                String::new()
+            } else {
+                " --budget-secs 2400".to_owned()
+            };
+            // `timeout` inside the container, so a supervisor that dies without killing
+            // it still leaves a container that stops itself. `exec` all the way down, so
+            // a SIGINT the docker client proxies reaches the runner itself, and when it
+            // dies the pid namespace takes every descendant with it.
+            let deadline = bounds.deadline.as_secs().saturating_sub(20);
             (
                 "mutate",
                 shell(&format!(
-                    "rm -rf /work/mut && mkdir -p /work/mut \
-                     && tar -C /src -cf - --exclude=./target --exclude=./.git . | tar -C /work/mut -xf - \
+                    "rm -rf /work/mut && mkdir -p /work/mut /work/campaigns \
+                     && tar -C /src -cf - --exclude=./target --exclude=./.git --exclude=.nazm . | tar -C /work/mut -xf - \
                      && cd /work/mut && export CARGO_TARGET_DIR=/work/mut/target \
-                     && cargo run -q -p xtask -- mutate{only}"
+                     && cargo build -q -p xtask --jobs 1 \
+                     && exec timeout -s KILL {deadline} /work/mut/target/debug/xtask mutate \
+                        --reset-derived-caches --export-journal --campaign-dir /work/campaigns \
+                        --resume-from /src/target/mutation-campaigns{commit}{budget}{passed}"
                 )),
             )
         }
@@ -2055,6 +2321,9 @@ fn run_contained(args: &[String]) -> ExitCode {
         bounds.deadline.as_secs()
     );
     let r = contained::run(&repo, name, &borrowed, &bounds);
+    if name == "mutate" {
+        collect_journal(&repo, &r.stdout);
+    }
     print!("{}", r.stdout);
     eprint!("{}", r.stderr);
     eprintln!(
@@ -2073,10 +2342,114 @@ fn run_contained(args: &[String]) -> ExitCode {
             eprintln!("contained: REFUSED — containment is unavailable: {why}");
             ExitCode::FAILURE
         }
+        Outcome::Failed(3) if name == "mutate" => {
+            eprintln!(
+                "contained: mutate ended INCOMPLETE — the session budget ran out before every \
+                 selected mutant was finalized. Nothing about the rest is established. \
+                 Continue with `cargo xtask contained mutate --resume` and the same selection."
+            );
+            ExitCode::from(3)
+        }
         other => {
             eprintln!("contained: {name} did not pass ({})", other.word());
             ExitCode::FAILURE
         }
+    }
+}
+
+/// The options `contained mutate` passes through, validated and quoted.
+///
+/// Rebuilt from a closed list rather than forwarded. Every value is interpolated into a
+/// shell command, so each is restricted to the characters a mutation name, a test path
+/// or a number uses, and single-quoted as well.
+fn mutate_passthrough(args: &[String]) -> Result<String, String> {
+    const WITH_VALUE: &[&str] = &[
+        "--only",
+        "--strategy",
+        "--budget-secs",
+        "--verify-killer",
+        "--killer",
+    ];
+    const SWITCHES: &[&str] = &["--plan", "--resume"];
+    let safe = |v: &str| {
+        !v.is_empty()
+            && v.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '=' | '.'))
+    };
+    let mut out = String::new();
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        if SWITCHES.contains(&a.as_str()) {
+            out.push_str(&format!(" {a}"));
+            i += 1;
+        } else if WITH_VALUE.contains(&a.as_str()) {
+            let Some(v) = args.get(i + 1) else {
+                return Err(format!("{a} needs a value"));
+            };
+            if !safe(v) {
+                return Err(format!(
+                    "{a} {v:?}: only letters, digits and - _ : = . are accepted"
+                ));
+            }
+            out.push_str(&format!(" {a} '{v}'"));
+            i += 2;
+        } else {
+            return Err(format!("mutate: unknown option {a}"));
+        }
+    }
+    Ok(out)
+}
+
+/// Append the journal lines a contained campaign printed to the host's copy, under
+/// `target/mutation-campaigns/<key>/journal.jsonl`.
+///
+/// The container's own journal dies with it. What it printed is the only record that
+/// crosses, so it is collected whatever the outcome, a timeout included: every line is
+/// a mutant that was restored and verified before it was printed, and a later session
+/// resumes from exactly these.
+fn collect_journal(repo: &std::path::Path, stdout: &str) {
+    use std::io::Write as _;
+    let mut by_key: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix(campaign::EXPORT_PREFIX) {
+            if let Some((key, json)) = rest.split_once(' ') {
+                if key.len() == 16 && key.chars().all(|c| c.is_ascii_hexdigit()) {
+                    by_key.entry(key).or_default().push(json);
+                }
+            }
+        }
+    }
+    for (key, lines) in by_key {
+        let dir = repo.join("target").join("mutation-campaigns").join(key);
+        if std::fs::create_dir_all(&dir).is_err() {
+            eprintln!("contained: cannot create {}", dir.display());
+            continue;
+        }
+        let path = dir.join("journal.jsonl");
+        let fresh = !path.exists();
+        let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        else {
+            eprintln!("contained: cannot open {}", path.display());
+            continue;
+        };
+        let mut n = 0;
+        for (i, l) in lines.iter().enumerate() {
+            // The header opens a fresh file and is otherwise already there.
+            if i == 0 && !fresh && l.contains("\"kind\":\"campaign\"") {
+                continue;
+            }
+            if writeln!(f, "{l}").is_ok() {
+                n += 1;
+            }
+        }
+        let _ = f.sync_all();
+        eprintln!(
+            "contained: {n} journal line(s) for campaign {key} kept at {}",
+            path.display()
+        );
     }
 }
 

@@ -2344,6 +2344,9 @@ fn run_bounded(
             None if start.elapsed() >= limit => {
                 let _ = Command::new("kill")
                     .arg("-KILL")
+                    // `--`: procps `kill` (the container's) parses `-<pgid>` after a signal as an
+                    // option and signals nothing without it. BSD `kill` accepts both.
+                    .arg("--")
                     .arg(format!("-{}", child.id()))
                     .status();
                 let _ = child.kill();
@@ -2357,6 +2360,43 @@ fn run_bounded(
     let stdout = String::from_utf8_lossy(&out.join().expect("stdout reader")).into_owned();
     let stderr = String::from_utf8_lossy(&err.join().expect("stderr reader")).into_owned();
     Some((finished?.code(), stdout, stderr))
+}
+
+/// The deadline reaches what the child started, not only the child.
+///
+/// Found in N12.2, not N12.1: the group kill above was written `kill -KILL -<pgid>`,
+/// which BSD `kill` accepts and procps `kill` (the container's, where this suite is
+/// authoritative) rejects as a malformed option, so inside the container it signalled
+/// nothing. The direct child still died by `child.kill()`, but a grandchild holding the
+/// pipe kept both readers waiting until it finished on its own. This test is what would
+/// have said so: with the old spelling it takes the grandchild's full sixty seconds.
+#[test]
+fn a_bounded_run_that_times_out_takes_its_grandchildren_with_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pid_file = dir.path().join("grandchild.pid");
+    let started = std::time::Instant::now();
+    let r = run_bounded(
+        Command::new("sh")
+            .arg("-c")
+            .arg(format!("sleep 60 & echo $! > {}; wait", pid_file.display())),
+        std::time::Duration::from_millis(500),
+    );
+    assert!(r.is_none(), "the deadline must be reported as a deadline");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "the readers waited {:?}: the grandchild outlived the deadline and held the pipe",
+        started.elapsed()
+    );
+    let pid = std::fs::read_to_string(&pid_file).expect("the grandchild announced itself");
+    let alive = Command::new("ps")
+        .args(["-p", pid.trim(), "-o", "stat="])
+        .output()
+        .map(|o| {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+            !s.is_empty() && !s.starts_with('Z')
+        })
+        .unwrap_or(false);
+    assert!(!alive, "grandchild {} is still running", pid.trim());
 }
 
 /// How long any one stage invocation in this file gets.

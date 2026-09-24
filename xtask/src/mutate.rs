@@ -1,7 +1,10 @@
-//! Automated mutation verification.
+//! Automated mutation verification: the lock, the write-ahead record, recovery, and the
+//! campaign driver.
 //!
-//! Injects each catalogued defect, rebuilds, and requires the test suite to fail — then
-//! restores and requires it to pass.
+//! Injects each catalogued defect, rebuilds, and requires the tests to fail, then restores
+//! the file byte for byte and verifies that it did before moving on. What runs between
+//! injection and restoration is decided by `campaign.rs` (tiers) and `plan.rs` (what each
+//! mutant's evidence is); how it runs is `procs.rs`.
 //!
 //! The important part is not the injection; it is proving the injection **landed**. Twice
 //! during development a hand-run replacement matched nothing because `cargo fmt` had
@@ -21,9 +24,17 @@
 //! mistake as the silently-skipped injection, and just as convincing. The baseline is now
 //! checked before any mutation runs, and the mutated tree is built with `--tests`.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
+
+use crate::campaign::{
+    self, Deadlines, Executor as _, Identity, Journal, Observation, Record, Strategy, Verdict,
+};
+use crate::plan::{self, KillerSpec, Mutation, MutationPlan};
+use crate::procs::{self, Ended, Invocation};
 
 /// Where a file's original contents live while it is mutated.
 ///
@@ -374,60 +385,6 @@ impl Drop for RunLock {
     }
 }
 
-/// One catalogued defect. Every field is required: a mutation that cannot say what it
-/// breaks, or why, is not reviewable.
-#[derive(Debug, serde::Deserialize)]
-pub(crate) struct Mutation {
-    pub(crate) name: String,
-    pub(crate) why: String,
-    pub(crate) file: String,
-    pub(crate) find: String,
-    pub(crate) replace: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct Catalogue {
-    mutation: Vec<Mutation>,
-}
-
-pub(crate) enum Verdict {
-    /// Injected, compiled, the suite ran to completion, and it failed. Covered.
-    Caught { failing: usize },
-    /// Injected, compiled, the suite ran to completion, and everything passed. A gap.
-    Survived,
-    /// The pattern was absent, or matched more than once. Not a result about the tests.
-    NotInjected(String),
-    /// The mutated tree does not compile, so the suite would fail for the wrong reason.
-    DidNotBuild,
-    /// A test binary died — stack overflow, abort, segfault — while the mutation was
-    /// injected.
-    ///
-    /// Distinct from both `Caught` and `RunnerFailed`, and the distinction is the point.
-    /// The mutant did have an observable effect, so this is not `Survived`; but nothing
-    /// *asserted* anything, so it is not `Caught` either, and the binary that died took
-    /// its other results with it. It is also not a `RunnerFailed`: the orchestration
-    /// worked perfectly and reported exactly what happened. The fix is always the same —
-    /// move the case to a suite that runs the program as a child process, where a crash
-    /// is an exit code the parent can assert on.
-    MutantCrashed { signature: String, missing: usize },
-    /// The mutation was injected and could **not** be taken back out.
-    ///
-    /// Fatal to the run, and the only verdict that is. Every other outcome leaves the
-    /// tree as it was found; this one leaves it mutated, so continuing would inject the
-    /// next defect on top of the last one and measure both at once. The record is kept,
-    /// which is what makes the tree recoverable afterwards.
-    NotRestored(String),
-    /// The suite did not run to completion: the runner errored, produced no results, or
-    /// produced fewer result lines than the baseline.
-    ///
-    /// Neither caught nor survived. A run that did not happen tells you nothing, and the
-    /// two ways of pretending otherwise are both wrong: calling it `Survived` invents a
-    /// coverage gap, calling it `Caught` invents coverage. This variant exists because
-    /// the runner already made the second mistake once, at scale — a test file that
-    /// failed to compile produced zero results and nineteen false SURVIVEDs.
-    RunnerFailed(String),
-}
-
 /// Take the tree's lock, for the hidden `mutate-hold` fixture.
 ///
 /// The same acquisition a real run performs — the fixture exists so a *second* process
@@ -457,163 +414,420 @@ pub(crate) fn recover(root: &Path, confirmed: bool) -> Result<String, String> {
     })
 }
 
-pub(crate) fn load(path: &Path) -> Result<Vec<Mutation>, String> {
-    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let catalogue: Catalogue =
-        toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    if catalogue.mutation.is_empty() {
-        return Err("catalogue has no [[mutation]] entries".to_owned());
-    }
-    Ok(catalogue.mutation)
+/// How a campaign is to be run. Built by the CLI; every field has a meaning in the
+/// campaign's identity or its output location, and none is a shell fragment.
+#[derive(Debug, Clone)]
+pub(crate) struct Options {
+    pub(crate) root: PathBuf,
+    pub(crate) catalogue: PathBuf,
+    pub(crate) only: Vec<String>,
+    pub(crate) strategy: Strategy,
+    /// Where journals and logs go. Default `<root>/target/mutation-campaigns`.
+    pub(crate) campaign_dir: Option<PathBuf>,
+    /// Where to look for a journal to resume. Default: `campaign_dir`.
+    pub(crate) resume_from: Option<PathBuf>,
+    pub(crate) resume: bool,
+    /// Stop starting new mutants after this long. The session ends *incomplete*, never
+    /// clean, and the rest is resumable.
+    pub(crate) budget: Option<Duration>,
+    /// The root is a disposable copy: derived `.nazm/` caches may be removed from it.
+    pub(crate) reset_derived: bool,
+    pub(crate) deadlines: Deadlines,
+    pub(crate) source_commit: Option<String>,
+    /// Print journal lines on stdout for a supervisor to collect.
+    pub(crate) export_journal: bool,
 }
 
-pub(crate) fn run_all(root: &Path, catalogue: &Path, only: &[String]) -> Result<(), Vec<String>> {
-    let all = match load(catalogue) {
-        Ok(m) => m,
-        Err(e) => return Err(vec![e]),
-    };
-
-    // A subset, when one is asked for. Each entry costs a full workspace build and test
-    // run, so re-running fifty to check one repaired pattern is hours for one fact.
-    //
-    // Matched by substring, and **a filter that matches nothing is an error**: the
-    // alternative is a run that reports no problems because it ran no mutations, which
-    // is the most convincing wrong answer this tool could give.
-    let mutations: Vec<Mutation> = if only.is_empty() {
-        all
-    } else {
-        let chosen: Vec<Mutation> = all
-            .into_iter()
-            .filter(|m| only.iter().any(|want| m.name.contains(want.as_str())))
-            .collect();
-        if chosen.is_empty() {
-            return Err(vec![format!(
-                "no mutation matches {only:?}. A filter that selects nothing would \
-                 report a clean run having tested nothing."
-            )]);
+impl Options {
+    pub(crate) fn new(root: &Path, catalogue: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            catalogue: catalogue.to_path_buf(),
+            only: Vec::new(),
+            strategy: DEFAULT_STRATEGY,
+            campaign_dir: None,
+            resume_from: None,
+            resume: false,
+            budget: None,
+            reset_derived: false,
+            deadlines: Deadlines::default(),
+            source_commit: None,
+            export_journal: false,
         }
+    }
+
+    fn campaigns(&self) -> PathBuf {
+        self.campaign_dir
+            .clone()
+            .unwrap_or_else(|| self.root.join("target").join("mutation-campaigns"))
+    }
+}
+
+/// The strategy a campaign uses unless told otherwise.
+pub(crate) const DEFAULT_STRATEGY: Strategy = Strategy::Targeted;
+
+/// How a campaign ended.
+#[derive(Debug)]
+pub(crate) enum End {
+    /// Every selected mutant was finalized as caught.
+    Clean,
+    /// Every selected mutant was finalized, and some verdicts are problems.
+    Problems(Vec<String>),
+    /// The session stopped before every mutant was finalized. Never reported as clean.
+    Incomplete(Vec<String>),
+    /// The campaign did not start, or stopped because the tree could not be trusted.
+    Refused(Vec<String>),
+}
+
+/// Plan only: validate the catalogue statically and print what each mutant would run.
+pub(crate) fn plan_only(
+    root: &Path,
+    catalogue: &Path,
+    only: &[String],
+) -> Result<String, Vec<String>> {
+    let cat = plan::load(catalogue).map_err(|e| vec![e])?;
+    let problems = plan::validate(root, &cat);
+    if !problems.is_empty() {
+        return Err(problems);
+    }
+    let selected = plan::select(&cat, only).map_err(|e| vec![e])?;
+    let plans = plan::plan(&cat, &selected)?;
+    Ok(plan::render(&plans))
+}
+
+fn toolchain(root: &Path) -> String {
+    let f = procs::run(&Invocation {
+        program: "rustc".to_owned(),
+        args: vec!["-vV".to_owned()],
+        cwd: root.to_path_buf(),
+        env: Vec::new(),
+        deadline: Duration::from_secs(60),
+    });
+    match f.ended {
+        Ended::Exited(s) if s.success() => f.stdout.trim().to_owned(),
+        _ => "unknown".to_owned(),
+    }
+}
+
+/// The harness's own identity: its source when the root carries it, else the binary.
+fn harness(root: &Path) -> String {
+    let src = root.join("xtask");
+    if src.is_dir() {
+        if let Ok(d) = campaign::tree_digest(&src) {
+            return d;
+        }
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| fs::read(p).ok())
+        .map_or_else(|| "unknown".to_owned(), |b| campaign::blake(&b))
+}
+
+/// Build and run the workspace suite on the pristine tree. Returns how many binaries
+/// reported, which every later workspace-suite run must match.
+fn baseline(o: &Options, identity_tree: &str) -> Result<usize, String> {
+    let build = procs::run(&Invocation {
+        program: campaign::cargo(),
+        args: plan::workspace_build(),
+        cwd: o.root.clone(),
+        env: Vec::new(),
+        deadline: Duration::from_secs(o.deadlines.build_secs),
+    });
+    match &build.ended {
+        Ended::Exited(s) if s.success() => {}
+        other => {
+            return Err(format!(
+                "the unmutated workspace does not build (including tests): {other:?}. Fix \
+                 that first: every mutation would otherwise be reported as SURVIVED."
+            ))
+        }
+    }
+    // The identity was taken before building. If building changed the tree (a lockfile
+    // written, a generated file), the identity no longer names what is being tested, and
+    // nothing journaled under it could be trusted on resume.
+    match campaign::tree_digest(&o.root) {
+        Ok(after) if after == identity_tree => {}
+        Ok(_) => {
+            return Err(
+                "building the pristine tree changed it, so the campaign identity taken \
+                        before the build does not describe what was tested. Commit what the \
+                        build writes (a `Cargo.lock`, a generated file) and run again."
+                    .to_owned(),
+            )
+        }
+        Err(e) => return Err(format!("cannot digest the tree: {e}")),
+    }
+    if o.reset_derived {
+        campaign::reset_derived(&o.root);
+    }
+    let suite = procs::run(&Invocation {
+        program: campaign::cargo(),
+        args: plan::broad_suite(),
+        cwd: o.root.clone(),
+        env: Vec::new(),
+        deadline: Duration::from_secs(o.deadlines.broad_secs),
+    });
+    match campaign::observe(&suite, 0, true) {
+        Observation::TimedOut(why) => Err(format!(
+            "the baseline suite timed out ({why}). Every verdict below would be meaningless."
+        )),
+        Observation::Failed(why) => Err(format!(
+            "the baseline suite did not run to completion ({why}). Every verdict below \
+             would be meaningless."
+        )),
+        Observation::Completed { failing, .. } if failing > 0 => Err(format!(
+            "{failing} test(s) already fail before any mutation. A mutation cannot be shown \
+             to be caught by a suite that is not green."
+        )),
+        Observation::Completed { result_lines, .. } => Ok(result_lines),
+    }
+}
+
+/// Every killer the campaign may run exists in its built target, exactly once, and is
+/// not ignored. Checked on the pristine build, before any mutant is injected.
+///
+/// The baseline suite being green then says each of them passes. That is the first half
+/// of what a Tier-1 catch rests on: this test passed without the mutant.
+fn verify_listed(o: &Options, plans: &[MutationPlan]) -> Result<(), Vec<String>> {
+    let mut by_target: BTreeMap<plan::Target, Vec<(String, String)>> = BTreeMap::new();
+    for p in plans {
+        for k in &p.killers {
+            if let Some(name) = &k.exact {
+                by_target
+                    .entry(k.target.clone())
+                    .or_default()
+                    .push((p.name.clone(), name.clone()));
+            }
+        }
+    }
+    let mut problems = Vec::new();
+    for (target, wanted) in &by_target {
+        let list = |ignored: bool| -> Result<BTreeSet<String>, String> {
+            let f = procs::run(&Invocation {
+                program: campaign::cargo(),
+                args: target.list_args(ignored),
+                cwd: o.root.clone(),
+                env: Vec::new(),
+                deadline: Duration::from_secs(o.deadlines.list_secs),
+            });
+            match &f.ended {
+                Ended::Exited(s) if s.success() => Ok(f
+                    .stdout
+                    .lines()
+                    .filter_map(|l| l.strip_suffix(": test"))
+                    .map(str::to_owned)
+                    .collect()),
+                other => Err(format!("listing {} failed: {other:?}", target.label())),
+            }
+        };
+        let (all, ignored) = match (list(false), list(true)) {
+            (Ok(a), Ok(i)) => (a, i),
+            (Err(e), _) | (_, Err(e)) => {
+                problems.push(e);
+                continue;
+            }
+        };
+        for (mutation, name) in wanted {
+            if !all.contains(name) {
+                problems.push(format!(
+                    "{mutation}: killer `{name}` is not a test in {}. Stale killer metadata is \
+                     a catalogue defect, and this campaign will not start on it.",
+                    target.label()
+                ));
+            } else if ignored.contains(name) {
+                problems.push(format!(
+                    "{mutation}: killer `{name}` in {} is ignored, so the workspace suite \
+                     does not run it",
+                    target.label()
+                ));
+            }
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
+/// Run a campaign.
+pub(crate) fn run_all(o: &Options) -> End {
+    let started = Instant::now();
+    let cat = match plan::load(&o.catalogue) {
+        Ok(c) => c,
+        Err(e) => return End::Refused(vec![e]),
+    };
+    let selected = match plan::select(&cat, &o.only) {
+        Ok(s) => s,
+        Err(e) => return End::Refused(vec![e]),
+    };
+    if !o.only.is_empty() {
         println!(
-            "running {} of the catalogue, selected by {only:?}",
-            chosen.len()
+            "running {} of the catalogue, selected by {:?}",
+            selected.len(),
+            o.only
         );
-        chosen
+    }
+    let plans = match plan::plan(&cat, &selected) {
+        Ok(p) => p,
+        Err(e) => return End::Refused(e),
     };
 
     // Bound to a name that lives to the end of this function on purpose. The kernel
     // lock is released when this handle drops, so it has to outlive recovery, every
     // injection, every test run, and every restoration — not just acquisition.
-    let run_lock = match RunLock::acquire(root) {
+    let run_lock = match RunLock::acquire(&o.root) {
         Ok(l) => l,
-        Err(e) => return Err(vec![e.describe(root)]),
+        Err(e) => return End::Refused(vec![e.describe(&o.root)]),
     };
 
-    // A previous run may have been killed mid-mutation. This used to repair it here and
-    // carry on. It no longer does, and the reason is the one thing this runner cannot
-    // establish: **whether the dead run's descendants have stopped.**
-    //
-    // The lock says nothing about them — it is released by the kernel the instant the
-    // coordinator dies, while its `cargo` and `rustc` children keep running and keep
-    // writing. Neither does the record: a digest says what a file held when it was read,
-    // not that nothing will write it next. Repairing under a live writer, and then
-    // injecting the next mutation on top, is how a run produces verdicts about a file
-    // two processes are editing.
-    //
-    // So recovery becomes an operator action, taken once quiescence has actually been
-    // checked. `restore_stranded` is unchanged and still correct about contents; it is
-    // simply no longer called by something that cannot know it is safe to call it.
-    if backup_path(root).exists() {
-        return Err(vec![stranded_refusal(root)]);
+    // A previous run may have been killed mid-mutation. Recovery is an operator's
+    // action, taken once quiescence has actually been checked; see `stranded_refusal`.
+    // This comes before anything reads the tree, so a journal can never be consulted
+    // over a file that still holds a mutation.
+    if backup_path(&o.root).exists() {
+        return End::Refused(vec![stranded_refusal(&o.root)]);
     }
 
-    // Establish a baseline before touching anything. If the suite is already failing, or
-    // does not run, every result below is meaningless.
-    if !builds(root) {
-        return Err(vec![
-            "the unmutated workspace does not build (including tests). Fix that first: \
-             every mutation would otherwise be reported as SURVIVED."
-                .to_owned(),
-        ]);
+    // Identity, from the tree as it is now: pristine, because nothing is stranded.
+    let tree = match campaign::tree_digest(&o.root) {
+        Ok(t) => t,
+        Err(e) => return End::Refused(vec![format!("cannot digest the tree: {e}")]),
+    };
+    let identity = Identity {
+        schema: campaign::JOURNAL_SCHEMA.to_owned(),
+        tree,
+        catalogue: fs::read(&o.catalogue)
+            .map_or_else(|_| "unreadable".to_owned(), |b| campaign::blake(&b)),
+        harness: harness(&o.root),
+        toolchain: toolchain(&o.root),
+        strategy: o.strategy,
+        selected: plans.iter().map(|p| p.name.clone()).collect(),
+        deadlines: o.deadlines,
+        reset_derived: o.reset_derived,
+    };
+    let key = identity.key();
+    let header = campaign::Header {
+        kind: "campaign".to_owned(),
+        key: key.clone(),
+        identity: identity.clone(),
+        source_commit: o.source_commit.clone(),
+    };
+
+    let mut prior = BTreeMap::new();
+    if o.resume {
+        let from = o.resume_from.clone().unwrap_or_else(|| o.campaigns());
+        let path = from.join(&key).join("journal.jsonl");
+        if path.exists() {
+            match campaign::read_journal(&path, &identity) {
+                Ok(r) => prior = r,
+                Err(e) => return End::Refused(vec![e]),
+            }
+            println!(
+                "resuming campaign {key}: {} finalized entries in {}",
+                prior.len(),
+                path.display()
+            );
+        } else {
+            println!(
+                "resume: no journal for campaign {key} under {}. Nothing is reused; a journal \
+                 recorded against any other tree, catalogue, harness, toolchain, strategy, \
+                 selection or deadline set has a different key and is never read.",
+                from.display()
+            );
+        }
     }
-    let baseline_results = match run_tests(root, 0) {
-        TestRun::Failed(why) => {
-            return Err(vec![format!(
-                "the baseline suite did not run to completion ({why}). Every verdict \
-                 below would be meaningless."
-            )])
+    let reuse = |name: &str| prior.get(name).filter(|r| Verdict::is_semantic(&r.verdict));
+
+    let mut journal = match Journal::open(Some(&o.campaigns()), &header, o.export_journal) {
+        Ok(j) => j,
+        Err(e) => return End::Refused(vec![format!("cannot open the campaign journal: {e}")]),
+    };
+    println!(
+        "campaign {key}: strategy {}, {} selected, root {}",
+        o.strategy.word(),
+        plans.len(),
+        o.root.display()
+    );
+
+    let pending = plans.iter().filter(|p| reuse(&p.name).is_none()).count();
+    let mut baseline_results = 0;
+    if pending > 0 {
+        baseline_results = match baseline(o, &identity.tree) {
+            Ok(n) => n,
+            Err(e) => return End::Refused(vec![e]),
+        };
+        if o.strategy == Strategy::Targeted {
+            if let Err(e) = verify_listed(o, &plans) {
+                return End::Refused(e);
+            }
         }
-        // Nothing is injected yet, so this is the tree's own doing, not a mutant's.
-        TestRun::Crashed { signature, .. } => {
-            return Err(vec![format!(
-                "the unmutated suite killed a test binary ({signature}). Fix that first: \
-                 a baseline that cannot survive itself measures nothing."
-            )])
-        }
-        TestRun::Completed { failing, .. } if failing > 0 => {
-            return Err(vec![format!(
-                "{failing} test(s) already fail before any mutation. A mutation cannot be \
-                 shown to be caught by a suite that is not green."
-            )])
-        }
-        TestRun::Completed { result_lines, .. } => result_lines,
+    }
+    let mut summary = campaign::Summary {
+        selected: plans.len(),
+        setup_secs: started.elapsed().as_secs_f64(),
+        ..campaign::Summary::default()
     };
 
     let mut problems = Vec::new();
-    for m in &mutations {
-        match apply_and_test(root, m, baseline_results) {
-            Verdict::Caught { failing } => {
-                println!("  caught       {}  ({failing} test(s) failed)", m.name);
+    let mut finalized = BTreeSet::new();
+    let mut not_reached = Vec::new();
+    let mut stopped = false;
+    for p in &plans {
+        if let Some(r) = reuse(&p.name) {
+            println!(
+                "  {} {}  (reused from journal {key}: {})",
+                word(&r.verdict),
+                p.name,
+                r.detail
+            );
+            summary.add(r, true);
+            finalized.insert(p.name.clone());
+            if let Some(m) = cat.mutation.get(p.index) {
+                if let Some(problem) = problem(&r.verdict, &r.detail, m) {
+                    problems.push(problem);
+                }
             }
-            Verdict::Survived => {
-                println!("  SURVIVED     {}", m.name);
-                problems.push(format!(
-                    "{}: injected and compiled, but the suite still passed. {}",
-                    m.name, m.why
-                ));
+            continue;
+        }
+        if stopped || o.budget.is_some_and(|b| started.elapsed() >= b) {
+            not_reached.push(p.name.clone());
+            continue;
+        }
+        let Some(m) = cat.mutation.get(p.index) else {
+            not_reached.push(p.name.clone());
+            continue;
+        };
+        let logs =
+            o.campaigns()
+                .join(&key)
+                .join("logs")
+                .join(format!("{:03}-{}", p.index + 1, p.name));
+        match run_one(o, p, m, baseline_results, Some(logs)) {
+            Ok(r) => {
+                println!("  {} {}  ({})", word(&r.verdict), p.name, r.detail);
+                if let Err(e) = journal.append(&r) {
+                    problems.push(format!(
+                        "{}: the verdict could not be journaled ({e})",
+                        p.name
+                    ));
+                }
+                if let Some(problem) = problem(&r.verdict, &r.detail, m) {
+                    problems.push(problem);
+                }
+                summary.add(&r, false);
+                finalized.insert(p.name.clone());
             }
-            Verdict::NotInjected(reason) => {
-                println!("  NOT INJECTED {}", m.name);
-                problems.push(format!(
-                    "{}: {reason}. A mutation that does not apply proves nothing — fix the \
-                     pattern rather than reading the pass as coverage.",
-                    m.name
-                ));
-            }
-            Verdict::DidNotBuild => {
-                println!("  UNUSABLE     {}", m.name);
-                problems.push(format!(
-                    "{}: the mutated tree does not compile, so a failing suite would not \
-                     mean the defect was detected.",
-                    m.name
-                ));
-            }
-            Verdict::MutantCrashed { signature, missing } => {
-                println!("  MUTANT CRASH {}", m.name);
-                problems.push(format!(
-                    "{}: the mutant killed a test binary ({signature}), taking {missing} \
-                     binary's results with it. The defect had an effect, but no test \
-                     asserted it and the rest of that binary went unmeasured — move the \
-                     case out of process, where a crash is an exit code to assert on.",
-                    m.name
-                ));
-            }
-            Verdict::NotRestored(why) => {
-                println!("  NOT RESTORED {}", m.name);
+            Err(why) => {
+                println!("  NOT RESTORED {}", p.name);
                 problems.push(format!(
                     "{}: {why} The run stopped here: every later verdict would have been \
                      measured against a file still holding this mutation.",
-                    m.name
+                    p.name
                 ));
+                not_reached.push(p.name.clone());
                 // Deliberately not a `continue`. The tree is damaged.
-                break;
-            }
-            Verdict::RunnerFailed(why) => {
-                println!("  RUNNER ERROR {}", m.name);
-                problems.push(format!(
-                    "{}: the suite did not run to completion ({why}). This is neither \
-                     caught nor survived — a run that did not happen says nothing about \
-                     coverage.",
-                    m.name
-                ));
+                stopped = true;
             }
         }
     }
@@ -622,10 +836,424 @@ pub(crate) fn run_all(root: &Path, catalogue: &Path, only: &[String]) -> Result<
     // extent of the critical section is visible here rather than inferred from scope.
     drop(run_lock);
 
-    if problems.is_empty() {
-        Ok(())
+    summary.not_reached = not_reached.clone();
+    summary.wall = started.elapsed().as_secs_f64();
+    print!("{}", summary.render(&key, o.strategy));
+    let names: Vec<String> = plans.iter().map(|p| p.name.clone()).collect();
+    if !campaign::accounted(&names, &finalized, &not_reached) {
+        problems.push(
+            "internal: the campaign's accounting does not cover every selected mutation".to_owned(),
+        );
+    }
+
+    if stopped {
+        End::Refused(problems)
+    } else if !not_reached.is_empty() {
+        problems.push(format!(
+            "{} of {} selected mutations were not reached this session: {}. Resume with \
+             `--resume`; nothing about them has been established.",
+            not_reached.len(),
+            plans.len(),
+            not_reached.join(", ")
+        ));
+        End::Incomplete(problems)
+    } else if problems.is_empty() {
+        End::Clean
     } else {
-        Err(problems)
+        End::Problems(problems)
+    }
+}
+
+/// The word a verdict prints as, padded like the legacy runner's.
+fn word(v: &str) -> &'static str {
+    match v {
+        "caught" => "caught      ",
+        "survived" => "SURVIVED    ",
+        "not-injected" => "NOT INJECTED",
+        "unusable" => "UNUSABLE    ",
+        "mutant-crash" => "MUTANT CRASH",
+        "timeout" => "TIMEOUT     ",
+        _ => "RUNNER ERROR",
+    }
+}
+
+/// The problem a finalized verdict represents, if any. The legacy wording, kept.
+fn problem(verdict: &str, detail: &str, m: &Mutation) -> Option<String> {
+    let name = &m.name;
+    match verdict {
+        "caught" => None,
+        "survived" => Some(format!(
+            "{name}: injected and compiled, but the suite still passed. {}",
+            m.why
+        )),
+        "not-injected" => Some(format!(
+            "{name}: {detail}. A mutation that does not apply proves nothing — fix the pattern \
+             rather than reading the pass as coverage."
+        )),
+        "unusable" => Some(format!(
+            "{name}: the mutated tree does not compile, so a failing suite would not mean the \
+             defect was detected."
+        )),
+        "mutant-crash" => Some(format!(
+            "{name}: the mutant killed a test binary ({detail}). The defect had an effect, but \
+             no test asserted it and the rest of that binary went unmeasured — move the case \
+             out of process, where a crash is an exit code to assert on."
+        )),
+        "timeout" => Some(format!(
+            "{name}: {detail}. A timeout is neither caught nor survived; it is no verdict."
+        )),
+        _ => Some(format!(
+            "{name}: the suite did not run to completion ({detail}). This is neither caught nor \
+             survived — a run that did not happen says nothing about coverage."
+        )),
+    }
+}
+
+/// One mutant: inject, decide, restore, verify, record. `Err` only for a failed
+/// restoration, which is fatal to the run.
+fn run_one(
+    o: &Options,
+    p: &MutationPlan,
+    m: &Mutation,
+    baseline_results: usize,
+    logs: Option<PathBuf>,
+) -> Result<Record, String> {
+    let t0 = Instant::now();
+    let path: PathBuf = o.root.join(&m.file);
+    let timing =
+        |apply: f64, build: f64, steps: &[campaign::StepRun], restore: f64| campaign::Timing {
+            apply,
+            build,
+            tests: steps.iter().map(|s| s.secs).sum(),
+            compile_in_tests: steps.iter().map(|s| s.compile_secs).sum(),
+            restore,
+            total: t0.elapsed().as_secs_f64(),
+        };
+    let not_injected = |why: String, original: Option<&str>| -> Result<Record, String> {
+        let v = Verdict::NotInjected(why);
+        let (proof, digest) = match original {
+            Some(orig) => (
+                campaign::untouched(&path, orig)?,
+                campaign::blake(orig.as_bytes()),
+            ),
+            // Nothing could be read, so nothing was written. The proof is vacuous and
+            // says so: the digests are of the empty input.
+            None => (campaign::untouched_absent(), campaign::blake(b"")),
+        };
+        Ok(Record::finalize(
+            p,
+            o.strategy,
+            &v,
+            Vec::new(),
+            digest,
+            None,
+            proof,
+            timing(0.0, 0.0, &[], 0.0),
+            Vec::new(),
+        ))
+    };
+
+    let Ok(original) = fs::read_to_string(&path) else {
+        return not_injected(format!("cannot read {}", m.file), None);
+    };
+    let occurrences = original.matches(&m.find).count();
+    if occurrences == 0 {
+        return not_injected(format!("pattern not found in {}", m.file), Some(&original));
+    }
+    if occurrences > 1 {
+        return not_injected(
+            format!(
+                "pattern occurs {occurrences} times in {}; it must be unique",
+                m.file
+            ),
+            Some(&original),
+        );
+    }
+    let mutated = original.replacen(&m.find, &m.replace, 1);
+    if mutated == original {
+        return not_injected(
+            "replacement produced an identical file".to_owned(),
+            Some(&original),
+        );
+    }
+
+    // Write-ahead: the original goes to disk before the file is touched, so a killed
+    // process leaves a recoverable record rather than a silently mutated tree. The
+    // record carries the hash of the *mutated* form too, so recovery never overwrites
+    // edits made after a crash.
+    let backup = backup_path(&o.root);
+    let record = format!(
+        "{RECORD_VERSION}\n{}\n{}\n{}\n{original}",
+        m.file,
+        digest(&mutated),
+        digest(&original)
+    );
+    if let Some(parent) = backup.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if fs::write(&backup, &record).is_err() {
+        return not_injected(
+            format!("cannot write the backup for {}", m.file),
+            Some(&original),
+        );
+    }
+    if fs::write(&path, &mutated).is_err() {
+        let _ = fs::remove_file(&backup);
+        return not_injected(format!("cannot write {}", m.file), Some(&original));
+    }
+    let apply = t0.elapsed().as_secs_f64();
+
+    let mut ex = campaign::Real {
+        root: &o.root,
+        deadlines: o.deadlines,
+        reset_derived: o.reset_derived,
+        logs,
+        failing: Vec::new(),
+    };
+    let prov = campaign::decide(p, o.strategy, &mut ex, baseline_results);
+
+    let r0 = Instant::now();
+    let proof =
+        campaign::restore(&path, &original, &backup, |p, c| fs::write(p, c)).map_err(|e| {
+            format!(
+                "{} was mutated and could not be restored ({e}). Its original is preserved at {} \
+             and has deliberately been kept. Recover with `cargo xtask mutate-recover \
+             --confirm-no-writers` once nothing is still writing to this tree.",
+                m.file,
+                backup.display()
+            )
+        })?;
+    let restore_secs = r0.elapsed().as_secs_f64();
+    let secs = timing(apply, prov.build_secs, &prov.steps, restore_secs);
+    let mut candidates = ex.failing;
+    candidates.dedup();
+    Ok(Record::finalize(
+        p,
+        o.strategy,
+        &prov.verdict,
+        prov.steps,
+        campaign::blake(original.as_bytes()),
+        Some(campaign::blake(mutated.as_bytes())),
+        proof,
+        secs,
+        candidates,
+    ))
+}
+
+/// A killer candidate named on the command line: `package:lib:name`,
+/// `package:test=T:name` or `package:bin=B:name`.
+pub(crate) fn parse_killer(s: &str) -> Result<KillerSpec, String> {
+    let mut parts = s.splitn(3, ':');
+    let (Some(package), Some(target), Some(name)) = (parts.next(), parts.next(), parts.next())
+    else {
+        return Err(format!(
+            "`{s}`: a killer is `package:lib:name`, `package:test=T:name` or `package:bin=B:name`"
+        ));
+    };
+    let mut k = KillerSpec {
+        package: package.to_owned(),
+        lib: false,
+        test: None,
+        bin: None,
+        name: name.to_owned(),
+    };
+    match target.split_once('=') {
+        None if target == "lib" => k.lib = true,
+        Some(("test", t)) => k.test = Some(t.to_owned()),
+        Some(("bin", b)) => k.bin = Some(b.to_owned()),
+        _ => {
+            return Err(format!(
+                "`{s}`: the target must be `lib`, `test=T` or `bin=B`"
+            ))
+        }
+    }
+    Ok(k)
+}
+
+/// Establish that each candidate killer observes this mutant, the only way a killer is
+/// allowed to become catalogue metadata:
+///
+/// ```text
+/// pristine: the test passes → mutant: the same test fails → restored: it passes again
+/// ```
+///
+/// Returns a report and the TOML to paste; errors if any candidate does not qualify.
+pub(crate) fn verify_killer(
+    o: &Options,
+    name: &str,
+    given: &[KillerSpec],
+) -> Result<String, Vec<String>> {
+    use std::fmt::Write as _;
+    let cat = plan::load(&o.catalogue).map_err(|e| vec![e])?;
+    let Some(index) = cat.mutation.iter().position(|m| m.name == name) else {
+        return Err(vec![format!("no mutation is named exactly `{name}`")]);
+    };
+    let mut m = cat
+        .mutation
+        .get(index)
+        .cloned()
+        .ok_or_else(|| vec!["unreachable".to_owned()])?;
+    if !given.is_empty() {
+        m.killers = given.to_vec();
+    }
+    if m.killers.is_empty() {
+        return Err(vec![format!(
+            "`{name}` declares no killer. Name a candidate with `--killer package:test=T:name`."
+        )]);
+    }
+    let mut cat1 = cat.clone();
+    if let Some(slot) = cat1.mutation.get_mut(index) {
+        *slot = m.clone();
+    }
+    let plans = plan::plan(&cat1, &[index])?;
+    let Some(p) = plans.first() else {
+        return Err(vec!["unreachable: no plan".to_owned()]);
+    };
+
+    let lock = RunLock::acquire(&o.root).map_err(|e| vec![e.describe(&o.root)])?;
+    if backup_path(&o.root).exists() {
+        return Err(vec![stranded_refusal(&o.root)]);
+    }
+    let mut ex = campaign::Real {
+        root: &o.root,
+        deadlines: o.deadlines,
+        reset_derived: o.reset_derived,
+        logs: None,
+        failing: Vec::new(),
+    };
+    let build = |ex: &mut campaign::Real<'_>, when: &str| -> Result<(), String> {
+        match ex.build().0 {
+            campaign::Build::Built => Ok(()),
+            other => Err(format!("{when}: the workspace did not build ({other:?})")),
+        }
+    };
+    let run_all_killers = |ex: &mut campaign::Real<'_>| -> Vec<(String, &'static str)> {
+        p.killers
+            .iter()
+            .map(|k| {
+                let step = campaign::Step {
+                    tier: campaign::Tier::Direct,
+                    selector: Some(k.clone()),
+                };
+                let (obs, _, _) = ex.test(&step, 1);
+                let w = match obs {
+                    Observation::Completed {
+                        passed: 1,
+                        failing: 0,
+                        result_lines: 1,
+                        ..
+                    } => "passes",
+                    Observation::Completed {
+                        passed: 0,
+                        failing: 1,
+                        result_lines: 1,
+                        ..
+                    } => "fails",
+                    _ => "unclear",
+                };
+                (k.label(), w)
+            })
+            .collect()
+    };
+
+    build(&mut ex, "pristine").map_err(|e| vec![e])?;
+    verify_listed(o, &plans)?;
+    let before = run_all_killers(&mut ex);
+
+    let path = o.root.join(&m.file);
+    let original = fs::read_to_string(&path).map_err(|e| vec![format!("{}: {e}", m.file)])?;
+    if original.matches(&m.find).count() != 1 {
+        return Err(vec![format!(
+            "`{name}`: the pattern does not occur exactly once in {}",
+            m.file
+        )]);
+    }
+    let mutated = original.replacen(&m.find, &m.replace, 1);
+    let backup = backup_path(&o.root);
+    let record = format!(
+        "{RECORD_VERSION}\n{}\n{}\n{}\n{original}",
+        m.file,
+        digest(&mutated),
+        digest(&original)
+    );
+    fs::write(&backup, &record).map_err(|e| vec![format!("cannot write the backup: {e}")])?;
+    if let Err(e) = fs::write(&path, &mutated) {
+        let _ = fs::remove_file(&backup);
+        return Err(vec![format!("cannot write {}: {e}", m.file)]);
+    }
+    let under = match build(&mut ex, "mutant") {
+        Ok(()) => Ok(run_all_killers(&mut ex)),
+        Err(e) => Err(e),
+    };
+    campaign::restore(&path, &original, &backup, |p, c| fs::write(p, c)).map_err(|e| {
+        vec![format!(
+            "{} could not be restored ({e}); its original is at {}",
+            m.file,
+            backup.display()
+        )]
+    })?;
+    build(&mut ex, "restored").map_err(|e| vec![e])?;
+    let after = run_all_killers(&mut ex);
+    drop(lock);
+    let under = under.map_err(|e| {
+        vec![format!(
+            "{e}: a mutant that does not build cannot verify a killer"
+        )]
+    })?;
+
+    let mut report = String::new();
+    let mut failed = Vec::new();
+    let mut ok = Vec::new();
+    for (i, k) in m.killers.iter().enumerate() {
+        let label = before.get(i).map_or("?", |b| b.0.as_str());
+        let (b, u, a) = (
+            before.get(i).map_or("?", |x| x.1),
+            under.get(i).map_or("?", |x| x.1),
+            after.get(i).map_or("?", |x| x.1),
+        );
+        let verified = b == "passes" && u == "fails" && a == "passes";
+        let _ = writeln!(
+            report,
+            "  {} {label}: pristine {b}, mutant {u}, restored {a}",
+            if verified {
+                "VERIFIED   "
+            } else {
+                "NOT A KILLER"
+            }
+        );
+        if verified {
+            ok.push(k.clone());
+        } else {
+            failed.push(format!(
+                "{name}: {label} is not a killer (pristine {b}, mutant {u}, restored {a})"
+            ));
+        }
+    }
+    if !ok.is_empty() {
+        let _ = writeln!(report, "\ncatalogue metadata for `{name}`:\nkillers = [");
+        for k in &ok {
+            let target = if k.lib {
+                "lib = true".to_owned()
+            } else if let Some(t) = &k.test {
+                format!("test = \"{t}\"")
+            } else if let Some(b) = &k.bin {
+                format!("bin = \"{b}\"")
+            } else {
+                String::new()
+            };
+            let _ = writeln!(
+                report,
+                "    {{ package = \"{}\", {target}, name = \"{}\" }},",
+                k.package, k.name
+            );
+        }
+        let _ = writeln!(report, "]");
+    }
+    if failed.is_empty() {
+        Ok(report)
+    } else {
+        print!("{report}");
+        Err(failed)
     }
 }
 
@@ -662,115 +1290,6 @@ fn stranded_refusal(root: &Path) -> String {
         backup_path(root).display(),
         root.display()
     )
-}
-
-fn apply_and_test(root: &Path, m: &Mutation, baseline_results: usize) -> Verdict {
-    let path: PathBuf = root.join(&m.file);
-    let Ok(original) = fs::read_to_string(&path) else {
-        return Verdict::NotInjected(format!("cannot read {}", m.file));
-    };
-
-    let occurrences = original.matches(&m.find).count();
-    if occurrences == 0 {
-        return Verdict::NotInjected(format!("pattern not found in {}", m.file));
-    }
-    if occurrences > 1 {
-        return Verdict::NotInjected(format!(
-            "pattern occurs {occurrences} times in {}; it must be unique",
-            m.file
-        ));
-    }
-
-    let mutated = original.replacen(&m.find, &m.replace, 1);
-    if mutated == original {
-        return Verdict::NotInjected("replacement produced an identical file".to_owned());
-    }
-
-    // Write-ahead: the original goes to disk before the file is touched, so a killed
-    // process leaves a recoverable record rather than a silently mutated tree.
-    //
-    // The record carries the hash of the *mutated* form too. Restoring blindly would
-    // overwrite whatever is on disk — including edits made after the crash, by someone
-    // who had no idea a mutation was stranded there.
-    let backup = backup_path(root);
-    let record = format!(
-        "{RECORD_VERSION}\n{}\n{}\n{}\n{original}",
-        m.file,
-        digest(&mutated),
-        digest(&original)
-    );
-    if let Some(parent) = backup.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if fs::write(&backup, &record).is_err() {
-        return Verdict::NotInjected(format!("cannot write the backup for {}", m.file));
-    }
-
-    if fs::write(&path, &mutated).is_err() {
-        let _ = fs::remove_file(&backup);
-        return Verdict::NotInjected(format!("cannot write {}", m.file));
-    }
-
-    let verdict = if builds(root) {
-        match run_tests(root, baseline_results) {
-            TestRun::Failed(why) => Verdict::RunnerFailed(why),
-            TestRun::Crashed {
-                signature,
-                result_lines,
-            } => Verdict::MutantCrashed {
-                signature,
-                missing: baseline_results.saturating_sub(result_lines),
-            },
-            // Fewer binaries reported than at baseline: something did not run, and a
-            // mutation the missing binary would have caught reads as survived.
-            TestRun::Completed { result_lines, .. } if result_lines < baseline_results => {
-                Verdict::RunnerFailed(format!(
-                    "only {result_lines} of {baseline_results} test binaries reported"
-                ))
-            }
-            TestRun::Completed { failing: 0, .. } => Verdict::Survived,
-            TestRun::Completed { failing, .. } => Verdict::Caught { failing },
-        }
-    } else {
-        Verdict::DidNotBuild
-    };
-
-    finish(&path, &original, &backup, &m.file, verdict, |p, c| {
-        fs::write(p, c)
-    })
-}
-
-/// Put the original back, then clear the record — in that order, and only in that order.
-///
-/// The write is taken as a parameter so a test can fail it at the exact boundary that
-/// matters. That is a smaller seam than a filesystem trait: there is one call, its
-/// failure has one consequence, and the consequence is what needs a regression.
-///
-/// Clearing the record regardless of whether the restore succeeded — which is what this
-/// did — converts the one recoverable failure into an unrecoverable one. The file stays
-/// mutated and the write-ahead record that would have repaired it is gone, so the next
-/// run measures a damaged tree with no way to know.
-fn finish(
-    path: &Path,
-    original: &str,
-    backup: &Path,
-    file: &str,
-    verdict: Verdict,
-    write: impl FnOnce(&Path, &str) -> std::io::Result<()>,
-) -> Verdict {
-    match write(path, original) {
-        Ok(()) => {
-            let _ = fs::remove_file(backup);
-            verdict
-        }
-        Err(e) => Verdict::NotRestored(format!(
-            "{file} was mutated and could not be restored ({e}). Its original is \
-             preserved at {} and has deliberately been kept. Recover with \
-             `cargo xtask mutate-recover --confirm-no-writers` once nothing is still \
-             writing to this tree.",
-            backup.display()
-        )),
-    }
 }
 
 /// Marks the write-ahead record's layout, so a record this runner did not write is
@@ -889,174 +1408,10 @@ fn digest(s: &str) -> String {
     format!("{h:016x}")
 }
 
-fn builds(root: &Path) -> bool {
-    // `--tests` matters: without it a broken test file compiles nothing, `cargo test`
-    // reports nothing, and every mutation looks like it survived.
-    Command::new(cargo())
-        .arg("build")
-        .arg("--workspace")
-        .arg("--tests")
-        .arg("--quiet")
-        // One job, for the same reason the suite runs on one thread: a build that
-        // oversubscribes the container competes with nothing here, but it is the same
-        // resource contract and keeping the two consistent is cheaper than remembering
-        // which one was allowed to differ.
-        .arg("--jobs")
-        .arg("1")
-        .current_dir(root)
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
-/// What one run of the suite actually produced.
-enum TestRun {
-    /// Ran to completion. `failing` may be zero.
-    Completed { failing: usize, result_lines: usize },
-    /// A test binary died rather than reporting. Carries what it died of, and how many
-    /// binaries did report, so the caller can say how much of the suite went unmeasured.
-    Crashed {
-        signature: String,
-        result_lines: usize,
-    },
-    /// Did not run to completion, for a reason that is about the runner, not the code.
-    Failed(String),
-}
-
-/// What a test binary died of, if one did.
-///
-/// Only meaningful once a binary is known to be missing: a crash and a broken
-/// orchestration both show up as missing results, and the message is what separates them.
-/// One is a fact about the code under test, the other about the runner, and reporting the
-/// first as the second hides a real effect behind an apology.
-///
-/// The message alone proves nothing, which is the trap. The CLI suite runs `nazm` as a
-/// child process *so that* a stack overflow is contained, and a test asserting on the
-/// child's stderr prints that stderr — crash text included — while every binary reports
-/// normally. Matching on the text before checking completeness turned three correct
-/// catches into crashes.
-fn crash_signature(stdout: &str, stderr: &str) -> Option<&'static str> {
-    [
-        "fatal runtime error: stack overflow",
-        "has overflowed its stack",
-        "memory allocation of",
-        "SIGSEGV",
-        "SIGABRT",
-        "signal: 6",
-        "signal: 11",
-    ]
-    .into_iter()
-    .find(|sig| stderr.contains(sig) || stdout.contains(sig))
-}
-
-/// Run the suite. `baseline_results` is how many binaries reported when nothing was
-/// injected; pass 0 to measure the baseline itself.
-///
-/// # Why this is the same invocation `cargo xtask contained tests` uses
-///
-/// A mutation verdict is a claim about **the suite**, so it has to be measured under the
-/// execution model the suite is authoritative in. Until 2026-09-22 this ran with cargo's
-/// defaults, and inside the container that meant ten test threads on one CPU: `nproc`
-/// reports the host's core count and the cgroup quota is `100000 100000`, so the harness
-/// oversubscribes by ten while several tests carry wall-clock deadlines — `STAGE_LIMIT` is
-/// 120 seconds, and `tests/selfhost.rs` has 30- and 60-second bounds.
-///
-/// That makes a verdict a function of scheduling luck, and the dangerous direction is not
-/// the one that was noticed. A spurious failure while measuring the **baseline** aborts the
-/// run and is visible; a spurious failure while measuring a **mutant** is counted as
-/// CAUGHT, and is not visible at all. One N6 run reported a pre-existing failure that three
-/// further runs of the identical environment did not reproduce, which is exactly the
-/// frequency at which the second kind would go unnoticed.
-///
-/// Serial costs wall time and nothing else. The catalogue could not be run in full inside
-/// one contained deadline either way.
-fn run_tests(root: &Path, baseline_results: usize) -> TestRun {
-    let out = match Command::new(cargo())
-        .arg("test")
-        .arg("--workspace")
-        .arg("--jobs")
-        .arg("1")
-        // Without this, cargo stops after the first test binary that fails — so a
-        // *caught* mutation reports fewer result lines than the baseline and the
-        // completeness check below misclassifies it as a runner error. Found by the
-        // negative control for that very check, which reported RUNNER ERROR for
-        // mutations that were in fact being caught correctly.
-        .arg("--no-fail-fast")
-        .arg("--")
-        .arg("--test-threads")
-        .arg("1")
-        .current_dir(root)
-        .output()
-    {
-        Ok(o) => o,
-        Err(e) => return TestRun::Failed(format!("could not start cargo test: {e}")),
-    };
-
-    let text = String::from_utf8_lossy(&out.stdout);
-    let result_lines = text
-        .lines()
-        .filter(|l| l.starts_with("test result:"))
-        .count();
-
-    if result_lines == 0 {
-        // Exit code alone cannot distinguish this: cargo exits non-zero both for "tests
-        // failed" and "nothing ran". Only the absence of result lines separates them.
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        return TestRun::Failed(format!(
-            "the suite produced no results at all ({}). stderr: {}",
-            out.status,
-            stderr.lines().last().unwrap_or("").trim()
-        ));
-    }
-
-    // Killed by a signal. A non-zero *code* is expected and normal here — a caught
-    // mutation makes tests fail — but a signal means the runner itself died, and the
-    // results it did print describe a partial run.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt as _;
-        if let Some(sig) = out.status.signal() {
-            return TestRun::Failed(format!("the test runner was killed by signal {sig}"));
-        }
-    }
-
-    let stderr_text = String::from_utf8_lossy(&out.stderr);
-    let failing = text
-        .lines()
-        .filter_map(|l| l.strip_prefix("test result: FAILED. "))
-        .filter_map(|rest| rest.split(';').nth(1))
-        .filter_map(|f| f.trim().strip_suffix(" failed"))
-        .filter_map(|n| n.parse::<usize>().ok())
-        .sum();
-
-    // Only now, with a count of the binaries that reported, can a crash be attributed.
-    // Crash text on its own means nothing: the CLI suite runs `nazm` as a child process
-    // precisely so that a stack overflow is contained, and when a test there asserts on
-    // the child's stderr it *prints that stderr*, crash message and all. Every binary
-    // still reported, so nothing died here — a test caught the defect exactly as
-    // intended. Reading the message alone turned three correct catches into crashes.
-    if result_lines < baseline_results {
-        if let Some(sig) = crash_signature(&text, &stderr_text) {
-            return TestRun::Crashed {
-                signature: sig.to_owned(),
-                result_lines,
-            };
-        }
-    }
-
-    TestRun::Completed {
-        failing,
-        result_lines,
-    }
-}
-
-fn cargo() -> String {
-    std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned())
-}
-
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
-    use super::crash_signature;
+    use crate::campaign::crash_signature;
 
     use super::{
         backup_path, digest, legacy_lock_path, lock_path, restore_stranded, AcquireError, Recovery,
@@ -1254,38 +1609,18 @@ mod tests {
         // The one failure that turns a recoverable tree into an unrecoverable one. The
         // record must survive it — clearing the record after a failed restore leaves the
         // file mutated with nothing left to repair it from.
-        use super::{finish, Verdict};
-
         let (root, src) = stranded("original\n", "mutated\n");
         let backup = backup_path(root.path());
 
-        let verdict = finish(
-            &src,
-            "original\n",
-            &backup,
-            "src.rs",
-            Verdict::Survived,
-            |_, _| {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "injected at the restoration boundary",
-                ))
-            },
-        );
-
-        // The failure propagates, and as the one verdict that is fatal to a run rather
-        // than a result about a mutation.
-        match &verdict {
-            Verdict::NotRestored(why) => {
-                assert!(why.contains("src.rs"), "{why}");
-                assert!(why.contains("could not be restored"), "{why}");
-                assert!(
-                    why.contains("mutate-recover"),
-                    "it must say how to fix it: {why}"
-                );
-            }
-            _ => panic!("a failed restore must not be reported as a mutation result"),
-        }
+        let outcome = crate::campaign::restore(&src, "original\n", &backup, |_, _| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected at the restoration boundary",
+            ))
+        });
+        // No proof of restoration, so no record can be built and no verdict finalized.
+        let why = outcome.expect_err("a failed restore must not produce a proof");
+        assert!(why.contains("could not write the original back"), "{why}");
 
         assert!(
             backup.exists(),
@@ -1308,23 +1643,13 @@ mod tests {
 
     #[test]
     fn a_successful_restore_clears_the_record() {
-        // The other half, so the test above is not satisfied by a `finish` that never
+        // The other half, so the test above is not satisfied by a restore that never
         // clears anything.
-        use super::{finish, Verdict};
-
         let (root, src) = stranded("original\n", "mutated\n");
         let backup = backup_path(root.path());
 
-        let verdict = finish(
-            &src,
-            "original\n",
-            &backup,
-            "src.rs",
-            Verdict::Caught { failing: 1 },
-            |p, c| fs::write(p, c),
-        );
-
-        assert!(matches!(verdict, Verdict::Caught { failing: 1 }));
+        crate::campaign::restore(&src, "original\n", &backup, |p, c| fs::write(p, c))
+            .expect("a proof of restoration");
         assert_eq!(fs::read_to_string(&src).unwrap(), "original\n");
         assert!(
             !backup.exists(),

@@ -245,6 +245,9 @@ fn nazm_test_with_deadline(dir: &std::path::Path) -> std::process::Output {
         if started.elapsed() > LIMIT {
             let _ = Command::new("kill")
                 .arg("-KILL")
+                // `--`: procps `kill` (the container's) parses `-<pgid>` after a signal as an
+                // option and signals nothing without it. BSD `kill` accepts both.
+                .arg("--")
                 .arg(format!("-{}", child.id()))
                 .status();
             let _ = child.wait();

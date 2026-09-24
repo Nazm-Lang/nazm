@@ -15,6 +15,11 @@ publish = false
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
+# The mutation campaign's identity and its journal digests. A journal is a verdict cache,
+# and the reason `architecture.md` §8 gives for BLAKE3 over a checksum applies to it: an
+# accidental collision would reuse a verdict for a tree it was never measured against.
+# Already in the lockfile through `nazm-cache`, with the same pure-Rust feature set.
+blake3 = { workspace = true }
 
 # Only for tests: the restoration and lifecycle tests build throwaway trees to
 # interrupt and repair, and they must never touch the real checkout.
