@@ -2696,8 +2696,8 @@ why = """
 the **Nazm-written** checker accepts `?` on any enum, so an `Option` or a lookalike propagates
 """
 file = "compiler/analyse.nz"
-find = "                    if definition_of(tb, ot) == result_decl { is_result = true; }"
-replace = "                    if is_enum(ot, rkind) { is_result = true; }"
+find = "        Option.Some(value: decl) => definition_of(tb, t) == decl,"
+replace = "        Option.Some(value: decl) => is_enum(t, tb.kind),"
 
 [[mutation]]
 name = "selfhost-question-mark-ignores-the-error-type"
@@ -2723,10 +2723,10 @@ why = """
 the **Nazm-written** checker reports a project `Result` as an ordinary import collision instead of `N0363` at its declaration
 """
 file = "compiler/analyse.nz"
-find = """                        if target == core {
-                            let named = ints_get(rat, own);"""
-replace = """                        if false {
-                            let named = ints_get(rat, own);"""
+find = """                            if target == core {
+                                let named = ints_get(rat, own);"""
+replace = """                            if false {
+                                let named = ints_get(rat, own);"""
 
 [[mutation]]
 name = "selfhost-the-prelude-is-not-imported"
@@ -2817,3 +2817,289 @@ the **Nazm-written** emitter's error path branches to the success block instead 
 file = "compiler/emit.nz"
 find = """    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
 replace = """    add_line(out, str_concat("  br label %", blk("q", k)));"""
+
+# --- N12.1: the core prelude's identity in the compiler written in Nazm -------------------
+
+[[mutation]]
+name = "selfhost-the-core-is-the-last-module"
+why = """
+the **Nazm-written** checker takes whichever module is last as the core prelude, as it did before N12.1, so a prelude loaded anywhere else is not one and the module after it is
+"""
+file = "compiler/module.nz"
+find = "        if strs_get(mpath, m) == core_key() { return m; }"
+replace = "        if m == strs_len(mpath) - 1 { return m; }"
+
+[[mutation]]
+name = "selfhost-any-module-called-prelude-is-the-core"
+why = """
+the **Nazm-written** checker recognises the prelude by its file name, so a project file named `prelude` is taken for it and its `?` refuses the real `Result`
+"""
+file = "compiler/module.nz"
+find = "        if strs_get(mpath, m) == core_key() { return m; }"
+replace = """        if str_len(strs_get(mpath, m)) >= 7 {
+            if str_slice(strs_get(mpath, m), str_len(strs_get(mpath, m)) - 7, str_len(strs_get(mpath, m))) == "prelude" { return m; }
+        }"""
+
+[[mutation]]
+name = "selfhost-a-project-path-keeps-the-core-namespace"
+why = """
+the **Nazm-written** loader keeps a project file's `@core/…` path as its key, so a file at `@core/prelude` holds the prelude's key and is found before the prelude is
+"""
+file = "compiler/module.nz"
+find = """            strs_set(mpath, p, str_concat("./", strs_get(mpath, p)));"""
+replace = """            strs_set(mpath, p, strs_get(mpath, p));"""
+
+[[mutation]]
+name = "selfhost-the-core-loses-its-key-when-loaded"
+why = """
+the **Nazm-written** loader keys the prelude by its file path, as it did in N12, so no module carries the prelude's key and nothing is the core `Result`
+"""
+file = "compiler/module.nz"
+find = """    strs_push(mpath, core_key());
+    ints_push(mstart, str_len(src) + 1);"""
+replace = """    strs_push(mpath, normalise(core));
+    ints_push(mstart, str_len(src) + 1);"""
+
+[[mutation]]
+name = "selfhost-the-root-module-s-result-is-the-core-one"
+why = """
+the **Nazm-written** checker looks for `Result` in the root module instead of the core prelude, so a project `Result` would be the one `?` accepts and the real one is not
+"""
+file = "compiler/analyse.nz"
+find = """    let core_result = record_owned(rnames, rowner, core, "Result");"""
+replace = """    let core_result = record_owned(rnames, rowner, 0, "Result");"""
+
+[[mutation]]
+name = "selfhost-reserved-names-follow-position"
+why = """
+the **Nazm-written** checker's prelude-name collision rule is asked of the last module rather than of the prelude, so which declarations are reserved depends on load order
+"""
+file = "compiler/analyse.nz"
+find = "    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath), core,"
+replace = "    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath), strs_len(mpath) - 1,"
+
+[[mutation]]
+name = "the-prelude-is-whichever-module-is-last"
+why = """
+the reference graph names its last module as the prelude, so a graph with a module after the prelude, or with none, answers wrongly
+"""
+file = "crates/nazm-sema/src/module.rs"
+find = "            .position(|m| m.key.as_ref().is_some_and(ModuleKey::is_prelude))"
+replace = "            .rposition(|_| true)"
+
+# --- N12.1: a block used as a value, in the reference backend ------------------------------
+
+[[mutation]]
+name = "lowered-arm-block-drops-its-statements"
+why = """
+an arm written as a block keeps only its tail, so the statements before it — the bindings its tail reads, the effects it has — never run
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = "                stmts.extend(inner.stmts);"
+replace = "                let _ = inner.stmts;"
+
+[[mutation]]
+name = "a-bare-block-is-emitted-as-its-tail-alone"
+why = """
+a block in a value position emits its tail and skips its statements
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = "            Expr::Block(b) => self.block(b),"
+replace = """            Expr::Block(b) => match &b.result {
+                Some(e) => self.expr(e),
+                None => Val::Transferred,
+            },"""
+
+[[mutation]]
+name = "a-block-value-is-released-as-it-leaves"
+why = """
+the value a block hands on is released as the block ends, before anything has taken it over, so a `Str` or `Vec` tail read from a block local is freed while it is still in use
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = "            Expr::Block(b) => self.block(b),"
+replace = """            Expr::Block(b) => {
+                let v = self.block(b);
+                if let Val::Of { value, ty } = v {
+                    self.release(value, ty);
+                }
+                v
+            }"""
+
+[[mutation]]
+name = "a-statement-block-is-skipped"
+why = """
+a block written as a statement lowers to nothing, so its assignments never happen
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = "        AstExpr::Block(b) => lower_body(ctx, b),"
+replace = "        AstExpr::Block(_) => (Vec::new(), Ends::FallsThrough),"
+
+[[mutation]]
+name = "a-statement-match-claims-every-arm-leaves"
+why = """
+a statement `match` is said to transfer even when an arm falls through, so everything written after it is dropped from the function
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = """        if ends == Ends::FallsThrough {
+            every_arm_leaves = false;
+        }"""
+replace = "        let _ = ends;"
+
+[[mutation]]
+name = "a-statement-match-arm-does-not-rejoin"
+why = """
+a statement `match` arm that falls through never branches to the continuation, leaving its block without a terminator
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """            if self.stmts(&arm.body) == Reach::FallsThrough {
+                let _ = writeln!(self.out, "  br label %{cont}");
+                arrives = true;
+            }"""
+replace = """            if self.stmts(&arm.body) == Reach::FallsThrough {
+                arrives = true;
+            }"""
+
+[[mutation]]
+name = "a-statement-match-never-lets-go-of-what-it-matched"
+why = """
+a statement `match` stops holding its scrutinee at the continuation without releasing it, so an owning scrutinee leaks every time an arm falls through
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """        self.open(&cont);
+        self.release_matched(scrutinee_ty, slot);
+        Reach::FallsThrough"""
+replace = """        self.open(&cont);
+        self.building.pop();
+        Reach::FallsThrough"""
+
+[[mutation]]
+name = "an-emitted-block-uses-its-tail-after-a-transfer"
+why = """
+a block whose statements transfer still emits its tail, treating `Diverges` as a value: instructions after a terminator, and a value on a path that never arrives
+"""
+file = "crates/nazm-lir/src/emit.rs"
+find = """        if self.stmts(&b.stmts) == Reach::Transferred {
+            return Val::Transferred;
+        }
+        match &b.result {"""
+replace = """        let _ = self.stmts(&b.stmts);
+        match &b.result {"""
+
+# --- N12.1: a block used as a value, in the compiler written in Nazm -----------------------
+
+[[mutation]]
+name = "selfhost-a-block-operand-is-not-parsed"
+why = """
+the **Nazm-written** parser refuses a block where an operand is expected, as it did before N12.1
+"""
+file = "compiler/parse.nz"
+find = """                ints_set(status, 0, 3);
+                return i;"""
+replace = """                die("a block used as an expression: not implemented yet in this parser", start_at(starts, i));
+                return i;"""
+
+[[mutation]]
+name = "selfhost-a-block-operand-loses-its-span"
+why = """
+the **Nazm-written** parser gives a block operand an empty span, so an expression built on it spans the wrong bytes
+"""
+file = "compiler/parse.nz"
+find = """                emit(nk, nar, nst, nen, ntx, n_blockexpr(), 1, start, close, "");
+                ints_push(vs, start);
+                ints_push(ve, close);"""
+replace = """                emit(nk, nar, nst, nen, ntx, n_blockexpr(), 1, start, close, "");
+                ints_push(vs, start);
+                ints_push(ve, start);"""
+
+[[mutation]]
+name = "selfhost-a-statement-block-needs-a-semicolon"
+why = """
+the **Nazm-written** parser does not treat a statement that starts with `{` as block-like, so a block followed by another statement is refused
+"""
+file = "compiler/parse.nz"
+find = "        if t == k_lbrace() { blocklike = 1; }"
+replace = "        if t == k_lbrace() { blocklike = 0; }"
+
+[[mutation]]
+name = "selfhost-every-block-expression-is-a-value"
+why = """
+the **Nazm-written** checker gives a block written as an expression a value whatever its block completes with, so a `Unit` block is accepted where a value is needed
+"""
+file = "compiler/analyse.nz"
+find = """            if kind == n_blockexpr() {
+                ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first)));"""
+replace = """            if kind == n_blockexpr() {
+                ints_set(ncomp, k, c_value());"""
+
+[[mutation]]
+name = "selfhost-a-diverging-block-expression-is-unit"
+why = """
+the **Nazm-written** checker treats a block expression that always leaves as producing nothing, so a `match` whose arms all return is refused as having no value
+"""
+file = "compiler/analyse.nz"
+find = """            if kind == n_blockexpr() {
+                ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first)));"""
+replace = """            if kind == n_blockexpr() {
+                ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first)));
+                if ints_get(ncomp, k) == c_diverges() { ints_set(ncomp, k, c_unit()); }"""
+
+[[mutation]]
+name = "selfhost-a-block-expression-is-emitted-as-something"
+why = """
+the **Nazm-written** emitter stops treating a block expression as structure, so the node falls through to the emitters of other kinds
+"""
+file = "compiler/emit.nz"
+find = "    if kind == n_blockexpr() { return true; }"
+replace = "    if kind == n_blockexpr() { return false; }"
+
+# --- N12.1: the `Option` dogfood in the checker written in Nazm -----------------------------
+
+[[mutation]]
+name = "selfhost-a-missing-declaration-is-found"
+why = """
+the **Nazm-written** checker's declaration lookup answers `Some` when nothing was found, confusing `None` with `Some`
+"""
+file = "compiler/analyse.nz"
+find = """            if strs_get(rnames, i) == name { return Option[Int].Some(value: i); }
+        }
+        i = i + 1;
+    }
+    Option[Int].None()"""
+replace = """            if strs_get(rnames, i) == name { return Option[Int].Some(value: i); }
+        }
+        i = i + 1;
+    }
+    Option[Int].Some(value: 0)"""
+
+[[mutation]]
+name = "selfhost-no-core-result-is-the-definition-of-a-non-record"
+why = """
+the **Nazm-written** checker brings the `-1` back: with no prelude, the missing `Result` compares equal to `definition_of` of any non-record, so `?` on an `Int` is taken for one on a `Result`
+"""
+file = "compiler/analyse.nz"
+find = """        Option.None() => false,
+        Option.Some(value: decl) => definition_of(tb, t) == decl,"""
+replace = """        Option.None() => definition_of(tb, t) == 0 - 1,
+        Option.Some(value: decl) => definition_of(tb, t) == decl,"""
+
+[[mutation]]
+name = "selfhost-a-duplicate-declaration-check-has-its-arms-reversed"
+why = """
+the **Nazm-written** checker's duplicate-type check reports on `None` and passes on `Some`, so every first declaration is a duplicate and a real duplicate is not
+"""
+file = "compiler/analyse.nz"
+find = """                match record_owned(rnames, rowner, owner, name) {
+                    Option.None() => { },
+                    Option.Some(value: _) => {"""
+replace = """                match record_owned(rnames, rowner, owner, name) {
+                    Option.Some(value: _) => { },
+                    Option.None() => {"""
+
+[[mutation]]
+name = "selfhost-a-module-s-own-type-is-not-found"
+why = """
+the **Nazm-written** checker's type lookup discards the declaration it found, so a module's own record or enum is an unknown type
+"""
+file = "compiler/analyse.nz"
+find = "        Option.Some(value: own) => t_record(own),"
+replace = "        Option.Some(value: own) => t_unknown(),"

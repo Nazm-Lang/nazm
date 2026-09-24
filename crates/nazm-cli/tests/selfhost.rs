@@ -2300,6 +2300,7 @@ fn run_bounded(
     limit: std::time::Duration,
 ) -> Option<(Option<i32>, String, String)> {
     use std::io::Read;
+    use std::os::unix::process::CommandExt;
     use std::process::Stdio;
 
     fn drain(mut r: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
@@ -2323,10 +2324,14 @@ fn run_bounded(
         })
     }
 
+    // Its own process group, so the deadline reaches what it started as well: a script's
+    // stage, or a stage's program, still holding the pipes would keep both readers — and
+    // this function — waiting after the child itself was killed.
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .expect("spawn");
     let out = drain(child.stdout.take().expect("stdout pipe"));
@@ -2337,6 +2342,10 @@ fn run_bounded(
         match child.try_wait().expect("try_wait") {
             Some(status) => break Some(status),
             None if start.elapsed() >= limit => {
+                let _ = Command::new("kill")
+                    .arg("-KILL")
+                    .arg(format!("-{}", child.id()))
+                    .status();
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
@@ -3212,18 +3221,15 @@ fn the_bootstrap_chain_reaches_a_fixpoint() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("bootstrap");
-    let result = Command::new("sh")
-        .arg(&script)
-        .arg(&out)
-        .current_dir(&root)
-        .output()
-        .expect("run bootstrap.sh");
-    let stdout = String::from_utf8_lossy(&result.stdout);
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(
-        result.status.success(),
-        "the bootstrap failed:\n{stdout}\n{stderr}"
-    );
+    // Under a deadline, as every stage here is: a stage that never finishes — a compiler
+    // miscompiled into a loop — is a failed bootstrap, not a suite that waits forever.
+    const BOOTSTRAP_LIMIT: std::time::Duration = std::time::Duration::from_secs(900);
+    let (status, stdout, stderr) = run_bounded(
+        Command::new("sh").arg(&script).arg(&out).current_dir(&root),
+        BOOTSTRAP_LIMIT,
+    )
+    .unwrap_or_else(|| panic!("bootstrap.sh did not finish within {BOOTSTRAP_LIMIT:?}"));
+    assert_eq!(status, Some(0), "the bootstrap failed:\n{stdout}\n{stderr}");
 
     let record = std::fs::read_to_string(out.join("record.txt")).expect("the record");
     for expected in ["ir: identical", "executables: byte-identical"] {

@@ -281,14 +281,53 @@ fn the_capability_inventory_matches_the_published_schema() {
     check_against("nazm.capabilities-1.json", &objects);
 }
 
+/// `nazm test --json` over `corpus`, under a deadline.
+///
+/// `nazm test` runs every case natively as well as interpreted, and a native program that
+/// never finishes is a wrong answer: a miscompiled loop is exactly that. So it fails this
+/// test rather than holding the suite until an outer limit ends it with no verdict. The
+/// run gets its own process group, and the whole group is killed on the way out, so a
+/// looping case is not left running beneath a `nazm` that has already been stopped.
+fn test_corpus_with_deadline(corpus: &std::path::Path) -> std::process::Output {
+    use std::os::unix::process::CommandExt;
+    const LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_path = dir.path().join("test.out");
+    let err_path = dir.path().join("test.err");
+    let mut child = Command::new(NAZM)
+        .args(["test", "--json"])
+        .arg(corpus)
+        .stdout(std::fs::File::create(&out_path).expect("stdout file"))
+        .stderr(std::fs::File::create(&err_path).expect("stderr file"))
+        .process_group(0)
+        .spawn()
+        .expect("run");
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        if started.elapsed() > LIMIT {
+            let _ = Command::new("kill")
+                .arg("-KILL")
+                .arg(format!("-{}", child.id()))
+                .status();
+            let _ = child.wait();
+            panic!("`nazm test` on the conformance corpus did not finish within {LIMIT:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    std::process::Output {
+        status,
+        stdout: std::fs::read(&out_path).unwrap_or_default(),
+        stderr: std::fs::read(&err_path).unwrap_or_default(),
+    }
+}
+
 #[test]
 fn every_test_case_matches_the_published_schema() {
     let corpus = repo_root().join("compiler/conformance");
-    let out = Command::new(NAZM)
-        .args(["test", "--json"])
-        .arg(&corpus)
-        .output()
-        .expect("run");
+    let out = test_corpus_with_deadline(&corpus);
     let objects = lines(&String::from_utf8_lossy(&out.stdout));
     assert!(objects.len() >= 5, "expected the conformance corpus");
     check_against("nazm.test-1.json", &objects);
