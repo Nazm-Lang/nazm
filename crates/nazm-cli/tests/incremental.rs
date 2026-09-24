@@ -30,6 +30,13 @@ use std::process::Command;
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 
+/// The core prelude: one module in every compilation, imported by every other.
+///
+/// Counted wherever modules are counted, because it is checked, cached and reused exactly
+/// as a project module is — `docs/spec.md`, *The core prelude*. Named rather than folded
+/// into each number, so every count below still reads as the project's modules plus it.
+const PRELUDE: u64 = 1;
+
 fn write(dir: &Path, name: &str, text: &str) {
     let path = dir.join(name);
     if let Some(parent) = path.parent() {
@@ -133,11 +140,14 @@ fn a_second_run_over_an_unchanged_project_checks_nothing() {
     two_modules(dir.path(), B);
 
     let first = check(dir.path(), "a.nz");
-    assert_eq!((first.checked, first.reused, first.stored), (2, 0, 2));
+    assert_eq!(
+        (first.checked, first.reused, first.stored),
+        (2 + PRELUDE, 0, 2 + PRELUDE)
+    );
     assert_eq!(first.root, "marker");
 
     let second = check(dir.path(), "a.nz");
-    assert_eq!((second.checked, second.reused), (0, 2));
+    assert_eq!((second.checked, second.reused), (0, 2 + PRELUDE));
     assert!(second.accepted);
 }
 
@@ -158,7 +168,7 @@ fn a_private_change_rechecks_the_module_and_leaves_its_importer_alone() {
     let after = check(dir.path(), "a.nz");
     assert_eq!(
         (after.checked, after.reused, after.missed),
-        (1, 1, 1),
+        (1, 1 + PRELUDE, 1),
         "exactly B should have been checked"
     );
     assert!(after.accepted);
@@ -211,7 +221,7 @@ fn every_kind_of_private_change_leaves_the_importer_alone() {
         let after = check(dir.path(), "a.nz");
         assert_eq!(
             (after.checked, after.reused),
-            (1, 1),
+            (1, 1 + PRELUDE),
             "{what}: the importer should not have been re-checked"
         );
         assert!(after.accepted, "{what}");
@@ -234,7 +244,7 @@ fn an_exported_signature_change_rechecks_the_importer() {
         "pub fn twice(n: Str) -> Int { str_len(n) }\n",
     );
     let after = check(dir.path(), "a.nz");
-    assert_eq!((after.checked, after.reused), (2, 0));
+    assert_eq!((after.checked, after.reused), (2, PRELUDE));
     assert!(!after.accepted, "the call in A no longer type-checks");
     assert_eq!(meaning(&after), meaning(&cold(dir.path(), "a.nz")));
 }
@@ -274,7 +284,10 @@ fn every_kind_of_exported_change_rechecks_the_importer() {
 
         write(dir.path(), "b.nz", b);
         let after = check(dir.path(), "a.nz");
-        assert_eq!(after.reused, 0, "{what}: the importer kept a stale answer");
+        assert_eq!(
+            after.reused, PRELUDE,
+            "{what}: the importer kept a stale answer"
+        );
         assert_eq!(
             meaning(&after),
             meaning(&cold(dir.path(), "a.nz")),
@@ -304,7 +317,7 @@ fn a_private_change_three_modules_down_reaches_nobody() {
     // offers did not.
     let dir = tempfile::tempdir().expect("tempdir");
     three_modules(dir.path(), C);
-    assert_eq!(check(dir.path(), "a.nz").checked, 3);
+    assert_eq!(check(dir.path(), "a.nz").checked, 3 + PRELUDE);
 
     write(
         dir.path(),
@@ -312,7 +325,7 @@ fn a_private_change_three_modules_down_reaches_nobody() {
         "pub fn deep(n: Int) -> Int { inner() + n }\nfn inner() -> Int { 3 + 4 }\n",
     );
     let after = check(dir.path(), "a.nz");
-    assert_eq!((after.checked, after.reused), (1, 2));
+    assert_eq!((after.checked, after.reused), (1, 2 + PRELUDE));
     assert!(after.accepted);
 }
 
@@ -324,7 +337,7 @@ fn an_exported_change_propagates_one_step_and_stops() {
     // re-checked A here, and would be wrong about nothing except how much work it did.
     let dir = tempfile::tempdir().expect("tempdir");
     three_modules(dir.path(), C);
-    assert_eq!(check(dir.path(), "a.nz").checked, 3);
+    assert_eq!(check(dir.path(), "a.nz").checked, 3 + PRELUDE);
 
     // `deep` gains a parameter. B's body changes to match — so B is re-checked for two
     // reasons — and B's signature does not, which is the point.
@@ -341,7 +354,7 @@ fn an_exported_change_propagates_one_step_and_stops() {
     let after = check(dir.path(), "a.nz");
     assert_eq!(
         (after.checked, after.reused),
-        (2, 1),
+        (2, 1 + PRELUDE),
         "A's interface dependency on B did not move, so A should have been left alone"
     );
     assert!(after.accepted);
@@ -355,7 +368,7 @@ fn a_change_that_moves_every_interface_reaches_every_importer() {
     // says should matter.
     let dir = tempfile::tempdir().expect("tempdir");
     three_modules(dir.path(), C);
-    assert_eq!(check(dir.path(), "a.nz").checked, 3);
+    assert_eq!(check(dir.path(), "a.nz").checked, 3 + PRELUDE);
 
     write(
         dir.path(),
@@ -373,7 +386,7 @@ fn a_change_that_moves_every_interface_reaches_every_importer() {
         "use \"b.nz\";\nfn main() -> Int { mid(1, 2) }\n",
     );
     let after = check(dir.path(), "a.nz");
-    assert_eq!((after.checked, after.reused), (3, 0));
+    assert_eq!((after.checked, after.reused), (3, PRELUDE));
     assert!(after.accepted);
 }
 
@@ -447,10 +460,11 @@ fn a_program_that_does_not_check_is_never_reused() {
 
     let first = check(dir.path(), "a.nz");
     assert!(!first.accepted);
-    assert_eq!(first.stored, 0);
+    // The prelude checked cleanly, and an entry means *this module* did.
+    assert_eq!(first.stored, PRELUDE);
 
     let second = check(dir.path(), "a.nz");
-    assert_eq!(second.reused, 0, "a refusal must not be reused");
+    assert_eq!(second.reused, PRELUDE, "a refusal must not be reused");
     assert_eq!(meaning(&first), meaning(&second));
 }
 
@@ -460,11 +474,11 @@ fn deleting_the_cache_changes_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     two_modules(dir.path(), B);
     let warm_setup = check(dir.path(), "a.nz");
-    assert_eq!(warm_setup.stored, 2);
+    assert_eq!(warm_setup.stored, 2 + PRELUDE);
 
     std::fs::remove_dir_all(dir.path().join(".nazm")).expect("remove the cache");
     let after = check(dir.path(), "a.nz");
-    assert_eq!((after.checked, after.reused), (2, 0));
+    assert_eq!((after.checked, after.reused), (2 + PRELUDE, 0));
     assert_eq!(meaning(&after), meaning(&warm_setup));
 }
 
@@ -572,7 +586,7 @@ fn a_damaged_entry_is_recomputed_rather_than_believed() {
         assert_eq!(meaning(&after), meaning(&good), "{what}");
         assert_eq!(
             (after.checked, after.reused, after.rejected),
-            (1, 1, 1),
+            (1, 1 + PRELUDE, 1),
             "{what}: a damaged entry must be a miss, and only for its own module"
         );
     }
@@ -646,10 +660,10 @@ fn two_checkouts_of_one_project_share_entries() {
         )
     };
 
-    assert_eq!(with_shared(a.path()), (true, 2, 0));
+    assert_eq!(with_shared(a.path()), (true, 2 + PRELUDE, 0));
     assert_eq!(
         with_shared(b.path()),
-        (true, 0, 2),
+        (true, 0, 2 + PRELUDE),
         "a different directory should not be a different project"
     );
 }
@@ -686,12 +700,12 @@ fn a_shared_module_is_reused_across_two_entry_points() {
     two_entry_points(dir.path());
 
     let first = check(dir.path(), "app.nz");
-    assert_eq!((first.checked, first.reused), (2, 0));
+    assert_eq!((first.checked, first.reused), (2 + PRELUDE, 0));
 
     let second = check(dir.path(), "tool/run.nz");
     assert_eq!(
         (second.checked, second.reused),
-        (1, 1),
+        (1, 1 + PRELUDE),
         "the library was checked for `app.nz`; `tool/run.nz` should not check it again"
     );
     assert!(second.accepted);
@@ -708,10 +722,12 @@ fn without_a_declared_root_the_two_entry_points_share_nothing() {
 
     let first = check(dir.path(), "app.nz");
     assert_eq!(first.root, "derived");
-    assert_eq!((first.checked, first.reused), (2, 0));
+    assert_eq!((first.checked, first.reused), (2 + PRELUDE, 0));
 
+    // Each derived root has a store of its own, so not even the prelude — whose key is
+    // the same in both — is shared.
     let second = check(dir.path(), "tool/run.nz");
-    assert_eq!((second.checked, second.reused), (2, 0));
+    assert_eq!((second.checked, second.reused), (2 + PRELUDE, 0));
     assert!(second.declined >= 1, "{second:?}");
     assert!(second.accepted);
 }
@@ -739,12 +755,12 @@ fn two_modules_with_identical_source_do_not_share_an_entry() {
     );
 
     let first = check(dir.path(), "one.nz");
-    assert_eq!((first.checked, first.stored), (2, 2));
+    assert_eq!((first.checked, first.stored), (2 + PRELUDE, 2 + PRELUDE));
 
     let second = check(dir.path(), "two.nz");
     assert_eq!(
         (second.checked, second.reused, second.rejected),
-        (2, 0, 0),
+        (2, PRELUDE, 0),
         "`b/m.nz` has the same bytes as `a/m.nz` and is not the same module"
     );
     assert!(second.accepted);
@@ -774,8 +790,8 @@ fn a_module_with_no_durable_identity_is_checked_every_time() {
     let second = check(dir.path(), "project/main.nz");
     assert!(second.accepted);
     assert_eq!(
-        second.reused, 0,
-        "nothing here should have a key: {second:?}"
+        second.reused, PRELUDE,
+        "nothing here but the prelude should have a key: {second:?}"
     );
 }
 
@@ -804,7 +820,7 @@ fn two_compilers_publishing_at_once_leave_a_usable_store() {
     }
 
     let after = check(dir.path(), "a.nz");
-    assert_eq!((after.checked, after.reused), (0, 2));
+    assert_eq!((after.checked, after.reused), (0, 2 + PRELUDE));
     assert!(after.accepted);
 }
 
@@ -836,7 +852,7 @@ fn a_private_record_change_leaves_the_importer_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
     two_modules_with_a_record(dir.path(), RECORD_B);
     let first = check(dir.path(), "a.nz");
-    assert_eq!((first.checked, first.reused), (2, 0));
+    assert_eq!((first.checked, first.reused), (2 + PRELUDE, 0));
 
     write(
         dir.path(),
@@ -849,7 +865,7 @@ fn a_private_record_change_leaves_the_importer_alone() {
     let after = check(dir.path(), "a.nz");
     assert_eq!(
         (after.checked, after.reused),
-        (1, 1),
+        (1, 1 + PRELUDE),
         "exactly B should have been checked"
     );
     assert!(after.accepted);
@@ -883,7 +899,10 @@ fn an_exported_record_change_rechecks_the_importer() {
         check(dir.path(), "a.nz");
         write(dir.path(), "b.nz", after_text);
         let after = check(dir.path(), "a.nz");
-        assert_eq!(after.reused, 0, "{what}: A should have been re-checked");
+        assert_eq!(
+            after.reused, PRELUDE,
+            "{what}: A should have been re-checked"
+        );
     }
 }
 
@@ -909,7 +928,7 @@ fn reordering_an_exported_records_fields_reaches_nobody() {
     let first = check(dir.path(), "a.nz");
     assert_eq!(
         (first.checked, first.stored),
-        (2, 2),
+        (2 + PRELUDE, 2 + PRELUDE),
         "both should be stored"
     );
     write(
@@ -921,7 +940,7 @@ fn reordering_an_exported_records_fields_reaches_nobody() {
     let after = check(dir.path(), "a.nz");
     assert_eq!(
         (after.checked, after.reused),
-        (1, 1),
+        (1, 1 + PRELUDE),
         "reordering fields should reach nobody"
     );
 }
@@ -936,7 +955,7 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     let dir = tempfile::tempdir().expect("tempdir");
     two_modules_with_a_record(dir.path(), RECORD_B);
     let first = check(dir.path(), "a.nz");
-    assert_eq!(first.stored, 2);
+    assert_eq!(first.stored, 2 + PRELUDE);
 
     // The identity is a digest of the build, so forging an older one is not possible from
     // out here. What *is* checkable is that the identity moved: an entry stored under the
@@ -944,8 +963,9 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        4,
-        "N9, N10 and N11 each changed what the checker accepts, so the epoch moved three times"
+        5,
+        "N9, N10, N11 and N12 each changed what the checker accepts, so the epoch moved four \
+         times"
     );
     assert_eq!(nazm_iface::SCHEMA, "nazm.interface/4");
 }
@@ -966,9 +986,9 @@ fn main() -> Int { match State.Ready() { State.Ready() => 0, } }
 ",
     );
     let first = check(dir.path(), "a.nz");
-    assert_eq!(first.stored, 1, "{first:?}");
+    assert_eq!(first.stored, 1 + PRELUDE, "{first:?}");
     let again = check(dir.path(), "a.nz");
-    assert_eq!(again.reused, 1, "{again:?}");
+    assert_eq!(again.reused, 1 + PRELUDE, "{again:?}");
 }
 
 // --- enums, and which edits reach an importer -------------------------------------------
@@ -999,7 +1019,7 @@ fn a_private_enum_change_leaves_the_importer_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
     two_modules_with_an_enum(dir.path(), ENUM_B);
     let first = check(dir.path(), "a.nz");
-    assert_eq!((first.checked, first.reused), (2, 0));
+    assert_eq!((first.checked, first.reused), (2 + PRELUDE, 0));
 
     write(
         dir.path(),
@@ -1013,7 +1033,7 @@ fn a_private_enum_change_leaves_the_importer_alone() {
     let after = check(dir.path(), "a.nz");
     assert_eq!(
         (after.checked, after.reused),
-        (1, 1),
+        (1, 1 + PRELUDE),
         "exactly B should have been checked"
     );
     assert!(after.accepted);
@@ -1038,7 +1058,10 @@ fn a_public_variant_addition_rechecks_the_importer_and_breaks_its_match() {
          pub fn start() -> State { State.Ready() }\n",
     );
     let after = check(dir.path(), "a.nz");
-    assert_eq!(after.reused, 0, "A should have been re-checked: {after:?}");
+    assert_eq!(
+        after.reused, PRELUDE,
+        "A should have been re-checked: {after:?}"
+    );
     assert!(!after.accepted, "A's match should no longer be exhaustive");
     assert!(
         after.diagnostics.iter().any(|d| d.starts_with("N0343")),
@@ -1079,7 +1102,10 @@ fn an_exported_enum_change_rechecks_the_importer() {
         check(dir.path(), "a.nz");
         write(dir.path(), "b.nz", after_text);
         let after = check(dir.path(), "a.nz");
-        assert_eq!(after.reused, 0, "{what}: A should have been re-checked");
+        assert_eq!(
+            after.reused, PRELUDE,
+            "{what}: A should have been re-checked"
+        );
     }
 }
 
@@ -1119,14 +1145,14 @@ fn reordering_an_exported_enums_variants_reaches_nobody() {
         let first = check(dir.path(), "a.nz");
         assert_eq!(
             (first.checked, first.stored),
-            (2, 2),
+            (2 + PRELUDE, 2 + PRELUDE),
             "{what}: both should be stored"
         );
         write(dir.path(), "b.nz", edited);
         let after = check(dir.path(), "a.nz");
         assert_eq!(
             (after.checked, after.reused),
-            (1, 1),
+            (1, 1 + PRELUDE),
             "{what} should reach nobody"
         );
     }

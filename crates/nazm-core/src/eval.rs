@@ -892,6 +892,45 @@ impl Interpreter {
     /// reference to whatever backs it, so an arm may return it and it survives the
     /// scrutinee. The scrutinee is dropped when this function returns, after the arm's
     /// value has been established — which is the ordering the whole milestone turns on.
+    /// `operand?`: the operand once, then either its success value or a `return`.
+    ///
+    /// No host mechanism is involved — not a panic, not an unwind. The `Err` path is the
+    /// same [`Flow::Return`] a written `return` produces, so it travels out through loops,
+    /// scopes and blocks exactly as one does, and a scope it leaves joins its tasks on the
+    /// way. What it returns is the enclosing function's own `Result`, which may be a
+    /// different instance from the operand's: only the error value is carried across.
+    fn propagate(&mut self, operand: &Expr, at: Span, env: &mut Env) -> Result<Flow, RuntimeError> {
+        let value = take!(self, operand, env);
+        let (Value::Enum(subject), Some(p)) = (value, self.res.propagation(at)) else {
+            // Unreachable for a checked program, which records every `?` it accepts.
+            return Err(RuntimeError {
+                diagnostic: Box::new(Diagnostic::error(
+                    codes::PROPAGATE_NON_RESULT,
+                    at,
+                    "this `?` was not resolved to a `Result`",
+                )),
+            });
+        };
+        let payload = |v: &EnumVal| {
+            v.field(0).cloned().ok_or_else(|| RuntimeError {
+                diagnostic: Box::new(Diagnostic::error(
+                    codes::UNKNOWN_FIELD,
+                    at,
+                    "this `Result` variant has no payload",
+                )),
+            })
+        };
+        if subject.variant() == p.ok {
+            return Ok(Flow::Fell(Some(payload(&subject)?)));
+        }
+        let error = payload(&subject)?;
+        Ok(Flow::Return(Value::Enum(EnumVal::new(
+            p.into,
+            p.into_err,
+            vec![error],
+        ))))
+    }
+
     fn match_expr(
         &mut self,
         scrutinee: &Expr,
@@ -1936,6 +1975,10 @@ impl Interpreter {
             } => {
                 return self.match_expr(scrutinee, arms, *span, env);
             }
+
+            Expr::Propagate {
+                operand, op_span, ..
+            } => return self.propagate(operand, *op_span, env),
 
             Expr::Field {
                 base, name_span, ..

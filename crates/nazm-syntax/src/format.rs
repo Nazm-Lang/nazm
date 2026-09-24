@@ -184,6 +184,7 @@ fn ends_a_value(k: &TokenKind) -> bool {
             | TokenKind::False
             | TokenKind::RParen
             | TokenKind::RBrace
+            | TokenKind::Question
     )
 }
 
@@ -202,6 +203,7 @@ fn continues_the_line(next: Option<&TokenKind>) -> bool {
                 | TokenKind::Comma
                 | TokenKind::RParen
                 | TokenKind::Dot
+                | TokenKind::Question
                 | TokenKind::Plus
                 | TokenKind::Minus
                 | TokenKind::Star
@@ -407,7 +409,8 @@ impl<'a> Printer<'a> {
             return false;
         }
         // Nothing before a closer or a separator. `.` is here because it binds to what
-        // it projects out of: `p.x`, never `p . x`.
+        // it projects out of: `p.x`, never `p . x` — and `?` for the same reason:
+        // `parse(s)?`, never `parse(s) ?`.
         if matches!(
             next,
             TokenKind::RParen
@@ -416,6 +419,7 @@ impl<'a> Printer<'a> {
                 | TokenKind::Colon
                 | TokenKind::Semi
                 | TokenKind::Dot
+                | TokenKind::Question
         ) {
             return false;
         }

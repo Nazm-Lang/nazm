@@ -23,6 +23,12 @@
 
 use std::fmt;
 
+/// The directory-like prefix the toolchain reserves. No project key begins with it.
+const CORE: &str = "@core";
+
+/// The core prelude's key. See [`ModuleKey::prelude`].
+const PRELUDE: &str = "@core/prelude";
+
 /// Which logical module this is: its path relative to the compilation's source root.
 ///
 /// # What equality means
@@ -54,6 +60,34 @@ impl ModuleKey {
     /// normalisation cannot bring it inside the root.
     #[must_use]
     pub fn relative(path: &str) -> Option<Self> {
+        let key = Self::fold(path)?;
+        // `@core` is the toolchain's, never a project's. A project file that happens to sit
+        // under a directory of that name compiles exactly as before and has no durable
+        // identity, so no project module can ever be keyed as the core prelude is.
+        if key.0 == CORE || key.0.starts_with("@core/") {
+            return None;
+        }
+        Some(key)
+    }
+
+    /// The core prelude's key: `@core/prelude`.
+    ///
+    /// Owned by the toolchain rather than computed from a path, so it is the same in every
+    /// project, from every working directory and every checkout — the property a
+    /// definition `?` recognises has to have. [`ModuleKey::relative`] can never produce
+    /// it, which is what keeps it disjoint from every project module's key.
+    #[must_use]
+    pub fn prelude() -> Self {
+        Self(PRELUDE.to_owned())
+    }
+
+    /// Whether this is the core prelude's key.
+    #[must_use]
+    pub fn is_prelude(&self) -> bool {
+        self.0 == PRELUDE
+    }
+
+    fn fold(path: &str) -> Option<Self> {
         let mut out: Vec<&str> = Vec::new();
         for part in path.split(['/', '\\']) {
             match part {
@@ -81,6 +115,9 @@ impl ModuleKey {
     /// that would then compare unequal to the key this compilation computes.
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
+        if text == PRELUDE {
+            return Some(Self::prelude());
+        }
         let candidate = Self(text.to_owned());
         let canonical = Self::relative(text)?;
         (candidate == canonical).then_some(canonical)
@@ -250,6 +287,22 @@ mod tests {
         assert!(ModuleKey::parse("lib/util.nz/").is_none());
         assert!(ModuleKey::parse("../outside.nz").is_none());
         assert!(ModuleKey::parse("lib\\util.nz").is_none());
+    }
+
+    #[test]
+    fn no_project_path_can_take_the_cores_key() {
+        // Disjoint by construction: a file under a directory called `@core` is compiled,
+        // and keyed as nothing, rather than being mistaken for the toolchain's module.
+        assert_eq!(key("@core/prelude"), None);
+        assert_eq!(key("@core/prelude.nz"), None);
+        assert_eq!(key("./@core/x.nz"), None);
+        assert_eq!(key("lib/@core/x.nz").as_deref(), Some("lib/@core/x.nz"));
+        assert!(ModuleKey::prelude().is_prelude());
+        assert_eq!(
+            ModuleKey::parse("@core/prelude"),
+            Some(ModuleKey::prelude())
+        );
+        assert_eq!(ModuleKey::parse("@core/other"), None);
     }
 
     #[test]

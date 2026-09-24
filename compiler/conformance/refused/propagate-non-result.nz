@@ -1,0 +1,9 @@
+// expect: N0360
+// `?` on an `Option`: the core `Result` is the only thing `?` propagates.
+fn first(o: Option[Int]) -> Result[Int, Str] {
+    Result[Int, Str].Ok(value: o? + 1)
+}
+
+fn main() -> Int {
+    0
+}

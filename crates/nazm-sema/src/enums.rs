@@ -230,6 +230,28 @@ impl Enums {
         id
     }
 
+    /// Make a definition added by [`Self::declare_unnamed`] its module's own: bound to
+    /// `module`, exported, and registered under its name there.
+    ///
+    /// For rehydration, which can meet a enum first as something another module's
+    /// interface mentions and only later as an export of the module that declares it. One
+    /// definition, reached twice, stays one enum.
+    pub fn adopt(&mut self, id: EnumId, module: ModuleId) {
+        let Some(def) = self.defs.get_mut(id.index()) else {
+            return;
+        };
+        def.module = module;
+        def.visibility = crate::interface::Visibility::Exported;
+        let name = def.name.clone();
+        let m = module.index();
+        if self.by_module.len() <= m {
+            self.by_module.resize_with(m + 1, HashMap::new);
+        }
+        if let Some(names) = self.by_module.get_mut(m) {
+            names.entry(name).or_insert(id);
+        }
+    }
+
     /// The entry for this definition applied to these arguments, if there is one yet.
     #[must_use]
     pub fn instance(&self, template: EnumId, args: &[Type]) -> Option<EnumId> {

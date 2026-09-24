@@ -228,6 +228,20 @@ pub mod codes {
     /// children: Vec[Node] }`. Its layout is finite; the refusal is of a value no count
     /// could reclaim. The inline case, with no finite layout, is `N0336`.
     pub const OWNERSHIP_CYCLE: Code = Code::new("N0359");
+
+    // N12: typed error values. `Result` and `Option` are ordinary generic enums declared by
+    // the core prelude, so constructing, matching and returning them raise the codes every
+    // enum does; these are the propagation operator's, and the prelude's reserved names.
+    /// `?` applied to something that is not the core prelude's `Result` — an `Option`, a
+    /// project enum shaped like one, anything else.
+    pub const PROPAGATE_NON_RESULT: Code = Code::new("N0360");
+    /// `?` in a function whose return type is not the core prelude's `Result`.
+    pub const PROPAGATE_OUTSIDE_RESULT: Code = Code::new("N0361");
+    /// `?` whose operand's error type is not exactly the enclosing function's. There is no
+    /// conversion between error types.
+    pub const PROPAGATE_ERROR_MISMATCH: Code = Code::new("N0362");
+    /// A project type named like one of the core prelude's, which every module sees.
+    pub const PRELUDE_TYPE_REDECLARED: Code = Code::new("N0363");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

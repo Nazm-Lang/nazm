@@ -153,6 +153,42 @@ impl ModuleGraph {
         }
     }
 
+    /// Add the core prelude, read from `file`, and make every module already here import
+    /// it.
+    ///
+    /// Called once, **after** every project module has been added, so it is the last module
+    /// and adding it moves no other module's id or file. The edges are ordinary import
+    /// edges: everything that follows — what a module may name, which interfaces its
+    /// check depends on, what invalidates it — treats the prelude exactly as a module the
+    /// project had written `use` for. Their span is synthetic because nothing was written.
+    ///
+    /// The prelude itself imports nothing. Calling this twice adds nothing the second
+    /// time.
+    pub fn attach_prelude(&mut self, file: FileId) -> ModuleId {
+        if let Some(existing) = self.prelude() {
+            return existing;
+        }
+        let core = self.add(file, Some(ModuleKey::prelude()));
+        let users: Vec<ModuleId> = self.ids().filter(|m| *m != core).collect();
+        for m in users {
+            self.import(m, core, Span::synthetic());
+        }
+        core
+    }
+
+    /// The core prelude's module in this compilation, if it has one.
+    ///
+    /// Found by its durable key and by nothing else — not by position, and not by a file
+    /// name — so a compilation assembled by hand, or from a persisted interface, has one
+    /// exactly when it contains a module with that key.
+    #[must_use]
+    pub fn prelude(&self) -> Option<ModuleId> {
+        self.modules
+            .iter()
+            .position(|m| m.key.as_ref().is_some_and(ModuleKey::is_prelude))
+            .map(|i| ModuleId(u32::try_from(i).unwrap_or(u32::MAX)))
+    }
+
     #[must_use]
     pub fn root(&self) -> ModuleId {
         ModuleId::ROOT
@@ -267,6 +303,22 @@ mod tests {
         g.import(b, c, somewhere());
         assert_eq!(on(&g, a), [b]);
         assert!(!on(&g, a).contains(&c));
+    }
+
+    #[test]
+    fn the_prelude_is_imported_by_every_module_and_imports_nothing() {
+        let mut g = ModuleGraph::default();
+        let a = g.add(FileId::ROOT, None);
+        let b = g.add(FileId::from_index(1), None);
+        g.import(a, b, somewhere());
+        let core = g.attach_prelude(FileId::from_index(2));
+        assert_eq!(g.prelude(), Some(core));
+        assert_eq!(on(&g, a), [b, core]);
+        assert_eq!(on(&g, b), [core]);
+        assert!(on(&g, core).is_empty());
+        // Once only.
+        assert_eq!(g.attach_prelude(FileId::from_index(3)), core);
+        assert_eq!(g.len(), 3);
     }
 
     #[test]

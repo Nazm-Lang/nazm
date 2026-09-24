@@ -1,15 +1,14 @@
 // The checker's command-line driver.
 //
-// Usage: check FILE
+// Usage: check FILE CORE-PRELUDE
 // Output: one diagnostic per line, `CODE|start|end|message`. Exits 1 if there were any.
 
 use "analyse.nz";
-use "lex.nz";
-use "parse.nz";
+use "module.nz";
 
 fn main() -> Int {
-    if args_count() < 1 {
-        eprint("usage: check FILE");
+    if args_count() < 2 {
+        eprint("usage: check FILE CORE-PRELUDE");
         eprint(str_from_byte(10));
         exit_with(2);
     }
@@ -19,12 +18,11 @@ fn main() -> Int {
         eprint(str_from_byte(10));
         exit_with(2);
     }
-    let src = read_file(path);
-
-    // One file is one module, and this driver is handed one file — so the graph is one
-    // module at offset zero with no imports. The tables exist even here, because the
-    // checker asks about ownership unconditionally and a checker that special-cased the
-    // single-module program would be a second answer to the same question.
+    // One file is one module, and this driver is handed one file — so the graph is that
+    // module at offset zero, importing nothing but the core prelude, which every
+    // compilation has. The tables exist even here, because the checker asks about
+    // ownership unconditionally and a checker that special-cased the single-module
+    // program would be a second answer to the same question.
     let mpath = strs_new();
     strs_push(mpath, path);
     let mstart = ints_new();
@@ -35,117 +33,14 @@ fn main() -> Int {
     ints_push(mcount, 0);
     let mto = ints_new();
     let mat = ints_new();
+    let src = attach_core(arg(1), read_file(path), mpath, mstart, mfirst, mcount, mto, mat);
 
-    let kinds = ints_new();
-    let starts = ints_new();
-    let ends = ints_new();
-    let texts = strs_new();
-    lex(src, kinds, starts, ends, texts);
-
-    let nk = ints_new();
-    let nar = ints_new();
-    let nst = ints_new();
-    let nen = ints_new();
-    let ntx = strs_new();
-    let naux = ints_new();
-    parse_program(kinds, starts, ends, texts, nk, nar, nst, nen, ntx, naux);
-
-    let kids = ints_new();
-    let kid_first = ints_new();
-    build_children(nk, nar, kids, kid_first);
-
-    // The built-ins share the ordinary function namespace, exactly as `docs/spec.md`
-    // says, so a call to one is not an undefined function — and a definition may not take
-    // one of their names, which is why they are collected first.
-    let bnames = strs_new();
-    let bret = ints_new();
-    let bfirst = ints_new();
-    let bcount = ints_new();
-    let bparams = ints_new();
-    builtins(bnames, bret, bfirst, bcount, bparams);
-
-    let diags = vec_new[Diag]();
-
-    // Records, in three stages before any signature. Names first, for the whole
-    // compilation, because a field's type may name a record declared later or in another
-    // module; then the field types; then the layouts those fields describe. `docs/spec.md`
-    // orders them and says why declaration order is not a dependency.
-    let rnames = strs_new();
-    let rowner = ints_new();
-    let rpub = ints_new();
-    let rat = ints_new();
-    let rnode = ints_new();
-    // What each entry is: a record, an enum, one of an enum's variants, a `Vec` or a type
-    // parameter. See `analyse.nz`, *an enum is a record whose fields are its variants*,
-    // and *generics*.
-    let rkind = ints_new();
-    let rfirst = ints_new();
-    let rcount = ints_new();
-    let rfname = strs_new();
-    let rftype = ints_new();
-    let rfat = ints_new();
-    let tb = new_table(rnames, rowner, rpub, rat, rnode, rkind, rfirst, rcount,
-            rfname, rftype, rfat);
-    let tmod = ints_new();
-    let tname = strs_new();
-    let trec = ints_new();
-    collect_records(nk, nar, nst, nen, ntx, naux, mstart, tb, kids, kid_first,
-            diags);
-    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath),
-            rnames, rowner, rpub, tmod, tname, trec, diags);
-    resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first, tb,
-            tmod, tname, trec, diags);
-    check_ownership(tb, diags);
-    // The generic built-ins' `T` and `Vec[T]`, now that there is a table to hold them.
-    let bgen = ints_new();
-    generic_builtins(tb, bnames, bret, bparams, bgen);
-
-    // Signatures before any body, so a forward reference resolves — the same two-pass
-    // shape `nazm-lir::lower` uses, and for the same reason. The declared types go on the
-    // `fn` and `param` nodes as they are resolved, so those arrays exist first.
-    let nslot = ints_new();
-    let ntype = ints_new();
-    let ncallee = ints_new();
-    let nrec = ints_new();
-    // The types a node carries beyond its own: a function's type parameters, and what a
-    // generic call settled its callee's to — `[count, t1, …]` in `ntargs`, from
-    // `ntfirst[node]`.
-    let ntfirst = ints_new();
-    let ntargs = ints_new();
-    let fnames = strs_new();
-    let fret = ints_new();
-    let ffirst = ints_new();
-    let fcount = ints_new();
-    let fparams = ints_new();
-    let fowner = ints_new();
-    let fpub = ints_new();
-    let fgen = ints_new();
-    let fgc = ints_new();
-    collect_signatures(nk, nar, nst, nen, ntx, naux, kids, kid_first, mstart,
-            fnames, fret, ffirst, fcount, fparams, fowner, fpub, fgen, fgc, bnames, tb,
-            nrec, ntfirst, ntargs, tmod, tname, trec,
-            diags);
-
-    // What each module's imports bring in, and the collisions that creates. Nothing here
-    // for a one-module program, and it still runs: the pass is not conditional on there
-    // being more than one module.
-    let vmod = ints_new();
-    let vname = strs_new();
-    let vfn = ints_new();
-    check_imports(mfirst, mcount, mto, mat, strs_len(mpath), fnames, fowner, fpub,
-            vmod, vname, vfn, diags);
-
-    entry_point(fnames, fowner, diags);
-
-    check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee, nrec,
-            kids, kid_first, ints_len(nk) - 1,
-            mstart, mfirst, mcount, mto,
-            fnames, fret, ffirst, fcount, fparams,
-            fowner, fpub, vmod, vname, vfn,
-            bnames, bret, bfirst, bcount, bparams,
-            tb, fgen, fgc, bgen, ntfirst, ntargs,
-            tmod, tname, trec,
-            diags);
+    // The whole front end, as one stage: the checked program, or its diagnostics. This
+    // driver's output is the diagnostics, so a program that checked prints nothing.
+    let diags = match check_program(src, mpath, mstart, mfirst, mcount, mto, mat) {
+        Result.Ok(value: checked) => vec_new[Diag](),
+        Result.Err(error: found) => found,
+    };
 
     // One allocation for the whole output; see the note in `lexer.nz`.
     let nl = str_from_byte(10);
