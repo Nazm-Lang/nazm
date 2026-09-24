@@ -1949,7 +1949,8 @@ different one, the emitter's stack.
 ### What this still does not do
 
 - **No generics** — *superseded by N11, §7.12*: a generic enum is expressible now, and
-  `Option` and `Result` are still not built in.
+  `Option` and `Result` are still not built in — *and since N12, §7.13, they are ordinary
+  enums of the core prelude rather than built into the checker*.
 - **No wildcard arm**, no guards, no or-patterns, no literal or record patterns, no `let`
   destructuring. N10 is variant selection with named payload bindings.
 - **No space promise.** The representation is one slot per variant, which is larger than a
@@ -2161,13 +2162,129 @@ measurable change in time (`performance.md`).
 - **No traits, constraints, methods or `impl`**, so a generic body can do only what every
   type can, and no `Option`/`Result` in the standard sense — `enum Maybe[T]` is a user
   declaration. No higher kinds, const generics, defaults, variance, specialisation or
-  overloading.
+  overloading. *(Superseded in part by §7.13: `Result` and `Option` now exist, as ordinary
+  generic enums of the core prelude, and N12 needed no generic machinery N11 did not have.)*
 - **No spawn of a generic function**, and no generic `main`.
 - **No indexing syntax**; `vec_get`/`vec_set` are calls.
 - **Monomorphisation only.** Code size grows with the number of instances; `performance.md`
   measures 1, 10 and 100.
 - **No space promise for an enum in a `Vec`**: an enum is still one slot per variant, and a
   `Vec[Enum]` multiplies it by the length.
+
+## 7.13 Typed errors: a prelude module and one operator — settled by N12, 2026-09-24
+
+`docs/spec.md`, *Typed error values*, is the language. This is where it lives. The design
+question was not how to represent `Result` — N9, N10 and N11 already could — but how one
+definition becomes **the** `Result` in every module without a package system, a structural
+test or a name test. The answer is one module whose identity the toolchain fixes, imported
+by every other.
+
+### The core source boundary
+
+`library/core/prelude.nz` is ordinary `.nz` source declaring `pub enum Result[T, E]` and
+`pub enum Option[T]`. Nothing in any crate describes those enums: `nazm-sema/src/prelude.rs`
+holds the file's **bytes** (`include_str!`, so a compilation needs no installation
+directory — a packaging decision) and the name it is shown under, and the checker reads them
+as source like any other file.
+
+- **Loading.** `nazm-cli/src/load.rs` appends the prelude after every project file; the
+  `&str` entry points (`nazm_core::one_file`) do the same. It is therefore the **last**
+  module and the last `FileId`: no project module's id and no span in one moves.
+  `ModuleGraph::attach_prelude` adds it and an ordinary import edge from every other module,
+  with a synthetic span because nothing was written.
+- **Identity.** `ModuleKey::prelude()` is `@core/prelude`. `ModuleKey::relative` refuses a
+  first component `@core`, so the key is disjoint from every project key by construction,
+  and `ModuleKey::parse` accepts it back from a persisted interface.
+  `ModuleGraph::prelude()` finds the module **by key** — never by position — so a
+  compilation assembled by hand, or from persisted interfaces, has one exactly when it
+  contains that key.
+- **Visibility and collision.** Because the prelude is an import, `type_environment` puts
+  its exported types in every module's type namespace by the existing rule. The one special
+  case is the collision: a project type named like a prelude type is `N0363` at the
+  declaration rather than `N0208` at an import line that does not exist.
+
+### `?`: resolved once, lowered as a `match`
+
+- **Syntax.** `TokenKind::Question`, `Expr::Propagate { operand, op_span, span }`, parsed in
+  the postfix loop beside projection.
+- **Checking.** `Checker::check_propagate`. The canonical `Result` is found once per unit —
+  `Enums::declared(prelude, "Result")`, a `DefKey` lookup — and a type is a `Result` iff
+  `definition_of(t)` is that enum. The operand's and the function's `Result`s must share
+  their second argument by `Type` equality, which interning makes nominal. The decision is
+  recorded as a `Propagation { operand, ok, err, into, into_err }` keyed by the `?`'s span;
+  nothing downstream asks whether a type is called `Result`.
+- **Completion.** None of its own: the operand's `Value(T)` is the result, and the `Err` arm
+  is a `return`, which N10.1 already made a transfer from any value position.
+- **Interpreter.** `Interpreter::propagate`: the operand once, then `Flow::Fell(payload)` or
+  `Flow::Return(Err)` in the function's own `Result` — the same `Flow::Return` a written
+  `return` produces, so it leaves loops and scopes, joining tasks, exactly as one does.
+- **Native.** `lower_propagate` builds the LIR `Expr::Match` the operator means: the operand
+  into a hidden local the frame releases, an `Ok` arm binding the payload with `Stmt::Let`
+  and yielding it, and an `Err` arm binding the error and `Stmt::Return`ing a `Variant` of
+  the function's `Result`. **There is no new LIR node**, and the emitter did not change: the
+  scope joins, temporaries and frame cleanup on the error path are `Stmt::Return`'s, and the
+  retain-before-release order is `Stmt::Let`'s. No landing pad, no `invoke`, no personality
+  function — there is nothing to unwind, because this is a branch.
+
+### Interfaces and caches
+
+- **`nazm.interface/4` is sufficient.** A signature mentioning `Result[Int, E]` persists as
+  an application of `@core/prelude::enum Result`, which `/4` already represented; the
+  prelude's own interface is an ordinary `/4` interface; and every module's `dependencies`
+  now lists `@core/prelude`, which is data `/4` already had a field for. Nothing changed
+  shape, so the schema did not move.
+- **One identity across interfaces.** An interface carries every type its shapes mention,
+  so B's carries the prelude's `Result`. N3–N11 rehydrated each interface's types
+  separately, which made two rehydrated interfaces disagree about a shared definition —
+  harmless until a third module's type mattered, and decisive for `?`. N12 adds
+  `PersistentUnitInterface::rehydrate_into` with a `Rehydrated` table keyed by `DefKey`: a
+  definition met in two interfaces is one definition, and one first met as a mention is
+  adopted by its own module when that module's interface arrives, in either order.
+- **`CheckKey`.** Unchanged in shape: the prelude is an import, so its `(ModuleKey,
+  InterfaceHash)` is in every module's dependency list already. It is not also hashed into
+  `CheckerIdentity`, which describes the checker, not the program. `SEMANTIC_EPOCH` moved
+  4 → 5 for the rule changes the code set cannot show (`nazm-cache/src/identity.rs`).
+- **Objects.** `ObjectKey` is untouched — any difference `?` makes is in the LLVM bytes.
+  A module that declares no function now has **no unit**, so the prelude never produces an
+  object; its enums' helpers are emitted in the units that use them, as every enum's are.
+
+### The compiler written in Nazm
+
+- **Loading.** `emit FILE CORE` and `check FILE CORE`: the prelude is named on the command
+  line, because it is the toolchain's source and not the program's. `attach_core` appends
+  it as the last module and gives every module an edge to it. This compiler's modules are
+  session indices, so "the last module" is its identity for the prelude — the strongest one
+  it has, and one no project file can take. Every stage of the bootstrap reads the same file,
+  and `bootstrap.sh` records its digest.
+- **Checking.** `n_propagate`, finished in `check_all`: the canonical `Result` is the entry
+  the prelude module declares under that name; the node records the operand's `Ok` variant
+  entry in `nrec` — substituted per instance like an arm's — and a hidden slot in `nslot`.
+- **Emission.** `emit_propagate`, at the node: store the operand into its slot, one test of
+  the discriminant, and on the error path retain the error, build the function's `Result`,
+  and leave by `n_return`'s exact sequence; on the success path retain the payload and
+  release the operand.
+
+### The dogfood
+
+The front end — lexing, parsing and twelve checking passes over one shared `Vec[Diag]` —
+was written out twice, in `check.nz` and in `emit.nz`'s `main`, and each copy ended by
+asking `vec_len(diags) > 0`. It is now **one stage**, `check_program(…) ->
+Result[Checked, Vec[Diag]]`, where `Checked` is a record of the tables emission reads.
+Inside it every pass still collects into the one `Vec[Diag]` and keeps going — recovery is
+untouched, and a program with three mistakes still reports three. `check.nz` lost its copy
+(171 → 64 lines), and `emit.nz` became `emit_program(…) -> Result[Str, Vec[Diag]]`, whose
+first line is `check_program(…)?`, with `main` taking the result apart once. Measured in
+`performance.md`.
+
+### What this still does not do
+
+- **No `?` on `Option`**, no conversion between error types, no `Error` trait, no methods
+  on `Result`: each needs a protocol, and traits do not exist.
+- **No `main` returning `Result`**: mapping a typed error to a process status is a separate
+  contract.
+- **No niche layout**: `Option[Str]` and `Result[A, B]` are enums, one slot per variant.
+- **Every module depends on the whole prelude**, not on the names it uses. With two
+  declarations that over-invalidates nothing.
 
 ## 8. Toolchain, and one real incompatibility
 

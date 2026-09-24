@@ -343,17 +343,52 @@ against the design rather than for it.
 | A compact enum representation | variants ✓, `Vec[T]` ✓ | an enum is one slot per variant, and a `Vec[Enum]` multiplies that by its length. `performance.md` measures the pressure; nothing here claims it is acceptable at scale |
 | A lossless CST | nothing above | unchanged; still independent, still the last AI-native item |
 
-### N12 — recommended next: `Result` and typed error propagation
+### After N12, in dependency order
 
-N11 made the recommendation concrete rather than argued. The compiler written in Nazm now
-holds its diagnostics in a `Vec[Diag]`, and every stage still reports a failure by pushing
-onto it and carrying on with `unknown` — there is no way for a function to *return* a
-failure a caller must handle, so every stage threads the sink instead. That is the next wall,
-and it is a semantic question rather than a representation one: what an error value is,
-whether propagating one is syntax, and how it composes with the failure that already stops
-a program. `Option` belongs to the same decision and should not be settled apart from it.
+| | Depends on | Why not before |
+| --- | --- | --- |
+| **Blocks as values in `nazm build`, and derived equality on records and enums** | records ✓, variants ✓ | the two walls both dogfoods hit. N11 could not turn the compiler's integer tags into an enum because an enum has no `==`; N12 could not turn a single `-1` sentinel into an `Option` because a `match` arm cannot be a block in the native subset, so the only spelling converts straight back to the sentinel. The interpreter already has blocks as values; the native backends refuse them, which is also why an explicit early return from an arm is written `if true { return … } else { return … }` there |
+| `?` on `Option`, and conversion between error types | traits | both need a protocol — a carrier `?` can dispatch on, a conversion it can call — and a protocol is a trait. N12 refused both rather than special-case them |
+| Traits, or any constraint on `T` | generics ✓ | unchanged: a constraint system is a large decision and should be forced by a program that needs `==` or ordering on `T`. Derived equality on *concrete* types is the smaller step that does not need one |
+| Mapping a typed error to a process status | `Result` ✓ | `main` still returns `Int`. Letting it return a `Result` is a contract with the operating system, not a type rule, and nothing has needed it yet |
+| A compact enum representation | variants ✓, `Vec[T]` ✓ | `Option[Str]` and every `Result` are now common, and each is one slot per variant; `performance.md` measures them |
+| Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged, and `?` adds one retain/release pair per success it passes through |
+| A lossless CST | nothing above | unchanged; still independent |
+
+### N13 — recommended next: blocks as values natively, and derived equality
+
+N12's dogfood found the wall N11's did, from the other side. Typed errors earned their place
+at a stage boundary — the front end returns `Result[Checked, Vec[Diag]]`, and `emit_program`
+begins with `check_program(…)?` — but inside the stages the compiler is written in integer
+tags and `-1` sentinels, and neither can become the typed value it stands for: an enum tag
+cannot be compared, and an `Option` cannot be taken apart into a statement in `nazm build`,
+because an arm is an expression and a block is not one there. Both are gaps between what the
+language already means — the interpreter runs blocks as values — and what the native
+backends accept, plus one missing rule, equality on user types. Neither needs traits.
 
 The alternatives are unchanged and smaller: a lossless CST, and `nazm explain-cost`.
+
+### N12 — `Result`, `Option`, typed error values and `?` — **complete, 2026-09-24**
+
+Typed failure as a value, in both compilers. `Result[T, E]` and `Option[T]` are ordinary
+generic enums declared by a toolchain-owned **core prelude** that every module imports
+implicitly; `?` propagates the core `Result` — recognised by definition, never by name or
+shape — as a `match` with a `return` in one arm. No exceptions, no unwinding, no conversion.
+
+| Settled | Where |
+| --- | --- |
+| the prelude, its identity and visibility, the reserved names, `?`'s rule, order, cleanup and ownership | `spec.md`, *Typed error values* |
+| one module with a toolchain-owned key, attached last; `?` resolved once and lowered as a `match` | `architecture.md` §7.13 |
+| `@core/prelude` is disjoint from every project key | `crates/nazm-sema/src/key.rs` |
+| persisted interfaces share a definition's identity across one compilation | `crates/nazm-iface/src/wire.rs`, `rehydrate_into` |
+| `nazm.interface/4` unchanged; `SEMANTIC_EPOCH` 5 | `crates/nazm-iface`, `crates/nazm-cache/src/identity.rs` |
+| the compiler written in Nazm does all of it, loads the same prelude, and returns its front end as a `Result` | `compiler/*.nz`, `bootstrap.md` |
+
+Two defects found on the way, both fixed and held by tests. **Rehydration gave every
+interface its own copy of the types it mentioned**, so a `Result` carried by a dependency's
+interface was not the prelude's: harmless while no two interfaces shared a type, decisive
+for `?`. And a native build produced an empty unit and object for every module that
+declared no function; it produces none now.
 
 ### N11 — Parametric generics and `Vec[T]` — **complete, 2026-09-23**
 
@@ -550,11 +585,12 @@ REPL, hot reload) exists. None does.
 
 ## Deliberately not next
 
-Effects · capabilities · provenance · traits · methods · closures · typed errors ·
+Effects · capabilities · provenance · traits · methods · closures · exceptions ·
 M:N scheduling · a second backend · GPU or accelerator work · a package manager · a standard
-library beyond the built-in table. Ownership, user-defined types and pattern matching left
-this list as N7–N10 landed them; generics is no longer *deliberately* not next — it is the
-recommendation above.
+library beyond the built-in table and the two-type prelude. Ownership, user-defined types,
+pattern matching, generics and typed errors left this list as N7–N12 landed them. Typed
+errors did not bring effects with them: a `Result` in a signature is a return type, not an
+effect row, and effects remain MISSING.
 
 Each has a home — `capability-matrix.md` for status, `research-register.md` for the ones
 that are hypotheses, `NAZM_LANGUAGE_GOALS.md` for why they are wanted eventually. None is

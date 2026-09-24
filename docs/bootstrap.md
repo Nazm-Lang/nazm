@@ -481,6 +481,46 @@ declaration-level diagnostics that are not compared — a record declared twice,
 type name redeclared — still point at the whole declaration in this checker and at the name
 in the reference.
 
+### Typed errors, and a prelude every stage loads — N12, 2026-09-24
+
+The compiler written in Nazm implements N12: `?` in its lexer and parser, the core `Result`
+recognised by definition in its checker, and propagation in its emitter as the `match` it
+means, leaving by `return`'s exact sequence (`architecture.md` §7.13, *The compiler written
+in Nazm*).
+
+**The prelude is part of the chain.** `library/core/prelude.nz` is the toolchain's source,
+not the compiler's, so it is not one of S's files: every stage is **given** it —
+`nazmc FILE CORE` — and loads it as the last module of every compilation, the compiler's own
+included. C1 is built by the reference, which carries the same file's bytes; C2 and C3 read
+the file. There is no stage-local definition of `Result` anywhere, and no warm cache is
+involved. The record gains a `core-prelude:` line with the file's digest and length, beside
+each source's.
+
+**What the chain now carries.** A propagation program (`compiler/conformance/results.nz` —
+`?` out of a loop, an argument, an initialiser, a scrutinee, a generic function and two
+layers of `Result`), a module exporting a `Result` API that its importer propagates
+through, and five more refusals: `?` on an `Option` and on a lookalike enum (`N0360`), `?`
+in `main` (`N0361`), two error types with identical fields (`N0362`), and a project
+`Result` (`N0363`). C2, C3 and the reference must each accept the first two with the same
+output and refuse each refusal with its code.
+
+**The compiler uses what it compiles.** The front end is one stage returning
+`Result[Checked, Vec[Diag]]`, and the emitter's driver begins with `check_program(…)?` — so
+every stage of the chain compiles, and runs, a `?` over a record of twenty handles with a
+`Vec[Diag]` error.
+
+**The digest moved an eighth time**: `c58b91dd…` (N11) → `08895900…`. `ir: identical`,
+executables byte-identical once the linker UUID is removed — and on this run the runnable
+forms too, with no byte differing — 26 conformance
+cases (10 of them multi-module) and 9 refusals agreeing across C2, C3
+and the reference, at 12,046 source lines.
+
+**What is still not the same.** This compiler's modules are session indices, so the prelude
+is identified as *the last module* rather than by a durable key; the reference finds it by
+`@core/prelude`. Both are exact within a compilation and neither can be confused with a
+project module. The earlier differences — one LLVM module and `@nz.g<n>` instance names, and
+whole-declaration spans for the declaration diagnostics that are not compared — stand.
+
 ## 6. Reproducing it
 
 ```sh
