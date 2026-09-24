@@ -119,24 +119,48 @@ fn both_exiting(source: &str, code: i32) -> (Ran, String) {
         "building failed: {}",
         String::from_utf8_lossy(&built.stderr)
     );
-    let native = Command::new(dir.path().join("prog"))
-        .env(MEMORY_VARIABLE, "1")
-        .current_dir(dir.path())
-        .output()
-        .expect("execute");
-    let native_err = String::from_utf8_lossy(&native.stderr).into_owned();
-    assert_eq!(
-        native.status.code(),
-        Some(code),
-        "the program: {native_err}"
-    );
-    let b = counts(
-        &native_err,
-        String::from_utf8_lossy(&native.stdout).trim().to_owned(),
-    );
+    let (status, native_out, native_err) = run_with_deadline(dir.path());
+    assert_eq!(status, Some(code), "the program: {native_err}");
+    let b = counts(&native_err, native_out.trim().to_owned());
 
     assert_eq!(a, b, "the two implementations disagree");
     (a, native_err)
+}
+
+/// Run the compiled `prog` under a deadline: `(status, stdout, stderr)`.
+///
+/// A compiled program that never finishes is a wrong answer, not a slow one — a lowering
+/// that drops a loop's increment produces exactly that — so it fails the case here rather
+/// than holding the suite until some outer limit kills it with no verdict. The output goes
+/// to files, so a program that writes a lot cannot block on a full pipe while we wait.
+fn run_with_deadline(dir: &std::path::Path) -> (Option<i32>, String, String) {
+    const LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+    let out_path = dir.join("prog.out");
+    let err_path = dir.join("prog.err");
+    let mut child = Command::new(dir.join("prog"))
+        .env(MEMORY_VARIABLE, "1")
+        .current_dir(dir)
+        .stdout(std::fs::File::create(&out_path).expect("stdout file"))
+        .stderr(std::fs::File::create(&err_path).expect("stderr file"))
+        .spawn()
+        .expect("execute");
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        if started.elapsed() > LIMIT {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the compiled program did not finish within {LIMIT:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    (
+        status.code(),
+        std::fs::read_to_string(&out_path).unwrap_or_default(),
+        std::fs::read_to_string(&err_path).unwrap_or_default(),
+    )
 }
 
 fn both(source: &str) -> Ran {

@@ -216,6 +216,49 @@ fn fix_writes_nothing_without_apply() {
     drop(dir);
 }
 
+/// `nazm test <dir>`, under a deadline.
+///
+/// `nazm test` runs every case natively as well as interpreted, and a native program that
+/// never finishes is a wrong answer — a miscompiled loop is exactly that — so it fails the
+/// test here rather than holding the suite until an outer limit ends it with no verdict.
+/// The run gets its own process group, and the whole group is killed on a timeout, so a
+/// looping case is not left running beneath a `nazm` that has already been stopped.
+fn nazm_test_with_deadline(dir: &std::path::Path) -> std::process::Output {
+    use std::os::unix::process::CommandExt;
+    const LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let out_path = scratch.path().join("test.out");
+    let err_path = scratch.path().join("test.err");
+    let mut child = Command::new(NAZM)
+        .arg("test")
+        .arg(dir)
+        .stdout(std::fs::File::create(&out_path).expect("stdout file"))
+        .stderr(std::fs::File::create(&err_path).expect("stderr file"))
+        .process_group(0)
+        .spawn()
+        .expect("run");
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        if started.elapsed() > LIMIT {
+            let _ = Command::new("kill")
+                .arg("-KILL")
+                .arg(format!("-{}", child.id()))
+                .status();
+            let _ = child.wait();
+            panic!("`nazm test` did not finish within {LIMIT:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    std::process::Output {
+        status,
+        stdout: std::fs::read(&out_path).unwrap_or_default(),
+        stderr: std::fs::read(&err_path).unwrap_or_default(),
+    }
+}
+
 #[test]
 fn a_corpus_runs_interpreted_and_compiled_and_both_must_agree() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -229,11 +272,7 @@ fn a_corpus_runs_interpreted_and_compiled_and_both_must_agree() {
     // passed over.
     std::fs::write(dir.path().join("helper.nz"), "fn main() -> Int { 1 }\n").expect("write");
 
-    let out = Command::new(NAZM)
-        .arg("test")
-        .arg(dir.path())
-        .output()
-        .expect("run");
+    let out = nazm_test_with_deadline(dir.path());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
@@ -253,11 +292,7 @@ fn the_conformance_corpus_passes_under_nazm_test() {
     // The same five cases `compiler/bootstrap.sh` compares, through the command rather
     // than through the script — so the convention has one implementation a person can
     // run and one the bootstrap runs, and they are checked against the same files.
-    let out = Command::new(NAZM)
-        .arg("test")
-        .arg(repo_root().join("compiler/conformance"))
-        .output()
-        .expect("run");
+    let out = nazm_test_with_deadline(&repo_root().join("compiler/conformance"));
     assert_eq!(
         out.status.code(),
         Some(0),
