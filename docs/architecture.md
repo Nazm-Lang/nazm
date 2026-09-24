@@ -1959,7 +1959,8 @@ different one, the emitter's stack.
   compiler-private and may change between builds.
 - **A bare block is still not an expression in the self-hosted parser**, so an arm body
   there may be `n + 1` but not `{ let n = …; n }`. That limitation is N2's and is unchanged;
-  N10 only made it reachable in one more position.
+  N10 only made it reachable in one more position — *closed by N12.1, §7.14, in both
+  compilers*.
 
 ## 7.12 Generics: parametric checking, concrete code — settled by N11, 2026-09-23
 
@@ -2253,8 +2254,8 @@ as source like any other file.
 - **Loading.** `emit FILE CORE` and `check FILE CORE`: the prelude is named on the command
   line, because it is the toolchain's source and not the program's. `attach_core` appends
   it as the last module and gives every module an edge to it. This compiler's modules are
-  session indices, so "the last module" is its identity for the prelude — the strongest one
-  it has, and one no project file can take. Every stage of the bootstrap reads the same file,
+  session indices, so "the last module" was its identity for the prelude — *replaced by N12.1,
+  §7.14: the module keyed `@core/prelude`, found by key*. Every stage of the bootstrap reads the same file,
   and `bootstrap.sh` records its digest.
 - **Checking.** `n_propagate`, finished in `check_all`: the canonical `Result` is the entry
   the prelude module declares under that name; the node records the operand's `Ok` variant
@@ -2285,6 +2286,93 @@ first line is `check_program(…)?`, with `main` taking the result apart once. M
 - **No niche layout**: `Option[Str]` and `Result[A, B]` are enums, one slot per variant.
 - **Every module depends on the whole prelude**, not on the names it uses. With two
   declarations that over-invalidates nothing.
+
+## 7.14 One block in every position, and the prelude by its key — settled by N12.1, 2026-09-24
+
+N12.1 adds nothing to the language. It closes two places where an implementation said less
+than the language does: the native backends refused a block used as a value anywhere but a
+function body and an `if` branch, and the compiler written in Nazm recognised the core
+prelude by its position.
+
+### The block law, unchanged
+
+`docs/spec.md`, *One block, and completion decided by checking*: a block is statements and an optional tail, and it
+completes `Value(T)`, `Unit` or `Diverges`. A `match` folds its arms as an `if` folds its
+branches — an arm that diverges defers to the others, a `Unit` arm makes the whole `match`
+`Unit`, and two `Value` arms must agree. The parser has always accepted `{` as an operand,
+the checker has always checked it with `check_block`, and the interpreter has always run
+it. What changed is that `nazm build` and the Nazm-written compiler compile it.
+
+### Reference backend
+
+- **One lowering for a value block.** `lower_block` — statements, then the tail, `result:
+  None` when the statements transfer — is now reached from a function body, an `if` branch,
+  a `match` arm written as a block, and a bare block in any value position. A block arm is
+  the pattern's bindings followed by the block's own statements, in one `Block`. There is
+  no second block lowering and no arm-specific completion rule.
+- **`Expr::Block(Box<Block>)`** is the one LIR generalisation a value position needed: a
+  block inside an argument or an initialiser has nowhere else to go, and hoisting its
+  statements out would move their effects before the arguments to their left. It is
+  emitted by the same `Emitter::block` the branches use. Its bindings need no scope: slots
+  are unique per function, so a block local is frame storage exactly as an `if` branch's is.
+- **`Stmt::Match`**, the statement form, pairs with `Stmt::If` for the same reason: an arm
+  that only assigns completes `Unit`, which a value `Block` cannot represent — its `None`
+  means *never arrives*. `lower_effect` is the one place an expression in statement
+  position is lowered: an `if`, a `match` or a block keeps its statement form, anything else
+  is a `Stmt::Discard`. The emitter shares the scrutinee dispatch (`dispatch`) and the
+  release at the join (`release_matched`) between the value and the statement `match`.
+- **Joins.** Unchanged, and now reached by block arms: an arm whose block transfers is
+  emitted into its own terminator and is not a predecessor of the join; the `phi` lists only
+  the arms that arrive; a `match` no arm reaches opens no join and has no value.
+
+### Ownership at a block's end
+
+A block does not release its locals when it ends. They are frame slots, released when the
+function leaves or when their `let` runs again, which is what N7 already specified for a
+branch. So the take-before-release question is the consumer's, and it is the one every
+value already answers: a tail read from a local is **borrowed**, and whatever takes it over
+— a `let`, an argument, a field, the `phi` of a `match` in each arm's own block before its
+jump — takes its own reference. A `Vec` tail is the same handle, not a copy. A pattern
+binding took its own reference from the scrutinee when it was bound, so the scrutinee's
+release at the join cannot reach a payload an arm handed on.
+
+### The compiler written in Nazm
+
+- **Parsing.** `{` in operand position suspends the expression exactly as an `if` does and
+  opens a `frame_blockexpr`; when it closes, the block is the operand, wrapped in a
+  `blockexpr` node — the reference AST's `Expr::Block`, and the encoding `selfhost.rs`
+  already fixed for it. A statement that starts with `{` is block-like and needs no `;`.
+- **Checking.** `blockexpr` completes and types exactly as its block does. The block's
+  `Value`/`Unit`/`Diverges` is the existing `c_value`/`c_unit`/`c_diverges`; nothing is
+  inferred from which node came last.
+- **Emission.** Structure only, like `block`: the tail's value is already on the stack, and
+  the joins, `phi` incomings and `live` state are the existing ones.
+- **The prelude's identity.** A module's entry in `mpath` is its **key**: a project file's
+  normalised path, or `@core/prelude`, which `attach_core` gives the prelude. `core_module`
+  finds the module with that key, once, in `check_program`, and both consumers — the
+  collision rule in `check_type_imports` and `?`'s `Result` in `check_all` — take that one
+  answer. A project path whose first component is `@core` is re-keyed out of the namespace,
+  so no project module can hold the key; like the reference, such a file still compiles.
+  The loader still places the prelude last, and nothing reads that.
+
+### The dogfood
+
+`record_owned` — which declaration a module owns under a name — answered `-1` for none. The
+same `-1` is what `definition_of` answers for any type that is not a record, so each of its
+four consumers carried an `if found >= 0` guard, one of them in front of the comparison that
+decides whether a type is the core `Result`. It returns `Option[Int]` now, and each consumer
+takes it apart with `match`: the type lookup falls through to imports on `None`, the
+duplicate and collision checks report from the `Some` arm, and `applies_core_result` answers
+`false` for a compilation with no prelude rather than comparing with anything.
+
+### What this still does not do
+
+- **No equality on enums**, so the compiler's integer tags stay integers: `kind ==
+  n_block()` cannot become a `match` without a comparison the language does not have.
+- **A block does not end a lifetime.** Locals are released with the frame; nothing here
+  shortens that.
+- **The self-hosted compiler still emits one LLVM module**, and still has no durable keys
+  beyond the prelude's.
 
 ## 8. Toolchain, and one real incompatibility
 

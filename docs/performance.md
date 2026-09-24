@@ -778,6 +778,66 @@ lines. The cost is 0.45% more IR and about 1% more time — consistent across th
 small to attribute with one session's measurements; no speed claim is made in either
 direction. The C2 and C3 of the migrated compiler emit identical IR.
 
+### Value blocks and the first `Option` in the compiler — measured 2026-09-24
+
+N12.1 made a block used as a value compile natively and moved one compiler table from a `-1`
+sentinel to an `Option[Int]`. Measured **contained, Linux aarch64** (`nazm-contained:1.98.1`,
+one CPU), release compiler, median of five, as for N12. Programs: `target/n121/perf/gen.py`;
+raw output: `target/n121/perf/results.txt` and `target/n121/dogfood/results.txt`.
+
+**One `match` arm written four ways**, 20,000,000 calls of a function that builds a
+two-variant enum (an `Int` payload or a `Str` one) and takes it apart:
+
+| arm | `-O2` | `-O0` | IR | `pick` in IR |
+| --- | ---: | ---: | ---: | ---: |
+| `=> n + 1` — a direct expression | 510.0 ms | 743.3 ms | 23,377 B | 129 lines |
+| `=> { n + 1 }` — the same, as a block | 514.8 ms | 738.9 ms | 23,287 B | 129 lines |
+| `=> { let m = n + 1; m }` — one local | 506.5 ms | 773.4 ms | 23,487 B | 135 lines |
+| `=> { let t = s0; n + str_len(t) }` — an owning local | 847.1 ms | 1,053.4 ms | 24,804 B | 161 lines |
+
+**A block costs nothing over the expression it contains**: the first two rows lower to the
+same instructions, and every gap between them is noise. A local costs a store and a load at
+`-O0` — about 1.5 ns a call — and nothing at `-O2`, where the slot is promoted. The owning
+row does more work, not the same work more slowly: binding a `Str` local takes a reference
+and the frame gives it back, and the arm calls `str_len`, so the extra ~17 ns a call is that
+pair and that call. No claim is made that blocks are free in general: that is measured for
+these shapes, and a block whose locals own something pays for what it owns.
+
+**Arms per `match`** — an enum of N one-field variants and one `match` over it, each arm a
+direct expression or a block with one local:
+
+| N | IR, direct | IR, blocks | executable, direct / blocks | `nazm build` | `nazm check` |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 11,672 B | 11,744 B | 71,600 B / 71,600 B | 68 / 71 ms | 1.6 / 1.5 ms |
+| 10 | 19,443 B | 20,391 B | 71,608 B / 71,600 B | 73 / 71 ms | 1.6 / 1.6 ms |
+| 100 | 100,756 B | 110,935 B | 71,632 B / 71,632 B | 94 / 102 ms | 2.2 / 2.6 ms |
+
+Linear: a block arm with a local costs about 100 bytes of IR more than the direct arm — the
+local's store and load — and nothing in the executable at these sizes. No pathological
+growth.
+
+**The `Option` dogfood** — `record_owned` returning `Option[Int]` instead of `-1`. C1 (built
+by the reference) compiling `compiler/emit.nz`, three runs each, the N12 script unchanged;
+*before* is N12.1's compiler with the migration undone:
+
+| | before | after |
+| --- | ---: | ---: |
+| guards testing a `record_owned` result for `>= 0` | 4 | **0** |
+| sites taking a `record_owned` result apart | 4 `if`s | 4 `match`es and `applies_core_result` |
+| `analyse.nz` lines / non-comment lines | 4,580 / 3,613 | 4,598 / 3,622 |
+| wall | 11.03–11.11 s | 10.91–10.95 s |
+| peak RSS | 53.4–55.5 MiB | 53.2–55.3 MiB |
+| emitted IR | 6,366,359 B | 6,361,900 B |
+| C2 executable | 1,987,872 B | 1,922,368 B |
+| C2 compiling itself | 10.98 s | 10.94 s |
+
+What moved is the meaning: "none" is a variant, so no comparison of a declaration with a
+definition can see it. The code is 0.07% smaller in IR; the time and memory differences are
+within one session's run-to-run spread, and no speed claim is made. The executable size
+moves by one 64 KiB page between runs of unrelated compilers here — N12's own compiler,
+measured in the same session, gave 1,922,176 B — so it is not attributed to the migration.
+C2 and C3 of the migrated compiler emit identical IR.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
