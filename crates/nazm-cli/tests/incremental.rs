@@ -963,11 +963,11 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        6,
-        "N9, N10, N11, N12 and N13 each changed what the checker accepts, so the epoch moved \
-         five times"
+        7,
+        "N9, N10, N11, N12, N13 and N14 each changed what the checker accepts, so the epoch \
+         moved six times"
     );
-    assert_eq!(nazm_iface::SCHEMA, "nazm.interface/4");
+    assert_eq!(nazm_iface::SCHEMA, "nazm.interface/5");
 }
 
 /// Every check entry under `dir`'s derived store, with the directory its store is at.
@@ -1236,4 +1236,114 @@ fn reordering_an_exported_enums_variants_reaches_nobody() {
             "{what} should reach nobody"
         );
     }
+}
+
+// --- N14: a requirement is part of what a module offers -----------------------------------
+
+#[test]
+fn a_public_requirement_added_rechecks_and_refuses_the_importer_that_breaks_it() {
+    // B's `keep` gains `T: Equality`. B's interface moves, so A's key moves and A is
+    // checked again — and refused, because it passes a `Vec[Int]`. Nothing but the
+    // fingerprint carried the change.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main() -> Int { vec_len(keep(vec_new[Int]())) }\n",
+    );
+    write(dir.path(), "b.nz", "pub fn keep[T](x: T) -> T { x }\n");
+    let first = check(dir.path(), "a.nz");
+    assert!(first.accepted, "{first:?}");
+
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn keep[T: Equality](x: T) -> T { x }\n",
+    );
+    let after = check(dir.path(), "a.nz");
+    assert!(!after.accepted, "{after:?}");
+    assert_eq!(after.diagnostics, vec!["N0364@0:0".to_owned()], "{after:?}");
+    assert_eq!((after.checked, after.reused), (2, PRELUDE), "{after:?}");
+    assert_eq!(meaning(&after), meaning(&cold(dir.path(), "a.nz")));
+
+    // And removed again, the importer is accepted again.
+    write(dir.path(), "b.nz", "pub fn keep[T](x: T) -> T { x }\n");
+    let back = check(dir.path(), "a.nz");
+    assert!(back.accepted, "{back:?}");
+}
+
+#[test]
+fn a_private_requirement_changed_leaves_the_importer_alone() {
+    // A requirement on a private helper is B's own business: B's source moves and its
+    // interface does not, so B alone is checked again.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main() -> Int { if same_int(1, 1) { 1 } else { 0 } }\n",
+    );
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn same_int(a: Int, b: Int) -> Bool { eq(a, b) }\n\
+         fn eq[T: Equality](a: T, b: T) -> Bool { a == b }\n",
+    );
+    check(dir.path(), "a.nz");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn same_int(a: Int, b: Int) -> Bool { eq(a, b) }\n\
+         fn eq[T](a: T, b: T) -> Bool { true }\n",
+    );
+    let after = check(dir.path(), "a.nz");
+    assert!(after.accepted, "{after:?}");
+    assert_eq!(
+        (after.checked, after.reused, after.missed),
+        (1, 1 + PRELUDE, 1),
+        "exactly B should have been checked"
+    );
+}
+
+#[test]
+fn an_entry_from_the_checker_before_requirements_is_never_read() {
+    // N14. `==` on a parameter that requires `Equality` moved from refused to accepted
+    // under the existing `N0304`. An entry the epoch-6 checker filed is a miss.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "a.nz",
+        "fn same[T: Equality](a: T, b: T) -> Bool { a == b }\n\
+         fn main() -> Int { if same(1, 1) { 1 } else { 0 } }\n",
+    );
+    let first = check(dir.path(), "a.nz");
+    assert!(first.accepted, "{first:?}");
+    let older = nazm_cache::CheckerIdentity::at_epoch(nazm_cache::SEMANTIC_EPOCH - 1);
+    for (store_dir, entry) in &check_entries(dir.path()) {
+        let module = nazm_core::sema::key::ModuleKey::parse(&entry.module).expect("module");
+        let source = nazm_cache::SourceFingerprint::parse(&entry.source).expect("source");
+        let deps: Vec<nazm_cache::Dependency> = entry
+            .dependencies
+            .iter()
+            .map(|d| nazm_cache::Dependency {
+                module: nazm_core::sema::key::ModuleKey::parse(&d.module).expect("dep"),
+                interface: nazm_iface::InterfaceHash::parse(&d.interface).expect("hash"),
+            })
+            .collect();
+        let forged =
+            nazm_cache::CheckArtifact::of(older, &module, source, &deps, entry.interface.clone())
+                .expect("an entry");
+        nazm_cache::Store::at(store_dir)
+            .put(&forged)
+            .expect("publish");
+        let name = &entry.key;
+        std::fs::remove_file(store_dir.join(&name[..2]).join(format!("{name}.json")))
+            .expect("remove this build's entry");
+    }
+    let again = check(dir.path(), "a.nz");
+    assert!(again.accepted, "{again:?}");
+    assert_eq!(again.reused, 0, "an epoch-6 entry was read: {again:?}");
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 7);
 }

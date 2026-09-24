@@ -310,7 +310,7 @@ fn a_dependent_checks_against_a_deserialised_interface_with_the_dependency_delet
     // And the negative half, so the pass above is not something else succeeding: with an
     // interface that offers nothing, the same source is refused.
     let empty = PersistentUnitInterface::from_json(
-        r#"{"schema":"nazm.interface/4","module":"b.nz","dependencies":[],"records":[],"enums":[],"exports":[]}"#,
+        r#"{"schema":"nazm.interface/5","module":"b.nz","dependencies":[],"records":[],"enums":[],"exports":[]}"#,
     )
     .expect("valid");
     let mut errors = Vec::new();
@@ -498,7 +498,7 @@ fn an_exported_record_is_published_with_its_fields_and_durable_identity() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
+        "{\"schema\":\"nazm.interface/5\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
          \"records\":[{\"def\":\"m.nz::record Point\",\"name\":\"Point\",\"generics\":0,\
          \"fields\":[{\"name\":\"x\",\"ty\":\"Str\"},{\"name\":\"y\",\"ty\":\"Int\"}]}],\
          \"enums\":[],\
@@ -725,7 +725,7 @@ fn an_exported_enum_is_published_with_its_variants_and_durable_identity() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
+        "{\"schema\":\"nazm.interface/5\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
          \"records\":[],\
          \"enums\":[{\"def\":\"m.nz::enum State\",\"name\":\"State\",\"generics\":0,\"variants\":[\
          {\"name\":\"Done\",\"fields\":[{\"name\":\"code\",\"ty\":\"Int\"}]},\
@@ -898,7 +898,7 @@ fn a_dependent_checks_enums_against_a_deserialised_interface_with_the_dependency
     );
 }
 
-// --- N11: generic interfaces, `nazm.interface/4` -------------------------------------------
+// --- N11: generic interfaces, `nazm.interface/5` -------------------------------------------
 
 /// The fingerprint of one module's published interface, from its source.
 fn generic_hash(dir: &Path, source: &str) -> String {
@@ -920,7 +920,7 @@ fn a_generic_interface_carries_positions_and_no_parameter_names() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
+        "{\"schema\":\"nazm.interface/5\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
          \"records\":[{\"def\":\"m.nz::record Pair\",\"name\":\"Pair\",\"generics\":2,\
          \"fields\":[{\"name\":\"first\",\"ty\":{\"param\":0}},{\"name\":\"second\",\"ty\":{\"param\":1}}]}],\
          \"enums\":[{\"def\":\"m.nz::enum Maybe\",\"name\":\"Maybe\",\"generics\":1,\"variants\":[\
@@ -1188,4 +1188,101 @@ fn a_dependent_derives_equality_from_a_deserialised_interface_with_the_dependenc
         .filter(|d| d.code == nazm_diag::codes::INVALID_OPERANDS)
         .collect();
     assert_eq!(refused.len(), 1, "{refused:#?}");
+}
+
+/// Check `a_source` as module A, importing `published` as B's interface, with B's source
+/// nowhere: the diagnostics.
+fn check_a_against(a_source: &str, published: &str) -> Vec<nazm_diag::Diagnostic> {
+    let (program, parse_errors) = nazm_core::__syntax::parse_source(a_source);
+    assert!(parse_errors.is_empty(), "{parse_errors:#?}");
+    let iface = PersistentUnitInterface::from_json(published).expect("a valid interface");
+    let mut graph = ModuleGraph::default();
+    let a = graph.add(FileId::ROOT, ModuleKey::relative("a.nz"));
+    let b = graph.add(FileId::from_index(1), iface.module_key());
+    graph.import(a, b, nazm_span::Span::synthetic());
+    let units = [nazm_core::Unit::of(&program, &graph, a)];
+    let mut res = Resolution::default();
+    let mut errors = Vec::new();
+    let rehydrated = iface.rehydrate(b, FnId::from_index(4096), res.types_mut());
+    nazm_core::declare_types(&units, &mut res, &mut errors);
+    nazm_core::declare_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+    nazm_core::check_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+    errors
+}
+
+#[test]
+fn a_dependent_is_held_to_a_requirement_read_from_a_deserialised_interface() {
+    // N14. B's requirement is part of what B offers: a caller may pass only a type with
+    // equality, and a generic caller only a parameter that requires it. With B's source
+    // deleted the requirement must come from the bytes — and it does, because removing it
+    // from them makes the refused calls pass.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn same[T: Equality](a: T, b: T) -> Bool { a == b }\n\
+         pub fn keep[T](x: T) -> T { x }\n",
+    );
+    let published = interface_of(&dir.path().join("b.nz"));
+    assert!(
+        published.contains(r#""name":"same","kind":"fn","generics":1,"requires_equality":[0]"#),
+        "{published}"
+    );
+    // An export that requires nothing is written exactly as before the field existed.
+    assert!(
+        published.contains(r#""name":"keep","kind":"fn","generics":1,"params""#),
+        "{published}"
+    );
+    std::fs::remove_file(dir.path().join("b.nz")).expect("remove B");
+
+    let good = "use \"b.nz\";\n\
+                fn wrap[T: Equality](a: T, b: T) -> Bool { same(a, b) }\n\
+                fn main() -> Int { if same(1, 1) { if wrap(\"a\", \"b\") { 2 } else { 1 } } else { 0 } }\n";
+    assert!(
+        check_a_against(good, &published).is_empty(),
+        "{:#?}",
+        check_a_against(good, &published)
+    );
+
+    let bad = "use \"b.nz\";\n\
+               fn wrap[T](a: T, b: T) -> Bool { same(a, b) }\n\
+               fn main() -> Int { let v = vec_new[Int](); if same(v, v) { 1 } else { 0 } }\n";
+    let codes: Vec<String> = check_a_against(bad, &published)
+        .iter()
+        .map(|d| d.code.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        codes,
+        vec!["N0364".to_owned(), "N0364".to_owned()],
+        "{codes:?}"
+    );
+
+    let without = published.replace(r#""requires_equality":[0],"#, "");
+    assert_ne!(without, published);
+    assert!(
+        check_a_against(bad, &without).is_empty(),
+        "the refusals came from somewhere other than the interface"
+    );
+}
+
+#[test]
+fn a_requirement_is_part_of_the_interface_and_a_parameter_s_name_is_not() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let publish = |source: &str| -> (String, String) {
+        write(dir.path(), "m.nz", source);
+        let json = interface_of(&dir.path().join("m.nz"));
+        let hash = InterfaceHash::of(&PersistentUnitInterface::from_json(&json).expect("valid"))
+            .expect("hashable")
+            .to_string();
+        (json, hash)
+    };
+    let bounded = publish("pub fn same[T: Equality](a: T, b: T) -> Bool { a == b }\n");
+    let renamed = publish("pub fn same[Value: Equality](a: Value, b: Value) -> Bool { a == b }\n");
+    let free = publish("pub fn same[T](a: T, b: T) -> Bool { true }\n");
+    assert_eq!(bounded, renamed, "renaming a parameter moved the interface");
+    assert_ne!(bounded.0, free.0);
+    assert_ne!(
+        bounded.1, free.1,
+        "a requirement did not move the fingerprint"
+    );
 }
