@@ -79,6 +79,48 @@ fn counts(stderr: &str, value: String) -> Ran {
     }
 }
 
+/// Runs a compiled program with a deadline, as every other suite that runs one does.
+///
+/// `nazm build` emits no iteration budget (`docs/spec.md`, *The native execution contract
+/// for loops*), so a backend defect that turns a terminating loop into a runaway makes a
+/// bare `.output()` wait for ever. Found in N12.2: under
+/// `the-loop-reuses-its-first-condition` this file hung for the whole of a campaign step's
+/// 1500 s and produced no verdict, the same shape N12.1 found in three other files. Output
+/// goes to files, not pipes, so nothing the program leaves behind can hold a reader open.
+trait WithinDeadline {
+    fn output_within_deadline(&mut self) -> std::process::Output;
+}
+
+impl WithinDeadline for Command {
+    fn output_within_deadline(&mut self) -> std::process::Output {
+        const LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+        let dir = tempfile::tempdir().expect("output dir");
+        let (out_path, err_path) = (dir.path().join("out"), dir.path().join("err"));
+        let mut child = self
+            .stdout(std::fs::File::create(&out_path).expect("stdout file"))
+            .stderr(std::fs::File::create(&err_path).expect("stderr file"))
+            .spawn()
+            .expect("execute");
+        let started = std::time::Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("wait") {
+                break status;
+            }
+            if started.elapsed() > LIMIT {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the compiled program did not finish within {LIMIT:?}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        std::process::Output {
+            status,
+            stdout: std::fs::read(&out_path).unwrap_or_default(),
+            stderr: std::fs::read(&err_path).unwrap_or_default(),
+        }
+    }
+}
+
 /// Evaluate `source`, and compile and run it, and require the two to agree about
 /// everything.
 fn both(source: &str) -> Ran {
@@ -116,8 +158,7 @@ fn both(source: &str) -> Ran {
     let native = Command::new(dir.path().join("prog"))
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
-        .output()
-        .expect("execute");
+        .output_within_deadline();
     let b = counts(
         &String::from_utf8_lossy(&native.stderr),
         String::from_utf8_lossy(&native.stdout).trim().to_owned(),
@@ -162,8 +203,7 @@ fn both_with_args(source: &str, args: &[&str]) -> Ran {
         .args(args)
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
-        .output()
-        .expect("execute");
+        .output_within_deadline();
     let b = counts(
         &String::from_utf8_lossy(&native.stderr),
         String::from_utf8_lossy(&native.stdout).trim().to_owned(),
@@ -197,8 +237,7 @@ fn both_failing(source: &str) -> (Ran, String) {
     let native = Command::new(dir.path().join("prog"))
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
-        .output()
-        .expect("execute");
+        .output_within_deadline();
     assert_eq!(native.status.code(), Some(2), "expected a failure");
     let native_err = String::from_utf8_lossy(&native.stderr).into_owned();
     let b = counts(&native_err, String::new());
@@ -856,8 +895,7 @@ fn the_report_is_silent_unless_it_is_asked_for() {
     }
     let quiet = Command::new(dir.path().join("prog"))
         .current_dir(dir.path())
-        .output()
-        .expect("execute");
+        .output_within_deadline();
     assert!(!String::from_utf8_lossy(&quiet.stderr).contains("nazm-memory:"));
 }
 
@@ -889,8 +927,7 @@ fn a_program_that_calls_exit_with_reclaims_nothing_and_says_nothing() {
     let native = Command::new(dir.path().join("prog"))
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
-        .output()
-        .expect("execute");
+        .output_within_deadline();
     assert_eq!(native.status.code(), Some(0));
     assert!(
         !String::from_utf8_lossy(&native.stderr).contains("nazm-memory:"),
