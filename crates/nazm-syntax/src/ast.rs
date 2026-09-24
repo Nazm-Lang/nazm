@@ -463,6 +463,18 @@ pub enum Expr {
         name_span: Span,
         span: Span,
     },
+    /// `operand?` — propagation, N12.
+    ///
+    /// On the core prelude's `Result.Ok` it is the payload; on `Result.Err` it leaves the
+    /// enclosing function, returning that error value in the function's own `Result`.
+    /// Ordinary control flow over an ordinary enum: `docs/spec.md`, *Propagation*.
+    Propagate {
+        operand: Box<Expr>,
+        /// Where the `?` is written — the span resolution keys this propagation by, and
+        /// what a diagnostic about it points at.
+        op_span: Span,
+        span: Span,
+    },
     If {
         cond: Box<Expr>,
         then_block: Block,
@@ -490,6 +502,7 @@ impl Expr {
             | Self::Variant { span, .. }
             | Self::Match { span, .. }
             | Self::Field { span, .. }
+            | Self::Propagate { span, .. }
             | Self::If { span, .. } => span,
             Self::Block(b) => &b.span,
         }
@@ -509,6 +522,7 @@ impl Expr {
             | Self::Variant { span, .. }
             | Self::Match { span, .. }
             | Self::Field { span, .. }
+            | Self::Propagate { span, .. }
             | Self::If { span, .. } => *span,
             Self::Block(b) => b.span,
         }

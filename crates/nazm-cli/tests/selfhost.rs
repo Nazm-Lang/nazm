@@ -151,6 +151,7 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::FatArrow => 51,
                 T::LBracket => 52,
                 T::RBracket => 53,
+                T::Question => 54,
                 // The Rust lexer emits a final `Eof`; the Nazm one prints `EOF` and
                 // stops, so there is nothing to compare.
                 T::Eof => return None,
@@ -651,6 +652,10 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
             dump_expr(operand, out);
             push_node(out, "neg", 1, span.start, span.end, "");
         }
+        E::Propagate { operand, span, .. } => {
+            dump_expr(operand, out);
+            push_node(out, "propagate", 1, span.start, span.end, "");
+        }
         E::Binary {
             op, lhs, rhs, span, ..
         } => {
@@ -898,6 +903,12 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
         "fn m() -> Int { f[](1) + g[Vec[Vec[Int]], Str](2) }",
         "fn m() -> Int { match Maybe[Int].None() { Maybe.None() => 0, Maybe.Some(value: v) => v, } }",
         "fn m() -> Int { h(identity[Str](\"a\"), Box[Int](v: vec_new[Maybe[Int]]())) }",
+        // N12: `?` as a postfix beside projection, in any order and any number, binding
+        // tighter than negation and than every binary operator.
+        "fn m(r: Result[Int, Str]) -> Result[Int, Str] { let a = r?; Result[Int, Str].Ok(value: a) }",
+        "fn m() -> Int { -f()?.x + g(h()??, (k()?)?) }",
+        "fn m() -> Int { f(1)? * 2 - x?.y.z? }",
+        "fn m() -> Int { match load()? { A.B() => 1, A.C(v: v) => v?, } }",
     ];
 
     for source in sources {
@@ -934,7 +945,7 @@ fn the_nazm_parser_agrees_with_the_reference_on_every_source_in_the_tree() {
     let root = repo_root();
 
     let mut files = Vec::new();
-    for folder in ["compiler", "examples"] {
+    for folder in ["compiler", "examples", "library/core"] {
         if let Ok(entries) = std::fs::read_dir(root.join(folder)) {
             for entry in entries.flatten() {
                 let p = entry.path();
@@ -1285,7 +1296,13 @@ fn the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value() {
             "{name}: the compiled checker's exit status"
         );
         let interpreted = Command::new(NAZM)
-            .args(["run", "compiler/check.nz", "--", file.to_str().unwrap()])
+            .args([
+                "run",
+                "compiler/check.nz",
+                "--",
+                file.to_str().unwrap(),
+                "library/core/prelude.nz",
+            ])
             .current_dir(repo_root())
             .output()
             .expect("interpret the Nazm checker");
@@ -1384,7 +1401,13 @@ fn the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value() {
         );
         let (rc, _, err) = run_stage(&emitter, &main);
         let interpreted = Command::new(NAZM)
-            .args(["run", "compiler/emit.nz", "--", main.to_str().unwrap()])
+            .args([
+                "run",
+                "compiler/emit.nz",
+                "--",
+                main.to_str().unwrap(),
+                "library/core/prelude.nz",
+            ])
             .current_dir(repo_root())
             .output()
             .expect("interpret the Nazm compiler");
@@ -1603,6 +1626,157 @@ fn the_nazm_checker_agrees_with_the_reference_on_generics() {
             "wrong exit status for {source:?}"
         );
     }
+}
+
+/// The codes the N12 comparison holds both checkers to: propagation's four, and the ones
+/// `Result` and `Option` raise as the ordinary enums they are.
+const PROPAGATION_COMPARABLE: &[&str] = &[
+    "N0300", "N0321", "N0336", "N0359", "N0360", "N0361", "N0362", "N0363",
+];
+
+#[test]
+fn the_nazm_checker_agrees_with_the_reference_on_propagation() {
+    // N12, `docs/spec.md`, *The core prelude* and *Propagation*. Both checkers load the
+    // same prelude source, and must agree on every accepted program and on every refusal's
+    // code and span — the `?` itself for propagation's own codes, the declaration for a
+    // reserved name.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_checker(dir.path());
+    let oops = "struct Oops { code: Int, }\nfn leaf(f: Bool) -> Result[Int, Oops] { \
+                if f { return Result[Int, Oops].Err(error: Oops(code: 1)); } Result[Int, Oops].Ok(value: 2) }\n";
+    let with = |body: &str| format!("{oops}{body}");
+
+    let sources = [
+        // Clean.
+        with("fn f(x: Bool) -> Result[Int, Oops] { let n = leaf(x)?; Result[Int, Oops].Ok(value: n) }\nfn m() -> Int { 0 }"),
+        with("fn g() -> Result[Str, Oops] { Result[Str, Oops].Ok(value: int_to_str(leaf(true)? + 1)) }\nfn m() -> Int { 0 }"),
+        with("fn g() -> Result[Int, Oops] { let mut t = 0; while t < 3 { t = t + leaf(false)?; } Result[Int, Oops].Ok(value: t) }\nfn m() -> Int { 0 }"),
+        "fn pass[T, E](r: Result[T, E]) -> Result[T, E] { let v = r?; Result[T, E].Ok(value: v) }\nfn m() -> Int { 0 }".to_owned(),
+        "fn i(n: Int) -> Result[Result[Int, Str], Str] { Result[Result[Int, Str], Str].Ok(value: Result[Int, Str].Ok(value: n)) }\nfn g() -> Result[Int, Str] { let a = i(1)??; let b = (i(2)?)?; Result[Int, Str].Ok(value: a + b) }\nfn m() -> Int { 0 }".to_owned(),
+        "struct P { x: Int, }\nfn mk() -> Result[P, Str] { Result[P, Str].Ok(value: P(x: 1)) }\nfn g() -> Result[Int, Str] { Result[Int, Str].Ok(value: -mk()?.x) }\nfn m() -> Int { 0 }".to_owned(),
+        "fn get(o: Option[Int]) -> Int { match o { Option.None() => 0, Option.Some(value: n) => n, } }\nfn m() -> Int { get(Option[Int].Some(value: 4)) }".to_owned(),
+        "fn w(r: Result[Int, Str]) -> Int { 0 }\nfn m() -> Int { scope { spawn w(Result[Int, Str].Ok(value: 1)); } 0 }".to_owned(),
+        // Refused: `?` on what is not the core `Result`.
+        "fn g() -> Result[Int, Str] { let n = 4?; Result[Int, Str].Ok(value: n) }\nfn m() -> Int { 0 }".to_owned(),
+        "fn g(o: Option[Int]) -> Result[Int, Str] { let n = o?; Result[Int, Str].Ok(value: n) }\nfn m() -> Int { 0 }".to_owned(),
+        "enum MyResult[T, E] { Ok(value: T), Err(error: E), }\nfn g(r: MyResult[Int, Str]) -> Result[Int, Str] { let n = r?; Result[Int, Str].Ok(value: n) }\nfn m() -> Int { 0 }".to_owned(),
+        // Refused: `?` where the function does not return the core `Result`.
+        "fn g(r: Result[Int, Str]) -> Int { r? }\nfn m() -> Int { 0 }".to_owned(),
+        "fn main() -> Int { Result[Int, Str].Ok(value: 1)? }".to_owned(),
+        "enum MyResult[T, E] { Ok(value: T), Err(error: E), }\nfn g(r: Result[Int, Str]) -> MyResult[Int, Str] { MyResult[Int, Str].Ok(value: r?) }\nfn m() -> Int { 0 }".to_owned(),
+        // Refused: a different error type, nominally — even one with the same fields.
+        "struct A { c: Int, }\nstruct B { c: Int, }\nfn g(r: Result[Int, A]) -> Result[Int, B] { let n = r?; Result[Int, B].Ok(value: n) }\nfn m() -> Int { 0 }".to_owned(),
+        "fn g[T, E1, E2](r: Result[T, E1]) -> Result[T, E2] { let v = r?; Result[T, E2].Ok(value: v) }\nfn m() -> Int { 0 }".to_owned(),
+        // Refused: the success value used as the wrong type.
+        "fn g(r: Result[Int, Str]) -> Result[Str, Str] { Result[Str, Str].Ok(value: r?) }\nfn m() -> Int { 0 }".to_owned(),
+        // Refused: a prelude name declared.
+        "enum Result[T, E] { Ok(value: T), Err(error: E), }\nfn m() -> Int { 0 }".to_owned(),
+        "struct Option { x: Int, }\nfn m() -> Int { 0 }".to_owned(),
+        // Refused: the ordinary enum laws, through the prelude's types.
+        "struct Node { next: Option[Vec[Node]], }\nfn m() -> Int { 0 }".to_owned(),
+        "struct Node { next: Option[Node], }\nfn m() -> Int { 0 }".to_owned(),
+        "struct D { c: Str, }\nfn w(r: Result[Int, Vec[D]]) -> Int { 0 }\nfn m() -> Int { let r = Result[Int, Vec[D]].Ok(value: 1); scope { spawn w(r); } 0 }".to_owned(),
+    ];
+
+    let mut refusals = 0;
+    for source in &sources {
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, source).expect("write");
+        let (status, stdout, stderr) = run_stage(&exe, &file);
+        let ours: Vec<(String, u32, u32)> = sorted_diagnostics(&stdout)
+            .into_iter()
+            .filter(|(c, _, _)| PROPAGATION_COMPARABLE.contains(&c.as_str()))
+            .collect();
+        let mut theirs: Vec<(String, u32, u32)> = nazm_core::check_source(source)
+            .into_iter()
+            .filter(|d| PROPAGATION_COMPARABLE.contains(&d.code.as_str()))
+            .map(|d| {
+                (
+                    d.code.as_str().to_owned(),
+                    d.primary.span.start,
+                    d.primary.span.end,
+                )
+            })
+            .collect();
+        theirs.sort();
+        assert_eq!(ours, theirs, "checking differs for {source:?}\n{stderr}");
+        if !theirs.is_empty() {
+            refusals += 1;
+            assert_eq!(status, Some(1), "{source:?} should have been refused");
+        }
+    }
+    assert!(refusals >= 14, "only {refusals} refusals were compared");
+}
+
+#[test]
+fn the_nazm_written_compiler_propagates_with_the_same_memory_semantics() {
+    // N12: `?` compiled by the Nazm-written compiler, against the reference, on the
+    // shapes where getting the order of a retain and a release wrong shows — an error
+    // value leaving through three functions, a success payload outliving the `Result` it
+    // came out of, a half-evaluated call and a half-built record abandoned, a scope's task
+    // joined on the way out, and a generic function's instances.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    let churn = "fn churn() -> Int { let mut noise = vec_new[Str](); let mut k = 0; \
+                 while k < 64 { vec_push(noise, str_concat(\"noise-\", int_to_str(k))); k = k + 1; } \
+                 noise = vec_new[Str](); vec_len(noise) }\n";
+    let cases: Vec<(String, &str)> = vec![
+        // An error value, a record and a `Vec[Diag]` propagated twice; a success `Str`.
+        (format!("{churn}struct Item {{ name: Str, tags: Ints, }}\nstruct Diag {{ code: Str, at: Int, }}\n\
+             fn item(n: Int) -> Item {{ let t = ints_new(); ints_push(t, n); Item(name: str_concat(\"item-\", int_to_str(n)), tags: t) }}\n\
+             fn diags(n: Int) -> Vec[Diag] {{ let d = vec_new[Diag](); let mut i = 0; while i < n {{ vec_push(d, Diag(code: int_to_str(300 + i), at: i)); i = i + 1; }} d }}\n\
+             fn ls() -> Result[Int, Str] {{ Result[Int, Str].Err(error: str_concat(\"broken-\", int_to_str(42))) }}\n\
+             fn lr() -> Result[Int, Item] {{ Result[Int, Item].Err(error: item(31)) }}\n\
+             fn lv() -> Result[Int, Vec[Diag]] {{ Result[Int, Vec[Diag]].Err(error: diags(5)) }}\n\
+             fn ms() -> Result[Int, Str] {{ let n = ls()?; churn(); Result[Int, Str].Ok(value: n) }}\n\
+             fn mr() -> Result[Int, Item] {{ let n = lr()?; Result[Int, Item].Ok(value: n) }}\n\
+             fn mv() -> Result[Str, Vec[Diag]] {{ let n = lv()?; Result[Str, Vec[Diag]].Ok(value: int_to_str(n)) }}\n\
+             fn ts() -> Result[Str, Str] {{ let n = ms()?; Result[Str, Str].Ok(value: int_to_str(n)) }}\n\
+             fn tr() -> Result[Int, Item] {{ let n = mr()?; Result[Int, Item].Ok(value: n) }}\n\
+             fn tv() -> Result[Int, Vec[Diag]] {{ let s = mv()?; Result[Int, Vec[Diag]].Ok(value: str_len(s)) }}\n\
+             fn text(n: Int) -> Result[Str, Str] {{ Result[Str, Str].Ok(value: str_concat(\"value-\", int_to_str(n))) }}\n\
+             fn ok() -> Result[Int, Str] {{ let s = text(12345)?; churn(); Result[Int, Str].Ok(value: str_len(s)) }}\n\
+             fn main() -> Int {{\n    let a = ts(); churn(); let b = tr(); churn(); let c = tv(); churn();\n    \
+             match a {{ Result.Ok(value: s) => 0, Result.Err(error: e) => str_len(e) * 10000, }}\n        \
+             + match b {{ Result.Ok(value: n) => 0, Result.Err(error: i) => str_len(i.name) * 100 + ints_get(i.tags, 0), }}\n        \
+             + match c {{ Result.Ok(value: n) => 0, Result.Err(error: ds) => vec_len(ds) * 1000000, }}\n        \
+             + match ok() {{ Result.Ok(value: n) => n * 100000000, Result.Err(error: e) => 0, }}\n}}\n"),
+         "1105090731"),
+        // A half-evaluated call, and a half-built record and variant, with `?` in the middle.
+        (format!("{churn}struct Three {{ a: Str, b: Int, c: Ints, }}\nenum Held {{ Three(a: Str, b: Int, c: Ints), Nothing, }}\n\
+             fn may_fail(n: Int) -> Result[Int, Str] {{ if n % 2 == 0 {{ return Result[Int, Str].Err(error: int_to_str(n)); }} Result[Int, Str].Ok(value: n) }}\n\
+             fn later(log: Ints) -> Str {{ ints_push(log, 1); str_concat(\"late\", \"r\") }}\n\
+             fn consume(log: Ints, a: Str, b: Int, c: Str) -> Int {{ ints_push(log, 2); str_len(a) + b + str_len(c) }}\n\
+             fn call(log: Ints, i: Int) -> Result[Int, Str] {{ Result[Int, Str].Ok(value: consume(log, int_to_str(i * 1000), may_fail(i)?, later(log))) }}\n\
+             fn rec(n: Int) -> Result[Three, Str] {{ Result[Three, Str].Ok(value: Three(a: int_to_str(n * 11), b: may_fail(n)?, c: ints_new())) }}\n\
+             fn var(n: Int) -> Result[Held, Str] {{ Result[Held, Str].Ok(value: Held.Three(a: int_to_str(n * 11), b: may_fail(n)?, c: ints_new())) }}\n\
+             fn main() -> Int {{\n    let log = ints_new(); let mut i = 0; let mut t = 0;\n    \
+             while i < 8 {{\n        t = t + match call(log, i) {{ Result.Ok(value: n) => n, Result.Err(error: e) => 0 - str_len(e), }};\n        \
+             t = t + match rec(i) {{ Result.Ok(value: r) => str_len(r.a) + r.b, Result.Err(error: e) => 100, }};\n        \
+             t = t + match var(i) {{ Result.Ok(value: h) => match h {{ Held.Three(a: a, b: b, c: c) => str_len(a) + b, Held.Nothing() => 0, }}, Result.Err(error: e) => 1000, }};\n        \
+             i = i + 1;\n    }}\n    churn();\n    t * 100 + ints_len(log)\n}}\n"),
+         "449608"),
+        // A scope whose task is still running when `?` leaves it.
+        ("fn worker(out: Chan, tag: Str) -> Int { let mut i = 0; let mut s = 0; while i < 200000 { s = s + i % 3; i = i + 1; } chan_send(out, str_len(tag)); s }\n\
+          fn fails() -> Result[Int, Str] { Result[Int, Str].Err(error: int_to_str(9)) }\n\
+          fn run(out: Chan) -> Result[Int, Str] { let tag = str_concat(\"task-\", int_to_str(1)); scope { spawn worker(out, tag); let held = int_to_str(555); let x = fails()?; chan_send(out, x + str_len(held)); } Result[Int, Str].Ok(value: 0) }\n\
+          fn main() -> Int { let out = chan_new(4); let r = run(out); chan_close(out); let buf = ints_new(); let got = chan_recv(out, buf); \
+          match r { Result.Ok(value: n) => 0, Result.Err(error: e) => str_len(e) * 1000, } + ints_len(buf) * 100 + ints_get(buf, 0) }\n".to_owned(),
+         "1106"),
+        // A generic function's instances, and one `match` on a propagated value.
+        (format!("{churn}enum Shape {{ Named(label: Str), Plain, }}\n\
+             fn pass[T, E](r: Result[T, E]) -> Result[T, E] {{ let v = r?; Result[T, E].Ok(value: v) }}\n\
+             fn make(n: Int) -> Result[Shape, Str] {{ if n == 0 {{ return Result[Shape, Str].Err(error: int_to_str(12345)); }} Result[Shape, Str].Ok(value: Shape.Named(label: str_concat(\"shape-\", int_to_str(n)))) }}\n\
+             fn f(n: Int) -> Result[Int, Str] {{ let k = match make(n)? {{ Shape.Named(label: l) => str_len(l), Shape.Plain() => 0, }}; churn(); Result[Int, Str].Ok(value: k) }}\n\
+             fn main() -> Int {{\n    let a = match pass(Result[Int, Str].Err(error: int_to_str(123))) {{ Result.Ok(value: n) => n, Result.Err(error: s) => str_len(s), }};\n    \
+             let b = match pass(Result[Str, Int].Ok(value: str_concat(\"ab\", \"cd\"))) {{ Result.Ok(value: s) => str_len(s), Result.Err(error: n) => n, }};\n    \
+             let c = match f(7) {{ Result.Ok(value: k) => k, Result.Err(error: e) => 0, }};\n    \
+             let d = match f(0) {{ Result.Ok(value: k) => 0, Result.Err(error: e) => str_len(e), }};\n    \
+             a * 1000 + b * 100 + c * 10 + d\n}}\n"),
+         "3475"),
+    ];
+    let borrowed: Vec<(&str, &str)> = cases.iter().map(|(s, e)| (s.as_str(), *e)).collect();
+    same_memory_semantics(dir.path(), &emitter, &borrowed);
 }
 
 #[test]
@@ -1834,8 +2008,14 @@ const STAGE_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
 /// The Rust `nazm` binary and `clang` are deliberately *not* routed through this. They
 /// are trusted build tools in the same class as `cargo`, not artefacts of the thing under
 /// test.
+///
+/// Every stage is also handed the core prelude, which the checker and the emitter load as
+/// the last module of every compilation — the toolchain's source, `library/core/prelude.nz`,
+/// named on the command line because it is not the program's. The lexer and parser
+/// drivers read one file and ignore the second argument.
 fn run_stage(exe: &Path, arg: &Path) -> (Option<i32>, String, String) {
-    run_bounded(common::bounded_exe(exe).arg(arg), STAGE_LIMIT).unwrap_or_else(|| {
+    let core = repo_root().join("library/core/prelude.nz");
+    run_bounded(common::bounded_exe(exe).arg(arg).arg(&core), STAGE_LIMIT).unwrap_or_else(|| {
         panic!(
             "{} did not finish within {STAGE_LIMIT:?} on {}",
             exe.display(),
@@ -2173,6 +2353,13 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
         ("fn main() -> Int { let xs = vec_new[Str](); vec_push(xs, \"a\"); str_len(vec_get(xs, 3)) }\n", ""),
     ];
 
+    same_memory_semantics(dir.path(), &emitter, cases);
+}
+
+/// Compile each case with the Nazm-written compiler and with the reference, run both, and
+/// require the same exit status, the same value — the one given — and the same memory
+/// report, with nothing left live.
+fn same_memory_semantics(dir: &Path, emitter: &Path, cases: &[(&str, &str)]) {
     /// The `nazm-memory:` line, which both compilers' programs print under the same
     /// variable because both take its text from one place.
     fn report(stderr: &str) -> String {
@@ -2184,19 +2371,19 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
     }
 
     for (source, expected) in cases {
-        let file = dir.path().join("mem.nz");
+        let file = dir.join("mem.nz");
         std::fs::write(&file, source).expect("write");
 
         // The Nazm-written compiler: IR out, clang in, then run it.
-        let (rc, ir, ir_err) = run_stage(&emitter, &file);
+        let (rc, ir, ir_err) = run_stage(emitter, &file);
         assert_eq!(
             rc,
             Some(0),
             "the Nazm compiler refused:\n{source}\n{ir_err}"
         );
-        let ll = dir.path().join("mem.ll");
+        let ll = dir.join("mem.ll");
         std::fs::write(&ll, &ir).expect("write IR");
-        let theirs = dir.path().join("mem-selfhost");
+        let theirs = dir.join("mem-selfhost");
         let built = Command::new("clang")
             .args(["-Wno-override-module", "-lpthread", "-o"])
             .arg(&theirs)
@@ -2210,7 +2397,7 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
         );
 
         // The reference compiler, from the same source.
-        let ours = dir.path().join("mem-reference");
+        let ours = dir.join("mem-reference");
         let out = Command::new(NAZM)
             .args(["build", file.to_str().unwrap(), "-o"])
             .arg(&ours)
@@ -2358,7 +2545,13 @@ fn a_transfer_in_a_value_position_is_never_a_value() {
         // The same compiler, interpreted. One program in two execution forms, so the
         // output is one output — a difference is a defect in whichever form is wrong.
         let interpreted = Command::new(NAZM)
-            .args(["run", "compiler/emit.nz", "--", file.to_str().unwrap()])
+            .args([
+                "run",
+                "compiler/emit.nz",
+                "--",
+                file.to_str().unwrap(),
+                "library/core/prelude.nz",
+            ])
             .current_dir(repo_root())
             .output()
             .expect("interpret the Nazm compiler");
@@ -2694,18 +2887,26 @@ fn the_bootstrap_chain_reaches_a_fixpoint() {
             .and_then(|n| n.parse().ok())
             .unwrap_or(0)
     };
-    // N11 added two generic programs, two generic module cases and four refusals.
+    // N11 added two generic programs, two generic module cases and four refusals; N12 a
+    // propagation program, a module exporting a `Result` API and five refusals.
     assert!(
-        count("conformance-cases:") >= 23,
+        count("conformance-cases:") >= 26,
         "the corpus has shrunk:\n{record}"
     );
     assert!(
-        count("module-conformance-cases:") >= 9,
+        count("module-conformance-cases:") >= 10,
         "the module corpus has shrunk:\n{record}"
     );
     assert!(
-        count("refusal-conformance-cases:") >= 4,
+        count("refusal-conformance-cases:") >= 9,
         "the refusal corpus has shrunk:\n{record}"
+    );
+    // Every stage loaded the same core prelude, and the record says which bytes it was.
+    assert!(
+        record
+            .lines()
+            .any(|l| l.starts_with("core-prelude: library/core/prelude.nz ")),
+        "the record does not name the core prelude:\n{record}"
     );
     // The two compilers really are the same bytes, read out of the record rather than
     // inferred from the script not having failed.

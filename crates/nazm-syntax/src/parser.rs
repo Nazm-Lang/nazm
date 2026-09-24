@@ -1397,15 +1397,31 @@ impl<'a> Parser<'a> {
         out
     }
 
-    /// `expr.name`, repeated. Binds tighter than any operator, including negation's
-    /// operand, because it is part of the operand.
+    /// `expr.name` and `expr?`, repeated in any order. Both bind tighter than any
+    /// operator, including negation's operand, because they are part of the operand:
+    /// `-r?` is `-(r?)`, and `make()?.field` projects out of what `?` produced.
     ///
-    /// A loop rather than recursion: `a.b.c.d` is a left spine, so it costs one tree level
-    /// per field and no parser recursion at all.
+    /// A loop rather than recursion: `a.b?.c` is a left spine, so it costs one tree level
+    /// per postfix and no parser recursion at all.
     fn projections(&mut self, base: Expr) -> Option<Expr> {
         let mut out = base;
         let mut depth = self.child();
-        while self.at(&TokenKind::Dot) {
+        loop {
+            if self.at(&TokenKind::Question) {
+                let op_span = self.peek_span();
+                self.advance();
+                depth += 1;
+                self.built(depth)?;
+                out = Expr::Propagate {
+                    span: out.span().join(op_span),
+                    operand: Box::new(out),
+                    op_span,
+                };
+                continue;
+            }
+            if !self.at(&TokenKind::Dot) {
+                break;
+            }
             self.advance();
             let name_span = self.peek_span();
             let name = match self.advance() {
@@ -2002,6 +2018,7 @@ mod ast_depth_tests {
                         }
                     }
                     Expr::Field { base, .. } => stack.push((Node::Expr(base), d + 1)),
+                    Expr::Propagate { operand, .. } => stack.push((Node::Expr(operand), d + 1)),
                     Expr::If {
                         cond,
                         then_block,

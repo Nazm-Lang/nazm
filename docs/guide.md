@@ -206,6 +206,83 @@ Six things to know, and then you know generics:
 
 A `Vec` may not be passed to a task, whatever it holds, for the reason an `Ints` may not.
 
+## Errors as values: `Result`, `Option`, and `?`
+
+Something that can fail says so in its return type. `Result[T, E]` is either a success
+holding a `T` or a failure holding an `E` — a **typed error value**, which you return, pass
+and store like any other value. There are no exceptions: nothing is thrown, nothing is
+caught, and nothing leaves a function unless the function returns.
+
+```nazm
+struct ParseError {
+    at: Int,
+}
+
+fn digit(s: Str, i: Int) -> Result[Int, ParseError] {
+    let d = str_byte(s, i) - 48;
+    if d < 0 {
+        return Result[Int, ParseError].Err(error: ParseError(at: i));
+    }
+    if d > 9 {
+        return Result[Int, ParseError].Err(error: ParseError(at: i));
+    }
+    Result[Int, ParseError].Ok(value: d)
+}
+
+fn parse(s: Str) -> Result[Int, ParseError] {
+    let mut i = 0;
+    let mut n = 0;
+    while i < str_len(s) {
+        n = n * 10 + digit(s, i)?;
+        i = i + 1;
+    }
+    Result[Int, ParseError].Ok(value: n)
+}
+
+fn main() -> Int {
+    match parse("4x2") {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 100 + e.at,
+    }
+}
+```
+
+That prints `101`. Three separate things are going on, and each is worth knowing on its own:
+
+- **`Result` is an ordinary enum.** It and `Option` are declared by the **core prelude**,
+  which every module sees without a `use`, so you build one as you build any generic enum —
+  `Result[Int, ParseError].Ok(value: d)` — and you cannot declare your own type called
+  `Result` or `Option`.
+- **`match` handles one explicitly.** `main` above looks at both variants and decides what
+  each means. That is always available, and it is how `main` handles errors: `main` still
+  returns `Int`.
+- **`?` passes a failure on.** `digit(s, i)?` is the digit when `digit` succeeded; when it
+  failed, `parse` returns that same error at once, in its own `Result`. The rule is exact:
+  `?` works on the core `Result` only, in a function that itself returns a `Result`, and
+  the two **error types must be the same type** — `?` never converts one error into
+  another. The success types may differ: `?` gives you the value, and only the error
+  leaves.
+
+When `?` leaves, it leaves the way `return` does: anything later in the same expression is
+not evaluated, every `scope` in between is joined, and everything the function was holding
+is released. The error value arrives intact.
+
+**`Option[T]`** is `None` or `Some(value: T)`, for a value that may be absent — there is no
+null. In this version `?` does not work on an `Option`; take it apart with `match`:
+
+```nazm
+fn first_or(xs: Vec[Int], fallback: Int) -> Int {
+    let o = if vec_len(xs) > 0 { Option[Int].Some(value: vec_get(xs, 0)) } else { Option[Int].None() };
+    match o {
+        Option.None() => fallback,
+        Option.Some(value: n) => n,
+    }
+}
+```
+
+There are no methods on either — no `unwrap`, no `map` — and runtime failures such as an
+index out of bounds are still runtime failures, not `Err` values.
+
 ## Memory: what you do not have to do
 
 **Nothing.** There is no `free`, no `new`, no ownership annotation and no lifetime to
@@ -285,7 +362,7 @@ accepts.
 | `sum` | `product , { ( "+" \| "-" ) , product }` |
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" ] , primary` |
-| `primary` | `atom , { "." , IDENT }` |
+| `primary` | `atom , { "." , IDENT \| "?" }` |
 | `atom` | `INTEGER \| STRING \| "true" \| "false" \| IDENT \| call \| construction \| variant_construction \| if_expression \| match_expression \| "(" , expression , ")"` |
 | `call` | `IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
 | `construction` | `IDENT , [ type_arguments ] , "(" , initialisers , ")"` |
@@ -769,8 +846,13 @@ fn main() -> Int { -1 }
 ### `primary`
 
 ```ebnf
-primary = atom , { "." , IDENT } ;
+primary = atom , { "." , IDENT | "?" } ;
 ```
+
+`?` is a postfix beside projection, in any order and any number: `r?`, `make()?.x`,
+`r??`. It binds tighter than negation, so `-r?` is `-(r?)`. Whether the operand is a
+`Result` — and the core prelude's one — is the checker's question, not the grammar's.
+See `docs/spec.md`, *Propagation*.
 
 ```nazm
 fn main() -> Int { (1 + 2) * 3 }
@@ -790,6 +872,14 @@ fn main() -> Int { str_len("a name") }
 
 ```nazm
 struct P { x: Int, } fn main() -> Int { P(x: 1).x }
+```
+
+```nazm
+fn f(r: Result[Int, Str]) -> Result[Int, Str] { Result[Int, Str].Ok(value: r? + 1) } fn main() -> Int { 0 }
+```
+
+```nazm
+struct P { x: Int, } fn f(r: Result[P, Str]) -> Result[Int, Str] { Result[Int, Str].Ok(value: -r?.x) } fn main() -> Int { 0 }
 ```
 
 ### `atom`

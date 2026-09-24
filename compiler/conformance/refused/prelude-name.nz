@@ -1,0 +1,10 @@
+// expect: N0363
+// `Result` is the core prelude's in every module, so a project may not declare its own.
+enum Result[T, E] {
+    Ok(value: T),
+    Err(error: E),
+}
+
+fn main() -> Int {
+    0
+}

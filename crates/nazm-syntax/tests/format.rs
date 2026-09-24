@@ -79,7 +79,7 @@ fn tree_sources() -> Vec<(String, String)> {
         .expect("workspace root")
         .to_path_buf();
     let mut out = Vec::new();
-    for folder in ["compiler", "examples"] {
+    for folder in ["compiler", "examples", "library/core"] {
         if let Ok(entries) = std::fs::read_dir(root.join(folder)) {
             for entry in entries.flatten() {
                 let p = entry.path();
@@ -221,6 +221,33 @@ fn generic_syntax_is_written_with_no_space_inside_or_before_the_brackets() {
         "struct Pair[A, B] { first: A, second: B, }\nfn id[T](x: T) -> T { x }\n\
          fn main() -> Int { id[Int](Pair[Int, Str](first: 1, second: \"s\").first) }\n",
         "got:\n{out}"
+    );
+}
+
+#[test]
+fn propagation_is_glued_to_its_operand() {
+    // `?` binds like `.`: nothing before it, and after it whatever the next token wants —
+    // a projection, another `?`, an operator, a separator.
+    let out = holds(
+        "propagation",
+        "fn f ( r : Result [ Result [ P , Str ] , Str ] ) -> Result [ Int , Str ] {\n\
+         let a = r ? ? . x ;\nlet b = - r ? ? . x - 1 ;\n\
+         Result [ Int , Str ] . Ok ( value : ( r ? ) ? . x + a + b )\n}",
+    );
+    assert_eq!(
+        out,
+        "fn f(r: Result[Result[P, Str], Str]) -> Result[Int, Str] {\n    let a = r??.x;\n    \
+         let b = -r??.x - 1;\n    Result[Int, Str].Ok(value: (r?)?.x + a + b)\n}\n",
+        "got:\n{out}"
+    );
+}
+
+#[test]
+fn a_comment_after_a_propagation_survives() {
+    holds(
+        "propagation and comments",
+        "fn f(r: Result[Int, Str]) -> Result[Int, Str] {\n    let a = r?; // the success value\n    \
+         // and the error leaves\n    Result[Int, Str].Ok(value: a)\n}\n",
     );
 }
 

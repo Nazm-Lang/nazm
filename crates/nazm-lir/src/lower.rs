@@ -862,6 +862,13 @@ pub fn lower(
     let mut units = Vec::new();
     let mut errors = Vec::new();
     for module in graph.ids() {
+        // A unit holds a module's native code, and a module that declares no function has
+        // none: its types are laid out, and their helpers emitted, in the units that use
+        // them. So it has no unit and no object — the core prelude, which declares two
+        // enums, is the case that made this a rule rather than an empty file per build.
+        if !res.functions().iter().any(|d| d.module == module) {
+            continue;
+        }
         // The module's durable identity where it has one, which is what makes the
         // artefact the same bytes from any checkout. `crate::names` owns the rule.
         let source = graph.file(module).map_or("", |f| names.name(f));
@@ -1648,6 +1655,9 @@ fn lower_expr(ctx: &mut Ctx<'_>, e: &AstExpr) -> Option<Expr> {
             arms,
             span,
         } => lower_match(ctx, scrutinee, arms, *span),
+        AstExpr::Propagate {
+            operand, op_span, ..
+        } => lower_propagate(ctx, operand, *op_span),
         AstExpr::If {
             cond,
             then_block,
@@ -2095,6 +2105,129 @@ fn lower_match(
         slot,
         arms: lowered_arms,
         ty: result,
+    })
+}
+
+/// `operand?` — lowered to the `match` it means, with no construct of its own.
+///
+/// ```text
+/// match operand {
+///     Result.Ok(value: v)  => v,
+///     Result.Err(error: e) => return <the function's Result>.Err(error: e),
+/// }
+/// ```
+///
+/// Which enum the operand is, which variant is which, and which `Result` the function
+/// returns were all decided by the checker and are read from its [`Propagation`] record;
+/// nothing here asks whether a type is called `Result`. Everything else is what a written
+/// `match` with a `return` in one arm already gets: the operand evaluated once into a
+/// hidden local the frame releases, each payload bound by an ordinary `Stmt::Let` that
+/// takes its own reference, and the error path an ordinary `Stmt::Return` — so every scope
+/// it leaves is joined and every local and temporary released on the way out, by the one
+/// path that does that for `return`. There is no landing pad and no unwinding, because
+/// there is nothing to unwind: this is a branch.
+///
+/// [`Propagation`]: nazm_sema::Propagation
+fn lower_propagate(ctx: &mut Ctx<'_>, operand: &AstExpr, at: Span) -> Option<Expr> {
+    let p = ctx.res.propagation(at)?;
+    let lowered = lower_expr(ctx, operand)?;
+    let scrutinee_ty = lowered.ty()?;
+    let Ty::Enum(eid) = scrutinee_ty else {
+        // Unreachable after checking, which records a propagation only on a `Result`.
+        ctx.unsupported(at, "a `?` on something that is not a `Result`");
+        return None;
+    };
+    ctx.note(scrutinee_ty);
+    let into_ty = ctx.ty(Type::Enum(p.into), at)?;
+    let Ty::Enum(into) = into_ty else {
+        ctx.unsupported(at, "a `?` in a function that does not return a `Result`");
+        return None;
+    };
+    ctx.note(into_ty);
+    let slot = ctx.hidden(scrutinee_ty, "propagate");
+
+    // One payload field each, declared first — `Ok(value: T)` and `Err(error: E)`.
+    let field = |ctx: &Ctx<'_>, id: EnumTy, tag: u32| -> Option<(u32, Ty)> {
+        let at = ctx.payload_index(id, tag, 0)?;
+        let ty = *ctx
+            .enum_layout(id)?
+            .variants
+            .get(tag as usize)?
+            .fields
+            .get(at as usize)?;
+        Some((at, ty))
+    };
+    let ok_tag = ctx.tag(eid, p.ok)?;
+    let err_tag = ctx.tag(eid, p.err)?;
+    let into_tag = ctx.tag(into, p.into_err)?;
+    let (ok_at, ok_ty) = field(ctx, eid, ok_tag)?;
+    let (err_at, err_ty) = field(ctx, eid, err_tag)?;
+    let (into_at, _) = field(ctx, into, into_tag)?;
+    ctx.note(ok_ty);
+    ctx.note(err_ty);
+
+    let payload = |tag: u32, at: u32, ty: Ty| Expr::Payload {
+        base: Box::new(Expr::Load {
+            slot,
+            ty: scrutinee_ty,
+        }),
+        base_ty: scrutinee_ty,
+        tag,
+        at,
+        ty,
+    };
+    let value = ctx.hidden(ok_ty, "ok");
+    let ok = MatchArm {
+        tag: ok_tag,
+        block: Block {
+            stmts: vec![Stmt::Let {
+                slot: value,
+                value: payload(ok_tag, ok_at, ok_ty),
+            }],
+            result: Some(Box::new(Expr::Load {
+                slot: value,
+                ty: ok_ty,
+            })),
+        },
+    };
+
+    let error = ctx.hidden(err_ty, "err");
+    let owns = ctx
+        .enum_layout(into)
+        .and_then(|l| l.variants.get(into_tag as usize))
+        .is_some_and(|v| v.fields.iter().any(|t| t.owns().is_some()));
+    let built = owns.then(|| ctx.hidden(into_ty, "variant"));
+    let err = MatchArm {
+        tag: err_tag,
+        block: Block {
+            stmts: vec![
+                Stmt::Let {
+                    slot: error,
+                    value: payload(err_tag, err_at, err_ty),
+                },
+                Stmt::Return(Expr::Variant {
+                    ty: into_ty,
+                    tag: into_tag,
+                    fields: vec![(
+                        into_at,
+                        Expr::Load {
+                            slot: error,
+                            ty: err_ty,
+                        },
+                    )],
+                    slot: built,
+                }),
+            ],
+            result: None,
+        },
+    };
+
+    Some(Expr::Match {
+        scrutinee: Box::new(lowered),
+        scrutinee_ty,
+        slot,
+        arms: vec![ok, err],
+        ty: Some(ok_ty),
     })
 }
 

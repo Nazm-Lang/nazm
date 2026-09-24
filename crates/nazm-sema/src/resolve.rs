@@ -165,6 +165,30 @@ pub struct VariantRef {
     pub variant: u32,
 }
 
+/// What one `?` was resolved to: the `Result` it takes apart, and the one it returns.
+///
+/// Decided once by the checker, which is the only place the operand was found to be the
+/// core prelude's `Result` — by definition identity, never by a name or by the shape of
+/// its variants. Both backends read this and neither asks the question again.
+///
+/// Two enums, not one, because they are two instances of one definition: `r?` on a
+/// `Result[Int, E]` inside a function returning `Result[Str, E]` takes apart the first and
+/// builds the second. Variant indices are in declaration order, like [`VariantRef`]'s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Propagation {
+    /// The operand's type: an instance of the core `Result`.
+    pub operand: EnumId,
+    /// Which of its variants is the value that `?` yields.
+    pub ok: u32,
+    /// Which of its variants is the error value that leaves.
+    pub err: u32,
+    /// The enclosing function's return type: an instance of the same `Result`, with the
+    /// same error type.
+    pub into: EnumId,
+    /// Which of *its* variants the error value is returned in.
+    pub into_err: u32,
+}
+
 /// Which payload field of which variant an initialiser or a pattern field names.
 ///
 /// The enum's answer to [`FieldRef`], and not an offset for the same reason.
@@ -213,6 +237,8 @@ pub struct Resolution {
     /// What each generic call site's type arguments were settled to, by the callee's name
     /// span — written or inferred, the checker decided and the backend reads.
     type_args: HashMap<Span, Vec<Type>>,
+    /// Keyed by the span of the **`?`** of a propagation, which is written once per one.
+    propagations: HashMap<Span, Propagation>,
 }
 
 impl Resolution {
@@ -270,6 +296,12 @@ impl Resolution {
     #[must_use]
     pub fn variant(&self, span: Span) -> Option<VariantRef> {
         self.variants.get(&span).copied()
+    }
+
+    /// What the `?` at `span` takes apart and returns.
+    #[must_use]
+    pub fn propagation(&self, span: Span) -> Option<Propagation> {
+        self.propagations.get(&span).copied()
     }
 
     /// Which payload field the initialiser or pattern field at `span` names.
@@ -418,6 +450,10 @@ impl Resolution {
 
     pub fn record_variant(&mut self, span: Span, to: VariantRef) {
         self.variants.insert(span, to);
+    }
+
+    pub fn record_propagation(&mut self, span: Span, to: Propagation) {
+        self.propagations.insert(span, to);
     }
 
     pub fn record_payload(&mut self, span: Span, to: PayloadRef) {

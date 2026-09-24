@@ -203,11 +203,20 @@ pub(crate) fn load(root: &Path, source_root: &Path) -> Result<Loaded, (Loaded, V
         parts.push((path.display().to_string(), text));
     }
 
+    // The core prelude, last: it is part of every compilation, and putting it after every
+    // project module means no project file's id — and no span in one — depends on it.
+    // `docs/spec.md`, *The core prelude*.
+    let core = parts.len();
+    parts.push((
+        nazm_core::sema::prelude::FILE_NAME.to_owned(),
+        nazm_core::sema::prelude::SOURCE.to_owned(),
+    ));
+
     // Ids exist now, so the edges can be. A named file that is not in `index` failed to
     // load and already has a diagnostic; dropping the edge here would otherwise turn one
     // error into two.
     let mut graph = ModuleGraph::default();
-    for i in 0..parts.len() {
+    for i in 0..core {
         graph.add(FileId::from_index(i), keys.get(i).cloned().flatten());
     }
     for (i, imports) in named.iter().enumerate() {
@@ -223,6 +232,8 @@ pub(crate) fn load(root: &Path, source_root: &Path) -> Result<Loaded, (Loaded, V
             }
         }
     }
+
+    graph.attach_prelude(FileId::from_index(core));
 
     let loaded = Loaded {
         map: SourceMap::from_parts(parts),

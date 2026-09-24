@@ -378,7 +378,8 @@ fn an_interface_names_only_its_direct_dependencies() {
 
     let published = interface_of(&dir.path().join("a.nz"));
     assert!(
-        published.contains(r#""dependencies":["b.nz"]"#),
+        // The core prelude is a dependency of every module, like any import.
+        published.contains(r#""dependencies":["@core/prelude","b.nz"]"#),
         "{published}"
     );
     assert!(!published.contains("c.nz"), "{published}");
@@ -497,7 +498,7 @@ fn an_exported_record_is_published_with_its_fields_and_durable_identity() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[],\
+        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
          \"records\":[{\"def\":\"m.nz::record Point\",\"name\":\"Point\",\"generics\":0,\
          \"fields\":[{\"name\":\"x\",\"ty\":\"Str\"},{\"name\":\"y\",\"ty\":\"Int\"}]}],\
          \"enums\":[],\
@@ -724,7 +725,7 @@ fn an_exported_enum_is_published_with_its_variants_and_durable_identity() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[],\
+        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
          \"records\":[],\
          \"enums\":[{\"def\":\"m.nz::enum State\",\"name\":\"State\",\"generics\":0,\"variants\":[\
          {\"name\":\"Done\",\"fields\":[{\"name\":\"code\",\"ty\":\"Int\"}]},\
@@ -919,7 +920,7 @@ fn a_generic_interface_carries_positions_and_no_parameter_names() {
     let json = interface_of(&dir.path().join("m.nz"));
     assert_eq!(
         json,
-        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[],\
+        "{\"schema\":\"nazm.interface/4\",\"module\":\"m.nz\",\"dependencies\":[\"@core/prelude\"],\
          \"records\":[{\"def\":\"m.nz::record Pair\",\"name\":\"Pair\",\"generics\":2,\
          \"fields\":[{\"name\":\"first\",\"ty\":{\"param\":0}},{\"name\":\"second\",\"ty\":{\"param\":1}}]}],\
          \"enums\":[{\"def\":\"m.nz::enum Maybe\",\"name\":\"Maybe\",\"generics\":1,\"variants\":[\

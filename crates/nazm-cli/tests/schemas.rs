@@ -348,7 +348,8 @@ fn the_cache_report_matches_the_published_schema() {
 
     let warm = run();
     check_against("nazm.check-report-1.json", &warm);
-    assert_eq!(field(&warm, "reused"), Value::from(2));
+    // Two project modules and the core prelude.
+    assert_eq!(field(&warm, "reused"), Value::from(3));
     assert_eq!(field(&warm, "checked"), Value::from(0));
 }
 

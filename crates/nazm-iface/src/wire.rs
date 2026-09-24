@@ -731,8 +731,38 @@ impl PersistentUnitInterface {
     /// * the **dependency list is empty**. Checking a dependent never reads a
     ///   dependency's own dependencies — that is the non-transitivity rule, expressed as
     ///   data — so nothing is lost.
+    ///
+    /// Each call gives every type the interface carries an identity of its own. A
+    /// compilation that rehydrates **several** interfaces, where one mentions a type
+    /// another declares, uses [`Self::rehydrate_into`] so the two agree it is one type.
     #[must_use]
     pub fn rehydrate(&self, module: ModuleId, first: FnId, types: &mut UserTypes) -> UnitInterface {
+        self.rehydrate_into(module, first, types, &mut Rehydrated::default())
+    }
+
+    /// As [`Self::rehydrate`], sharing type identities with every interface already
+    /// rehydrated through `seen`.
+    ///
+    /// # Why this exists
+    ///
+    /// An interface carries every type its exported shapes mention, including ones other
+    /// modules declare: B's `pub fn parse(…) -> Result[Int, E]` carries the core prelude's
+    /// `Result`. Rehydrated alone, that is a fresh definition bound to B, and a dependent
+    /// that also rehydrated the prelude would hold two `Result`s that are not equal —
+    /// `parse(s)?` would be a `?` on an enum that is not the core one. Keyed by
+    /// **durable identity** (`DefKey`), a definition met in two interfaces is one
+    /// definition, which is what it is.
+    ///
+    /// The order does not matter. A definition first met as another interface's
+    /// mention and later as its own module's export is adopted by that module then.
+    #[must_use]
+    pub fn rehydrate_into(
+        &self,
+        module: ModuleId,
+        first: FnId,
+        types: &mut UserTypes,
+        seen: &mut Rehydrated,
+    ) -> UnitInterface {
         // Two passes, for the reason the checker declares type names before resolving
         // field types: a field may name a type defined later in this file, and both
         // orders have to work. And applications met while reading field types wait for
@@ -750,8 +780,18 @@ impl PersistentUnitInterface {
                 .is_some_and(|(k, m)| k.module() == m)
         };
         let placeholder = |n: u32| vec![String::new(); n as usize];
+        // The definitions this call declares, and so the ones whose fields it fills. One
+        // another interface already brought in has its fields already.
+        let mut fresh: Vec<&str> = Vec::new();
         for r in &self.records {
             let nameable = mine(&r.def, DefKind::Record);
+            if let Some(TypeNode::Record(id)) = seen.known.get(&r.def).copied() {
+                if nameable {
+                    types.records_mut().adopt(id, module);
+                }
+                ids.insert(&r.def, TypeNode::Record(id));
+                continue;
+            }
             let def = RecordDef {
                 name: r.name.clone(),
                 module,
@@ -778,9 +818,18 @@ impl PersistentUnitInterface {
                 types.records_mut().declare_unnamed(def)
             };
             ids.insert(&r.def, TypeNode::Record(id));
+            seen.known.insert(r.def.clone(), TypeNode::Record(id));
+            fresh.push(&r.def);
         }
         for e in &self.enums {
             let nameable = mine(&e.def, DefKind::Enum);
+            if let Some(TypeNode::Enum(id)) = seen.known.get(&e.def).copied() {
+                if nameable {
+                    types.enums_mut().adopt(id, module);
+                }
+                ids.insert(&e.def, TypeNode::Enum(id));
+                continue;
+            }
             let def = EnumDef {
                 name: e.name.clone(),
                 module,
@@ -802,8 +851,13 @@ impl PersistentUnitInterface {
                 types.enums_mut().declare_unnamed(def)
             };
             ids.insert(&e.def, TypeNode::Enum(id));
+            seen.known.insert(e.def.clone(), TypeNode::Enum(id));
+            fresh.push(&e.def);
         }
         for r in &self.records {
+            if !fresh.contains(&r.def.as_str()) {
+                continue;
+            }
             let Some(TypeNode::Record(id)) = ids.get(r.def.as_str()).copied() else {
                 continue;
             };
@@ -812,6 +866,9 @@ impl PersistentUnitInterface {
             types.records_mut().complete(id, fields);
         }
         for e in &self.enums {
+            if !fresh.contains(&e.def.as_str()) {
+                continue;
+            }
             let Some(TypeNode::Enum(id)) = ids.get(e.def.as_str()).copied() else {
                 continue;
             };
@@ -877,6 +934,15 @@ impl PersistentUnitInterface {
     pub fn module_key(&self) -> Option<ModuleKey> {
         ModuleKey::parse(&self.module)
     }
+}
+
+/// The type definitions a compilation has rehydrated so far, by durable identity.
+///
+/// Threaded through [`PersistentUnitInterface::rehydrate_into`] so that a definition two
+/// interfaces carry is rehydrated once. Session-local, like the ids it holds.
+#[derive(Debug, Default)]
+pub struct Rehydrated {
+    known: HashMap<String, TypeNode>,
 }
 
 /// Split `module::record Name` or `module::enum Name` back into a key.

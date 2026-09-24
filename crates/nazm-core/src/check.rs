@@ -25,7 +25,8 @@ use nazm_sema::intrinsic::{Intrinsic, Shape};
 use nazm_sema::module::{Dependency, ModuleGraph, ModuleId};
 use nazm_sema::record::{FieldDef, RecordDef, RecordId};
 use nazm_sema::resolve::{
-    CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Resolution, VariantRef,
+    CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Propagation, Resolution,
+    VariantRef,
 };
 use nazm_sema::types::{ParamOwner, Type, TypeParam};
 use nazm_sema::udt::{TypeNode, UserTypes, MAX_TYPE_DEPTH};
@@ -218,6 +219,10 @@ pub struct Unit<'a> {
     /// Each enum of this module, with its index in `Program::enums`.
     enums: Vec<(u32, &'a Enum)>,
     imports: &'a [Dependency],
+    /// The core prelude's module in this compilation, found by its durable key. `None`
+    /// for a compilation assembled without one, which then has no `Result` for `?` to
+    /// recognise — the answer, not an error.
+    prelude: Option<ModuleId>,
 }
 
 impl<'a> Unit<'a> {
@@ -251,6 +256,7 @@ impl<'a> Unit<'a> {
             records,
             enums,
             imports: graph.imports(module),
+            prelude: graph.prelude(),
         }
     }
 
@@ -288,6 +294,14 @@ pub struct Checker<'a> {
     errors: Vec<Diagnostic>,
     /// The enclosing function's declared return type, for checking `return`.
     return_type: Option<Type>,
+    /// Where that return type is written, for a `?` whose error type disagrees with it.
+    return_span: Option<Span>,
+    /// The core prelude's `Result`, by definition — the one enum `?` takes apart.
+    ///
+    /// Found once per unit from the prelude module's declarations, which are keyed by the
+    /// prelude's durable identity. A project enum shaped like it, or named like it, is a
+    /// different definition and never this.
+    result: Option<EnumId>,
     /// How many `scope` blocks enclose the statement being checked.
     ///
     /// `spawn` needs one: a task with no scope would be detached work, and the model
@@ -1131,6 +1145,28 @@ fn type_environment(
                         || res.enums().declared(unit.module, &name).is_some()
                 })
             {
+                // The prelude's names are reserved rather than colliding at an import: no
+                // `use` was written, so there is no import line to point at, and the rule
+                // is about the declaration. A project `Result` would otherwise be the one
+                // ordinary lookup finds while `?` still meant the core one.
+                if Some(d.on) == unit.prelude {
+                    if collisions == Collisions::Report {
+                        errors.push(
+                            Diagnostic::error(
+                                codes::PRELUDE_TYPE_REDECLARED,
+                                own,
+                                format!("`{name}` is a core prelude type"),
+                            )
+                            .secondary(declared_at, "declared by the core prelude here")
+                            .help(
+                                "every module sees the prelude's `Result` and `Option` \
+                                 without importing them, and there is no way to shadow \
+                                 one. Give this type another name",
+                            ),
+                        );
+                    }
+                    continue;
+                }
                 if collisions == Collisions::Report {
                     errors.push(
                         Diagnostic::error(
@@ -1152,6 +1188,13 @@ fn type_environment(
                 continue;
             }
             if let Some(first) = brought_in.get(&name) {
+                // Only reachable when another import exports a prelude name, which that
+                // module's own declaration was already refused for. One mistake, one
+                // error: the prelude's meaning stands and nothing more is said here.
+                if Some(d.on) == unit.prelude {
+                    names.insert(name, offer);
+                    continue;
+                }
                 if collisions == Collisions::Report {
                     errors.push(
                         Diagnostic::error(
@@ -1667,6 +1710,9 @@ pub fn check_unit(
     // against persisted interfaces resolves type names by exactly the rule the
     // whole-program path uses. Two builders would be two rules.
     let imports = unit.imports.iter().map(|d| d.on).collect();
+    let result = unit
+        .prelude
+        .and_then(|m| res.enums().declared(m, nazm_sema::prelude::RESULT));
     let mut c = Checker {
         res,
         module: unit.module,
@@ -1677,6 +1723,8 @@ pub fn check_unit(
         scopes: Scopes::default(),
         errors: Vec::new(),
         return_type: None,
+        return_span: None,
+        result,
         scope_depth: 0,
         loop_depth: 0,
         type_scope: Vec::new(),
@@ -2612,6 +2660,144 @@ impl Checker<'_> {
         result.unwrap_or(Completion::Value(expected.unwrap_or(Type::Int)))
     }
 
+    /// Whether `t` is an instance of the core prelude's `Result`, and if so its success
+    /// and error types.
+    ///
+    /// By **definition identity**: the application's definition must be the prelude's
+    /// `Result`. Nothing here reads a name or looks at variants, so a project enum called
+    /// `Result`, or one shaped `Ok`/`Err`, is simply not one.
+    fn result_parts(&self, t: Type) -> Option<(EnumId, Type, Type)> {
+        let Type::Enum(id) = t else { return None };
+        let def = self.result?;
+        if self.res.types().definition_of(t) != Some(TypeNode::Enum(def)) {
+            return None;
+        }
+        match self.res.types().type_args(t).as_slice() {
+            [ok, err] => Some((id, *ok, *err)),
+            _ => None,
+        }
+    }
+
+    /// `operand?`.
+    ///
+    /// # The rule
+    ///
+    /// The operand is a `Result[T, E]` and the enclosing function returns `Result[U, E]` —
+    /// the **same** `E`, compared as types, so two error types with identical fields are
+    /// still two error types. The expression is a `T`. `U` is free: `?` yields the
+    /// operand's success value where it is written, and what leaves is only the error.
+    ///
+    /// # Completion
+    ///
+    /// Exactly the operand's. The `Err` path leaves the function, which is a `return`, and
+    /// a `return` inside an expression is already how a value position can transfer; the
+    /// path that stays is `Value(T)`. So `?` needs no completion of its own, and
+    /// `docs/spec.md` says why that is the point.
+    fn check_propagate(&mut self, operand: &Expr, at: Span, expected: Option<Type>) -> Completion {
+        let completion = self.check_expr(operand, None);
+        let ot = match completion {
+            Completion::Value(t) => t,
+            // An operand that never produces a value: nothing is taken apart, and the
+            // expression transfers with it.
+            Completion::Diverges => return Completion::Diverges,
+            Completion::Unit => {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        operand.span(),
+                        "this produces no value",
+                    )
+                    .help("`?` takes apart a `Result`, and this is not a value at all"),
+                );
+                return Completion::Value(expected.unwrap_or(Type::Int));
+            }
+        };
+
+        let Some((operand_id, ok, err)) = self.result_parts(ot) else {
+            let shown = self.show(ot);
+            self.errors.push(
+                Diagnostic::error(
+                    codes::PROPAGATE_NON_RESULT,
+                    at,
+                    format!("`?` needs a `Result`, but this is `{shown}`"),
+                )
+                .secondary(operand.span(), format!("this is `{shown}`"))
+                .help(
+                    "`?` propagates the core prelude's `Result` and nothing else — not an \
+                     `Option`, and not an enum with the same variants. Take the value \
+                     apart with `match` instead",
+                ),
+            );
+            return Completion::Value(expected.unwrap_or(Type::Int));
+        };
+
+        let declared = self.return_type;
+        let Some((into, _, into_err)) = declared.and_then(|t| self.result_parts(t)) else {
+            let shown = declared.map_or_else(|| "nothing".to_owned(), |t| self.show(t));
+            let mut d = Diagnostic::error(
+                codes::PROPAGATE_OUTSIDE_RESULT,
+                at,
+                format!("`?` can only be used in a function that returns a `Result`, and this one returns `{shown}`"),
+            )
+            .help(
+                "`?` leaves the function with the error, so the function has to return a \
+                 `Result` with the same error type. Here, `match` on the value and decide \
+                 what the error means instead",
+            );
+            if let Some(span) = self.return_span {
+                d = d.secondary(span, format!("declared `{shown}` here"));
+            }
+            self.errors.push(d);
+            return Completion::Value(ok);
+        };
+
+        if err != into_err {
+            let (have, want) = (self.show(err), self.show(into_err));
+            let mut d = Diagnostic::error(
+                codes::PROPAGATE_ERROR_MISMATCH,
+                at,
+                format!(
+                    "this `?` propagates a `{have}`, but the function's error type is `{want}`"
+                ),
+            )
+            .secondary(operand.span(), format!("its error type is `{have}`"))
+            .help(
+                "there is no conversion between error types: `?` returns the error value \
+                 as it is. Match on the value and build the error this function returns",
+            );
+            if let Some(span) = self.return_span {
+                d = d.secondary(span, format!("the function returns `{want}` errors"));
+            }
+            self.errors.push(d);
+            return Completion::Value(ok);
+        }
+
+        let variant = |c: &Self, id: EnumId, name: &str| {
+            c.res
+                .enums()
+                .get(id)
+                .and_then(|d| d.variant(name))
+                .map(|(i, _)| i)
+        };
+        if let (Some(ok_at), Some(err_at), Some(into_at)) = (
+            variant(self, operand_id, "Ok"),
+            variant(self, operand_id, "Err"),
+            variant(self, into, "Err"),
+        ) {
+            self.res.record_propagation(
+                at,
+                Propagation {
+                    operand: operand_id,
+                    ok: ok_at,
+                    err: err_at,
+                    into,
+                    into_err: into_at,
+                },
+            );
+        }
+        Completion::Value(ok)
+    }
+
     /// One arm: its payload bindings, then its body, in a scope of their own.
     fn check_arm(
         &mut self,
@@ -2865,8 +3051,10 @@ impl Checker<'_> {
             return;
         };
         let previous = self.return_type.replace(declared);
+        let previous_span = self.return_span.replace(f.return_type.span);
         let completion = self.check_block(body, Some(declared));
         self.return_type = previous;
+        self.return_span = previous_span;
 
         match completion {
             // Every path returned. No tail is needed, and demanding one would force a
@@ -3589,6 +3777,10 @@ impl Checker<'_> {
                     None => Completion::Value(Type::Int),
                 }
             }
+
+            Expr::Propagate {
+                operand, op_span, ..
+            } => self.check_propagate(operand, *op_span, expected),
 
             Expr::If {
                 cond,

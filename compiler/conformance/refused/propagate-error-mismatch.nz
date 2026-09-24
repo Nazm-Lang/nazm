@@ -1,0 +1,22 @@
+// expect: N0362
+// Two error types with identical fields are still two error types: nothing converts one
+// into the other.
+struct ErrorA {
+    code: Int,
+}
+
+struct ErrorB {
+    code: Int,
+}
+
+fn inner() -> Result[Int, ErrorA] {
+    Result[Int, ErrorA].Ok(value: 1)
+}
+
+fn outer() -> Result[Int, ErrorB] {
+    Result[Int, ErrorB].Ok(value: inner()?)
+}
+
+fn main() -> Int {
+    0
+}

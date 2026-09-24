@@ -33,6 +33,10 @@ nazm=${NAZM:-"${CARGO_TARGET_DIR:-$root/target}/debug/nazm"}
 # ends up in the unit. Nothing reads it to decide what to compile.
 root_source="emit.nz"
 sources="emit.nz analyse.nz module.nz parse.nz lex.nz"
+# The core prelude: the toolchain's own source, which every stage loads as the last module
+# of every compilation — the compiler's own included. Not generated, not embedded in any
+# stage: the same file, read by C1, C2 and C3, and recorded below like the compiler source.
+core="$root/library/core/prelude.nz"
 
 say() { printf '%s\n' "$*"; }
 # `shasum` on macOS, `sha256sum` on GNU userland. A digest line that silently vanished
@@ -128,6 +132,7 @@ for f in $sources; do
   total_lines=$((total_lines + n))
 done
 say "source lines: $total_lines" >> "$out/record.txt"
+say "core-prelude: library/core/prelude.nz $(sha256 "$core") $(wc -l < "$core" | tr -d ' ') lines" >> "$out/record.txt"
 
 # A **reference** check, by the Rust front end, and not part of the chain. Nothing
 # downstream depends on it; it is here so a bootstrap cannot succeed on a program the
@@ -144,12 +149,12 @@ say "stage 1: the Rust implementation compiles the compiler source into C1"
 
 # --- stage 2: C1 builds C2 ----------------------------------------------------------
 say "stage 2: C1 compiles it into C2, resolving the imports itself"
-"$out/stage1/nazmc" "$S" > "$out/stage2/nazmc.ll" || fail "stage 2 emission failed"
+"$out/stage1/nazmc" "$S" "$core" > "$out/stage2/nazmc.ll" || fail "stage 2 emission failed"
 link "$out/stage2"
 
 # --- stage 3: C2 builds C3 ----------------------------------------------------------
 say "stage 3: C2 compiles it into C3, resolving the imports itself"
-"$out/stage2/nazmc" "$S" > "$out/stage3/nazmc.ll" || fail "stage 3 emission failed"
+"$out/stage2/nazmc" "$S" "$core" > "$out/stage3/nazmc.ll" || fail "stage 3 emission failed"
 link "$out/stage3"
 
 # --- the fixpoint -------------------------------------------------------------------
@@ -183,7 +188,7 @@ for case in "$corpus"/*.nz; do
   name=$(basename "$case" .nz)
   expected=$(cat "$corpus/$name.expected")
   for stage in stage2 stage3; do
-    "$out/$stage/nazmc" "$case" > "$out/$stage/$name.ll" || fail "$stage refused $name"
+    "$out/$stage/nazmc" "$case" "$core" > "$out/$stage/$name.ll" || fail "$stage refused $name"
     clang -Wno-override-module -o "$out/$stage/$name" "$out/$stage/$name.ll" \
       || fail "$stage emitted IR clang rejected for $name"
     got=$("$out/$stage/$name" 2>&1 || true)
@@ -207,7 +212,7 @@ for case in "$corpus"/modules/*/; do
   name=$(basename "$case")
   expected=$(cat "$case/expected")
   for stage in stage2 stage3; do
-    "$out/$stage/nazmc" "$case/main.nz" > "$out/$stage/$name.ll" \
+    "$out/$stage/nazmc" "$case/main.nz" "$core" > "$out/$stage/$name.ll" \
       || fail "$stage refused module case $name"
     clang -Wno-override-module -o "$out/$stage/$name" "$out/$stage/$name.ll" \
       || fail "$stage emitted IR clang rejected for module case $name"
@@ -234,7 +239,7 @@ for case in "$corpus"/refused/*.nz; do
   code=$(sed -n '1s#^// expect: ##p' "$case")
   [ -n "$code" ] || fail "refusal case $name names no code"
   for stage in stage2 stage3; do
-    if "$out/$stage/nazmc" "$case" > "$out/$stage/$name.ll" 2> "$out/$stage/$name.err"; then
+    if "$out/$stage/nazmc" "$case" "$core" > "$out/$stage/$name.ll" 2> "$out/$stage/$name.err"; then
       fail "$stage accepted refusal case $name"
     fi
     grep -q "error\[$code\]" "$out/$stage/$name.err" || fail "$stage refused $name without $code"

@@ -903,7 +903,8 @@ fn a_semantic_hit_does_not_imply_a_native_hit() {
     };
 
     assert_eq!(check(&[]), 0, "cold");
-    assert_eq!(check(&[]), 2, "the semantic store is warm");
+    // Two project modules and the core prelude.
+    assert_eq!(check(&[]), 3, "the semantic store is warm");
 
     // Warm semantically, and entirely cold natively, because no object for this
     // configuration has ever been produced.
@@ -917,7 +918,7 @@ fn a_semantic_hit_does_not_imply_a_native_hit() {
     // semantic store is still warm after a build that reused every object.
     assert_eq!(build(dir.path(), "a.nz").compiled, did.units);
     assert_eq!(build(dir.path(), "a.nz").compiled, 0);
-    assert_eq!(check(&[]), 2);
+    assert_eq!(check(&[]), 3);
 }
 
 // --- records, and the boundary they must not blur ---------------------------------------

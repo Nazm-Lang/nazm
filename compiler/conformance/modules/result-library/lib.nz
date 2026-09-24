@@ -1,0 +1,27 @@
+// A `Result`-returning API exported across a module boundary. The error type is this
+// module's; `Result` is the core prelude's, the same definition in both modules.
+
+pub struct ParseError {
+    at: Int,
+}
+
+fn digit(s: Str, i: Int) -> Result[Int, ParseError] {
+    let d = str_byte(s, i) - 48;
+    if d < 0 {
+        return Result[Int, ParseError].Err(error: ParseError(at: i));
+    }
+    if d > 9 {
+        return Result[Int, ParseError].Err(error: ParseError(at: i));
+    }
+    Result[Int, ParseError].Ok(value: d)
+}
+
+pub fn parse(s: Str) -> Result[Int, ParseError] {
+    let mut i = 0;
+    let mut n = 0;
+    while i < str_len(s) {
+        n = n * 10 + digit(s, i)?;
+        i = i + 1;
+    }
+    Result[Int, ParseError].Ok(value: n)
+}
