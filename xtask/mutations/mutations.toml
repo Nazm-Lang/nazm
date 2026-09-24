@@ -1223,7 +1223,7 @@ find = """                self.retain(arg(1), elem);
 replace = """                let _ = writeln!(
                     self.out,
                     "  store {} %{}, ptr %{slot}",
-                    llvm_type(self.records, elem),
+                    llvm_type(self.types, elem),
                     arg(1)
                 );"""
 
@@ -1507,7 +1507,7 @@ find = """            out.push(PersistentField {
 replace = """            let _ = ty;
             out.push(PersistentField {
                 name: f.name.clone(),
-                ty: "Int".to_owned(),
+                ty: PersistentType::Builtin("Int".to_owned()),
             });"""
 
 [[mutation]]
@@ -1551,21 +1551,27 @@ replace = """                if let Some(slot) = of_declaration.get_mut(declared
                     *slot = 0;
                 }"""
 
+# `a-record-that-contains-itself-is-accepted` (N9) is retired as **equivalent**, found by the
+# first whole-catalogue run (N12.2, 2026-09-24): it SURVIVED the workspace suite because it
+# disabled `UserTypes::layout_cycle`, which has had no caller since N11 moved the checker to
+# `ownership_cycles`. A mutation of dead code cannot be observed, so no test was missing;
+# the rule itself moved. The entry below attacks the rule where it now lives.
 [[mutation]]
-name = "a-record-that-contains-itself-is-accepted"
+name = "an-inline-containment-cycle-is-not-refused"
 why = """
-finds no containment cycle, so `struct Node { next: Node, }` reaches the backend — where
-LLVM reports a recursive type, after the compiler has already decided the program is fine.
-A refusal that arrives after the output is one nobody can act on
+the layout check stops refusing cycles of inline containment, so `struct Node { next: Node, }`
+reaches the backend — where LLVM reports a recursive type, after the compiler has already
+decided the program is fine. Replaces `a-record-that-contains-itself-is-accepted`, whose
+target has been dead code since N11
 """
-file = "crates/nazm-sema/src/udt.rs"
-find = "    pub fn layout_cycle(&self, start: TypeNode) -> Option<LayoutCycle> {"
-replace = """    pub fn layout_cycle(&self, start: TypeNode) -> Option<LayoutCycle> {
-        if true {
-            let _ = start;
-            return None;
-        }"""
-
+file = "crates/nazm-core/src/check.rs"
+find = "    let cycles = res.types().ownership_cycles();"
+replace = """    let cycles: Vec<_> = res
+        .types()
+        .ownership_cycles()
+        .into_iter()
+        .filter(|c| !matches!(c.reach, nazm_sema::Reach::Inline))
+        .collect();"""
 [[mutation]]
 name = "a-private-type-leaks-through-a-public-signature"
 why = """
