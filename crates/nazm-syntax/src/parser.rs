@@ -10,8 +10,8 @@ use nazm_span::{FileId, Span};
 
 use crate::ast::{
     Assign, BinOp, Block, Enum, Expr, Field, FieldInit, Function, Import, Let, MatchArm, Param,
-    PatternField, Place, PlaceField, Program, Record, Return, Scope, Spawn, Stmt, TypeName,
-    TypeParam, Variant, While,
+    PatternField, Place, PlaceField, Program, Record, Requirement, Return, Scope, Spawn, Stmt,
+    TypeName, TypeParam, Variant, While,
 };
 use crate::lexer::{Token, TokenKind};
 
@@ -747,7 +747,40 @@ impl<'a> Parser<'a> {
         loop {
             let span = self.peek_span();
             match self.advance() {
-                TokenKind::Ident(n) => out.push(TypeParam { name: n, span }),
+                TokenKind::Ident(n) => {
+                    // `T: Equality` — at most one requirement, one name. There is no `+`:
+                    // one capability exists, and a list of one is not a list.
+                    let requires = if self.eat(&TokenKind::Colon) {
+                        let at = self.peek_span();
+                        match self.advance() {
+                            TokenKind::Ident(r) => Some(Requirement { name: r, span: at }),
+                            other => {
+                                self.errors.push(
+                                    Diagnostic::error(
+                                        codes::UNEXPECTED_TOKEN,
+                                        at,
+                                        format!(
+                                            "expected a capability after `:`, found {}",
+                                            other.describe()
+                                        ),
+                                    )
+                                    .help(
+                                        "a type parameter may require equality: \
+                                         `fn same[T: Equality](a: T, b: T) -> Bool`",
+                                    ),
+                                );
+                                return None;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    out.push(TypeParam {
+                        name: n,
+                        span,
+                        requires,
+                    });
+                }
                 other => {
                     self.errors.push(
                         Diagnostic::error(

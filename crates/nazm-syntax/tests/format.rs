@@ -353,3 +353,31 @@ fn text_that_does_not_lex_is_refused_rather_than_guessed_at() {
     let e = format("fn main() -> Int { \"unterminated }").unwrap_err();
     assert!(!e.is_empty(), "the lexer's diagnostics should come back");
 }
+
+#[test]
+fn a_requirement_is_written_one_way() {
+    // N14: `T: Equality`, with the spacing a field's type has, however it was written.
+    let out = holds(
+        "requirements",
+        "fn same [ T :Equality , U ] ( a : T , b : U ) -> Bool { a == a }\n\
+         fn main ( ) -> Int { 0 }",
+    );
+    assert_eq!(
+        out, "fn same[T: Equality, U](a: T, b: U) -> Bool { a == a }\nfn main() -> Int { 0 }\n",
+        "got:\n{out}"
+    );
+    // And what it formats to parses to the same parameters, requirement and all.
+    let (p, errors) = nazm_syntax::parser::parse(&nazm_syntax::lex(&out).0);
+    assert!(errors.is_empty(), "{errors:#?}");
+    let params: Vec<Option<&str>> = p
+        .functions
+        .first()
+        .map(|f| {
+            f.type_params
+                .iter()
+                .map(|t| t.requires.as_ref().map(|r| r.name.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(params, vec![Some("Equality"), None]);
+}

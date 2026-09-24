@@ -37,14 +37,23 @@ use_item = "use" , STRING , ";" ;
 function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" ,
            "->" , type , block ;
 
-(* A generic declaration's parameters: at least one name, no trailing comma. A parameter
+(* A generic declaration's parameters: at least one, no trailing comma. A parameter
  * is a **position** — renaming one changes nothing — and it is a type and nothing else.
  * Which names may be one (not a built-in type, not `Vec`, not twice) is the checker's
  * question. See `docs/spec.md`, *Generics*.
  *)
 (* @example struct Pair[A, B] { first: A, second: B, } fn main() -> Int { 0 } *)
 (* @example enum Maybe[T] { None, Some(value: T), } fn main() -> Int { 0 } *)
-type_parameters = "[" , IDENT , { "," , IDENT } , "]" ;
+type_parameters = "[" , type_parameter , { "," , type_parameter } , "]" ;
+
+(* A parameter may require a capability of every type it stands for: one name after a
+ * `:`, and no list. `Equality` is the only capability, only a function's parameter may
+ * require it, and inside the function the parameter then has `==`. The name is not a
+ * type and nothing declares it. See `docs/spec.md`, *A type parameter may require
+ * equality*.
+ *)
+(* @example fn same[T: Equality](a: T, b: T) -> Bool { a == b } fn main() -> Int { if same(1, 1) { 1 } else { 0 } } *)
+type_parameter = IDENT , [ ":" , IDENT ] ;
 
 (* One bit, and one spelling for it. Absent means private to this module; `pub` exports
  * it to the modules that directly import this one. There is no `private` keyword,
