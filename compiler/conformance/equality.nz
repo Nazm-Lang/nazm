@@ -1,0 +1,47 @@
+// Derived equality, N13: records, enums, `Option`, `Result`, a generic record and a nest.
+//
+// Every answer is folded into one integer by place value, so a comparison that answers
+// wrongly in the reference, C2 or C3 changes a digit rather than hiding in a sum.
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+struct Named {
+    name: Str,
+    at: Point,
+}
+
+enum Shape {
+    Plain,
+    Circle(centre: Point, r: Int),
+    Label(text: Str),
+}
+
+struct Box[T] {
+    value: T,
+}
+
+fn text(n: Int) -> Str {
+    str_concat("n-", int_to_str(n))
+}
+
+fn bit(b: Bool, place: Int) -> Int {
+    if b { place } else { 0 }
+}
+
+fn main() -> Int {
+    let p = Point(x: 1, y: 2);
+    let mut total = bit(p == Point(x: 1, y: 2), 1);
+    total = total + bit(p != Point(x: 1, y: 3), 10);
+    // Heap-backed fields built separately compare by their bytes.
+    total = total + bit(Named(name: text(4), at: p) == Named(at: p, name: "n-4"), 100);
+    // Different variants never compare a payload; the same variant compares only its own.
+    total = total + bit(Shape.Plain() == Shape.Label(text: text(1)), 1000);
+    total = total + bit(Shape.Circle(centre: p, r: 3) == Shape.Circle(r: 3, centre: Point(x: 1, y: 2)), 10000);
+    total = total + bit(Option[Int].Some(value: 7) == Option[Int].Some(value: 7), 100000);
+    total = total + bit(Result[Int, Str].Err(error: text(2)) != Result[Int, Str].Ok(value: 2), 1000000);
+    total = total + bit(Box[Shape](value: Shape.Label(text: text(5))) == Box[Shape](value: Shape.Label(text: "n-5")), 10000000);
+    total
+}

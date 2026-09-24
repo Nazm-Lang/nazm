@@ -1,0 +1,5 @@
+// expect: N0304
+// An unconstrained `T` has no equality, and neither has a generic type applied to one.
+struct Box[T] { value: T, }
+fn same[T](a: Box[T], b: Box[T]) -> Bool { a == b }
+fn main() -> Int { 0 }

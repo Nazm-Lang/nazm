@@ -1,0 +1,5 @@
+// expect: N0304
+// Two records of one shape are two types, and nothing compares across them.
+struct A { x: Int, }
+struct B { x: Int, }
+fn main() -> Int { if A(x: 1) == B(x: 1) { 1 } else { 0 } }

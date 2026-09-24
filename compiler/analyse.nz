@@ -1668,6 +1668,69 @@ pub fn task_unsafe_path(t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype
     ""
 }
 
+// Whether a type that contains nothing has no built-in equality: a sequence, a `Vec`, a
+// `Chan` or a type parameter. N13. `Int`, `Bool` and `Str` have their own, and `unknown`
+// was reported already.
+fn has_no_equality(t: Int) -> Bool {
+    if t == t_ints() { return true; }
+    if t == t_strs() { return true; }
+    if t == t_chan() { return true; }
+    if is_vec(t) { return true; }
+    if is_param(t) { return true; }
+    false
+}
+
+// The field path to the first component that gives this type no built-in equality, `"."`
+// when the type itself has none, or `""` when it has equality. N13.
+//
+// The reference's `UserTypes::equality`, over the same table. A record has `==` exactly when
+// every field does and an enum exactly when every payload field of every variant does —
+// which is one walk here, because an enum's fields are its variants and a variant's are its
+// payload, exactly as for `task_unsafe_path`. An applied entry's fields are already
+// substituted, so `Box[Int]` compares and `Box[T]` does not; `Option` and `Result` are
+// entries like any other and nothing here names them.
+//
+// Depth-first over declaration order, so the path reported is the first a reader would
+// find. An entry already visited is not walked again, so the walk ends even in a program
+// whose containment cycle is being refused in the same run.
+pub fn equality_blocker(t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Str {
+    if is_record(t) == false {
+        if has_no_equality(t) { return "."; }
+        return "";
+    }
+    let at = ints_new();
+    let which = ints_new();
+    let path = strs_new();
+    let seen = ints_new();
+    ints_push(at, record_of(t));
+    ints_push(which, 0);
+    ints_push(seen, record_of(t));
+    while ints_len(at) > 0 {
+        let r = ints_get(at, ints_len(at) - 1);
+        let i = ints_get(which, ints_len(which) - 1);
+        if i >= ints_get(rcount, r) {
+            ints_pop(at);
+            ints_pop(which);
+            if strs_len(path) > 0 { strs_pop(path); }
+        } else {
+            ints_set(which, ints_len(which) - 1, i + 1);
+            let ft = ints_get(rftype, ints_get(rfirst, r) + i);
+            let fname = strs_get(rfname, ints_get(rfirst, r) + i);
+            if is_record(ft) {
+                if contains(seen, record_of(ft)) == false {
+                    ints_push(seen, record_of(ft));
+                    strs_push(path, fname);
+                    ints_push(at, record_of(ft));
+                    ints_push(which, 0);
+                }
+            } else {
+                if has_no_equality(ft) { return joined(path, fname); }
+            }
+        }
+    }
+    ""
+}
+
 fn joined(path: Strs, last: Str) -> Str {
     let mut out = "";
     let mut i = 0;
@@ -2996,7 +3059,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // operands instead.
                 let op_at = ints_get(naux, k);
                 ints_push(ts, check_binary(text, l, r, op_at, op_at + str_len(text), rnames,
-                        diags));
+                        rfirst, rcount, rfname, rftype, diags));
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
@@ -4013,8 +4076,9 @@ fn is_ordering(op: Str) -> Bool {
 }
 
 fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int, rnames: Strs,
-        diags: Vec[Diag]) -> Int {
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, diags: Vec[Diag]) -> Int {
     let mut ok = true;
+    let mut why = "";
     if is_comparison(op) {
         if is_ordering(op) {
             // Ordering is `Int` only: comparing strings needs a collation decision the
@@ -4022,25 +4086,25 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int, rnames: Strs,
             if agrees(l, t_int()) == false { ok = false; }
             if agrees(r, t_int()) == false { ok = false; }
         } else {
-            // Equality works on any single type, but not across two, and **not on a
-            // sequence** — where it would have to mean identity or contents.
+            // Equality needs one type — two records of one shape are two types — and that
+            // type must have equality, which is derived (N13): not on a sequence, a `Vec`
+            // or a `Chan`, where it would have to mean identity or contents; not on an
+            // unconstrained `T`, which supports only what every type supports; and on a
+            // record or an enum exactly when everything it contains has it.
             if agrees(l, r) == false { ok = false; }
-            if l == t_ints() { ok = false; }
-            if l == t_strs() { ok = false; }
-            if l == t_chan() { ok = false; }
-            // A record joins them rather than getting an exception: equality would have
-            // to decide what a sequence field means, and the language has not chosen.
-            if is_record(l) { ok = false; }
-            // So does every `Vec`, for the sequence reason, and a type parameter: `==` is
-            // not valid for every type, and an unconstrained `T` supports only what every
-            // type supports.
-            if is_vec(l) { ok = false; }
-            if is_param(l) { ok = false; }
+            why = equality_blocker(l, rfirst, rcount, rfname, rftype);
+            if why != "" { ok = false; }
         }
         if ok == false {
-            report(diags, "N0304", from, to,
-                    str_concat(str_concat(str_concat("`", op), "` cannot compare `"),
-                    str_concat(show_type(l, rnames), "`")));
+            let mut message = str_concat(str_concat(str_concat("`", op), "` cannot compare `"),
+                    str_concat(show_type(l, rnames), "`"));
+            if why != "" {
+                if why != "." {
+                    message = str_concat(message,
+                            str_concat(str_concat(": its `", why), "` has no equality"));
+                }
+            }
+            report(diags, "N0304", from, to, message);
             return t_bool();
         }
         return t_bool();

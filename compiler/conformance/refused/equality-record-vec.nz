@@ -1,0 +1,5 @@
+// expect: N0304
+// A record has equality only when every field does.
+struct Held { n: Int, xs: Vec[Int], }
+fn same(a: Held, b: Held) -> Bool { a == b }
+fn main() -> Int { 0 }
