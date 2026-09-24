@@ -1,0 +1,15 @@
+use "model.nz";
+
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 4 {
+        if at(i) == Point(x: i, label: str_concat("p", int_to_str(i))) { total = total + 1; }
+        if at(i) != at(i + 1) { total = total + 10; }
+        if finished(i) == finished(i) { total = total + 100; }
+        if finished(i) == State.Ready() { total = total + 1000; }
+        if Option[Point].Some(value: at(i)) == Option[Point].Some(value: at(i)) { total = total + 10000; }
+        i = i + 1;
+    }
+    total
+}

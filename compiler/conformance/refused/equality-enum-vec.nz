@@ -1,0 +1,4 @@
+// expect: N0304
+// An enum has equality only when every variant does, whichever one a value holds.
+enum Work { Empty, Values(value: Vec[Int]), }
+fn main() -> Int { if Work.Empty() == Work.Empty() { 1 } else { 0 } }

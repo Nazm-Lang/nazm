@@ -1946,6 +1946,150 @@ fn the_nazm_written_compiler_compiles_value_blocks_with_the_same_memory_semantic
     same_memory_semantics(dir.path(), &emitter, &borrowed);
 }
 
+#[test]
+fn the_nazm_checker_agrees_with_the_reference_on_equality() {
+    // N13, `docs/spec.md`, *Equality is derived*. Both checkers derive `==` from the same
+    // table — a record when every field has it, an enum when every payload field of every
+    // variant does, an instance after substitution — and must agree on every accepted
+    // program and on every refusal's code and span.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_checker(dir.path());
+    let sources = [
+        // Accepted.
+        "struct Point { x: Int, y: Int, }\nfn main() -> Int { if Point(x: 1, y: 2) == Point(x: 1, y: 2) { 1 } else { 0 } }",
+        "struct N { name: Str, n: Int, flag: Bool, }\nfn f(a: N, b: N) -> Bool { a != b }\nfn main() -> Int { 0 }",
+        "enum E { A, B(v: Int), C(s: Str, t: Str), }\nfn f(a: E, b: E) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "enum Solo { Only, }\nfn main() -> Int { if Solo.Only() == Solo.Only() { 1 } else { 0 } }",
+        "fn main() -> Int { if Option[Int].None() == Option[Int].Some(value: 1) { 1 } else { 0 } }",
+        "fn f(a: Result[Int, Str], b: Result[Int, Str]) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "struct Box[T] { value: T, }\nstruct P { x: Int, }\nfn f(a: Box[P], b: Box[P]) -> Bool { a == b }\nfn main() -> Int { if Box[Str](value: \"a\") != Box[Str](value: \"b\") { 1 } else { 0 } }",
+        "struct Name { t: Str, }\nenum Shape { Dot, Circle(c: Name, r: Int), }\nstruct D { s: Shape, }\nenum L { H, S(top: D), }\nfn f(a: L, b: L) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "struct Box[T] { value: T, tag: Int, }\nfn same_tag[T](a: Box[T], b: Box[T]) -> Bool { a.tag == b.tag }\nfn main() -> Int { 0 }",
+        "enum Shape { Named(label: Str), Plain, }\nfn f(s: Shape) -> Bool { match s { Shape.Named(label: x) => { let w = str_concat(\"a\", \"b\"); x == w }, Shape.Plain() => { false }, } }\nfn main() -> Int { 0 }",
+        // Refused: one type, never two.
+        "struct A { x: Int, }\nstruct B { x: Int, }\nfn main() -> Int { if A(x: 1) == B(x: 1) { 1 } else { 0 } }",
+        "struct Box[T] { value: T, }\nfn main() -> Int { if Box[Int](value: 1) == Box[Str](value: \"1\") { 1 } else { 0 } }",
+        "fn main() -> Int { if Option[Int].None() == Option[Str].None() { 1 } else { 0 } }",
+        // Refused: a component without equality, however deep and in whichever variant.
+        "struct B { n: Int, values: Vec[Int], }\nfn f(a: B, b: B) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "struct B { values: Ints, }\nstruct D { n: Int, inner: B, }\nfn f(a: D, b: D) -> Bool { a != b }\nfn main() -> Int { 0 }",
+        "struct C { ch: Chan, }\nfn f(a: C, b: C) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "enum Work { Empty, Values(value: Vec[Int]), Count(n: Int), }\nfn main() -> Int { if Work.Empty() == Work.Empty() { 1 } else { 0 } }",
+        "enum M { A(n: Int), B(c: Chan), C(s: Str), }\nfn main() -> Int { if M.A(n: 1) == M.A(n: 1) { 1 } else { 0 } }",
+        "enum L { A(n: Int), B(s: Str), C(xs: Strs), }\nfn main() -> Int { if L.A(n: 1) != L.A(n: 1) { 1 } else { 0 } }",
+        "struct Leaf { xs: Vec[Int], }\nenum Mid { N, Has(leaf: Leaf), }\nstruct Top { mid: Mid, }\nfn f(a: Top, b: Top) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "enum E { A, B(maybe: Option[Vec[Int]]), }\nfn main() -> Int { if E.A() == E.A() { 1 } else { 0 } }",
+        "fn main() -> Int { if Option[Vec[Int]].None() == Option[Vec[Int]].None() { 1 } else { 0 } }",
+        "struct Diag { code: Str, }\nfn f(a: Result[Int, Vec[Diag]], b: Result[Int, Vec[Diag]]) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "struct Box[T] { value: T, }\nfn f(a: Box[Box[Chan]], b: Box[Box[Chan]]) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "struct Pair[A, B] { first: A, second: B, }\nfn f(a: Pair[Strs, Int], b: Pair[Strs, Int]) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        // Refused: an unconstrained parameter, bare or applied.
+        "fn same[T](a: T, b: T) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "struct Box[T] { value: T, }\nfn same_box[T](a: Box[T], b: Box[T]) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "fn same[T](a: Option[T], b: Option[T]) -> Bool { a != b }\nfn main() -> Int { 0 }",
+        // Refused: handles, and ordering on anything that now compares.
+        "fn main() -> Int { let a = vec_new[Int](); if a == a { 1 } else { 0 } }",
+        "struct Point { x: Int, }\nfn main() -> Int { if Point(x: 1) < Point(x: 2) { 1 } else { 0 } }",
+    ];
+
+    let mut refusals = 0;
+    for source in &sources {
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, source).expect("write");
+        let (status, stdout, stderr) = run_stage(&exe, &file);
+        let ours: Vec<(String, u32, u32)> = sorted_diagnostics(&stdout);
+        let mut theirs: Vec<(String, u32, u32)> = nazm_core::check_source(source)
+            .into_iter()
+            .map(|d| {
+                (
+                    d.code.as_str().to_owned(),
+                    d.primary.span.start,
+                    d.primary.span.end,
+                )
+            })
+            .collect();
+        theirs.sort();
+        assert_eq!(ours, theirs, "checking differs for {source:?}\n{stderr}");
+        if theirs.is_empty() {
+            assert_eq!(
+                status,
+                Some(0),
+                "{source:?} should have been accepted: {stdout}"
+            );
+        } else {
+            refusals += 1;
+            assert_eq!(status, Some(1), "{source:?} should have been refused");
+        }
+    }
+    assert!(refusals >= 18, "only {refusals} refusals were compared");
+}
+
+#[test]
+fn the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics() {
+    // N13: records, enums, `Option`, `Result` and generic instances compared by the
+    // Nazm-written compiler, against the reference, on the stated answers — with owning
+    // temporaries on both sides, bound operands read again afterwards, a different-variant
+    // comparison that must read no payload, and churn after each to make a premature
+    // release show.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    let prelude = "fn churn() -> Int { let mut noise = vec_new[Str](); let mut k = 0; \
+                   while k < 64 { vec_push(noise, str_concat(\"noise-\", int_to_str(k))); k = k + 1; } \
+                   noise = vec_new[Str](); vec_len(noise) }\n\
+                   fn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }\n\
+                   fn text(n: Int) -> Str { str_concat(\"t-\", int_to_str(n)) }\n\
+                   struct Item { name: Str, n: Int, }\n\
+                   enum Shape { Plain, Named(label: Str), Pair(left: Str, right: Str), }\n\
+                   struct Outer { item: Item, shape: Shape, note: Option[Str], }\n\
+                   struct Box[T] { value: T, }\n\
+                   fn item(n: Int) -> Item { Item(name: text(n), n: n) }\n\
+                   fn shape(k: Int) -> Shape { if k % 3 == 0 { return Shape.Plain(); } if k % 3 == 1 { return Shape.Named(label: text(k)); } Shape.Pair(left: text(k), right: text(k + 1)) }\n\
+                   fn outer(n: Int) -> Outer { Outer(item: item(n), shape: shape(n), note: Option[Str].Some(value: text(n))) }\n";
+    let cases: Vec<(String, &str)> = vec![
+        (format!("{prelude}struct Point {{ x: Int, y: Int, }}\n\
+             fn main() -> Int {{ let p = Point(x: 1, y: 2); \
+             bit(p == Point(x: 1, y: 2), 1) + bit(p == Point(x: 9, y: 2), 2) + bit(p == Point(x: 1, y: 9), 4) + bit(p != Point(x: 1, y: 9), 8) + bit(p != p, 16) \
+             + bit(Item(name: str_concat(\"a\", \"b\"), n: 2) == Item(n: 2, name: \"ab\"), 32) + bit(Item(name: \"ab\", n: 2) == Item(name: \"ab\", n: 3), 64) }}\n"),
+         "41"),
+        (format!("{prelude}enum MaybeInt {{ None, Some(value: Int), }}\nenum Twins {{ Left(n: Int), Right(n: Int), }}\nenum Solo {{ Only, }}\n\
+             fn main() -> Int {{ bit(MaybeInt.None() == MaybeInt.None(), 1) + bit(MaybeInt.None() == MaybeInt.Some(value: 0), 2) \
+             + bit(MaybeInt.Some(value: 1) == MaybeInt.Some(value: 1), 4) + bit(MaybeInt.Some(value: 1) == MaybeInt.Some(value: 2), 8) \
+             + bit(Twins.Left(n: 1) == Twins.Right(n: 1), 16) + bit(Twins.Right(n: 1) != Twins.Right(n: 2), 32) \
+             + bit(Shape.Named(label: text(1)) == Shape.Plain(), 64) + bit(Shape.Pair(left: text(1), right: text(2)) == Shape.Pair(right: text(2), left: text(1)), 128) \
+             + bit(Solo.Only() == Solo.Only(), 256) }}\n"),
+         "421"),
+        (format!("{prelude}struct Point {{ x: Int, y: Int, }}\n\
+             fn main() -> Int {{ bit(Option[Int].None() == Option[Int].None(), 1) + bit(Option[Str].Some(value: text(1)) == Option[Str].Some(value: \"t-1\"), 2) \
+             + bit(Result[Int, Str].Ok(value: 1) == Result[Int, Str].Err(error: \"1\"), 4) + bit(Result[Str, Str].Err(error: text(3)) == Result[Str, Str].Err(error: text(3)), 8) \
+             + bit(Box[Int](value: 1) == Box[Int](value: 1), 16) + bit(Box[Str](value: text(1)) == Box[Str](value: text(2)), 32) \
+             + bit(Box[Point](value: Point(x: 1, y: 2)) == Box[Point](value: Point(x: 1, y: 2)), 64) + bit(Box[Box[Int]](value: Box[Int](value: 4)) != Box[Box[Int]](value: Box[Int](value: 5)), 128) }}\n"),
+         "219"),
+        (format!("{prelude}fn main() -> Int {{ let mut total = 0; let mut i = 0; while i < 6 {{ \
+             total = total + bit(item(i) == item(i), 1) + bit(item(i) != item(i + 1), 10); \
+             total = total + bit(shape(i) == shape(i), 100) + bit(shape(i) == shape(i + 1), 1000); \
+             total = total + bit(outer(i) == outer(i), 10000); \
+             total = total + bit(Option[Str].Some(value: text(i)) == Option[Str].Some(value: text(i)), 100000); \
+             total = total + bit(Result[Str, Str].Ok(value: text(i)) == Result[Str, Str].Err(error: text(i)), 1000000); \
+             churn(); i = i + 1; }} total }}\n"),
+         "660666"),
+        (format!("{prelude}fn main() -> Int {{ let a = outer(4); let b = outer(4); let c = outer(5); \
+             let same = a == b; let differ = a != c; churn(); let mut n = 0; if same {{ n = n + 1; }} if differ {{ n = n + 10; }} \
+             n + 100 * (str_len(a.item.name) + str_len(b.item.name) + str_len(c.item.name)) }}\n"),
+         "911"),
+        (format!("{prelude}fn right(k: Int) -> Int {{ if item(k) == Item(name: text(k), n: {{ return 7; }}) {{ 1 }} else {{ 2 }} }}\n\
+             fn found(ok: Bool) -> Result[Option[Str], Int] {{ if ok {{ Result[Option[Str], Int].Ok(value: Option[Str].Some(value: text(3))) }} else {{ Result[Option[Str], Int].Err(error: 3) }} }}\n\
+             fn compare(ok: Bool) -> Result[Int, Int] {{ let got = found(ok)?; if got == Option[Str].Some(value: text(3)) {{ Result[Int, Int].Ok(value: 1) }} else {{ Result[Int, Int].Ok(value: 0) }} }}\n\
+             fn main() -> Int {{ let s = shape(1); let same = match s {{ Shape.Named(label: x) => {{ let want = text(1); x == want }}, Shape.Plain() => {{ false }}, Shape.Pair(left: _, right: _) => {{ false }}, }}; \
+             churn(); let one = if same {{ 1 }} else {{ 0 }}; \
+             let ten = match compare(true) {{ Result.Ok(value: v) => 10 * v, Result.Err(error: _) => 0, }}; \
+             let hundred = match compare(false) {{ Result.Ok(value: _) => 0, Result.Err(error: c) => 100 * c, }}; \
+             one + ten + hundred + right(1) * 1000 }}\n"),
+         "7311"),
+    ];
+    let borrowed: Vec<(&str, &str)> = cases.iter().map(|(s, e)| (s.as_str(), *e)).collect();
+    same_memory_semantics(dir.path(), &emitter, &borrowed);
+}
+
 /// Build a harness that checks a three-module program — `root`, `dep` and the core
 /// prelude — through `check_program` directly, with the prelude either where the loader
 /// puts it or between the two project modules.
