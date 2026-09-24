@@ -2219,7 +2219,11 @@ fn run_contained(args: &[String]) -> ExitCode {
                 " --budget-secs 2400".to_owned()
             };
             // `timeout` inside the container, so a supervisor that dies without killing
-            // it still leaves a container that stops itself. `exec` all the way down, so
+            // it still leaves a container that stops itself. TERM, not KILL: `timeout`
+            // then exits 124, which says "the session ran out" in a way an exit of 137
+            // cannot — the contained runner reads 137 as a memory kill, and on
+            // 2026-09-24 it did, for a session whose only problem was a mutant still in
+            // flight at the deadline. `exec` all the way down, so
             // a SIGINT the docker client proxies reaches the runner itself, and when it
             // dies the pid namespace takes every descendant with it.
             let deadline = bounds.deadline.as_secs().saturating_sub(20);
@@ -2230,7 +2234,7 @@ fn run_contained(args: &[String]) -> ExitCode {
                      && tar -C /src -cf - --exclude=./target --exclude=./.git --exclude=.nazm . | tar -C /work/mut -xf - \
                      && cd /work/mut && export CARGO_TARGET_DIR=/work/mut/target \
                      && cargo build -q -p xtask --jobs 1 \
-                     && exec timeout -s KILL {deadline} /work/mut/target/debug/xtask mutate \
+                     && exec timeout -s TERM -k 15 {deadline} /work/mut/target/debug/xtask mutate \
                         --reset-derived-caches --export-journal --campaign-dir /work/campaigns \
                         --resume-from /src/target/mutation-campaigns{commit}{budget}{passed}"
                 )),
@@ -2341,6 +2345,15 @@ fn run_contained(args: &[String]) -> ExitCode {
             // Explicit refusal. A silent skip would report green on no evidence.
             eprintln!("contained: REFUSED — containment is unavailable: {why}");
             ExitCode::FAILURE
+        }
+        Outcome::Failed(124) if name == "mutate" => {
+            eprintln!(
+                "contained: mutate ended INCOMPLETE — the session deadline passed with a \
+                 mutant still in flight. That mutant was restored with the container and never \
+                 journaled, so it has no verdict and runs again. Continue with \
+                 `cargo xtask contained mutate --resume` and the same selection."
+            );
+            ExitCode::from(3)
         }
         Outcome::Failed(3) if name == "mutate" => {
             eprintln!(
