@@ -38,9 +38,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,125 passed, 0 failed, 6 ignored, across 58 suites**, run through
+**Current suite: 1,186 passed, 0 failed, 6 ignored, across 62 suites**, run through
 `cargo xtask contained run "cargo test --locked --workspace --jobs 1 --no-fail-fast -- --test-threads 1"`
-at N11 (2026-09-23). The frozen count at the tested release commit is in
+at N12 (2026-09-24). N11 ended at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
 
@@ -114,6 +114,10 @@ and counts against the parse budget; `[]` parses and is the checker's to refuse.
 Nazm-written parser produces the same tree for every generic shape in
 `the_nazm_parser_produces_the_same_tree_as_the_reference`, spans included.*
 
+*Since N12, `?` is a token and one postfix operator, parsed beside projection in any order —
+`primary = atom , { "." , IDENT | "?" }` — so `-r?` is `-(r?)` and `r??` is two layers. The
+formatter glues it to its operand; the Nazm-written parser produces the same trees.*
+
 **Limitation** · There is **no CST**. `crates/nazm-syntax/src/ast.rs` is a plain owned
 AST; comments are returned as a parallel span list consumed only by the formatter, and
 never reach the tree. Error recovery is one strategy at one granularity — skip to the next
@@ -162,6 +166,13 @@ exports; imports are not transitive; every collision is a diagnostic naming both
 (`N0206`–`N0208`). Twenty cases in `crates/nazm-cli/tests/visibility.rs`, most of them run
 interpreted and compiled and required to agree. The self-hosted compiler was migrated
 rather than exempted: 84 of its 224 functions are `pub`, 140 are private, and since N2.1 it enforces the rule as well as expressing it.
+
+**A toolchain-owned module exists as of N12 (2026-09-24).** The core prelude,
+`library/core/prelude.nz`, is loaded into every compilation after its project modules and
+imported by every one of them with no `use` (`ModuleGraph::attach_prelude`). Its key,
+`@core/prelude`, is fixed by the toolchain and disjoint from every project key; its two type
+names are reserved (`N0363`). It is a dependency like any import, so it is in every module's
+check key. It is **not** a package system.
 
 **Durable identity and persisted interfaces exist as of N3 (2026-09-22).** A module's
 `ModuleKey` is its normalised path relative to the compilation's source root, and a
@@ -284,13 +295,26 @@ renaming one changes no interface byte. Codes `N0350`–`N0359`. 40 tests in
 comparing both checkers on 42 programs by code **and** span. `docs/spec.md`, *Generics*, is
 the law; `architecture.md` §7.12 is the implementation.
 
-Four constructs are verified rather than partial: **records**, **closed enums**,
-**exhaustive variant match** and **first-order generics with `Vec[T]`**. What surrounds them
-is not.
+*N12, 2026-09-24.* **Typed error values.** `Result[T, E]` and `Option[T]` are ordinary
+generic enums declared by the core prelude, and `?` propagates the core `Result` — recognised
+by definition, never by name or shape — with the exact rule `expr: Result[T, E]` in a function
+returning `Result[U, E]` gives `expr?: T`, the identical `E` required. No exceptions, no
+unwinding, no conversion between error types, no `?` on `Option`. Codes `N0360`–`N0363`. 33
+tests in `crates/nazm-core/tests/results.rs` with code and span, 12 native memory cases in
+`crates/nazm-cli/tests/propagation.rs`, 10 module, interface and cache cases in
+`crates/nazm-cli/tests/prelude.rs`, and
+`the_nazm_checker_agrees_with_the_reference_on_propagation` comparing both checkers on 22
+programs by code **and** span. `docs/spec.md`, *Typed error values*, is the law;
+`architecture.md` §7.13 is the implementation.
+
+Five constructs are verified rather than partial: **records**, **closed enums**,
+**exhaustive variant match**, **first-order generics with `Vec[T]`** and **typed `Result`
+propagation**. What surrounds them is not. Typed errors are **not** effects: a `Result` in a
+signature is a return type, and area 5 is unchanged.
 
 **Limitation** · Generics are unconstrained: no traits, no constraints, no methods or
-`impl`, so a generic body can do only what every type can. No built-in `Option` or
-`Result`; no higher kinds, const generics, defaults, variance or specialisation; no
+`impl`, so a generic body can do only what every type can. `Option` has no `?`, `Result` no
+methods and no conversion between error types, and `main` cannot return one; no higher kinds, const generics, defaults, variance or specialisation; no
 indexing syntax on a `Vec`; no `spawn` of a generic function. No closures or function
 values, no unit type, no `Never`.
 No derived equality on a record or an enum. No field-level or per-variant visibility, no
@@ -303,9 +327,9 @@ in N10, for the same reason `print` did in B3 — a reserved word earns its plac
 something absent. *Until N11 this said neither a record nor an enum could be put in a
 sequence; `Vec[T]` holds either.*
 
-**Next dependency** · Typed errors: `Result` and propagation, and `Option` with them. All
-three are expressible as ordinary generic enums now, which is the evidence the kernel is
-ready; what is missing is the decision about what a failure is (`roadmap.md`, N12).
+**Next dependency** · Equality on user types, and blocks as values in the native backends:
+the two things both dogfoods could not use (`roadmap.md`, N13). *Until N12 this named typed
+errors, which N12 added.*
 
 **Accepted when** · Chosen by the milestone that needs it, not by completeness.
 
@@ -345,6 +369,15 @@ first way a definition can reach itself with a finite layout, so the argument ne
 second satisfaction, and got it the first way again: every definition whose values could
 own themselves through a counted handle is refused (`N0359`), over an ownership graph that
 keeps acyclic nesting and phantom parameters legal.
+
+*N12, 2026-09-24, needed no extension.* `Result` and `Option` are ordinary enums, so they
+reclaim by the enum law, and `?` is a `match` with a `return`: its success payload takes its
+own reference before the temporary `Result` is released, and its error payload is owned by
+the returned `Result` before anything it came out of is. Every shape — `Ok` and `Err` of
+`Int`, `Str`, a record, an enum, a `Vec` and a `Chan`; `None` and `Some` of four kinds — and
+every way out — a half-evaluated call, a half-built record or variant, a scope with a running
+task, three functions deep — reports `live=0` in both implementations, under allocator churn,
+in `crates/nazm-cli/tests/propagation.rs`.
 
 **Evidence** · `docs/spec.md`'s *memory constitution* settles assignment, parameters,
 returns, aliasing, mutation, reclamation, cross-task transfer, cycles and cost visibility
@@ -504,6 +537,10 @@ records with heap fields peak at the empty-program floor.
 
 ### 5. Effects — MISSING
 
+*N12 did not change this row.* A function's error type is visible because it is inside its
+return type, `Result[T, E]`; a caller may store, pass or ignore that value, and nothing about
+it is tracked as an effect.
+
 **Evidence of absence** · No effect row, annotation, inference or purity analysis. The
 only occurrences of the word in the language crates are the English phrase "evaluated for
 its effects" and `crates/nazm-lir/src/lib.rs`'s statement that there are *"no effects to
@@ -601,6 +638,9 @@ constant folding happens here.
 *The duplicate built-in table and the second resolver this row used to name were removed by
 N1; the forbidden dependency on `nazm-core` still holds, and is satisfied by both crates
 depending on `nazm-sema`, which owns the shared vocabulary since N2.*
+
+*N12 added no node.* `?` is lowered to the LIR `match` it means, with a `Stmt::Return` in its
+error arm (`lower_propagate`), so its cleanup is `return`'s and the emitter did not change.
 
 *The paragraph that stood here until N5 said the backend was whole-program: one LLVM
 module, functions numbered `@nz.fN`, modules existing in the front end and nowhere below
@@ -814,7 +854,12 @@ implementation.
 
 ### 16. Standard library — MISSING
 
-**Evidence of absence** · No `.nz` library, no prelude. Thirty-one compiler built-ins in
+*Since N12 there is one `.nz` library file, and it is not a standard library:*
+`library/core/prelude.nz` declares `Result` and `Option`, is checked as ordinary source, and
+is special only in its identity and in being imported everywhere (area 2). Nothing can add a
+second declaration to it or a second such module.
+
+**Evidence of absence** · No `.nz` library beyond that prelude. Thirty-one compiler built-ins in
 one table, `crates/nazm-sema/src/intrinsic.rs`, mirrored by the backend in
 `crates/nazm-lir/src/ir.rs`. Every built-in the front end has, the backend lowers — there
 is no coverage gap today, and a test enforces that.
@@ -1080,7 +1125,9 @@ every `.nz` in the tree including their own sources, and eleven programs built b
 compilers and required to report the same reclamation — plus, since N10.1, the 32-case
 transfer corpus run five ways. `compiler/bootstrap.sh` — thirteen conformance cases, six of
 them the N10.1 transfer shapes and one the original reproducer byte for byte, and seven
-multi-module ones, under C2, C3 and the interpreter.
+multi-module ones, under C2, C3 and the interpreter. *Since N12, propagation: 22 programs
+through both checkers by code and span, four `?` programs built by both compilers with equal
+reclamation reports, and a `results.nz` and a `Result`-library module case in the corpus.*
 
 **Limitation** · The interpreter is the oracle, so a shared specification error is
 invisible to all five. `docs/spec.md` names what must be settled before
@@ -1092,7 +1139,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **158** catalogued defects;
+**Evidence** · `xtask/mutations/mutations.toml` holds **208** catalogued defects (158 when
+this sentence was first written);
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -1210,6 +1258,21 @@ build, no timeout. The six were two holes and one equivalence:
 Rerun: **all four remaining caught**. Final: **24 of 24 live mutations caught**, 2 retired as
 equivalent. Targeted batches, not a catalogue run; the catalogue is 182 entries.
 
+*N12 added twenty-six on 2026-09-24 and ran all twenty-six contained and serial, in six
+batches, with nothing else running.* Result identity — `?` recognising `Result` by name, by
+an `Ok`/`Err` shape, or as the first enum of that name; a project path taking the `@core`
+key; the prelude left out of every check key; rehydration giving each interface its own
+types. The rule — `?` outside a `Result` function, the error type ignored, the success type
+demanded equal, a project type taking a prelude name. Control flow — the lowered `match`
+testing the error tag, returning the operand's `Result`, falling through on error, and the
+interpreter carrying on with the error. And in the compiler written in Nazm, the same checks
+plus ownership and the scope join: the error or the success value not retained, the operand
+leaked on success, the join skipped, earlier temporaries or the frame left unreleased, the
+error path falling into the success path, the prelude never imported. **All twenty-six
+caught on the first run** — none survived, none unusable, none unapplied, none without a
+verdict, and none retired. Targeted batches, not a catalogue run; the catalogue is 208
+entries.
+
 **Limitation** · The **whole-catalogue run timed out unexplained** at its 3600 s deadline
 without reaching injection, and is recorded as incomplete rather than as a result; the
 first hypothesis (a cold build cache) was measured and is wrong. It must not be restarted
@@ -1261,6 +1324,12 @@ cases, 9 of them multi-module, including a generic library instantiated only by 
 and one instance requested from two modules, and a **refusal corpus** of 4 programs that C2,
 C3 and the reference must each refuse with the named code. The fixpoint moved to
 `c58b91dd…` at 11,877 source lines. `bootstrap.md` has the record.
+
+**Since N12** every stage loads the same core prelude — named on its command line, its digest
+in the record — and the compiler uses `?` itself: its front end returns
+`Result[Checked, Vec[Diag]]`. The corpus has 26 cases, 10 of them multi-module, and 9
+refusals. The fixpoint moved to `08895900…` at 12,046 source lines, with the runnable
+executables byte-identical as well.
 
 **Next dependency** · None.
 

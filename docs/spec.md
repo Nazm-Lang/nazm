@@ -690,7 +690,9 @@ and the number the backend gives it is chosen fresh for each build.
 No generics, so no `Option`, no `Result` and no generic enum of any kind — a monomorphic
 `enum MaybeInt { None, Some(value: Int), }` is an ordinary user declaration and the language
 offers no built-in like it. No typed errors, no `throw`, no `?`, no `try`: an enum can model
-a result by hand, and that is not an error-handling feature.
+a result by hand, and that is not an error-handling feature. *(N12 added `Result`, `Option`
+and `?` — as ordinary generic enums and a `match` — in* Typed error values *below; there is
+still no `throw` and no `try`.)*
 
 No literal, record, tuple, range or or-patterns; no guards; no top-level wildcard; no `let`
 destructuring; no by-move or mutable patterns; no match ergonomics inferred from ownership.
@@ -907,10 +909,145 @@ many instances one program may need (`N0358`).
 
 No traits, interfaces or protocols; no `impl` and no methods; no constraints or `where`; no
 associated types or constants; no higher-kinded parameters; no const generics; no defaults;
-no variance or subtyping; no specialisation or overloading; no reflection. No built-in
-`Option` or `Result` — `enum Maybe[T]` is an ordinary declaration. No closures, no function
-values, no `Never`, no unit type. Construction infers nothing: its type arguments are
-written.
+no variance or subtyping; no specialisation or overloading; no reflection. No closures, no
+function values, no `Never`, no unit type. Construction infers nothing: its type arguments
+are written.
+
+**Corrected 2026-09-24, N12.** This paragraph said there was no built-in `Option` or
+`Result`. There still is none built into the checker: both are now ordinary generic enums
+declared by the core prelude — the next section — and nothing about generics changed to
+admit them.
+
+### Typed error values — `Result`, `Option`, and `?`
+
+*Settled by N12, 2026-09-24.* **A typed failure is a value, and propagation is structured
+control flow over that value.** There is no exception, no `throw` or `catch`, no unwinding,
+no hidden error object and no conversion between error types. `Result` and `Option` are
+two ordinary generic enums, and `?` is one postfix operator that means a `match` with a
+`return` in one arm.
+
+#### The core prelude
+
+One module belongs to the toolchain rather than to a project: **the core prelude**, whose
+source is `library/core/prelude.nz` and which declares exactly
+
+```nazm
+pub enum Result[T, E] {
+    Ok(value: T),
+    Err(error: E),
+}
+
+pub enum Option[T] {
+    None,
+    Some(value: T),
+}
+```
+
+It is ordinary source, checked by the ordinary checker, and it is part of **every**
+compilation — including one given as a string. Its rules:
+
+- **Every module imports it**, with no `use` written. Its two types are therefore in every
+  module's type namespace exactly as a direct import's exported types are, and by the same
+  rule; nothing is copied into a module, and every module names the same two definitions.
+- **Its identity is the toolchain's.** Its `ModuleKey` is `@core/prelude` in every project,
+  from every working directory and every checkout, so `Result` is
+  `@core/prelude::enum Result` everywhere. No project path produces a key beginning
+  `@core`: a project file that happens to sit under a directory of that name compiles, and
+  has no durable identity (*Durable identity*, below).
+- **It is a dependency like any other.** A module's check key includes the prelude's key
+  and interface hash, as it includes every import's. A change to the prelude's public
+  shape reaches every module; one that moves no public shape reaches none. Every module
+  depends on the whole prelude — there is no per-name slicing — which costs nothing while
+  it declares two types.
+- **Its names are reserved.** A project module may not declare a type named `Result` or
+  `Option` (`N0363`, at the declaration). Otherwise ordinary lookup would find the
+  project's while `?` meant the prelude's. Only the **type** namespace: a function called
+  `Result` is legal, as it always was.
+- **It is not a package system.** There is one such module, with two declarations; nothing
+  can add a second, and there is no registry, version, manifest or namespace mechanism
+  behind it.
+
+#### `Result` and `Option` are ordinary enums
+
+Everything *Enums* and *Generics* say applies, unchanged, and nothing is added:
+
+- construction is qualified and carries its arguments — `Result[Int, Str].Ok(value: 1)`,
+  `Option[Str].None()` — and a pattern names the definition, `Result.Ok(value: v)`;
+- `match` is exhaustive over both variants;
+- layout, copying and release are an enum's: one active variant, released by its own law;
+- task safety is derived: `Result[Int, Str]` and `Result[Int, Chan]` may cross into a task,
+  `Result[Int, Vec[Diag]]` and `Option[Vec[Int]]` may not (`N0321`);
+- the ownership graph sees through them: `struct Node { next: Option[Vec[Node]] }` is an
+  ownership cycle (`N0359`), and `struct Node { next: Option[Node] }` has no layout
+  (`N0336`).
+
+**There is no null.** `Option[Str].None()` is a variant, not a null pointer, and
+`Option[Int].None()` is not a magic integer. **There are no methods** — no `unwrap`, `map`,
+`is_ok` — and no panicking accessor: a program takes a value apart with `match`.
+
+#### `?` — propagation
+
+`?` is a postfix operator beside projection, in any order and any number: `r?`,
+`make()?.x`, `r??`. It binds tighter than every operator, including negation, so `-r?` is
+`-(r?)`. `??` is two `?` tokens and removes two layers; `(r?)?` is the same thing written
+out.
+
+**The rule.** If `expr : Result[T, E]` — an application of the core prelude's `Result`,
+recognised by **definition**, never by name or by the shape of its variants — and the
+enclosing function returns `Result[U, E]` with the **identical** `E`, then `expr? : T`. `U`
+is free: `?` yields the operand's success value where it is written, and only the error
+leaves. `?` means exactly
+
+```nazm
+match expr {
+    Result.Ok(value: v) => v,
+    Result.Err(error: e) => return Result[U, E].Err(error: e),
+}
+```
+
+with `expr` evaluated **once**. Everything below follows from that sentence.
+
+**What is refused**, each at the `?`:
+
+| code | meaning |
+| --- | --- |
+| `N0360` | the operand is not the core `Result` — an `Option`, a project enum with `Ok` and `Err` variants, anything else |
+| `N0361` | the enclosing function does not return the core `Result` — including `main`, and including a function returning a lookalike |
+| `N0362` | the operand's error type is not exactly the function's: two records with identical fields are two error types, and two type parameters `E1`, `E2` are not known to be equal |
+
+There is no conversion: to change an error type, `match` and construct the other.
+
+**Completion.** A propagation completes as `Value(T)` when its operand does; the `Err`
+path is a `return` and adds no completion state of its own. An operand that never
+produces a value makes the propagation transfer too.
+
+**Evaluation order.** The operand is evaluated once, where the left-to-right rules put it.
+When it is an `Err`, nothing after it in the enclosing expression is evaluated: no later
+argument and no call, no arithmetic on it, no store of an assignment — the destination
+keeps its value — no later field initialiser and no completed record or variant, whose
+earlier fields are released, and no inspection of a `match` whose scrutinee it is.
+
+**Cleanup is exactly `return`'s.** Every `scope` the propagation leaves is joined,
+innermost first, before the function returns — a task still running is waited for, and a
+task's failure is taken on as it is for `return`. Every temporary the enclosing
+expressions hold and every local of the function are released once.
+
+**Ownership.** On `Ok`, the payload takes its own reference before the temporary `Result`
+is released, so a `Str` that came out of one outlives it. On `Err`, the error value is
+owned by the returned `Result` before anything it came out of is released. A `Vec` error
+is a handle: propagated through three functions, it is one vector with one logical
+reference at each return boundary, never a copy.
+
+**What `?` is not.** Not an exception: no unwinding, no landing pad, no catch table, no
+runtime failure and no message — a propagated `Err` is a normal return. Not an effect: a
+function's error type is visible in its signature because it is inside its return type,
+and a caller may store, pass or ignore the `Result` like any value. Runtime failures —
+`N0405`, `N0406`, division by zero, overflow — are unchanged and never become an `Err`.
+Not available on `Option`, which a program takes apart with `match`: a second carrier
+would need a propagation protocol, and traits do not exist.
+
+**`main` is unchanged.** It returns `Int`, so a program handles its errors itself with a
+`match` and decides what they mean; nothing maps an `Err` to an exit status.
 
 ## Settled for v0.2 — mutation and iteration
 
@@ -1556,11 +1693,17 @@ single largest authority grant available and it is not needed.
 
 #### Errors are values only where they can be
 
-There is no error type, no `Result`, and no exceptions. A failed read stops the program
-with `N0407`. A program that wants to *handle* a missing file asks `file_exists` first
-and reports it itself, which is what a compiler wants to do anyway. The gap between the
-check and the read is a real race, and for a compiler reading its own inputs it is an
-accepted one; closing it needs an error type, which is a later decision.
+There are no exceptions, and the built-ins return no `Result`. A failed read stops the
+program with `N0407`. A program that wants to *handle* a missing file asks `file_exists`
+first and reports it itself, which is what a compiler wants to do anyway. The gap between
+the check and the read is a real race, and for a compiler reading its own inputs it is an
+accepted one.
+
+*Corrected 2026-09-24, N12.* This said there was no error type and that closing the race
+needed one, which was a later decision. N12 made it: `Result` exists (*Typed error values*).
+It did **not** change any built-in's signature — a runtime failure stays a runtime failure,
+and never becomes an `Err` — so the race is still open, and a `read_file` returning a
+`Result` is a separate decision about the outside-world built-ins.
 
 ### A file is a module, and `use` names one by path
 
@@ -1581,6 +1724,7 @@ fn main() -> Int { quad(5) }
 | **Cycles** | **Allowed.** See below |
 | **Missing file** | `N0205`, pointing at the quoted path |
 | **Declarations** | There is no `mod`. A file is the module |
+| **The prelude** | Every module also imports the core prelude, with no `use` written, and it is loaded after every project module. N12; see *Typed error values* |
 
 #### One file is one module is one compilation unit
 
@@ -1778,6 +1922,12 @@ guess:
 | --- | --- |
 | The module sits **outside** the source root — its relative path still begins with `..` after folding | Its identity would depend on the directory the root happens to sit in, which is the thing a durable identity must not depend on |
 | Two different import paths reach **one file** through a symbolic link | The implementations disagree about how many modules that is (see below), and an identity the two cannot both compute is not an identity |
+| The relative path's first component is `@core` | That name is the toolchain's. Added by N12, so that no project module can ever be keyed as the core prelude is |
+
+**One module's identity is not a path at all.** The core prelude's `ModuleKey` is
+`@core/prelude`, fixed by the toolchain and the same in every compilation of every project
+(*Typed error values*, above). It is disjoint from every project key by the row above, and
+it is the one key a persisted interface may name that no source root computed.
 
 Such a compilation is correct and complete — session-local identity is untouched, the
 program checks, runs and compiles exactly as before. What it does not get is a durable key,
@@ -2055,6 +2205,9 @@ were never built would be claims about the parser's guess, not about the program
 Valueless `return`, labelled break, `for`, `loop`, mutable parameters, effects, floating
 point. A program using any of them is rejected by name rather than misparsed into something
 else.
+
+Exceptions, `throw`, `catch` and unwinding are not in the language and are not planned:
+N12's typed error values are values, and `?` is a `return` (*Typed error values*, above).
 
 **Corrected 2026-09-23, N11.** This list named **generics**, which N11 added: records, enums
 and functions may declare type parameters, and `Vec[T]` is the one generic built-in — the
