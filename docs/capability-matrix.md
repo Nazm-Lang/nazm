@@ -38,9 +38,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,186 passed, 0 failed, 6 ignored, across 62 suites**, run through
+**Current suite: 1,211 passed, 0 failed, 6 ignored, across 63 suites**, run through
 `cargo xtask contained run "cargo test --locked --workspace --jobs 1 --no-fail-fast -- --test-threads 1"`
-at N12 (2026-09-24). N11 ended at 1,125 across 58. The frozen count at the tested release commit is in
+at N12.1 (2026-09-24). N12 ended at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
 
@@ -307,6 +307,12 @@ tests in `crates/nazm-core/tests/results.rs` with code and span, 12 native memor
 programs by code **and** span. `docs/spec.md`, *Typed error values*, is the law;
 `architecture.md` §7.13 is the implementation.
 
+*N12.1, 2026-09-24, changed no rule here.* A block used as a value — a `match` arm, a `let`
+initialiser, an argument, a field, an operand — was always part of the checked language; it
+now also compiles natively in both compilers, which is area 9's and area 10's row rather
+than this one's. What this row gains is the first `Option` doing real work inside the
+compiler: `record_owned` returns `Option[Int]` instead of a `-1`.
+
 Five constructs are verified rather than partial: **records**, **closed enums**,
 **exhaustive variant match**, **first-order generics with `Vec[T]`** and **typed `Result`
 propagation**. What surrounds them is not. Typed errors are **not** effects: a `Result` in a
@@ -327,9 +333,10 @@ in N10, for the same reason `print` did in B3 — a reserved word earns its plac
 something absent. *Until N11 this said neither a record nor an enum could be put in a
 sequence; `Vec[T]` holds either.*
 
-**Next dependency** · Equality on user types, and blocks as values in the native backends:
-the two things both dogfoods could not use (`roadmap.md`, N13). *Until N12 this named typed
-errors, which N12 added.*
+**Next dependency** · Equality on user types: what the N11 dogfood could not use and N12.1
+still cannot — the compiler's integer tags need `==` on an enum (`roadmap.md`, N13). *Until
+N12 this named typed errors, which N12 added; until N12.1 it also named blocks as values in
+the native backends, which N12.1 added.*
 
 **Accepted when** · Chosen by the milestone that needs it, not by completeness.
 
@@ -641,6 +648,15 @@ depending on `nazm-sema`, which owns the shared vocabulary since N2.*
 
 *N12 added no node.* `?` is lowered to the LIR `match` it means, with a `Stmt::Return` in its
 error arm (`lower_propagate`), so its cleanup is `return`'s and the emitter did not change.
+
+*N12.1 added two, and removed a refusal.* A block used as a value compiles natively: every
+value block goes through one `lower_block`, a `match` arm written as a block is its bindings
+followed by that block, `Expr::Block` carries a block in any other value position, and
+`Stmt::Match` is the statement `match` whose arms may produce nothing — the pairing
+`Stmt::If` already had. Until then *a block used as an expression* was refused as `N0101`;
+`nazm capabilities` now reports it compiled. Evidence: `crates/nazm-cli/tests/value_blocks.rs`,
+19 cases each interpreted and native and required to agree on value and on every memory
+counter. `architecture.md` §7.14.
 
 *The paragraph that stood here until N5 said the backend was whole-program: one LLVM
 module, functions numbered `@nz.fN`, modules existing in the front end and nowhere below
@@ -1128,6 +1144,10 @@ them the N10.1 transfer shapes and one the original reproducer byte for byte, an
 multi-module ones, under C2, C3 and the interpreter. *Since N12, propagation: 22 programs
 through both checkers by code and span, four `?` programs built by both compilers with equal
 reclamation reports, and a `results.nz` and a `Result`-library module case in the corpus.*
+*Since N12.1, value blocks: 26 programs through both checkers by code and span, 10 parser
+trees, six block programs built by both compilers with equal reclamation reports, the core
+prelude found by key with the prelude last, between two project modules and absent, and a
+`blocks.nz`, a value-block module case and three refusals in the corpus.*
 
 **Limitation** · The interpreter is the oracle, so a shared specification error is
 invisible to all five. `docs/spec.md` names what must be settled before
@@ -1273,6 +1293,32 @@ caught on the first run** — none survived, none unusable, none unapplied, none
 verdict, and none retired. Targeted batches, not a catalogue run; the catalogue is 208
 entries.
 
+*N12.1 added twenty-five on 2026-09-24 and re-pointed two of N12's,* whose patterns the
+`Option` dogfood had moved; their defects were unchanged, so they were rerun rather than
+retired. Run contained and serial, with nothing else running. Prelude identity in the
+compiler written in Nazm: the last module taken as the prelude, any module called `prelude`,
+a project path keeping the `@core` key, the prelude losing its key, the root module's
+`Result`, the reserved-name rule following position — and in the reference graph, the last
+module named the prelude. The reference backend: an arm block dropping its statements, a bare
+block emitted as its tail alone, a block's value released as it leaves, a statement block
+skipped, a statement `match` claiming every arm leaves, an arm that never rejoins, a
+scrutinee never let go, a tail emitted after a transfer. The compiler written in Nazm: a block
+operand refused or given an empty span, a statement block needing a `;`, every block
+expression a value, a diverging one `Unit`, a block expression emitted as something. The
+dogfood: `None` confused with `Some`, the `-1` brought back for a compilation with no
+prelude, a check's arms reversed, a found declaration discarded. **All twenty-seven caught.**
+None survived, none unusable, none unapplied, none retired.
+
+One needed three runs, and the reason is the suite's rather than the compiler's. *A
+statement `match` claiming every arm leaves* drops a loop's increment, so the compiled
+programs it produces never finish — and three places ran compiled programs with no deadline
+(`value_blocks.rs`, the corpus run in `schemas.rs` and `workflow.rs`), while `run_bounded`
+killed a stage but not what the stage had started. The first run ended at the batch's 3000 s
+deadline with no verdict, and the second was stopped when it hung in the next such place; a
+timeout was not counted as a catch. Each now fails its case under a deadline and kills its
+process group, and the third run caught the mutant with 25 failing tests. The catalogue is
+233 entries.
+
 **Limitation** · The **whole-catalogue run timed out unexplained** at its 3600 s deadline
 without reaching injection, and is recorded as incomplete rather than as a result; the
 first hypothesis (a cold build cache) was measured and is wrong. It must not be restarted
@@ -1330,6 +1376,12 @@ in the record — and the compiler uses `?` itself: its front end returns
 `Result[Checked, Vec[Diag]]`. The corpus has 26 cases, 10 of them multi-module, and 9
 refusals. The fixpoint moved to `08895900…` at 12,046 source lines, with the runnable
 executables byte-identical as well.
+
+**Since N12.1** the compiler written in Nazm compiles a block used as a value and finds the
+prelude by the key `@core/prelude` rather than as the last module, and its checker takes an
+`Option[Int]` apart where it used to test for `-1`. The corpus has 28 cases, 11 of them
+multi-module, and 12 refusals. The fixpoint moved to `a9ead258…` at 12,164 source lines,
+runnable executables byte-identical too.
 
 **Next dependency** · None.
 
