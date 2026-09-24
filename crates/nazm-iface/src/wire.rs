@@ -71,9 +71,19 @@ use nazm_span::Span;
 /// refuse; there is no extension under which it could stay correct about a type argument
 /// it has no concept of.
 ///
-/// Unknown majors remain refused rather than reinterpreted — including a future `/5`, and
-/// including `/1` to `/3`, which this build no longer reads.
-pub const SCHEMA: &str = "nazm.interface/4";
+/// # Why N14 versioned it a fourth time
+///
+/// A generic function may require equality of a type parameter (`fn same[T: Equality]`),
+/// and which callers are valid depends on it: `same(v, v)` for a `Vec` is refused only
+/// because of the requirement. `/4` recorded a function's arity and nothing about its
+/// parameters, so an importer checking against a `/4` file would accept that call. `/5`
+/// writes each export's required positions (`requires_equality`). A `/4` reader handed a
+/// `/5` file could not honour the field, so the major moves rather than the field being
+/// added silently.
+///
+/// Unknown majors remain refused rather than reinterpreted — including a future `/6`, and
+/// including `/1` to `/4`, which this build no longer reads.
+pub const SCHEMA: &str = "nazm.interface/5";
 
 /// A type as persisted.
 ///
@@ -200,6 +210,13 @@ pub struct PersistentExport {
     /// How many type parameters the function declares. Its **body** is not here, generic
     /// or not: a dependent checks against the signature and never needs the rest.
     pub generics: u32,
+    /// The positions of the type parameters whose declaration requires equality, strictly
+    /// ascending, and **absent** when there are none — so a function that requires nothing
+    /// is written exactly as it was before N14. Positions, never names: renaming a
+    /// parameter changes no byte, and a requirement belongs to the position as the
+    /// parameter does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_equality: Vec<u32>,
     /// The parameter types, in declaration order. A parameter in them is this function's.
     pub params: Vec<PersistentType>,
     /// The return type, in the same encoding.
@@ -515,6 +532,14 @@ impl PersistentUnitInterface {
                 name: e.name.clone(),
                 kind: DefKind::Function.as_str().to_owned(),
                 generics: u32::try_from(e.type_params.len()).unwrap_or(u32::MAX),
+                requires_equality: (0..u32::try_from(e.type_params.len()).unwrap_or(u32::MAX))
+                    .filter(|&index| {
+                        types.requires_equality(TypeParam {
+                            owner: ParamOwner::Function(e.def),
+                            index,
+                        })
+                    })
+                    .collect(),
                 params,
                 ret: persist(e.ret, types, graph)
                     .ok_or_else(|| PublishError::NoModuleKey(interface.module()))?,
@@ -688,6 +713,18 @@ impl PersistentUnitInterface {
             }
             for t in e.params.iter().chain(std::iter::once(&e.ret)) {
                 validate_type(t, e.generics, &defined, 0, &e.def)?;
+            }
+            // Each a position the function has, once, in ascending order: anything else is
+            // a file that disagrees with itself or was not written by the canonical writer.
+            if e.requires_equality
+                .windows(2)
+                .any(|w| w.first() >= w.last())
+                || e.requires_equality.iter().any(|&p| p >= e.generics)
+            {
+                return Err(ReadError::NotCanonical(format!(
+                    "the requirements of `{}`",
+                    e.def
+                )));
             }
             // The identity must be this module's, and must be the one the name and kind
             // beside it describe. Either mismatch means the file disagrees with itself.
@@ -902,6 +939,9 @@ impl PersistentUnitInterface {
                 def,
                 type_params: placeholder(e.generics),
             });
+            for &index in &e.requires_equality {
+                types.require_equality(TypeParam { owner, index });
+            }
         }
         types.settle();
         let record_exports = self
