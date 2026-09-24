@@ -684,6 +684,7 @@ replace = """        self.loops.pop();
         if reach == Reach::FallsThrough {
             let _ = writeln!(self.out, "  br label %{body_label}");
         }"""
+killers = [{ package = "nazm-cli", test = "build", name = "the_condition_is_reevaluated_on_every_iteration" }]
 
 [[mutation]]
 name = "continue-jumps-to-the-body-not-the-condition"
