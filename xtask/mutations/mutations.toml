@@ -2527,3 +2527,293 @@ the **Nazm-written** emitter never plans an instance's own calls to generic func
 file = "compiler/emit.nz"
 find = "                        callee_inst = request_instance(ints_get(fnode_of, f), cargs, inst_fn,"
 replace = "                        callee_inst = 0 - 1 + 0 * request_instance(ints_get(fnode_of, f), cargs, inst_fn,"
+
+# --- N12: `Result`, `Option` and `?` --------------------------------------------------
+#
+# Result identity, the propagation rule, control flow, ownership, the scope join and the
+# prelude's place in interfaces and keys — in the reference and in the compiler written in
+# Nazm. Each names the test it expects to be caught by only in its `why`.
+
+[[mutation]]
+name = "question-mark-recognises-result-by-name"
+why = """
+`?` accepts any enum whose definition is called `Result` — the name test the spec forbids. Caught where a persisted interface claims a project `Result` of the same shape
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """        if self.res.types().definition_of(t) != Some(TypeNode::Enum(def)) {
+            return None;
+        }"""
+replace = """        let _ = def;
+        if self.res.enums().get(id).is_none_or(|d| d.name != nazm_sema::prelude::RESULT) {
+            return None;
+        }"""
+
+[[mutation]]
+name = "question-mark-recognises-result-by-shape"
+why = """
+`?` accepts any enum with an `Ok` and an `Err` variant — structural recognition of a nominal type
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """        if self.res.types().definition_of(t) != Some(TypeNode::Enum(def)) {
+            return None;
+        }"""
+replace = """        let _ = def;
+        if self.res.enums().get(id).is_none_or(|d| d.variant("Ok").is_none() || d.variant("Err").is_none()) {
+            return None;
+        }"""
+
+[[mutation]]
+name = "the-canonical-result-is-the-first-one-named-result"
+why = """
+the `Result` `?` propagates is the first definition of that name anywhere in the compilation rather than the prelude module's — a project `Result`, loaded first, would take its place
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """        .and_then(|m| res.enums().declared(m, nazm_sema::prelude::RESULT));"""
+replace = """        .and(res.enums().declared_anywhere(nazm_sema::prelude::RESULT).next());"""
+
+[[mutation]]
+name = "checker-question-mark-is-allowed-outside-a-result-function"
+why = """
+`?` in a function that does not return `Result` is accepted silently, so an error has nowhere to go — `N0361` never fires
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """            if let Some(span) = self.return_span {
+                d = d.secondary(span, format!("declared `{shown}` here"));
+            }
+            self.errors.push(d);
+            return Completion::Value(ok);"""
+replace = """            if let Some(span) = self.return_span {
+                d = d.secondary(span, format!("declared `{shown}` here"));
+            }
+            let _ = d;
+            return Completion::Value(ok);"""
+
+[[mutation]]
+name = "checker-question-mark-ignores-the-error-type"
+why = """
+the operand's error type is never compared with the function's, so a `Result[Int, ErrorA]` propagates out of a `Result[Int, ErrorB]` function — an implicit conversion
+"""
+file = "crates/nazm-core/src/check.rs"
+find = "        if err != into_err {"
+replace = "        if err != into_err && false {"
+
+[[mutation]]
+name = "question-mark-requires-the-same-success-type"
+why = """
+`?` also demands that the operand's success type equal the function's, refusing the ordinary case where only the error crosses
+"""
+file = "crates/nazm-core/src/check.rs"
+find = "        if err != into_err {"
+replace = "        if err != into_err || Some(ok) != declared.and_then(|t| self.result_parts(t)).map(|p| p.1) {"
+
+[[mutation]]
+name = "checker-a-project-type-may-take-a-prelude-name"
+why = """
+a project `Result` is reported as an ordinary import collision at an import line that does not exist, instead of `N0363` at its declaration
+"""
+file = "crates/nazm-core/src/check.rs"
+find = """                if Some(d.on) == unit.prelude {
+                    if collisions == Collisions::Report {"""
+replace = """                if Some(d.on) == unit.prelude && false {
+                    if collisions == Collisions::Report {"""
+
+[[mutation]]
+name = "a-project-path-can-take-the-core-key"
+why = """
+a project file under a directory called `@core` gets a durable key in the toolchain's namespace, so a project module could be keyed as the prelude is
+"""
+file = "crates/nazm-sema/src/key.rs"
+find = """        if key.0 == CORE || key.0.starts_with("@core/") {"""
+replace = """        if key.0 == CORE && false {"""
+
+[[mutation]]
+name = "the-prelude-is-left-out-of-every-check-key"
+why = """
+the implicit import is not a dependency of a module's check key, so a change to the prelude's public shape would reach no module that uses it
+"""
+file = "crates/nazm-cli/src/checking.rs"
+find = """                .imports(m)
+                .iter()
+                .map(|d| {"""
+replace = """                .imports(m)
+                .iter()
+                .filter(|d| graph.key(d.on).is_none_or(|k| !k.is_prelude()))
+                .map(|d| {"""
+
+[[mutation]]
+name = "rehydration-gives-every-interface-its-own-types"
+why = """
+an enum two persisted interfaces carry is rehydrated twice, so the `Result` in B's interface is not the prelude's and `?` over B's API is refused when checked from interfaces alone
+"""
+file = "crates/nazm-iface/src/wire.rs"
+find = "            if let Some(TypeNode::Enum(id)) = seen.known.get(&e.def).copied() {"
+replace = "            if let Some(TypeNode::Enum(id)) = None::<TypeNode> {"
+
+[[mutation]]
+name = "lowered-propagation-tests-the-error-tag"
+why = """
+the lowered `match` treats the error variant as the success, so every `Ok` propagates and every `Err` is read as a value
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = "    let ok_tag = ctx.tag(eid, p.ok)?;"
+replace = "    let ok_tag = ctx.tag(eid, p.err)?;"
+
+[[mutation]]
+name = "lowered-propagation-returns-the-operand-s-result"
+why = """
+the error is returned in the operand's `Result` instead of the function's, which differ whenever the success types do
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = "    let into_ty = ctx.ty(Type::Enum(p.into), at)?;"
+replace = "    let into_ty = ctx.ty(Type::Enum(p.operand), at)?;"
+
+[[mutation]]
+name = "lowered-propagation-falls-through-on-error"
+why = """
+the error path builds the function's `Result` and discards it instead of returning, so an `Err` reaches the join with no value and the code after `?` runs
+"""
+file = "crates/nazm-lir/src/lower.rs"
+find = "                Stmt::Return(Expr::Variant {"
+replace = "                Stmt::Discard(Expr::Variant {"
+
+[[mutation]]
+name = "interpreted-propagation-carries-on-with-the-error"
+why = """
+the interpreter hands the error value to the rest of the expression instead of returning it — the exception-less analogue of swallowing an exception
+"""
+file = "crates/nazm-core/src/eval.rs"
+find = """        let error = payload(&subject)?;
+        Ok(Flow::Return(Value::Enum(EnumVal::new("""
+replace = """        let error = payload(&subject)?;
+        if true {
+            return Ok(Flow::Fell(Some(error)));
+        }
+        Ok(Flow::Return(Value::Enum(EnumVal::new("""
+
+[[mutation]]
+name = "selfhost-question-mark-accepts-any-enum"
+why = """
+the **Nazm-written** checker accepts `?` on any enum, so an `Option` or a lookalike propagates
+"""
+file = "compiler/analyse.nz"
+find = "                    if definition_of(tb, ot) == result_decl { is_result = true; }"
+replace = "                    if is_enum(ot, rkind) { is_result = true; }"
+
+[[mutation]]
+name = "selfhost-question-mark-ignores-the-error-type"
+why = """
+the **Nazm-written** checker never compares the two error types
+"""
+file = "compiler/analyse.nz"
+find = "                if ints_get(parts, 1) != into_err {"
+replace = "                if false {"
+
+[[mutation]]
+name = "selfhost-question-mark-is-allowed-outside-a-result-function"
+why = """
+the **Nazm-written** checker accepts `?` in a function that does not return `Result`
+"""
+file = "compiler/analyse.nz"
+find = "                if returns_result == false {"
+replace = "                if false {"
+
+[[mutation]]
+name = "selfhost-a-project-type-may-take-a-prelude-name"
+why = """
+the **Nazm-written** checker reports a project `Result` as an ordinary import collision instead of `N0363` at its declaration
+"""
+file = "compiler/analyse.nz"
+find = """                        if target == core {
+                            let named = ints_get(rat, own);"""
+replace = """                        if false {
+                            let named = ints_get(rat, own);"""
+
+[[mutation]]
+name = "selfhost-the-prelude-is-not-imported"
+why = """
+the **Nazm-written** loader appends the prelude but gives no module an edge to it, so no module can name `Result`
+"""
+file = "compiler/module.nz"
+find = """        ints_push(to, me);
+        ints_push(at, 0 - 1);
+        ints_set(mcount, m, n + 1);"""
+replace = """        ints_set(mcount, m, n);"""
+
+[[mutation]]
+name = "selfhost-an-error-is-not-retained-before-it-leaves"
+why = """
+the **Nazm-written** emitter builds the returned `Err` from the operand's own reference, which the frame then releases — the propagated error is freed under its caller
+"""
+file = "compiler/emit.nz"
+find = "    emit_retain(out, next, error, err_t, rowns);"
+replace = "    ints_len(vals);"
+
+[[mutation]]
+name = "selfhost-a-success-value-is-not-retained"
+why = """
+the **Nazm-written** emitter releases the operand while the success payload taken out of it still points into it
+"""
+file = "compiler/emit.nz"
+find = "        emit_retain(out, next, value, ok_t, rowns);"
+replace = "        ints_len(vals);"
+
+[[mutation]]
+name = "selfhost-the-operand-leaks-on-success"
+why = """
+the **Nazm-written** emitter never releases the `Result` a successful `?` took apart
+"""
+file = "compiler/emit.nz"
+find = """    emit_release(out, next, dying, et, rowns);
+    ints_push(vals, value);
+    1"""
+replace = """    ints_push(vals, value);
+    1"""
+
+[[mutation]]
+name = "selfhost-propagation-skips-the-scope-join"
+why = """
+the **Nazm-written** emitter's error path leaves without joining the scopes it is inside, so a running task outlives the frame it borrows from — the N10.1 defect, through `?`
+"""
+file = "compiler/emit.nz"
+find = """    join_from(out, next, current, live, 2);
+    release_temporaries(out, next, owned, otype, rowns);
+    release_frame(out, next, frame, rowns);
+    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+replace = """    release_temporaries(out, next, owned, otype, rowns);
+    release_frame(out, next, frame, rowns);
+    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+
+[[mutation]]
+name = "selfhost-propagation-leaks-earlier-temporaries"
+why = """
+the **Nazm-written** emitter's error path releases the frame but not the temporaries the enclosing expression holds — `consume(int_to_str(i), may_fail()?, …)` leaks the first argument
+"""
+file = "compiler/emit.nz"
+find = """    join_from(out, next, current, live, 2);
+    release_temporaries(out, next, owned, otype, rowns);
+    release_frame(out, next, frame, rowns);
+    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+replace = """    join_from(out, next, current, live, 2);
+    release_frame(out, next, frame, rowns);
+    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+
+[[mutation]]
+name = "selfhost-propagation-leaves-the-frame-unreleased"
+why = """
+the **Nazm-written** emitter's error path returns without releasing the function's locals
+"""
+file = "compiler/emit.nz"
+find = """    release_temporaries(out, next, owned, otype, rowns);
+    release_frame(out, next, frame, rowns);
+    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+replace = """    release_temporaries(out, next, owned, otype, rowns);
+    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+
+[[mutation]]
+name = "selfhost-the-error-path-falls-into-the-success-path"
+why = """
+the **Nazm-written** emitter's error path branches to the success block instead of returning, so an `Err`'s payload is read as the success value and the rest of the expression runs
+"""
+file = "compiler/emit.nz"
+find = """    add_line(out, str_concat(str_concat("  ret ", rty), str_concat(" ", v(returned))));"""
+replace = """    add_line(out, str_concat("  br label %", blk("q", k)));"""
