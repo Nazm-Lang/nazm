@@ -355,18 +355,44 @@ against the design rather than for it.
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged, and `?` adds one retain/release pair per success it passes through |
 | A lossless CST | nothing above | unchanged; still independent |
 
-### N13 — recommended next: blocks as values natively, and derived equality
+*N12.1 took the first half of the first row.* Blocks as values compile natively in both
+compilers, and the `-1` sentinel became an `Option`. Derived equality is what is left of it.
 
-N12's dogfood found the wall N11's did, from the other side. Typed errors earned their place
-at a stage boundary — the front end returns `Result[Checked, Vec[Diag]]`, and `emit_program`
-begins with `check_program(…)?` — but inside the stages the compiler is written in integer
-tags and `-1` sentinels, and neither can become the typed value it stands for: an enum tag
-cannot be compared, and an `Option` cannot be taken apart into a statement in `nazm build`,
-because an arm is an expression and a block is not one there. Both are gaps between what the
-language already means — the interpreter runs blocks as values — and what the native
-backends accept, plus one missing rule, equality on user types. Neither needs traits.
+### After N12.1, in dependency order
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| **Derived equality on records and enums** | records ✓, variants ✓ | the wall N11's dogfood hit and N12.1's did not remove: the compiler's node kinds, token kinds and frame kinds are integers compared with `==` or `!=` at 463 sites in `compiler/*.nz` (`kind == n_block()`), and an enum cannot replace them while it has no `==`. Rewriting every comparison as a `match` would be the workaround this milestone refused. Needs no trait: equality on a *concrete* nominal type, derived from its fields as copy and release already are |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+| Traits, or any constraint on `T` | generics ✓ | unchanged |
+| Mapping a typed error to a process status | `Result` ✓ | unchanged |
+| A compact enum representation | variants ✓, `Vec[T]` ✓ | unchanged; `Option[Int]` now appears inside the compiler too |
+| Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
+| A lossless CST | nothing above | unchanged; still independent |
+
+### N13 — recommended next: derived equality on records and enums
+
+N12's dogfood found the wall N11's did, from the other side; N12.1 removed one of the two
+bricks. The compiler can now take an `Option` apart in a block arm in every stage of the
+chain, and does. What it still cannot do is turn a tag into the enum it stands for, because
+the tag is *compared* — and equality on a user type is a missing rule, not a missing
+backend capability. It needs no trait.
 
 The alternatives are unchanged and smaller: a lossless CST, and `nazm explain-cost`.
+
+### N12.1 — Core prelude identity and native value-block parity — **complete, 2026-09-24**
+
+No new source concept. The native backends and the compiler written in Nazm now compile
+every block the language already accepted as a value, and that compiler finds the core
+prelude by its key rather than by its position.
+
+| Settled | Where |
+| --- | --- |
+| one lowering for a value block; `Expr::Block` and `Stmt::Match`; the join and ownership at a block's end | `architecture.md` §7.14, `crates/nazm-lir` |
+| `{` as an operand, `blockexpr`, and its completion, in the compiler written in Nazm | `compiler/parse.nz`, `compiler/analyse.nz`, `compiler/emit.nz` |
+| the prelude keyed `@core/prelude` and resolved once; a project path cannot hold the key | `compiler/module.nz`, `compiler/analyse.nz` |
+| `SEMANTIC_EPOCH` 5 and `nazm.interface/4`, both unchanged: no accepted program and no persisted shape moved | `crates/nazm-cache/src/identity.rs`, `crates/nazm-iface` |
+| the first `Option` inside the compiler, replacing a `-1` sentinel | `compiler/analyse.nz`, `record_owned`; `performance.md` |
 
 ### N12 — `Result`, `Option`, typed error values and `?` — **complete, 2026-09-24**
 

@@ -253,6 +253,14 @@ ownership rule special to failures. What N12 adds to the cost side is small and 
 return from an arm is awkward in the native subset because an arm cannot be a block there.
 Neither changes the status.
 
+*N12.1, 2026-09-24, closed the second of those and adds one observation.* A block used as a
+value needed no ownership rule of its own in either native backend: its locals are frame
+storage, its tail is borrowed, and whatever takes the value over takes its own reference —
+the rule every value already follows. And the `Option` dogfood (`record_owned`) removed four
+`>= 0` guards whose only job was to stop a `-1` meaning *none* from comparing equal to a
+`-1` meaning *not a record*: a sentinel is a value that participates in comparisons it was
+never meant for, and an enum is not. Status unchanged.
+
 ---
 
 ## R2 · Content-addressed semantic IR pays for itself

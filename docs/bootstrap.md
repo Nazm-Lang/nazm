@@ -265,7 +265,7 @@ declared root to change.
   deliberately not for this one. It is one limitation, not three: whatever fixes the symbols
   fixes the type names.
 - **A bare block is not an expression here**, so a `match` arm's body may not be one. See
-  §5's N10 note; the limitation is N2's and predates enums.
+  §5's N10 note; the limitation is N2's and predates enums — *closed by N12.1, below*.
 - **The chain cannot run uncontained**, by design. See §6.
 
 ### Records, and what the chain now carries — N9, 2026-09-23
@@ -518,8 +518,53 @@ and the reference, at 12,046 source lines.
 **What is still not the same.** This compiler's modules are session indices, so the prelude
 is identified as *the last module* rather than by a durable key; the reference finds it by
 `@core/prelude`. Both are exact within a compilation and neither can be confused with a
-project module. The earlier differences — one LLVM module and `@nz.g<n>` instance names, and
+project module — *N12.1 closed this, below*. The earlier differences — one LLVM module and `@nz.g<n>` instance names, and
 whole-declaration spans for the declaration diagnostics that are not compared — stand.
+
+### One block, and the prelude by its key — N12.1, 2026-09-24
+
+**Both differences N12 recorded as this compiler's own are closed.**
+
+*A block used as a value.* The parser takes `{` where an operand is expected — suspending
+the expression exactly as an `if` does — and wraps the block in a `blockexpr` node, the
+reference AST's `Expr::Block` and the encoding `selfhost.rs` had already written down for
+it. The checker gives it its block's completion and type; the emitter treats it as
+structure, like `block`. So a `match` arm, a `let` initialiser, an argument, a field and an
+operand may each be a block, a statement may be a bare block, and a statement `match` may
+have arms that produce nothing. The same programs compile in `nazm build`, which refused
+all of them until N12.1 as well.
+
+*The prelude's identity.* A module's `mpath` entry is its key, and `attach_core` keys the
+prelude `@core/prelude`. `core_module` finds that key — once, in `check_program` — and both
+consumers, the reserved-name rule and `?`'s `Result`, read the one answer. A project path in
+the `@core` namespace is re-keyed out of it, so no project file can hold the key; such a
+file still compiles, as it does in the reference. A harness drives `check_program` with the
+prelude where the loader puts it, between two project modules, and absent, and the answers
+are the same wherever it is.
+
+**The compiler uses what it compiles.** `record_owned` returns `Option[Int]`: its four
+consumers `match` on it, and four `>= 0` guards are gone — the guards whose job was to keep a
+`-1` meaning *no declaration* from equalling the `-1` `definition_of` answers for a type that
+is not a record. `performance.md` has the before and after.
+
+**What the chain now carries.** `compiler/conformance/blocks.nz` — arm blocks over `Option`
+and a generic `T`, a three-arm `match` where one arm returns, one produces a value and one
+propagates with `?`, a block argument and a block field initialiser that leave half-way,
+an all-leaving `match`, `break` and `continue` out of arm blocks, `Unit` arms in a statement
+`match`, and a block producing a `Result` for `?` — a module case whose importer takes
+another module's enum and an `Option` apart with arm blocks, and three refusals: arm blocks
+of two types (`N0302`), a `Unit` arm used as a value and a `Unit` block used as an argument
+(`N0300`).
+
+**The digest moved a ninth time**: `08895900…` (N12) → `a9ead258…`. `ir: identical`,
+executables byte-identical once the linker UUID is removed and the runnable forms too, 28
+conformance cases (11 of them multi-module) and 12 refusals agreeing across C2, C3 and the
+reference, at 12,164 source lines.
+
+**What is still not the same.** One LLVM module and `@nz.g<n>` instance names;
+whole-declaration spans for the declaration diagnostics that are not compared; modules
+keyed by normalised rather than canonical path. The prelude is the only module whose key
+is not a path.
 
 ## 6. Reproducing it
 
