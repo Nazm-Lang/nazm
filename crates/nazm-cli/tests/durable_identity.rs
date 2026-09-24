@@ -1100,3 +1100,92 @@ fn a_dependent_checks_generic_apis_against_a_deserialised_interface_with_the_dep
         "a definition that lost its parameter should be refused where it is applied: {errors:#?}"
     );
 }
+
+#[test]
+fn a_dependent_derives_equality_from_a_deserialised_interface_with_the_dependency_deleted() {
+    // N13. Whether an imported record, enum or core instance has `==` is derived from its
+    // shape, and an interface carries the shape and nothing else: no "has equality" fact is
+    // persisted that could disagree with it. So A compares B's `Point`, B's `State` and an
+    // `Option[Point]` from B's interface alone, with B's source gone — and when the
+    // interface says a field is a sequence, the same comparisons are refused, which is what
+    // shows the answer came from the bytes and not from anything remembered.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub struct Point {\n    x: Int,\n    label: Str,\n}\n\
+         pub enum State {\n    Ready,\n    Done(code: Int, why: Str),\n}\n\
+         pub fn at(n: Int) -> Point { Point(x: n, label: \"p\") }\n\
+         pub fn start() -> State { State.Ready() }\n\
+         pub fn maybe(n: Int) -> Option[Point] { Option[Point].Some(value: at(n)) }\n",
+    );
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\n\
+         fn main() -> Int {\n    let mut n = 0;\n    \
+         if at(1) == Point(x: 1, label: \"p\") { n = n + 1; }\n    \
+         if start() != State.Done(code: 1, why: \"w\") { n = n + 10; }\n    \
+         if maybe(2) == maybe(2) { n = n + 100; }\n    n\n}\n",
+    );
+
+    let published = interface_of(&dir.path().join("b.nz"));
+    assert!(!published.contains("equal"), "{published}");
+    std::fs::remove_file(dir.path().join("b.nz")).expect("remove B");
+    assert!(!dir.path().join("b.nz").exists());
+
+    let a_source = std::fs::read_to_string(dir.path().join("a.nz")).expect("read A");
+    let (program, parse_errors) = nazm_core::__syntax::parse_source(&a_source);
+    assert!(parse_errors.is_empty(), "{parse_errors:#?}");
+    let mut graph = ModuleGraph::default();
+    let a = graph.add(FileId::ROOT, ModuleKey::relative("a.nz"));
+    let b = graph.add(
+        FileId::from_index(1),
+        PersistentUnitInterface::from_json(&published)
+            .expect("valid")
+            .module_key(),
+    );
+    graph.import(a, b, nazm_span::Span::synthetic());
+
+    let check_against = |json: &str| -> Vec<nazm_diag::Diagnostic> {
+        let iface = PersistentUnitInterface::from_json(json).expect("a valid interface");
+        let units = [nazm_core::Unit::of(&program, &graph, a)];
+        let mut res = Resolution::default();
+        let mut errors = Vec::new();
+        let rehydrated = iface.rehydrate(b, FnId::from_index(4096), res.types_mut());
+        nazm_core::declare_types(&units, &mut res, &mut errors);
+        nazm_core::declare_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+        nazm_core::check_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+        errors
+    };
+
+    assert!(
+        check_against(&published).is_empty(),
+        "A should compare B's types from B's persisted interface alone: {:#?}",
+        check_against(&published)
+    );
+
+    // The record's `label` becomes a `Strs`: `Point` and `Option[Point]` lose `==`, and the
+    // enum, which never contained a `Point`, keeps it.
+    let label = published.replace(
+        "{\"name\":\"label\",\"ty\":\"Str\"}",
+        "{\"name\":\"label\",\"ty\":\"Strs\"}",
+    );
+    assert_ne!(label, published, "the interface was not changed");
+    let refused: Vec<_> = check_against(&label)
+        .into_iter()
+        .filter(|d| d.code == nazm_diag::codes::INVALID_OPERANDS)
+        .collect();
+    assert_eq!(refused.len(), 2, "{refused:#?}");
+    // A payload field of one variant becomes a `Strs`: the enum loses `==`.
+    let why = published.replace(
+        "{\"name\":\"why\",\"ty\":\"Str\"}",
+        "{\"name\":\"why\",\"ty\":\"Strs\"}",
+    );
+    assert_ne!(why, published, "the interface was not changed");
+    let refused: Vec<_> = check_against(&why)
+        .into_iter()
+        .filter(|d| d.code == nazm_diag::codes::INVALID_OPERANDS)
+        .collect();
+    assert_eq!(refused.len(), 1, "{refused:#?}");
+}

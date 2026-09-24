@@ -164,9 +164,9 @@ impl Type {
 
     /// Whether this is a type some module declared, rather than one every module has.
     ///
-    /// The distinction `==` needs: `docs/spec.md` refuses equality on a record and on an
-    /// enum for one reason — a field or payload may be a sequence, and equality would have
-    /// to decide what that means.
+    /// Until N13 this was the distinction `==` used to refuse every record and enum. Equality
+    /// is derived now, from what a type contains — [`UserTypes::equality`](crate::UserTypes::equality)
+    /// — and asking whether a type is user-defined is not the same question.
     #[must_use]
     pub const fn is_user_defined(self) -> bool {
         matches!(self, Self::Record(_) | Self::Enum(_))
@@ -174,9 +174,10 @@ impl Type {
 
     /// Whether values of this type are handles to shared mutable storage.
     ///
-    /// Load-bearing rather than descriptive: it is what stops `==` being offered on a
-    /// sequence, where it would have to mean either identity or contents and the
-    /// language has not chosen.
+    /// Load-bearing rather than descriptive: it is what stops a sequence crossing into a
+    /// task. `==` is refused on one too, where it would have to mean either identity or
+    /// contents — but that rule is [`UserTypes::equality`](crate::UserTypes::equality)'s,
+    /// which lists the types with equality rather than the ones without.
     #[must_use]
     pub fn is_sequence(self) -> bool {
         matches!(self, Self::Ints | Self::Strs | Self::Vec(_))
