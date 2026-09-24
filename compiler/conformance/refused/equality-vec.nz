@@ -1,0 +1,3 @@
+// expect: N0304
+// A `Vec` has no equality: it would have to mean the same storage or the same contents.
+fn main() -> Int { let a = vec_new[Int](); if a == a { 1 } else { 0 } }

@@ -1858,6 +1858,149 @@ fn string_equality(out: Strs, current: Strs, live: Ints, next: Ints,
     flipped
 }
 
+// `==` or `!=` on two records or two enums of one type: a call to that type's equality
+// helper, negated for `!=`. N13. The entry joins `eqs` the first time a comparison reaches it,
+// which is what has its helper written.
+fn composite_equality(out: Strs, next: Ints, a: Int, b: Int, t: Int, negate: Bool, eqs: Ints) -> Int {
+    if contains(eqs, record_of(t)) == false { ints_push(eqs, record_of(t)); }
+    let same = take_number(next);
+    let ty = llvm_type(t);
+    add_line(out, str_concat(str_concat(str_concat("  ", v(same)),
+            str_concat(" = call i1 @nz.eq", int_to_str(record_of(t)))),
+            str_concat(str_concat(str_concat("(", ty), str_concat(" ", v(a))),
+            str_concat(str_concat(", ", ty), str_concat(str_concat(" ", v(b)), ")")))));
+    if negate == false { return same; }
+    let flipped = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(flipped)),
+            str_concat(" = xor i1 ", str_concat(v(same), ", true"))));
+    flipped
+}
+
+// One component of a helper's two operands, compared: an `icmp` for `Int` and `Bool`, bytes
+// for `Str`, and the component's own helper for a record or an enum. Borrowing throughout —
+// comparing reads, and the caller owns both values.
+fn component_equality(out: Strs, current: Strs, live: Ints, next: Ints, x: Int, y: Int, t: Int,
+        eqs: Ints) -> Int {
+    if t == t_str() { return string_equality(out, current, live, next, x, y, false); }
+    if is_record(t) { return composite_equality(out, next, x, y, t, false, eqs); }
+    let n = take_number(next);
+    add_line(out, str_concat(str_concat("  ", v(n)),
+            str_concat(str_concat(" = icmp eq ", llvm_type(t)),
+            str_concat(" ", str_concat(v(x), str_concat(", ", v(y)))))));
+    n
+}
+
+// Leave for `%bne` unless `same` holds, and carry on in a fresh block.
+fn equal_or_leave(out: Strs, current: Strs, live: Ints, next: Ints, same: Int) -> Int {
+    let go = str_concat("b", int_to_str(take_label(next)));
+    add_line(out, str_concat(str_concat("  br i1 ", v(same)),
+            str_concat(str_concat(", label %", go), ", label %bne")));
+    open_block(out, current, live, go);
+    0
+}
+
+// The equality helper of entry `r`: a record's, a variant's or an enum's. N13.
+//
+// The reference's `equality_helper`, and the same shape. A record or a variant compares its
+// fields in **layout order** — canonical, by field name — and leaves at the first that
+// differs; comparing is pure, so the order is not observable, and canonical order makes the
+// helper independent of how the declaration was written. An enum compares discriminants
+// first, and different variants are unequal with nothing else read; equal ones `switch` to
+// the variant's slot, and only that slot is extracted and handed to the variant's own
+// helper. A variant with no payload reaches `true` through the `switch`'s default.
+//
+// Named by the entry's index, as every helper and function here is: this emitter writes one
+// module for the whole program, so the index is unique by construction, and an applied
+// entry — `Box[Int]` — is an entry of its own.
+fn equality_helper(out: Strs, next: Ints, r: Int, eqs: Ints,
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, rkind: Ints) -> Int {
+    ints_set(next, 0, 0);
+    ints_set(next, 1, 0);
+    let current = strs_new();
+    strs_push(current, "entry");
+    let live = ints_new();
+    ints_push(live, 1);
+    let ty = llvm_type(t_record(r));
+    add_line(out, "");
+    add_line(out, str_concat(str_concat(str_concat("define internal i1 @nz.eq", int_to_str(r)),
+            str_concat("(", ty)), str_concat(str_concat(" %a, ", ty), " %b) {")));
+    add_line(out, "entry:");
+    if ints_get(rkind, r) == rk_enum() {
+        let ta = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(ta)),
+                str_concat(str_concat(" = extractvalue ", ty), " %a, 0")));
+        let tb = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(tb)),
+                str_concat(str_concat(" = extractvalue ", ty), " %b, 0")));
+        let same = take_number(next);
+        add_line(out, str_concat(str_concat("  ", v(same)),
+                str_concat(" = icmp eq i64 ", str_concat(v(ta), str_concat(", ", v(tb))))));
+        add_line(out, str_concat(str_concat("  br i1 ", v(same)), ", label %bsw, label %bne"));
+        add_line(out, "bsw:");
+        // The table first, because the `switch` is written before the blocks it names.
+        let arms = ints_new();
+        let mut pos = 0;
+        while pos < ints_get(rcount, r) {
+            let decl = layout_field(rfirst, rcount, rfname, r, pos);
+            let vt = ints_get(rftype, ints_get(rfirst, r) + decl);
+            if ints_get(rcount, record_of(vt)) > 0 { ints_push(arms, pos); }
+            pos = pos + 1;
+        }
+        let mut table = "";
+        let mut u = 0;
+        while u < ints_len(arms) {
+            table = str_concat(str_concat(table, "i64 "),
+                    str_concat(str_concat(int_to_str(ints_get(arms, u)), ", label %barm"),
+                    str_concat(int_to_str(ints_get(arms, u)), " ")));
+            u = u + 1;
+        }
+        add_line(out, str_concat(str_concat("  switch i64 ", v(ta)),
+                str_concat(", label %beq [ ", str_concat(table, "]"))));
+        let mut w = 0;
+        while w < ints_len(arms) {
+            let at = ints_get(arms, w);
+            add_line(out, str_concat(str_concat("barm", int_to_str(at)), ":"));
+            let decl = layout_field(rfirst, rcount, rfname, r, at);
+            let vt = ints_get(rftype, ints_get(rfirst, r) + decl);
+            let pa = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(pa)),
+                    str_concat(str_concat(" = extractvalue ", ty),
+                    str_concat(" %a, ", int_to_str(at + 1)))));
+            let pb = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(pb)),
+                    str_concat(str_concat(" = extractvalue ", ty),
+                    str_concat(" %b, ", int_to_str(at + 1)))));
+            let c = composite_equality(out, next, pa, pb, vt, false, eqs);
+            add_line(out, str_concat(str_concat("  br i1 ", v(c)), ", label %beq, label %bne"));
+            w = w + 1;
+        }
+    } else {
+        let mut pos = 0;
+        while pos < ints_get(rcount, r) {
+            let decl = layout_field(rfirst, rcount, rfname, r, pos);
+            let ft = ints_get(rftype, ints_get(rfirst, r) + decl);
+            let x = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(x)),
+                    str_concat(str_concat(" = extractvalue ", ty),
+                    str_concat(" %a, ", int_to_str(pos)))));
+            let y = take_number(next);
+            add_line(out, str_concat(str_concat("  ", v(y)),
+                    str_concat(str_concat(" = extractvalue ", ty),
+                    str_concat(" %b, ", int_to_str(pos)))));
+            let c = component_equality(out, current, live, next, x, y, ft, eqs);
+            equal_or_leave(out, current, live, next, c);
+            pos = pos + 1;
+        }
+        add_line(out, "  br label %beq");
+    }
+    add_line(out, "beq:");
+    add_line(out, "  ret i1 true");
+    add_line(out, "bne:");
+    add_line(out, "  ret i1 false");
+    add_line(out, "}");
+    0
+}
+
 fn emit_binary(out: Strs, msgs: Strs, next: Ints, current: Strs, live: Ints, op: Str, a: Int, b: Int, at: Str, ot: Int,
         owned: Ints, otype: Ints, rowns: Ints) -> Int {
     let pred = predicate(op);
@@ -2977,7 +3120,8 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
         fnames: Strs, fret: Ints, fowner: Ints, mstart: Ints,
         out: Strs, msgs: Strs, blobs: Strs, tasks: Strs, blocks: Strs, nrec: Ints, rowns: Ints,
         rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
-        lo: Int, hi: Int, me_sym: Str, ninst: Ints, generic_fn: Ints, tb: Table) -> Int {
+        lo: Int, hi: Int, me_sym: Str, ninst: Ints, generic_fn: Ints, tb: Table,
+        eqs: Ints) -> Int {
     let next = ints_new();
     ints_push(next, 0);
     // Slot 1 is the block-label counter, separate from slot 0 because the labels are
@@ -3399,16 +3543,28 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                                                         // The operand type, not the result's: `==` always produces `Bool`, and
                                                                                         // what it compares decides how.
                                                                                         let ot = ints_get(ntype, ints_get(kids, ints_get(kid_first, k)));
+                                                                                        // A record or an enum compares through its equality
+                                                                                        // helper (N13), and `!=` negates that one answer.
                                                                                         let r = if ot == t_str() {
                                                                                             string_equality(out, current, live, next, a, b, text == "!=")
                                                                                         } else {
-                                                                                            emit_binary(out, msgs, next, current, live, text, a, b, at, ot, owned, otype, rowns)
+                                                                                            if is_record(ot) {
+                                                                                                composite_equality(out, next, a, b, ot, text == "!=", eqs)
+                                                                                            } else {
+                                                                                                emit_binary(out, msgs, next, current, live, text, a, b, at, ot, owned, otype, rowns)
+                                                                                            }
                                                                                         };
                                                                                         if r < 0 { refuse(str_concat(str_concat("the operator `", text), "`"), at); }
                                                                                         // Rule 2: a comparison borrows its operands, as a call
                                                                                         // does, so a string compared is nobody's once the
                                                                                         // answer exists. Leaked on every evaluation until N10.1.
+                                                                                        // A record or an enum compared is released the same
+                                                                                        // way, once, after the answer.
                                                                                         if ot == t_str() {
+                                                                                            own_drop(out, next, owned, a, ot, rowns, otype);
+                                                                                            own_drop(out, next, owned, b, ot, rowns, otype);
+                                                                                        }
+                                                                                        if is_record(ot) {
                                                                                             own_drop(out, next, owned, a, ot, rowns, otype);
                                                                                             own_drop(out, next, owned, b, ot, rowns, otype);
                                                                                         }
@@ -4025,10 +4181,14 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
         r = r + 1;
     }
 
+    // The records and enums some `==` or `!=` compares, by entry, in the order emission
+    // first reached them. Their equality helpers are written after every function, each
+    // adding the entries its own fields compare.
+    let eqs = ints_new();
     emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
             parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
             body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype,
-            0, ints_len(nk) - 1, "", ninst, generic_fn, tb);
+            0, ints_len(nk) - 1, "", ninst, generic_fn, tb, eqs);
     // Each instance, from its definition's own nodes — spans and all, so a failure inside
     // one is reported at the generic definition's line — with the node types substituted.
     ii = 0;
@@ -4046,7 +4206,7 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
         emit_module(src, path, nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee,
                 parent, childno, substart, kids, kid_first, fnames, fret, fowner, mstart,
                 body, msgs, blobs, tasks, blocks, nrec, rowns, rfirst, rcount, rfname, rftype,
-                lo, fnn, str_concat("@nz.g", int_to_str(ii)), ninst, generic_fn, tb);
+                lo, fnn, str_concat("@nz.g", int_to_str(ii)), ninst, generic_fn, tb, eqs);
         ii = ii + 1;
     }
 
@@ -4346,6 +4506,14 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
             }
         }
         hr = hr + 1;
+    }
+    // One equality helper per record or enum some comparison reached, and per one those
+    // helpers' fields reach in turn: the list grows while it is walked, and an entry is
+    // added once, so the walk ends.
+    let mut he = 0;
+    while he < ints_len(eqs) {
+        equality_helper(helpers, hnext, ints_get(eqs, he), eqs, rfirst, rcount, rfname, rftype, rkind);
+        he = he + 1;
     }
     Result[Str, Vec[Diag]].Ok(value: str_concat(str_concat(str_concat(join(head), rt),
             str_concat(join(body), join(tasks))),
