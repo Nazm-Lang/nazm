@@ -78,7 +78,7 @@ at N12.1 (2026-09-24). N12 ended at 1,186 across 62, N11 at 1,125 across 58. The
 | 27 | Debugger and profiler | MISSING |
 | 28 | Performance measurement | PARTIAL |
 | 29 | Differential testing | VERIFIED |
-| 30 | Mutation testing and fuzzing | PARTIAL / MISSING |
+| 30 | Mutation testing and fuzzing | VERIFIED / MISSING |
 | 31 | Bootstrap | VERIFIED |
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
@@ -1157,10 +1157,11 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 **Accepted when** · Met.
 
-### 30. Mutation testing — PARTIAL · Fuzzing — MISSING
+### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **208** catalogued defects (158 when
-this sentence was first written);
+**Evidence** · `xtask/mutations/mutations.toml` holds **233** catalogued defects (158 when
+this sentence was first written), **38** of them with a verified killer and all of them
+owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -1319,15 +1320,70 @@ timeout was not counted as a catch. Each now fails its case under a deadline and
 process group, and the third run caught the mutant with 25 failing tests. The catalogue is
 233 entries.
 
-**Limitation** · The **whole-catalogue run timed out unexplained** at its 3600 s deadline
-without reaching injection, and is recorded as incomplete rather than as a result; the
-first hypothesis (a cold build cache) was measured and is wrong. It must not be restarted
-until the hour is understood. **Fuzzing does not exist** — no fuzz directory at the repository
-root, no targets, no corpus.
+*N12.2 (2026-09-24/25) replaced the runner's evidence shape without changing what a verdict
+means, and then ran the whole catalogue for the first time.* The harness is
+`xtask/src/campaign.rs`, `xtask/src/plan.rs` and `xtask/src/procs.rs`, operated as
+`docs/runbook.md` "Mutation campaigns" describes: per mutant, a verified **killer** (tier 1),
+then a **focused profile** (tier 2), then the **workspace suite** (tier 3), stopping at the
+first failure. A tier-1 or tier-2 catch is the same evidence as a tier-3 one — the test is a
+member of the suite, passed in the baseline and failed under the mutant — and only tier 3 can
+report SURVIVED. A timeout is its own no-verdict. `--strategy full` keeps the legacy shape
+as the oracle. Lifecycle is in `xtask/tests/lifecycle.rs`: every tier transition, a deadline
+at each tier, stale killer metadata, build reuse across four mutants, interruption and
+resume, resume refused for another tree or catalogue, and the watchdog under SIGKILL and
+SIGINT.
 
-**Next dependency** · For mutation, an explanation. For fuzzing, a decision to start.
+Measured, contained, serial, nothing else running:
 
-**Accepted when** · A full catalogue run completes with every verdict accounted for.
+| run | mutants | wall | per mutant, median |
+| --- | --- | --- | --- |
+| N12.1's catalogue batches, legacy, productive time | 27 | 10,782 s (13,870 s with the no-verdict reruns) | ≈ 240 s |
+| the same 27, v2, profiles only | 27 | 1,807 s | 52 s |
+| the same 27, v2, verified killers | 27 | **523 s** | **1.4 s** |
+| differential sample, `--strategy full` | 10 | 3,058 s | 246 s |
+| the same 10, `--strategy targeted`, profiles only | 10 | 945 s | 23 s |
+| **whole catalogue, targeted** | **233** | **10,686 s**, five resumable sessions | 22 s |
+
+The differential sample spans the checker, native symbols, memory, the interface, the cache
+key, the compiler written in Nazm, the agent harness and the parser: **identical verdicts**
+(ten caught under both) and identical original, mutated and restored digests. Two mutants
+that crash a binary gave MUTANT CRASH under both strategies too.
+
+**The whole catalogue, on `f444d0d`:** 233 selected, 233 finalized. **228 caught** — 38 at
+tier 1, 185 at tier 2, 5 at tier 3. Six workspace-suite runs in all; 227 avoided. And five
+problems, each accounted for rather than folded into a pass:
+
+* **2 UNUSABLE** — `a-sequence-does-not-retain-the-string-it-stores` and
+  `a-published-field-loses-its-type`: their *replacements* had drifted from the code (a
+  renamed field; a field type that is no longer a string), so the mutants did not compile.
+  Repaired, rerun, **caught**.
+* **1 SURVIVED** — `a-record-that-contains-itself-is-accepted` disabled
+  `UserTypes::layout_cycle`, which has had no caller since N11 moved the checker to
+  `ownership_cycles`. An equivalent mutation of dead code; **retired**, and
+  `an-inline-containment-cycle-is-not-refused` attacks the rule where it lives: **caught**.
+* **2 MUTANT CRASH** — `nesting-unbounded` and `stack-not-sized-from-the-budget` overflow the
+  stack inside the `nazm-syntax` and `nazm-core` test binaries. The legacy strategy gives the
+  same verdict. The effect is observed; no test *asserts* it. Open — the cases must move
+  out of process, which is a change to those crates' tests and not N12.2's to make.
+
+The run also found three harness defects, all repaired before the counted run:
+`memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a
+verdict it could not get); N12.1's process-group kills used `kill -KILL -<pgid>`, which
+procps rejects, so inside the container they signalled nothing; and a session killed at its
+deadline was reported as a memory limit.
+
+**Limitation** · Two catalogued defects are MUTANT CRASH, not caught (above). A campaign is
+five sessions, each paying a cold build and a baseline (about 355 s); journal lines reach the
+host when a container ends, so a supervisor killed mid-session loses that session's verdicts,
+which then simply run again. The 71 entries in `compiler/` cost 45 % of per-mutant time,
+almost all at the selfhost profile, because 51 of them have no killer yet. **Fuzzing does not
+exist** — no fuzz directory at the repository root, no targets, no corpus.
+
+**Next dependency** · For mutation, killers for the older `compiler/` entries, and the two
+crashing cases moved out of process. For fuzzing, a decision to start.
+
+**Accepted when** · A full catalogue run completes with every verdict accounted for. **Met on
+2026-09-25**: 233 of 233, as above. Fuzzing's status is separate and unchanged.
 
 ### 31. Bootstrap — VERIFIED
 

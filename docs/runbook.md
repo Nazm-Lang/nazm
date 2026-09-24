@@ -192,7 +192,145 @@ load-bearing for Stage 7 even though nothing depends on Cranelift yet.
 
 ---
 
+## Mutation campaigns
+
+*Mutation harness v2, N12.2, 2026-09-24. The mechanism is `xtask/src/campaign.rs`,
+`plan.rs` and `procs.rs`; this section is how to operate it.*
+
+### The one command
+
+```sh
+cargo xtask contained mutate [--only NAME]… [--strategy targeted|full] [--resume]
+```
+
+Always contained. One container is one **session** of a campaign: the tree is copied to a
+disposable directory on the container's capped writable layer (`.git`, `target/` and every
+derived `.nazm/` cache excluded), built once, the workspace suite run once as the
+**baseline**, and then every selected mutant is injected, judged, restored, verified and
+journaled in catalogue order. `/src` stays read-only and the checkout is never mutated.
+
+### Evidence tiers — escalate only while a mutant is still alive
+
+The default strategy, `targeted`, runs for each mutant, stopping at the first failure:
+
+1. **Direct**: each verified killer the entry names, one exact test each;
+2. **Focused**: each whole target of the entry's profile (`[[profile]]` in the catalogue);
+3. **Full**: the workspace suite, exactly the legacy invocation.
+
+A failure at any tier is **CAUGHT at that tier**, and it is the same evidence as a failure
+in the workspace suite: the killer is a member of that suite, it passed in the baseline,
+and it failed with the mutant installed. **Only tier 3 can report SURVIVED.** A killer or
+a profile that passes escalates; it never concludes.
+
+`--strategy full` is the legacy shape — build, then the workspace suite, for every mutant —
+and is kept as the oracle the targeted strategy is compared with.
+
+### Verdicts, and what is never converted into one
+
+| word | meaning |
+| --- | --- |
+| `caught` | a tier's tests failed with the mutant installed |
+| `SURVIVED` | every step passed, the workspace suite last |
+| `UNUSABLE` | the mutated tree does not build, tests included |
+| `NOT INJECTED` | the pattern matched zero or several times, or changed nothing |
+| `MUTANT CRASH` | a test binary died with the mutant installed |
+| `TIMEOUT` | a step passed its deadline — **no verdict** |
+| `RUNNER ERROR` | a step did not run to completion — **no verdict** |
+| `NOT RESTORED` | the source could not be put back — the run stops |
+
+A timeout is never caught and never survived. A no-verdict mutant is not escalated past:
+a later tier passing would not mean the earlier one said nothing.
+
+### Serial, and alone
+
+One Cargo job, one test thread, one mutant at a time, and nothing else heavy on the
+machine: no bootstrap, no benchmark, no second campaign, no full verification. The speed of
+v2 comes from running fewer tests, which holds on a constrained machine; it must never come
+from parallelism, which makes deadline-bearing verdicts a function of scheduling.
+
+### Deadlines and process trees
+
+Every build and test the campaign starts runs through one subprocess runner
+(`procs.rs`), in **a process group of its own** with a **watchdog** in a separate group:
+
+* at a deadline, the tree is walked by parent id and stopped, then killed — so a compiled
+  program a test put in *another* group dies too;
+* after an ordinary exit, anything left in the group is swept, so a grandchild holding a
+  pipe cannot hang the reader;
+* if the harness itself dies (SIGINT, SIGKILL, a panic), the watchdog sees its pipe close
+  and kills the group.
+
+Deadlines bound pathology, not speed: build 1800 s, a killer 1200 s, a profile target
+1500 s, the workspace suite 2400 s. Lowering them to make a campaign faster converts slow
+catches into no-verdicts.
+
+**`kill -KILL -<pgid>` does not work in the container.** procps `kill` reads `-123` after a
+signal as an option and signals nothing; `kill -KILL -- -<pgid>` works there and on macOS.
+N12.2 found N12.1's test deadlines using the first spelling and corrected them.
+
+**A test that runs a compiled program needs its own deadline.** `nazm build` emits no
+iteration budget, so a backend mutant that makes a loop run away makes a bare `.output()`
+wait for ever. `value_blocks.rs`, `schemas.rs`, `workflow.rs` (N12.1) and `memory.rs`
+(N12.2) bound theirs; a new suite that runs programs must too, or its tier times out and
+the mutant gets no verdict.
+
+### Sessions, the journal and `--resume`
+
+A session has a 3000 s container deadline and a 2400 s budget: past the budget it starts
+no new mutant, ends **incomplete** (exit 3), and says which mutants were not reached.
+Nothing is established about those. A mutant still in flight at the deadline is killed
+with the container, is never journaled, and runs again; that is also reported as
+incomplete, never as a memory limit. Continue with the same selection:
+
+```sh
+cargo xtask contained mutate [same --only …] --resume
+```
+
+Each finalized mutant — verdict known, source restored **and read back** — is printed as a
+journal line and collected on the host at `target/mutation-campaigns/<key>/journal.jsonl`.
+`<key>` is a digest of the campaign's **identity**: the tree's contents, the catalogue, the
+harness, the toolchain, the strategy, the selection, the deadlines and the cache-isolation
+rule. A resumed session reuses only verdicts journaled under the identical key; a changed
+file anywhere, a changed catalogue or a different selection is a different campaign and
+reuses nothing. A timeout or runner error is never reused — it is attempted again.
+
+The journal is evidence, not a cache: an old verdict is never inferred from an old binary or
+log. Journal lines reach the host when the container ends; a supervisor killed with the
+container running loses that session's lines, and those mutants are simply run again.
+
+### Authoring a mutation (the N13 workflow)
+
+1. Write the semantic regression test that observes the rule.
+2. Add the `[[mutation]]` entry; `cargo xtask check-mutations` validates it statically.
+3. Verify the killer — pristine passes, mutant fails, restored passes:
+
+   ```sh
+   cargo xtask contained mutate --verify-killer NAME --killer nazm-cli:test=memory:the_test
+   ```
+
+   (`PACKAGE:lib:PATH`, `PACKAGE:test=T:PATH` or `PACKAGE:bin=B:PATH`.) It prints the
+   `killers = [...]` line to add.
+4. Add it, then `cargo xtask contained mutate --only NAME`, which now stops at tier 1.
+5. Commit.
+
+`cargo xtask mutate --plan [--only NAME]` prints each mutant's tiers and runs nothing.
+
+A killer is authoritative only after step 3 observed it. Never write one from a test's
+name; never name the workspace suite or the bootstrap as a killer — an entry with no narrow
+killer simply has none, and says why in `no_killer` if it names a profile.
+
+### Artefacts and disk
+
+Everything a campaign writes on the host is under `target/mutation-campaigns/<key>/`. The
+Cargo build of a session lives in the container and goes with it (about 2.6 GB of the 8 GB
+writable layer). Nothing here cleans up automatically, and nothing ever runs `cargo clean`,
+`rm -rf target` or a Docker prune; delete a campaign's directory by hand when it is no
+longer evidence.
+
 ## Recovering an interrupted mutation run
+
+*This section is about a tree mutated in place, which only an uncontained run does. A
+contained campaign (above) mutates a disposable copy and leaves nothing here to recover.*
 
 `cargo xtask mutate` mutates the working tree in place and restores each file after
 testing it. If the run is killed in between, the tree is left holding a mutation and a

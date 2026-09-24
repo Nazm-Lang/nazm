@@ -883,6 +883,35 @@ compiler holds the whole LLVM text it is building, the emitted IR now carries re
 release calls and the string runtime, and a bigger text is a bigger buffer. It is the price
 of the emitted program's 5× and it is recorded rather than left for a reader to find.
 
+## Mutation harness v2 — what a mutant costs (N12.2, 2026-09-24/25)
+
+Tooling, not language performance, recorded here because this is where measured cost lives.
+Contained, one CPU, one Cargo job, one test thread, nothing else running.
+
+**Where the legacy runner's time went, per mutant:** a workspace rebuild of 11–15 s for a Rust
+file and 0.1 s for a `compiler/*.nz` one, then the workspace suite, **228 s**. Per session, a
+cold build of 92 s and the baseline suite. The suite, run for every mutant, was the cost.
+
+| | legacy (N12.1 batches) | v2, profiles only | v2, verified killers |
+| --- | --- | --- | --- |
+| the 27 N12.1 mutants, wall | 10,782 s productive, 13,870 s with no-verdict reruns | 1,807 s | **523 s** (20.6× less) |
+| per mutant, median / p90 | ≈ 240 s | 52 s / 84 s | **1.4 s / 13.8 s** |
+| workspace suites run | 27, plus baselines | 0 | 0 |
+
+The 523 s is 331 s of cold build and baseline, 131 s of workspace builds — kept, because
+UNUSABLE is decided on the whole tree — and 44 s of killers.
+
+**The whole catalogue, targeted:** 233 mutants in 10,686 s over five sessions (1,770 s of it
+cold builds and baselines), median 22 s and p90 84 s per mutant; 2,116 s of workspace
+builds, 6,694 s of tests. Six workspace suites were run and 227 avoided. The legacy shape
+would have run 233 suites at about 245 s each — about sixteen hours, never measured, because
+no session could hold it.
+
+**What remains:** the selfhost profile. The 71 `compiler/*.nz` entries are 45 % of per-mutant
+time, and the 51 without a killer each pay most of the selfhost binary (≈ 80–100 s) at tier 2.
+A killer takes such an entry to a few seconds. Compilation is the second cost (24 %), and it
+is the build UNUSABLE depends on.
+
 ## The optimisation pass, and what it was based on
 
 One pass, chosen from a profile rather than from intuition. `sample` on the release

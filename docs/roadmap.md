@@ -380,6 +380,27 @@ backend capability. It needs no trait.
 
 The alternatives are unchanged and smaller: a lossless CST, and `nazm explain-cost`.
 
+### N12.2 — Mutation harness v2 — **complete, 2026-09-25**
+
+Evidence infrastructure between N12.1 and N13; no language, compiler, interface, cache-key
+or bootstrap change. A mutant now stops at the first tier that sees it — a verified killer,
+then a focused profile, then the workspace suite — and only the workspace suite can report
+SURVIVED. The same 27 N12.1 mutants took **523 s** instead of 10,782 s, and the **whole
+catalogue ran for the first time**: 233 of 233 accounted for in 10,686 s.
+
+| Settled | Where |
+| --- | --- |
+| tiered escalation, the full strategy kept as the oracle, identical verdicts on a differential sample | `xtask/src/campaign.rs`, `docs/capability-matrix.md` §30 |
+| typed killer and profile metadata, validated in `cargo xtask check`; `--verify-killer`, `--plan` | `xtask/src/plan.rs`, `xtask/mutations/mutations.toml` |
+| one subprocess runner: own process group, tree kill at a deadline, a watchdog if the harness dies | `xtask/src/procs.rs` |
+| a journal bound to a campaign identity, `--resume`, bounded sessions | `docs/runbook.md` "Mutation campaigns" |
+| the N13 mutation-authoring workflow: regression test, entry, verified killer | `docs/runbook.md` |
+| found on the way: N12.1's group kill did nothing in the container, `memory.rs` had no deadline, two catalogue entries had drifted, one was equivalent | `docs/capability-matrix.md` §30 |
+
+**N13 has not started.** It is still derived equality, below, and each of its mutations is
+expected to arrive with its semantic regression test and a killer verified by
+`--verify-killer`.
+
 ### N12.1 — Core prelude identity and native value-block parity — **complete, 2026-09-24**
 
 No new source concept. The native backends and the compiler written in Nazm now compile
