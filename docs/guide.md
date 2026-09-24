@@ -85,8 +85,9 @@ Six things to know, and then you know records:
   after the record `make()` returned is gone.
 - **Records are nominal.** Two records with the same fields are two types, and there is no
   conversion between them. A record and a function may share a name.
-- **`a == b` is not offered**, for the same reason it is not offered on a sequence: it
-  would have to decide whether an `Ints` field means the same storage or the same contents.
+- **`a == b` compares fields**, when every field's type has equality — see *Equality*
+  below. A record holding an `Ints` cannot be compared: that field would have to mean the
+  same storage or the same contents.
 
 Field order is presentation. Moving two field declarations changes nothing at all — not
 the type, not what constructs it, not the compiled program. Construction is by name.
@@ -139,7 +140,8 @@ Six things to know, and then you know enums:
 - **A binding is a borrowed view that lives in its arm.** You can return it, store it or
   pass it on, and it stays valid after the value you matched is gone. If it names an `Ints`,
   you can still push to the sequence: the binding is immutable, the storage is not.
-- **`a == b` is not offered**, for the reason it is not offered on a record.
+- **`a == b` compares the variant and then its payload**, when every payload field of
+  every variant has equality — see *Equality* below.
 
 Variant order and payload-field order are presentation, exactly as a record's field order
 is. Moving two of either changes nothing at all.
@@ -205,6 +207,29 @@ Six things to know, and then you know generics:
   and a record holding a `Vec[Str]` are fine — the refusal is only for a circle.
 
 A `Vec` may not be passed to a task, whatever it holds, for the reason an `Ints` may not.
+
+## Equality
+
+`==` and `!=` take two values of **one** type. `Int`, `Bool` and `Str` compare as they always
+have — a `Str` by its bytes. For your own types equality is worked out from what they
+contain; there is nothing to declare:
+
+- **A record** can be compared when every field's type can, and two records are equal when
+  every field is. It compares values, never identity: two records built separately with
+  equal fields are equal.
+- **An enum** can be compared when every payload field of **every** variant can — decided
+  for the whole type, not for the variant a value happens to hold. Different variants are
+  unequal and their payloads are not looked at; the same variant compares its own payload
+  and nothing else.
+- **Two types of one shape** are still two types and cannot be compared.
+- **A generic type** is answered after its arguments are filled in: `Box[Int]` compares,
+  `Box[Vec[Int]]` does not. `Option[T]` and `Result[T, E]` are ordinary enums and follow the
+  same rule.
+- **Not comparable:** `Vec[T]`, `Ints`, `Strs` and `Chan`, anything that contains one, and an
+  unconstrained `T` inside a generic function — `fn same[T](a: T, b: T) -> Bool { a == b }`
+  is refused, because nothing can say "only for types that have `==`".
+
+`docs/spec.md`, *Equality is derived*, has the full rule.
 
 ## Errors as values: `Result`, `Option`, and `?`
 

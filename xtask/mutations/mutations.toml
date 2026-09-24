@@ -3511,16 +3511,18 @@ replace = """                    self.drop_temporary(a, *operand_ty);
                     return Val::Of {"""
 killers = [{ package = "nazm-cli", test = "equality", name = "owning_temporaries_live_through_the_comparison_and_are_released_once" }]
 
-# Retired by N13, 2026-09-25: `n13-native-operands-are-released-before-they-are-compared`
-# moved the two `drop_temporary` calls above the equality helper's call, so the helper reads
-# operands whose storage was just freed. Campaign 418a5e5921b866cc: SURVIVED, the workspace
-# suite passing last. Investigated, not equivalent in intent — it is a use-after-free — but
-# unobservable here: nothing allocates between the release and the read, so the freed
-# bytes are unchanged and every answer and every memory counter is right. glibc 2.41 in the
-# contained image ignores `MALLOC_PERTURB_` and `glibc.malloc.perturb` (measured with a
-# C probe), and a sanitizer is a framework this project does not use. Observing it needs
-# freed storage poisoned by the runtime itself; until something does, an entry that can
-# only survive is not evidence.
+[[mutation]]
+name = "n13-native-operands-are-released-before-they-are-compared"
+why = "the temporaries are released before the helper reads them, so a string payload is compared after its storage was freed — a real use-after-free, not an equivalent mutant"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                if matches!(operand_ty, Ty::Record(_) | Ty::Enum(_)) {
+                    let same = self.equality(a, b, *operand_ty);"""
+replace = """                if matches!(operand_ty, Ty::Record(_) | Ty::Enum(_)) {
+                    self.drop_temporary(a, *operand_ty);
+                    self.drop_temporary(b, *operand_ty);
+                    let same = self.equality(a, b, *operand_ty);"""
+profile = "native"
+no_killer = "a known surviving mutant (campaign 418a5e5921b866cc: SURVIVED at the workspace suite). Nothing allocates between the early release and the helper's read, so the freed bytes are still there and every answer and memory counter is right; glibc 2.41 in the contained image ignores MALLOC_PERTURB_ and glibc.malloc.perturb (measured with a C probe), so no deterministic direct killer exists under the supported allocator and harness. A test-detection gap: it needs freed storage poisoned, which no supported configuration does"
 
 [[mutation]]
 name = "n13-native-helper-names-omit-type-arguments"
