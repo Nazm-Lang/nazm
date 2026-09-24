@@ -892,6 +892,17 @@ fn read_type_params(kinds: Ints, starts: Ints, texts: Strs, i: Int, out: Strs) -
         text = str_concat(str_concat(str_concat(text, text_at(texts, at)), "@"),
                 int_to_str(start_at(starts, at)));
         at = at + 1;
+        // `T: Equality` — a requirement, N14, written into the item as `T@5=Equality@8`:
+        // after the parameter's own position, where every reader of this list stops, so
+        // only the checker's requirement reader sees it.
+        if kind_at(kinds, at) == k_colon() {
+            if kind_at(kinds, at + 1) != k_ident() {
+                die("expected a capability after `:`", start_at(starts, at + 1));
+            }
+            text = str_concat(str_concat(str_concat(text, "="), text_at(texts, at + 1)),
+                    str_concat("@", int_to_str(start_at(starts, at + 1))));
+            at = at + 2;
+        }
         if kind_at(kinds, at) != k_comma() { break; }
         text = str_concat(text, ",");
         at = at + 1;

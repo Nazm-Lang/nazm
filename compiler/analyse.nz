@@ -406,6 +406,9 @@ pub struct Table {
     depth: Ints,
     state: Ints,
     pending: Ints,
+    // `req[r]` — for a type parameter, `1` when its declaration requires equality
+    // (`T: Equality`, N14), `0` otherwise and for every other entry.
+    req: Ints,
 }
 
 // The bound reported to a program: a written type, or one a generic call produces, may
@@ -426,7 +429,7 @@ pub fn new_table(names: Strs, owner: Ints, vis: Ints, at: Ints, node: Ints, kind
     Table(names: names, owner: owner, vis: vis, at: at, node: node, kind: kind,
             first: first, count: count, fname: fname, ftype: ftype, fat: fat,
             tpl: ints_new(), afirst: ints_new(), acount: ints_new(), args: ints_new(),
-            depth: ints_new(), state: state, pending: ints_new())
+            depth: ints_new(), state: state, pending: ints_new(), req: ints_new())
 }
 
 // One more entry, with no fields and no arguments yet. Every per-entry array grows here and
@@ -445,6 +448,7 @@ pub fn new_entry(tb: Table, name: Str, owner: Int, vis: Int, at: Int, node: Int,
     ints_push(tb.afirst, ints_len(tb.args));
     ints_push(tb.acount, 0);
     ints_push(tb.depth, 1);
+    ints_push(tb.req, 0);
     strs_len(tb.names) - 1
 }
 
@@ -1042,7 +1046,69 @@ pub fn resolve_written(tb: Table, tt: Str, owner: Int, tscope: Ints, from: Int, 
 // Declared type parameters, from `[A@7,B@10]`: one `rk_param` entry each, in order, and the
 // two refusals a parameter list can earn — a built-in type's name or `Vec` (`N0331`), and a
 // name used twice (`N0350`). Returns the parameters as `t_param` codes.
-pub fn declare_params(tb: Table, text: Str, diags: Vec[Diag]) -> Ints {
+// The requirement written on item `n` of a parameter list — `Equality@8` from
+// `[T@5=Equality@8,U@20]` — or `""`. N14; the parser writes it after the parameter's own
+// position, where every other reader of the list stops.
+fn requirement_of(text: Str, n: Int) -> Str {
+    let mut item = 0;
+    let mut i = 1;
+    let mut from = 1;
+    while i <= str_len(text) {
+        let mut edge = false;
+        if i == str_len(text) { edge = true; } else {
+            let b = str_byte(text, i);
+            if b == 44 { edge = true; }
+            if b == 93 { edge = true; }
+        }
+        if edge {
+            if item == n {
+                let mut j = from;
+                while j < i {
+                    if str_byte(text, j) == 61 { return str_slice(text, j + 1, i); }
+                    j = j + 1;
+                }
+                return "";
+            }
+            item = item + 1;
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+// `Equality` from `Equality@8`.
+fn requirement_name(s: Str) -> Str {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 64 { return str_slice(s, 0, i); }
+        i = i + 1;
+    }
+    s
+}
+
+// `8` from `Equality@8`.
+fn requirement_start(s: Str) -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    let mut seen = false;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if seen {
+            if b >= 48 {
+                if b <= 57 { n = n * 10 + (b - 48); }
+            }
+        }
+        if b == 64 { seen = true; }
+        i = i + 1;
+    }
+    n
+}
+
+// A declaration's type parameters, as entries. `allow` is whether a requirement may be
+// written on them: a function's may, a record's or an enum's may not (`N0101`), as the
+// reference has it.
+pub fn declare_params(tb: Table, text: Str, allow: Bool, diags: Vec[Diag]) -> Ints {
     let out = ints_new();
     if str_len(text) == 0 { return out; }
     let inames = strs_new();
@@ -1079,6 +1145,23 @@ pub fn declare_params(tb: Table, text: Str, diags: Vec[Diag]) -> Ints {
             }
         }
         let p = new_entry(tb, name, 0 - 1, 0, at, 0 - 1, rk_param(), 0 - 1);
+        let written = requirement_of(text, i - 1);
+        if written != "" {
+            let cap = requirement_name(written);
+            let cap_at = requirement_start(written);
+            if allow == false {
+                report(diags, "N0101", cap_at, cap_at + str_len(cap),
+                        "a requirement on a record's or an enum's type parameter is not supported yet");
+            } else {
+                if cap == "Equality" {
+                    ints_set(tb.req, p, 1);
+                } else {
+                    report(diags, "N0365", cap_at, cap_at + str_len(cap),
+                            str_concat(str_concat("`", cap),
+                            "` is not a capability a type parameter can require"));
+                }
+            }
+        }
         ints_push(out, t_param(p));
         i = i + 1;
     }
@@ -1671,12 +1754,18 @@ pub fn task_unsafe_path(t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype
 // Whether a type that contains nothing has no built-in equality: a sequence, a `Vec`, a
 // `Chan` or a type parameter. N13. `Int`, `Bool` and `Str` have their own, and `unknown`
 // was reported already.
-fn has_no_equality(t: Int) -> Bool {
+fn has_no_equality(t: Int, req: Ints) -> Bool {
     if t == t_ints() { return true; }
     if t == t_strs() { return true; }
     if t == t_chan() { return true; }
     if is_vec(t) { return true; }
-    if is_param(t) { return true; }
+    // A type parameter has equality exactly when its declaration requires it (N14).
+    if is_param(t) {
+        if entry_of(t) < ints_len(req) {
+            if ints_get(req, entry_of(t)) == 1 { return false; }
+        }
+        return true;
+    }
     false
 }
 
@@ -1693,9 +1782,10 @@ fn has_no_equality(t: Int) -> Bool {
 // Depth-first over declaration order, so the path reported is the first a reader would
 // find. An entry already visited is not walked again, so the walk ends even in a program
 // whose containment cycle is being refused in the same run.
-pub fn equality_blocker(t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints) -> Str {
+pub fn equality_blocker(t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints,
+        req: Ints) -> Str {
     if is_record(t) == false {
-        if has_no_equality(t) { return "."; }
+        if has_no_equality(t, req) { return "."; }
         return "";
     }
     let at = ints_new();
@@ -1724,7 +1814,7 @@ pub fn equality_blocker(t: Int, rfirst: Ints, rcount: Ints, rfname: Strs, rftype
                     ints_push(which, 0);
                 }
             } else {
-                if has_no_equality(ft) { return joined(path, fname); }
+                if has_no_equality(ft, req) { return joined(path, fname); }
             }
         }
     }
@@ -2215,7 +2305,7 @@ pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, nau
                 // The parameters, as entries of their own after the variants — so the
                 // variants stay contiguous — and as the definition's `args`, which is
                 // where its arity is read from.
-                let params = declare_params(tb, from_bracket(strs_get(ntx, k)),
+                let params = declare_params(tb, from_bracket(strs_get(ntx, k)), false,
                         diags);
                 ints_set(tb.afirst, r, ints_len(tb.args));
                 let mut p = 0;
@@ -2680,7 +2770,7 @@ pub fn collect_signatures(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, 
             let mut sink = diags;
             if refused == 1 { sink = vec_new[Diag](); }
             // The parameters first: the signature's types may name them.
-            let tscope = declare_params(tb, from_bracket(before_colon(text)), sink);
+            let tscope = declare_params(tb, from_bracket(before_colon(text)), true, sink);
             // `main` cannot be generic: there is no caller to choose its type arguments.
             if refused == 0 {
                 if owner == 0 {
@@ -3069,7 +3159,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 // operands instead.
                 let op_at = ints_get(naux, k);
                 ints_push(ts, check_binary(text, l, r, op_at, op_at + str_len(text), rnames,
-                        rfirst, rcount, rfname, rftype, diags));
+                        rfirst, rcount, rfname, rftype, tb.req, diags));
                 ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
                 continue;
             }
@@ -4092,7 +4182,8 @@ fn is_ordering(op: Str) -> Bool {
 }
 
 fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int, rnames: Strs,
-        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, diags: Vec[Diag]) -> Int {
+        rfirst: Ints, rcount: Ints, rfname: Strs, rftype: Ints, req: Ints,
+        diags: Vec[Diag]) -> Int {
     let mut ok = true;
     let mut why = "";
     if is_comparison(op) {
@@ -4108,7 +4199,7 @@ fn check_binary(op: Str, l: Int, r: Int, from: Int, to: Int, rnames: Strs,
             // unconstrained `T`, which supports only what every type supports; and on a
             // record or an enum exactly when everything it contains has it.
             if agrees(l, r) == false { ok = false; }
-            why = equality_blocker(l, rfirst, rcount, rfname, rftype);
+            why = equality_blocker(l, rfirst, rcount, rfname, rftype, req);
             if why != "" { ok = false; }
         }
         if ok == false {
@@ -4396,6 +4487,35 @@ fn check_generic_call(name: Str, written: Str, argc: Int, got: Ints, from: Int, 
         report(diags, "N0354", from, from + str_len(name),
                 str_concat(str_concat(str_concat("nothing in this call to `", name), "` says what "),
                 str_concat(missing, " is")));
+    }
+
+    // What each parameter's declaration requires, of the argument it was given (N14), by
+    // the one derivation `==` uses: a concrete argument by what it contains, a caller's own
+    // parameter by its declaration. Reported where the reference reports it — at the
+    // callee for a written argument, at the argument an inferred one came from.
+    g = 0;
+    while g < n {
+        if ints_get(solved, g) == 1 {
+            if ints_get(tb.req, entry_of(ints_get(generics, g))) == 1 {
+                let arg_t = ints_get(sval, g);
+                let why = equality_blocker(arg_t, tb.first, tb.count, tb.fname, tb.ftype, tb.req);
+                if why != "" {
+                    let mut at_from = from;
+                    let mut at_to = from + str_len(name);
+                    if ints_get(sfrom, g) >= 0 {
+                        let src = ints_get(kids, first + ints_get(sfrom, g));
+                        at_from = ints_get(nst, src);
+                        at_to = ints_get(nen, src);
+                    }
+                    report(diags, "N0364", at_from, at_to,
+                            str_concat(str_concat(str_concat("`", name), "` requires `"),
+                            str_concat(str_concat(strs_get(tb.names, entry_of(ints_get(generics, g))),
+                            ": Equality`, and `"), str_concat(show_type(arg_t, tb.names),
+                            "` does not have it"))));
+                }
+            }
+        }
+        g = g + 1;
     }
 
     // What the call settled, on the node: an unsettled parameter is `Int`, as the

@@ -1,0 +1,16 @@
+// A generic function whose parameter requires equality, exported: an importer's calls
+// are held to the requirement, and an importer's own bounded caller may forward to it.
+
+pub fn same[T: Equality](a: T, b: T) -> Bool {
+    a == b
+}
+
+pub fn count_same[T: Equality](xs: Vec[T], x: T) -> Int {
+    let mut n = 0;
+    let mut i = 0;
+    while i < vec_len(xs) {
+        if vec_get(xs, i) == x { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}

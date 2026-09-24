@@ -369,7 +369,11 @@ fn type_params_text(params: &[nazm_core::__syntax::TypeParam]) -> String {
     }
     let inner: Vec<String> = params
         .iter()
-        .map(|p| format!("{}@{}", p.name, p.span.start))
+        .map(|p| match &p.requires {
+            // N14: a requirement rides after the parameter's position, as `T@5=Equality@8`.
+            Some(r) => format!("{}@{}={}@{}", p.name, p.span.start, r.name, r.span.start),
+            None => format!("{}@{}", p.name, p.span.start),
+        })
         .collect();
     format!("[{}]", inner.join(","))
 }
@@ -894,6 +898,8 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
         "struct Pair[A, B] { first: A, second: B, }\nfn m() -> Int { 0 }",
         "enum Maybe[T] { None, Some(value: T), }\nfn m() -> Int { 0 }",
         "fn identity[T](value: T) -> T { value }",
+        // N14: a requirement, on one parameter of several, with the spacing varied.
+        "fn same[T: Equality, U, V :Equality](a: T, b: U, c: V) -> Bool { a == a }",
         "fn m(p: Pair[Int, Vec[Str]]) -> Vec[Pair[Int, Str]] { f(p) }",
         "struct Box[T] { v: Vec[Maybe[T]], }\nfn m() -> Int { 0 }",
         "fn m() -> Int { identity[Int](7) }",
@@ -2085,6 +2091,114 @@ fn the_nazm_written_compiler_compiles_equality_with_the_same_memory_semantics() 
              let hundred = match compare(false) {{ Result.Ok(value: _) => 0, Result.Err(error: c) => 100 * c, }}; \
              one + ten + hundred + right(1) * 1000 }}\n"),
          "7311"),
+    ];
+    let borrowed: Vec<(&str, &str)> = cases.iter().map(|(s, e)| (s.as_str(), *e)).collect();
+    same_memory_semantics(dir.path(), &emitter, &borrowed);
+}
+
+#[test]
+fn the_nazm_checker_agrees_with_the_reference_on_requirements() {
+    // N14, `docs/spec.md`, *A type parameter may require equality*. Both checkers record
+    // the same requirement on the same position, give the body `==` by it, check every
+    // argument against it by N13's derivation, and refuse what they refuse with the same
+    // code at the same span.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_checker(dir.path());
+    let same = "fn same[T: Equality](a: T, b: T) -> Bool { a == b }\n";
+    let sources: Vec<String> = [
+        // Accepted.
+        "fn main() -> Int { if same(1, 1) { 1 } else { 0 } }",
+        "fn main() -> Int { if same(\"a\", \"b\") { 1 } else { 0 } }",
+        "struct Point { x: Int, y: Int, }\nfn main() -> Int { if same(Point(x: 1, y: 2), Point(x: 1, y: 2)) { 1 } else { 0 } }",
+        "fn main() -> Int { if same(Option[Int].Some(value: 1), Option[Int].None()) { 1 } else { 0 } }",
+        "fn main() -> Int { if same[Result[Int, Str]](Result[Int, Str].Ok(value: 1), Result[Int, Str].Ok(value: 1)) { 1 } else { 0 } }",
+        "struct Box[T] { value: T, }\nfn box_same[T: Equality](a: Box[T], b: Box[T]) -> Bool { a == b }\nfn main() -> Int { if box_same(Box[Int](value: 1), Box[Int](value: 1)) { 1 } else { 0 } }",
+        "fn wrap[T: Equality](a: T, b: T) -> Bool { same(a, b) }\nfn main() -> Int { if wrap(1, 1) { 1 } else { 0 } }",
+        "fn res[T: Equality, E: Equality](a: Result[T, E], b: Result[T, E]) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "fn pick[A: Equality, B](a: A, b: B) -> Int { 0 }\nfn main() -> Int { pick(1, vec_new[Int]()) }",
+        "struct Equality { x: Int, }\nfn main() -> Int { Equality(x: 1).x }",
+        // Refused: an argument without equality, inferred or written.
+        "fn main() -> Int { let v = vec_new[Int](); if same(v, v) { 1 } else { 0 } }",
+        "fn main() -> Int { let c = chan_new(1); if same(c, c) { 1 } else { 0 } }",
+        "fn main() -> Int { let o = Option[Vec[Int]].None(); if same(o, o) { 1 } else { 0 } }",
+        "struct Box[T] { value: T, }\nfn main() -> Int { let a = Box[Vec[Int]](value: vec_new[Int]()); if same[Box[Vec[Int]]](a, a) { 1 } else { 0 } }",
+        "enum Work { Empty, Values(value: Vec[Int]), }\nfn main() -> Int { if same(Work.Empty(), Work.Empty()) { 1 } else { 0 } }",
+        "fn both[A: Equality, B: Equality](a: A, b: B) -> Int { 0 }\nfn main() -> Int { both(1, vec_new[Int]()) }",
+        // Refused: the body, and forwarding.
+        "fn other[T](a: T, b: T) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "fn wrap[T](a: T, b: T) -> Bool { same(a, b) }\nfn main() -> Int { 0 }",
+        "fn f[T: Equality, E](a: Result[T, E], b: Result[T, E]) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        "fn wrong[A: Equality, B: Equality](a: A, b: B) -> Bool { a == b }\nfn main() -> Int { 0 }",
+        // Refused: what may be written.
+        "fn f[T: Ord](a: T) -> Int { 0 }\nfn main() -> Int { 0 }",
+        "struct B[T: Equality] { v: T, }\nfn main() -> Int { 0 }",
+        "enum E[T: Equality] { A(v: T), }\nfn main() -> Int { 0 }",
+    ]
+    .iter()
+    .map(|s| format!("{same}{s}"))
+    .collect();
+
+    let mut refusals = 0;
+    for source in &sources {
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, source).expect("write");
+        let (status, stdout, stderr) = run_stage(&exe, &file);
+        let ours: Vec<(String, u32, u32)> = sorted_diagnostics(&stdout);
+        let mut theirs: Vec<(String, u32, u32)> = nazm_core::check_source(source)
+            .into_iter()
+            .map(|d| {
+                (
+                    d.code.as_str().to_owned(),
+                    d.primary.span.start,
+                    d.primary.span.end,
+                )
+            })
+            .collect();
+        theirs.sort();
+        assert_eq!(ours, theirs, "checking differs for {source:?}\n{stderr}");
+        if theirs.is_empty() {
+            assert_eq!(
+                status,
+                Some(0),
+                "{source:?} should have been accepted: {stdout}"
+            );
+        } else {
+            refusals += 1;
+            assert_eq!(status, Some(1), "{source:?} should have been refused");
+        }
+    }
+    assert!(refusals >= 13, "only {refusals} refusals were compared");
+}
+
+#[test]
+fn the_nazm_written_compiler_compiles_requirements_with_the_same_memory_semantics() {
+    // N14: bounded generic bodies instantiated at owning types, compiled by the
+    // Nazm-written compiler against the reference, on the stated answers and on
+    // reclamation.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    let prelude = "fn churn() -> Int { let mut noise = vec_new[Str](); let mut k = 0; \
+                   while k < 64 { vec_push(noise, str_concat(\"noise-\", int_to_str(k))); k = k + 1; } \
+                   noise = vec_new[Str](); vec_len(noise) }\n\
+                   fn same[T: Equality](a: T, b: T) -> Bool { a == b }\n\
+                   fn wrap[T: Equality](a: T, b: T) -> Bool { same(a, b) }\n\
+                   fn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }\n\
+                   fn text(n: Int) -> Str { str_concat(\"t-\", int_to_str(n)) }\n\
+                   struct Box[T] { value: T, }\n\
+                   struct Item { name: Str, n: Int, }\n\
+                   enum Shape { Plain, Named(label: Str), }\n\
+                   fn box_same[T: Equality](a: Box[T], b: Box[T]) -> Bool { a == b }\n";
+    let cases: Vec<(String, &str)> = vec![
+        (format!("{prelude}fn main() -> Int {{ bit(same(1, 1), 1) + bit(same(text(1), \"t-2\"), 2) \
+             + bit(same(Item(name: text(3), n: 3), Item(n: 3, name: \"t-3\")), 4) + bit(same(Shape.Plain(), Shape.Named(label: text(4))), 8) \
+             + bit(same(Option[Int].Some(value: 5), Option[Int].Some(value: 5)), 16) \
+             + bit(wrap(Result[Str, Int].Ok(value: text(6)), Result[Str, Int].Ok(value: text(6))), 32) \
+             + bit(box_same(Box[Shape](value: Shape.Named(label: text(7))), Box[Shape](value: Shape.Named(label: text(7)))), 64) }}\n"),
+         "117"),
+        (format!("{prelude}fn main() -> Int {{ let mut total = 0; let mut i = 0; while i < 5 {{ \
+             total = total + bit(same(text(i), text(i)), 1) + bit(wrap(Box[Str](value: text(i)), Box[Str](value: text(i + 1))), 10); \
+             churn(); i = i + 1; }} let a = Item(name: text(8), n: 8); let s = same(a, a); churn(); total + bit(s, 100) + 1000 * str_len(a.name) }}\n"),
+         "3105"),
     ];
     let borrowed: Vec<(&str, &str)> = cases.iter().map(|(s, e)| (s.as_str(), *e)).collect();
     same_memory_semantics(dir.path(), &emitter, &borrowed);
