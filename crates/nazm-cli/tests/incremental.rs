@@ -963,11 +963,91 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        5,
-        "N9, N10, N11 and N12 each changed what the checker accepts, so the epoch moved four \
-         times"
+        6,
+        "N9, N10, N11, N12 and N13 each changed what the checker accepts, so the epoch moved \
+         five times"
     );
     assert_eq!(nazm_iface::SCHEMA, "nazm.interface/4");
+}
+
+/// Every check entry under `dir`'s derived store, with the directory its store is at.
+fn check_entries(dir: &Path) -> Vec<(std::path::PathBuf, nazm_cache::CheckArtifact)> {
+    let mut out = Vec::new();
+    let mut work = vec![dir.join(nazm_cache::store::DIRECTORY)];
+    while let Some(d) = work.pop() {
+        let Ok(read) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in read.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                work.push(path);
+            } else if path.extension().is_some_and(|x| x == "json") {
+                let text = std::fs::read_to_string(&path).expect("read");
+                if let Ok(a) = serde_json::from_str::<nazm_cache::CheckArtifact>(&text) {
+                    if a.schema == nazm_cache::SCHEMA {
+                        let store = path.parent().and_then(Path::parent).expect("a store");
+                        out.push((store.to_path_buf(), a));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn an_entry_from_the_checker_before_derived_equality_is_never_read() {
+    // N13. `==` on a record moved from refused to accepted under the existing `N0304`, so
+    // the code set did not move and only the epoch says the checker changed. What an
+    // N12 build left in a store — here, each entry this build wrote, re-filed exactly as
+    // the same build at epoch 5 would have filed it — must be a miss, and the module
+    // checked again, with nothing deleted by hand.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "a.nz",
+        "struct P { x: Int, name: Str, }
+         fn main() -> Int { if P(x: 1, name: \"a\") == P(x: 1, name: \"a\") { 1 } else { 0 } }\n",
+    );
+    let first = check(dir.path(), "a.nz");
+    assert!(first.accepted, "{first:?}");
+    assert_eq!(first.stored, 1 + PRELUDE, "{first:?}");
+
+    let current = nazm_cache::CheckerIdentity::current();
+    let older = nazm_cache::CheckerIdentity::at_epoch(nazm_cache::SEMANTIC_EPOCH - 1);
+    let entries = check_entries(dir.path());
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    for (store_dir, entry) in &entries {
+        assert_eq!(entry.checker, current.to_string());
+        let module = nazm_core::sema::key::ModuleKey::parse(&entry.module).expect("module");
+        let source = nazm_cache::SourceFingerprint::parse(&entry.source).expect("source");
+        let deps: Vec<nazm_cache::Dependency> = entry
+            .dependencies
+            .iter()
+            .map(|d| nazm_cache::Dependency {
+                module: nazm_core::sema::key::ModuleKey::parse(&d.module).expect("dep"),
+                interface: nazm_iface::InterfaceHash::parse(&d.interface).expect("hash"),
+            })
+            .collect();
+        let forged =
+            nazm_cache::CheckArtifact::of(older, &module, source, &deps, entry.interface.clone())
+                .expect("an entry");
+        assert_ne!(forged.key, entry.key, "the epoch must reach the key");
+        let store = nazm_cache::Store::at(store_dir);
+        store.put(&forged).expect("publish");
+        let name = &entry.key;
+        std::fs::remove_file(store_dir.join(&name[..2]).join(format!("{name}.json")))
+            .expect("remove this build's entry");
+    }
+
+    let again = check(dir.path(), "a.nz");
+    assert!(again.accepted, "{again:?}");
+    assert_eq!(meaning(&again), meaning(&first));
+    assert_eq!(again.reused, 0, "an epoch-5 entry was read: {again:?}");
+    assert_eq!(again.checked, 1 + PRELUDE, "{again:?}");
+    assert_eq!(again.stored, 1 + PRELUDE, "{again:?}");
 }
 
 #[test]

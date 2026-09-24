@@ -14,7 +14,7 @@
     clippy::indexing_slicing
 )]
 
-use nazm_core::{run, Outcome, Value};
+use nazm_core::{check_source, run, Outcome, Value};
 use nazm_diag::codes;
 
 fn value(src: &str) -> Value {
@@ -456,9 +456,16 @@ fn an_enums_payload_cannot_be_projected_out_of_it() {
 }
 
 #[test]
-fn equality_is_not_offered_on_an_enum() {
+fn equality_is_offered_on_an_enum_only_when_every_variant_has_it() {
+    // N13. Decided over every variant, never the one a value holds: `E.A()` owns nothing,
+    // and in the second program it is still not comparable.
     let src = r"
         enum E { A, }
+        fn main() -> Int { let a = E.A(); let b = E.A(); if a == b { 1 } else { 0 } }
+    ";
+    assert!(check_source(src).is_empty(), "{:?}", check_source(src));
+    let src = r"
+        enum E { A, B(xs: Strs), }
         fn main() -> Int { let a = E.A(); let b = E.A(); if a == b { 1 } else { 0 } }
     ";
     assert_eq!(code(src), codes::INVALID_OPERANDS);

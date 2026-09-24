@@ -14,7 +14,7 @@
     clippy::indexing_slicing
 )]
 
-use nazm_core::{run, Outcome, Value};
+use nazm_core::{check_source, run, Outcome, Value};
 use nazm_diag::codes;
 
 fn value(src: &str) -> Value {
@@ -375,13 +375,18 @@ fn an_unknown_type_in_a_field_is_refused() {
 }
 
 #[test]
-fn equality_is_not_offered_on_a_record() {
-    // It would have to decide what a sequence field means — the same storage, or the
-    // same contents — and the language has not chosen. Sequences and channels are
-    // refused for the same reason; a record joins them rather than getting an exception.
+fn equality_is_offered_on_a_record_only_when_every_field_has_it() {
+    // Since N13 a record compares field by field — but one with a sequence field would
+    // have to decide what that field means, the same storage or the same contents, and
+    // the language has not chosen. `crates/nazm-core/tests/equality.rs` holds the rest.
     let src = r"
         struct Point { x: Int, }
         fn main() -> Int { let a = Point(x: 1); let b = Point(x: 1); if a == b { 1 } else { 0 } }
+    ";
+    assert!(check_source(src).is_empty(), "{:?}", check_source(src));
+    let src = r"
+        struct Held { xs: Ints, }
+        fn main() -> Int { let a = Held(xs: ints_new()); if a == a { 1 } else { 0 } }
     ";
     assert_eq!(code(src), codes::INVALID_OPERANDS);
 }

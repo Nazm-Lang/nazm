@@ -98,7 +98,16 @@ use crate::digest::{self, Framed};
 /// changes no code at all; and every module gained a dependency it did not write. That
 /// last one is in each `CheckKey` already, as an import like any other. The counter covers
 /// the first two, which are rules, not inputs.
-pub const SEMANTIC_EPOCH: u32 = 5;
+///
+/// `6` — N13, 2026-09-25. Derived structural equality. `==` and `!=` on a record, an enum or
+/// a concrete generic instance of either whose every component has equality moved from
+/// refused to accepted, under the existing `N0304` — no code was added or removed, so the
+/// code set is identical and nothing derived moved. That is the case this counter exists
+/// for, stated in N9's entry: the checker's conditions for an existing diagnostic changed.
+/// A cached entry records only a module that checked cleanly, so no N12 entry could claim a
+/// program N13 refuses; what the counter guarantees is the general rule, that no entry is
+/// ever read by a checker other than the one that wrote it.
+pub const SEMANTIC_EPOCH: u32 = 6;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -171,8 +180,21 @@ impl CheckerIdentity {
     /// runs it exists to relate.
     #[must_use]
     pub fn current() -> Self {
+        Self::at_epoch(SEMANTIC_EPOCH)
+    }
+
+    /// This build's identity with a different epoch: every other input unchanged.
+    ///
+    /// Not for a compiler to use — a build has one identity, [`Self::current`]. It exists so
+    /// a test can stand in for the build before a rule changed, and establish that the
+    /// entries such a build left behind are unreachable from this one. The epoch is the only
+    /// input two such builds could share everything else with, so it is the one worth
+    /// being able to vary.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn at_epoch(epoch: u32) -> Self {
         let mut f = Framed::new("nazm.checker/1");
-        f.number(SEMANTIC_EPOCH)
+        f.number(epoch)
             .field(env!("CARGO_PKG_VERSION"))
             .field(nazm_iface::SCHEMA)
             .field(CHECK_SCHEMA);
@@ -263,6 +285,18 @@ mod tests {
             f.finish()
         };
         assert_ne!(with("Int"), with("Str"));
+    }
+
+    #[test]
+    fn the_current_identity_is_this_epoch_s_and_no_other() {
+        assert_eq!(
+            CheckerIdentity::current(),
+            CheckerIdentity::at_epoch(SEMANTIC_EPOCH)
+        );
+        assert_ne!(
+            CheckerIdentity::current(),
+            CheckerIdentity::at_epoch(SEMANTIC_EPOCH - 1)
+        );
     }
 
     #[test]

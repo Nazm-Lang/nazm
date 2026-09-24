@@ -61,4 +61,6 @@ pub use resolve::{
     VariantRef,
 };
 pub use types::{ParamOwner, Type, TypeParam, VecId};
-pub use udt::{CycleEdge, LayoutCycle, OwnershipCycle, Reach, TypeNode, UserTypes, MAX_TYPE_DEPTH};
+pub use udt::{
+    CycleEdge, LayoutCycle, NoEquality, OwnershipCycle, Reach, TypeNode, UserTypes, MAX_TYPE_DEPTH,
+};

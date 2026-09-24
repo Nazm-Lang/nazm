@@ -263,12 +263,11 @@ impl PartialEq for Value {
             (Self::Strs(a), Self::Strs(b)) => Arc::ptr_eq(a, b),
             (Self::Chan(a), Self::Chan(b)) => Arc::ptr_eq(a, b),
             (Self::Vec(a), Self::Vec(b)) => Arc::ptr_eq(a, b),
-            // Field by field. Never observable from a program — `docs/spec.md` does not
-            // offer `==` on a record, and `N0304` refuses it — and defined so that the
-            // rest of `Value` can still be compared.
+            // Field by field. Not what `==` means in a program — that is [`equal`], which
+            // follows the language's law — and defined so that the rest of `Value` can
+            // still be compared.
             (Self::Record(a), Self::Record(b)) => a.def == b.def && a.fields == b.fields,
-            // Same enum, same active variant, equal payloads. Also never observable —
-            // `N0304` refuses `==` on an enum for the reason it refuses one on a record.
+            // Same enum, same active variant, equal payloads. Also the host's, not `==`.
             (Self::Enum(a), Self::Enum(b)) => {
                 a.def == b.def && a.variant == b.variant && a.fields == b.fields
             }
@@ -2141,6 +2140,11 @@ impl Interpreter {
         }
         };
 
+        let same = if matches!(op, BinOp::Eq | BinOp::NotEq) {
+            equal(l, r)
+        } else {
+            None
+        };
         match (op, l, r) {
             (BinOp::Add, Int(a), Int(b)) => a
                 .checked_add(*b)
@@ -2180,8 +2184,10 @@ impl Interpreter {
             (BinOp::Gt, Int(a), Int(b)) => Ok(Bool(a > b)),
             (BinOp::GtEq, Int(a), Int(b)) => Ok(Bool(a >= b)),
 
-            (BinOp::Eq, a, b) => Ok(Bool(a == b)),
-            (BinOp::NotEq, a, b) => Ok(Bool(a != b)),
+            // One relation, and `!=` is its negation rather than a second walk that could
+            // drift from it. A value with no equality falls to the arm below.
+            (BinOp::Eq, _, _) if same.is_some() => Ok(Bool(same == Some(true))),
+            (BinOp::NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(false))),
 
             // Unreachable after checking. A diagnostic rather than a panic, for the same
             // reason as the undefined-variable arm above.
@@ -2198,6 +2204,47 @@ impl Interpreter {
                 )),
             }),
         }
+    }
+}
+
+/// Built-in equality, by the language's law rather than the host's. N13.
+///
+/// `Int`, `Bool` and `Str` compare as they always have — a `Str` by its bytes, never by
+/// whether two views share a backing. A record compares every field, and an enum its
+/// active variant and then **that variant's payload alone**: a value here carries no
+/// storage for an inactive variant, so there is nothing else it could read. No definition
+/// id is compared, because checking has already established that both sides have one type.
+///
+/// `None` for a value the language gives no equality — a sequence, a `Vec`, a `Chan` —
+/// which checking refuses (`N0304`) before a program runs. [`Value`]'s own `PartialEq`
+/// answers those by identity so the rest of `Value` can be compared, and that answer is
+/// the host's convenience, not the language's: it is not what `==` means, and this is.
+///
+/// Recursive, and bounded: a type nests at most [`nazm_sema::MAX_TYPE_DEPTH`] deep.
+fn equal(a: &Value, b: &Value) -> Option<bool> {
+    let all = |xs: &[Value], ys: &[Value]| -> Option<bool> {
+        if xs.len() != ys.len() {
+            return None;
+        }
+        for (x, y) in xs.iter().zip(ys) {
+            if !equal(x, y)? {
+                return Some(false);
+            }
+        }
+        Some(true)
+    };
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => Some(x == y),
+        (Value::Bool(x), Value::Bool(y)) => Some(x == y),
+        (Value::Str(x), Value::Str(y)) => Some(x.bytes() == y.bytes()),
+        (Value::Record(x), Value::Record(y)) => all(&x.fields, &y.fields),
+        (Value::Enum(x), Value::Enum(y)) => {
+            if x.variant != y.variant {
+                return Some(false);
+            }
+            all(&x.fields, &y.fields)
+        }
+        _ => None,
     }
 }
 

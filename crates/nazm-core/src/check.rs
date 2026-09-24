@@ -4162,25 +4162,17 @@ impl Checker<'_> {
             // Ordering is `Int` only: comparing strings needs a collation decision, and
             // ordering booleans is almost always a mistake.
             BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => lt == Type::Int && rt == Type::Int,
-            // Equality works on any single type, but not across two — and **not on a
-            // sequence**, where it would have to mean either "the same handle" or "the
-            // same contents" and the language has chosen neither. Offering one silently
-            // is how a program comes to depend on the wrong answer.
-            //
-            // A record and an enum join them rather than getting an exception, and for
-            // exactly that reason: one with an `Ints` field or payload would force the
-            // same unmade choice, and a rule that held for some of them and not others
-            // would be worse than no rule.
-            //
-            // A type parameter joins them too: `==` is not valid for every type, and an
-            // unconstrained `T` supports only what every type supports.
-            BinOp::Eq | BinOp::NotEq => {
-                lt == rt
-                    && !lt.is_sequence()
-                    && lt != Type::Chan
-                    && !lt.is_user_defined()
-                    && !lt.is_param()
-            }
+            // Equality needs **one** type — two records with identical fields are two
+            // types, and nothing converts — and that type must have equality, which is
+            // derived rather than listed (`docs/spec.md`, *Equality is derived*, N13).
+            // `Int`, `Bool` and `Str` have it. A sequence, a `Vec` and a `Chan` do not:
+            // equality on a handle would have to mean either "the same storage" or "the
+            // same contents", the language has chosen neither, and offering one silently
+            // is how a program comes to depend on the wrong answer. A record or an enum has
+            // it exactly when everything it contains does, over every variant. A type
+            // parameter does not: `==` is not valid for every type, and an unconstrained
+            // `T` supports only what every type supports.
+            BinOp::Eq | BinOp::NotEq => lt == rt && self.res.types().equality(lt).is_ok(),
         };
 
         if !ok {
@@ -4193,7 +4185,21 @@ impl Checker<'_> {
                 "combine"
             };
             let (slt, srt) = (self.show(lt), self.show(rt));
-            let detail = if lt == rt {
+            // For a composite without equality, the component responsible — the first a
+            // reader would find, `Outer.inner.values` — so the refusal says why rather than
+            // only that.
+            let blocked = match op {
+                BinOp::Eq | BinOp::NotEq if lt == rt => self.res.types().equality(lt).err(),
+                _ => None,
+            };
+            let detail = if let Some(why) = blocked.filter(|w| !w.path.is_empty()) {
+                format!(
+                    "`{}` does not apply to `{slt}`: its `{}` is a `{}`, which has no equality",
+                    op.symbol(),
+                    why.path.join("."),
+                    self.show(why.ty)
+                )
+            } else if lt == rt {
                 format!("`{}` does not apply to `{slt}`", op.symbol())
             } else {
                 format!("`{}` cannot {verb} `{slt}` with `{srt}`", op.symbol())

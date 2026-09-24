@@ -83,6 +83,17 @@ pub struct LayoutCycle {
     pub via: CycleEdge,
 }
 
+/// Why a type has no built-in equality, and which component is responsible. N13.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoEquality {
+    /// The field path from the outer type to the component, by name — a variant named
+    /// on the way, as [`TaskUnsafe`](crate::TaskUnsafe)'s is: `["inner", "Values", "items"]`.
+    /// Empty when the type itself has none.
+    pub path: Vec<String>,
+    /// The component's type: a sequence, a `Vec`, a `Chan` or a type parameter.
+    pub ty: Type,
+}
+
 /// Every record and enum declared in one compilation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UserTypes {
@@ -318,6 +329,81 @@ impl UserTypes {
                     return Err(TaskUnsafe { path, ty: other });
                 }
                 _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether built-in `==` and `!=` are defined for this type, and if not, why.
+    ///
+    /// N13. `Ok(())` or the **field path** to the first component that has no equality.
+    /// `Int`, `Bool` and `Str` have their primitive equality; a sequence, a `Vec`, a
+    /// `Chan` and a type parameter have none. A record has equality when **every field**
+    /// does, and an enum when **every payload field of every variant** does — the static
+    /// rule [`Self::task_safety`] states for the same reason: `==` is checked where the
+    /// active variant is not known, and a guarantee about a type is about all of its
+    /// values. An applied type is answered over its fields *after* substitution, which is
+    /// what an instance's entry holds, so `Box[Int]` has equality and `Box[Vec[Int]]` and
+    /// `Box[T]` do not. `Option` and `Result` are ordinary enums here and nothing names
+    /// them.
+    ///
+    /// Independent of every other derived property on purpose: a `Str` needs cleanup and
+    /// compares; a `Chan` may cross into a task and does not compare.
+    ///
+    /// Depth-first over declaration order, so the path reported is the first one a reader
+    /// would find. A definition already visited is not walked again, which bounds the walk
+    /// by the number of definitions even in a program whose containment cycle is being
+    /// refused in the same run.
+    ///
+    /// # Errors
+    ///
+    /// [`NoEquality`] naming the field path and the type that has no equality.
+    pub fn equality(&self, t: Type) -> Result<(), NoEquality> {
+        let leaf = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Str);
+        let Some(root) = TypeNode::of(t) else {
+            return if leaf(t) {
+                Ok(())
+            } else {
+                Err(NoEquality {
+                    path: Vec::new(),
+                    ty: t,
+                })
+            };
+        };
+        let mut seen = vec![false; self.nodes()];
+        let mut stack: Vec<(TypeNode, usize, usize)> = vec![(root, 0, 0)];
+        let mut path: Vec<String> = Vec::new();
+        if let Some(s) = seen.get_mut(self.slot(root)) {
+            *s = true;
+        }
+        while let Some((node, at, pushed)) = stack.pop() {
+            let edges = self.contained(node);
+            let Some((variant, field, ty)) = edges.get(at).copied() else {
+                for _ in 0..pushed {
+                    path.pop();
+                }
+                continue;
+            };
+            stack.push((node, at + 1, pushed));
+            match TypeNode::of(ty) {
+                Some(inner) => {
+                    let at = self.slot(inner);
+                    if seen.get(at).copied().unwrap_or(true) {
+                        continue;
+                    }
+                    if let Some(s) = seen.get_mut(at) {
+                        *s = true;
+                    }
+                    let names = self.names_of(node, variant, field);
+                    let n = names.len();
+                    path.extend(names);
+                    stack.push((inner, 0, n));
+                }
+                None if leaf(ty) => {}
+                None => {
+                    path.extend(self.names_of(node, variant, field));
+                    return Err(NoEquality { path, ty });
+                }
             }
         }
         Ok(())
