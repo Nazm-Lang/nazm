@@ -2368,6 +2368,14 @@ fn branch(out: Strs, live: Ints, target: Str) -> Int {
 // the store, the arithmetic, the construction — happens nowhere. Declarations and the end
 // of a function are not evaluated and are not asked: the space between two functions is
 // never live, and a function's close is what decides what to do about a body that left.
+// A `block`, or a block written as an expression (`blockexpr`, N12.1): neither emits anything
+// of its own. One question with one answer, so the two kinds cannot drift apart.
+fn block_like(kind: Int) -> Bool {
+    if kind == n_block() { return true; }
+    if kind == n_blockexpr() { return true; }
+    false
+}
+
 fn unreachable_here(live: Ints, kind: Int) -> Bool {
     if ints_get(live, 0) == 1 { return false; }
     if kind == n_fn() { return false; }
@@ -3274,9 +3282,10 @@ fn emit_module(src: Str, path: Str, nk: Ints, nar: Ints, nst: Ints, nen: Ints, n
                                                 str_concat(" = or i1 ", str_concat(text, ", false"))));
                                         ints_push(vals, n);
                                     } else {
-                                        if kind == n_block() {
+                                        if block_like(kind) {
                                             // Structure only: a block's value, if it has one, is its tail's and is
-                                            // already on the stack.
+                                            // already on the stack — whether the block is a body, a branch, or an
+                                            // operand written as a block.
                                         } else {
                                             if kind == n_while() {
                                                 // Structure only: the header, the body and the exit are opened at the

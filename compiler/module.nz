@@ -281,28 +281,59 @@ fn path_index(mpath: Strs, want: Str) -> Int {
     0 - 1
 }
 
-// --- the core prelude, N12 ------------------------------------------------------------
+// --- the core prelude, N12 and N12.1 -------------------------------------------------
 
-/// Add the core prelude — the file at `core` — as the **last** module, and make every
-/// module already loaded import it. Returns the buffer with the prelude's text appended.
+/// The core prelude's module key: the reference's `ModuleKey::prelude()`, spelled the same.
 ///
-/// The same shape the reference loader gives a compilation: the prelude after every
-/// project module, so no project offset moves, and an ordinary import edge from each of
-/// them, so what a module may name and what it depends on treat the prelude as a module it
-/// had written `use` for. The edges point at no `use` line because none was written; a
-/// diagnostic about the prelude points at the declaration instead. `docs/spec.md`, *The
-/// core prelude*.
+/// A module's entry in `mpath` is its **key** — for a project file, the normalised path it
+/// was read from; for the prelude, this. It is not a path and is never read: the prelude's
+/// file is named on the command line, and where it lives on this machine is no part of what
+/// it is. Until N12.1 the prelude was whichever module came last, which is an order, not an
+/// identity.
+pub fn core_key() -> Str { "@core/prelude" }
+
+/// Whether `key` is in the toolchain's namespace: its first component is `@core`. No project
+/// module may have such a key, which is what makes [`core_key`] impossible to impersonate —
+/// the reference refuses the same first component in `ModuleKey::relative`.
+fn reserved_key(key: Str) -> Bool {
+    if key == "@core" { return true; }
+    if str_len(key) < 6 { return false; }
+    str_slice(key, 0, 6) == "@core/"
+}
+
+/// Add the core prelude — the file at `core` — as a module keyed [`core_key`], and make
+/// every module already loaded import it. Returns the buffer with the prelude's text
+/// appended.
 ///
-/// **Its identity is this position**: the last module of the compilation is the prelude,
-/// by construction here and nowhere else. This compiler's modules are session-local
-/// indices — it has no durable keys — so this is the strongest identity it has, and it is
-/// one no project file can take: a project module is always loaded before this runs.
+/// The same shape the reference loader gives a compilation: the prelude after every project
+/// module, so no project offset moves, and an ordinary import edge from each of them, so
+/// what a module may name and what it depends on treat the prelude as a module it had
+/// written `use` for. The edges point at no `use` line because none was written; a
+/// diagnostic about the prelude points at the declaration instead. `docs/spec.md`, *The core
+/// prelude*.
+///
+/// **Its identity is its key**, established here and nowhere else: [`core_module`] finds
+/// the module by it, and every semantic question about the prelude — which `Result` a `?`
+/// accepts, which names a project may not declare — is asked of the module that finds.
+/// Where the prelude sits among the modules is a layout decision this function makes and
+/// nothing downstream reads. A project module can never hold the key: one whose path is in the
+/// `@core` namespace is re-keyed out of it before the prelude is added.
 pub fn attach_core(core: Str, src: Str, mpath: Strs, mstart: Ints, mfirst: Ints,
         mcount: Ints, mto: Ints, mat: Ints) -> Str {
     if file_exists(core) == false {
         eprint(str_concat(str_concat("cannot find the core prelude ", core),
                 str_from_byte(10)));
         exit_with(2);
+    }
+    // A project file whose path is in the `@core` namespace is still a project file: it
+    // compiles, as the reference compiles it, under a key that is not in that namespace.
+    // Its text has already been read, so the key is all that changes.
+    let mut p = 0;
+    while p < strs_len(mpath) {
+        if reserved_key(strs_get(mpath, p)) {
+            strs_set(mpath, p, str_concat("./", strs_get(mpath, p)));
+        }
+        p = p + 1;
     }
     let me = strs_len(mpath);
     // Every module's edges, then the prelude, rebuilt in module order so each module's
@@ -333,12 +364,22 @@ pub fn attach_core(core: Str, src: Str, mpath: Strs, mstart: Ints, mfirst: Ints,
         ints_push(mat, ints_get(at, c));
         c = c + 1;
     }
-    strs_push(mpath, normalise(core));
+    strs_push(mpath, core_key());
     ints_push(mstart, str_len(src) + 1);
     ints_push(mfirst, ints_len(mto));
     ints_push(mcount, 0);
     str_concat(str_concat(src, str_from_byte(10)), read_file(core))
 }
 
-/// The core prelude's module: the last one. See [`attach_core`].
-pub fn core_module(mstart: Ints) -> Int { ints_len(mstart) - 1 }
+/// The core prelude's module: the one keyed [`core_key`], or `-1` when there is none.
+///
+/// Asked **once**, by `check_program`, and the answer handed to every consumer — so the
+/// prelude has one resolution, not one per question.
+pub fn core_module(mpath: Strs) -> Int {
+    let mut m = 0;
+    while m < strs_len(mpath) {
+        if strs_get(mpath, m) == core_key() { return m; }
+        m = m + 1;
+    }
+    0 - 1
+}

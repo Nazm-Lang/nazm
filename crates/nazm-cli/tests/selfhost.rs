@@ -909,6 +909,19 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
         "fn m() -> Int { -f()?.x + g(h()??, (k()?)?) }",
         "fn m() -> Int { f(1)? * 2 - x?.y.z? }",
         "fn m() -> Int { match load()? { A.B() => 1, A.C(v: v) => v?, } }",
+        // N12.1: a block where an expression is — an arm, an initialiser, an argument, an
+        // operand, a statement — which is `block` wrapped in `blockexpr`, as the dump above
+        // writes the reference's `Expr::Block`.
+        "fn m() -> Int { { 1 } }",
+        "fn m() -> Int { let x = { let a = 2; a * 3 }; x }",
+        "fn m() -> Int { f({ 1 }, { let b = 2; b }) + { 3 } * -{ 4 } }",
+        "fn m() -> Int { match o { A.B() => { let x = 1; x }, A.C(v: v) => { v }, } }",
+        "fn m() -> Int { match o { A.B() => { return 1; }, A.C(v: v) => v, } }",
+        "fn m() -> Int { let mut x = 0; { x = 1; } { let y = 2; x = y; } x }",
+        "fn m() -> Int { P(a: { 1 }, b: E.V(c: { let d = 2; d })).a }",
+        "fn m() -> Int { ({ r })?.x + { { 5 } } }",
+        "fn m() -> Int { if { true } { { 1 } } else { 2 } }",
+        "fn m() -> Int { while { false } { { break; } } 0 }",
     ];
 
     for source in sources {
@@ -1011,8 +1024,8 @@ fn the_nazm_parser_refuses_what_it_cannot_parse_yet_by_name() {
 
     for (source, expected) in [
         (
-            "fn m() -> Int { { 1 } }",
-            "a block used as an expression: not implemented yet",
+            "fn m() -> Int { enum E { A } 0 }",
+            "an enum declared inside a function: not implemented yet",
         ),
         (
             "fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; }",
@@ -1779,6 +1792,350 @@ fn the_nazm_written_compiler_propagates_with_the_same_memory_semantics() {
     same_memory_semantics(dir.path(), &emitter, &borrowed);
 }
 
+const BLOCK_COMPARABLE: &[&str] = &[
+    "N0200", "N0300", "N0302", "N0313", "N0343", "N0360", "N0361", "N0362",
+];
+
+#[test]
+fn the_nazm_checker_agrees_with_the_reference_on_value_blocks() {
+    // N12.1: a block used as a value, in every position the grammar allows one, and the
+    // completion rules it is checked by — `Value`, `Unit` and `Diverges`, folded across
+    // arms exactly as the reference folds them. Both checkers must agree on every accepted
+    // program and on every refusal's code and span.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_checker(dir.path());
+    let sources = [
+        // Accepted.
+        "fn f(o: Option[Int]) -> Int { match o { Option.None() => { let n = 1; n + 1 }, Option.Some(value: v) => { let y = v * 10; y }, } }\nfn main() -> Int { 0 }",
+        "fn main() -> Int { let x = { let a = 2; a * 3 }; x }",
+        "fn add(a: Int, b: Int) -> Int { a + b }\nfn main() -> Int { add({ let a = 1; a + 1 }, 5) + { 3 } }",
+        "struct P { a: Int, s: Str, }\nfn main() -> Int { let p = P(a: { let z = 4; z }, s: { let t = int_to_str(9); t }); p.a }",
+        "fn main() -> Int { let o = Option[Str].Some(value: { let t = int_to_str(12); t }); match o { Option.None() => 0, Option.Some(value: v) => str_len(v), } }",
+        "fn f() -> Int { return { let q = 5; q + 1 }; }\nfn main() -> Int { f() }",
+        "fn choose[T](x: Option[T], fallback: T) -> T { match x { Option.None() => { fallback }, Option.Some(value: v) => { v }, } }\nfn main() -> Int { choose(Option[Int].None(), 3) }",
+        "fn g(ok: Bool) -> Result[Int, Str] { Result[Int, Str].Ok(value: 1) }\nenum S { A, B, }\nfn f(s: S) -> Result[Int, Str] { let x = match s { S.A() => { let n = g(true)?; n + 1 }, S.B() => { 0 }, }; Result[Int, Str].Ok(value: x) }\nfn main() -> Int { 0 }",
+        "fn g() -> Result[Int, Str] { Result[Int, Str].Ok(value: 1) }\nfn f(c: Bool) -> Result[Int, Str] { let a = (if c { g() } else { g() })?; let b = ({ let r = g(); r })?; Result[Int, Str].Ok(value: a + b) }\nfn main() -> Int { 0 }",
+        "fn main() -> Int { let mut x = 1; { let y = 2; x = x + y; } x }",
+        "fn main() -> Int { let mut x = 0; match Option[Int].Some(value: 5) { Option.None() => { x = 1; }, Option.Some(value: v) => { x = v; }, }; x }",
+        "fn f(o: Option[Int]) -> Int { let x = match o { Option.None() => { return 7; }, Option.Some(value: v) => { return v; }, }; x }\nfn main() -> Int { 0 }",
+        "enum E { A, B, C, }\nfn f(e: E) -> Int { match e { E.A() => { return 1; }, E.B() => { let s = int_to_str(3); str_len(s) }, E.C() => { 9 }, } }\nfn main() -> Int { 0 }",
+        "fn main() -> Int { let mut i = 0; while i < 5 { i = i + 1; let v = match Option[Int].Some(value: i) { Option.None() => { continue; }, Option.Some(value: n) => { if n == 3 { break; } n }, }; } i }",
+        // Refused: completions that do not join.
+        "fn f(c: Bool) -> Int { let mut z = 0; if c { 1 } else { z = 2; } }\nfn main() -> Int { 0 }",
+        "fn f(o: Option[Int]) -> Int { let mut z = 0; match o { Option.None() => { z = 1; }, Option.Some(value: v) => { v }, } }\nfn main() -> Int { 0 }",
+        "fn f(o: Option[Int]) -> Int { let mut z = 0; let x = match o { Option.None() => { z = 1; }, Option.Some(value: v) => { v }, }; x }\nfn main() -> Int { 0 }",
+        "fn f(o: Option[Int]) -> Int { match o { Option.None() => { 1 }, Option.Some(value: v) => { let s = int_to_str(v); s }, } }\nfn main() -> Int { 0 }",
+        "fn main() -> Int { let mut z = 0; let x = { z = 1; }; 0 }",
+        "fn add(a: Int, b: Int) -> Int { a + b }\nfn main() -> Int { let mut z = 0; add({ z = 1; }, 2) }",
+        "fn main() -> Int { let x = { let s = int_to_str(1); s }; x }",
+        // Refused: a tail after a transfer, and a block that cannot reach the value it names.
+        "fn main() -> Int { let x = { return 1; 2 }; x }",
+        "fn main() -> Int { let x = { let a = 1; a }; a }",
+        // Refused: the rules around it still apply inside a block.
+        "fn f(o: Option[Int]) -> Int { match o { Option.None() => { 0 }, } }\nfn main() -> Int { 0 }",
+        "fn f(o: Option[Int]) -> Result[Int, Str] { let x = match o { Option.None() => { 0 }, Option.Some(value: v) => { o? }, }; Result[Int, Str].Ok(value: x) }\nfn main() -> Int { 0 }",
+        "fn f(r: Result[Int, Str]) -> Int { let x = { let n = r?; n }; x }\nfn main() -> Int { 0 }",
+    ];
+
+    let mut refusals = 0;
+    for source in &sources {
+        let file = dir.path().join("case.nz");
+        std::fs::write(&file, source).expect("write");
+        let (status, stdout, stderr) = run_stage(&exe, &file);
+        let ours: Vec<(String, u32, u32)> = sorted_diagnostics(&stdout)
+            .into_iter()
+            .filter(|(c, _, _)| BLOCK_COMPARABLE.contains(&c.as_str()))
+            .collect();
+        let mut theirs: Vec<(String, u32, u32)> = nazm_core::check_source(source)
+            .into_iter()
+            .filter(|d| BLOCK_COMPARABLE.contains(&d.code.as_str()))
+            .map(|d| {
+                (
+                    d.code.as_str().to_owned(),
+                    d.primary.span.start,
+                    d.primary.span.end,
+                )
+            })
+            .collect();
+        theirs.sort();
+        assert_eq!(ours, theirs, "checking differs for {source:?}\n{stderr}");
+        if theirs.is_empty() {
+            assert_eq!(
+                status,
+                Some(0),
+                "{source:?} should have been accepted: {stdout}"
+            );
+        } else {
+            refusals += 1;
+            assert_eq!(status, Some(1), "{source:?} should have been refused");
+        }
+    }
+    assert!(refusals >= 10, "only {refusals} refusals were compared");
+}
+
+#[test]
+fn the_nazm_written_compiler_compiles_value_blocks_with_the_same_memory_semantics() {
+    // N12.1: block values compiled by the Nazm-written compiler, against the reference, on
+    // the shapes where a retain placed after a release shows — a `Str` tail outliving its
+    // local, payloads handed back through arm blocks, a `?` inside a `scope` inside an arm,
+    // an arm that returns beside one that propagates, a transfer out of a block argument
+    // and out of a block field initialiser, and a statement `match` whose arms are `Unit`.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let emitter = build_emitter(dir.path());
+    let prelude = "fn churn() -> Int { let mut noise = vec_new[Str](); let mut k = 0; \
+                   while k < 64 { vec_push(noise, str_concat(\"noise-\", int_to_str(k))); k = k + 1; } \
+                   noise = vec_new[Str](); vec_len(noise) }\n\
+                   struct Item { name: Str, tags: Ints, }\nenum Shape { Named(label: Str), Plain, }\n\
+                   fn item(n: Int) -> Item { let t = ints_new(); ints_push(t, n); Item(name: str_concat(\"item-\", int_to_str(n)), tags: t) }\n";
+    let cases: Vec<(String, &str)> = vec![
+        (format!("{prelude}fn make(n: Int) -> Str {{ str_concat(\"text-\", int_to_str(n)) }}\n\
+             fn main() -> Int {{ let mut total = 0; let mut i = 0; while i < 5 {{ let s = {{ let t = make(i * 111); t }}; churn(); \
+             total = total + str_len(s); i = i + 1; }} let it = {{ let a = item(7); let b = item(8); a }}; \
+             let sh = {{ let l = str_concat(\"lab\", int_to_str(1234)); let made = Shape.Named(label: l); made }}; churn(); \
+             total * 10000 + str_len(it.name) * 100 + ints_get(it.tags, 0) + match sh {{ Shape.Named(label: l) => str_len(l), Shape.Plain() => 0, }} * 1000000 }}\n"),
+         "7380607"),
+        (format!("{prelude}enum Bag {{ Full(items: Vec[Str]), Empty, }}\n\
+             fn text(o: Option[Str]) -> Str {{ match o {{ Option.None() => {{ let d = str_concat(\"no\", \"ne\"); d }}, Option.Some(value: s) => {{ let x = s; x }}, }} }}\n\
+             fn thing(r: Result[Item, Str]) -> Item {{ match r {{ Result.Ok(value: i) => {{ let kept = i; kept }}, Result.Err(error: e) => {{ let fb = item(str_len(e)); fb }}, }} }}\n\
+             fn bag(b: Bag) -> Vec[Str] {{ match b {{ Bag.Full(items: xs) => {{ let ys = xs; ys }}, Bag.Empty() => {{ let fresh = vec_new[Str](); vec_push(fresh, int_to_str(0)); fresh }}, }} }}\n\
+             fn choose[T](x: Option[T], fallback: T) -> T {{ match x {{ Option.None() => {{ let f = fallback; f }}, Option.Some(value: v) => {{ let w = v; w }}, }} }}\n\
+             fn main() -> Int {{ let a = text(Option[Str].Some(value: str_concat(\"some-\", int_to_str(42)))); let b = text(Option[Str].None()); churn(); \
+             let i = thing(Result[Item, Str].Ok(value: item(3))); let j = thing(Result[Item, Str].Err(error: int_to_str(12345))); churn(); \
+             let full = vec_new[Str](); vec_push(full, int_to_str(777)); vec_push(full, int_to_str(8)); \
+             let c = bag(Bag.Full(items: full)); let d = bag(Bag.Empty()); let g = choose(Option[Str].None(), int_to_str(1234)); churn(); \
+             str_len(a) * 1000000 + str_len(b) * 100000 + ints_get(i.tags, 0) * 10000 + ints_get(j.tags, 0) * 1000 \
+             + vec_len(c) * 100 + str_len(vec_get(c, 0)) * 10 + vec_len(d) + str_len(g) * 10000000 }}\n"),
+         "47435231"),
+        ("fn worker(out: Chan, tag: Str) -> Int { let mut i = 0; let mut s = 0; while i < 200000 { s = s + i % 3; i = i + 1; } chan_send(out, str_len(tag)); s }\n\
+          fn g(ok: Bool) -> Result[Int, Str] { if ok { return Result[Int, Str].Ok(value: 41); } Result[Int, Str].Err(error: int_to_str(404)) }\n\
+          enum State { A, B, }\n\
+          fn f(s: State, ok: Bool, out: Chan) -> Result[Int, Str] { let x = match s { State.A() => { let held = str_concat(\"held-\", int_to_str(1)); let mut n = 0; \
+          scope { spawn worker(out, held); let inner = int_to_str(99); n = g(ok)? + str_len(inner); } n + str_len(held) }, State.B() => { 0 }, }; Result[Int, Str].Ok(value: x) }\n\
+          fn main() -> Int { let out = chan_new(8); let a = f(State.A(), true, out); let b = f(State.A(), false, out); let c = f(State.B(), false, out); chan_close(out); \
+          let buf = ints_new(); let got = chan_recv(out, buf); let more = chan_recv(out, buf); let rest = chan_recv(out, buf); \
+          let va = match a { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, }; let vb = match b { Result.Ok(value: v) => v, Result.Err(error: e) => str_len(e), }; \
+          let vc = match c { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, }; va * 10000 + vb * 1000 + vc * 100 + ints_len(buf) * 10 + ints_get(buf, 0) }\n".to_owned(),
+         "493026"),
+        (format!("{prelude}enum E {{ A, B, C, }}\n\
+             fn g(ok: Bool) -> Result[Int, Str] {{ if ok {{ return Result[Int, Str].Ok(value: 5); }} Result[Int, Str].Err(error: str_concat(\"x\", \"y\")) }}\n\
+             fn f(e: E, ok: Bool) -> Result[Int, Str] {{ let v = match e {{ E.A() => {{ let gone = int_to_str(1); return Result[Int, Str].Ok(value: 100); }}, \
+             E.B() => {{ let s = str_concat(\"ab\", \"c\"); str_len(s) }}, E.C() => {{ let held = int_to_str(22); g(ok)? + str_len(held) }}, }}; Result[Int, Str].Ok(value: v) }}\n\
+             fn show(r: Result[Int, Str]) -> Int {{ match r {{ Result.Ok(value: v) => v, Result.Err(error: e) => 0 - str_len(e), }} }}\n\
+             fn main() -> Int {{ let mut i = 0; let mut loops = 0; while i < 10 {{ i = i + 1; let o = if i % 2 == 0 {{ Option[Str].Some(value: int_to_str(i * 100)) }} else {{ Option[Str].None() }}; \
+             let v = match o {{ Option.None() => {{ let w = str_concat(\"skip-\", int_to_str(i)); continue; }}, Option.Some(value: s) => {{ let k = s; if i == 8 {{ break; }} k }}, }}; loops = loops + str_len(v); }} \
+             churn(); show(f(E.A(), true)) * 10000 + show(f(E.B(), true)) * 1000 + show(f(E.C(), true)) * 10 + show(f(E.C(), false)) + loops * 10000000 }}\n"),
+         "91003068"),
+        (format!("{prelude}fn later(log: Ints) -> Str {{ ints_push(log, 1); str_concat(\"late\", \"r\") }}\n\
+             fn consume(a: Str, b: Str, c: Str) -> Int {{ str_len(a) + str_len(b) + str_len(c) }}\n\
+             fn go(fail: Bool, log: Ints) -> Int {{ consume(int_to_str(12345), {{ let t = str_concat(\"mid-\", int_to_str(1)); if fail {{ return 0 - 1; }} t }}, later(log)) }}\n\
+             fn record(fail: Bool) -> Int {{ let it = Item(name: str_concat(\"nm-\", int_to_str(7)), tags: {{ let ts = ints_new(); ints_push(ts, 3); if fail {{ return 0 - 1; }} ts }}); \
+             str_len(it.name) * 10 + ints_get(it.tags, 0) }}\n\
+             fn variant(fail: Bool) -> Int {{ let sh = Shape.Named(label: {{ let l = int_to_str(4444); if fail {{ return 0 - 1; }} l }}); \
+             match sh {{ Shape.Named(label: l) => str_len(l), Shape.Plain() => 0, }} }}\n\
+             fn main() -> Int {{ let log = ints_new(); let a = go(false, log); let b = go(true, log); let r = record(false); let q = record(true); \
+             let c = variant(false); let d = variant(true); churn(); \
+             a * 100000000 + (b + 1) * 10000000 + ints_len(log) * 1000000 + r * 1000 + (q + 1) * 100 + c * 10 + (d + 1) }}\n"),
+         "1501043040"),
+        (format!("{prelude}fn main() -> Int {{ let mut name = str_concat(\"start\", \"\"); let mut i = 0; while i < 6 {{ \
+             let o = if i % 3 == 0 {{ Option[Str].None() }} else {{ Option[Str].Some(value: int_to_str(i * 1000)) }}; \
+             match o {{ Option.None() => {{ name = str_concat(name, \".\"); }}, Option.Some(value: s) => {{ let t = s; name = t; }}, }}; i = i + 1; }} \
+             {{ let tail = str_concat(name, \"\"); name = tail; }} churn(); str_len(name) }}\n"),
+         "4"),
+    ];
+    let borrowed: Vec<(&str, &str)> = cases.iter().map(|(s, e)| (s.as_str(), *e)).collect();
+    same_memory_semantics(dir.path(), &emitter, &borrowed);
+}
+
+/// Build a harness that checks a three-module program — `root`, `dep` and the core
+/// prelude — through `check_program` directly, with the prelude either where the loader
+/// puts it or between the two project modules.
+fn build_layout_harness(dir: &Path) -> PathBuf {
+    common::require_containment("analyse.nz");
+    for f in ["lex.nz", "parse.nz", "module.nz", "analyse.nz"] {
+        std::fs::copy(repo_root().join("compiler").join(f), dir.join(f)).expect("copy");
+    }
+    std::fs::write(
+        dir.join("layout.nz"),
+        "use \"analyse.nz\";\nuse \"module.nz\";\n\
+         // arg(0) the prelude, arg(1) the root, arg(2) its dependency, arg(3) `last`, `between` or `none`.\n\
+         fn main() -> Int {\n    let core = arg(0);\n    let root = read_file(arg(1));\n    let dep = read_file(arg(2));\n    \
+         let nl = str_from_byte(10);\n    let mpath = strs_new();\n    let mstart = ints_new();\n    let mfirst = ints_new();\n    \
+         let mcount = ints_new();\n    let mto = ints_new();\n    let mat = ints_new();\n    let mut src = \"\";\n    \
+         if arg(3) != \"between\" {\n        \
+         // The loader's layout: root, dep, then `attach_core` — or, for `none`, no prelude.\n        \
+         strs_push(mpath, \"root.nz\");\n        strs_push(mpath, \"dep.nz\");\n        \
+         ints_push(mstart, 0);\n        ints_push(mstart, str_len(root) + 1);\n        \
+         ints_push(mfirst, 0);\n        ints_push(mcount, 1);\n        ints_push(mto, 1);\n        ints_push(mat, 0);\n        \
+         ints_push(mfirst, 1);\n        ints_push(mcount, 0);\n        \
+         src = str_concat(str_concat(root, nl), dep);\n        \
+         if arg(3) == \"last\" {\n            src = attach_core(core, src, mpath, mstart, mfirst, mcount, mto, mat);\n        }\n    \
+         } else {\n        \
+         // The prelude between the two, keyed as the prelude, so it is neither last nor\n        \
+         // any particular index the checker could assume.\n        \
+         let text = read_file(core);\n        \
+         strs_push(mpath, \"root.nz\");\n        strs_push(mpath, core_key());\n        strs_push(mpath, \"dep.nz\");\n        \
+         ints_push(mstart, 0);\n        ints_push(mstart, str_len(root) + 1);\n        \
+         ints_push(mstart, str_len(root) + 1 + str_len(text) + 1);\n        \
+         ints_push(mfirst, 0);\n        ints_push(mcount, 2);\n        ints_push(mto, 2);\n        ints_push(mat, 0);\n        \
+         ints_push(mto, 1);\n        ints_push(mat, 0 - 1);\n        \
+         ints_push(mfirst, 2);\n        ints_push(mcount, 0);\n        \
+         ints_push(mfirst, 2);\n        ints_push(mcount, 1);\n        ints_push(mto, 1);\n        ints_push(mat, 0 - 1);\n        \
+         src = str_concat(str_concat(str_concat(str_concat(root, nl), text), nl), dep);\n    }\n    \
+         let out = strs_new();\n    \
+         match check_program(src, mpath, mstart, mfirst, mcount, mto, mat) {\n        \
+         Result.Ok(value: checked) => {\n            strs_push(out, \"ok\");\n        },\n        \
+         Result.Err(error: found) => {\n            let mut d = 0;\n            while d < vec_len(found) {\n                \
+         strs_push(out, vec_get(found, d).code);\n                d = d + 1;\n            }\n        },\n    };\n    \
+         print(str_concat(str_join(out, \",\"), nl));\n    0\n}\n",
+    )
+    .expect("write harness");
+    let exe = dir.join("layout");
+    let out = Command::new(NAZM)
+        .args(["build", dir.join("layout.nz").to_str().unwrap(), "-o"])
+        .arg(&exe)
+        .output()
+        .expect("run nazm build");
+    assert!(
+        out.status.success(),
+        "the layout harness does not compile: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    exe
+}
+
+#[test]
+fn the_nazm_checker_finds_the_prelude_by_its_key_wherever_it_is_loaded() {
+    // N12.1 §4–§11. The Nazm-written checker used to take the *last* module as the core
+    // prelude. Here the same three modules are checked in the loader's order and with the
+    // prelude between the two project modules, and one case with no prelude at all. Every
+    // answer that depends on which module is the prelude must be the same: which `Result`
+    // a `?` accepts, which names are reserved, and that a lookalike is not one.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = build_layout_harness(dir.path());
+    let core = repo_root().join("library/core/prelude.nz");
+    let root_q = "use \"dep.nz\";\nfn f(r: Result[Int, Str]) -> Result[Int, Str] { let n = r?; Result[Int, Str].Ok(value: n + helper()) }\n\
+                  fn main() -> Int { match f(Result[Int, Str].Ok(value: 1)) { Result.Ok(value: v) => { let w = v; w }, Result.Err(error: e) => 0, } }\n";
+    let cases: [(&str, &str, &str); 5] = [
+        // `?` over the prelude's `Result`, and `Option` through the same module.
+        (
+            root_q,
+            "pub fn helper() -> Int { match Option[Int].Some(value: 1) { Option.None() => 0, Option.Some(value: v) => v, } }\n",
+            "ok",
+        ),
+        // A dependency declaring the prelude's name is refused at its declaration, and the
+        // prelude's meaning stands for the root.
+        (
+            root_q,
+            "pub enum Result[T, E] { Ok(value: T), Err(error: E), }\npub fn helper() -> Int { 1 }\n",
+            "N0363",
+        ),
+        (
+            root_q,
+            "pub struct Option { x: Int, }\npub fn helper() -> Int { 1 }\n",
+            "N0363",
+        ),
+        // A lookalike with the right shape and the wrong definition.
+        (
+            "use \"dep.nz\";\nfn f() -> Result[Int, Str] { let n = mk()?; Result[Int, Str].Ok(value: n) }\nfn main() -> Int { 0 }\n",
+            "pub enum MyResult[T, E] { Ok(value: T), Err(error: E), }\npub fn mk() -> MyResult[Int, Str] { MyResult[Int, Str].Ok(value: 1) }\n",
+            "N0360",
+        ),
+        // `?` on an `Int`. Refused wherever the prelude is — and also with no prelude at
+        // all, where there is no `Result` to be: "none" must not compare equal to anything.
+        (
+            "use \"dep.nz\";\nfn main() -> Int { let n = 4; let m = n?; m }\n",
+            "pub fn helper() -> Int { 1 }\n",
+            "N0360",
+        ),
+    ];
+    for (root, dep, expected) in cases {
+        std::fs::write(dir.path().join("root.nz"), root).expect("write");
+        std::fs::write(dir.path().join("dep.nz"), dep).expect("write");
+        // Only the last case names no prelude type, so only it can be checked without one.
+        let layouts: &[&str] = if root.contains("n?") {
+            &["last", "between", "none"]
+        } else {
+            &["last", "between"]
+        };
+        for layout in layouts {
+            let (status, stdout, stderr) = run_bounded(
+                common::bounded_exe(&exe)
+                    .arg(&core)
+                    .arg(dir.path().join("root.nz"))
+                    .arg(dir.path().join("dep.nz"))
+                    .arg(layout),
+                STAGE_LIMIT,
+            )
+            .expect("the harness hung");
+            assert_eq!(status, Some(0), "{layout}: {stderr}");
+            assert_eq!(
+                stdout.lines().next().unwrap_or(""),
+                expected,
+                "with the prelude {layout}, for:\n{root}\n{dep}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_project_file_cannot_take_the_prelude_s_key() {
+    // N12.1 §9. A project file whose path *is* `@core/prelude` would, keyed by its path,
+    // hold the prelude's key. It is a project file like any other — it compiles, as the
+    // reference compiles one under `@core/` — but under a key outside that namespace, so
+    // the `Result` its `?` accepts is still the prelude's. In the checker's driver and in
+    // the compiler's, and the compiled program agrees with the reference's.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let checker = build_checker(dir.path());
+    let emitter = build_emitter(dir.path());
+    std::fs::create_dir_all(dir.path().join("@core")).expect("mkdir");
+    std::fs::write(
+        dir.path().join("@core/prelude"),
+        "fn f(r: Result[Int, Str]) -> Result[Int, Str] { let n = r?; Result[Int, Str].Ok(value: n + 1) }\n\
+         fn main() -> Int { match f(Result[Int, Str].Ok(value: 41)) { Result.Ok(value: v) => v, Result.Err(error: e) => 0, } }\n",
+    )
+    .expect("write");
+    let core = repo_root().join("library/core/prelude.nz");
+    let stage = |exe: &Path| {
+        run_bounded(
+            common::bounded_exe(exe)
+                .current_dir(dir.path())
+                .arg("@core/prelude")
+                .arg(&core),
+            STAGE_LIMIT,
+        )
+        .expect("the stage hung")
+    };
+
+    let (status, stdout, stderr) = stage(&checker);
+    assert_eq!(status, Some(0), "the checker: {stdout}{stderr}");
+    assert!(!stdout.contains('|'), "the checker reported: {stdout}");
+
+    let (status, ir, stderr) = stage(&emitter);
+    assert_eq!(status, Some(0), "the compiler: {stderr}");
+    let ll = dir.path().join("imp.ll");
+    std::fs::write(&ll, &ir).expect("write IR");
+    let exe = dir.path().join("imp");
+    let built = Command::new("clang")
+        .args(["-Wno-override-module", "-lpthread", "-o"])
+        .arg(&exe)
+        .arg(&ll)
+        .output()
+        .expect("run clang");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let (_, out, _) = run_bounded(&mut common::bounded_exe(&exe), STAGE_LIMIT).expect("hung");
+    let reference = Command::new(NAZM)
+        .args(["run", "@core/prelude"])
+        .current_dir(dir.path())
+        .output()
+        .expect("run nazm");
+    assert_eq!(out.trim(), "42");
+    assert_eq!(String::from_utf8_lossy(&reference.stdout).trim(), "42");
+}
+
 #[test]
 fn the_nazm_checker_accepts_the_compiler_it_is_part_of() {
     // The strongest available check short of self-hosting: run the Nazm checker over
@@ -2010,9 +2367,9 @@ const STAGE_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
 /// test.
 ///
 /// Every stage is also handed the core prelude, which the checker and the emitter load as
-/// the last module of every compilation — the toolchain's source, `library/core/prelude.nz`,
-/// named on the command line because it is not the program's. The lexer and parser
-/// drivers read one file and ignore the second argument.
+/// the module keyed `@core/prelude` in every compilation — the toolchain's source,
+/// `library/core/prelude.nz`, named on the command line because it is not the program's.
+/// The lexer and parser drivers read one file and ignore the second argument.
 fn run_stage(exe: &Path, arg: &Path) -> (Option<i32>, String, String) {
     let core = repo_root().join("library/core/prelude.nz");
     run_bounded(common::bounded_exe(exe).arg(arg).arg(&core), STAGE_LIMIT).unwrap_or_else(|| {
@@ -2819,9 +3176,13 @@ fn the_nazm_compiler_refuses_what_it_cannot_emit_and_writes_nothing() {
         // `main` must produce an `Int`: the platform wrapper prints one, and what a
         // `Str` result would mean for a process is a decision nobody has made.
         ("fn main() -> Bool { true }\n", "N0101"),
-        // A bare block used as an expression is refused in the parser, so the refusal
-        // arrives before emission is reached at all.
-        ("fn main() -> Int { { 1 } }\n", "not implemented yet"),
+        // An enum declared inside a function is refused in the parser, so the refusal
+        // arrives before emission is reached at all. (A bare block was this case until
+        // N12.1, when both compilers came to compile one.)
+        (
+            "fn main() -> Int { enum E { A } 0 }\n",
+            "not implemented yet",
+        ),
         // A program that does not check is a *check* failure, reported with the
         // checker's own code — never as a backend limit.
         ("fn main() -> Int { 1 + true }\n", "N0304"),
@@ -2888,17 +3249,18 @@ fn the_bootstrap_chain_reaches_a_fixpoint() {
             .unwrap_or(0)
     };
     // N11 added two generic programs, two generic module cases and four refusals; N12 a
-    // propagation program, a module exporting a `Result` API and five refusals.
+    // propagation program, a module exporting a `Result` API and five refusals; N12.1 a
+    // value-block program, a module whose importer uses arm blocks and three refusals.
     assert!(
-        count("conformance-cases:") >= 26,
+        count("conformance-cases:") >= 28,
         "the corpus has shrunk:\n{record}"
     );
     assert!(
-        count("module-conformance-cases:") >= 10,
+        count("module-conformance-cases:") >= 11,
         "the module corpus has shrunk:\n{record}"
     );
     assert!(
-        count("refusal-conformance-cases:") >= 9,
+        count("refusal-conformance-cases:") >= 12,
         "the refusal corpus has shrunk:\n{record}"
     );
     // Every stage loaded the same core prelude, and the record says which bytes it was.

@@ -51,7 +51,7 @@ use crate::names::SourceNames;
 
 use crate::ir::{
     ArithOp, Block, Builtin, EnumLayout, EnumTy, Expr, Function, Lowering as _, MatchArm, Owns,
-    RecordLayout, RecordTy, Stmt, Ty, Unit, VecLayout, VecTy,
+    RecordLayout, RecordTy, StatementArm, Stmt, Ty, Unit, VecLayout, VecTy,
 };
 use crate::symbol::NativeSymbol;
 
@@ -1275,49 +1275,10 @@ impl Emitter<'_> {
         slot: usize,
         arms: &[MatchArm],
     ) -> Val {
-        let whole = llvm_type(self.types, scrutinee_ty);
-        let Val::Of { value: v, ty } = self.expr(scrutinee) else {
+        let tags: Vec<u32> = arms.iter().map(|a| a.tag).collect();
+        let Some((labels, join_label)) = self.dispatch(scrutinee, scrutinee_ty, slot, &tags) else {
             return Val::Transferred;
         };
-        // The `match` takes the value over: a temporary is already owned and a binding is
-        // borrowed, and `take` is the one place that difference is settled. From here the
-        // slot holds the reference, so every exit — the join below, a `return` inside an
-        // arm, the unwind block a failure takes — releases it exactly once.
-        self.take(v, ty);
-        let _ = writeln!(self.out, "  store {whole} %{v}, ptr %slot{slot}");
-        // The `match` is holding it from here, so a `break` or a `continue` out of an arm
-        // gives it back rather than leaving it for the next turn of the loop to zero.
-        self.building.push((slot, ty));
-
-        let held = self.fresh();
-        let _ = writeln!(self.out, "  %{held} = load {whole}, ptr %slot{slot}");
-        let tag = self.fresh();
-        let _ = writeln!(self.out, "  %{tag} = extractvalue {whole} %{held}, 0");
-
-        let join_label = format!("b{}", self.fresh_label());
-        let labels: Vec<String> = arms
-            .iter()
-            .map(|_| format!("b{}", self.fresh_label()))
-            .collect();
-        // Checking has established that every variant has exactly one arm, so the default
-        // is unreachable for any value this program can build. It is written as a branch
-        // to the first arm rather than as `unreachable`: the block must exist for the
-        // instruction to be well formed, and a `switch` whose default is poison would make
-        // a compiler mistake into undefined behaviour instead of a wrong answer.
-        let default = labels
-            .first()
-            .cloned()
-            .unwrap_or_else(|| join_label.clone());
-        let table = arms
-            .iter()
-            .zip(&labels)
-            .map(|(a, l)| format!("i64 {}, label %{l}", a.tag))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let _ = writeln!(
-            self.out,
-            "  switch i64 %{tag}, label %{default} [ {table} ]"
-        );
 
         let mut incomings: Vec<(u32, Ty, String)> = Vec::new();
         for (arm, label) in arms.iter().zip(&labels) {
@@ -1357,6 +1318,121 @@ impl Emitter<'_> {
         // arm retained whatever it handed to the join before branching here, so a payload
         // returned from an arm holds its own reference by the time the value it came out
         // of is let go.
+        self.release_matched(scrutinee_ty, slot);
+        Val::Of {
+            value: out,
+            ty: result_ty,
+        }
+    }
+
+    /// Statement-position `match`: the same dispatch, arms that produce nothing, and no
+    /// `phi`.
+    ///
+    /// An arm that falls through branches to the continuation; one that transfers ended in
+    /// its own terminator and is not a predecessor of it. The continuation is opened only
+    /// if some arm arrives — every arm leaving is the whole statement leaving, and no
+    /// continuation is fabricated for it, exactly as [`Self::statement_if`] does.
+    fn statement_match(
+        &mut self,
+        scrutinee: &Expr,
+        scrutinee_ty: Ty,
+        slot: usize,
+        arms: &[StatementArm],
+    ) -> Reach {
+        let tags: Vec<u32> = arms.iter().map(|a| a.tag).collect();
+        let Some((labels, cont)) = self.dispatch(scrutinee, scrutinee_ty, slot, &tags) else {
+            return Reach::Transferred;
+        };
+
+        let mut arrives = false;
+        for (arm, label) in arms.iter().zip(&labels) {
+            // An arm's temporaries dominate neither its siblings nor the continuation. See
+            // `value_branch`.
+            let outer = self.owned.clone();
+            self.open(label);
+            if self.stmts(&arm.body) == Reach::FallsThrough {
+                let _ = writeln!(self.out, "  br label %{cont}");
+                arrives = true;
+            }
+            self.owned = outer;
+        }
+
+        if !arrives {
+            self.building.pop();
+            return Reach::Transferred;
+        }
+        self.open(&cont);
+        self.release_matched(scrutinee_ty, slot);
+        Reach::FallsThrough
+    }
+
+    /// Evaluate a `match`'s scrutinee into its slot and `switch` on the discriminant.
+    ///
+    /// Returns each arm's label, in the order given, and the join's — or `None` when the
+    /// scrutinee transferred, so no arm is reachable. On success the `match` is holding the
+    /// value in `slot` and has said so on `building`; whoever finishes the `match` pops it,
+    /// either through [`Self::release_matched`] at the join or directly when no arm
+    /// arrives.
+    fn dispatch(
+        &mut self,
+        scrutinee: &Expr,
+        scrutinee_ty: Ty,
+        slot: usize,
+        tags: &[u32],
+    ) -> Option<(Vec<String>, String)> {
+        let whole = llvm_type(self.types, scrutinee_ty);
+        let Val::Of { value: v, ty } = self.expr(scrutinee) else {
+            return None;
+        };
+        // The `match` takes the value over: a temporary is already owned and a binding is
+        // borrowed, and `take` is the one place that difference is settled. From here the
+        // slot holds the reference, so every exit — the join below, a `return` inside an
+        // arm, the unwind block a failure takes — releases it exactly once.
+        self.take(v, ty);
+        let _ = writeln!(self.out, "  store {whole} %{v}, ptr %slot{slot}");
+        // The `match` is holding it from here, so a `break` or a `continue` out of an arm
+        // gives it back rather than leaving it for the next turn of the loop to zero.
+        self.building.push((slot, ty));
+
+        let held = self.fresh();
+        let _ = writeln!(self.out, "  %{held} = load {whole}, ptr %slot{slot}");
+        let tag = self.fresh();
+        let _ = writeln!(self.out, "  %{tag} = extractvalue {whole} %{held}, 0");
+
+        let join_label = format!("b{}", self.fresh_label());
+        let labels: Vec<String> = tags
+            .iter()
+            .map(|_| format!("b{}", self.fresh_label()))
+            .collect();
+        // Checking has established that every variant has exactly one arm, so the default
+        // is unreachable for any value this program can build. It is written as a branch
+        // to the first arm rather than as `unreachable`: the block must exist for the
+        // instruction to be well formed, and a `switch` whose default is poison would make
+        // a compiler mistake into undefined behaviour instead of a wrong answer.
+        let default = labels
+            .first()
+            .cloned()
+            .unwrap_or_else(|| join_label.clone());
+        let table = tags
+            .iter()
+            .zip(&labels)
+            .map(|(t, l)| format!("i64 {t}, label %{l}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let _ = writeln!(
+            self.out,
+            "  switch i64 %{tag}, label %{default} [ {table} ]"
+        );
+        Some((labels, join_label))
+    }
+
+    /// Let go of the value a `match` was holding, at the join its arms arrived at.
+    ///
+    /// Only ever reached **after** the arms have established whatever they produce, which
+    /// is the take-before-release ordering: a payload an arm handed on holds its own
+    /// reference by now. The slot is zeroed so the frame does not release it again.
+    fn release_matched(&mut self, scrutinee_ty: Ty, slot: usize) {
+        let whole = llvm_type(self.types, scrutinee_ty);
         let dying = self.fresh();
         let _ = writeln!(self.out, "  %{dying} = load {whole}, ptr %slot{slot}");
         let _ = writeln!(
@@ -1366,10 +1442,6 @@ impl Emitter<'_> {
         );
         self.building.pop();
         self.release(dying, scrutinee_ty);
-        Val::Of {
-            value: out,
-            ty: result_ty,
-        }
     }
 
     /// Replace the field `path` reaches, starting from `slot`.
@@ -1739,6 +1811,12 @@ impl Emitter<'_> {
                     then_body,
                     else_body,
                 } => self.statement_if(cond, then_body, else_body.as_deref()),
+                Stmt::Match {
+                    scrutinee,
+                    scrutinee_ty,
+                    slot,
+                    arms,
+                } => self.statement_match(scrutinee, *scrutinee_ty, *slot, arms),
                 // Its own `ret`, not a branch to a shared exit. An operand that
                 // transfers instead wins outright — the `break` in
                 // `return if c { break; } else { 1 };` leaves the loop and no `ret` is
@@ -2634,6 +2712,10 @@ impl Emitter<'_> {
                 else_block,
                 ..
             } => self.conditional(cond, then_block, else_block),
+
+            // The block every other block is. Nothing to restore afterwards: unlike a
+            // branch, it has no sibling its temporaries could fail to dominate.
+            Expr::Block(b) => self.block(b),
         }
     }
 

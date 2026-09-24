@@ -1,0 +1,26 @@
+// An enum and an `Option`-returning API, exported for an importer that takes them apart
+// with arm blocks. Nothing here is written with a block: the importer's blocks must not
+// need to see this module's bodies.
+
+pub enum Token {
+    Word(text: Str),
+    Number(value: Int),
+    End,
+}
+
+pub fn token(n: Int) -> Token {
+    if n == 0 {
+        return Token.End();
+    }
+    if n % 2 == 0 {
+        return Token.Number(value: n);
+    }
+    Token.Word(text: str_concat("w", int_to_str(n)))
+}
+
+pub fn find(n: Int) -> Option[Str] {
+    if n > 3 {
+        return Option[Str].Some(value: int_to_str(n * 11));
+    }
+    Option[Str].None()
+}

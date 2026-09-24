@@ -25,8 +25,9 @@
 //! The bootstrap subset: functions over `Int`, `Bool`, `Str`, `Ints`, `Strs` and `Chan`;
 //! `let` and `let mut` and assignment; `while` with `break` and `continue`; `return`;
 //! `if`/`else` in **both** statement and value position; non-recursive direct calls; all
-//! 31 built-ins; modules; and structured concurrency. Everything else — recursion, a bare
-//! block used as an expression, a `main` with parameters — is rejected by name in
+//! 31 built-ins; modules; and structured concurrency — and records, enums with `match`,
+//! generics, and a block used as a value in any position (N12.1). Everything else —
+//! recursion, a `main` with parameters — is rejected by name in
 //! [`lower`], after the program has passed ordinary checking, and never partially
 //! compiled.
 //!
@@ -47,7 +48,7 @@ pub use emit::{
 };
 pub use ir::{
     ArithOp, Block, CmpOp, EnumLayout, EnumTy, Expr, External, Function, Local, MatchArm, Native,
-    Owns, RecordLayout, RecordTy, Stmt, Ty, Unit, VariantLayout,
+    Owns, RecordLayout, RecordTy, StatementArm, Stmt, Ty, Unit, VariantLayout,
 };
 pub use lower::{lower, lower_module, plan, LowerError, Lowered, Plan};
 pub use names::SourceNames;

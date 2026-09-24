@@ -413,10 +413,10 @@ fn explicit_match_and_propagation_agree_on_value_and_on_every_counter() {
              i = i + 1;\n    }}\n    churn();\n    t\n}}\n"
         ))
     };
-    // `return` is a statement, and `nazm build` has no block expression to put one in, so
-    // an arm leaves through an `if` whose branches both transfer — the idiom N10.1's
-    // transfer cases use. That the explicit spelling needs this and `?` does not is part of
-    // what `?` is for.
+    // `return` is a statement, so an arm leaves through an `if` whose branches both
+    // transfer — the idiom N10.1's transfer cases use, and the only one `nazm build` had
+    // when this was written. Since N12.1 the arm could be `{ return …; }` instead; the
+    // spelling is kept because what is compared is the program, not the idiom.
     let by_match = both(&body(
         "match leaf(n) {\n        Result.Ok(value: v) => v,\n        \
          Result.Err(error: e) => if true { return Result[Int, Vec[Diag]].Err(error: e); } \

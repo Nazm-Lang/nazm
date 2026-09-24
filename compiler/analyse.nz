@@ -247,24 +247,42 @@ pub fn type_in(name: Str, owner: Int, rnames: Strs, rowner: Ints,
         tmod: Ints, tname: Strs, trec: Ints) -> Int {
     let built = type_of_name(name);
     if built != t_unknown() { return built; }
-    let own = record_owned(rnames, rowner, owner, name);
-    if own >= 0 { return t_record(own); }
-    let brought = record_imported(tmod, tname, trec, owner, name);
-    if brought >= 0 { return t_record(brought); }
-    t_unknown()
+    match record_owned(rnames, rowner, owner, name) {
+        Option.Some(value: own) => t_record(own),
+        Option.None() => {
+            let brought = record_imported(tmod, tname, trec, owner, name);
+            if brought >= 0 { return t_record(brought); }
+            t_unknown()
+        },
+    }
 }
 
 // The record `owner` declares under `name` — public or private, since a module sees all
-// of its own. `-1` when it declares none.
-pub fn record_owned(rnames: Strs, rowner: Ints, owner: Int, name: Str) -> Int {
+// of its own — or `None` when it declares none.
+//
+// An `Option` since N12.1, and not for style. It used to answer `-1` for "none", and
+// `definition_of` answers `-1` for any type that is not a record — so every comparison of
+// the one with the other needed an `if found >= 0` in front of it, or a missing `Result`
+// would have been equal to the definition of `Int`. The guards were all there; now there
+// is nothing to guard, because "none" is not a number either answer could be.
+pub fn record_owned(rnames: Strs, rowner: Ints, owner: Int, name: Str) -> Option[Int] {
     let mut i = 0;
     while i < strs_len(rnames) {
         if ints_get(rowner, i) == owner {
-            if strs_get(rnames, i) == name { return i; }
+            if strs_get(rnames, i) == name { return Option[Int].Some(value: i); }
         }
         i = i + 1;
     }
-    0 - 1
+    Option[Int].None()
+}
+
+// Whether `t` applies the core prelude's `Result` — `core_result`, the entry the prelude
+// module declares under that name, or `None` when there is no prelude and nothing is one.
+pub fn applies_core_result(tb: Table, core_result: Option[Int], t: Int) -> Bool {
+    match core_result {
+        Option.None() => false,
+        Option.Some(value: decl) => definition_of(tb, t) == decl,
+    }
 }
 
 // The record an import brings into `owner` under `name`, or -1.
@@ -2089,12 +2107,15 @@ pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, nau
                 }
             }
             if refused == 0 {
-                if record_owned(rnames, rowner, owner, name) >= 0 {
-                    report(diags, "N0330", at, ints_get(nen, k),
-                            str_concat(str_concat("`", name),
-                            "` is declared more than once in this module"));
-                    refused = 1;
-                }
+                match record_owned(rnames, rowner, owner, name) {
+                    Option.None() => { },
+                    Option.Some(value: _) => {
+                        report(diags, "N0330", at, ints_get(nen, k),
+                                str_concat(str_concat("`", name),
+                                "` is declared more than once in this module"));
+                        refused = 1;
+                    },
+                };
             }
             if refused == 0 {
                 let mut kind = rk_record();
@@ -2140,15 +2161,14 @@ pub fn collect_records(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, nau
 // What each module's imports bring into its **type** namespace, and the two ways that can
 // go wrong — the same rule, the same codes and the same reasoning as the function
 // namespace's, because it is the same rule.
-pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: Int,
+pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modules: Int, core: Int,
         rnames: Strs, rowner: Ints, rpub: Ints, rat: Ints,
         tmod: Ints, tname: Strs, trec: Ints,
         diags: Vec[Diag]) -> Int {
-    // The core prelude is the last module (`attach_core`), and every other module imports
-    // it with no `use` written. A collision with one of its names is therefore reported at
-    // the **declaration** that took the name, under its own code — there is no import line
-    // to point at, and the rule is that the name is reserved.
-    let core = modules - 1;
+    // `core` is the core prelude's module, as `core_module` resolved it from its key, and
+    // every other module imports it with no `use` written. A collision with one of its names
+    // is therefore reported at the **declaration** that took the name, under its own code —
+    // there is no import line to point at, and the rule is that the name is reserved.
     let mut m = 0;
     while m < modules {
         let first = ints_get(mfirst, m);
@@ -2165,20 +2185,22 @@ pub fn check_type_imports(mfirst: Ints, mcount: Ints, mto: Ints, mat: Ints, modu
                 if offered == 1 {
                     let name = strs_get(rnames, r);
                     let mut taken = 1;
-                    let own = record_owned(rnames, rowner, m, name);
-                    if own >= 0 {
-                        if target == core {
-                            let named = ints_get(rat, own);
-                            report(diags, "N0363", named, named + str_len(name),
-                                    str_concat(str_concat("`", name),
-                                    "` is a core prelude type"));
-                        } else {
-                            report(diags, "N0208", at, at + 1,
-                                    str_concat(str_concat("this import brings in the type `", name),
-                                    "`, which this module declares"));
-                        }
-                        taken = 0;
-                    }
+                    match record_owned(rnames, rowner, m, name) {
+                        Option.None() => { },
+                        Option.Some(value: own) => {
+                            if target == core {
+                                let named = ints_get(rat, own);
+                                report(diags, "N0363", named, named + str_len(name),
+                                        str_concat(str_concat("`", name),
+                                        "` is a core prelude type"));
+                            } else {
+                                report(diags, "N0208", at, at + 1,
+                                        str_concat(str_concat("this import brings in the type `", name),
+                                        "`, which this module declares"));
+                            }
+                            taken = 0;
+                        },
+                    };
                     if taken == 1 {
                         if target == core {
                             // Only reachable when another import exports a prelude name,
@@ -2818,7 +2840,7 @@ fn scope_flags(nk: Ints, nar: Ints, kids: Ints, kid_first: Ints, flags: Ints) ->
 pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Ints, nslot: Ints,
         ntype: Ints, ncallee: Ints, nrec: Ints,
         kids: Ints, kid_first: Ints, root: Int,
-        mstart: Ints, mfirst: Ints, mcount: Ints, mto: Ints,
+        mstart: Ints, mfirst: Ints, mcount: Ints, mto: Ints, core: Int,
         fnames: Strs, fret: Ints, ffirst: Ints, fcount: Ints, fparams: Ints,
         fowner: Ints, fpub: Ints, vmod: Ints, vname: Strs, vfn: Ints,
         bnames: Strs, bret: Ints, bfirst: Ints, bcount: Ints, bparams: Ints,
@@ -2828,6 +2850,10 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
     let rnames = tb.names;
     let rowner = tb.owner;
     let rkind = tb.kind;
+    // The `Result` a `?` accepts: the entry the core prelude module declares under that
+    // name — a definition in a module identified by its key, never a name alone and never
+    // a position. `None` when the compilation has no prelude, and then nothing is one.
+    let core_result = record_owned(rnames, rowner, core, "Result");
     let rfirst = tb.first;
     let rcount = tb.count;
     let rfname = tb.fname;
@@ -3078,11 +3104,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                     continue;
                 }
                 let q = to - 1;
-                let result_decl = record_owned(rnames, rowner, core_module(mstart), "Result");
-                let mut is_result = false;
-                if result_decl >= 0 {
-                    if definition_of(tb, ot) == result_decl { is_result = true; }
-                }
+                let is_result = applies_core_result(tb, core_result, ot);
                 if is_result == false {
                     if ot != t_unknown() {
                         report(diags, "N0360", q, q + 1,
@@ -3096,8 +3118,7 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 let parts = type_args(tb, ot);
                 let ok = ints_get(parts, 0);
                 let fr = ints_get(cur_ret, 0);
-                let mut returns_result = false;
-                if definition_of(tb, fr) == result_decl { returns_result = true; }
+                let returns_result = applies_core_result(tb, core_result, fr);
                 if returns_result == false {
                     report(diags, "N0361", q, q + 1,
                             str_concat(str_concat(
@@ -3412,6 +3433,14 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
             // `arity` entries without knowing which children were statements. Anything
             // else makes the pop count depend on the shape of the children, which is how
             // a type stack underflows.
+            // A block written as an expression is its block: the same completion and the
+            // same type, `check_expr(Block) => check_block` in the reference. Its one
+            // child already left the one entry on `ts` this node owes.
+            if kind == n_blockexpr() {
+                ints_set(ncomp, k, ints_get(ncomp, ints_get(kids, first)));
+                ints_set(ntype, k, ints_get(ts, ints_len(ts) - 1));
+                continue;
+            }
             if kind == n_block() {
                 let mut t = t_unknown();
                 // What follows a child that leaves can never run, and the reference refuses
@@ -4496,12 +4525,14 @@ pub fn check_program(src: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: 
     let rfat = ints_new();
     let tb = new_table(rnames, rowner, rpub, rat, rnode, rkind, rfirst, rcount,
             rfname, rftype, rfat);
+    // The core prelude's module, found by its key — once, here, for every consumer below.
+    let core = core_module(mpath);
     let tmod = ints_new();
     let tname = strs_new();
     let trec = ints_new();
     collect_records(nk, nar, nst, nen, ntx, naux, mstart, tb, kids, kid_first,
             diags);
-    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath),
+    check_type_imports(mfirst, mcount, mto, mat, strs_len(mpath), core,
             rnames, rowner, rpub, rat, tmod, tname, trec, diags);
     resolve_record_fields(nk, nar, nst, nen, ntx, kids, kid_first, tb,
             tmod, tname, trec, diags);
@@ -4549,7 +4580,7 @@ pub fn check_program(src: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mcount: 
 
     check_all(nk, nar, nst, nen, ntx, naux, nslot, ntype, ncallee, nrec,
             kids, kid_first, ints_len(nk) - 1,
-            mstart, mfirst, mcount, mto,
+            mstart, mfirst, mcount, mto, core,
             fnames, fret, ffirst, fcount, fparams,
             fowner, fpub, vmod, vname, vfn,
             bnames, bret, bfirst, bcount, bparams,
