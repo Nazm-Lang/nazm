@@ -1,18 +1,19 @@
 # Capability matrix
 
-**Status: source-backed against `4fb15542dfbf9af0bf34c42fe52783637b3daed4`, the commit the
-retained candidate was built and tested at.**
+**Status: this file is the current status authority for the tree it is committed in.**
 
-**The capability claims remain grounded in the tested `4fb1554` implementation.** Changes
-since that tested tree are documentation, test and reference wiring, comments, or other
-non-capability changes. Specifically: every change under `compiler/`, `crates/nazm-lir/src`
-and `crates/nazm-core/src` is comment-only — verified by diffing with comment lines removed;
-the only shipping-code changes are two `evidence:` strings in
-`crates/nazm-cli/src/capabilities.rs` and the `--help` description in
-`crates/nazm-cli/src/main.rs`, both correcting stale prose rather than altering behaviour;
-the rest is test wiring and a new `cargo xtask check` rule. No behavioural change has been made
-to the compiler, and the workspace suite reports the same result. Where a row below rests on
-something newer, it says so.
+Two things are kept apart here. **`4fb15542dfbf9af0bf34c42fe52783637b3daed4` is a frozen
+historical candidate**: the commit a retained release candidate was built and tested at.
+Its evidence is [`releases/4fb1554.md`](releases/4fb1554.md), which is immutable and is not
+updated by anything that happened since. **The claims below are current-tree claims**, and
+they include behaviour added after that candidate — the milestones N7 through N13, each of
+which changed the compiler and ran its own evidence. They are not grounded in `4fb1554`,
+and nothing here says the tree has changed only in comments since then.
+
+Each row carries the evidence for the milestone that changed it — the tests, the contained
+runs and the dates — so a claim is checked against its row, not against a single commit. A
+row that rests on nothing newer than the candidate says so or cites only what the candidate
+already had.
 
 This is one table serving two purposes. The directive asked for a capability matrix and a
 gap map; they are the same information at the same granularity, so the five fields of a
@@ -1194,7 +1195,7 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **265** catalogued defects (158 when
+**Evidence** · `xtask/mutations/mutations.toml` holds **266** catalogued defects (158 when
 this sentence was first written, 233 at N12.2), **77** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
@@ -1417,11 +1418,15 @@ exists. **Campaign `418a5e5921b866cc`, targeted, one session, 1,997 s:** the 33 
 repointed and 12 existing entries whose target code N13's diff touched or sits beside — 58
 selected, 58 finalized. **57 caught**, 45 at tier 1 and 12 at tier 2, none at tier 3; no
 timeout, no runner error, nothing unapplied or unusable, no crash; the workspace suite ran
-once. **1 SURVIVED**: `n13-native-operands-are-released-before-they-are-compared`, a
-use-after-free that reads freed storage nothing has reused, so every answer and every counter
-is right. glibc 2.41 in the image ignores `MALLOC_PERTURB_` and `glibc.malloc.perturb`
-(measured), and a sanitizer is a framework this project does not use, so it is **retired
-with that evidence** in the catalogue — not caught, and not called equivalent. Three
+once. **1 SURVIVED**: `n13-native-operands-are-released-before-they-are-compared`, a real
+use-after-free — the helper reads operands whose storage was just released. It is **not
+equivalent** and is **not counted as caught**. It survives because nothing allocates between
+the release and the read, so the freed bytes are unchanged and every answer and counter is
+right; glibc 2.41 in the image ignores `MALLOC_PERTURB_` and `glibc.malloc.perturb`
+(measured), so **no deterministic direct killer exists under the supported allocator and
+harness**. It stays **live** in the catalogue, with the `native` profile and a `no_killer`
+reason, as a known surviving mutation: a mutation-sensitivity limitation of this suite, not
+a verdict about the defect. Three
 candidate killers were refuted by verification and not used. The whole catalogue was not
 re-run: N13 did not change the harness, and the two open MUTANT CRASH entries were not
 reached by it.
@@ -1432,7 +1437,10 @@ verdict it could not get); N12.1's process-group kills used `kill -KILL -<pgid>`
 procps rejects, so inside the container they signalled nothing; and a session killed at its
 deadline was reported as a memory limit.
 
-**Limitation** · Two catalogued defects are MUTANT CRASH, not caught (above). A campaign is
+**Limitation** · Two catalogued defects are MUTANT CRASH, not caught (above), and one N13
+defect is a known survivor (above): the suite cannot observe a read of freed storage nothing
+has reused. **VERIFIED here means the harness runs every catalogued mutant and accounts for
+every verdict — not that every meaningful mutation is killed.** A campaign is
 five sessions, each paying a cold build and a baseline (about 355 s); journal lines reach the
 host when a container ends, so a supervisor killed mid-session loses that session's verdicts,
 which then simply run again. The 71 entries in `compiler/` cost 45 % of per-mutant time,
