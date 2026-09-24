@@ -1825,6 +1825,17 @@ fn lower_binary(
         ctx.unsupported(op_span, &format!("ordering `{}` values", operand_ty.name()));
         return None;
     }
+    // Unreachable after checking, which gives a handle no equality (`N0304`). Refused
+    // rather than emitted, because the only instruction that fits a pointer is an `icmp`
+    // on it, and that would answer "the same storage" — the one choice the language has
+    // not made.
+    if matches!(operand_ty, Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_)) {
+        ctx.unsupported(
+            op_span,
+            &format!("comparing `{}` values", operand_ty.name()),
+        );
+        return None;
+    }
     Some(Expr::Compare {
         op: cmp,
         operand_ty,
