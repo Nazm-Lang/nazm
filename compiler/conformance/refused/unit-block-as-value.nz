@@ -1,0 +1,12 @@
+// expect: N0300
+// A block whose last statement ends in `;` has no value to give an argument.
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn main() -> Int {
+    let mut z = 0;
+    add({
+        z = 1;
+    }, 2)
+}

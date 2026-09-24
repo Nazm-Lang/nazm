@@ -650,6 +650,23 @@ pub enum Stmt {
         then_body: Vec<Stmt>,
         else_body: Option<Vec<Stmt>>,
     },
+    /// Statement-position `match`. Produces no value; any arm may transfer control.
+    ///
+    /// The same source `match` as [`Expr::Match`], found where no value is wanted — the
+    /// pairing [`Stmt::If`] and [`Expr::If`] already have, for the same reason. An arm
+    /// here may complete with nothing (`E.A() => { x = 1; }`), which the checker accepts
+    /// in this position and which a value [`Block`] cannot represent: its `None` result
+    /// means *never arrives*, not *arrives with nothing*.
+    ///
+    /// Everything else is the value form's: the scrutinee evaluated once into `slot`, a
+    /// hidden local this statement owns, each binding an ordinary [`Stmt::Let`] at the
+    /// head of its arm's body, and the scrutinee released where the arms rejoin.
+    Match {
+        scrutinee: Expr,
+        scrutinee_ty: Ty,
+        slot: usize,
+        arms: Vec<StatementArm>,
+    },
     /// An expression evaluated for its effects, its value discarded.
     ///
     /// Where the language permits a tail in a position that wants no value: the end of a
@@ -865,6 +882,24 @@ pub enum Expr {
         /// transfers happen — but it never yields anything, and no `phi` is written.
         ty: Option<Ty>,
     },
+    /// `{ statements; tail }` written where a value is wanted: a `let` initialiser, an
+    /// argument, a field initialiser, an operand.
+    ///
+    /// The same [`Block`] a function body, an `if` branch and a `match` arm are, emitted
+    /// by the same code — the language has one block, and a value position only decides
+    /// that its tail is used. Its bindings need no scope here: resolution already gave
+    /// each one a slot of its own, which is how an `if` branch's bindings work too.
+    Block(Box<Block>),
+}
+
+/// One arm of a lowered [`Stmt::Match`]: a discriminant, and statements with no value.
+///
+/// The pattern's bindings are the first statements of `body`, exactly as they are the
+/// first statements of a [`MatchArm`]'s block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatementArm {
+    pub tag: u32,
+    pub body: Vec<Stmt>,
 }
 
 /// One arm of a lowered [`Expr::Match`].
@@ -908,6 +943,7 @@ impl Expr {
             | Self::Variant { ty, .. }
             | Self::Payload { ty, .. } => Some(*ty),
             Self::If { ty, .. } | Self::Match { ty, .. } => *ty,
+            Self::Block(b) => b.result.as_ref().and_then(|e| e.ty()),
         }
     }
 }

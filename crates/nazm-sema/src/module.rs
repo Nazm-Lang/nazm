@@ -322,6 +322,29 @@ mod tests {
     }
 
     #[test]
+    fn the_prelude_is_found_by_its_key_wherever_it_sits() {
+        // N12.1: the loader happens to put the prelude last, and nothing may depend on it.
+        // A module added after it, and a graph whose prelude comes first, both still name
+        // the module keyed `@core/prelude` — and a graph with no such key has none, however
+        // many modules it has.
+        let mut after = ModuleGraph::default();
+        after.add(FileId::ROOT, None);
+        let core = after.attach_prelude(FileId::from_index(1));
+        after.add(FileId::from_index(2), ModuleKey::relative("late.nz"));
+        assert_eq!(after.prelude(), Some(core));
+
+        let mut first = ModuleGraph::default();
+        let core = first.add(FileId::ROOT, Some(ModuleKey::prelude()));
+        first.add(FileId::from_index(1), ModuleKey::relative("a.nz"));
+        assert_eq!(first.prelude(), Some(core));
+
+        let mut none = ModuleGraph::default();
+        none.add(FileId::ROOT, ModuleKey::relative("a.nz"));
+        none.add(FileId::from_index(1), ModuleKey::relative("b.nz"));
+        assert_eq!(none.prelude(), None);
+    }
+
+    #[test]
     fn a_module_knows_its_file_and_a_file_its_module() {
         let mut g = ModuleGraph::default();
         let a = g.add(FileId::ROOT, None);

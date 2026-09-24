@@ -413,17 +413,8 @@ fn constructs_outside_the_subset_are_refused_and_nothing_is_emitted() {
             "fn main() -> Str {\n    \"hi\"\n}\n",
             "a `main` that does not return `Int`",
         ),
-        (
-            "fn main() -> Int {\n    { 1 }\n}\n",
-            "a block used as an expression",
-        ),
-        // A bare block used as an expression is the one construct left outside the
-        // subset that is not recursion. Expression statements compile since B2: a
-        // language with no unit type otherwise forces a binding at every mutation.
-        (
-            "fn main() -> Int {\n    { let y = 2; };\n    3\n}\n",
-            "a block used as an expression",
-        ),
+        // A bare block used as an expression left this list in N12.1: the backend
+        // lowers every block through the one `lower_block`, in every position.
     ];
 
     for (src, expected) in cases {
@@ -493,7 +484,12 @@ fn a_program_that_does_not_check_is_a_check_failure_not_a_subset_failure() {
 
 #[test]
 fn build_diagnostics_are_available_as_json() {
-    let (dir, src) = write_program("fn main() -> Int {\n    { 1 }\n}\n");
+    // Recursion, the construct left outside the subset; a bare block was this case until
+    // N12.1 compiled one.
+    let (dir, src) = write_program(
+        "fn f(n: Int) -> Int { if n < 1 { return 0; } return f(n - 1); }\n\
+         fn main() -> Int {\n    f(2)\n}\n",
+    );
     let out = Command::new(NAZM)
         .args(["build", src.to_str().unwrap(), "--json"])
         .arg("-o")
@@ -956,23 +952,18 @@ fn front_end_type_errors_are_not_reported_as_backend_limits() {
 
 #[test]
 fn unsupported_constructs_inside_a_branch_are_refused_by_the_backend() {
+    // A bare block inside a branch was the other construct here until N12.1, which
+    // compiles one. Recursion is what is left, reached from either branch.
     let cases: &[(&str, &str)] = &[
-        (
-            "fn main() -> Int {\n    if true { { 1 } } else { 0 }\n}\n",
-            "a block used as an expression",
-        ),
-        (
-            "fn main() -> Int {\n    if true { { let y = 2; }; 1 } else { 0 }\n}\n",
-            "a block used as an expression",
-        ),
         (
             "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) } }\n\
              fn main() -> Int {\n    if true { f(3) } else { 0 }\n}\n",
             "from inside itself",
         ),
         (
-            "fn main() -> Int {\n    if true { { 1 } } else { 0 }\n}\n",
-            "a block used as an expression",
+            "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) } }\n\
+             fn main() -> Int {\n    if false { 0 } else { f(3) }\n}\n",
+            "from inside itself",
         ),
     ];
 
@@ -999,37 +990,20 @@ fn unsupported_constructs_inside_a_branch_are_refused_by_the_backend() {
 
 #[test]
 fn a_statement_position_if_compiles_but_other_expression_statements_do_not() {
-    // M1e adds the statement `if` and **only** that. The other expression statements —
-    // a bare block, a discarded call, a bare arithmetic expression — are separate
-    // constructs with their own questions, and they stay refused so that adding one did
-    // not quietly add the rest.
+    // M1e added the statement `if` and **only** that; a discarded call and a bare
+    // arithmetic expression followed in B2, and a bare block — in statement and in value
+    // position — in N12.1. Each is its own construct, and each is held here by value.
     expect_value("    let mut x = 1;\n    if x > 0 { x = 5; }\n    x", "5");
     // With no `else` and a false condition, the statement still falls through.
     expect_value("    let mut x = 1;\n    if x > 9 { x = 5; }\n    x", "1");
 
     expect_value("    1 + 1;\n    3", "3");
 
-    for (src, expected) in [
-        (
-            "fn main() -> Int {\n    { let y = 2; };\n    3\n}\n",
-            "a block used as an expression",
-        ),
-        (
-            "fn main() -> Int {\n    { 1 }\n}\n",
-            "a block used as an expression",
-        ),
-    ] {
-        let (dir, path) = write_program(src);
-        let out = Command::new(NAZM)
-            .args(["build", path.to_str().unwrap()])
-            .arg("-o")
-            .arg(dir.path().join("prog"))
-            .output()
-            .expect("run");
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(1), "{stderr}");
-        assert!(stderr.contains(expected), "expected {expected:?}: {stderr}");
-    }
+    expect_value(
+        "    let mut x = 1;\n    { let y = 2; x = x + y; };\n    x",
+        "3",
+    );
+    expect_value("    { 1 }", "1");
 }
 
 #[test]
@@ -1130,7 +1104,7 @@ fn deep_syntax_produces_exactly_the_expected_outcome() {
 /// distinguishes a nesting diagnostic from a backend limitation — two different refusals
 /// that an `is_some()` assertion would have conflated.
 #[test]
-fn deeply_nested_blocks_check_but_are_refused_by_the_backend() {
+fn deeply_nested_blocks_check_and_compile() {
     let nest = |n: usize| {
         format!(
             "fn main() -> Int {{\n{}1{}\n}}\n",
@@ -1146,19 +1120,16 @@ fn deeply_nested_blocks_check_but_are_refused_by_the_backend() {
         "`nazm check` on 255 nested blocks",
     );
 
-    // And the backend refuses it — as a *backend limitation*, not a nesting error.
+    // And the backend compiles it. Until N12.1 it refused a block used as an expression, so
+    // this nesting was a backend limitation; now each level is one more `Expr::Block`.
     let exe = dir.path().join("prog");
     let built = nazm(
         &["build", src.to_str().unwrap(), "-o", exe.to_str().unwrap()],
         &dir,
     );
-    assert_diagnostic(&built, "N0101", "`nazm build` on 255 nested blocks");
-    assert!(
-        built.stderr.contains("a block used as an expression"),
-        "the backend limitation should name the construct: {}",
-        built.stderr
-    );
-    assert!(!exe.exists());
+    assert_ok(&built, "`nazm build` on 255 nested blocks");
+    let ran = Command::new(&exe).output().expect("run the program");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "1");
 
     // Past the limit: the nesting diagnostic, from the parser, before anything else.
     let (dir, src) = write_program(&nest(400));
@@ -1645,18 +1616,14 @@ fn call_errors_belong_to_the_checker_not_the_backend() {
 #[test]
 fn unsupported_signatures_and_bodies_are_refused_by_name() {
     for (src, expected) in [
+        // Bare-block bodies were these cases until N12.1, which compiles them.
         (
-            "fn f(n: Int) -> Int { { 1 } }\nfn main() -> Int { f(1) }\n",
-            "a block used as an expression",
+            "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) } }\nfn main() -> Int { f(1) }\n",
+            "from inside itself",
         ),
         (
-            "fn f(n: Int) -> Int {\n    let mut t = n;\n    while t < 10 { { t = t + 1; }; }\n    t\n}\n\
-             fn main() -> Int { f(1) }\n",
-            "a block used as an expression",
-        ),
-        (
-            "fn f(n: Int) -> Int { { let y = 2; }; n }\nfn main() -> Int { f(1) }\n",
-            "a block used as an expression",
+            "fn main() -> Bool {\n    true\n}\n",
+            "a `main` that does not return `Int`",
         ),
     ] {
         let (dir, path) = write_program(src);
@@ -2074,24 +2041,23 @@ fn assignment_and_loop_condition_errors_belong_to_the_checker() {
 
 #[test]
 fn unsupported_control_flow_inside_a_loop_is_refused_and_nothing_is_published() {
-    // What is left after B2. `break`, `continue`, statement `if`, `return`, `Str` and
-    // discarded expressions all compile now, so what remains inside a loop is a bare
-    // block used as an expression, and recursion.
+    // What is left after B2 and N12.1. `break`, `continue`, statement `if`, `return`,
+    // `Str`, discarded expressions and — since N12.1 — a bare block all compile now, so
+    // what remains inside a loop is recursion.
     for (src, expected) in [
-        (
-            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; { 1 }; }\n    i\n}\n",
-            "a block used as an expression",
-        ),
-        (
-            "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { { 1 }; i = i + 1; }\n    i\n}\n",
-            "a block used as an expression",
-        ),
         // Recursion, reached from inside a loop. Still refused, and still for a reason
         // about the stack rather than about loops.
         (
             "fn f(n: Int) -> Int { if n < 1 { return 0; } return f(n - 1); }\n\
              fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1 + f(2); }\n    i\n}\n",
             "from inside itself",
+        ),
+        // And through a second function: a cycle, not a self-call.
+        (
+            "fn f(n: Int) -> Int { if n < 1 { return 0; } return g(n - 1); }\n\
+             fn g(n: Int) -> Int { f(n) }\n\
+             fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1 + g(2); }\n    i\n}\n",
+            "a call cycle through",
         ),
     ] {
         let (dir, path) = write_program(src);
@@ -2156,7 +2122,8 @@ fn a_working_loop_executable_survives_a_later_refused_build() {
     // Now edit the source to something the backend refuses.
     std::fs::write(
         &src,
-        "fn main() -> Int {\n    let mut i = 0;\n    while i < 5 { i = i + 1; { 1 }; }\n    i\n}\n",
+        "fn f(n: Int) -> Int { if n < 1 { return 0; } return f(n - 1); }\n\
+         fn main() -> Int {\n    let mut i = 0;\n    while i < 5 { i = i + 1 + f(1); }\n    i\n}\n",
     )
     .expect("write");
     let second = Command::new(NAZM)
@@ -3695,23 +3662,14 @@ fn a_program_without_sequences_carries_none_of_their_runtime() {
 }
 
 #[test]
-fn a_call_may_be_a_statement_but_a_bare_block_may_not() {
+fn a_call_and_a_bare_block_may_each_be_a_statement() {
     expect_value(
         "    let a = ints_new();\n    ints_push(a, 1);\n    ints_push(a, 2);\n    ints_len(a)",
         "2",
     );
     expect_value("    1 + 1;\n    3", "3");
-
-    let (dir, path) = write_program("fn main() -> Int {\n    { let y = 2; };\n    3\n}\n");
-    let out = Command::new(NAZM)
-        .args(["build", path.to_str().unwrap()])
-        .arg("-o")
-        .arg(dir.path().join("prog"))
-        .output()
-        .expect("run");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("a block used as an expression"), "{stderr}");
+    // A bare block was refused here until N12.1; it is a statement like any other now.
+    expect_value("    { let y = 2; };\n    3", "3");
 }
 
 // ---------------------------------------------------------------------------

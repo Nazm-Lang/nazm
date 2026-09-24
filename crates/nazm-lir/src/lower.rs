@@ -60,8 +60,8 @@ use nazm_sema::udt::TypeNode;
 use crate::instance::{plan_instances, InstanceKey, Instances};
 use crate::ir::{
     fits, ArithOp, Block, Builtin, CmpOp, EnumLayout, EnumTy, Expr, External, Function, Local,
-    Lowering as _, MatchArm, Native, RecordLayout, RecordTy, Stmt, Ty, Unit, VariantLayout,
-    VecLayout, VecTy,
+    Lowering as _, MatchArm, Native, RecordLayout, RecordTy, StatementArm, Stmt, Ty, Unit,
+    VariantLayout, VecLayout, VecTy,
 };
 use crate::symbol::{encoded, type_key, Linkage, NativeSymbol, NativeTypeName};
 
@@ -1248,24 +1248,55 @@ fn lower_body(ctx: &mut Ctx<'_>, b: &AstBlock) -> (Vec<Stmt>, Ends) {
             // which is also what emission would do with it.
             return (stmts, ends);
         }
-        if let AstExpr::If {
+        let (effect, tail_ends) = lower_effect(ctx, tail);
+        stmts.extend(effect);
+        return (stmts, tail_ends);
+    }
+
+    (stmts, ends)
+}
+
+/// An expression found where no value is wanted: an expression statement, or the tail of
+/// a block that wants none.
+///
+/// The three constructs that contain blocks keep their statement form here, because each
+/// may complete with nothing — a branch or an arm that only assigns — and a value form
+/// cannot say so. An `if` becomes [`Stmt::If`], a `match` [`Stmt::Match`], and a bare
+/// block its own statements in place: resolution gave its bindings their own slots, so
+/// no scope has to be marked. Anything else is evaluated and its value dropped, which is
+/// what `nazm run` does with it.
+fn lower_effect(ctx: &mut Ctx<'_>, e: &AstExpr) -> (Vec<Stmt>, Ends) {
+    match e {
+        AstExpr::If {
             cond,
             then_block,
             else_block,
             span,
-        } = tail.as_ref()
-        {
-            let (stmt, tail_ends) =
+        } => {
+            let (stmt, ends) =
                 lower_statement_if(ctx, cond, then_block, else_block.as_ref(), *span);
-            stmts.extend(stmt);
-            return (stmts, tail_ends);
+            (stmt.into_iter().collect(), ends)
         }
-        if let Some(value) = lower_expr(ctx, tail) {
-            stmts.push(Stmt::Discard(value));
+        AstExpr::Match {
+            scrutinee,
+            arms,
+            span,
+        } => {
+            let (stmt, ends) = lower_statement_match(ctx, scrutinee, arms, *span);
+            (stmt.into_iter().collect(), ends)
         }
+        AstExpr::Block(b) => lower_body(ctx, b),
+        // A sequence operation is written this way (`ints_push(a, 1);`), and having to
+        // bind a result nobody wants would be a workaround for the language's lack of a
+        // unit type rather than a rule worth having.
+        other => (
+            lower_expr(ctx, other)
+                .map(Stmt::Discard)
+                .into_iter()
+                .collect(),
+            Ends::FallsThrough,
+        ),
     }
-
-    (stmts, ends)
 }
 
 /// The statements every kind of block shares.
@@ -1350,34 +1381,15 @@ fn lower_stmts(ctx: &mut Ctx<'_>, statements: &[AstStmt]) -> (Vec<Stmt>, Ends) {
                     return (stmts, Ends::Transfers);
                 }
             }
-            // A statement-position `if`: the same `if` as everywhere else, found where
-            // no value is wanted.
-            AstStmt::Expr(AstExpr::If {
-                cond,
-                then_block,
-                else_block,
-                span,
-            }) => {
-                let (stmt, ends) =
-                    lower_statement_if(ctx, cond, then_block, else_block.as_ref(), *span);
-                stmts.extend(stmt);
+            // An expression statement: the same `if`, `match` or block as everywhere
+            // else, found where no value is wanted, or any other expression evaluated and
+            // its value dropped — which is what the language means by putting a `;` after
+            // an expression. See `lower_effect`.
+            AstStmt::Expr(e) => {
+                let (effect, ends) = lower_effect(ctx, e);
+                stmts.extend(effect);
                 if ends == Ends::Transfers {
                     return (stmts, ends);
-                }
-            }
-            // Every other expression statement: evaluated, and its value dropped —
-            // which is what `nazm run` does with it, and what the language means by
-            // putting a `;` after an expression. A sequence operation is written this
-            // way (`ints_push(a, 1);`), and having to bind a result nobody wants would
-            // be a workaround for the language's lack of a unit type rather than a
-            // rule worth having.
-            //
-            // A bare block is still refused, because `lower_expr` refuses
-            // `AstExpr::Block` — the refusal lives with the construct rather than with
-            // the position it was found in.
-            AstStmt::Expr(e) => {
-                if let Some(value) = lower_expr(ctx, e) {
-                    stmts.push(Stmt::Discard(value));
                 }
             }
         }
@@ -1664,12 +1676,10 @@ fn lower_expr(ctx: &mut Ctx<'_>, e: &AstExpr) -> Option<Expr> {
             else_block,
             span,
         } => lower_if(ctx, cond, then_block, else_block.as_ref(), *span),
-        // Only an `if` branch may be a block. A bare one is a different construct with a
-        // different scoping question, and this increment does not answer it.
-        AstExpr::Block(b) => {
-            ctx.unsupported(b.span, "a block used as an expression");
-            None
-        }
+        // The block every other block is, in a position that uses its value. Its scope
+        // question is already answered: resolution gave each binding inside it a slot of
+        // its own, exactly as it does inside an `if` branch.
+        AstExpr::Block(b) => lower_block(ctx, b).map(|b| Expr::Block(Box::new(b))),
     }
 }
 
@@ -2057,38 +2067,25 @@ fn lower_match(
     let mut lowered_arms: Vec<MatchArm> = Vec::with_capacity(arms.len());
     let mut result: Option<Ty> = None;
     for arm in arms {
-        let to = ctx.res.variant(arm.variant_span)?;
-        let tag = ctx.tag(eid, to.variant)?;
-        let mut stmts: Vec<Stmt> = Vec::new();
-        for f in &arm.fields {
-            // A discard names no binding, so there is nothing to lower — and nothing is
-            // lost: the value is the scrutinee's, and the scrutinee is released whole.
-            let Some(binding) = &f.binding else { continue };
-            let _ = binding;
-            let at = ctx
-                .res
-                .payload(f.name_span)
-                .and_then(|p| ctx.payload_index(eid, tag, p.field))?;
-            let (binding_slot, ty) = ctx.slot_at(f.binding_span)?;
-            ctx.note(ty);
-            stmts.push(Stmt::Let {
-                slot: binding_slot,
-                value: Expr::Payload {
-                    base: Box::new(Expr::Load {
-                        slot,
-                        ty: scrutinee_ty,
-                    }),
-                    base_ty: scrutinee_ty,
-                    tag,
-                    at,
-                    ty,
-                },
-            });
-        }
-        let body = lower_expr(ctx, &arm.body);
-        let block = Block {
-            stmts,
-            result: body.map(Box::new),
+        let (tag, mut stmts) = lower_arm_head(ctx, arm, eid, scrutinee_ty, slot)?;
+        // An arm written as a block is that block: its statements run after the
+        // bindings, in the arm's own branch, and its tail is the arm's value. Lowered by
+        // the one function every value block goes through, so an arm cannot acquire a
+        // completion rule of its own — a block whose statements all leave has no result,
+        // which is what keeps a transferring arm out of the join.
+        let block = match &arm.body {
+            AstExpr::Block(b) => {
+                let inner = lower_block(ctx, b)?;
+                stmts.extend(inner.stmts);
+                Block {
+                    stmts,
+                    result: inner.result,
+                }
+            }
+            body => Block {
+                stmts,
+                result: lower_expr(ctx, body).map(Box::new),
+            },
         };
         if let Some(t) = block.result.as_ref().and_then(|e| e.ty()) {
             result = Some(t);
@@ -2106,6 +2103,111 @@ fn lower_match(
         arms: lowered_arms,
         ty: result,
     })
+}
+
+/// Statement-position `match`: the arms are statements, and one may complete with
+/// nothing.
+///
+/// Shaped like [`lower_statement_if`], and for the same reason: the source `match` is one
+/// construct, and what differs between positions is completion. The statement transfers
+/// only when **every** arm does; one arm falling through is a path past it.
+fn lower_statement_match(
+    ctx: &mut Ctx<'_>,
+    scrutinee: &AstExpr,
+    arms: &[AstArm],
+    span: Span,
+) -> (Option<Stmt>, Ends) {
+    let lowered = lower_expr(ctx, scrutinee);
+    let Some(scrutinee_ty) = lowered.as_ref().and_then(Expr::ty) else {
+        // A scrutinee that failed to lower has reported; one that always transfers leaves
+        // before any arm could run, so nothing after it is reachable either.
+        return match lowered {
+            Some(e) => (Some(Stmt::Discard(e)), Ends::Transfers),
+            None => (None, Ends::FallsThrough),
+        };
+    };
+    let Ty::Enum(eid) = scrutinee_ty else {
+        ctx.unsupported(span, "a `match` on something that is not an enum");
+        return (None, Ends::FallsThrough);
+    };
+    ctx.note(scrutinee_ty);
+    let slot = ctx.hidden(scrutinee_ty, "match");
+
+    let mut lowered_arms: Vec<StatementArm> = Vec::with_capacity(arms.len());
+    let mut every_arm_leaves = !arms.is_empty();
+    for arm in arms {
+        let Some((tag, mut body)) = lower_arm_head(ctx, arm, eid, scrutinee_ty, slot) else {
+            return (None, Ends::FallsThrough);
+        };
+        let (effect, ends) = lower_effect(ctx, &arm.body);
+        body.extend(effect);
+        if ends == Ends::FallsThrough {
+            every_arm_leaves = false;
+        }
+        lowered_arms.push(StatementArm { tag, body });
+    }
+
+    let ends = if every_arm_leaves {
+        Ends::Transfers
+    } else {
+        Ends::FallsThrough
+    };
+    let Some(scrutinee) = lowered else {
+        return (None, ends);
+    };
+    (
+        Some(Stmt::Match {
+            scrutinee,
+            scrutinee_ty,
+            slot,
+            arms: lowered_arms,
+        }),
+        ends,
+    )
+}
+
+/// One arm's discriminant, and its pattern's bindings as the first statements of its body.
+///
+/// Shared by both forms of `match`, so a binding means the same thing whether or not the
+/// `match` produces a value: an ordinary [`Stmt::Let`] of an [`Expr::Payload`], which takes
+/// its own reference through the one path that already gets take-before-release right.
+fn lower_arm_head(
+    ctx: &mut Ctx<'_>,
+    arm: &AstArm,
+    eid: EnumTy,
+    scrutinee_ty: Ty,
+    slot: usize,
+) -> Option<(u32, Vec<Stmt>)> {
+    let to = ctx.res.variant(arm.variant_span)?;
+    let tag = ctx.tag(eid, to.variant)?;
+    let mut stmts: Vec<Stmt> = Vec::new();
+    for f in &arm.fields {
+        // A discard names no binding, so there is nothing to lower — and nothing is
+        // lost: the value is the scrutinee's, and the scrutinee is released whole.
+        if f.binding.is_none() {
+            continue;
+        }
+        let at = ctx
+            .res
+            .payload(f.name_span)
+            .and_then(|p| ctx.payload_index(eid, tag, p.field))?;
+        let (binding_slot, ty) = ctx.slot_at(f.binding_span)?;
+        ctx.note(ty);
+        stmts.push(Stmt::Let {
+            slot: binding_slot,
+            value: Expr::Payload {
+                base: Box::new(Expr::Load {
+                    slot,
+                    ty: scrutinee_ty,
+                }),
+                base_ty: scrutinee_ty,
+                tag,
+                at,
+                ty,
+            },
+        });
+    }
+    Some((tag, stmts))
 }
 
 /// `operand?` — lowered to the `match` it means, with no construct of its own.
