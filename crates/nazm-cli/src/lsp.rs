@@ -13,10 +13,20 @@
 //! # What is offered
 //!
 //! Exactly what is implemented, and the initialize response says so: full-document
-//! synchronisation (open, change, close), published diagnostics, definition, hover and
-//! references (N17). No completion, rename, formatting, symbols, code actions, semantic
-//! tokens, watched files or cancellation — a client is never told something exists that
-//! the server would then ignore.
+//! synchronisation (open, change, close), published diagnostics, definition, hover,
+//! references (N17), and prepare-rename and rename (N18). No completion, formatting,
+//! symbols, code actions, semantic tokens, watched files or cancellation — a client is never
+//! told something exists that the server would then ignore.
+//!
+//! # What a rename can promise over this protocol
+//!
+//! The service's plan carries, for every file it edits, the exact text it was computed
+//! from. The protocol can hold a client to less: a document **version**, and only for a
+//! document the client has open — a `null` version means "whatever is on disk", with no
+//! precondition at all. So a rename is returned only as versioned `documentChanges`, only to
+//! a client that says it accepts them, and only when every file the plan edits is an open
+//! document at the version the plan was validated against. Otherwise the rename is refused
+//! with a message, rather than sent as an edit the client could apply to other bytes.
 //!
 //! # Standard output is the protocol
 //!
@@ -42,10 +52,11 @@ use lsp_types::{
     Diagnostic as LspDiagnostic, DiagnosticSeverity, GotoDefinitionParams, GotoDefinitionResponse,
     Hover as LspHover, HoverContents, HoverParams, HoverProviderCapability, InitializeResult,
     Location as LspLocation, MarkupContent, MarkupKind, NumberOrString, OneOf, Position,
-    PositionEncodingKind, PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities,
-    ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
+    PositionEncodingKind, PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams,
+    RenameOptions, RenameParams, ServerCapabilities, ServerInfo, TextDocumentPositionParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
 };
-use nazm_service::{LanguageService, Published, Target};
+use nazm_service::{LanguageService, Published, RenamePlan, Target};
 
 /// `nazm lsp`: serve one client on stdin and stdout until it says `exit`.
 pub(crate) fn run(source_root: Option<&Path>) -> ExitCode {
@@ -90,6 +101,10 @@ fn capabilities() -> ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         references_provider: Some(OneOf::Left(true)),
+        rename_provider: Some(OneOf::Right(RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+        })),
         ..ServerCapabilities::default()
     }
 }
@@ -105,9 +120,15 @@ fn serve(connection: &Connection, root: Option<PathBuf>) -> Result<(), String> {
     let init = serde_json::to_value(init).map_err(|e| e.to_string())?;
     // `initialize_start`/`initialize_finish` rather than `initialize`, which takes only the
     // capabilities and would wrap them again: the response must be one `InitializeResult`.
-    let (id, _params) = connection
+    let (id, params) = connection
         .initialize_start()
         .map_err(|e| format!("initialize: {e}"))?;
+    // Whether the client accepts `documentChanges`, which is the only form in which an
+    // edit can carry the document version it is valid against.
+    let versioned_edits = params
+        .pointer("/capabilities/workspace/workspaceEdit/documentChanges")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     connection
         .initialize_finish(id, init)
         .map_err(|e| format!("initialize: {e}"))?;
@@ -115,6 +136,7 @@ fn serve(connection: &Connection, root: Option<PathBuf>) -> Result<(), String> {
     let mut server = Server {
         service: LanguageService::with_source_root(root),
         versions: HashMap::new(),
+        versioned_edits,
     };
     for message in &connection.receiver {
         match message {
@@ -155,6 +177,8 @@ struct Server {
     service: LanguageService,
     /// The current version of each open document, by path.
     versions: HashMap<PathBuf, i32>,
+    /// Whether the client said it accepts versioned `documentChanges`.
+    versioned_edits: bool,
 }
 
 impl Server {
@@ -211,7 +235,9 @@ impl Server {
     }
 
     fn request(&self, req: Request) -> Response {
-        use lsp_types::request::{GotoDefinition, HoverRequest, References};
+        use lsp_types::request::{
+            GotoDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
+        };
         let id = req.id.clone();
         let result = match req.method.as_str() {
             GotoDefinition::METHOD => serde_json::from_value::<GotoDefinitionParams>(req.params)
@@ -223,6 +249,20 @@ impl Server {
             References::METHOD => serde_json::from_value::<ReferenceParams>(req.params)
                 .map_err(|e| e.to_string())
                 .map(|p| self.references(&p)),
+            PrepareRenameRequest::METHOD => {
+                serde_json::from_value::<TextDocumentPositionParams>(req.params)
+                    .map_err(|e| e.to_string())
+                    .map(|p| self.prepare_rename(&p))
+            }
+            Rename::METHOD => match serde_json::from_value::<RenameParams>(req.params) {
+                Ok(p) => match self.rename(&p) {
+                    Ok(edit) => Ok(edit),
+                    Err(why) => {
+                        return Response::new_err(id, ErrorCode::RequestFailed as i32, why);
+                    }
+                },
+                Err(e) => Err(e.to_string()),
+            },
             other => {
                 return Response::new_err(
                     id,
@@ -308,6 +348,47 @@ impl Server {
         serde_json::to_value(out).unwrap_or(serde_json::Value::Null)
     }
 
+    /// `textDocument/prepareRename`: the token and its current spelling, or `null` for a
+    /// position the service would not rename — whatever the reason, which `rename` states.
+    fn prepare_rename(&self, p: &TextDocumentPositionParams) -> serde_json::Value {
+        let Some((path, version, offset)) = self.locate(&p.text_document.uri, p.position) else {
+            return serde_json::Value::Null;
+        };
+        let (Ok(r), Some(text)) = (
+            self.service.prepare_rename(&path, version, offset),
+            self.service.text(&path),
+        ) else {
+            return serde_json::Value::Null;
+        };
+        let index = LineIndex::new(&text);
+        serde_json::to_value(PrepareRenameResponse::RangeWithPlaceholder {
+            range: Range {
+                start: index.position(r.start),
+                end: index.position(r.end),
+            },
+            placeholder: r.name,
+        })
+        .unwrap_or(serde_json::Value::Null)
+    }
+
+    /// `textDocument/rename`: the service's validated plan as a versioned edit, or the
+    /// reason there is none.
+    fn rename(&self, p: &RenameParams) -> Result<serde_json::Value, String> {
+        let tdp = &p.text_document_position;
+        let (path, version, offset) = self
+            .locate(&tdp.text_document.uri, tdp.position)
+            .ok_or_else(|| "the document is not open".to_owned())?;
+        let plan = self
+            .service
+            .rename(&path, version, offset, &p.new_name)
+            .map_err(|r| format!("nazm cannot rename this: {r}"))?;
+        if !self.service.plan_is_current(&plan) {
+            return Err("the program changed while the rename was being planned".to_owned());
+        }
+        let edit = workspace_edit(&plan, self.versioned_edits)?;
+        serde_json::to_value(edit).map_err(|e| e.to_string())
+    }
+
     fn hover(&self, p: &HoverParams) -> serde_json::Value {
         let tdp = &p.text_document_position_params;
         let Some((path, version, offset)) = self.locate(&tdp.text_document.uri, tdp.position)
@@ -333,6 +414,61 @@ impl Server {
         })
         .unwrap_or(serde_json::Value::Null)
     }
+}
+
+/// A rename plan as the protocol's edit: `documentChanges`, one per file, each tied to the
+/// version of the open document the plan was validated against.
+///
+/// Refused, not weakened, when the protocol cannot hold the client to the plan's
+/// precondition: a client that does not accept versioned changes, or a file the plan edits
+/// that is not open — whose version would be `null`, which the protocol defines as "the
+/// disk is the master", with no check of what the disk now holds.
+fn workspace_edit(plan: &RenamePlan, versioned: bool) -> Result<lsp_types::WorkspaceEdit, String> {
+    use lsp_types::{
+        DocumentChanges, OptionalVersionedTextDocumentIdentifier, TextDocumentEdit, TextEdit,
+    };
+    if !versioned {
+        return Err(
+            "this client does not accept versioned edits, so a rename could be applied to a              document that has since changed"
+                .to_owned(),
+        );
+    }
+    let mut changes = Vec::with_capacity(plan.files.len());
+    for f in &plan.files {
+        let Some(version) = f.version else {
+            return Err(format!(
+                "{} must change and is not open; a closed file's content cannot be made a                  condition of the edit, so open it and ask again",
+                f.path.display()
+            ));
+        };
+        let uri = uri_of(&f.path).ok_or_else(|| format!("{} has no URI", f.path.display()))?;
+        let index = LineIndex::new(&f.text);
+        let edits = f
+            .edits
+            .iter()
+            .map(|e| {
+                OneOf::Left(TextEdit {
+                    range: Range {
+                        start: index.position(e.start),
+                        end: index.position(e.end),
+                    },
+                    new_text: e.replacement.clone(),
+                })
+            })
+            .collect();
+        changes.push(TextDocumentEdit {
+            text_document: OptionalVersionedTextDocumentIdentifier {
+                uri,
+                version: Some(version),
+            },
+            edits,
+        });
+    }
+    Ok(lsp_types::WorkspaceEdit {
+        changes: None,
+        document_changes: Some(DocumentChanges::Edits(changes)),
+        change_annotations: None,
+    })
 }
 
 /// One document's complete diagnostic set, as a `textDocument/publishDiagnostics`.
@@ -573,6 +709,56 @@ mod tests {
             path_of(&Uri::from_str("untitled:Untitled-1").unwrap()),
             None
         );
+    }
+
+    fn plan(version: Option<i32>) -> RenamePlan {
+        // `é` is two bytes and one UTF-16 unit, `😀` four and two: the edit at byte 9 is
+        // at column 6.
+        let text = "é😀 = old;";
+        let at = u32::try_from(text.find("old").unwrap()).unwrap();
+        RenamePlan {
+            kind: "local",
+            old_name: "old".into(),
+            new_name: "new".into(),
+            generation: 1,
+            files: vec![nazm_service::FileEdit {
+                path: PathBuf::from("/tmp/m.nz"),
+                version,
+                text: text.into(),
+                edits: vec![nazm_service::Edit {
+                    start: at,
+                    end: at + 3,
+                    expected: "old".into(),
+                    replacement: "new".into(),
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn a_rename_edit_is_versioned_and_positioned_in_utf16() {
+        let edit = serde_json::to_value(workspace_edit(&plan(Some(7)), true).unwrap()).unwrap();
+        assert_eq!(
+            edit["changes"],
+            serde_json::Value::Null,
+            "never the unversioned form"
+        );
+        let change = &edit["documentChanges"][0];
+        assert_eq!(change["textDocument"]["version"], 7);
+        let r = &change["edits"][0]["range"];
+        assert_eq!(r["start"], serde_json::json!({"line": 0, "character": 6}));
+        assert_eq!(r["end"], serde_json::json!({"line": 0, "character": 9}));
+        assert_eq!(change["edits"][0]["newText"], "new");
+    }
+
+    #[test]
+    fn a_rename_that_the_protocol_cannot_protect_is_refused() {
+        // A file that is not open would go out with a `null` version — "the disk is the
+        // master" — and nothing would stop it being applied to other bytes.
+        let why = workspace_edit(&plan(None), true).unwrap_err();
+        assert!(why.contains("not open"), "{why}");
+        // A client that does not accept versioned changes gets no edit at all.
+        assert!(workspace_edit(&plan(Some(1)), false).is_err());
     }
 
     #[test]
