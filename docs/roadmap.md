@@ -370,6 +370,46 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N15, in dependency order
+
+No item is chosen here; N15 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| A language server | units ✓ + durable identity ✓ + reuse ✓ + a lossless CST ✓ | every listed blocker is met; it must read the checker's results rather than re-implement them |
+| Incremental reparse | a lossless CST ✓ | N15 parses whole files; the tree is shaped for subtree reuse and does none |
+| Structured edits | a lossless CST ✓ | the tree finds and reproduces a node by position (N15's test); no edit command exists |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+| A requirement on a record's or an enum's parameter | a requirement ✓ | unchanged |
+| Cross-unit inlining of generic instances | native units ✓ | unchanged |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+| A compact enum representation | variants ✓, `Vec[T]` ✓ | unchanged |
+| Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
+
+### N15 — Lossless CST and local error recovery — **complete, 2026-09-25**
+
+One lossless scan feeds the one parser, which builds the abstract tree and a lossless
+concrete tree from the same decisions. The tree reproduces every input byte — whitespace,
+comments, punctuation, refused characters — and a malformed statement no longer costs the
+rest of its function: it becomes an error node, and what follows it is still syntax. No
+language, interface, cache-key or bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`,
+fixpoint `0e1a40e6…`.
+
+| Settled | Where |
+| --- | --- |
+| one lossless scan; the parser's tokens and the formatter's comments are views of it | `crates/nazm-syntax/src/lexer.rs` |
+| the tree, its kinds, trivia placement, a wrapper that keeps `cstree` inside the crate | `crates/nazm-syntax/src/cst.rs`, `architecture.md` §7.17 |
+| one parser for both trees; statement-level recovery; cascades withheld | `crates/nazm-syntax/src/parser.rs` |
+| losslessness, recovery, the two trees agreeing, termination | `crates/nazm-syntax/tests/cst.rs`, `capability-matrix.md` area 1 |
+| what it costs: 2.0× parse time on real code | `performance.md` |
+
+Mutation evidence: 16 new and 3 repointed, 17 killers verified; one targeted campaign of the
+26 entries on the syntax crate — 25 caught (19 at tier 1, 6 at tier 2), no survivor, and the
+known `nesting-unbounded` MUTANT CRASH unchanged (`capability-matrix.md` §30).
+
+**N16 has not started.**
+
 ### After N14, in dependency order
 
 | | Depends on | Why not before |
@@ -384,7 +424,7 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 
 **Recommended next: a lossless CST** — the item nothing blocks and nothing has displaced, now
-that the equality wall is gone. Not traits: no program here yet needs user-defined behaviour
+that the equality wall is gone. *N15 took it (above).* Not traits: no program here yet needs user-defined behaviour
 abstraction, and N14's evidence is that the built-in requirement met the need N13 exposed.
 
 ### N14.1 — Contained performance calibration — **complete, 2026-09-25**
@@ -708,8 +748,8 @@ C-5 is measurement: spawn-to-first-instruction latency, context-switch cost, and
 as **RSS, not virtual reservation, with page size recorded**. No scheduler work starts before
 C-4's prerequisite lands; a single-threaded compiler is a perfectly good compiler.
 
-**AI-native — one item left.** A lossless CST (`cstree` is the recorded choice) and the
-~3k-token cheatsheet. The formatter, grammar artefact, schemas and fixes all shipped. **No
+**AI-native — one item left.** The ~3k-token cheatsheet. The lossless CST shipped in N15;
+the formatter, grammar artefact, schemas and fixes before it. **No
 language keyword will be added to support the label**; if a construct earns its place on
 semantics it earns it, and "AI-native" is not an argument for syntax.
 

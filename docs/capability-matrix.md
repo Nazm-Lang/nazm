@@ -6,7 +6,7 @@ Two things are kept apart here. **`4fb15542dfbf9af0bf34c42fe52783637b3daed4` is 
 historical candidate**: the commit a retained release candidate was built and tested at.
 Its evidence is [`releases/4fb1554.md`](releases/4fb1554.md), which is immutable and is not
 updated by anything that happened since. **The claims below are current-tree claims**, and
-they include behaviour added after that candidate — the milestones N7 through N14, each of
+they include behaviour added after that candidate — the milestones N7 through N15, each of
 which changed the compiler and ran its own evidence. They are not grounded in `4fb1554`,
 and nothing here says the tree has changed only in comments since then.
 
@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,317 passed, 0 failed, 13 ignored, across 67 suites**, run contained at
-N14 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
-13 passed, contained). N13 ended at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,348 passed, 0 failed, 13 ignored, across 68 suites**, run contained at
+N15 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
+13 passed, contained). N14 ended at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -120,18 +120,44 @@ Nazm-written parser produces the same tree for every generic shape in
 `primary = atom , { "." , IDENT | "?" }` — so `-r?` is `-(r?)` and `r??` is two layers. The
 formatter glues it to its operand; the Nazm-written parser produces the same trees.*
 
-**Limitation** · There is **no CST**. `crates/nazm-syntax/src/ast.rs` is a plain owned
-AST; comments are returned as a parallel span list consumed only by the formatter, and
-never reach the tree. Error recovery is one strategy at one granularity — skip to the next
-`fn` — so a malformed statement loses its whole function body. Parse nesting is bounded at
-512 with a 24 MiB parse stack.
+*Since N15 there is a lossless concrete syntax tree — **the lossless CST is VERIFIED; the
+area stays PARTIAL** for the limitations below.* One lossless scan
+(`lexer::lex_lossless_in`) gives every byte of a file to exactly one lexeme; the one parser
+builds the abstract tree and a `cstree` 0.14 green tree (`crates/nazm-syntax/src/cst.rs`)
+from the same decisions, and `parse_cst` returns it. Its leaves, concatenated, are the input
+byte for byte — whitespace, comments, punctuation, refused characters, trailing trivia —
+and every leaf is the bytes it was scanned from, never a spelling rebuilt from its kind.
+Comments are leaves of the tree; the formatter's comment list is derived from the same scan.
+Inside a block, a malformed statement becomes an `Error` node and parsing resumes at the next
+statement boundary, so what follows it is still structured syntax and a later independent
+mistake is its own diagnostic. Evidence in `crates/nazm-syntax/tests/cst.rs`:
+`a_lossless_tree_preserves_every_byte_and_recovers_inside_a_function`; every `.nz` file in
+the repository and every grammar example round-trips with its byte-ownership invariants;
+13 malformed fixtures each keep the construct after the error; seeded random input (3,000
+cases) and seeded token deletions of the compiler written in Nazm always round-trip and
+terminate; the abstract and concrete trees agree on the span of every construct the checker
+sees, over the whole clean corpus. Against the pre-N15 parser, all 196 files give an
+identical abstract tree and identical diagnostics, and 4,240 single-token corruptions of
+real programs give the same first diagnostic and abstract tree in every case and one more
+diagnostic in one (`architecture.md` §7.17). Sixteen N15 mutations were caught with verified
+killers; the campaign is in area 30.
 
-**Next dependency** · A lossless green tree (`cstree` is the recorded choice,
-`architecture.md:344`), which is also what safe structured edits and any language server
-need.
+**Limitation** · Full-file parsing only: no incremental relexing or reparse, no reuse of
+green nodes. Recovery is local at statements inside blocks; a mistake in a signature, a
+record, an enum or a `use` still skips to the next item, and one inside an expression costs
+its whole statement. After an item's first recovery, if its delimiters do not balance, its
+further syntax diagnostics are withheld as cascades. The abstract tree still has no body for
+a function whose body had a syntax error. The concrete tree is built on every parse and
+costs about 2× the parse time and 1.8× the peak parse heap (`performance.md`). The compiler
+written in Nazm has no concrete tree and does not recover. No language server. Parse
+nesting is bounded at 512 with a 24 MiB parse stack.
 
-**Accepted when** · A round trip through the tree preserves every byte including trivia,
-and the parser produces a usable tree for a file with an error in the middle of a function.
+**Next dependency** · None for the tree. A language server, structured edits and
+incremental reparse are separate items (`roadmap.md`).
+
+**Accepted when** · Met, 2026-09-25 (N15): a round trip through the tree preserves every byte
+including trivia, and the parser produces a usable tree for a file with an error in the
+middle of a function.
 
 ### 2. Name resolution and modules — PARTIAL
 
@@ -1118,9 +1144,11 @@ and that output ends in exactly one newline — applied to every `.nz` in the tr
 hand-written ugly inputs.
 
 **Limitation** · No reflow, no reordering, no insertion. Per file, not per merged program.
-Canonical in the sense of "one output", not yet in the sense of a lossless tree round trip.
+Canonical in the sense of "one output". Since N15 a lossless tree exists (area 1), and the
+formatter reads its comments from the same scan the tree is built from, but it still lays
+out from tokens rather than from the tree.
 
-**Next dependency** · A CST, for edits rather than formatting.
+**Next dependency** · None for formatting; edits are a separate item.
 
 **Accepted when** · Met for formatting.
 
@@ -1234,8 +1262,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **288** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13), **99** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **304** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14), **116** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -1483,6 +1511,23 @@ and nominality mutants, because N14 changed that walk's leaf rule. **40 of 40 ca
 tier 1 and 4 at tier 2; no survivor, nothing unusable or unapplied, no crash, no timeout; the
 workspace suite never ran. N14 did not touch the native equality code, so N13's known
 use-after-free survivor was not re-run and stays as it was: live, SURVIVED, no killer.
+
+*N15 (2026-09-25) added sixteen and repointed three,* each with its regression test and a
+killer verified by `--verify-killer` (17 of 17: pristine passes, mutant fails, restored
+passes). They break the tree's promises — whitespace, comments, a refused character or the
+trailing trivia missing from it, a leaf normalised or spelled from its kind, trivia inside
+the construct before it, nodes at one position nested inside out, a token given the wrong
+kind — and recovery's: abandoning the block as before N15, consuming nothing, swallowing
+the next statement, leaving no error node, handing a recovered body to the checker,
+reporting a cascade, forgetting the braces the failed statement opened. **Campaign
+`f1f15052a1be61f0`, targeted, P1, one session, 1,015 s:** every entry on
+`crates/nazm-syntax` — the 16 new and the 10 existing parser entries, the three repointed
+among them, because N15 rewrote the code they target. **25 caught**, 19 at tier 1 and 6 at
+tier 2; no survivor, nothing unusable or unapplied, no timeout; the workspace suite never
+ran. **One MUTANT CRASH, `nesting-unbounded`**, the known open entry above, as it was: with
+the nesting limit removed the parse stack overflows, as it did at N13 and N14. N15 did not
+touch native equality, so N13's use-after-free survivor was not re-run and stays live,
+SURVIVED, no killer.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

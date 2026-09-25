@@ -228,7 +228,8 @@ Two consequences worth naming, because both are dependencies rather than complai
 > persisted interface, **N4 incremental semantic checking**, **N5 separate code generation
 > and linking**, and **N6 native object reuse** — so of the four things the second bullet
 > called blocked, three now exist and the fourth, a language server, is blocked on a
-> lossless CST rather than on identity.
+> lossless CST rather than on identity. *N15 supplied the lossless CST; the language server
+> itself has not been started.*
 >
 > "Incremental compilation" in that list is worth reading narrowly: a module's semantic
 > check may be skipped, and a unit's `clang -c` may be skipped. Lowering, emission and the

@@ -2306,6 +2306,10 @@ that it does not exist — which would be several errors for one mistake, the ex
 this language is meant to avoid. Nothing is said about the body itself: statements that
 were never built would be claims about the parser's guess, not about the program.
 
+Since N15 the parser resumes after a malformed statement, so a second, independent syntax
+error in the same body is reported too; what follows from the first — a stray token left
+behind by a missing brace — is not reported again. The body is still withheld from checking.
+
 ### Not in v0.3, and unsupported rather than half-present
 
 Valueless `return`, labelled break, `for`, `loop`, mutable parameters, effects, floating
