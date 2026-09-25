@@ -149,11 +149,12 @@ its whole statement. After an item's first recovery, if its delimiters do not ba
 further syntax diagnostics are withheld as cascades. The abstract tree still has no body for
 a function whose body had a syntax error. The concrete tree is built on every parse and
 costs about 2× the parse time and 1.8× the peak parse heap (`performance.md`). The compiler
-written in Nazm has no concrete tree and does not recover. No language server. Parse
-nesting is bounded at 512 with a 24 MiB parse stack.
+written in Nazm has no concrete tree and does not recover. Parse nesting is bounded at 512
+with a 24 MiB parse stack. The language server that reads this tree to find the token under a
+position is area 25.
 
-**Next dependency** · None for the tree. A language server, structured edits and
-incremental reparse are separate items (`roadmap.md`).
+**Next dependency** · None for the tree. Structured edits and incremental reparse are
+separate items (`roadmap.md`).
 
 **Accepted when** · Met, 2026-09-25 (N15): a round trip through the tree preserves every byte
 including trivia, and the parser produces a usable tree for a file with an error in the
