@@ -1081,6 +1081,35 @@ ranges.
 **What it added to the binary.** The release `nazm` grew from 2,823,040 to 2,888,576 bytes
 (+65,536, +2.3%); no dependency was added.
 
+### Scope at a position and completion — measured 2026-09-25
+
+N19 records the checker's scopes as it checks. Measured as N18 was: in process, release,
+contained, P1, nothing else running; medians (`target/n19/bench`, not committed). The trace is
+written inside the check, so its cost is inside `analyse` and is stated as the difference from
+N18's.
+
+| What | Small (`examples/sum.nz`) | The compiler (`emit.nz` and imports) | Multi-module (`diamond/main.nz`) | 200 nested scopes |
+| --- | --- | --- | --- | --- |
+| scope trace recorded (frames, bindings) | 8, 7 | 2,725, 3,250 | 8, 0 | 202, 200 |
+| `scope_at` | 6.6 µs | 0.72 ms | 5.8 µs | 59 µs |
+| `completion` | 14.3 µs (1 item) | 2.12 ms (a call head, 16 items) | 15.2 µs (40 items) | 208 µs (111 items) |
+
+On the compiler, against N18: `analyse` 32.9–33.5 ms over two runs (N18: 33.6) — the trace's
+cost is not separable from the run-to-run spread; warm edit 80.7–81.6 ms (N18: 83.3); index
+construction 3.85–3.88 ms (N18: 3.91). Resident memory: 49.5–49.9 MB with the compiler open
+(N18: 48.1), 51.7–51.8 MB after 10 edits and the same after 100 (N18: 48.6 and 50.5) — about
+1.5 MB more, the trace's frames and bindings, and flat across edits, with retained documents,
+analyses, text, index and trace sizes held constant by the thousand-edit test.
+
+**What the numbers say.** Recording what the checker already decides costs nothing measurable.
+A scope query on the whole compiler is under a millisecond — it scans the trace's frames and
+checks the function around the position for recovery — and a completion there is about 2 ms,
+most of it finding the token, as definition's is. The protocol's conversion is not measured
+apart: it is one range and a list of names. None of this makes a case for incremental reparse.
+
+**What it added to the binary.** The release `nazm` grew from 2,888,576 to 2,954,112 bytes
+(+65,536, +2.3%); no dependency was added.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
