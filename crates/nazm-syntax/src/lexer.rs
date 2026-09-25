@@ -7,6 +7,15 @@
 //! It does not stop at the first bad character. A file with three unknown characters
 //! should report three, not one per compile — an agent that fixes one and recompiles to
 //! find the next spends a turn per character.
+//!
+//! # One scan, and every byte in it
+//!
+//! Since N15 the scan is **lossless**: [`lex_lossless_in`] returns a [`Lexeme`] for every
+//! byte of the input — a token, a run of whitespace, a comment, or a region that is not
+//! valid Nazm — in source order, with no gap and no overlap. The token list the parser
+//! reads and the comment list the formatter reads are both *derived* from that one stream
+//! ([`lex_in`], [`lex_with_comments_in`]); nothing scans the text a second time, so the
+//! two can never disagree about where a comment is.
 
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, Span};
@@ -285,17 +294,17 @@ pub fn lex(text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
 /// Tokenise one file, so every span it produces names that file.
 #[must_use]
 pub fn lex_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
-    let (tokens, errors, _) = lex_with_comments_in(file, text);
-    (tokens, errors)
+    let (lexemes, errors) = lex_lossless_in(file, text);
+    (tokens(&lexemes), errors)
 }
 
 /// Tokenise, and also report where the comments were.
 ///
 /// A comment is not a token and the parser must never see one, so [`lex`] drops them.
-/// The formatter cannot: a formatter that deletes comments is not a formatter. Both go
-/// through this one scanner rather than the formatter having a second, nearly identical
-/// one — the two would agree about everything except `"// not a comment"` inside a
-/// string literal, which is exactly the case a second scanner gets wrong.
+/// The formatter cannot: a formatter that deletes comments is not a formatter. Both are
+/// views of the one lossless scan rather than the formatter having a second, nearly
+/// identical scanner — the two would agree about everything except `"// not a comment"`
+/// inside a string literal, which is exactly the case a second scanner gets wrong.
 #[must_use]
 pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>) {
     lex_with_comments_in(FileId::ROOT, text)
@@ -304,6 +313,60 @@ pub fn lex_with_comments(text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>)
 /// [`lex_with_comments`], for a named file.
 #[must_use]
 pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>, Vec<Span>) {
+    let (lexemes, errors) = lex_lossless_in(file, text);
+    let comments = lexemes
+        .iter()
+        .filter_map(|l| match l {
+            Lexeme::Comment(span) => Some(*span),
+            _ => None,
+        })
+        .collect();
+    (tokens(&lexemes), errors, comments)
+}
+
+/// The tokens of a lossless scan, in order, ending with [`TokenKind::Eof`].
+#[must_use]
+pub fn tokens(lexemes: &[Lexeme]) -> Vec<Token> {
+    lexemes
+        .iter()
+        .filter_map(|l| match l {
+            Lexeme::Token(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// One piece of a lossless scan: every byte of the input belongs to exactly one.
+///
+/// Only [`Lexeme::Token`] is seen by the parser's grammar. The other three are what the
+/// abstract tree forgets and the concrete tree keeps. [`Lexeme::Invalid`] owns the bytes a
+/// diagnostic was reported for — an unknown character, a string with no closing quote —
+/// so the concrete tree still reproduces them however the diagnostic reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lexeme {
+    Token(Token),
+    /// A run of ASCII whitespace, newlines included.
+    Whitespace(Span),
+    /// `//` to the end of its line, the newline excluded.
+    Comment(Span),
+    /// Bytes that are not a token and not trivia, reported by the diagnostic beside them.
+    Invalid(Span),
+}
+
+impl Lexeme {
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Token(t) => t.span,
+            Self::Whitespace(s) | Self::Comment(s) | Self::Invalid(s) => *s,
+        }
+    }
+}
+
+/// Scan one file into a [`Lexeme`] per region, in order, ending with a zero-width
+/// [`TokenKind::Eof`] token. The spans cover `0..text.len()` exactly.
+#[must_use]
+pub fn lex_lossless_in(file: FileId, text: &str) -> (Vec<Lexeme>, Vec<Diagnostic>) {
     let bytes = text.as_bytes();
     // Checked access throughout. Every one of these reads is provably in bounds from the
     // surrounding loop condition, but "provably" is a property of today's code: the lint
@@ -311,9 +374,8 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
     // them a panic on malformed input.
     let byte = |i: usize| -> Option<u8> { bytes.get(i).copied() };
     let mut i = 0usize;
-    let mut tokens = Vec::new();
+    let mut out: Vec<Lexeme> = Vec::new();
     let mut errors = Vec::new();
-    let mut comments = Vec::new();
 
     let at = |i: usize| -> u32 { u32::try_from(i).unwrap_or(u32::MAX) };
 
@@ -321,9 +383,13 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
         let start = i;
         let Some(c) = byte(i) else { break };
 
-        // Whitespace
+        // Whitespace, one lexeme per run: the tree keeps the bytes, and nothing needs to
+        // know where one space ends and the next begins.
         if c.is_ascii_whitespace() {
-            i += 1;
+            while byte(i).is_some_and(|b| b.is_ascii_whitespace()) {
+                i += 1;
+            }
+            out.push(Lexeme::Whitespace(Span::new(file, at(start), at(i))));
             continue;
         }
 
@@ -334,7 +400,7 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
             }
             // Not including the newline: the comment is the text, and where the line
             // ends is the formatter's decision rather than the comment's.
-            comments.push(Span::new(file, at(start), at(i)));
+            out.push(Lexeme::Comment(Span::new(file, at(start), at(i))));
             continue;
         }
 
@@ -350,19 +416,19 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
                 .filter(|c| *c != '_')
                 .collect();
             match raw.parse::<i64>() {
-                Ok(v) => tokens.push(Token {
+                Ok(v) => out.push(Lexeme::Token(Token {
                     kind: TokenKind::Int(v),
                     span: Span::new(file, at(start), at(i)),
-                }),
+                })),
                 // Refused at the boundary rather than silently wrapped. A literal that
                 // does not fit the type it is written as is a mistake, not a value.
                 // Not an error here: `-9223372036854775808` is a valid `Int` and its
                 // magnitude does not fit. The parser folds the sign and reports if it
                 // still does not.
-                Err(_) => tokens.push(Token {
+                Err(_) => out.push(Lexeme::Token(Token {
                     kind: TokenKind::IntTooLarge(raw),
                     span: Span::new(file, at(start), at(i)),
-                }),
+                })),
             }
             continue;
         }
@@ -394,10 +460,10 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
                 "spawn" => TokenKind::Spawn,
                 _ => TokenKind::Ident(word.to_owned()),
             };
-            tokens.push(Token {
+            out.push(Lexeme::Token(Token {
                 kind,
                 span: Span::new(file, at(start), at(i)),
-            });
+            }));
             continue;
         }
 
@@ -424,14 +490,16 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
                          than a quote being missing from somewhere earlier",
                     ),
                 );
+                // The quote and what followed it are still the author's bytes.
+                out.push(Lexeme::Invalid(Span::new(file, at(start), at(i))));
                 continue;
             }
             let value = text.get(content_start..i).unwrap_or("").to_owned();
             i += 1;
-            tokens.push(Token {
+            out.push(Lexeme::Token(Token {
                 kind: TokenKind::Str(value),
                 span: Span::new(file, at(start), at(i)),
-            });
+            }));
             continue;
         }
 
@@ -448,10 +516,10 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
         };
         if let Some(kind) = kind {
             i += width;
-            tokens.push(Token {
+            out.push(Lexeme::Token(Token {
                 kind,
                 span: Span::new(file, at(start), at(i)),
-            });
+            }));
             continue;
         }
 
@@ -480,10 +548,10 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
         match single {
             Some(kind) => {
                 i += 1;
-                tokens.push(Token {
+                out.push(Lexeme::Token(Token {
                     kind,
                     span: Span::new(file, at(start), at(i)),
-                });
+                }));
             }
             None => {
                 // Advance by a whole character, not a byte: stepping into the middle of a
@@ -493,6 +561,7 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
                     .and_then(|t| t.chars().next())
                     .unwrap_or('\u{fffd}');
                 i += ch.len_utf8();
+                out.push(Lexeme::Invalid(Span::new(file, at(start), at(i))));
                 errors.push(Diagnostic::error(
                     codes::UNKNOWN_CHARACTER,
                     Span::new(file, at(start), at(i)),
@@ -502,11 +571,11 @@ pub fn lex_with_comments_in(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagno
         }
     }
 
-    tokens.push(Token {
+    out.push(Lexeme::Token(Token {
         kind: TokenKind::Eof,
         span: Span::new(file, at(bytes.len()), at(bytes.len())),
-    });
-    (tokens, errors, comments)
+    }));
+    (out, errors)
 }
 
 #[cfg(test)]

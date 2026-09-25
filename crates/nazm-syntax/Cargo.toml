@@ -1,6 +1,6 @@
 [package]
 name = "nazm-syntax"
-description = "Lexer, parser, and the v0.1 abstract syntax tree."
+description = "Lexer, parser, the lossless concrete syntax tree, and the abstract syntax tree."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ publish.workspace = true
 [dependencies]
 nazm-span = { workspace = true }
 nazm-diag = { workspace = true }
+cstree = { workspace = true }
 
 [lints]
 workspace = true

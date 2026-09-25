@@ -1,6 +1,12 @@
-//! Lexing and parsing for Nazm v0.1.
+//! Lexing and parsing for Nazm.
+//!
+//! One lossless scan ([`lexer::lex_lossless_in`]) feeds one parser, which builds two
+//! trees from the same decisions: the abstract [`Program`] the checker reads and the
+//! lossless [`cst::Cst`] that keeps every byte of the file. [`parse_file`] returns the
+//! first, [`parse_cst`] the second; both come from [`parse_both`].
 
 pub mod ast;
+pub mod cst;
 pub mod format;
 pub mod lexer;
 pub mod parser;
@@ -10,9 +16,12 @@ pub use ast::{
     PatternField, Place, PlaceField, Program, Record, Requirement, Return, Scope, Spawn, Stmt,
     TypeName, TypeParam, Variant, While,
 };
+pub use cst::{Cst, CstNode, CstParse, Leaf, SyntaxKind};
 pub use format::format;
-pub use lexer::{lex, lex_in, lex_with_comments, lex_with_comments_in, Token, TokenKind};
-pub use parser::{parse, parse_in, MAX_NESTING, PARSE_STACK_BYTES};
+pub use lexer::{
+    lex, lex_in, lex_lossless_in, lex_with_comments, lex_with_comments_in, Lexeme, Token, TokenKind,
+};
+pub use parser::{MAX_NESTING, PARSE_STACK_BYTES};
 
 /// Lex and parse in one step, collecting every diagnostic from both.
 ///
@@ -31,10 +40,43 @@ pub fn parse_source(text: &str) -> (Program, Vec<nazm_diag::Diagnostic>) {
 
 /// Parse one file, so every span it produces names that file.
 pub fn parse_file(file: nazm_span::FileId, text: &str) -> (Program, Vec<nazm_diag::Diagnostic>) {
-    let (tokens, mut errors) = lex_in(file, text);
-    let (program, parse_errors) = parse_in(file, &tokens);
-    errors.extend(parse_errors);
+    let (program, _, errors) = parse_both(file, text);
     (program, errors)
+}
+
+/// Parse one file into its lossless concrete tree.
+///
+/// The same scan, the same parser and the same diagnostics as [`parse_file`]; the
+/// abstract tree is built and dropped. The tree reproduces `text` exactly
+/// ([`Cst::text`]) whatever the diagnostics say, including for text that does not lex.
+///
+/// # Stack
+///
+/// As [`parse_source`]: the caller provides [`PARSE_STACK_BYTES`].
+pub fn parse_cst(file: nazm_span::FileId, text: &str) -> CstParse {
+    let (_, cst, diagnostics) = parse_both(file, text);
+    CstParse { cst, diagnostics }
+}
+
+/// Both trees of one file, and every lexical and syntactic diagnostic, lexical first.
+///
+/// Parsing proceeds even when lexing found errors, so a file with one bad character still
+/// reports its type errors.
+pub fn parse_both(
+    file: nazm_span::FileId,
+    text: &str,
+) -> (Program, Cst, Vec<nazm_diag::Diagnostic>) {
+    let (lexemes, mut errors) = lex_lossless_in(file, text);
+    let tokens: Vec<&Token> = lexemes
+        .iter()
+        .filter_map(|l| match l {
+            Lexeme::Token(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    let (program, parse_errors, cst) = parser::parse_lossless(file, text, &lexemes, &tokens);
+    errors.extend(parse_errors);
+    (program, cst, errors)
 }
 
 /// Parse every file of a compilation, in load order.
