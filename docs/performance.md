@@ -1015,6 +1015,38 @@ locked crates — `lsp-server`, `lsp-types`, `crossbeam-channel`, `crossbeam-uti
 earn a second executable every editor configuration would have to find: the server is
 `nazm lsp`.
 
+### The reference index — measured 2026-09-25, and it does not change the incremental-reparse answer
+
+N17 builds one reference index per analysis (`architecture.md` §7.19) and rebuilds it with the
+analysis on every change. Measured as N16 was: in process against `nazm-service`, release,
+contained, P1 — one CPU — nothing else running; medians (`target/n17/bench`, not committed).
+Index construction is timed apart from analysis, and a query apart from both.
+
+| What | Small file (`examples/sum.nz`) | The compiler (`compiler/emit.nz` and its imports) |
+| --- | --- | --- |
+| parse and check (`nazm_core::analyse`) | 0.08 ms | 32.3 ms |
+| **index construction** (`ReferenceIndex::of`) | 0.006 ms | **3.85 ms** |
+| cold open → diagnostics | 0.2 ms (N16: 0.3) | 80.3 ms (N16: 76.8) |
+| warm edit → diagnostics and a new index | 0.2 ms (N16: 0.2) | 81.4 ms (N16: 79.2) |
+| definition query | 7.1 µs (N16: 7.5) | 1.72 ms (N16: 1.86) |
+| references query | 8.0 µs | 1.76 ms (a function, 62 uses); 1.76 ms (a local of the emitter) |
+| cross-file references, three compilations open | — | 2.27 ms (`t_int`, 62 uses) |
+
+The compiler's index: 21,884 occurrences, 3,752 entities, 18,132 uses. Resident memory: 1.9 MB
+at start, 48.1 MB with the compiler open (N16: 44.2), 50.2 MB after 10 edits and 50.2 MB after
+100 (N16: 46.3 both) — flat, with one analysis and one index retained whatever the edit count.
+
+**What the numbers say.** The index costs about 12% of a check and under 5% of an edit on the
+largest program there is — 3.9 ms of an 81 ms warm edit, which is inside the run-to-run spread
+of the N16 figures it is compared with. A query costs what finding the token does: the 1.7 ms
+is the leaf walk definition already paid, and the reverse lookup itself is a hash probe and a
+copy of the uses. About 4 MB more is resident with the compiler open, the index's spans.
+Nothing here makes a case for incremental reparse or for incremental index maintenance: a
+complete rebuild with the analysis is cheap, and correct by construction.
+
+**What it added to the binary.** The release `nazm` grew from 2,768,592 to 2,823,040 bytes
+(+54,448, +2.0%); no dependency was added.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

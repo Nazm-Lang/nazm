@@ -370,9 +370,46 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N17, in dependency order
+
+No item is chosen here; N17 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Safe structured edits, rename | a lossless CST ✓, references ✓ | N17 gives the occurrence set; turning it into validated edits — and deciding what a rename across files not open means — is its own contract |
+| Incremental reparse | a lossless CST ✓ | N17 measured a warm edit of the whole compiler at about 81 ms on one CPU, index included; the evidence that would justify it still does not exist |
+| Completion, signature help | a language service ✓ | each needs its own semantic contract — what is in scope at a position — which the resolution does not record |
+| Symbols (document, workspace) | a language service ✓ | not started |
+| Type names in annotations as references | references ✓ | the resolution records no entity at a written type name; the checker would have to record one |
+| Semantic tokens, code actions | a language service ✓ | unchanged |
+| MCP | a language service ✓ | not started |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+
+### N17 — Semantic reference index and references query — **complete, 2026-09-25**
+
+Given an occurrence that resolves to an entity, where every use of that same entity is in the
+current program snapshot: one reference index per analysis, derived from the resolution alone,
+behind `LanguageService::references` and `textDocument/references`. No language, interface,
+cache-key or bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint `0e1a40e6…`.
+
+| Settled | Where |
+| --- | --- |
+| what a reference is, and the index that reads the resolution backwards | `crates/nazm-sema/src/references.rs`, `architecture.md` §7.19 |
+| a variable use records which function's slot it is; a construction label, which field | `LocalRef` in `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check.rs` |
+| definition and references as one lookup; the query over every open compilation | `crates/nazm-service/src/service.rs` |
+| `textDocument/references`, `includeDeclaration`, UTF-16 at the boundary only | `crates/nazm-cli/src/lsp.rs` |
+| what it costs: 3.8 ms of index per compiler analysis, 1.8 ms a query | `performance.md` |
+
+Mutation evidence: 16 new and 1 repointed, all 17 killers verified uncontended; one targeted
+campaign of 19 — 19 caught at tier 1, no survivor (`capability-matrix.md` §30).
+
+**N18 has not started.**
+
 ### After N16, in dependency order
 
-No item is chosen here; N16 left these standing.
+No item is chosen here; N16 left these standing. *Superseded by "After N17" above.*
 
 | | Depends on | Why not before |
 | --- | --- | --- |
@@ -383,8 +420,6 @@ No item is chosen here; N16 left these standing.
 | Semantic tokens, code actions | a language service ✓ | unchanged |
 | MCP | a language service ✓ | not started |
 | `nazm explain-cost` | nothing above | independent |
-| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
-| `?` on `Option`, and conversion between error types | traits | unchanged |
 
 ### N16 — Language service core and minimal LSP — **complete, 2026-09-25**
 
