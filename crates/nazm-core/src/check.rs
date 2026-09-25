@@ -2019,7 +2019,7 @@ impl Checker<'_> {
     /// reused** — including for a name that shadows another. That ordering is a contract
     /// the backend relies on to store incoming arguments without a separate notion of what
     /// a parameter is, and it lives here now because this is where bindings are made.
-    fn allocate(&mut self, name: &str, ty: Type, mutable: bool) -> u32 {
+    fn allocate(&mut self, name: &str, span: Span, ty: Type, mutable: bool) -> u32 {
         let Some(id) = self.current else {
             return 0;
         };
@@ -2031,6 +2031,7 @@ impl Checker<'_> {
                     name: name.to_owned(),
                     ty,
                     mutable,
+                    span,
                 },
             )
             .unwrap_or(0)
@@ -2929,7 +2930,7 @@ impl Checker<'_> {
             // the match's scrutinee holds. That is a statement about the *name* — a
             // binding that names a sequence still reaches shared mutable storage, which
             // `docs/spec.md` says in as many words.
-            let slot = self.allocate(binding, ty, false);
+            let slot = self.allocate(binding, f.binding_span, ty, false);
             self.res.record_var(f.binding_span, slot);
             self.scopes
                 .define(binding, ty, false, Some(f.binding_span), slot);
@@ -3101,7 +3102,7 @@ impl Checker<'_> {
             // convention; `let mut` in the body says the same thing unambiguously.
             // No declaration span: `mut` on a parameter is `N0311`, so there is no
             // edit at the declaration that would make this assignment legal.
-            let slot = self.allocate(&p.name, ty, false);
+            let slot = self.allocate(&p.name, p.name_span, ty, false);
             self.scopes.define(&p.name, ty, false, None, slot);
         }
 
@@ -3224,7 +3225,7 @@ impl Checker<'_> {
                         ),
                     );
                 }
-                let slot = self.allocate(&l.name, ty, l.mutable);
+                let slot = self.allocate(&l.name, l.name_span, ty, l.mutable);
                 // The declaration site resolves to the binding it introduces, so the
                 // backend can find the slot for a `let` the same way it finds one for a
                 // mention.

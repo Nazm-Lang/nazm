@@ -40,8 +40,9 @@ mod derived;
 mod fix;
 mod fmt;
 mod interface;
-mod load;
-mod root;
+mod lsp;
+// Moved to `nazm-service` in N16, so `nazm lsp` loads exactly as every command does.
+use nazm_service::{load, root};
 mod test;
 
 use clap::{Parser, Subcommand};
@@ -162,6 +163,19 @@ enum Command {
         /// One JSON object per edit, on stdout. See `docs/diagnostics.md`.
         #[arg(long)]
         json: bool,
+    },
+    /// Serve the Language Server Protocol to an editor, on stdin and stdout.
+    ///
+    /// Started and owned by the editor; ends when it says `exit`. Diagnostics, definition
+    /// and hover, from the same loader and checker every other command uses, over the
+    /// editor's unsaved buffers. `docs/architecture.md` §7.18 says what it does and does
+    /// not do.
+    Lsp {
+        /// Measure every module's durable identity from this directory, as
+        /// `nazm check --source-root` does. Without it, each open file's root is decided
+        /// exactly as `nazm check` decides it for that file.
+        #[arg(long)]
+        source_root: Option<PathBuf>,
     },
     /// Lay out source files canonically.
     ///
@@ -318,6 +332,7 @@ fn main() -> ExitCode {
             source_root,
         } => return interface::run(&file, hash, source_root.as_deref()),
         Command::Capabilities { json } => return capabilities::run(json),
+        Command::Lsp { source_root } => return lsp::run(source_root.as_deref()),
         Command::Fmt { files, check } => return fmt::run(&files, check),
         Command::Test {
             paths,
@@ -352,6 +367,7 @@ fn main() -> ExitCode {
         | Command::Fmt { .. }
         | Command::Test { .. }
         | Command::Interface { .. }
+        | Command::Lsp { .. }
         | Command::Capabilities { .. } => {
             unreachable!("handled above")
         }
