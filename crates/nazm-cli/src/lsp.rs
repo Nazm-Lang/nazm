@@ -13,10 +13,10 @@
 //! # What is offered
 //!
 //! Exactly what is implemented, and the initialize response says so: full-document
-//! synchronisation (open, change, close), published diagnostics, definition and hover. No
-//! completion, references, rename, formatting, symbols, code actions, semantic tokens,
-//! watched files or cancellation — a client is never told something exists that the
-//! server would then ignore.
+//! synchronisation (open, change, close), published diagnostics, definition, hover and
+//! references (N17). No completion, rename, formatting, symbols, code actions, semantic
+//! tokens, watched files or cancellation — a client is never told something exists that
+//! the server would then ignore.
 //!
 //! # Standard output is the protocol
 //!
@@ -42,8 +42,8 @@ use lsp_types::{
     Diagnostic as LspDiagnostic, DiagnosticSeverity, GotoDefinitionParams, GotoDefinitionResponse,
     Hover as LspHover, HoverContents, HoverParams, HoverProviderCapability, InitializeResult,
     Location as LspLocation, MarkupContent, MarkupKind, NumberOrString, OneOf, Position,
-    PositionEncodingKind, PublishDiagnosticsParams, Range, ServerCapabilities, ServerInfo,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
+    PositionEncodingKind, PublishDiagnosticsParams, Range, ReferenceParams, ServerCapabilities,
+    ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
 };
 use nazm_service::{LanguageService, Published, Target};
 
@@ -89,6 +89,7 @@ fn capabilities() -> ServerCapabilities {
         )),
         definition_provider: Some(OneOf::Left(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
+        references_provider: Some(OneOf::Left(true)),
         ..ServerCapabilities::default()
     }
 }
@@ -210,7 +211,7 @@ impl Server {
     }
 
     fn request(&self, req: Request) -> Response {
-        use lsp_types::request::{GotoDefinition, HoverRequest};
+        use lsp_types::request::{GotoDefinition, HoverRequest, References};
         let id = req.id.clone();
         let result = match req.method.as_str() {
             GotoDefinition::METHOD => serde_json::from_value::<GotoDefinitionParams>(req.params)
@@ -219,6 +220,9 @@ impl Server {
             HoverRequest::METHOD => serde_json::from_value::<HoverParams>(req.params)
                 .map_err(|e| e.to_string())
                 .map(|p| self.hover(&p)),
+            References::METHOD => serde_json::from_value::<ReferenceParams>(req.params)
+                .map_err(|e| e.to_string())
+                .map(|p| self.references(&p)),
             other => {
                 return Response::new_err(
                     id,
@@ -266,6 +270,42 @@ impl Server {
                 .unwrap_or(serde_json::Value::Null),
             None => serde_json::Value::Null,
         }
+    }
+
+    /// `textDocument/references`: the service's answer, with the declaration included when
+    /// the client asks for it, and each byte span turned into a UTF-16 range in the text
+    /// it was computed from. `null` when the position refers to nothing.
+    fn references(&self, p: &ReferenceParams) -> serde_json::Value {
+        let tdp = &p.text_document_position;
+        let Some(found) = self
+            .locate(&tdp.text_document.uri, tdp.position)
+            .and_then(|(path, version, offset)| self.service.references(&path, version, offset))
+        else {
+            return serde_json::Value::Null;
+        };
+        let found = found.locations(p.context.include_declaration);
+        // One line table per file, not per location: the locations are ordered by file.
+        let mut index: Option<(&str, LineIndex<'_>)> = None;
+        let mut out = Vec::with_capacity(found.len());
+        for l in &found {
+            if !index
+                .as_ref()
+                .is_some_and(|(t, _)| std::ptr::eq(*t, &*l.text))
+            {
+                index = Some((&l.text, LineIndex::new(&l.text)));
+            }
+            let (Some((_, lines)), Some(uri)) = (&index, uri_of(&l.path)) else {
+                continue;
+            };
+            out.push(LspLocation {
+                uri,
+                range: Range {
+                    start: lines.position(l.start),
+                    end: lines.position(l.end),
+                },
+            });
+        }
+        serde_json::to_value(out).unwrap_or(serde_json::Value::Null)
     }
 
     fn hover(&self, p: &HoverParams) -> serde_json::Value {

@@ -251,6 +251,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
             "definitionProvider",
             "hoverProvider",
             "positionEncoding",
+            "referencesProvider",
             "textDocumentSync"
         ],
         "only what is implemented is advertised: {init}"
@@ -261,6 +262,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
         "full synchronisation"
     );
     assert_eq!(caps["textDocumentSync"]["openClose"], true);
+    assert_eq!(caps["referencesProvider"], true);
 
     // 2. Open: a diagnostic, its code, and its exact UTF-16 range after non-ASCII text.
     c.open(&main, 1, MAIN);
@@ -386,8 +388,21 @@ fn malformed_source_is_diagnosed_and_never_stops_the_server() {
         }
         let d = c.diagnostics_for(&uri(&m));
         assert_eq!(d["version"], version);
-        // A query in the middle of it all is answered, with no answer.
-        assert_eq!(c.definition(&m, 0, 3), Value::Null);
+        // A query in the middle of it all is answered. On `main`'s name that is `main`
+        // itself where the declaration survived (N17: a declaration's definition is
+        // itself), and nothing where it did not; on a name inside a body that did not
+        // parse, it is nothing.
+        let at_main = c.definition(&m, 0, 3);
+        assert!(at_main.is_null() || at_main["uri"] == uri(&m), "{at_main}");
+        if let Some(x) = text.rfind("x }") {
+            let x = u32::try_from(x).unwrap();
+            assert_eq!(c.definition(&m, 0, x), Value::Null, "{text}");
+            let r = c.request(
+                "textDocument/references",
+                json!({"textDocument": {"uri": uri(&m)}, "position": {"line": 0, "character": x}, "context": {"includeDeclaration": true}}),
+            );
+            assert_eq!(r["result"], Value::Null, "{r}");
+        }
     }
     let (status, stderr) = c.finish();
     assert_eq!(status, Some(0), "{stderr}");
@@ -413,4 +428,173 @@ fn a_frame_that_is_not_json_rpc_ends_the_session_without_a_panic() {
         .unwrap();
     assert!(!err.contains("panicked"), "{err}");
     assert_ne!(status, None);
+}
+
+impl Client {
+    fn references(
+        &mut self,
+        path: &Path,
+        line: u32,
+        character: u32,
+        include_declaration: bool,
+    ) -> Value {
+        self.request(
+            "textDocument/references",
+            json!({
+                "textDocument": {"uri": uri(path)},
+                "position": {"line": line, "character": character},
+                "context": {"includeDeclaration": include_declaration}
+            }),
+        )["result"]
+            .clone()
+    }
+}
+
+/// A location as the protocol writes it: `(uri, start line, start column, end column)`.
+fn located(v: &Value) -> Vec<(String, u64, u64, u64)> {
+    v.as_array()
+        .unwrap_or_else(|| panic!("not a list of locations: {v}"))
+        .iter()
+        .map(|l| {
+            let r = &l["range"];
+            assert_eq!(r["start"]["line"], r["end"]["line"], "{l}");
+            (
+                l["uri"].as_str().unwrap().to_owned(),
+                r["start"]["line"].as_u64().unwrap(),
+                r["start"]["character"].as_u64().unwrap(),
+                r["end"]["character"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+// Non-ASCII before the queried name and before every name returned, on the same line.
+const REF_LIB: &str = "pub fn tag() -> Str { \"é→😀\" } pub fn helper(n: Int) -> Int { n }\n\
+pub fn again() -> Int { let s = \"😀→\"; helper(2) }\n";
+const REF_MAIN: &str =
+    "use \"lib.nz\";\nfn main() -> Int { let s = \"é→😀\"; helper(1) + again() }\n";
+
+#[test]
+fn references_cross_the_protocol_in_utf16_from_the_current_buffers() {
+    let (_dir, root) = project(&[("lib.nz", REF_LIB), ("main.nz", REF_MAIN)]);
+    let (lib, main) = (root.join("lib.nz"), root.join("main.nz"));
+    let mut c = Client::start(&root);
+    let init = c.initialize(&root);
+    assert_eq!(init["result"]["capabilities"]["referencesProvider"], true);
+    c.open(&main, 1, REF_MAIN);
+    let d = c.diagnostics_for(&uri(&main));
+    assert_eq!(d["diagnostics"], json!([]), "{d}");
+
+    // Every expected column is counted here, independently, in UTF-16 units.
+    let main_line = REF_MAIN.lines().nth(1).unwrap();
+    let lib0 = REF_LIB.lines().next().unwrap();
+    let lib1 = REF_LIB.lines().nth(1).unwrap();
+    let span = |uri: &str, n: u64, line: &str, at: usize| {
+        (
+            uri.to_owned(),
+            n,
+            u64::from(utf16(line, at)),
+            u64::from(utf16(line, at + "helper".len())),
+        )
+    };
+    let (lu, mu) = (uri(&lib), uri(&main));
+    let declaration = span(&lu, 0, lib0, lib0.find("helper").unwrap());
+    let in_lib = span(&lu, 1, lib1, lib1.find("helper").unwrap());
+    let call = main_line.find("helper").unwrap();
+    let in_main = span(&mu, 1, main_line, call);
+    // Sanity: the bytes and the units differ on every one of these lines.
+    assert_ne!(utf16(main_line, call) as usize, call);
+
+    // From a use in the middle of the name, without and with the declaration, in the
+    // canonical order: by file, then position.
+    let q = utf16(main_line, call) + 3;
+    assert_eq!(
+        located(&c.references(&main, 1, q, false)),
+        [in_lib.clone(), in_main.clone()]
+    );
+    assert_eq!(
+        located(&c.references(&main, 1, q, true)),
+        [declaration.clone(), in_lib.clone(), in_main.clone()]
+    );
+
+    // An unsaved change: a new use appears, at its UTF-16 position in the buffer.
+    let edited =
+        "use \"lib.nz\";\nfn main() -> Int { let s = \"é→😀\"; helper(1) + again() + helper(3) }\n";
+    c.change(&main, 2, edited);
+    c.diagnostics_for(&uri(&main));
+    let edited_line = edited.lines().nth(1).unwrap();
+    let third = edited_line.rfind("helper").unwrap();
+    assert_eq!(
+        located(&c.references(&main, 1, q, false)),
+        [in_lib, in_main, span(&mu, 1, edited_line, third)]
+    );
+
+    // Nothing to refer to: a string's contents, and a keyword.
+    let in_string = utf16(edited_line, edited_line.find('→').unwrap());
+    assert_eq!(c.references(&main, 1, in_string, true), Value::Null);
+    assert_eq!(c.references(&main, 1, 1, true), Value::Null);
+    // And a malformed request is an error, not a crash.
+    let r = c.request("textDocument/references", json!({"nonsense": true}));
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+/// The references `nazm lsp` gives for `helper` in `main.nz` of the project at `root`,
+/// with the project's own directory taken out of every URI so two projects compare.
+fn references_in(root: &Path) -> Vec<(String, u64, u64, u64)> {
+    let main = root.join("main.nz");
+    let mut c = Client::start(root);
+    c.initialize(root);
+    c.open(&main, 1, REF_MAIN);
+    c.diagnostics_for(&uri(&main));
+    let line = REF_MAIN.lines().nth(1).unwrap();
+    let got = c.references(&main, 1, utf16(line, line.find("helper").unwrap()), true);
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+    let prefix = uri(root);
+    located(&got)
+        .into_iter()
+        .map(|(u, l, s, e)| (u.replacen(&prefix, "", 1), l, s, e))
+        .collect()
+}
+
+#[test]
+fn references_do_not_depend_on_whether_semantic_analysis_was_cached() {
+    // The language service reads no persistent cache: an unsaved buffer is not state a
+    // cache may record, so every analysis is a full one. This is the evidence that a warm
+    // cache beside the sources changes nothing about the answer.
+    let (_warm_dir, warm) = project(&[("lib.nz", REF_LIB), ("main.nz", REF_MAIN)]);
+    let (_cold_dir, cold) = project(&[("lib.nz", REF_LIB), ("main.nz", REF_MAIN)]);
+    let check = |dir: &Path| {
+        let out = Command::new(env!("CARGO_BIN_EXE_nazm"))
+            .args(["check", "--cache-report", "main.nz"])
+            .current_dir(dir)
+            .env_remove("NAZM_CACHE_DIR")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let report = String::from_utf8(out.stdout).unwrap();
+        let line = report.lines().next().unwrap().to_owned();
+        serde_json::from_str::<Value>(&line).unwrap()
+    };
+    let first = check(&warm);
+    assert_eq!(
+        first["stored"].as_u64().map(|n| n > 0),
+        Some(true),
+        "{first}"
+    );
+    let second = check(&warm);
+    assert_eq!(
+        second["reused"].as_u64().map(|n| n > 0),
+        Some(true),
+        "the cache is warm: {second}"
+    );
+
+    let from_warm = references_in(&warm);
+    let from_cold = references_in(&cold);
+    assert_eq!(from_warm.len(), 3, "{from_warm:?}");
+    assert_eq!(from_warm, from_cold);
 }
