@@ -1767,6 +1767,12 @@ fn mutate_run(args: &mut impl Iterator<Item = String>) -> ExitCode {
     if let Some(n) = f.get("budget-secs").and_then(|n| n.parse().ok()) {
         o.budget = Some(std::time::Duration::from_secs(n));
     }
+    if let Some(n) = f.get("cargo-jobs").and_then(|n| n.parse().ok()) {
+        o.parallelism.cargo_jobs = n;
+    }
+    if let Some(n) = f.get("test-threads").and_then(|n| n.parse().ok()) {
+        o.parallelism.test_threads = n;
+    }
     finish_campaign(mutate::run_all(&o))
 }
 
@@ -1850,6 +1856,22 @@ fn mutate_cli(rest: &[String]) -> ExitCode {
                 o.export_journal = true;
                 1
             }
+            // N14.1: each step's internal parallelism. Never more mutants at once.
+            "--cargo-jobs" | "--test-threads" => match value(i, arg).map(|v| v.parse::<u32>()) {
+                Ok(Ok(n)) if (1..=16).contains(&n) => {
+                    if arg == "--cargo-jobs" {
+                        o.parallelism.cargo_jobs = n;
+                    } else {
+                        o.parallelism.test_threads = n;
+                    }
+                    2
+                }
+                Ok(_) => {
+                    eprintln!("mutate: {arg} needs a whole number from 1 to 16");
+                    return ExitCode::FAILURE;
+                }
+                Err(e) => return e,
+            },
             "--budget-secs" => match value(i, "--budget-secs").map(|v| v.parse::<u64>()) {
                 Ok(Ok(n)) => {
                     o.budget = Some(std::time::Duration::from_secs(n));
@@ -2062,11 +2084,36 @@ fn run_contained(args: &[String]) -> ExitCode {
     };
     let mut bounds = Bounds::default();
 
+    // `--profile NAME` before the workload chooses its internal parallelism (N14.1).
+    // Without one, each workload takes the profile its calibration adopted.
+    let (chosen, args) = match args.first().map(String::as_str) {
+        Some("--profile") => {
+            let Some(p) = args
+                .get(1)
+                .and_then(|n| contained::ExecutionProfile::by_name(n))
+            else {
+                let names: Vec<&str> = contained::ExecutionProfile::ALL
+                    .iter()
+                    .map(|p| p.name)
+                    .collect();
+                eprintln!("contained: --profile is one of {}", names.join(", "));
+                return ExitCode::FAILURE;
+            };
+            (Some(p), args.get(2..).unwrap_or_default())
+        }
+        _ => (None, args),
+    };
+    let workload = args.first().map(String::as_str).unwrap_or_default();
+    let profile = chosen.unwrap_or_else(|| default_profile(workload));
+    bounds.profile = profile;
+    bounds.milli_cpus = profile.milli_cpus;
+    let j = profile.cargo_jobs;
+
     let (name, argv): (&str, Vec<String>) = match args.first().map(String::as_str) {
         Some("probe") => return contained_probe(&repo),
         Some("selfhost") => (
             "selfhost",
-            shell("cargo test --locked -p nazm-cli --test selfhost --jobs 1 -- --test-threads 1"),
+            shell(&cargo_test("-p nazm-cli --test selfhost", profile)),
         ),
         // The reference front end is **built here**, not taken from the image.
         //
@@ -2081,16 +2128,13 @@ fn run_contained(args: &[String]) -> ExitCode {
             bounds.deadline = Duration::from_secs(1800);
             (
                 "bootstrap",
-                shell(
-                    "cargo build --locked -p nazm-cli --jobs 1 \
-                     && sh compiler/bootstrap.sh /work/bootstrap",
-                ),
+                shell(&format!(
+                    "cargo build --locked -p nazm-cli --jobs {j} \
+                     && sh compiler/bootstrap.sh /work/bootstrap"
+                )),
             )
         }
-        Some("tests") => (
-            "tests",
-            shell("cargo test --locked --workspace --jobs 1 -- --test-threads 1"),
-        ),
+        Some("tests") => ("tests", shell(&cargo_test("--workspace", profile))),
         // The release candidate: every gate, then the candidate archived and handed out.
         //
         // It has to be exported, because `/work` is the container's writable layer and
@@ -2227,16 +2271,17 @@ fn run_contained(args: &[String]) -> ExitCode {
             // a SIGINT the docker client proxies reaches the runner itself, and when it
             // dies the pid namespace takes every descendant with it.
             let deadline = bounds.deadline.as_secs().saturating_sub(20);
+            let par = mutate_parallelism(profile);
             (
                 "mutate",
                 shell(&format!(
                     "rm -rf /work/mut && mkdir -p /work/mut /work/campaigns \
                      && tar -C /src -cf - --exclude=./target --exclude=./.git --exclude=.nazm . | tar -C /work/mut -xf - \
                      && cd /work/mut && export CARGO_TARGET_DIR=/work/mut/target \
-                     && cargo build -q -p xtask --jobs 1 \
+                     && cargo build -q -p xtask --jobs {j} \
                      && exec timeout -s TERM -k 15 {deadline} /work/mut/target/debug/xtask mutate \
                         --reset-derived-caches --export-journal --campaign-dir /work/campaigns \
-                        --resume-from /src/target/mutation-campaigns{commit}{budget}{passed}"
+                        --resume-from /src/target/mutation-campaigns {par}{commit}{budget}{passed}"
                 )),
             )
         }
@@ -2370,6 +2415,38 @@ fn run_contained(args: &[String]) -> ExitCode {
     }
 }
 
+/// The profile a workload runs under when `--profile` is not given. N14.1.
+///
+/// The workspace suite and the selfhost suite take P4T4, which their calibration qualified
+/// (`docs/performance.md`). Everything else is P1. `mutate` is P1 because every parallel
+/// profile tried crossed the frozen total-memory gate on it, not because its verdicts
+/// differed. `bench` is P1 for good: it measures the programs and the compiler, and a
+/// measurement shares the machine with nothing. `--profile p1` reproduces any older
+/// result.
+fn default_profile(workload: &str) -> contained::ExecutionProfile {
+    match workload {
+        "tests" | "selfhost" => contained::ExecutionProfile::P4T4,
+        _ => contained::ExecutionProfile::P1,
+    }
+}
+
+/// A contained `cargo test` over `scope`, with the profile's job and thread counts.
+fn cargo_test(scope: &str, p: contained::ExecutionProfile) -> String {
+    format!(
+        "cargo test --locked {scope} --jobs {} -- --test-threads {}",
+        p.cargo_jobs, p.test_threads
+    )
+}
+
+/// The parallelism a contained campaign passes to its runner. It sizes each step; the
+/// runner still takes one mutant at a time.
+fn mutate_parallelism(p: contained::ExecutionProfile) -> String {
+    format!(
+        "--cargo-jobs {} --test-threads {}",
+        p.cargo_jobs, p.test_threads
+    )
+}
+
 /// The options `contained mutate` passes through, validated and quoted.
 ///
 /// Rebuilt from a closed list rather than forwarded. Every value is interpolated into a
@@ -2485,6 +2562,7 @@ fn contained_probe(repo: &std::path::Path) -> ExitCode {
     let tight = Bounds {
         memory_mb: 256,
         milli_cpus: 1000,
+        profile: contained::ExecutionProfile::P1,
         pids: 64,
         storage_gb: 1,
         scratch_mb: 16,
@@ -2584,8 +2662,52 @@ fn contained_probe(repo: &std::path::Path) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        absence_claims, cited_paths, serde_in_manifest, serde_in_source, verified_without_evidence,
+        absence_claims, cargo_test, cited_paths, contained::ExecutionProfile, default_profile,
+        mutate_parallelism, serde_in_manifest, serde_in_source, verified_without_evidence,
     };
+
+    #[test]
+    fn only_the_calibrated_workloads_leave_p1() {
+        assert_eq!(default_profile("tests"), ExecutionProfile::P4T4);
+        assert_eq!(default_profile("selfhost"), ExecutionProfile::P4T4);
+        for w in [
+            "mutate",
+            "bootstrap",
+            "bench",
+            "release",
+            "probe",
+            "run",
+            "",
+        ] {
+            assert_eq!(default_profile(w), ExecutionProfile::P1, "{w}");
+        }
+    }
+
+    #[test]
+    fn p1_is_still_one_cpu_one_job_one_thread() {
+        let p1 = ExecutionProfile::P1;
+        assert_eq!(
+            (p1.milli_cpus, p1.cargo_jobs, p1.test_threads),
+            (1000, 1, 1)
+        );
+        assert_eq!(ExecutionProfile::by_name("p1"), Some(p1));
+        assert_eq!(ExecutionProfile::by_name("p6"), None);
+        assert_eq!(
+            cargo_test("--workspace", p1),
+            "cargo test --locked --workspace --jobs 1 -- --test-threads 1"
+        );
+        assert_eq!(mutate_parallelism(p1), "--cargo-jobs 1 --test-threads 1");
+    }
+
+    #[test]
+    fn a_profile_reaches_every_step_it_sizes() {
+        let p = ExecutionProfile::P4T4;
+        assert_eq!(
+            cargo_test("-p nazm-cli --test selfhost", p),
+            "cargo test --locked -p nazm-cli --test selfhost --jobs 4 -- --test-threads 4"
+        );
+        assert_eq!(mutate_parallelism(p), "--cargo-jobs 4 --test-threads 4");
+    }
 
     #[test]
     fn a_path_is_cited_only_when_it_is_rooted_in_the_repository() {
