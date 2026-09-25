@@ -404,7 +404,8 @@ fixpoint `0e1a40e6…`.
 | losslessness, recovery, the two trees agreeing, termination | `crates/nazm-syntax/tests/cst.rs`, `capability-matrix.md` area 1 |
 | what it costs: 2.0× parse time on real code | `performance.md` |
 
-Mutation evidence: 16 new and 3 repointed, 17 killers verified; one targeted campaign of the
+Mutation evidence: 16 new and 3 repointed; the 17 of those 19 that list a killer (fourteen
+distinct tests) verified, uncontended; one targeted campaign of the
 26 entries on the syntax crate — 25 caught (19 at tier 1, 6 at tier 2), no survivor, and the
 known `nesting-unbounded` MUTANT CRASH unchanged (`capability-matrix.md` §30).
 
