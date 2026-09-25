@@ -15,4 +15,4 @@ pub mod load;
 pub mod root;
 pub mod service;
 
-pub use service::{Definition, Hover, LanguageService, Location, Published, Target};
+pub use service::{Definition, Hover, LanguageService, Location, Published, References, Target};
