@@ -340,6 +340,9 @@ pub struct Analysis {
     pub program: __syntax::Program,
     pub resolution: Resolution,
     pub diagnostics: Vec<nazm_diag::Diagnostic>,
+    /// The files whose text had a syntax error, each once, in file order (N19): where the
+    /// tree is a recovery, what the checker saw of it may be missing a declaration.
+    pub syntax_errors: Vec<nazm_span::FileId>,
 }
 
 /// Parse and check `map`, keeping the tree, the resolution and every diagnostic.
@@ -354,6 +357,10 @@ pub struct Analysis {
 pub fn analyse(map: &nazm_span::SourceMap, graph: &sema::ModuleGraph, entry: Entry) -> Analysis {
     let (program, mut diagnostics) = nazm_syntax::parse_map(map);
     let parse_failed = !diagnostics.is_empty();
+    let mut syntax_errors: Vec<nazm_span::FileId> =
+        diagnostics.iter().map(|d| d.primary.span.file).collect();
+    syntax_errors.sort_unstable();
+    syntax_errors.dedup();
     // The resolution is **handed on** rather than discarded. Two call sites used to
     // throw it away — `let (_, check_errors) = check(&program)` — and the backend then
     // rebuilt an equivalent one, which is the duplication N1 exists to remove.
@@ -370,6 +377,7 @@ pub fn analyse(map: &nazm_span::SourceMap, graph: &sema::ModuleGraph, entry: Ent
         program,
         resolution,
         diagnostics,
+        syntax_errors,
     }
 }
 

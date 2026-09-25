@@ -265,6 +265,9 @@ pub struct Resolution {
     /// enum had none. A built-in and a type parameter are not recorded: neither is a
     /// definition a program wrote.
     type_names: HashMap<Span, TypeNode>,
+    /// The checker's scopes and environments, as it built them (N19): what may be written
+    /// where, for a tool to enumerate. Nothing resolves through this.
+    scopes: crate::scope::ScopeTrace,
 }
 
 impl Resolution {
@@ -419,6 +422,17 @@ impl Resolution {
     #[must_use]
     pub fn callee(&self, span: Span) -> Option<Callee> {
         self.calls.get(&span).copied()
+    }
+
+    /// What the checker recorded about its scopes and environments.
+    #[must_use]
+    pub fn scopes(&self) -> &crate::scope::ScopeTrace {
+        &self.scopes
+    }
+
+    /// The scope trace, for the checker that is recording it.
+    pub fn scopes_mut(&mut self) -> &mut crate::scope::ScopeTrace {
+        &mut self.scopes
     }
 
     /// Which record or enum the type name written at `span` names.

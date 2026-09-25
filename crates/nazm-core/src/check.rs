@@ -176,6 +176,9 @@ struct Visible {
 #[derive(Debug, Default)]
 struct Types {
     names: HashMap<String, Type>,
+    /// Names refused as an ambiguity or a collision, which mean nothing unambiguously
+    /// here. Recorded for the scope trace (N19), which leaves them out.
+    refused: Vec<String>,
 }
 
 /// What one module may name.
@@ -192,6 +195,8 @@ struct Types {
 #[derive(Debug, Default)]
 struct Env {
     names: HashMap<String, Visible>,
+    /// Names refused as an ambiguity or a collision. See [`Types::refused`].
+    refused: Vec<String>,
 }
 
 impl Env {
@@ -841,6 +846,7 @@ pub fn resolve_type_fields(
         }
         completed.push(&r.name);
         let scope = param_scope(&r.type_params, ParamOwner::Record(id));
+        record_type_scope(res, r.span, &scope, &types);
         let fields = resolve_fields(&types, res, &r.name, &r.fields, &scope, errors);
         // A record with no fields. Refused rather than allowed, and the reason is the
         // grammar: `Marker()` is exactly what a call to a function named `Marker` looks
@@ -894,6 +900,7 @@ pub fn resolve_type_fields(
         }
         let mut variants: Vec<VariantDef> = Vec::new();
         let scope = param_scope(&e.type_params, ParamOwner::Enum(id));
+        record_type_scope(res, e.span, &scope, &types);
         for v in &e.variants {
             if let Some(first) = variants.iter().find(|p| p.name == v.name) {
                 errors.push(
@@ -1171,6 +1178,7 @@ fn type_environment(
     }
 
     let mut brought_in: HashMap<String, Span> = HashMap::new();
+    let mut refused: Vec<String> = Vec::new();
     for d in unit.imports {
         let Some(iface) = deps.iter().find(|i| i.module() == d.on) else {
             continue;
@@ -1227,6 +1235,7 @@ fn type_environment(
                             ),
                         );
                     }
+                    refused.push(name);
                     continue;
                 }
                 if collisions == Collisions::Report {
@@ -1247,6 +1256,7 @@ fn type_environment(
                         ),
                     );
                 }
+                refused.push(name);
                 continue;
             }
             if let Some(first) = brought_in.get(&name) {
@@ -1273,13 +1283,82 @@ fn type_environment(
                         ),
                     );
                 }
+                refused.push(name);
                 continue;
             }
             brought_in.insert(name.clone(), d.at);
             names.insert(name, offer);
         }
     }
-    Types { names }
+    Types { names, refused }
+}
+
+/// Record what a module may name, as its checker is about to use it (N19): every function
+/// and built-in in its environment, every type in its type namespace and every built-in
+/// type — less the names the environments refused, which mean nothing unambiguously.
+fn record_module_names(res: &mut Resolution, module: ModuleId, env: &Env, types: &Types) {
+    use nazm_sema::scope::{defined, Candidate, Named};
+    let callables = env
+        .names
+        .iter()
+        .filter(|(n, _)| !env.refused.contains(n))
+        .map(|(name, v)| Named {
+            name: name.clone(),
+            candidate: match v.callee {
+                Callee::Builtin(i) => Candidate::Intrinsic(i),
+                Callee::Function(id) => Candidate::Entity(nazm_sema::ReferenceTarget::Function(id)),
+            },
+        })
+        .collect();
+    let mut named: Vec<Named> = types
+        .names
+        .iter()
+        .filter(|(n, _)| !types.refused.contains(n))
+        .filter_map(|(name, t)| {
+            TypeNode::of(*t).map(|node| Named {
+                name: name.clone(),
+                candidate: defined(node),
+            })
+        })
+        .collect();
+    for t in Type::ALL {
+        if let Some(name) = t.builtin_name() {
+            named.push(Named {
+                name: name.to_owned(),
+                candidate: Candidate::BuiltinType(*t),
+            });
+        }
+    }
+    named.push(Named {
+        name: VEC.to_owned(),
+        candidate: Candidate::BuiltinVec,
+    });
+    res.scopes_mut().module(module, callables, named);
+}
+
+/// Record a definition's type parameters over its declaration (N19), each with the type
+/// name it hides — found here by the same lookup `resolve_written_inner` makes after it.
+fn record_type_scope(res: &mut Resolution, span: Span, scope: &[(String, Type)], types: &Types) {
+    use nazm_sema::scope::{defined, Candidate};
+    let params = scope
+        .iter()
+        .filter_map(|(name, t)| {
+            let Type::Param(p) = t else { return None };
+            let hides = if name == VEC {
+                Some(Candidate::BuiltinVec)
+            } else if let Some(b) = Type::from_name(name) {
+                Some(Candidate::BuiltinType(b))
+            } else {
+                types
+                    .names
+                    .get(name)
+                    .and_then(|t| TypeNode::of(*t))
+                    .map(defined)
+            };
+            Some((name.clone(), *p, hides))
+        })
+        .collect();
+    res.scopes_mut().type_scope(span, params);
 }
 
 /// A user-defined type's declared name, or `None` for a built-in.
@@ -1774,6 +1853,7 @@ pub fn check_unit(
 ) {
     let env = environment(unit, deps, res, errors);
     let types = type_environment(unit, deps, res, errors, Collisions::Silent);
+    record_module_names(res, unit.module, &env, &types);
     // Built from `deps` rather than from a graph, so the one path that checks a module
     // against persisted interfaces resolves type names by exactly the rule the
     // whole-program path uses. Two builders would be two rules.
@@ -1876,6 +1956,7 @@ fn environment(
     // remembers which `use` introduced each name, so the second collision points at the
     // first rather than at "somewhere else".
     let mut brought_in: HashMap<&str, Span> = HashMap::new();
+    let mut refused: Vec<String> = Vec::new();
     for d in unit.imports {
         let Some(iface) = deps.iter().find(|i| i.module() == d.on) else {
             continue;
@@ -1901,6 +1982,7 @@ fn environment(
                          them, or stop exporting the other",
                     ),
                 );
+                refused.push(e.name.clone());
                 continue;
             }
             if let Some(first) = brought_in.get(e.name.as_str()) {
@@ -1917,6 +1999,7 @@ fn environment(
                          is refused where it is created rather than where it is used",
                     ),
                 );
+                refused.push(e.name.clone());
                 continue;
             }
             brought_in.insert(e.name.as_str(), d.at);
@@ -1936,7 +2019,7 @@ fn environment(
         }
     }
 
-    Env { names }
+    Env { names, refused }
 }
 
 /// Where a type argument came from, when it was written rather than inferred.
@@ -2040,6 +2123,48 @@ impl Checker<'_> {
                 },
             )
             .unwrap_or(0)
+    }
+
+    /// Push a lexical scope over `span`, and record it (N19).
+    fn open_scope(&mut self, span: Span) {
+        self.scopes.push();
+        self.res.scopes_mut().open(span, self.current);
+    }
+
+    /// Pop the innermost lexical scope, and record that it ended.
+    fn close_scope(&mut self) {
+        self.scopes.pop();
+        self.res.scopes_mut().close();
+    }
+
+    /// Bind a name in the innermost scope, visible from byte `visible_from` — and record,
+    /// from this checker's own lookup, which binding it hides and whether it collides
+    /// with one in the same scope, so that what is visible where can be read back without
+    /// comparing a single name.
+    fn define(
+        &mut self,
+        name: &str,
+        ty: Type,
+        mutable: bool,
+        declared_at: Option<Span>,
+        slot: u32,
+        visible_from: u32,
+    ) {
+        if let Some(function) = self.current {
+            let shadows = self.scopes.lookup(name).map(|b| LocalRef {
+                function,
+                slot: b.slot,
+            });
+            let duplicate = self.scopes.defined_here(name);
+            self.res.scopes_mut().bind(
+                LocalRef { function, slot },
+                name,
+                visible_from,
+                shadows,
+                duplicate,
+            );
+        }
+        self.scopes.define(name, ty, mutable, declared_at, slot);
     }
 
     /// Record that the variable written at `span` is the binding in `slot` of the function
@@ -2903,7 +3028,7 @@ impl Checker<'_> {
         arm: &MatchArm,
         expected: Option<Type>,
     ) -> Completion {
-        self.scopes.push();
+        self.open_scope(arm.span);
         let mut named: Vec<(String, Span)> = Vec::new();
         for f in &arm.fields {
             let declared = self
@@ -2965,8 +3090,14 @@ impl Checker<'_> {
             // `docs/spec.md` says in as many words.
             let slot = self.allocate(binding, f.binding_span, ty, false);
             self.record_var(f.binding_span, slot);
-            self.scopes
-                .define(binding, ty, false, Some(f.binding_span), slot);
+            self.define(
+                binding,
+                ty,
+                false,
+                Some(f.binding_span),
+                slot,
+                f.binding_span.end,
+            );
         }
 
         let missing = self.missing_payload_fields(id, at, &named);
@@ -2988,7 +3119,7 @@ impl Checker<'_> {
         }
 
         let completion = self.check_expr(&arm.body, expected);
-        self.scopes.pop();
+        self.close_scope();
         completion
     }
 
@@ -3120,7 +3251,8 @@ impl Checker<'_> {
             .current
             .map(|id| param_scope(&f.type_params, ParamOwner::Function(id)))
             .unwrap_or_default();
-        self.scopes.push();
+        record_type_scope(self.res, f.span, &self.type_scope, &self.types);
+        self.open_scope(f.span);
         for p in &f.params {
             let ty = self.signature_type(&p.ty);
             if self.scopes.defined_here(&p.name) {
@@ -3136,7 +3268,7 @@ impl Checker<'_> {
             // No declaration span: `mut` on a parameter is `N0311`, so there is no
             // edit at the declaration that would make this assignment legal.
             let slot = self.allocate(&p.name, p.name_span, ty, false);
-            self.scopes.define(&p.name, ty, false, None, slot);
+            self.define(&p.name, ty, false, None, slot, p.name_span.end);
         }
 
         let declared = self.signature_type(&f.return_type);
@@ -3144,7 +3276,8 @@ impl Checker<'_> {
             // The body failed to parse; the parse error is already reported. Anything
             // said about statements that were never built would be about the parser's
             // guess, not the program.
-            self.scopes.pop();
+            self.res.scopes_mut().incomplete();
+            self.close_scope();
             return;
         };
         let previous = self.return_type.replace(declared);
@@ -3191,13 +3324,13 @@ impl Checker<'_> {
                 );
             }
         }
-        self.scopes.pop();
+        self.close_scope();
     }
 
     fn check_block(&mut self, b: &Block, expected: Option<Type>) -> Completion {
-        self.scopes.push();
+        self.open_scope(b.span);
         let completion = self.check_block_inner(b, expected);
-        self.scopes.pop();
+        self.close_scope();
         completion
     }
 
@@ -3263,8 +3396,9 @@ impl Checker<'_> {
                 // backend can find the slot for a `let` the same way it finds one for a
                 // mention.
                 self.record_var(l.name_span, slot);
-                self.scopes
-                    .define(&l.name, ty, l.mutable, Some(l.name_span), slot);
+                // Visible from the end of the statement: its own initializer, checked
+                // above, could not see it, and nothing between the name and the `;` can.
+                self.define(&l.name, ty, l.mutable, Some(l.name_span), slot, l.span.end);
                 false
             }
             Stmt::Assign(a) => {
