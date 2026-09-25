@@ -853,6 +853,7 @@ impl<'a> Parser<'a> {
             self.wrap(param, SyntaxKind::Param);
             params.push(Param {
                 name: p_name,
+                name_span: p_span,
                 span: p_span.join(ty.span),
                 ty,
             });

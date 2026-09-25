@@ -42,6 +42,12 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // code-generator dependency — which is why `may_depend_on_codegen` below stays
         // false for it.
         "nazm-lir" => &["nazm-span", "nazm-diag", "nazm-syntax", "nazm-sema"],
+        // The driver library and the language service, N16. Through `nazm-core` only, like
+        // the CLI and for the same reason: the service consumes the compiler's answers,
+        // and a direct dependency on the parser or on `nazm-sema` would be the first step
+        // to it computing its own. Not `nazm-cache` either: an unsaved buffer is not state
+        // the cache may record.
+        "nazm-service" => &["nazm-span", "nazm-diag", "nazm-core"],
         // The CLI deliberately does NOT depend on nazm-syntax: it goes through nazm-core,
         // so there is one entry point into the front end rather than two that can drift.
         "nazm-cli" => &[
@@ -51,6 +57,7 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
             "nazm-lir",
             "nazm-iface",
             "nazm-cache",
+            "nazm-service",
         ],
 
         // The measurement instrument answers to nothing. It must stay usable — and
@@ -100,6 +107,8 @@ pub(crate) fn emission_allowlist() -> &'static [(&'static str, &'static [&'stati
         ("crates/nazm-core", &[]),
         ("crates/nazm-cache", &[]),
         ("crates/nazm-lir", &["emits LLVM IR"]),
+        // The language service answers questions; it never emits or runs anything.
+        ("crates/nazm-service", &[]),
         (
             "crates/nazm-cli",
             &["emits LLVM IR", "invokes the native toolchain"],

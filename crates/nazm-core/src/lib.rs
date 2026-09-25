@@ -32,8 +32,11 @@ pub mod __syntax {
     pub use nazm_syntax::{
         format, lex, lex_in, parse_file, parse_map, parse_source, Block, Enum, Expr, Field,
         FieldInit, Function, MatchArm, PatternField, Place, PlaceField, Program, Record, Stmt,
-        TokenKind, TypeName, TypeParam, Variant,
+        TokenKind, TypeName, TypeParam, Variant, PARSE_STACK_BYTES,
     };
+    /// The lossless tree (N15), for a tool that needs to know where a position is. What a
+    /// position *means* is the resolution's, never the tree's.
+    pub use nazm_syntax::{parse_cst, Cst, CstNode, Leaf, SyntaxKind};
 }
 
 use nazm_diag::Diagnostic;
@@ -325,6 +328,51 @@ where
     on_checked_with(map, graph, Entry::Absent, f)
 }
 
+/// Everything one parse and check of a compilation produced, whatever it found.
+///
+/// The tree, what resolution decided about it, and every diagnostic — together, because a
+/// language service needs the current answer to *where does this name resolve* for a file
+/// that also has a type error somewhere else. It is the same parse and the same check
+/// every other entry point runs; [`on_checked_map`] is this with the diagnostics turned
+/// into an early return.
+#[derive(Debug)]
+pub struct Analysis {
+    pub program: __syntax::Program,
+    pub resolution: Resolution,
+    pub diagnostics: Vec<nazm_diag::Diagnostic>,
+}
+
+/// Parse and check `map`, keeping the tree, the resolution and every diagnostic.
+///
+/// # Stack
+///
+/// **Not** on a stack of its own: the caller provides [`__syntax::PARSE_STACK_BYTES`], as
+/// for `parse_source`, and the returned tree must be dropped on it. The language service
+/// owns one thread with that stack for exactly this reason. Every other caller wants the
+/// stack arranged for it and uses [`on_checked_map`] or [`on_module_map`].
+#[must_use]
+pub fn analyse(map: &nazm_span::SourceMap, graph: &sema::ModuleGraph, entry: Entry) -> Analysis {
+    let (program, mut diagnostics) = nazm_syntax::parse_map(map);
+    let parse_failed = !diagnostics.is_empty();
+    // The resolution is **handed on** rather than discarded. Two call sites used to
+    // throw it away — `let (_, check_errors) = check(&program)` — and the backend then
+    // rebuilt an equivalent one, which is the duplication N1 exists to remove.
+    let (resolution, check_errors) = check(&program, graph);
+    // A function that failed to parse was never registered, so "this program has no
+    // `main`" would be reported for a file whose first line is `fn main`.
+    let drop_missing_main = parse_failed || entry == Entry::Absent;
+    diagnostics.extend(
+        check_errors
+            .into_iter()
+            .filter(|d| !(drop_missing_main && d.code == nazm_diag::codes::MISSING_MAIN)),
+    );
+    Analysis {
+        program,
+        resolution,
+        diagnostics,
+    }
+}
+
 fn on_checked_with<T, F>(
     map: &nazm_span::SourceMap,
     graph: &sema::ModuleGraph,
@@ -336,24 +384,11 @@ where
     F: FnOnce(&__syntax::Program, &Resolution) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
 {
     let run = || {
-        let (program, mut diagnostics) = nazm_syntax::parse_map(map);
-        let parse_failed = !diagnostics.is_empty();
-        // The resolution is **handed on** rather than discarded. Two call sites used to
-        // throw it away — `let (_, check_errors) = check(&program)` — and the backend then
-        // rebuilt an equivalent one, which is the duplication N1 exists to remove.
-        let (resolution, check_errors) = check(&program, graph);
-        // A function that failed to parse was never registered, so "this program has no
-        // `main`" would be reported for a file whose first line is `fn main`.
-        let drop_missing_main = parse_failed || entry == Entry::Absent;
-        diagnostics.extend(
-            check_errors
-                .into_iter()
-                .filter(|d| !(drop_missing_main && d.code == nazm_diag::codes::MISSING_MAIN)),
-        );
-        if diagnostics.is_empty() {
-            f(&program, &resolution)
+        let a = analyse(map, graph, entry);
+        if a.diagnostics.is_empty() {
+            f(&a.program, &a.resolution)
         } else {
-            Err(diagnostics)
+            Err(a.diagnostics)
         }
     };
 

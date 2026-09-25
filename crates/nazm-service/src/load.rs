@@ -30,8 +30,19 @@
 //! spellings is one file, and the map's contents depend on the import graph rather than on
 //! the filesystem's iteration order. A cycle terminates because the second visit finds the
 //! file already loaded; it is not an error, and `docs/spec.md` says why.
+//!
+//! # Where the bytes come from
+//!
+//! Moved from `nazm-cli` in N16 so the command line and the language service share one
+//! loader rather than each having one. The only thing that differs between them is where
+//! a file's **bytes** come from, so that is the only thing that is a parameter: a
+//! [`Sources`]. [`Disk`] reads the filesystem, which is what every command does; the
+//! language service passes one that answers from an open editor buffer first. Which files
+//! a compilation has, how a path becomes an identity, cycles, the prelude and every
+//! diagnostic are decided here, once, whichever it is.
 
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use nazm_core::sema::{ModuleGraph, ModuleKey};
@@ -74,11 +85,42 @@ fn module_key(root: &Path, path: &Path) -> Option<ModuleKey> {
     ModuleKey::relative(&text)
 }
 
+/// Where a compilation's source bytes come from.
+///
+/// Two questions and nothing else. Identity — which two paths are one module — is not one
+/// of them: the loader decides it from the path, the same way whatever answers these.
+pub trait Sources {
+    /// The exact text of the file at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever made it unreadable; the loader reports it as a missing module.
+    fn read(&self, path: &Path) -> io::Result<String>;
+
+    /// Whether an import naming `path` names a file that exists.
+    fn exists(&self, path: &Path) -> bool;
+}
+
+/// The filesystem, as every command reads it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Disk;
+
+impl Sources for Disk {
+    fn read(&self, path: &Path) -> io::Result<String> {
+        std::fs::read_to_string(path)
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+}
+
 /// The source of a compilation, and how its modules relate.
 ///
 /// Two values that are always built together and always travel together: the text, for
 /// diagnostics and slicing, and the graph, for everything semantic.
-pub(crate) struct Loaded {
+#[derive(Debug)]
+pub struct Loaded {
     pub map: SourceMap,
     pub graph: ModuleGraph,
 }
@@ -92,7 +134,20 @@ pub(crate) struct Loaded {
 /// against the positions they will keep.
 /// On failure what was loaded **so far** comes back with the diagnostics, so a
 /// "cannot find" points at the `use` line that wrote it rather than at an empty file.
-pub(crate) fn load(root: &Path, source_root: &Path) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
+pub fn load(root: &Path, source_root: &Path) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
+    load_from(root, source_root, &Disk)
+}
+
+/// [`load`], reading every file through `sources`.
+///
+/// # Errors
+///
+/// As [`load`].
+pub fn load_from(
+    root: &Path,
+    source_root: &Path,
+    sources: &dyn Sources,
+) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
     // Every module's durable identity is its path relative to this, so a checkout moved
     // from one directory to another keeps its identities — which is the property
     // `docs/spec.md` asks for and the reason the absolute path never reaches one. Whether
@@ -137,7 +192,7 @@ pub(crate) fn load(root: &Path, source_root: &Path) -> Result<Loaded, (Loaded, V
             continue;
         }
 
-        let text = match std::fs::read_to_string(&path) {
+        let text = match sources.read(&path) {
             Ok(t) => t,
             Err(e) => {
                 // No file to point into: this one could not be read. Said plainly rather
@@ -168,7 +223,7 @@ pub(crate) fn load(root: &Path, source_root: &Path) -> Result<Loaded, (Loaded, V
         let mut children = Vec::new();
         for import in &program.imports {
             let target = dir.join(&import.path);
-            if target.exists() {
+            if sources.exists(&target) {
                 children.push((target, import.path_span));
             } else {
                 errors.push(
