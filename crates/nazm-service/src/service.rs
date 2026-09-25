@@ -3,10 +3,12 @@
 //! # What it is, and what it is not
 //!
 //! A long-lived owner of **open documents** — their exact current text and version — that
-//! answers three questions about them: what is wrong ([`Published`] diagnostics), where a
-//! name is defined ([`LanguageService::definition`]), and what a name is
-//! ([`LanguageService::hover`]). It speaks no protocol: positions are byte offsets into a
-//! document's text and every answer names files by path. `nazm lsp` is an adapter over it.
+//! answers four questions about them: what is wrong ([`Published`] diagnostics), where a
+//! name is defined ([`LanguageService::definition`]), what a name is
+//! ([`LanguageService::hover`]), and where else the entity a name refers to is used
+//! ([`LanguageService::references`], N17). It speaks no protocol: positions are byte
+//! offsets into a document's text and every answer names files by path. `nazm lsp` is an
+//! adapter over it.
 //!
 //! **It is not a second compiler.** It has no lexer, parser, symbol table, resolver or
 //! checker of its own. Every answer comes from three things the compiler already owns:
@@ -14,12 +16,34 @@
 //! - [`crate::load::load_from`] — the loader every command uses, reading an open buffer in
 //!   place of the file on disk;
 //! - [`nazm_core::analyse`] — the same parse and check every command runs;
-//! - [`nazm_core::Resolution`] — what that check decided each name refers to, by identity.
+//! - [`nazm_core::Resolution`] — what that check decided each name refers to, by identity,
+//!   and [`ReferenceIndex`], the same answers read backwards: each entity's declaration and
+//!   uses, derived from the resolution and from nothing else.
 //!
 //! The concrete tree ([`nazm_core::__syntax::Cst`]) finds *which token* a position is on. What that
 //! token *means* is only ever read from the resolution. A query that the resolution cannot
 //! answer — a name in a body that did not parse, a type name it does not record — has no
 //! answer; nothing here guesses from spelling.
+//!
+//! Definition and references are one lookup: the occurrence under the position is taken to
+//! its entity by the index, and definition is that entity's declaration while references
+//! are its uses. They cannot disagree about what a name means, because neither decides it.
+//!
+//! # Which program a references query covers
+//!
+//! The **current snapshot**: every compilation the service holds — one rooted at each open
+//! document, loaded exactly as `nazm check <that document>` would load it — that contains
+//! the file declaring the entity, with the same text. An entity's uses can only be in
+//! modules that import the one declaring it, so this reaches every use in every program
+//! the service is analysing. A file that no open document's compilation loads is in no
+//! program being analysed, and is not searched: there is no scan of the disk for `.nz`
+//! files, and no index of anything that is not open or imported.
+//!
+//! Identity does not cross compilations — every id is session-local to one — so an entity
+//! is carried from one compilation to another by **where it is declared**: the same bytes
+//! of the same file, analysed from the same text, are the same declaration in each. That is
+//! a position, read by each compilation's own index; it is not a name, and nothing is
+//! resolved again.
 //!
 //! # What is recomputed
 //!
@@ -47,8 +71,8 @@ use std::sync::Arc;
 
 use nazm_core::__syntax::{Cst, SyntaxKind};
 use nazm_core::sema::module::ModuleGraph;
-use nazm_core::sema::{Callee, FnDef};
-use nazm_core::{Analysis, Entry, Resolution};
+use nazm_core::sema::{Callee, ReferenceIndex};
+use nazm_core::{Analysis, Entry};
 use nazm_diag::Diagnostic;
 use nazm_span::{FileId, SourceMap, Span};
 
@@ -84,6 +108,38 @@ pub struct Definition {
     /// `function`, `local`, `record`, `variant`, `field` or `payload field`.
     pub kind: &'static str,
     pub target: Target,
+}
+
+/// What `references` found: the entity's declaration, and every use of it, apart.
+///
+/// Apart because they are different facts — a definition is not a use of itself — and a
+/// consumer that wants them together (an editor's `includeDeclaration`) says so with
+/// [`Self::locations`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct References {
+    /// `function`, `local`, `record`, `variant`, `field` or `payload field`.
+    pub kind: &'static str,
+    /// Where the entity is declared, when that is a file a client can open. `None` for an
+    /// entity of the core prelude, which has no file.
+    pub declaration: Option<Location>,
+    /// Every use, ordered by file, then start, then end, each once. Uses inside the core
+    /// prelude are not among them, for the same reason.
+    pub uses: Vec<Location>,
+}
+
+impl References {
+    /// The uses, and the declaration too if `include_declaration`, in one canonical order.
+    #[must_use]
+    pub fn locations(&self, include_declaration: bool) -> Vec<Location> {
+        let mut all = self.uses.clone();
+        if include_declaration {
+            if let Some(d) = &self.declaration {
+                all.push(d.clone());
+            }
+        }
+        all.sort_by(|a, b| (&a.path, a.start, a.end).cmp(&(&b.path, b.start, b.end)));
+        all
+    }
 }
 
 /// What `hover` found: text read from the resolution, not reconstructed from syntax.
@@ -126,10 +182,24 @@ struct Snapshot {
     map: SourceMap,
     graph: ModuleGraph,
     analysis: Analysis,
+    /// Every entity of the compilation with its declaration and uses, read from
+    /// `analysis.resolution` once, when the analysis is made, and dropped with it.
+    index: ReferenceIndex,
     /// The document's own concrete tree, for finding the token under a position.
     cst: Cst,
     /// The texts of the compilation's files, shared with what is handed out.
     texts: Vec<Arc<str>>,
+    /// Which file each of the compilation's files is, by [`FileId`] index, so that one file
+    /// can be recognised in two compilations.
+    files: Vec<FileKey>,
+}
+
+/// A file, as the same file in any compilation: its [`identity`] path, or the core
+/// prelude, which every compilation has and none reads from a path.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum FileKey {
+    Path(PathBuf),
+    Prelude,
 }
 
 /// The files an editor has open, and what the compiler says about them.
@@ -236,6 +306,20 @@ impl LanguageService {
         (self.documents.len(), analyses, bytes)
     }
 
+    /// What the reference indexes are holding: `(entities, uses)`, over every analysis.
+    ///
+    /// Like [`Self::retained`], a function of what is open and what it imports now, never
+    /// of the history of edits: each analysis's index is replaced with it.
+    #[must_use]
+    pub fn indexed(&self) -> (usize, usize) {
+        self.documents
+            .values()
+            .filter_map(|d| d.analysis.as_ref())
+            .fold((0, 0), |(t, u), s| {
+                (t + s.index.targets(), u + s.index.use_count())
+            })
+    }
+
     /// Open `path` at `version` with exactly `text`, which is from now on what every
     /// compilation reads for that file instead of the disk.
     pub fn open(&mut self, path: &Path, version: i32, text: String) -> Vec<Published> {
@@ -327,11 +411,75 @@ impl LanguageService {
     pub fn definition(&self, path: &Path, version: i32, offset: u32) -> Option<Definition> {
         let s = self.current(path, version)?;
         let at = name_at(&s.cst, offset)?;
-        let res = &s.analysis.resolution;
-        let (kind, span) = defined_at(res, &s.analysis, at)?;
+        let entity = s.index.target(at)?;
         Some(Definition {
-            kind,
-            target: s.target(span)?,
+            kind: entity.kind(),
+            target: s.target(s.index.declaration(entity)?)?,
+        })
+    }
+
+    /// Every use of the entity the name at byte `offset` of `path`, at `version`, refers
+    /// to — or is the declaration of — and where that entity is declared.
+    ///
+    /// `None` exactly when [`Self::definition`] would have no entity to go to: not on a
+    /// name, not the current version, or a name the resolution identified as nothing — a
+    /// built-in, a type annotation, a name in a body that did not parse. An entity with no
+    /// uses is `Some`, with none.
+    ///
+    /// What *is* the entity is decided by `path`'s own compilation. Its uses are gathered
+    /// from every current compilation that contains the file declaring it (see the module
+    /// documentation), each reading its own index.
+    #[must_use]
+    pub fn references(&self, path: &Path, version: i32, offset: u32) -> Option<References> {
+        let s = self.current(path, version)?;
+        let at = name_at(&s.cst, offset)?;
+        let entity = s.index.target(at)?;
+        // The anchor: where the entity is declared, as a file any compilation may have.
+        // An entity with no declaration in source (none is, today) is anchored where it
+        // was asked about, which is at least in this compilation.
+        let anchor = s.index.declaration(entity).unwrap_or(at);
+        let file = s.files.get(anchor.file.index())?;
+        let text = s.texts.get(anchor.file.index())?;
+        let declaration = s
+            .index
+            .declaration(entity)
+            .and_then(|d| match s.target(d)? {
+                Target::File(l) => Some(l),
+                Target::Prelude { .. } => None,
+            });
+
+        let mut uses: BTreeMap<(FileKey, u32, u32), Location> = BTreeMap::new();
+        for other in self.documents.values().filter_map(|d| d.analysis.as_ref()) {
+            if other.generation != self.generation {
+                continue;
+            }
+            // The declaring file, in this compilation, with the text it was analysed
+            // from — or this compilation does not have the entity at all.
+            let Some(f) = other
+                .files
+                .iter()
+                .zip(&other.texts)
+                .position(|(k, t)| k == file && **t == **text)
+            else {
+                continue;
+            };
+            let there = Span::new(FileId::from_index(f), anchor.start, anchor.end);
+            let Some(same) = other.index.target(there) else {
+                continue;
+            };
+            for u in other.index.uses(same) {
+                let (Some(key), Some(Target::File(l))) =
+                    (other.files.get(u.file.index()), other.target(*u))
+                else {
+                    continue;
+                };
+                uses.entry((key.clone(), u.start, u.end)).or_insert(l);
+            }
+        }
+        Some(References {
+            kind: entity.kind(),
+            declaration,
+            uses: uses.into_values().collect(),
         })
     }
 
@@ -353,9 +501,9 @@ impl LanguageService {
                 types.show(f.ret)
             )
         } else {
-            let slot = res.var(at)?;
-            let f = enclosing(&s.analysis, at)?;
-            let l = f.locals.get(usize::try_from(slot).ok()?)?;
+            let local = res.local(at)?;
+            let f = res.function(local.function)?;
+            let l = f.locals.get(usize::try_from(local.slot).ok()?)?;
             format!(
                 "{}{}: {}",
                 if l.mutable { "mut " } else { "" },
@@ -428,7 +576,15 @@ fn analyse(
     let mut analysis = nazm_core::analyse(&map, &graph, Entry::Absent);
     early.append(&mut analysis.diagnostics);
     analysis.diagnostics = early;
+    let index = ReferenceIndex::of(&analysis.resolution);
     let texts: Vec<Arc<str>> = map.ids().map(|f| Arc::from(map.text(f))).collect();
+    let files = map
+        .ids()
+        .map(|f| match graph.module_of(f) {
+            Some(m) if Some(m) == graph.prelude() => FileKey::Prelude,
+            _ => FileKey::Path(identity(Path::new(map.name(f)))),
+        })
+        .collect();
     let root_text = texts.first().map_or("", |t| &**t);
     let cst = nazm_core::__syntax::parse_cst(FileId::ROOT, root_text).cst;
     Snapshot {
@@ -437,8 +593,10 @@ fn analyse(
         map,
         graph,
         analysis,
+        index,
         cst,
         texts,
+        files,
     }
 }
 
@@ -476,53 +634,6 @@ fn name_at(cst: &Cst, offset: u32) -> Option<Span> {
         .iter()
         .find(|l| is_name(l.kind) && l.span.end == offset)
         .map(|l| l.span)
-}
-
-/// What the use of a name at `at` was resolved to, and where that definition's name is
-/// written — one question per kind of identity the resolution records, asked in turn.
-fn defined_at(res: &Resolution, a: &Analysis, at: Span) -> Option<(&'static str, Span)> {
-    if let Some(Callee::Function(id)) = res.callee(at) {
-        return Some(("function", res.function(id)?.name_span));
-    }
-    if let Some(slot) = res.var(at) {
-        let f = enclosing(a, at)?;
-        return Some(("local", f.locals.get(usize::try_from(slot).ok()?)?.span));
-    }
-    if let Some(r) = res.construction(at) {
-        return Some(("record", res.records().get(r)?.name_span));
-    }
-    if let Some(v) = res.variant(at) {
-        let e = res.enums().get(v.enumeration)?;
-        let variant = e.variants.get(usize::try_from(v.variant).ok()?)?;
-        return Some(("variant", variant.name_span));
-    }
-    if let Some(f) = res.field(at) {
-        let r = res.records().get(f.record)?;
-        return Some((
-            "field",
-            r.fields.get(usize::try_from(f.field).ok()?)?.name_span,
-        ));
-    }
-    let p = res.payload(at)?;
-    let e = res.enums().get(p.enumeration)?;
-    let variant = e.variants.get(usize::try_from(p.variant).ok()?)?;
-    let field = variant.fields.get(usize::try_from(p.field).ok()?)?;
-    Some(("payload field", field.name_span))
-}
-
-/// The function whose body `span` is in, by the resolution's own link from a definition
-/// to its declaration.
-fn enclosing(a: &Analysis, span: Span) -> Option<&FnDef> {
-    a.resolution.functions().iter().find(|f| {
-        a.program
-            .functions
-            .get(f.decl as usize)
-            .is_some_and(|decl| {
-                decl.span.file == span.file
-                    && decl.span.start <= span.start
-                    && span.end <= decl.span.end
-            })
-    })
 }
 
 #[cfg(test)]
