@@ -759,9 +759,13 @@ anything reachable from it. The rule with the largest effect on how much context
 one module requires, and its absence is invisible in any single-module test
 """
 file = "crates/nazm-core/src/check.rs"
+# Repointed in N19, which records the names an environment refuses: its pattern gained the
+# line that starts that list. The defect is unchanged.
 find = """    let mut brought_in: HashMap<&str, Span> = HashMap::new();
+    let mut refused: Vec<String> = Vec::new();
     for d in unit.imports {"""
 replace = """    let mut brought_in: HashMap<&str, Span> = HashMap::new();
+    let mut refused: Vec<String> = Vec::new();
     let reachable: Vec<Dependency> = unit
         .imports
         .iter()
@@ -3239,6 +3243,8 @@ targets = [
     { package = "nazm-service", test = "references" },
     # N18: and what a rename edits.
     { package = "nazm-service", test = "rename" },
+    # N19: and what completion offers.
+    { package = "nazm-service", test = "completion" },
 ]
 
 [[profile]]
@@ -3274,6 +3280,7 @@ targets = [
     # the language service.
     { package = "nazm-service", test = "references" },
     { package = "nazm-service", test = "rename" },
+    { package = "nazm-service", test = "completion" },
 ]
 
 [[profile]]
@@ -3317,6 +3324,7 @@ targets = [
     { package = "nazm-service", test = "service" },
     { package = "nazm-service", test = "references" },
     { package = "nazm-service", test = "rename" },
+    { package = "nazm-service", test = "completion" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
@@ -4435,6 +4443,132 @@ find = "    if !versioned {"
 replace = "    if false {"
 killers = [{ package = "nazm-cli", test = "lsp", name = "a_client_that_cannot_take_versioned_edits_is_refused_a_rename" }]
 
+# ---------------------------------------------------------------------------------------
+# N19 — scope at a position, and completion. Each attacks one invariant: that a binding is
+# visible exactly where the checker introduced it and no further, that a hidden binding is
+# not offered, that each context offers its own namespace, that a refused name is offered
+# as nothing, that a scope the source cannot establish is not offered as complete, and that
+# what is typed selects and what is completed is replaced.
+# ---------------------------------------------------------------------------------------
+
+[[mutation]]
+name = "n19-a-let-is-visible-in-its-own-initializer"
+why = "a `let` is recorded as visible from its name, so its own initializer is offered the binding being written instead of the one it reads"
+file = "crates/nazm-core/src/check.rs"
+find = "                self.define(&l.name, ty, l.mutable, Some(l.name_span), slot, l.span.end);"
+replace = "                self.define(&l.name, ty, l.mutable, Some(l.name_span), slot, l.name_span.end);"
+killers = [{ package = "nazm-service", test = "completion", name = "a_binding_is_visible_from_where_the_checker_introduces_it_and_no_earlier" }]
+
+[[mutation]]
+name = "n19-a-later-local-is-visible-early"
+why = "every binding of the enclosing scopes is visible anywhere in them, including before it is introduced"
+file = "crates/nazm-sema/src/scope.rs"
+find = "            .filter(|b| b.visible_from <= offset)"
+replace = "            .filter(|b| b.visible_from <= u32::MAX)"
+killers = [{ package = "nazm-service", test = "completion", name = "a_binding_is_visible_from_where_the_checker_introduces_it_and_no_earlier" }]
+
+[[mutation]]
+name = "n19-a-shadowed-binding-is-offered"
+why = "a binding hidden by a nearer one of its name is offered beside it, though writing the name can only mean the nearer"
+file = "crates/nazm-sema/src/scope.rs"
+find = "            hidden.extend(b.shadows);"
+replace = "            let _ = b.shadows;"
+killers = [{ package = "nazm-service", test = "completion", name = "completion_follows_semantic_scope_not_spelling" }]
+
+[[mutation]]
+name = "n19-a-closed-scope-stays-open"
+why = "a popped scope is never closed in the trace, so the next scope is recorded inside it and a sibling arm's bindings leak into the next arm"
+file = "crates/nazm-sema/src/scope.rs"
+find = "        self.open.pop();"
+replace = "        let _ = self.open.last();"
+killers = [{ package = "nazm-service", test = "completion", name = "a_match_arms_bindings_stay_in_their_arm" }]
+
+[[mutation]]
+name = "n19-a-refused-duplicate-is-offered"
+why = "a binding refused as a same-scope duplicate is offered, picking a winner the checker declined to pick"
+file = "crates/nazm-sema/src/scope.rs"
+find = """            if b.duplicate {
+                hidden.push(b.local);
+            }"""
+replace = """            if false {
+                hidden.push(b.local);
+            }"""
+killers = [{ package = "nazm-service", test = "completion", name = "a_refused_duplicate_binding_names_nothing" }]
+
+[[mutation]]
+name = "n19-locals-are-in-arbitrary-order"
+why = "visible locals are left in the order their scopes were walked, not in the canonical order by name"
+file = "crates/nazm-sema/src/scope.rs"
+find = "        values.sort_by(|a, b| (&a.name, a.candidate).cmp(&(&b.name, b.candidate)));"
+replace = "        values.reverse();"
+killers = [{ package = "nazm-service", test = "completion", name = "a_binding_is_visible_from_where_the_checker_introduces_it_and_no_earlier" }]
+
+[[mutation]]
+name = "n19-a-type-parameter-leaks"
+why = "a definition's type parameters are offered in every type position of the file, not only inside that definition"
+file = "crates/nazm-sema/src/scope.rs"
+find = "            .filter(|t| inside(t.span))"
+replace = "            .filter(|t| t.span.file == file)"
+killers = [{ package = "nazm-service", test = "completion", name = "a_type_parameter_is_visible_in_its_own_definition_only" }]
+
+[[mutation]]
+name = "n19-a-refused-name-is-offered"
+why = "a name the checker refused as an ambiguous import is offered, silently ranking one import over the other"
+file = "crates/nazm-core/src/check.rs"
+find = "        .filter(|(n, _)| !env.refused.contains(n))"
+replace = "        .filter(|(n, _)| !n.is_empty())"
+killers = [{ package = "nazm-service", test = "completion", name = "an_ambiguous_import_offers_neither_meaning" }]
+
+[[mutation]]
+name = "n19-a-type-is-offered-as-a-value"
+why = "a value position is offered types as well as locals, though no type can be written there"
+file = "crates/nazm-service/src/completion.rs"
+find = "            Context::Value => names.values,"
+replace = "            Context::Value => [names.values, names.types].concat(),"
+killers = [{ package = "nazm-service", test = "completion", name = "completion_follows_semantic_scope_not_spelling" }]
+
+[[mutation]]
+name = "n19-a-function-is-offered-as-a-type"
+why = "a type position is offered functions as well as types, so the function spelled like a record is suggested where only the record fits"
+file = "crates/nazm-service/src/completion.rs"
+find = "            Context::Type => names.types,"
+replace = "            Context::Type => [names.types, names.callables].concat(),"
+killers = [{ package = "nazm-service", test = "completion", name = "completion_follows_semantic_scope_not_spelling" }]
+
+[[mutation]]
+name = "n19-what-is-typed-is-ignored"
+why = "the candidates are not filtered by what is written of the identifier, so every name of the context is offered for any prefix"
+file = "crates/nazm-service/src/completion.rs"
+find = "            .filter(|n| n.name.starts_with(prefix))"
+replace = "            .filter(|n| !n.name.is_empty() || prefix.is_empty())"
+killers = [{ package = "nazm-service", test = "completion", name = "built_ins_come_from_the_compilers_own_inventories" }]
+
+[[mutation]]
+name = "n19-a-completion-inserts-rather-than-replaces"
+why = "an accepted completion replaces only what is before the cursor, so completing inside a name leaves its tail behind"
+file = "crates/nazm-service/src/completion.rs"
+find = "            end: at.end,"
+replace = "            end: offset,"
+killers = [{ package = "nazm-service", test = "completion", name = "built_ins_come_from_the_compilers_own_inventories" }]
+
+[[mutation]]
+name = "n19-a-recovered-function-offers-its-locals"
+why = "a function whose body is a syntax recovery is offered its locals, though the recovered statement may have been a binding the checker never saw"
+file = "crates/nazm-service/src/completion.rs"
+find = """        Some(f)
+            if f.descendants()"""
+replace = """        Some(f)
+            if false && f.descendants()"""
+killers = [{ package = "nazm-service", test = "completion", name = "a_body_that_does_not_parse_has_no_completion_and_never_the_last_clean_one" }]
+
+[[mutation]]
+name = "n19-a-recovered-file-offers-its-module-names"
+why = "a compilation with a syntax recovery is offered its functions and types, though a lost item would be missing from them"
+file = "crates/nazm-service/src/completion.rs"
+find = "    if s.analysis.syntax_errors.is_empty() {"
+replace = "    if true {"
+killers = [{ package = "nazm-service", test = "completion", name = "a_body_that_does_not_parse_has_no_completion_and_never_the_last_clean_one" }]
+
 [[mutation]]
 name = "n16-a-column-is-a-byte-count"
 why = "an outgoing column counts bytes, so every position after non-ASCII text on its line is wrong"
@@ -4461,10 +4595,13 @@ replace = """    println!("nazm lsp: ready");
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
 
 [[mutation]]
-name = "n16-completion-is-advertised"
-why = "the server claims completion, which it does not implement, so a client sends requests it will refuse"
+name = "n16-signature-help-is-advertised"
+# Was `n16-completion-is-advertised` until N19, which implements completion: the defect it
+# stood for — claiming a capability the server does not have — is now injected with
+# signature help, which it still does not have. The killer is unchanged.
+why = "the server claims signature help, which it does not implement, so a client sends requests it will refuse"
 file = "crates/nazm-cli/src/lsp.rs"
 find = "        hover_provider: Some(HoverProviderCapability::Simple(true)),"
 replace = """        hover_provider: Some(HoverProviderCapability::Simple(true)),
-        completion_provider: Some(lsp_types::CompletionOptions::default()),"""
+        signature_help_provider: Some(lsp_types::SignatureHelpOptions::default()),"""
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
