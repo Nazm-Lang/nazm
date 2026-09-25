@@ -3245,6 +3245,8 @@ targets = [
     { package = "nazm-service", test = "rename" },
     # N19: and what completion offers.
     { package = "nazm-service", test = "completion" },
+    # N20: and what signature help reports of a call.
+    { package = "nazm-service", test = "signature" },
 ]
 
 [[profile]]
@@ -3281,6 +3283,7 @@ targets = [
     { package = "nazm-service", test = "references" },
     { package = "nazm-service", test = "rename" },
     { package = "nazm-service", test = "completion" },
+    { package = "nazm-service", test = "signature" },
 ]
 
 [[profile]]
@@ -3325,6 +3328,7 @@ targets = [
     { package = "nazm-service", test = "references" },
     { package = "nazm-service", test = "rename" },
     { package = "nazm-service", test = "completion" },
+    { package = "nazm-service", test = "signature" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
@@ -4595,13 +4599,147 @@ replace = """    println!("nazm lsp: ready");
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
 
 [[mutation]]
-name = "n16-signature-help-is-advertised"
-# Was `n16-completion-is-advertised` until N19, which implements completion: the defect it
-# stood for — claiming a capability the server does not have — is now injected with
-# signature help, which it still does not have. The killer is unchanged.
-why = "the server claims signature help, which it does not implement, so a client sends requests it will refuse"
+name = "n16-document-symbols-are-advertised"
+# Was `n16-completion-is-advertised` until N19 and `n16-signature-help-is-advertised` until
+# N20, each of which implemented the capability it named: the defect it stands for —
+# claiming a capability the server does not have — is now injected with document symbols,
+# which it still does not have. The killer is unchanged.
+why = "the server claims document symbols, which it does not implement, so a client sends requests it will refuse"
 file = "crates/nazm-cli/src/lsp.rs"
 find = "        hover_provider: Some(HoverProviderCapability::Simple(true)),"
 replace = """        hover_provider: Some(HoverProviderCapability::Simple(true)),
-        signature_help_provider: Some(lsp_types::SignatureHelpOptions::default()),"""
+        document_symbol_provider: Some(OneOf::Left(true)),"""
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
+
+# ---- N20: the call at a position, and signature help -------------------------------------
+
+[[mutation]]
+name = "n20-a-rejected-call-is-not-recorded"
+why = "a call is recorded only when its argument count fits, so a call being written — too few arguments so far — has no signature, though the checker resolved its callee"
+file = "crates/nazm-core/src/check.rs"
+find = "                self.record_checked_call(*callee_span, *span, args, &sig, None, false);"
+replace = """                if args.len() == sig.params.len() {
+                    self.record_checked_call(*callee_span, *span, args, &sig, None, false);
+                }"""
+killers = [{ package = "nazm-service", test = "signature", name = "a_call_the_checker_rejected_still_has_the_callee_it_resolved" }]
+
+[[mutation]]
+name = "n20-written-type-arguments-are-recorded-as-inferred"
+why = "the record of a generic call forgets that its type arguments were written"
+file = "crates/nazm-core/src/check.rs"
+find = "            written: explicit,"
+replace = "            written: false,"
+killers = [{ package = "nazm-service", test = "signature", name = "signature_help_follows_the_resolved_call_not_the_spelling" }]
+
+[[mutation]]
+name = "n20-inferred-type-arguments-are-discarded"
+why = "the record of a generic call keeps none of the type arguments the checker settled, so its signature is shown uninstantiated"
+file = "crates/nazm-core/src/check.rs"
+find = "            args: solved.iter().map(|s| s.map(|(t, _)| t)).collect(),"
+replace = "            args: solved.iter().map(|_| None).collect(),"
+killers = [{ package = "nazm-service", test = "signature", name = "signature_help_follows_the_resolved_call_not_the_spelling" }]
+
+[[mutation]]
+name = "n20-the-instantiated-parameters-are-the-declared-ones"
+why = "a generic call's parameters are recorded as declared, so the call shows `x: T` where the checker checked `x: Int`"
+file = "crates/nazm-core/src/check.rs"
+find = "                .map(|p| self.res.types().substituted(*p, owner, &partial))"
+replace = "                .map(|p| Some(*p))"
+killers = [{ package = "nazm-service", test = "signature", name = "signature_help_follows_the_resolved_call_not_the_spelling" }]
+
+[[mutation]]
+name = "n20-the-outer-call-is-chosen"
+why = "the first call met on the way down the tree is kept, so a position inside a nested call is given the call around it"
+file = "crates/nazm-service/src/signature.rs"
+find = "                best = Some(r);"
+replace = "                best = best.or(Some(r));"
+killers = [{ package = "nazm-service", test = "signature", name = "the_active_parameter_is_the_argument_lists_own_structure" }]
+
+[[mutation]]
+name = "n20-every-argument-is-the-first"
+why = "the active argument is always the first, whatever separators precede the position"
+file = "crates/nazm-service/src/signature.rs"
+find = "        active: u32::try_from(separators).unwrap_or(u32::MAX),"
+replace = "        active: 0,"
+killers = [{ package = "nazm-service", test = "signature", name = "the_active_parameter_is_the_argument_lists_own_structure" }]
+
+[[mutation]]
+name = "n20-a-nested-comma-separates"
+why = "every comma inside the argument list counts, including those of a nested call, a construction or a parenthesised expression"
+file = "crates/nazm-service/src/signature.rs"
+find = """    let separators = own
+        .iter()"""
+replace = """    let separators = list
+        .leaves()
+        .iter()"""
+killers = [{ package = "nazm-service", test = "signature", name = "the_active_parameter_is_the_argument_lists_own_structure" }]
+
+[[mutation]]
+name = "n20-a-type-argument-comma-separates"
+why = "the commas of a call's type argument list count as separators of its arguments"
+file = "crates/nazm-service/src/signature.rs"
+find = "    let own = list.child_leaves();"
+replace = """    let mut own = list.child_leaves();
+    if let Some(t) = node
+        .children()
+        .into_iter()
+        .find(|c| c.kind() == SyntaxKind::TypeArgList)
+    {
+        own.extend(t.child_leaves());
+    }"""
+killers = [{ package = "nazm-service", test = "signature", name = "the_active_parameter_is_the_argument_lists_own_structure" }]
+
+# `n20-a-position-after-the-call-is-in-it` (the region's upper bound moved from the `)`'s start
+# to its end) is not catalogued: `--verify-killer` found it equivalent. The walk down the tree
+# enters only a node whose span strictly contains the position, so a call is never visited at
+# the byte after its `)`, and either guard alone keeps that position out of the call. The
+# behaviour stays pinned by the "after the )" case of
+# `the_active_parameter_is_the_argument_lists_own_structure`.
+
+[[mutation]]
+name = "n20-a-position-before-the-paren-is-in-the-call"
+why = "a position before a call's `(` — on its callee — is taken to be in its argument list"
+file = "crates/nazm-service/src/signature.rs"
+find = "    if !(open.span.end <= offset && offset <= close.span.start) {"
+replace = "    if !(open.span.start <= offset && offset <= close.span.start) {"
+killers = [{ package = "nazm-service", test = "signature", name = "the_active_parameter_is_the_argument_lists_own_structure" }]
+
+[[mutation]]
+name = "n20-a-recovered-compilation-answers"
+why = "a compilation with a syntax recovery answers signature help, though a lost declaration could have changed what the call resolves to"
+file = "crates/nazm-service/src/signature.rs"
+find = "    if !s.analysis.syntax_errors.is_empty() {"
+replace = "    if false {"
+killers = [{ package = "nazm-service", test = "signature", name = "broken_current_source_has_no_call_and_never_the_last_clean_one" }]
+
+[[mutation]]
+name = "n20-no-parameter-is-a-parameter"
+why = "an argument at no parameter — any argument of a callee with none, or one past the last — is reported as an active parameter"
+file = "crates/nazm-service/src/signature.rs"
+find = "        (usize::try_from(self.active_argument).ok()? < self.signature.params.len())"
+replace = "        (usize::try_from(self.active_argument).ok()? <= self.signature.params.len())"
+killers = [{ package = "nazm-service", test = "signature", name = "a_call_the_checker_rejected_still_has_the_callee_it_resolved" }]
+
+[[mutation]]
+name = "n20-hover-and-signature-help-disagree"
+why = "hover renders a function's signature without the names signature help shows for the same function"
+file = "crates/nazm-service/src/signature.rs"
+find = "            params: named(res, Callee::Function(id), &f.params),"
+replace = "            params: named(res, Callee::Builtin(nazm_core::Intrinsic::StrLen), &f.params),"
+killers = [{ package = "nazm-service", test = "signature", name = "hover_and_signature_help_render_one_signature" }]
+
+[[mutation]]
+name = "n20-a-requirement-is-not-shown"
+why = "a declared `T: Equality` is rendered as a bare `T`, so the signature hides what the callee requires"
+file = "crates/nazm-service/src/signature.rs"
+find = "                    None if p.requires_equality => {"
+replace = "                    None if false => {"
+killers = [{ package = "nazm-service", test = "signature", name = "hover_and_signature_help_render_one_signature" }]
+
+[[mutation]]
+name = "n20-an-absent-active-parameter-is-sent"
+why = "a position past the last parameter is answered with no active parameter, which the protocol reads as the first"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "        if help.active_parameter.is_none() && !params.is_empty() {"
+replace = "        if false {"
+killers = [{ package = "nazm-cli", test = "lsp", name = "signature_help_crosses_the_protocol_with_utf16_positions_and_label_offsets" }]
