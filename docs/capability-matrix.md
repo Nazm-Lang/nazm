@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,348 passed, 0 failed, 13 ignored, across 68 suites**, run contained at
-N15 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
-13 passed, contained). N14 ended at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,376 passed, 0 failed, 13 ignored, across 72 suites**, run contained at
+N16 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
+13 passed, contained). N15 ended at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -75,7 +75,7 @@ N15 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on the
 | 22 | Diagnostics | VERIFIED |
 | 23 | Formatter | VERIFIED |
 | 24 | Machine-applicable fixes | PARTIAL |
-| 25 | LSP and MCP | MISSING |
+| 25 | LSP and MCP | PARTIAL / MISSING |
 | 26 | Package and build tooling | PARTIAL |
 | 27 | Debugger and profiler | MISSING |
 | 28 | Performance measurement | PARTIAL |
@@ -85,7 +85,7 @@ N15 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on the
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
 
-Nine VERIFIED, twelve PARTIAL, three DESIGNED, two RESEARCH, nine MISSING. The shape is
+Nine VERIFIED, thirteen PARTIAL, three DESIGNED, two RESEARCH, eight MISSING. The shape is
 worth reading directly: **everything verified is either a front-end capability, a tooling
 interface, or an evidence mechanism.** Nothing in the semantic core — ownership, effects,
 capabilities, provenance — exists at all, and that is the accurate summary of where the
@@ -163,7 +163,7 @@ middle of a function.
 
 **Evidence** · Lexical scoping with shadowing rules and a separate function namespace,
 `crates/nazm-core/src/check.rs`. `use "relative/path.nz";` resolved by the driver,
-`crates/nazm-cli/src/load.rs` — canonical-path keyed, read-once, depth-first, cycles
+`crates/nazm-service/src/load.rs` — canonical-path keyed, read-once, depth-first, cycles
 terminate rather than erroring. A second resolver written in Nazm, `compiler/module.nz`,
 serves the bootstrap stages. Codes `N0200`–`N0208` in `crates/nazm-diag/src/lib.rs`.
 
@@ -177,7 +177,7 @@ declarations through `FnDef::decl` and finds the entry point through `Resolution
 so neither consumer knows the spelling `main`.
 
 **Source identity is real as of N1.** `nazm_span::Span` is `{ file, start, end }` with
-file-local offsets, and `crates/nazm-cli/src/load.rs` produces a `SourceMap` whose files
+file-local offsets, and `crates/nazm-service/src/load.rs` produces a `SourceMap` whose files
 are parsed separately. The merged buffer, and the binary search that recovered a file from
 an offset, are gone.
 
@@ -224,7 +224,7 @@ guess.
 **A project can declare where it begins, as of N4 (2026-09-22).** An empty `nazm.root`
 marker, or `--source-root DIR`, fixes the root a module's key is relative to, so
 `lib/common.nz` is the same module whichever entry file named it
-(`crates/nazm-cli/src/root.rs`, ten cases in `crates/nazm-cli/tests/source_root.rs`). With
+(`crates/nazm-service/src/root.rs`, ten cases in `crates/nazm-cli/tests/source_root.rs`). With
 neither, the root is derived from the named file exactly as before. The marker must be
 empty and is refused otherwise: it says where a project begins and owns nothing else.
 
@@ -1167,20 +1167,49 @@ asserted anywhere. The named test for it exercises a different path.
 
 **Accepted when** · Each of the four skip reasons has a test that reaches it.
 
-### 25. LSP and MCP — MISSING
+### 25. LSP — PARTIAL · MCP — MISSING
 
-**Evidence of absence** · No crate, no dependency, no protocol code. `architecture.md`
-lists `nazm-lsp` and `nazm-mcp` as planned and records the intended libraries.
+**Evidence** · *N16, 2026-09-25.* `nazm lsp` serves the Language Server Protocol over stdio
+(`crates/nazm-cli/src/lsp.rs`) as an adapter over a protocol-independent language service
+(`crates/nazm-service/src/service.rs`, `architecture.md` §7.18) that answers from the loader,
+parser, checker and resolution every command uses — nothing is re-implemented, and the
+layering and `one resolver` gates keep it so. Open buffers are the source: they override the
+disk for every compilation, an unsaved dependency is what its importer sees, closing a buffer
+gives the file back to the disk, and an unsaved `use` changes the graph. Diagnostics keep
+their Nazm codes and are published per version, an empty set included. Definition follows the
+resolution's identities — calls, locals (by slot), record constructions, variants, fields and
+payload fields — across files; hover shows a function's declared signature or a local's type,
+from the same resolution. Positions are converted between byte offsets and UTF-16 at the
+adapter boundary only. Evidence: `crates/nazm-service/tests/service.rs` (overlays, close,
+import edits, versions, a broken buffer never answering from the clean one, every definition
+category, a spelling with three meanings, the prelude, the cursor rule, the service's
+diagnostics equal to the command line's over every example and multi-module conformance
+program, a thousand edits with constant retained state); `crates/nazm-cli/tests/lsp.rs` (the
+real process over real framing — handshake, exact capability set, diagnostics and definition
+in UTF-16 after `é→😀`, an unsaved dependency and its close, unimplemented methods refused,
+malformed source and a malformed frame without a panic, stdout nothing but frames); the
+position unit tests in `lsp.rs`. Fourteen N16 mutations were caught with verified killers
+(area 30).
 
-**Next dependency** · A CST and incremental resolution — both area 1 and area 2.
+**Limitation** · Diagnostics, definition and hover only: no completion, references, rename,
+symbols, formatting, code actions, semantic tokens, signature help or inlay hints, no
+cancellation and no watched files. Every change re-analyses every open document in full; no
+incremental reparse or graph maintenance, and no persistent cache in the editor. A type name
+in an annotation, the enum name in `E.V(…)`, a built-in, and anything in a body that did not
+parse have no definition; the core prelude has no file, so a definition in it has no location.
+`N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
+are published for open documents only. MCP does not exist.
 
-**Accepted when** · An adapter shares the compiler's semantic engine rather than
-re-implementing it.
+**Next dependency** · None for what exists. Each further request needs its own semantic
+contract; incremental reparse needs latency evidence, which N16's measurements do not give.
+
+**Accepted when** · Met for the LSP, 2026-09-25 (N16): an adapter shares the compiler's
+semantic engine rather than re-implementing it. MCP: not started.
 
 ### 26. Package and build tooling — PARTIAL
 
 **Evidence** · Multi-file builds work through path-relative `use`, two independent
-implementations: `crates/nazm-cli/src/load.rs` and `compiler/module.nz`.
+implementations: `crates/nazm-service/src/load.rs` and `compiler/module.nz`.
 
 **Limitation** · There is no project manifest, no dependency resolution, no lockfile and no
 registry. `nazm build` takes one root file, and since N3 the **source root is derived from
@@ -1262,8 +1291,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **304** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14), **116** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **318** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15), **130** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -1534,6 +1563,27 @@ ran. **One MUTANT CRASH, `nesting-unbounded`**, the known open entry above, as i
 the nesting limit removed the parse stack overflows, as it did at N13 and N14. N15 did not
 touch native equality, so N13's use-after-free survivor was not re-run and stays live,
 SURVIVED, no killer.
+
+*N16 (2026-09-25) added fourteen,* each with its regression test and a killer verified by
+`--verify-killer`, uncontended, contained at P1: 13 in one session, and the fourteenth —
+`n16-a-broken-buffer-keeps-the-last-clean-analysis` — after that session reported its first
+killer **not a killer**. That was right: the edited document cannot keep an old analysis,
+because a change replaces it with none, so the defect reaches only the *other* open
+documents; the killer is now the test that asks an importer a question after its dependency
+broke, and it verified. The fourteen break what an editor relies on — the disk winning over
+a buffer, a closed buffer staying authoritative, an edit reaching only the edited document, a
+stale analysis kept or a stale version answered, an empty set not published, a local found by
+its spelling, an imported definition pointing at the caller, the prelude given a path, a
+position past a name selected, a column counted in bytes either way, a log line on stdout,
+completion advertised. **Campaign `7eabdfd883ebbae8`, targeted, P1, one session, 1,017 s:** the
+fourteen and `an-absolute-path-reaches-the-module-key`, whose file moved to
+`crates/nazm-service/src/load.rs`. **15 of 15 caught**, 14 at tier 1 and that one at tier 3; no
+survivor, crash, timeout or unusable entry. Tier 3 was a finding: the moved loader had no
+focused profile, where in `nazm-cli` it had been the `cli` profile's. The profile now owns
+`crates/nazm-service/src/` and runs the service's suites, and that one entry, re-run alone,
+was caught at tier 2 by `nazm-cli --test source_root` — the suite that caught it before N16.
+N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and are
+as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

@@ -420,7 +420,7 @@ so a compilation of many modules and a compilation of one take the same path.
 | `UnitInterface`, `Export`, `Visibility` | `nazm-sema` | what one unit offers another. No bodies, no private definitions, no hashes |
 | `Resolution`, `FnDef { module, visibility, decl }`, `FnId` | `nazm-sema` | one answer, read by the evaluator and the backend |
 | `Type`, `Intrinsic` | `nazm-sema` | moved from `nazm-syntax`; see below |
-| the module graph's **construction** | `crates/nazm-cli/src/load.rs` | resolving a path reads the filesystem, which is an effect, and the front end performs none |
+| the module graph's **construction** | `crates/nazm-service/src/load.rs` (in `nazm-cli` until N16) | resolving a path reads the filesystem, which is an effect, and the front end performs none |
 | `declare_unit`, `check_unit`, `Env` | `nazm-core` | resolution is a pass, and the pass did not move |
 
 ### Why a crate this time, when N1 declined one
@@ -2188,7 +2188,7 @@ holds the file's **bytes** (`include_str!`, so a compilation needs no installati
 directory — a packaging decision) and the name it is shown under, and the checker reads them
 as source like any other file.
 
-- **Loading.** `nazm-cli/src/load.rs` appends the prelude after every project file; the
+- **Loading.** `nazm-service/src/load.rs` (in `nazm-cli` until N16) appends the prelude after every project file; the
   `&str` entry points (`nazm_core::one_file`) do the same. It is therefore the **last**
   module and the last `FileId`: no project module's id and no span in one moves.
   `ModuleGraph::attach_prelude` adds it and an ordinary import edge from every other module,
@@ -2668,6 +2668,73 @@ still lays out from tokens — it reads comments from the same scan the tree is 
 but not through the tree. No language server, no structured-edit command. The compiler
 written in Nazm has no concrete tree and does not recover; bootstrap parity is about the
 language it accepts, not about this.
+
+## 7.18 The language service and `nazm lsp` — settled by N16, 2026-09-25
+
+**Why `nazm-service` exists.** An editor asks the same questions `nazm check` answers —
+which files, what is wrong, what a name refers to — about text that is not on disk yet, in a
+process that stays alive. Two things needed a home that was not the CLI binary: the loader
+and root discovery, so that the command line and the editor share one module graph rather
+than each having one; and a long-lived owner of open buffers. `crates/nazm-service` holds
+both. It depends on `nazm-span`, `nazm-diag` and `nazm-core` only (`xtask/src/rules.rs`), so
+it can reach the compiler's answers and cannot reach the parser or `nazm-sema` to compute
+its own.
+
+```text
+editor ──stdio── nazm lsp (nazm-cli/src/lsp.rs)       framing, message types, UTF-16
+                     │  byte offsets and paths only
+                     ▼
+              LanguageService (nazm-service)           buffers, versions, one analysis each
+                     │
+        load::load_from(…, Overlaid) ── the loader every command uses
+        nazm_core::analyse           ── the parse and check every command runs
+        Resolution                   ── what each name was resolved to, by identity
+```
+
+**Who owns what.**
+
+| Concern | Owner |
+| --- | --- |
+| open buffers and their versions | `LanguageService` |
+| which files a compilation has, identity of a path, cycles, prelude | `nazm-service/src/load.rs`, reading through a `Sources` — `Disk` for commands, `Overlaid` (buffer first, then disk) for the service |
+| the source root | `nazm-service/src/root.rs`, `decide`, called exactly as `nazm check` calls it; `nazm lsp --source-root` is `nazm check --source-root` |
+| what a program means | `nazm_core::analyse`, which `on_checked_map` is now a wrapper over |
+| where a position is | the document's concrete tree (N15), by the rule below |
+| what a name refers to | `Resolution`: calls by `FnId`, locals by slot, constructions, variants, fields, payload fields |
+| byte offset ↔ LSP position | `LineIndex` in `nazm-cli/src/lsp.rs`, and nowhere else |
+
+**Where the concrete tree stops.** It answers exactly one question: which token a byte
+offset is on. The rule is fixed — the identifier whose bytes contain the offset, or whose
+last byte is just before it; anything else, including whitespace, comments, punctuation,
+keywords, literals and the end of the file, is on no name. What that identifier *means* is
+read from the resolution, keyed by its span. A name the resolution has no entry for — inside
+a body that did not parse, a type annotation, a built-in — has no definition. **The service
+never resolves a name itself:** no table from names to definitions exists in it, and a unit
+test and the `one resolver` gate keep it that way. N16 needed one addition to the resolution
+for this — each local binding records where its name is written (`LocalDef::span`), so a use
+goes to its definition by slot rather than by spelling.
+
+**Current versions.** Every open, change and close bumps a generation and re-analyses every
+open document before returning. A query is answered only from an analysis whose generation
+is current and whose version is the one asked about; diagnostics are published with the
+version they were computed for, and every document's complete set is published every time —
+an empty set included, which is how an editor clears errors. A broken buffer is analysed like
+any other: its diagnostics are current, and a query into its broken body has no answer. The
+previous, clean analysis is not kept.
+
+**What is deliberately not incremental.** Every open document is loaded, lexed, parsed and
+checked in full as the root of its own compilation on every change. No reparse of a changed
+region, no maintained module graph, no reuse of semantic work between versions, no
+persistent cache read or written: an unsaved buffer is not state `nazm-cache` may record. What
+is reused is the process and the buffers. Measured on the whole compiler written in Nazm, a
+warm edit is about 80 ms on one CPU (`performance.md`) — the evidence that incremental
+reparse is not yet needed.
+
+**Protocol surface.** Full-document synchronisation, `publishDiagnostics`, definition and
+hover, positions in UTF-16. Nothing else is advertised. The core prelude has no file, so a
+definition in it has no location. Diagnostics keep their Nazm codes and messages; the
+protocol message is an adapter's rendering of a `nazm.diagnostic/1` object's primary span,
+not a new schema.
 
 ## 8. Toolchain, and one real incompatibility
 

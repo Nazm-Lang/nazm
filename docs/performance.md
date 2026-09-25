@@ -977,6 +977,44 @@ One cost was removed after it was measured: the first version copied every token
 identifier's and string's text — out of the lossless scan for the parser to read. Borrowing
 them took the compiler's parse from 33.6 ms and 34.6 MB to the figures above.
 
+### The language service — measured 2026-09-25, and it is fast enough without incremental reparse
+
+`nazm lsp` re-analyses every open document in full on every change (`architecture.md`
+§7.18). Whether that is acceptable is a latency question, measured rather than assumed: in
+process against `nazm-service` for everything but startup, and against the real release
+binary for startup. Release build, contained, P1 — one CPU — nothing else running; medians
+(`target/n16/bench`, not committed).
+
+| What | Small file (`examples/sum.nz`, 550 B) | The compiler written in Nazm (`compiler/emit.nz` and its imports, 12,543 lines) |
+| --- | --- | --- |
+| cold start: spawn to `initialize` response | 0.8 ms (10 runs) | — |
+| cold open → diagnostics, new service | 0.3 ms | 76.8 ms (7) |
+| warm edit → diagnostics, same process | 0.2 ms | 79.2 ms (7) |
+| definition query | 7.5 µs | 1.86 ms |
+
+And on the compiler: a syntax error in the middle of `emit.nz`, cold open → diagnostics,
+77.4 ms, two diagnostics; a signature edit in `lex.nz` with both `lex.nz` and `emit.nz` open,
+82.5 ms to both documents' diagnostics. Resident memory: 1.9 MB at start, 44.2 MB with the
+compiler open, 46.3 MB after 10 edits and 46.3 MB after 100 — flat, with one analysis and
+0.89 MB of source text retained whatever the edit count.
+
+**What the numbers say.** A warm edit costs what a cold open does: nothing is reused
+between versions except the process, and the process was never the cost — startup is under
+a millisecond. On the largest program there is, an edit is answered in about 80 ms on one
+CPU; on anything a person edits by hand it is below a millisecond, which is below the noise
+of any editor's round trip and is reported as measured rather than as a percentage. The
+definition query walks the document's leaves to find the token, which is the 1.9 ms on the
+compiler. None of this makes a case for incremental reparse yet; a file much larger than
+the compiler, or a workspace with many large documents open, would be the evidence.
+
+**What it added to the binary.** The release `nazm` grew from 2,397,984 to 2,768,592 bytes
+(+370,608, +15.5%), almost all of it the protocol's message types; the workspace gained six
+locked crates — `lsp-server`, `lsp-types`, `crossbeam-channel`, `crossbeam-utils`,
+`fluent-uri`, `serde_repr` — all pure Rust. That was the measurement the choice between
+`nazm lsp` and a separate `nazm-lsp` binary waited for, and a third of a megabyte did not
+earn a second executable every editor configuration would have to find: the server is
+`nazm lsp`.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

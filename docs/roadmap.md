@@ -370,6 +370,44 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N16, in dependency order
+
+No item is chosen here; N16 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Incremental reparse | a lossless CST ✓ | N16 measured a warm edit of the whole compiler at about 80 ms on one CPU; the evidence that would justify it does not exist yet |
+| Structured edits | a lossless CST ✓, a language service ✓ | no edit command exists |
+| Completion, signature help | a language service ✓ | each needs its own semantic contract — what is in scope at a position — which the resolution does not record |
+| References, rename | a language service ✓ | need every use of an identity, across modules not open |
+| Semantic tokens, code actions | a language service ✓ | unchanged |
+| MCP | a language service ✓ | not started |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+
+### N16 — Language service core and minimal LSP — **complete, 2026-09-25**
+
+`nazm lsp` serves diagnostics, definition and hover over an editor's unsaved buffers, as an
+adapter over a protocol-independent language service that answers from the loader, parser,
+checker and resolution every command uses. No language, interface, cache-key or bootstrap
+change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint `0e1a40e6…`.
+
+| Settled | Where |
+| --- | --- |
+| one loader for the CLI and the editor, reading bytes through a `Sources` | `crates/nazm-service/src/load.rs` (moved from `nazm-cli`) |
+| open buffers, versions, one current analysis per document | `crates/nazm-service/src/service.rs`, `architecture.md` §7.18 |
+| one parse-and-check pipeline that also hands back its resolution | `nazm_core::analyse` |
+| a local's definition by slot, not by spelling | `LocalDef::span` in `crates/nazm-sema/src/resolve.rs` |
+| the protocol shell, UTF-16 at the boundary only | `crates/nazm-cli/src/lsp.rs` |
+| what it costs: about 80 ms per warm edit of the whole compiler on one CPU | `performance.md` |
+
+Mutation evidence: 14 new, all 14 killers verified uncontended; one targeted campaign of 15 —
+15 caught (14 at tier 1, 1 at tier 3, then tier 2 once the moved loader was given back to the
+`cli` profile), no survivor (`capability-matrix.md` §30).
+
+**N17 has not started.**
+
 ### After N15, in dependency order
 
 No item is chosen here; N15 left these standing.
