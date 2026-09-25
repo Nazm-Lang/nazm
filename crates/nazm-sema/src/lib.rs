@@ -57,7 +57,7 @@ pub use intrinsic::{Intrinsic, Shape};
 pub use key::{DefKey, DefKind, ModuleKey};
 pub use module::{Dependency, ModuleGraph, ModuleId};
 pub use record::{FieldDef, RecordDef, RecordId, Records, TaskUnsafe};
-pub use references::{ReferenceIndex, ReferenceTarget};
+pub use references::{Coverage, ReferenceIndex, ReferenceTarget};
 pub use resolve::{
     CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, LocalRef, PayloadRef, Propagation,
     Resolution, VariantRef,

@@ -1413,6 +1413,11 @@ fn resolve_written_inner(
         return res.types_mut().vec_of(elem);
     }
     let t = resolve_name(types, res, &written.name, written.name_span, errors);
+    // Which definition this name is, recorded where it was decided (N18). A built-in is
+    // not one, and neither is a type parameter, which returned above.
+    if let Some(node) = TypeNode::of(t) {
+        res.record_type_name(written.name_span, node);
+    }
     if Type::from_name(&written.name).is_some() {
         if args.is_some() {
             errors.push(not_generic(&written.name, "a built-in type", written.span));
@@ -2142,7 +2147,13 @@ impl Checker<'_> {
         let t = if let Some((_, p)) = self.type_scope.iter().find(|(n, _)| n == name) {
             *p
         } else {
-            resolve_name(&self.types, self.res, name, span, &mut errors)
+            let t = resolve_name(&self.types, self.res, name, span, &mut errors);
+            // The head of a construction and the enum before a variant's `.`: which
+            // definition the name is, recorded where it was decided (N18).
+            if let Some(node) = TypeNode::of(t) {
+                self.res.record_type_name(span, node);
+            }
+            t
         };
         self.errors = errors;
         t

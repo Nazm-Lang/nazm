@@ -42,10 +42,20 @@
 //!
 //! # What is not here
 //!
-//! A type name written in an annotation (`p: Point`) or in a generic argument has no entry
-//! in the resolution, and so has none here: a record's uses are its constructions. A call
-//! to a built-in refers to nothing declared. A binding introduced but never mentioned has
-//! a declaration and no uses.
+//! A built-in — a call to one, or a built-in type — refers to nothing declared; a type
+//! parameter's name is not recorded. A binding introduced but never mentioned has a
+//! declaration and no uses. Until N18 a type name written in an annotation or a generic
+//! argument, and the enum before the `.` of `E.V(…)`, had no entry either; the checker now
+//! records the record or enum each names, and they are uses here like any other.
+//!
+//! # Completeness, stated per kind
+//!
+//! [`ReferenceTarget::rename_coverage`] says, for each kind of entity, whether every
+//! occurrence whose spelling is the entity's name is recorded — which is what a rename
+//! needs, and more than a references query does. It is an exhaustive `match`, so a new kind
+//! of entity cannot be added without saying; a new *position* in which an existing kind can
+//! be written is held by the corpus gate in `crates/nazm-service/tests/references.rs`, which
+//! requires every name token of the repository's source to be indexed or explained.
 
 use std::collections::HashMap;
 
@@ -65,6 +75,9 @@ pub enum ReferenceTarget {
     /// A parameter, a `let` or a pattern binding.
     Local(LocalRef),
     Record(RecordId),
+    /// An enum, by the name it is declared and written with — distinct from any of its
+    /// variants. N18.
+    Enum(EnumId),
     Variant(VariantRef),
     Field(FieldRef),
     PayloadField(PayloadRef),
@@ -78,9 +91,53 @@ impl ReferenceTarget {
             Self::Function(_) => "function",
             Self::Local(_) => "local",
             Self::Record(_) => "record",
+            Self::Enum(_) => "enum",
             Self::Variant(_) => "variant",
             Self::Field(_) => "field",
             Self::PayloadField(_) => "payload field",
+        }
+    }
+}
+
+/// Whether the index holds every occurrence of an entity's name — the precondition of
+/// renaming it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Coverage {
+    /// Every position the language lets this kind of entity be written in is recorded by
+    /// the checker, as the entity it names.
+    Complete,
+    /// Some position is not, and a rename would miss it.
+    Incomplete(&'static str),
+}
+
+impl ReferenceTarget {
+    /// Whether every occurrence of this kind of entity's name is recorded, by the kind: the
+    /// positions the grammar gives it, each of which the checker resolves and records.
+    ///
+    /// No arm is a wildcard. A new kind of entity is a compile error here until someone
+    /// says what its occurrences are.
+    #[must_use]
+    pub const fn rename_coverage(self) -> Coverage {
+        match self {
+            // Its declaration and its calls, `spawn` included. There are no function
+            // values and no import lists: a function's name appears nowhere else.
+            Self::Function(_) => Coverage::Complete,
+            // A parameter, a `let` or a pattern binding, and every mention and assignment
+            // of it — all in one body.
+            Self::Local(_) => Coverage::Complete,
+            // Its declaration, its constructions, and its name in every written type:
+            // parameter, return, field, payload field, type argument at any depth.
+            Self::Record(_) => Coverage::Complete,
+            // Its declaration, its name in every written type, and the qualifier of every
+            // variant construction and pattern.
+            Self::Enum(_) => Coverage::Complete,
+            // Its declaration, and the name after the `.` of every construction and pattern.
+            Self::Variant(_) => Coverage::Complete,
+            // Its declaration, every projection and assignment path, and every label of a
+            // construction.
+            Self::Field(_) => Coverage::Complete,
+            // Its declaration, and the label of every construction and pattern field.
+            Self::PayloadField(_) => Coverage::Complete,
         }
     }
 }
@@ -135,6 +192,7 @@ impl ReferenceIndex {
                 continue;
             }
             let enumeration = EnumId::from_index(e);
+            index.declare(ReferenceTarget::Enum(enumeration), def.name_span);
             for (variant, v) in def.variants.iter().enumerate() {
                 let variant = u32::try_from(variant).unwrap_or(u32::MAX);
                 index.declare(
@@ -265,6 +323,7 @@ fn definition_of(res: &Resolution, target: ReferenceTarget) -> ReferenceTarget {
     };
     match target {
         ReferenceTarget::Record(id) => ReferenceTarget::Record(record(id)),
+        ReferenceTarget::Enum(id) => ReferenceTarget::Enum(enumeration(id)),
         ReferenceTarget::Field(f) => ReferenceTarget::Field(FieldRef {
             record: record(f.record),
             ..f

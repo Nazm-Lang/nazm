@@ -806,10 +806,16 @@ fn resolved_declaration(
         let r = res.records().get(f.record)?;
         return Some(("field", r.fields.get(f.field as usize)?.name_span));
     }
-    let p = res.payload(span)?;
-    let e = res.enums().get(p.enumeration)?;
-    let v = e.variants.get(p.variant as usize)?;
-    Some(("payload field", v.fields.get(p.field as usize)?.name_span))
+    if let Some(p) = res.payload(span) {
+        let e = res.enums().get(p.enumeration)?;
+        let v = e.variants.get(p.variant as usize)?;
+        return Some(("payload field", v.fields.get(p.field as usize)?.name_span));
+    }
+    // N18: a written type name, by the definition the checker resolved it to.
+    match res.type_name(span)? {
+        nazm_core::sema::TypeNode::Record(id) => Some(("record", res.records().get(id)?.name_span)),
+        nazm_core::sema::TypeNode::Enum(id) => Some(("enum", res.enums().get(id)?.name_span)),
+    }
 }
 
 #[test]
@@ -959,5 +965,95 @@ fn the_services_references_are_the_command_lines_resolution_read_backwards() {
                 );
             }
         }
+    });
+}
+
+#[test]
+fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
+    // The coverage gate (N18). A rename is complete only if every place a program's own
+    // entity can be written is recorded. So for every clean compilation of the repository's
+    // source, every identifier token must be in the index — or be one of a short list of
+    // things that are not a program's entity, each recognised by its syntactic position
+    // and not by guessing what it means. A new syntax position that names an entity and
+    // that the checker does not record fails here, before any rename could miss it.
+    use nazm_core::__syntax::SyntaxKind as K;
+    use nazm_core::sema::{Callee, ReferenceIndex};
+    let roots = corpus();
+    on_the_service_stack(move || {
+        let mut unexplained = Vec::new();
+        let mut checked = 0;
+        for path in &roots {
+            let decided = nazm_service::root::decide(path, None).unwrap();
+            let Ok(loaded) = nazm_service::load::load(path, decided.path()) else {
+                continue;
+            };
+            let a = nazm_core::analyse(&loaded.map, &loaded.graph, nazm_core::Entry::Absent);
+            if !a.diagnostics.is_empty() {
+                continue; // `examples/bad`: a rename is never offered on an unclean program
+            }
+            let index = ReferenceIndex::of(&a.resolution);
+            for f in loaded.map.ids() {
+                let cst = nazm_core::__syntax::parse_cst(f, loaded.map.text(f)).cst;
+                // Each item's own type parameters, by the item's span: a name written in a
+                // type position inside it may be one of them.
+                let mut params: Vec<(nazm_span::Span, Vec<String>)> = Vec::new();
+                for item in cst.nodes() {
+                    if matches!(item.kind(), K::FnItem | K::RecordItem | K::EnumItem) {
+                        let names = item
+                            .descendants()
+                            .into_iter()
+                            .filter(|n| n.kind() == K::TypeParam)
+                            .filter_map(|n| {
+                                n.child_leaves()
+                                    .into_iter()
+                                    .find(|l| l.kind == K::Ident)
+                                    .map(|l| l.text.to_owned())
+                            })
+                            .collect();
+                        params.push((item.span(), names));
+                    }
+                }
+                let a_type_parameter = |span: nazm_span::Span, text: &str| {
+                    params.iter().any(|(s, names)| {
+                        s.start <= span.start
+                            && span.end <= s.end
+                            && names.iter().any(|n| n == text)
+                    })
+                };
+                for node in cst.nodes() {
+                    for leaf in node.child_leaves() {
+                        if leaf.kind != K::Ident {
+                            continue;
+                        }
+                        checked += 1;
+                        let span = leaf.span;
+                        let explained = index.target(span).is_some()
+                            || node.kind() == K::TypeParam
+                            || (node.kind() == K::Type
+                                && (nazm_core::Type::from_name(leaf.text).is_some()
+                                    || leaf.text == "Vec"
+                                    || a_type_parameter(span, leaf.text)))
+                            || (node.kind() == K::PatternField && leaf.text == "_")
+                            || matches!(a.resolution.callee(span), Some(Callee::Builtin(_)));
+                        if !explained {
+                            unexplained.push(format!(
+                                "{}:{} {:?} `{}`",
+                                loaded.map.name(f),
+                                span.start,
+                                node.kind(),
+                                leaf.text
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 20_000, "{checked}");
+        assert!(
+            unexplained.is_empty(),
+            "{} name tokens are neither indexed nor a non-entity: {:#?}",
+            unexplained.len(),
+            &unexplained[..unexplained.len().min(20)]
+        );
     });
 }
