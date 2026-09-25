@@ -1530,6 +1530,28 @@ fn an_interrupted_campaign_resumes_its_own_journal_and_refuses_any_other() {
         tree.stdout
     );
     assert_clean(root);
+
+    // 6. So is a different execution profile (N14.1): a verdict reached with four test
+    //    threads is not evidence for a campaign run with one. The same profile, resumed,
+    //    reuses everything, so the refusal is the profile's doing and nothing else's.
+    let same = xtask(&args(true).iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(
+        same.says("of which reused from journal 2"),
+        "{}",
+        same.stdout
+    );
+    let mut threads = args(true);
+    threads.extend(["--test-threads".to_owned(), "4".to_owned()]);
+    let profile = xtask(&threads.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(profile.says("Nothing is reused"), "{}", profile.stdout);
+    assert!(profile.says("execution profile"), "{}", profile.stdout);
+    assert!(!profile.says("(reused from journal"), "{}", profile.stdout);
+    assert!(
+        profile.says("of which reused from journal 0"),
+        "{}",
+        profile.stdout
+    );
+    assert_clean(root);
 }
 
 /// The watchdog: when the harness dies, its invocation's tree goes with it.

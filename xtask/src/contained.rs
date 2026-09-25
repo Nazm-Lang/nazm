@@ -40,6 +40,52 @@ use std::time::{Duration, Instant};
 
 pub(crate) const IMAGE: &str = "nazm-contained:1.98.1";
 
+/// How much of the machine one contained workload may use. N14.1.
+///
+/// One owner for the three numbers that have to agree: the CPU quota the container gets,
+/// the Cargo job count its builds use, and the libtest thread count its test runs use.
+/// Every workload takes its values from here and nothing spells them again. Memory, swap,
+/// pids, storage and deadlines are **not** part of a profile: they are ceilings, and a
+/// profile never loosens one.
+///
+/// A profile is internal parallelism for **one** workload. It never means two workloads,
+/// or two mutants, at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExecutionProfile {
+    pub(crate) name: &'static str,
+    pub(crate) milli_cpus: u32,
+    pub(crate) cargo_jobs: u32,
+    pub(crate) test_threads: u32,
+}
+
+impl ExecutionProfile {
+    /// One CPU, one job, one thread: the rule the 2026-09-21 incident produced, kept as
+    /// the conservative profile for debugging and for reproducing an old result, and the
+    /// default for every workload the N14.1 calibration did not qualify for anything else.
+    pub(crate) const P1: Self = Self {
+        name: "p1",
+        milli_cpus: 1000,
+        cargo_jobs: 1,
+        test_threads: 1,
+    };
+    /// Four CPUs, four jobs, four test threads: the fastest profile that stayed inside the
+    /// frozen memory gates on the workloads it is the default for. P2, P4 with one and two
+    /// test threads, and P6 were measured and dropped; `docs/performance.md` says why.
+    pub(crate) const P4T4: Self = Self {
+        name: "p4t4",
+        milli_cpus: 4000,
+        cargo_jobs: 4,
+        test_threads: 4,
+    };
+
+    /// Every profile a workload may be run under, by name.
+    pub(crate) const ALL: &'static [Self] = &[Self::P1, Self::P4T4];
+
+    pub(crate) fn by_name(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|p| p.name == name)
+    }
+}
+
 /// Every limit the runner imposes. Defaults are budgets, not guesses: the migrated stages
 /// peak near 11 MB, and `rustc` building this workspace needs on the order of 1-2 GB, so
 /// 4 GiB leaves room for the build while staying well under the 7.75 GiB Linux VM.
@@ -47,7 +93,12 @@ pub(crate) const IMAGE: &str = "nazm-contained:1.98.1";
 #[derive(Debug, Clone)]
 pub(crate) struct Bounds {
     pub(crate) memory_mb: u32,
+    /// The CPU quota, from [`Self::profile`]; kept as its own field because the probe
+    /// sets it directly.
     pub(crate) milli_cpus: u32,
+    /// The workload's internal parallelism, N14.1. Its job and thread counts reach the
+    /// container as `NAZM_CARGO_JOBS` and `NAZM_TEST_THREADS`.
+    pub(crate) profile: ExecutionProfile,
     pub(crate) pids: u32,
     pub(crate) storage_gb: u32,
     pub(crate) scratch_mb: u32,
@@ -66,7 +117,8 @@ impl Default for Bounds {
     fn default() -> Self {
         Self {
             memory_mb: 4096,
-            milli_cpus: 1000,
+            milli_cpus: ExecutionProfile::P1.milli_cpus,
+            profile: ExecutionProfile::P1,
             pids: 512,
             storage_gb: 8,
             scratch_mb: 512,
@@ -246,6 +298,15 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
         ))
         // The only place a real ceiling applies, so the only place this is set.
         .args(["--env", "NAZM_CONTAINED=1"])
+        .args(["--env", &format!("NAZM_PROFILE={}", b.profile.name)])
+        .args([
+            "--env",
+            &format!("NAZM_CARGO_JOBS={}", b.profile.cargo_jobs),
+        ])
+        .args([
+            "--env",
+            &format!("NAZM_TEST_THREADS={}", b.profile.test_threads),
+        ])
         .args(["--env", "CARGO_TARGET_DIR=/work/target"])
         .arg(IMAGE)
         .args(argv)

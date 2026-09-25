@@ -554,6 +554,8 @@ impl Default for Deadlines {
 pub(crate) struct Real<'a> {
     pub(crate) root: &'a Path,
     pub(crate) deadlines: Deadlines,
+    /// How much each build and test step may use inside itself. N14.1.
+    pub(crate) parallelism: plan::Parallelism,
     pub(crate) reset_derived: bool,
     /// Where this mutant's full logs go, when there is somewhere to put them.
     pub(crate) logs: Option<PathBuf>,
@@ -596,7 +598,11 @@ impl Real<'_> {
 
 impl Executor for Real<'_> {
     fn build(&mut self) -> (Build, f64) {
-        let f = self.invoke("build", plan::workspace_build(), self.deadlines.build_secs);
+        let f = self.invoke(
+            "build",
+            plan::workspace_build(self.parallelism),
+            self.deadlines.build_secs,
+        );
         let secs = f.elapsed.as_secs_f64();
         let b = match &f.ended {
             Ended::Exited(s) if s.success() => Build::Built,
@@ -619,17 +625,17 @@ impl Executor for Real<'_> {
         }
         let (args, deadline, what) = match (&step.selector, step.tier) {
             (None, _) => (
-                plan::broad_suite(),
+                plan::broad_suite(self.parallelism),
                 self.deadlines.broad_secs,
                 "tier3".to_owned(),
             ),
             (Some(s), Tier::Direct) => (
-                s.cargo_args(),
+                s.cargo_args(self.parallelism),
                 self.deadlines.killer_secs,
                 format!("tier1-{}", sanitize(&s.label())),
             ),
             (Some(s), _) => (
-                s.cargo_args(),
+                s.cargo_args(self.parallelism),
                 self.deadlines.profile_target_secs,
                 format!("tier2-{}", sanitize(&s.label())),
             ),
@@ -868,6 +874,13 @@ pub(crate) struct Identity {
     pub(crate) selected: Vec<String>,
     pub(crate) deadlines: Deadlines,
     pub(crate) reset_derived: bool,
+    /// Each step's internal parallelism, N14.1. A deadline-bearing verdict is evidence
+    /// about the execution that produced it.
+    pub(crate) parallelism: plan::Parallelism,
+    /// The CPU quota the campaign ran under, as the cgroup states it (`cpu.max`), or
+    /// `unbounded` where there is none to read. N14.1: the same step under another quota
+    /// is another execution.
+    pub(crate) cpu_quota: String,
 }
 
 pub(crate) const JOURNAL_SCHEMA: &str = "nazm.mutation-campaign/1";
@@ -1551,6 +1564,26 @@ mod tests {
             selected: vec!["m".into()],
             deadlines: Deadlines::default(),
             reset_derived: true,
+            parallelism: plan::Parallelism::SERIAL,
+            cpu_quota: "unbounded".into(),
+        }
+    }
+
+    #[test]
+    fn a_different_execution_profile_is_a_different_campaign() {
+        let base = identity();
+        assert_eq!(base.key(), identity().key());
+        let mut jobs = identity();
+        jobs.parallelism.cargo_jobs = 4;
+        let mut threads = identity();
+        threads.parallelism.test_threads = 4;
+        let mut quota = identity();
+        quota.cpu_quota = "400000 100000".into();
+        let keys = [base.key(), jobs.key(), threads.key(), quota.key()];
+        for (i, a) in keys.iter().enumerate() {
+            for b in &keys[i + 1..] {
+                assert_ne!(a, b, "{keys:?}");
+            }
         }
     }
 
