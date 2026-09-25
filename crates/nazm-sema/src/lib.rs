@@ -60,8 +60,8 @@ pub use module::{Dependency, ModuleGraph, ModuleId};
 pub use record::{FieldDef, RecordDef, RecordId, Records, TaskUnsafe};
 pub use references::{Coverage, ReferenceIndex, ReferenceTarget};
 pub use resolve::{
-    CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, LocalRef, PayloadRef, Propagation,
-    Resolution, VariantRef,
+    CallSite, Callee, CheckedCall, FieldRef, FnDef, FnId, Instantiation, LocalDef, LocalRef,
+    PayloadRef, Propagation, Resolution, VariantRef,
 };
 pub use scope::{Candidate, Named, ScopeTrace, Unavailable, Visible};
 pub use types::{ParamOwner, Type, TypeParam, VecId};
