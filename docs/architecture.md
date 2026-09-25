@@ -2733,7 +2733,8 @@ reparse is not yet needed.
 
 **Protocol surface.** Full-document synchronisation, `publishDiagnostics`, definition and
 hover, positions in UTF-16 — and, since N17, references (§7.19), since N18 prepare-rename
-and rename (§7.20), and since N19 completion (§7.21). Nothing else is advertised. The core prelude has no file, so a
+and rename (§7.20), since N19 completion (§7.21), and since N20 signature help (§7.22).
+Nothing else is advertised. The core prelude has no file, so a
 definition in it has no location. Diagnostics keep their Nazm codes and messages; the
 protocol message is an adapter's rendering of a `nazm.diagnostic/1` object's primary span,
 not a new schema.
@@ -2968,6 +2969,78 @@ document's compilation: another open program's names never enter it.
 **Deliberately not here.** Completion of a field after `.`, a variant after `E.`, a construction
 or payload label, a pattern, an import path; auto-import; trigger characters; ranking; fuzzy
 matching; signature help. Nothing is persisted: the trace lives and dies with its analysis.
+
+## 7.22 The call at a position, and signature help — settled by N20, 2026-09-26
+
+> **N20 does not perform call resolution. It reports call resolution that already happened.**
+
+```text
+CST              which call's argument list holds the position, which argument   (the tree's nesting)
+Checker          which callee the call resolved to, the signature its arguments   (nazm-core/src/check.rs)
+                 were checked against, what a generic call settled
+CheckedCall      records those as the checker decides them                         (nazm-sema/src/resolve.rs)
+LanguageService  joins the two, for the current document only                     (nazm-service/src/signature.rs)
+LSP adapter      renders one SignatureHelp, UTF-16 at the edge                     (nazm-cli/src/lsp.rs)
+```
+
+**What the checker records.** `Resolution::checked_call(callee_span)` is a `CheckedCall`, written
+wherever the checker checks a call or a `spawn` against a callee it resolved — whether or not
+the arguments then fitted: the `Callee` (`Function(FnId)` or `Builtin(Intrinsic)`), the call's
+and each parsed argument's span, and the parameter and return types **exactly as the module's
+environment gave them** — a function's own signature, an import's from the interface it was
+checked against, a built-in's from `Intrinsic::ALL`. For a generic callee it adds an
+`Instantiation`: whether the type arguments were written, each one the checker settled (`None`
+where it settled none, which it has reported), and the parameters and result with the settled
+arguments in place, computed by `UserTypes::substituted` — which reads the type table and adds
+nothing to it, so recording changes no type id and nothing a backend emits. A call whose
+callee did not resolve is not recorded. Keyed by the callee's span, like `Resolution::callee`,
+and session-local; it is not a call graph and nothing about compilation reads it.
+
+**Which call, which argument.** The service walks down the one path of tree nodes containing
+the position and keeps the last call or `spawn` whose argument list holds it — strictly after
+its `(` and no later than its `)`. On the callee, before the `(`, and after the `)` the
+position is in no call. The active argument is the number of that `ArgList`'s **own** `,`
+tokens ending at or before the position: a comma of a nested call, a construction, a
+parenthesised expression or a type argument list belongs to another node, and one in a string
+or a comment is not a comma token. Then the call is looked up by its callee's span; no record
+means no answer (`NoCall::NotChecked`) — a callee that did not resolve, whatever it is spelled.
+
+| Position | Answer |
+| --- | --- |
+| on the callee, or before `(` | none |
+| just after `(`, before the first argument | argument 0 |
+| inside an argument, or just before the `,` after it | that argument |
+| just after a `,` | the next argument |
+| inside a nested call's argument list | the nested call |
+| just before `)` | the last argument (or 0 when there are none) |
+| after `)` | none — not the nearest call |
+
+**When there is an answer.** One document at its current version, from its own compilation;
+never an earlier clean one. None when any file of the compilation needed syntax recovery
+(`NoCall::RecoveredSyntax`, the rule N19 applies to module names): a lost declaration could
+have changed what the call resolved to. Too few arguments, too many and wrong argument types
+do not stop it — the checker still resolved the callee. The active *parameter* is the active
+argument when the callee has a parameter there, and none otherwise: for a callee with no
+parameters, and for an argument past the last one.
+
+**One signature, one spelling.** `Signature` is structured — callee, name, type parameters with
+whether each requires `Equality`, parameters with their declared names and types, result — and
+`Signature::render` is the only place a signature becomes text: hover, completion's detail and
+signature help all call it, so they cannot disagree. A function's parameter names are its first
+slots, which the checker bound; a built-in's are not named by the inventory, so it shows types
+only (`fn str_len(Str) -> Int`). Rendered with a call's instantiation, the settled arguments
+replace the parameters: `fn identity[T](x: T) -> T` is shown at `identity(1)` as
+`fn identity[Int](x: Int) -> Int`; the declared form, with `[T: Equality]`, is what hover shows.
+
+**The protocol.** One `SignatureInformation`, parameters as offsets into the label in UTF-16,
+`activeSignature` 0; triggered by `(` and `,`, with no retrigger characters. Past the last
+parameter of an over-long call the answer is `null`, because the protocol reads an absent active
+parameter as the first; a callee with no parameters has its signature and no active parameter.
+
+**Deliberately not here.** Signature help for a record construction or a variant construction
+(neither is a call; each would be a label contract of its own); documentation; overloads, which
+the language does not have; call hierarchy. Nothing is persisted: the records live and die with
+their analysis.
 
 ## 8. Toolchain, and one real incompatibility
 

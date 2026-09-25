@@ -370,9 +370,48 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N20, in dependency order
+
+No item is chosen here; N20 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Member, variant-dot, construction-label and payload-label completion; signature help for constructions | completion ✓, signature help ✓, field identity ✓ | each is a structure-aware contract — the type before `.`, the record being built — not a call |
+| Document and workspace symbols | a language service ✓ | not started |
+| Semantic tokens, code actions | a language service ✓ | not started |
+| Call hierarchy | checked calls ✓, references ✓ | a consumer of the records N20 added, and not asked for |
+| Rename of exported definitions; edits of files not open | rename ✓ | unchanged since N18 |
+| MCP, semantic context packets | a language service ✓, scope and call at a position ✓ | not started |
+| Incremental reparse | a lossless CST ✓ | N20 measured a warm edit of the whole compiler at 84.7–86.4 ms on one CPU, 3–5 ms over N19; still no evidence that forces it |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+
+### N20 — Call-site semantic query and signature help — **complete, 2026-09-26**
+
+Which call a position is in, and with which signature, is now answered from what the checker
+recorded when it checked the call — the resolved callee, the signature its arguments were
+checked against, what a generic call settled — with the tree deciding only which argument list
+and which argument. Signature help is that answer rendered by the one signature renderer hover
+and completion also use. No language, interface, cache-key or bootstrap change:
+`SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint `0e1a40e6…`.
+
+| Settled | Where |
+| --- | --- |
+| `CheckedCall` and `Instantiation`, written by the checker | `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check.rs`, `architecture.md` §7.22 |
+| `call_at`, `signature_help`, the structured `Signature` and its one renderer | `crates/nazm-service/src/signature.rs` |
+| `textDocument/signatureHelp`, triggered by `(` and `,`, UTF-16 label offsets | `crates/nazm-cli/src/lsp.rs` |
+| what it costs: 6 µs a query on the compiler; 2–5 ms more `analyse`, 3–5 ms more per warm edit, 9 MB more resident | `performance.md` |
+
+Mutation evidence: 14 new, 1 renamed, 1 candidate found equivalent and left uncatalogued; all 16
+direct killers verified on the final source; one targeted campaign of 23, all caught at tier 1
+(`capability-matrix.md` §30).
+
+**N21 has not started.**
+
 ### After N19, in dependency order
 
-No item is chosen here; N19 left these standing.
+No item is chosen here; N19 left these standing. *Superseded by "After N20" above.*
 
 | | Depends on | Why not before |
 | --- | --- | --- |
@@ -408,7 +447,6 @@ Mutation evidence: 14 new, 1 repointed, 1 renamed; all 16 direct killers verifie
 source; one targeted campaign of 17 — 16 caught at tier 1 and 1 at tier 2, no survivor
 (`capability-matrix.md` §30).
 
-**N20 has not started.**
 
 ### After N18, in dependency order
 

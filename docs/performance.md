@@ -1110,6 +1110,39 @@ apart: it is one range and a list of names. None of this makes a case for increm
 **What it added to the binary.** The release `nazm` grew from 2,888,576 to 2,954,112 bytes
 (+65,536, +2.3%); no dependency was added.
 
+### The call at a position and signature help — measured 2026-09-26
+
+N20 records every checked call as the checker checks it. Measured as N19 was: in process,
+release, contained, P1, nothing else running; medians over two runs (`target/n20/bench`, not
+committed). The record is written inside the check, so its cost is inside `analyse` and a warm
+edit, stated against N19's.
+
+| What | Small (`examples/sum.nz`) | The compiler (`emit.nz` and imports) | 200 nested calls | Multi-module (an imported generic) |
+| --- | --- | --- | --- | --- |
+| checked calls recorded | 2 | 8,873 | 200 | 2 |
+| `call_at` | 2.0 µs | 5.9 µs | 61 µs (innermost) | 2.0 µs |
+| `signature_help` (structured, rendered) | 2.3 µs | 6.3 µs | 62 µs | 2.6 µs |
+
+On the compiler, against N19: `analyse` 34.9–38.3 ms (N19: 32.9–33.5); warm edit 84.7–86.4 ms
+(N19: 80.7–81.6); index construction 3.93–3.99 ms (N19: 3.85–3.88); `scope_at` 0.70–0.73 ms
+and completion 2.09–2.13 ms, unchanged. Resident memory: 58.7–58.8 MB with the compiler open,
+and the same after 10 and after 100 edits (N19: 49.5–49.9 open, 51.7–51.8 after edits) — about
+9 MB more, and flat, with retained documents, analyses, text and checked-call count held
+constant by the thousand-edit test. The protocol's conversion is not measured apart: it is one
+label and its parameters' offsets.
+
+**What the numbers say.** A query is a walk down one path of the tree and one lookup, so it is
+microseconds even on the whole compiler — faster than hover, which scans the tokens. The cost
+is the record: about 8,900 calls, each with its argument spans and parameter types, add 2–5 ms
+to checking the compiler, 3–5 ms (4–7%) to a warm edit, and about 9 MB of resident memory. The
+memory was not attributed further than that; the record is what changed. It is paid by every
+compilation, since the checker writes it whether or not a tool reads it. None of this makes a
+case for incremental reparse; whether the record should become cheaper, or optional outside the
+language service, is left to review.
+
+**What it added to the binary.** The release `nazm` grew from 2,954,112 to 3,019,648 bytes
+(+65,536, +2.2%); no dependency was added.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
