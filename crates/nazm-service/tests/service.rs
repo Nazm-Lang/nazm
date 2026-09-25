@@ -452,7 +452,7 @@ fn hover_reads_the_resolution_and_nothing_else() {
         let mut s = LanguageService::new();
         s.open(&main, 1, MAIN.into());
         let h = s.hover(&main, 1, at(MAIN, "helper(", 0, 3)).unwrap();
-        assert_eq!(h.text, "fn helper(Int) -> Int");
+        assert_eq!(h.text, "fn helper(n: Int) -> Int");
         assert_eq!(&MAIN[h.start as usize..h.end as usize], "helper");
 
         let local = "fn main() -> Int { let mut n = 2; n = n + 1; n }\n";

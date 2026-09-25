@@ -346,6 +346,17 @@ impl LanguageService {
             })
     }
 
+    /// How many checked calls the analyses are holding, over every analysis (N20). A
+    /// function of what is open now, like [`Self::retained`].
+    #[must_use]
+    pub fn calls(&self) -> usize {
+        self.documents
+            .values()
+            .filter_map(|d| d.analysis.as_ref())
+            .map(|s| s.analysis.resolution.checked_calls().count())
+            .sum()
+    }
+
     /// Open `path` at `version` with exactly `text`, which is from now on what every
     /// compilation reads for that file instead of the disk.
     pub fn open(&mut self, path: &Path, version: i32, text: String) -> Vec<Published> {
@@ -522,14 +533,9 @@ impl LanguageService {
         let res = &s.analysis.resolution;
         let types = res.types();
         let text = if let Some(Callee::Function(id)) = res.callee(at) {
-            let f = res.function(id)?;
-            let params: Vec<String> = f.params.iter().map(|t| types.show(*t)).collect();
-            format!(
-                "fn {}({}) -> {}",
-                f.name,
-                params.join(", "),
-                types.show(f.ret)
-            )
+            crate::Signature::of_function(res, id)?
+                .render(res, None)
+                .label
         } else {
             let local = res.local(at)?;
             let f = res.function(local.function)?;

@@ -264,16 +264,11 @@ fn detail(s: &Snapshot, c: Candidate) -> Option<String> {
                 types.show(def.ty)
             ))
         }
-        Candidate::Entity(ReferenceTarget::Function(id)) => {
-            let f = res.function(id)?;
-            let params: Vec<String> = f.params.iter().map(|t| types.show(*t)).collect();
-            Some(format!(
-                "fn {}({}) -> {}",
-                f.name,
-                params.join(", "),
-                types.show(f.ret)
-            ))
-        }
+        Candidate::Entity(ReferenceTarget::Function(id)) => Some(
+            crate::Signature::of_function(res, id)?
+                .render(res, None)
+                .label,
+        ),
         _ => None,
     }
 }
