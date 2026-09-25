@@ -671,11 +671,21 @@ approximation of what the analysis misses.
 
 ### 8. Core IR — MISSING · ### 9. MIR — MISSING
 
-**Evidence of absence** · Neither exists; no HIR either. `crates/nazm-lir/src/lib.rs`
-states the reason directly: the levels in between *"exist to carry information M1a has
-none of"* — no generics to monomorphise, no traits to lower, no regions to infer, no
-effects to track. Monomorphisation is absent and cannot be otherwise, since nothing is
-polymorphic.
+**Evidence of absence** · Neither exists; no HIR either — no typed Core IR, no MIR, no
+HIR. What changed is the reason. Since N11 the language has first-order generics and the
+native backend compiles **monomorphised concrete instances**: the checker interns each
+applied record and enum with its substituted fields (`crates/nazm-sema/src/generic.rs`),
+and native lowering plans one instance per concrete generic function and lowers each from
+the same syntax tree (`crates/nazm-lir/src/instance.rs`). So polymorphism and
+monomorphisation exist, and **no dedicated Core or MIR level carries them** — the existing
+semantic and native pipeline does the specialisation, and nothing has shown that a level
+between them would own something neither owns. Traits, regions and effects are still
+absent, so none of those gives a middle level work either.
+
+*Historical, M1a:* `crates/nazm-lir/src/lib.rs` gave the original reason — the levels in
+between *"exist to carry information M1a has none of"*, no generics to monomorphise, no
+traits to lower, no regions to infer, no effects to track. The absence it justified still
+stands; its "nothing is polymorphic" does not, since N11.
 
 **Limitation** · Not the absence of the levels — that is correct restraint.
 
