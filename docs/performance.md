@@ -1013,6 +1013,75 @@ time, and the 51 without a killer each pay most of the selfhost binary (≈ 80�
 A killer takes such an entry to a few seconds. Compilation is the second cost (24 %), and it
 is the build UNUSABLE depends on.
 
+## Development and evidence pipeline parallelism — N14.1, measured 2026-09-25
+
+Tooling, not language performance. The question: how much of the machine may **one**
+contained workload use inside the same ceilings — 4 GiB memory with swap equal, 512 pids,
+8 GiB storage, the same deadlines — without changing a verdict or approaching a limit.
+
+**The machine.** Apple M1 Pro, 10 cores (8 performance, 2 efficiency), 32 GiB; Docker
+Desktop VM with 10 CPUs and 7.75 GiB, kernel 7.0.12-linuxkit, aarch64, `nazm-contained:1.98.1`.
+Nothing else heavy ran during any cell; cells alternated profiles so thermal drift could
+not line up with one of them.
+
+**The gates, frozen before any profile was chosen.** Total cgroup peak (`memory.peak`) at or
+below 85 % of the limit, 3,482 MiB; anonymous memory at or below 70 %, 2,867 MiB; zero
+`memory.events` max, oom and oom_kill; no swap. Total, anonymous and page-cache peaks are
+reported separately because they mean different things (the first round's build cells
+recorded only the total; anonymous and page-cache figures come from the later rounds): anonymous memory is what the
+workload needs, page cache is what the kernel kept of the files it wrote.
+
+**Semantics did not move.** Every cell of every profile gave the same answer: the workspace
+suite 1,317 passed / 0 failed / 13 ignored in 67 binaries, selfhost 38 of 38, every mutant
+the same verdict and tier. No cell anywhere had an OOM kill, a limit event or swap.
+
+| Workload (median of n) | P1 | P4T4 | P6 (6 CPUs, 6 jobs, 4 threads) |
+| --- | --- | --- | --- |
+| cold workspace build | 97.5 s (4) | **26.9 s (3), 3.6×** | 19.2 s (4) |
+| incremental rebuild, one `nazm-core` file | 16.0 s (4) | **4.7 s (3), 3.4×** | 3.3 s (4) |
+| worst total / anonymous peak, build | 3,328 / 375 MiB | 3,311 / 1,050 MiB | **3,658** / 1,302 MiB |
+| workspace suite | 294.4 s (3) | **97.0 s (3), 3.03×** | 96.9 s (3) |
+| worst total / anonymous peak, suite | 2,704 / 354 MiB | 2,857 / 359 MiB | 2,944 / 362 MiB |
+| selfhost suite | 131.2 s (2) | **38.1 s (2), 3.44×** | 38.0 s (2) |
+| worst total / anonymous peak, selfhost | 764 / 100 MiB | 1,076 / 303 MiB | 1,102 / 287 MiB |
+
+**What decided it.** The suites scale with *test threads*, not with the CPU quota: P4 with
+two threads ran the suite in 146.6 s and P6 with two in 146.7 s, P4 with one thread in
+270.2 s. P6's extra quota helps compilation only, and its incremental rebuild crossed the
+total gate in all four measurements (3,506–3,658 MiB) — six concurrent `rustc` processes'
+anonymous memory on top of 2.3 GiB of page cache. P1's own worst build total, 3,328 MiB, is
+above P4T4's: the total is mostly page cache, which is why anonymous memory is reported
+beside it. Where P4T4 and P6 tie, the rule was the lower-resource profile. P2 (1.9×) and the one- and two-thread P4 variants were measured in
+the first round and dropped.
+
+**Mutation stays P1.** One fast tier-1 mutant, `n13-a-vec-has-equality`:
+
+| | wall | verdict | total / anonymous / page cache |
+| --- | --- | --- | --- |
+| P1 | 374.9 s | caught, tier 1 | 2,998 / 373 / 2,630 MiB |
+| P4T4 | 130.8 s | caught, tier 1 | **3,623** / 868 / 2,642 MiB |
+| 4 CPUs, 2 jobs, 4 threads | 156.7 s | caught, tier 1 | **3,853** / 619 / 3,292 MiB |
+
+Both parallel profiles crossed the total gate. The total is dominated by page cache — a
+campaign holds a tree copy, a target directory and every test binary it built — and it is
+not monotonic in parallelism: halving the jobs lowered anonymous memory by 250 MiB and the
+total *rose* by 230 MiB. The gate was not changed after this evidence appeared, so the
+default did not move and **N14.1 claims no mutation speedup.** Accelerating mutation needs
+its own experiment on how page cache and the container's memory limit interact, not a
+looser gate.
+
+**The defaults.** `contained tests` and `contained selfhost` take P4T4; `mutate`,
+`bootstrap`, `release` and `run` stay P1; `bench` is P1 permanently. `--profile p1`
+reproduces any older result. All build-cell and mutation numbers above are direct paired
+measurements on the current tree; the per-workload speedups are measured, not derived.
+
+**The final runs, on the frozen tree that was then committed unchanged, each under its
+adopted default:** the workspace suite at P4T4 in 116 s of container time (1,321 passed,
+the four new tests included), selfhost at P4T4 in 45 s, the xtask lifecycle suite 13 of
+13, a frozen seven-mutant P1 sample with every verdict and tier as established (five at
+tier 1, two at tier 2, no timeout, every source restored to its digest), and the bootstrap
+at P1 in 52 s with `0e1a40e6…` unchanged.
+
 ## The optimisation pass, and what it was based on
 
 One pass, chosen from a profile rather than from intuition. `sample` on the release
