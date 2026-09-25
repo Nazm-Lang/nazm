@@ -25,8 +25,8 @@ use nazm_sema::intrinsic::{Intrinsic, Shape};
 use nazm_sema::module::{Dependency, ModuleGraph, ModuleId};
 use nazm_sema::record::{FieldDef, RecordDef, RecordId};
 use nazm_sema::resolve::{
-    CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, LocalRef, PayloadRef, Propagation,
-    Resolution, VariantRef,
+    CallSite, Callee, CheckedCall, FieldRef, FnDef, FnId, Instantiation, LocalDef, LocalRef,
+    PayloadRef, Propagation, Resolution, VariantRef,
 };
 use nazm_sema::types::{ParamOwner, Type, TypeParam};
 use nazm_sema::udt::{TypeNode, UserTypes, MAX_TYPE_DEPTH};
@@ -3582,6 +3582,7 @@ impl Checker<'_> {
                 );
             }
         }
+        self.record_checked_call(s.callee_span, s.span, &s.args, &sig, None, true);
     }
 
     fn check_return(&mut self, r: &Return) {
@@ -3950,6 +3951,7 @@ impl Checker<'_> {
                         }
                     }
                 }
+                self.record_checked_call(*callee_span, *span, args, &sig, None, false);
                 Completion::Value(sig.ret)
             }
 
@@ -4092,6 +4094,34 @@ impl Checker<'_> {
 
             Expr::Block(b) => self.check_block(b, expected),
         }
+    }
+
+    /// Record a call as it was checked (N20): its resolved callee, its arguments and the
+    /// signature they were checked against, for a tool to read rather than work out.
+    fn record_checked_call(
+        &mut self,
+        at: Span,
+        span: Span,
+        args: &[Expr],
+        sig: &Signature,
+        instance: Option<Instantiation>,
+        spawned: bool,
+    ) {
+        let Some(callee) = self.res.callee(at) else {
+            return;
+        };
+        self.res.record_checked_call(
+            at,
+            CheckedCall {
+                callee,
+                span,
+                args: args.iter().map(Expr::span).collect(),
+                params: sig.params.clone(),
+                ret: sig.ret,
+                instance,
+                spawned,
+            },
+        );
     }
 
     /// Record one call of the body being checked, for the native backend's planner.
@@ -4360,6 +4390,21 @@ impl Checker<'_> {
         }
         self.res.record_type_args(at, settled.clone());
         self.record_site(at, settled.clone(), false);
+        // What this call settled, for tooling: unsettled parameters stay themselves, and
+        // the substitution only reads what already exists, so recording it interns nothing.
+        let partial = settled_args(&solved, owner);
+        let instance = Instantiation {
+            owner,
+            written: explicit,
+            args: solved.iter().map(|s| s.map(|(t, _)| t)).collect(),
+            params: sig
+                .params
+                .iter()
+                .map(|p| self.res.types().substituted(*p, owner, &partial))
+                .collect(),
+            ret: self.res.types().substituted(sig.ret, owner, &partial),
+        };
+        self.record_checked_call(at, span, args, sig, Some(instance), false);
         let ret = self.res.types_mut().substitute(sig.ret, owner, &settled);
         self.mention(ret);
         if self.res.types().nesting(ret) > MAX_TYPE_DEPTH {

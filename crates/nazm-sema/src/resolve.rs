@@ -152,6 +152,53 @@ pub struct CallSite {
     pub spawned: bool,
 }
 
+/// One call as the checker checked it (N20): what it resolved to, where its arguments
+/// are, and the signature the arguments were checked against.
+///
+/// Recorded at the point the checker has all of it — after the callee resolved, whether or
+/// not the arguments then fitted — so that a tool asking "which call is this, with which
+/// signature" reads the answer instead of resolving the callee again or re-running
+/// inference. A call whose callee did not resolve is not here: nothing was checked against
+/// anything.
+///
+/// Not a call graph and not for the backends, which read [`FnDef::call_sites`]; this is
+/// the signature side of a call, for tooling. Session-local, like everything here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedCall {
+    pub callee: Callee,
+    /// The whole call, from the callee's name to the `)` — or, for a `spawn`, the
+    /// statement.
+    pub span: Span,
+    /// Each argument that parsed, in order.
+    pub args: Vec<Span>,
+    /// The parameter types the callee declares, exactly as the checker read them from the
+    /// module's environment: a function's own or imported signature, or a built-in's. A
+    /// generic callee's mention its own parameters.
+    pub params: Vec<Type>,
+    pub ret: Type,
+    /// For a generic callee, what this call settled. `None` for one that is not generic.
+    pub instance: Option<Instantiation>,
+    /// Whether this is a `spawn` rather than a call.
+    pub spawned: bool,
+}
+
+/// What one call of a generic callee settled its type parameters to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Instantiation {
+    /// Whose parameters [`CheckedCall::params`] mention.
+    pub owner: crate::types::ParamOwner,
+    /// Whether the type arguments were written (`f[Int](…)`) rather than inferred.
+    pub written: bool,
+    /// Each type parameter's argument, in declaration order — `None` where nothing settled
+    /// it, which the checker has reported.
+    pub args: Vec<Option<Type>>,
+    /// Each parameter's type with the settled arguments in place. An unsettled parameter
+    /// stays itself; `None` only where that type was never formed in this compilation.
+    pub params: Vec<Option<Type>>,
+    /// The result type with the settled arguments in place, on the same terms.
+    pub ret: Option<Type>,
+}
+
 /// Which field of which record a projection refers to.
 ///
 /// **Not an offset.** `docs/architecture.md` requires field access to stay symbolic until
@@ -268,6 +315,9 @@ pub struct Resolution {
     /// The checker's scopes and environments, as it built them (N19): what may be written
     /// where, for a tool to enumerate. Nothing resolves through this.
     scopes: crate::scope::ScopeTrace,
+    /// Every call the checker checked against a resolved callee, by the span of the
+    /// callee's name (N20). For tooling; nothing about compilation reads it.
+    checked_calls: HashMap<Span, CheckedCall>,
 }
 
 impl Resolution {
@@ -422,6 +472,22 @@ impl Resolution {
     #[must_use]
     pub fn callee(&self, span: Span) -> Option<Callee> {
         self.calls.get(&span).copied()
+    }
+
+    /// The call whose callee was written at `span`, as the checker checked it (N20).
+    #[must_use]
+    pub fn checked_call(&self, span: Span) -> Option<&CheckedCall> {
+        self.checked_calls.get(&span)
+    }
+
+    /// Every checked call, by its callee's span, in no particular order.
+    pub fn checked_calls(&self) -> impl Iterator<Item = (Span, &CheckedCall)> {
+        self.checked_calls.iter().map(|(s, c)| (*s, c))
+    }
+
+    /// Record the call whose callee was written at `span`.
+    pub fn record_checked_call(&mut self, span: Span, call: CheckedCall) {
+        self.checked_calls.insert(span, call);
     }
 
     /// What the checker recorded about its scopes and environments.
