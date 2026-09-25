@@ -370,9 +370,49 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N18, in dependency order
+
+No item is chosen here; N18 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Rename of exported definitions | rename ✓ | needs a provably complete set of importers — a finite project boundary the service does not have; N18 refuses rather than guess |
+| Edits of files that are not open | rename ✓ | the protocol cannot make a closed file's content a precondition; needs an application path that can, or a client contract that does |
+| Other code actions, structured edits beyond rename | a lossless CST ✓, a plan model ✓ | each needs its own semantic contract |
+| Incremental reparse | a lossless CST ✓ | N18 measured a warm edit of the whole compiler at about 83 ms and a validated rename at about 93 ms on one CPU; the evidence that would justify it still does not exist |
+| Completion, signature help | a language service ✓ | each needs its own semantic contract — what is in scope at a position — which the resolution does not record |
+| Symbols (document, workspace) | a language service ✓ | not started |
+| Semantic tokens | a language service ✓ | unchanged |
+| MCP | a language service ✓ | not started |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+
+### N18 — Safe semantic rename and stale-safe edit plans — **complete, 2026-09-25**
+
+Every written user-type name and enum qualifier is now an occurrence of the definition it
+names, which makes the occurrence set complete for every kind of entity; on that, a rename is a
+validated plan — the entity's recorded occurrences only, re-checked in memory, partition-
+preserving, tied to the exact text and version it was made from — for locals and private
+definitions, served as a versioned `WorkspaceEdit`. No language, interface, cache-key or
+bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint `0e1a40e6…`.
+
+| Settled | Where |
+| --- | --- |
+| the checker records every written type name and qualifier; `Enum` is an entity | `crates/nazm-core/src/check.rs`, `crates/nazm-sema/src/{resolve,references}.rs`, `architecture.md` §7.20 |
+| coverage per kind, exhaustive; a corpus gate for new positions | `ReferenceTarget::rename_coverage`, `crates/nazm-service/tests/references.rs` |
+| the plan, its scope rule, its validation and its preconditions | `crates/nazm-service/src/rename.rs` |
+| `prepareRename`, `rename`, versioned `documentChanges` only | `crates/nazm-cli/src/lsp.rs` |
+| what it costs: a rename of the compiler's private function in about 93 ms | `performance.md` |
+
+Mutation evidence: 14 new, all 14 killers verified; one targeted campaign of 18 — 18 caught at
+tier 1, no survivor (`capability-matrix.md` §30).
+
+**N19 has not started.**
+
 ### After N17, in dependency order
 
-No item is chosen here; N17 left these standing.
+No item is chosen here; N17 left these standing. *Superseded by "After N18" above.*
 
 | | Depends on | Why not before |
 | --- | --- | --- |

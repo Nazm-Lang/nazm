@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,395 passed, 0 failed, 13 ignored, across 73 suites**, run contained at
-N17 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
-13 passed, contained). N16 ended at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,417 passed, 0 failed, 13 ignored, across 74 suites**, run contained at
+N18 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
+13 passed, contained). N17 ended at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1214,15 +1214,47 @@ process: the capability, UTF-16 after `é→😀` on both the query and the answ
 edit, and the same answer with a warm semantic cache beside the sources and without one.
 Sixteen N17 mutations, all caught at tier 1 (area 30).
 
-**Limitation** · Diagnostics, definition, hover and references only: no completion, rename,
+*N18, 2026-09-25: rename — VERIFIED for locals and private definitions only.*
+`textDocument/prepareRename` and `textDocument/rename` over `LanguageService::rename`'s
+validated plan (`crates/nazm-service/src/rename.rs`, `architecture.md` §7.20). Renameable:
+parameters, `let`s and pattern bindings; and private functions, records, enums, and the fields,
+variants and payload fields of private records and enums. The proof of completeness is the
+language's own: a local is written only in its body, and a private entity only in its module
+(`N0337` keeps private types out of public signatures), in a clean analysis whose every written
+type name, qualifier, label and use the checker now records — type names and enum qualifiers
+since N18. Every plan's candidate program is re-checked in memory in every open compilation
+containing the edited file and must partition its occurrences into entities exactly as before.
+Refused: exported entities (their importers cannot be known), core-prelude entities, built-ins
+and type parameters, programs with errors, a name the lexer does not read as one identifier,
+and every collision or capture the checker or the partition finds. The protocol edit is
+versioned `documentChanges` only, only for a client that accepts them, and only when every file
+the plan edits is open. Evidence: `crates/nazm-service/tests/rename.rs` — a type rename through
+declaration, parameter, return, field, payload, nested generic argument, construction and
+qualifiers, stated as the exact edited text; one rename from any occurrence; definition on a
+type annotation and on a qualifier; same-spelled locals, fields, variants and a record and a
+function of one name renamed apart; an enum, its variant, its payload field and the pattern
+local bound to it, apart; capture and collision refused and legal shadowing accepted; built-in
+names; invalid names; non-entities and the prelude; a program with errors; private accepted and
+exported refused across modules, and a private rename validated in the importer's compilation;
+stale plans by generation, version and text; a thousand plans with constant retained state.
+`references.rs` adds the corpus gate — every name token of every clean compilation of the
+repository indexed or explicitly a non-entity. `crates/nazm-cli/tests/lsp.rs` adds the real
+process: the capability, prepare-rename's range and placeholder, refusals as `null`, a versioned
+edit with every range in UTF-16 after `é→😀`, an unsaved edit's new version, refusals with
+reasons, and a client without versioned edits refused. Fourteen N18 mutations, all caught at
+tier 1 (area 30).
+
+**Limitation** · Diagnostics, definition, hover, references and rename only: no completion,
 symbols, formatting, code actions, semantic tokens, signature help or inlay hints, no
 cancellation and no watched files. Every change re-analyses every open document in full; no
-incremental reparse or graph maintenance, and no persistent cache in the editor. A type name
-in an annotation, the enum name in `E.V(…)`, a built-in, and anything in a body that did not
-parse have no definition and no references; the core prelude has no file, so a definition in it has
+incremental reparse or graph maintenance, and no persistent cache in the editor. A built-in, a
+type parameter and anything in a body that did not parse have no definition and no references;
+the core prelude has no file, so a definition in it has
 no location and a references answer for one of its entities has no declaration. References
 cover the programs being analysed — each open document's compilation — and not files on disk
-that no open document loads.
+that no open document loads. Rename covers locals and private definitions only: an exported
+entity is refused, because a module no open program loads may use it, and a closed file is
+never edited, because the protocol cannot make its content a precondition.
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
 are published for open documents only. MCP does not exist.
 
@@ -1317,8 +1349,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **334** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16), **146** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **348** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17), **160** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -1630,6 +1662,24 @@ those seventeen and two unchanged N16 entries on code references now share
 error. The `references` suite joined the `cli`, `semantics` and `checker` profiles. N13's
 use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and are as
 they were.
+
+*N18 (2026-09-25) added fourteen,* each killer verified by `--verify-killer`, contained at P1,
+one at a time. `n18-a-plan-ignores-its-text`'s first killer was reported **not a killer**: the
+forged text also moved the edited bytes, so the per-edit check refused the plan first; the test
+now forges a text that differs only outside the edits, and that killer and
+`n18-a-plan-outlives-its-generation`'s, which shares the test, were verified again against it.
+`n18-a-written-type-is-not-recorded`'s first verification overlapped a small host build and was
+repeated alone. The fourteen attack N18's invariants: a written type and an enum qualifier not
+recorded; a rename found by its spelling; an exported entity renamed; the candidate not checked;
+its meaning not compared; the comparison made at unmoved offsets; a program with errors renamed;
+any name accepted; a plan outliving its generation or ignoring its text; a closed file edited
+without a version; an edit losing its version; an unversioned client sent an edit. **Campaign
+`0bc0e71f921e7a6e`, targeted, P1, one session, 873 s:** the fourteen and four N17 identity
+entries on index code N18 extended (a local's slot, same-named fields and variants, an applied
+record's field). **18 of 18 caught at tier 1**; no survivor, crash, timeout, unusable or
+uninjected entry, no runner error. The `rename` suite joined the `cli`, `semantics` and
+`checker` profiles. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were
+not re-run and are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a
