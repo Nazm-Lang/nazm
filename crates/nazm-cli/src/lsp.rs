@@ -14,9 +14,10 @@
 //!
 //! Exactly what is implemented, and the initialize response says so: full-document
 //! synchronisation (open, change, close), published diagnostics, definition, hover,
-//! references (N17), prepare-rename and rename (N18), and completion (N19) — of a value, a
-//! call's head or a type, invoked on an identifier, with no trigger characters. No signature
-//! help, formatting, symbols, code actions, semantic tokens, watched files or cancellation — a
+//! references (N17), prepare-rename and rename (N18), completion (N19) — of a value, a
+//! call's head or a type, invoked on an identifier, with no trigger characters — and
+//! signature help (N20), of the call the checker checked, triggered by `(` and `,`. No
+//! formatting, symbols, code actions, semantic tokens, watched files or cancellation — a
 //! client is never told something exists that the server would then ignore.
 //!
 //! # What a rename can promise over this protocol
@@ -54,10 +55,11 @@ use lsp_types::{
     CompletionResponse, CompletionTextEdit, Diagnostic as LspDiagnostic, DiagnosticSeverity,
     GotoDefinitionParams, GotoDefinitionResponse, Hover as LspHover, HoverContents, HoverParams,
     HoverProviderCapability, InitializeResult, Location as LspLocation, MarkupContent, MarkupKind,
-    NumberOrString, OneOf, Position, PositionEncodingKind, PrepareRenameResponse,
-    PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions, RenameParams,
-    ServerCapabilities, ServerInfo, TextDocumentPositionParams, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
+    NumberOrString, OneOf, ParameterInformation, ParameterLabel, Position, PositionEncodingKind,
+    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions,
+    RenameParams, ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions,
+    SignatureHelpParams, SignatureInformation, TextDocumentPositionParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
 };
 use nazm_service::{LanguageService, Published, RenamePlan, Target};
 
@@ -109,6 +111,14 @@ fn capabilities() -> ServerCapabilities {
         completion_provider: Some(CompletionOptions {
             resolve_provider: Some(false),
             ..CompletionOptions::default()
+        }),
+        // `(` opens an argument list and `,` moves to the next argument: the two
+        // characters after which the active call or parameter changes. No retrigger
+        // characters — nothing else is claimed.
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_owned(), ",".to_owned()]),
+            retrigger_characters: None,
+            work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
         }),
         rename_provider: Some(OneOf::Right(RenameOptions {
             prepare_provider: Some(true),
@@ -246,6 +256,7 @@ impl Server {
     fn request(&self, req: Request) -> Response {
         use lsp_types::request::{
             Completion, GotoDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
+            SignatureHelpRequest,
         };
         let id = req.id.clone();
         let result = match req.method.as_str() {
@@ -261,6 +272,11 @@ impl Server {
             Completion::METHOD => serde_json::from_value::<CompletionParams>(req.params)
                 .map_err(|e| e.to_string())
                 .map(|p| self.completion(&p)),
+            SignatureHelpRequest::METHOD => {
+                serde_json::from_value::<SignatureHelpParams>(req.params)
+                    .map_err(|e| e.to_string())
+                    .map(|p| self.signature_help(&p))
+            }
             PrepareRenameRequest::METHOD => {
                 serde_json::from_value::<TextDocumentPositionParams>(req.params)
                     .map_err(|e| e.to_string())
@@ -407,6 +423,53 @@ impl Server {
             is_incomplete: false,
             items,
         }))
+        .unwrap_or(serde_json::Value::Null)
+    }
+
+    /// `textDocument/signatureHelp`: the one signature of the call the checker checked, with
+    /// each parameter as its UTF-16 range in the label — or `null` where the service has
+    /// none.
+    ///
+    /// Also `null` for a position past the last parameter of a call with too many
+    /// arguments: the protocol reads an absent active parameter as the first one, so the
+    /// only answer that does not point at the wrong parameter is none. A callee with no
+    /// parameters has its signature and no active parameter, which the protocol ignores.
+    fn signature_help(&self, p: &SignatureHelpParams) -> serde_json::Value {
+        let tdp = &p.text_document_position_params;
+        let Some((path, version, offset)) = self.locate(&tdp.text_document.uri, tdp.position)
+        else {
+            return serde_json::Value::Null;
+        };
+        let Ok(help) = self.service.signature_help(&path, version, offset) else {
+            return serde_json::Value::Null;
+        };
+        let params = &help.rendered.params;
+        if help.active_parameter.is_none() && !params.is_empty() {
+            return serde_json::Value::Null;
+        }
+        // Offsets into the label, in the position encoding: the label is one line, so its
+        // own line index converts them.
+        let label = LineIndex::new(&help.rendered.label);
+        let parameters = params
+            .iter()
+            .map(|(start, end)| ParameterInformation {
+                label: ParameterLabel::LabelOffsets([
+                    label.position(*start).character,
+                    label.position(*end).character,
+                ]),
+                documentation: None,
+            })
+            .collect();
+        serde_json::to_value(SignatureHelp {
+            signatures: vec![SignatureInformation {
+                label: help.rendered.label.clone(),
+                documentation: None,
+                parameters: Some(parameters),
+                active_parameter: help.active_parameter,
+            }],
+            active_signature: Some(0),
+            active_parameter: help.active_parameter,
+        })
         .unwrap_or(serde_json::Value::Null)
     }
 
