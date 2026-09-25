@@ -367,7 +367,7 @@ fn a_requirement_is_written_one_way() {
         "got:\n{out}"
     );
     // And what it formats to parses to the same parameters, requirement and all.
-    let (p, errors) = nazm_syntax::parser::parse(&nazm_syntax::lex(&out).0);
+    let (p, errors) = nazm_syntax::parse_source(&out);
     assert!(errors.is_empty(), "{errors:#?}");
     let params: Vec<Option<&str>> = p
         .functions

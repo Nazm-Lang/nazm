@@ -57,9 +57,10 @@ publish = false
 # Shared dependency versions.
 #
 # Phase 2 only. The compiler stack (salsa, cstree, cranelift, redb, blake3,
-# postcard) is listed in docs/architecture.md with its MSRVs checked, but is
-# NOT depended on here: adding a dependency before the crate that needs it
-# exists is how a workspace acquires a build it cannot explain.
+# postcard) is listed in docs/architecture.md with its MSRVs checked, and each
+# is depended on only once the crate that needs it exists: adding a dependency
+# before then is how a workspace acquires a build it cannot explain. blake3
+# arrived with the cache, cstree with the lossless syntax tree (N15).
 # ---------------------------------------------------------------------------
 [workspace.dependencies]
 # --- internal ---
@@ -94,6 +95,12 @@ serde = { version = "1", features = ["derive"] }
 # an invalid cache hit, which is a miscompilation with a plausible explanation.
 blake3 = { version = "1", default-features = false, features = ["std"] }
 serde_json = "1"
+# --- syntax ---
+# The lossless concrete syntax tree, N15. Pinned exactly: a green tree's layout and its
+# interner are what `nazm-syntax` wraps, and a minor version is allowed to change both.
+# `default-features = false` keeps it to `std` — no `derive` proc macro, no `lasso`, no
+# `serde`. `architecture.md` §8 records why `cstree` rather than `rowan`.
+cstree = { version = "=0.14.0", default-features = false, features = ["std"] }
 # Preserves insertion order. Run records are diffed and reviewed by hand; map
 # iteration order leaking into output would make every diff noise.
 indexmap = { version = "2", features = ["serde"] }
