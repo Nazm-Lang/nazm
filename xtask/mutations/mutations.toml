@@ -839,7 +839,7 @@ stops making a module's durable identity relative to the source root, so the key
 the path this machine happened to use. Two checkouts of one project then disagree about
 what their modules are, and every persisted interface carries a host directory
 """
-file = "crates/nazm-cli/src/load.rs"
+file = "crates/nazm-service/src/load.rs"
 find = "    let relative = absolute.strip_prefix(root).unwrap_or(&absolute);"
 replace = "    let relative = absolute.as_path();"
 
@@ -3298,9 +3298,16 @@ targets = [
 [[profile]]
 name = "cli"
 why = "the driver is observed by its own unit tests and the CLI suites for loading, source roots, checking and resolution"
-owns = ["crates/nazm-cli/src/"]
+# `crates/nazm-service/src/` since N16: the loader and root discovery moved there from
+# `nazm-cli`, and the language service beside them is driver code too. Without it a loader
+# mutant has no focused profile and is decided by the workspace suite, which the N16
+# campaign showed.
+owns = ["crates/nazm-cli/src/", "crates/nazm-service/src/"]
 targets = [
     { package = "nazm-cli", bin = "nazm" },
+    { package = "nazm-service", lib = true },
+    { package = "nazm-service", test = "service" },
+    { package = "nazm-cli", test = "lsp" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
     { package = "nazm-cli", test = "incremental" },
@@ -4006,3 +4013,133 @@ file = "crates/nazm-syntax/src/parser.rs"
 find = "        let mut braces = self.left_open(start);"
 replace = "        let mut braces = { let _ = self.left_open(start); 0 };"
 killers = [{ package = "nazm-syntax", test = "cst", name = "recovery_resumes_inside_the_block_it_started_in" }]
+
+# --- N16: the language service and `nazm lsp` --------------------------------------------
+#
+# Each breaks one promise an editor relies on — buffers are the source, positions are
+# UTF-16, definitions follow identities, nothing stale is answered, stdout is the protocol,
+# only what exists is advertised — and names the regression test that observes it.
+
+[[mutation]]
+name = "n16-the-disk-wins-over-an-open-buffer"
+why = "an open buffer is ignored and every compilation reads the file on disk"
+file = "crates/nazm-service/src/service.rs"
+find = "            Some(d) => Ok(d.text.to_string()),"
+replace = "            Some(_) => Disk.read(path),"
+killers = [{ package = "nazm-service", test = "service", name = "an_open_buffer_is_read_instead_of_the_file_on_disk" }]
+
+[[mutation]]
+name = "n16-a-closed-buffer-stays-authoritative"
+why = "closing a document keeps its buffer, so the disk never becomes the source again"
+file = "crates/nazm-service/src/service.rs"
+find = "        let closed = self.documents.remove(&identity(path));"
+replace = "        let closed: Option<Document> = { let _ = identity(path); None };"
+killers = [{ package = "nazm-service", test = "service", name = "closing_a_buffer_gives_the_file_back_to_the_disk" }]
+
+[[mutation]]
+name = "n16-an-edit-reaches-only-the-edited-document"
+why = "a change re-analyses only the document that changed, so an importer keeps the diagnostics of a dependency's old signature"
+file = "crates/nazm-service/src/service.rs"
+find = "            let Some(doc) = self.documents.get(&key) else {"
+replace = "            let Some(doc) = self.documents.get(&key).filter(|d| d.analysis.is_none()) else {"
+killers = [{ package = "nazm-service", test = "service", name = "an_unsaved_dependency_is_what_its_importer_sees" }]
+
+[[mutation]]
+name = "n16-a-broken-buffer-keeps-the-last-clean-analysis"
+# The document that was edited cannot keep an old analysis: `change` replaces it with none
+# before anything is analysed, so this defect reaches the *other* open documents — an
+# importer whose dependency just broke. Its killer is the test that asks the importer a
+# question after that happens; the first killer named here was the edited-document test,
+# which `--verify-killer` reported is not one.
+why = "an analysis with diagnostics never replaces a clean one, so an importer whose dependency just broke keeps a stale analysis and a query about it has no current answer"
+file = "crates/nazm-service/src/service.rs"
+find = "                d.analysis = Some(snapshot);"
+replace = """                if snapshot.analysis.diagnostics.is_empty() || d.analysis.is_none() {
+                    d.analysis = Some(snapshot);
+                }"""
+killers = [{ package = "nazm-service", test = "service", name = "an_unsaved_dependency_is_what_its_importer_sees" }]
+
+[[mutation]]
+name = "n16-a-stale-version-is-answered"
+why = "any analysis answers a query whatever version it was computed for, so a request about version 1 is answered after version 2 replaced it"
+file = "crates/nazm-service/src/service.rs"
+find = "        (doc.version == version && s.version == version && s.generation == self.generation)"
+replace = "        (s.generation <= self.generation)"
+killers = [{ package = "nazm-service", test = "service", name = "a_question_about_another_version_has_no_answer" }]
+
+[[mutation]]
+name = "n16-an-empty-set-is-not-published"
+why = "a document with no diagnostics publishes nothing, so the errors an editor was last shown are never cleared"
+file = "crates/nazm-service/src/service.rs"
+find = "            out.push(published);"
+replace = """            if !published.diagnostics.is_empty() {
+                out.push(published);
+            }"""
+killers = [{ package = "nazm-service", test = "service", name = "a_fix_publishes_an_empty_set_so_old_errors_are_cleared" }]
+
+[[mutation]]
+name = "n16-a-local-is-found-by-its-spelling"
+why = "a use of a local goes to the first binding of that name rather than to the slot resolution gave it, so a shadowing `let` is skipped"
+file = "crates/nazm-service/src/service.rs"
+find = """        return Some(("local", f.locals.get(usize::try_from(slot).ok()?)?.span));"""
+replace = """        let named = &f.locals.get(usize::try_from(slot).ok()?)?.name;
+        return Some(("local", f.locals.iter().find(|l| &l.name == named)?.span));"""
+killers = [{ package = "nazm-service", test = "service", name = "one_spelling_with_three_meanings_goes_to_three_definitions" }]
+
+[[mutation]]
+name = "n16-an-imported-definition-points-at-the-caller"
+why = "a definition's location names the document the query came from rather than the file it is in"
+file = "crates/nazm-service/src/service.rs"
+find = "            path: root::absolute(Path::new(self.map.name(span.file))),"
+replace = "            path: root::absolute(Path::new(self.map.name(FileId::ROOT))),"
+killers = [{ package = "nazm-service", test = "service", name = "an_unsaved_dependency_is_what_its_importer_sees" }]
+
+[[mutation]]
+name = "n16-the-prelude-is-given-a-path"
+why = "a core-prelude definition is reported as a file location, sending an editor to a path that does not exist"
+file = "crates/nazm-service/src/service.rs"
+find = "        if Some(module) == self.graph.prelude() {"
+replace = "        if Some(module) == self.graph.prelude() && false {"
+killers = [{ package = "nazm-service", test = "service", name = "a_core_prelude_definition_is_named_not_given_a_path" }]
+
+[[mutation]]
+name = "n16-a-position-past-a-name-is-on-it"
+why = "a position one past the end of a name still selects it, which is guessing the nearest token rather than the rule"
+file = "crates/nazm-service/src/service.rs"
+find = "        .find(|l| is_name(l.kind) && l.span.end == offset)"
+replace = "        .find(|l| is_name(l.kind) && l.span.end <= offset && offset <= l.span.end + 1)"
+killers = [{ package = "nazm-service", test = "service", name = "a_position_is_on_a_name_or_on_nothing" }]
+
+[[mutation]]
+name = "n16-a-column-is-a-byte-count"
+why = "an outgoing column counts bytes, so every position after non-ASCII text on its line is wrong"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "            .map_or(0, |s| s.chars().map(char::len_utf16).sum());"
+replace = "            .map_or(0, str::len);"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "lsp::tests::a_multibyte_character_is_one_utf16_unit_and_several_bytes" }]
+
+[[mutation]]
+name = "n16-an-incoming-column-is-a-byte-count"
+why = "an incoming column is read as bytes, so a request after a character outside the BMP lands in the wrong place"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "            let next = units + c.len_utf16();"
+replace = "            let next = units + c.len_utf8();"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "lsp::tests::a_character_outside_the_bmp_is_two_utf16_units" }]
+
+[[mutation]]
+name = "n16-the-server-writes-to-stdout"
+why = "a log line on stdout, which is the protocol stream, so the client reads it as a frame"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "    let init = InitializeResult {"
+replace = """    println!("nazm lsp: ready");
+    let init = InitializeResult {"""
+killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
+
+[[mutation]]
+name = "n16-completion-is-advertised"
+why = "the server claims completion, which it does not implement, so a client sends requests it will refuse"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "        hover_provider: Some(HoverProviderCapability::Simple(true)),"
+replace = """        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        completion_provider: Some(lsp_types::CompletionOptions::default()),"""
+killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
