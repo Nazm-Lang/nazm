@@ -376,7 +376,7 @@ No item is chosen here; N17 left these standing.
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| Safe structured edits, rename | a lossless CST ✓, references ✓ | N17 gives the occurrence set; turning it into validated edits — and deciding what a rename across files not open means — is its own contract |
+| Safe structured edits, rename | a lossless CST ✓, references ✓ for the entities whose coverage is complete | N17's occurrence set is complete for functions, locals, variants, fields and payload fields, and turning it into validated edits — and deciding what a rename across files not open means — is its own contract. It is **not** complete for type names: a record's name written in an annotation, and the enum name in `E.V(…)`, have no reference identity, so a record or enum rename would miss them. Safe rename is possible only for an entity whose coverage is complete; record and enum rename depends on the checker recording type-name occurrences first. The milestone that adds rename must either add that prerequisite first or refuse rename for every category whose occurrence set is incomplete |
 | Incremental reparse | a lossless CST ✓ | N17 measured a warm edit of the whole compiler at about 81 ms on one CPU, index included; the evidence that would justify it still does not exist |
 | Completion, signature help | a language service ✓ | each needs its own semantic contract — what is in scope at a position — which the resolution does not record |
 | Symbols (document, workspace) | a language service ✓ | not started |
