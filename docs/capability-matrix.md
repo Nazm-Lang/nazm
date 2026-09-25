@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,376 passed, 0 failed, 13 ignored, across 72 suites**, run contained at
-N16 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
-13 passed, contained). N15 ended at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,395 passed, 0 failed, 13 ignored, across 73 suites**, run contained at
+N17 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
+13 passed, contained). N16 ended at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1191,12 +1191,37 @@ malformed source and a malformed frame without a panic, stdout nothing but frame
 position unit tests in `lsp.rs`. Fourteen N16 mutations were caught with verified killers
 (area 30).
 
-**Limitation** · Diagnostics, definition and hover only: no completion, references, rename,
+*N17, 2026-09-25: references — VERIFIED as a sub-capability.* `textDocument/references` and
+`LanguageService::references` answer from one reference index per analysis
+(`crates/nazm-sema/src/references.rs`, `architecture.md` §7.19): the resolution read backwards,
+with no name resolved again. Functions, locals (parameters, `let`s, pattern bindings, by slot
+of a function), records (their constructions), variants, fields (projections, assignments and
+construction labels) and payload fields; across files and across every open compilation that
+loads the declaring file; from unsaved buffers; declaration apart from uses, combined only for
+`includeDeclaration`; ordered by file and position, each occurrence once. Evidence:
+`crates/nazm-service/tests/references.rs` — one spelling given to a function, a parameter, two
+shadowing `let`s, fields of two records, variants of two enums and private functions of two
+modules, each its own set asked from every one of its occurrences; definition and references
+agreeing at every byte of every file; shadowing; a generic record's field through two
+instances; the unsaved program (a use added, removed, moved to another same-named entity, and
+the disk back on close); a broken buffer; only analysed programs searched; unsupported
+positions; the prelude; a thousand edits with constant retained state; and, over 40
+compilations of the repository's own source (the compiler, the conformance programs, the
+examples), every resolved name token in exactly one entity's set and the service's answer equal
+to the command line's resolution read backwards. `crates/nazm-cli/tests/lsp.rs` adds the real
+process: the capability, UTF-16 after `é→😀` on both the query and the answers, an unsaved
+edit, and the same answer with a warm semantic cache beside the sources and without one.
+Sixteen N17 mutations, all caught at tier 1 (area 30).
+
+**Limitation** · Diagnostics, definition, hover and references only: no completion, rename,
 symbols, formatting, code actions, semantic tokens, signature help or inlay hints, no
 cancellation and no watched files. Every change re-analyses every open document in full; no
 incremental reparse or graph maintenance, and no persistent cache in the editor. A type name
 in an annotation, the enum name in `E.V(…)`, a built-in, and anything in a body that did not
-parse have no definition; the core prelude has no file, so a definition in it has no location.
+parse have no definition and no references; the core prelude has no file, so a definition in it has
+no location and a references answer for one of its entities has no declaration. References
+cover the programs being analysed — each open document's compilation — and not files on disk
+that no open document loads.
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
 are published for open documents only. MCP does not exist.
 
@@ -1291,8 +1316,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **318** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15), **130** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **334** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16), **146** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -1584,6 +1609,26 @@ focused profile, where in `nazm-cli` it had been the `cli` profile's. The profil
 was caught at tier 2 by `nazm-cli --test source_root` — the suite that caught it before N16.
 N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and are
 as they were.
+
+*N17 (2026-09-25) added sixteen and repointed one,* each killer verified by `--verify-killer`,
+uncontended, contained at P1, one at a time. The first killer tried for
+`n17-an-old-version-answers-references` was reported **not a killer** — its version-1 query
+lands in a comment of the version-2 text, which answers nothing either way — and the thousand-
+edit test, which asks about version 999 at a name version 1000 still has, verified instead.
+The sixteen attack the index's invariants: a slot recorded without its function, a use given
+its function's first slot, and same-named functions, fields and variants merged by spelling; an
+applied record's field not taken to its definition; a cross-file use dropped; a declaration
+listed as a use; uses left in hash order; the checker not recording a construction label's
+field; only the asking compilation searched; an imported use placed in the asking file; one use
+listed once per compilation; an old version answering; the declaration always, and never,
+included. `n16-a-local-is-found-by-its-spelling` was repointed at the index, where a local's
+declaration now comes from. **Campaign `a2fedab55b657d80`, targeted, P1, one session, 934 s:**
+those seventeen and two unchanged N16 entries on code references now share
+(`n16-an-imported-definition-points-at-the-caller`, `n16-a-stale-version-is-answered`). **19 of
+19 caught at tier 1**; no survivor, crash, timeout, unusable or uninjected entry, no runner
+error. The `references` suite joined the `cli`, `semantics` and `checker` profiles. N13's
+use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and are as
+they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

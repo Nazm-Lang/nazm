@@ -2700,7 +2700,8 @@ editor ──stdio── nazm lsp (nazm-cli/src/lsp.rs)       framing, message t
 | the source root | `nazm-service/src/root.rs`, `decide`, called exactly as `nazm check` calls it; `nazm lsp --source-root` is `nazm check --source-root` |
 | what a program means | `nazm_core::analyse`, which `on_checked_map` is now a wrapper over |
 | where a position is | the document's concrete tree (N15), by the rule below |
-| what a name refers to | `Resolution`: calls by `FnId`, locals by slot, constructions, variants, fields, payload fields |
+| what a name refers to | `Resolution`: calls by `FnId`, locals by slot of a function, constructions, variants, fields, payload fields |
+| which occurrences an entity has | `ReferenceIndex` (N17, §7.19), derived from `Resolution` and nothing else |
 | byte offset ↔ LSP position | `LineIndex` in `nazm-cli/src/lsp.rs`, and nowhere else |
 
 **Where the concrete tree stops.** It answers exactly one question: which token a byte
@@ -2731,10 +2732,88 @@ warm edit is about 80 ms on one CPU (`performance.md`) — the evidence that inc
 reparse is not yet needed.
 
 **Protocol surface.** Full-document synchronisation, `publishDiagnostics`, definition and
-hover, positions in UTF-16. Nothing else is advertised. The core prelude has no file, so a
+hover, positions in UTF-16 — and, since N17, references (§7.19). Nothing else is advertised. The core prelude has no file, so a
 definition in it has no location. Diagnostics keep their Nazm codes and messages; the
 protocol message is an adapter's rendering of a `nazm.diagnostic/1` object's primary span,
 not a new schema.
+
+## 7.19 The reference index and `textDocument/references` — settled by N17, 2026-09-25
+
+**What a reference is.** A source occurrence that the current analysis resolved to a
+specific entity — exactly the spans `Resolution` recorded an answer for. Not an identifier
+with a matching spelling, not a mention in a comment or a string, not a name the checker
+could not resolve, and not a token the concrete tree merely knows is a name.
+
+```text
+CST             → which token a position is on        (N15, the service's cursor rule)
+Resolution      → which entity that occurrence is      (the checker, and only the checker)
+ReferenceIndex  → which occurrences an entity has      (N17: Resolution read backwards)
+LSP adapter     → UTF-16 ranges and `includeDeclaration` (nazm-cli/src/lsp.rs)
+```
+
+**What the index owns.** `nazm_sema::ReferenceIndex` (`crates/nazm-sema/src/references.rs`)
+is built once per analysis by `ReferenceIndex::of(&Resolution)` and dropped with it. It holds
+every indexed occurrence — declaration or use — with its entity, and for each entity its
+declaration and its uses, apart. It is derived from two things the resolution already has:
+the definition tables (functions and their locals, records and their fields, enums, their
+variants and their payload fields), read by position; and the use answers the checker
+recorded, read by span (`Resolution::each_use`, crate-private). **It resolves nothing**: it
+never reads a name to decide what anything means, holds no scope, and a unit test keeps every
+spelling-keyed search out of the file. A declaration is not a use of itself: the span where a
+`let` introduces its binding, which the checker records for the backend, is the binding's
+declaration and is not in its uses.
+
+**Identity.** `ReferenceTarget` is resolution's own identity and nothing stronger:
+`Function(FnId)`, `Local(LocalRef)`, `Record(RecordId)`, `Variant(VariantRef)`,
+`Field(FieldRef)`, `PayloadField(PayloadRef)`. Every one is **session-local** — valid in one
+compilation — and none is persisted: `nazm.interface/5` and `SEMANTIC_EPOCH` 7 are unchanged,
+because an interface describes what an importer needs, not where anybody uses it. A durable
+identity exists for top-level definitions (`DefKey`) and is not needed here; a local has only
+its slot, and stable local identity across edits is not claimed. One adjustment is made, and
+it is not a resolution: a use through an applied type (`Box[Int]`) is taken to the definition
+it applies, by the type table's own `Instance` record, so a generic record's field has one set
+of uses however many instances reach it.
+
+**What `Resolution` gained.** Two narrow things, both recorded where the checker already knew
+them. A variable use now records **which function's** slot it is (`LocalRef { function, slot
+}`; `Resolution::var` still returns the slot the backend reads, and `Resolution::local` the
+pair), so a use is not placed by working out which body a span is in. And a record
+construction's initialiser label records **which field** it names — the checker looked the
+field up there and discarded the answer — so a field's uses include the constructions that set
+it. Neither changes what any program means, and the backend and interpreter read neither.
+
+**Definition and references are one lookup.** The service takes the occurrence under a
+position to its entity through the index; definition is that entity's declaration, references
+are its uses. They cannot disagree about what a name means, because neither decides it. One
+consequence, deliberate: definition on a *declaration* now answers with that declaration (N16
+answered it for a `let` and not for a function), and definition on a construction label now
+answers with the field.
+
+**Which program a query covers.** The current snapshot: every compilation the service holds —
+one rooted at each open document, loaded exactly as `nazm check <that document>` would load it
+— that contains the file declaring the entity, with the same text. Identity does not cross
+compilations, so an entity is carried from one to another by **where it is declared**: the
+same bytes of the same file, analysed from the same text, are the same declaration in each,
+and each compilation's own index answers what its uses are. Uses are merged by file and span,
+so one found by two compilations is listed once, and ordered by file path, then start, then
+end. A file that no open document's compilation loads is in no program being analysed and is
+not searched: there is no scan of the disk and no persistent symbol index.
+
+**Current means current.** The index is part of an analysis snapshot: replaced on every open,
+change and close with the analysis it was read from, never kept across generations, and
+answered only for the version asked about. A body that did not parse has no resolution, so its
+names are no one's references — the concrete tree knowing a name is there does not make it
+one. `retained()` and `indexed()` are functions of what is open now.
+
+**What has no references.** A built-in (it declares nothing); a type name in an annotation or
+a generic argument, and the enum name in `E.V(…)` (the resolution records no entity there, so
+a record's uses are its constructions); anything in a body that did not parse. A core-prelude
+entity has uses in files and no declaration an editor can open, and the prelude's own uses are
+not navigable.
+
+**What is deliberately not here.** Rename, prepare-rename, any edit, call hierarchy, a
+general semantic graph, a persistent index, incremental invalidation (the index is rebuilt
+with its analysis), and MCP. The only edges are *occurrence → entity* and its reverse.
 
 ## 8. Toolchain, and one real incompatibility
 
