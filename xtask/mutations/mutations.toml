@@ -308,11 +308,12 @@ restores the cascade: one syntax error inside a body deletes the whole declarati
 every call to it then reports that the function does not exist
 """
 file = "crates/nazm-syntax/src/parser.rs"
-find = """        let body = self.block();
-        if body.is_none() {
-            self.recover_to_item();
-        }"""
-replace = """        let body = Some(self.block()?);"""
+# Repointed in N15. A body with a syntax error now usually *recovers* rather than fails —
+# its statements are kept in the concrete tree and the abstract body is withheld — so the
+# line that keeps the declaration for such a body is the recovered arm, not the failed one.
+find = """            Some(_) if self.poisoned => None,"""
+replace = """            Some(_) if self.poisoned => return None,"""
+killers = [{ package = "nazm-syntax", test = "cst", name = "the_abstract_tree_keeps_its_contract_for_a_body_that_recovered" }]
 
 [[mutation]]
 name = "nesting-unbounded"
@@ -383,8 +384,8 @@ measures a block as one level whatever is inside it, so nesting inside a block e
 tree bound entirely
 """
 file = "crates/nazm-syntax/src/parser.rs"
-find = "        self.built(deepest + 1)?;\n        Some(Block {"
-replace = "        self.built(1)?;\n        Some(Block {"
+find = "        self.built(deepest + 1)?;\n        self.wrap(at, SyntaxKind::Block);"
+replace = "        self.built(1)?;\n        self.wrap(at, SyntaxKind::Block);"
 
 [[mutation]]
 name = "an-if-ignores-its-condition-depth"
@@ -404,10 +405,10 @@ adds a level for punctuation that builds nothing, so `((((x))))` is measured as 
 deeper than the tree it produces and ordinary parenthesised arithmetic is refused
 """
 file = "crates/nazm-syntax/src/parser.rs"
-find = """                // No node: `(x)` *is* `x`. `self.built` already holds the inner depth and
-                // must not be incremented, or the limit would count punctuation.
+find = """                self.wrap(at, SyntaxKind::ParenExpr);
                 Some(inner)"""
-replace = """                self.built(self.child() + 1)?;
+replace = """                self.wrap(at, SyntaxKind::ParenExpr);
+                self.built(self.child() + 1)?;
                 Some(inner)"""
 
 # `chain-depth-never-unwound` and `chain-depth-not-counted` were removed with the code they
@@ -3854,3 +3855,154 @@ file = "compiler/parse.nz"
 find = "        if kind_at(kinds, at) == k_colon() {"
 replace = "        if false {"
 killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_parser_produces_the_same_tree_as_the_reference" }]
+
+# --- N15: the lossless concrete syntax tree and local recovery ---------------------------
+#
+# Each observes one promise the tree makes — every byte kept, every leaf its own bytes, the
+# two trees agreeing, recovery local and bounded — and names the regression test that
+# states it. `crates/nazm-syntax/tests/cst.rs` holds the tests; `docs/capability-matrix.md`
+# area 1 records what the campaign found.
+
+[[mutation]]
+name = "n15-whitespace-is-not-in-the-tree"
+why = "the tree skips whitespace, so it no longer reproduces its input"
+file = "crates/nazm-syntax/src/cst.rs"
+find = "                Lexeme::Whitespace(_) => SyntaxKind::Whitespace,"
+replace = """                Lexeme::Whitespace(_) => {
+                    self.next += 1;
+                    continue;
+                }"""
+killers = [{ package = "nazm-syntax", test = "cst", name = "a_lossless_tree_preserves_every_byte_and_recovers_inside_a_function" }]
+
+[[mutation]]
+name = "n15-comments-are-not-in-the-tree"
+why = "the tree skips comments, so the only place a comment still exists is the formatter's side list"
+file = "crates/nazm-syntax/src/cst.rs"
+find = "                Lexeme::Comment(_) => SyntaxKind::Comment,"
+replace = """                Lexeme::Comment(_) => {
+                    self.next += 1;
+                    continue;
+                }"""
+killers = [{ package = "nazm-syntax", test = "cst", name = "the_formatters_comments_and_the_trees_comments_are_the_same_list" }]
+
+[[mutation]]
+name = "n15-a-refused-character-owns-no-bytes"
+why = "the lexer reports an unknown character and keeps no lexeme for it, so its bytes vanish from the tree"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = """                i += ch.len_utf8();
+                out.push(Lexeme::Invalid(Span::new(file, at(start), at(i))));"""
+replace = """                i += ch.len_utf8();"""
+killers = [{ package = "nazm-syntax", test = "cst", name = "text_the_lexer_refuses_is_kept_as_the_bytes_it_was" }]
+
+[[mutation]]
+name = "n15-a-leaf-is-a-normalised-spelling"
+why = "a leaf's text is normalised — digit separators dropped — rather than the bytes it was scanned from"
+file = "crates/nazm-syntax/src/cst.rs"
+find = "        self.builder.token(kind, text);"
+replace = "        self.builder.token(kind, &text.replace('_', \"\"));"
+killers = [{ package = "nazm-syntax", test = "cst", name = "every_token_keeps_the_bytes_it_was_written_with" }]
+
+[[mutation]]
+name = "n15-a-keyword-is-spelled-from-its-kind"
+why = "`fn` is given a fixed spelling, so its leaf is printed from the kind rather than from the source"
+file = "crates/nazm-syntax/src/cst.rs"
+find = """    fn static_text(self) -> Option<&'static str> {
+        None
+    }"""
+replace = """    fn static_text(self) -> Option<&'static str> {
+        matches!(self, Self::FnKw).then_some("fn")
+    }"""
+killers = [{ package = "nazm-syntax", lib = true, name = "cst::tests::no_kind_has_a_fixed_spelling" }]
+
+[[mutation]]
+name = "n15-trailing-trivia-is-dropped"
+why = "whitespace and comments after the last token are never emitted, so the end of a file is lost"
+file = "crates/nazm-syntax/src/cst.rs"
+find = """        while b.next < lexemes.len() {
+            b.trivia();
+            b.next += 1;
+        }"""
+replace = """        b.next = lexemes.len();"""
+killers = [{ package = "nazm-syntax", test = "cst", name = "the_ends_of_a_file_are_kept_and_the_end_itself_owns_nothing" }]
+
+[[mutation]]
+name = "n15-trivia-joins-the-construct-before-it"
+why = "trivia is emitted before a node closes as well as before a token, so a node ends with the whitespace after it"
+file = "crates/nazm-syntax/src/cst.rs"
+find = """            if matches!(event, Event::Token) {
+                b.trivia();
+            }"""
+replace = """            b.trivia();"""
+killers = [{ package = "nazm-syntax", test = "cst", name = "every_nazm_file_in_the_repository_round_trips_exactly" }]
+
+[[mutation]]
+name = "n15-nodes-at-one-place-nest-inside-out"
+why = "nodes that begin at the same token open in the order they were recognised, so `a - b - c` and every statement over its own first node nest inside out"
+file = "crates/nazm-syntax/src/cst.rs"
+find = "            (at, std::cmp::Reverse(i))"
+replace = "            (at, std::cmp::Reverse(0))"
+killers = [{ package = "nazm-syntax", test = "cst", name = "the_abstract_and_concrete_trees_agree_on_every_construct" }]
+
+[[mutation]]
+name = "n15-a-token-is-the-wrong-leaf-kind"
+why = "`;` is recorded as a `:` leaf, so the tree says a different token is there"
+file = "crates/nazm-syntax/src/cst.rs"
+find = "            TokenKind::Semi => Self::Semi,"
+replace = "            TokenKind::Semi => Self::Colon,"
+killers = [{ package = "nazm-syntax", lib = true, name = "cst::tests::every_token_the_lexer_has_is_one_leaf_kind_of_its_own" }]
+
+[[mutation]]
+name = "n15-recovery-skips-to-the-next-function"
+why = "a malformed statement abandons its block, as before N15, so every statement after it is lost"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                    let resumable = self.skip_statement(start);"
+replace = "                    let resumable = { let _ = start; false };"
+killers = [{ package = "nazm-syntax", test = "cst", name = "a_lossless_tree_preserves_every_byte_and_recovers_inside_a_function" }]
+
+[[mutation]]
+name = "n15-recovery-stops-where-it-failed"
+why = "the skip consumes nothing, so the rest of a malformed statement is parsed again as statements of its own and reported again"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                _ => self.bump(),"
+replace = "                _ => return true,"
+killers = [{ package = "nazm-syntax", test = "cst", name = "two_independent_mistakes_in_one_function_are_two_diagnostics" }]
+
+[[mutation]]
+name = "n15-recovery-swallows-the-next-statement"
+why = "the skip does not stop at a statement keyword, so the statement after a missing `;` is skipped with it"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                    if braces == 0 && self.pos > start =>"
+replace = "                    if false =>"
+killers = [{ package = "nazm-syntax", test = "cst", name = "each_malformed_fixture_is_one_diagnostic_one_error_region_and_the_rest_intact" }]
+
+[[mutation]]
+name = "n15-a-malformed-statement-has-no-error-node"
+why = "what recovery skipped is left as loose leaves, so the tree does not say where the malformed region is"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                        self.wrap(stmt, SyntaxKind::Error);"
+replace = "                        let _ = stmt;"
+killers = [{ package = "nazm-syntax", test = "cst", name = "a_lossless_tree_preserves_every_byte_and_recovers_inside_a_function" }]
+
+[[mutation]]
+name = "n15-a-recovered-body-reaches-the-checker"
+why = "a body that recovered from a syntax error is handed to the checker with the malformed statement missing from it"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "            Some(_) if self.poisoned => None,"
+replace = "            Some(b) if self.poisoned => Some(b),"
+killers = [{ package = "nazm-syntax", test = "cst", name = "the_abstract_tree_keeps_its_contract_for_a_body_that_recovered" }]
+
+[[mutation]]
+name = "n15-a-cascade-is-reported"
+why = "diagnostics after a recovery in an item whose delimiters do not balance are reported, so one extra `}` is reported twice"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "        if !self.muted {"
+replace = "        if true {"
+killers = [{ package = "nazm-syntax", test = "cst", name = "one_mistaken_token_is_one_diagnostic_wherever_it_is" }]
+
+[[mutation]]
+name = "n15-recovery-forgets-the-braces-it-is-inside"
+why = "the skip starts counting braces from zero, so a `match` the failed statement opened ends the block early"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "        let mut braces = self.left_open(start);"
+replace = "        let mut braces = { let _ = self.left_open(start); 0 };"
+killers = [{ package = "nazm-syntax", test = "cst", name = "recovery_resumes_inside_the_block_it_started_in" }]
