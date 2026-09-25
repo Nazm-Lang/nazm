@@ -6,7 +6,7 @@ Two things are kept apart here. **`4fb15542dfbf9af0bf34c42fe52783637b3daed4` is 
 historical candidate**: the commit a retained release candidate was built and tested at.
 Its evidence is [`releases/4fb1554.md`](releases/4fb1554.md), which is immutable and is not
 updated by anything that happened since. **The claims below are current-tree claims**, and
-they include behaviour added after that candidate — the milestones N7 through N13, each of
+they include behaviour added after that candidate — the milestones N7 through N14, each of
 which changed the compiler and ran its own evidence. They are not grounded in `4fb1554`,
 and nothing here says the tree has changed only in comments since then.
 
@@ -340,7 +340,7 @@ implementation.
 | `Option[T]` / `Result[T, E]`, inherited as ordinary enums | VERIFIED |
 | `Vec[T]`, `Ints`, `Strs` — sequence equality | absent, deliberately |
 | `Chan` | absent, deliberately |
-| equality over a constrained type parameter | absent — no constraint mechanism |
+| equality over a constrained type parameter | absent at N13 — there was no constraint mechanism; N14 added one (below) |
 | custom (user-defined) equality | absent |
 
 *N14, 2026-09-25.* **A type parameter may require equality.** `fn same[T: Equality](a: T,
@@ -371,12 +371,17 @@ the law; `architecture.md` §7.16 is the implementation.
 Seven constructs are verified rather than partial: **records**, **closed enums**,
 **exhaustive variant match**, **first-order generics with `Vec[T]`**, **typed `Result`
 propagation**, **derived structural equality** and **equality-requiring type parameters**.
-None of that is a trait system, and this row does not say it is. What surrounds them is not. Typed errors are **not** effects: a `Result` in a
+What surrounds them is not verified, and none of it is a trait system. Typed errors are **not** effects: a `Result` in a
 signature is a return type, and area 5 is unchanged.
 
-**Limitation** · Generics are unconstrained: no traits, no constraints, no methods or
-`impl`, so a generic body can do only what every type can. `Option` has no `?`, `Result` no
-methods and no conversion between error types, and `main` cannot return one; no higher kinds, const generics, defaults, variance or specialisation; no
+**Limitation** · Generics remain narrowly constrained: N14 adds exactly one compiler-owned
+requirement, `Equality`, on a function's type parameters, and that is not a trait system.
+There are still no user-defined traits, no `impl`, no methods, no other capability
+requirement, and no higher kinds, const generics, defaults, variance or specialisation —
+so apart from `==` on a parameter that requires it, a generic body can do only what every
+type can. A requirement cannot be written on a record's or an enum's parameter (`N0101`).
+`Option` has no `?`, `Result` no
+methods and no conversion between error types, and `main` cannot return one; no
 indexing syntax on a `Vec`; no `spawn` of a generic function. No closures or function
 values, no unit type, no `Never`.
 Equality is the only thing a generic definition can require of `T` (N14): nothing can say
