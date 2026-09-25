@@ -35,7 +35,7 @@ use crate::key::{DefKey, DefKind, ModuleKey};
 use crate::module::ModuleId;
 use crate::record::{RecordId, Records};
 use crate::types::Type;
-use crate::udt::UserTypes;
+use crate::udt::{TypeNode, UserTypes};
 
 /// A function of this compilation, by position in declaration order.
 ///
@@ -257,6 +257,14 @@ pub struct Resolution {
     type_args: HashMap<Span, Vec<Type>>,
     /// Keyed by the span of the **`?`** of a propagation, which is written once per one.
     propagations: HashMap<Span, Propagation>,
+    /// Keyed by the span of a **user-defined type's name** wherever one is written: in a
+    /// parameter, a return, a field or a payload field's type, a type argument at any
+    /// depth, a construction's head and the enum before the `.` of a variant or a pattern.
+    /// N18: the checker decided which record or enum each of these names, and until then
+    /// kept the answer only as a `Type`, so a record's uses were its constructions and an
+    /// enum had none. A built-in and a type parameter are not recorded: neither is a
+    /// definition a program wrote.
+    type_names: HashMap<Span, TypeNode>,
 }
 
 impl Resolution {
@@ -413,6 +421,19 @@ impl Resolution {
         self.calls.get(&span).copied()
     }
 
+    /// Which record or enum the type name written at `span` names.
+    #[must_use]
+    pub fn type_name(&self, span: Span) -> Option<TypeNode> {
+        self.type_names.get(&span).copied()
+    }
+
+    /// Record that the type name written at `span` names `to`. The same span may be
+    /// resolved more than once — a signature is resolved at declaration and again when its
+    /// body is checked — and always to the same answer.
+    pub fn record_type_name(&mut self, span: Span, to: TypeNode) {
+        self.type_names.insert(span, to);
+    }
+
     /// Which slot the variable mentioned at `span` refers to.
     #[must_use]
     pub fn var(&self, span: Span) -> Option<u32> {
@@ -427,7 +448,8 @@ impl Resolution {
     }
 
     /// Every use this resolution recorded, with what it was resolved to, in a fixed order
-    /// of kinds — calls, variables, constructions, variants, fields, payload fields — and
+    /// of kinds — calls, variables, constructions, variants, fields, payload fields and
+    /// (N18) type names — and
     /// in no particular order within one. For [`crate::references`], which is the only
     /// consumer that wants them all rather than one at a time.
     ///
@@ -453,6 +475,15 @@ impl Resolution {
         }
         for (span, p) in &self.payloads {
             f(*span, T::PayloadField(*p));
+        }
+        for (span, node) in &self.type_names {
+            f(
+                *span,
+                match node {
+                    TypeNode::Record(id) => T::Record(*id),
+                    TypeNode::Enum(id) => T::Enum(*id),
+                },
+            );
         }
     }
 
