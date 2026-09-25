@@ -14,9 +14,10 @@
 //!
 //! Exactly what is implemented, and the initialize response says so: full-document
 //! synchronisation (open, change, close), published diagnostics, definition, hover,
-//! references (N17), and prepare-rename and rename (N18). No completion, formatting,
-//! symbols, code actions, semantic tokens, watched files or cancellation — a client is never
-//! told something exists that the server would then ignore.
+//! references (N17), prepare-rename and rename (N18), and completion (N19) — of a value, a
+//! call's head or a type, invoked on an identifier, with no trigger characters. No signature
+//! help, formatting, symbols, code actions, semantic tokens, watched files or cancellation — a
+//! client is never told something exists that the server would then ignore.
 //!
 //! # What a rename can promise over this protocol
 //!
@@ -49,12 +50,14 @@ use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use lsp_types::{
-    Diagnostic as LspDiagnostic, DiagnosticSeverity, GotoDefinitionParams, GotoDefinitionResponse,
-    Hover as LspHover, HoverContents, HoverParams, HoverProviderCapability, InitializeResult,
-    Location as LspLocation, MarkupContent, MarkupKind, NumberOrString, OneOf, Position,
-    PositionEncodingKind, PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams,
-    RenameOptions, RenameParams, ServerCapabilities, ServerInfo, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
+    CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
+    CompletionResponse, CompletionTextEdit, Diagnostic as LspDiagnostic, DiagnosticSeverity,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover as LspHover, HoverContents, HoverParams,
+    HoverProviderCapability, InitializeResult, Location as LspLocation, MarkupContent, MarkupKind,
+    NumberOrString, OneOf, Position, PositionEncodingKind, PrepareRenameResponse,
+    PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions, RenameParams,
+    ServerCapabilities, ServerInfo, TextDocumentPositionParams, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
 };
 use nazm_service::{LanguageService, Published, RenamePlan, Target};
 
@@ -101,6 +104,12 @@ fn capabilities() -> ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         references_provider: Some(OneOf::Left(true)),
+        // Invoked, not triggered: completion is of an identifier being written, and every
+        // item is final — there is nothing more to resolve.
+        completion_provider: Some(CompletionOptions {
+            resolve_provider: Some(false),
+            ..CompletionOptions::default()
+        }),
         rename_provider: Some(OneOf::Right(RenameOptions {
             prepare_provider: Some(true),
             work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
@@ -236,7 +245,7 @@ impl Server {
 
     fn request(&self, req: Request) -> Response {
         use lsp_types::request::{
-            GotoDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
+            Completion, GotoDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
         };
         let id = req.id.clone();
         let result = match req.method.as_str() {
@@ -249,6 +258,9 @@ impl Server {
             References::METHOD => serde_json::from_value::<ReferenceParams>(req.params)
                 .map_err(|e| e.to_string())
                 .map(|p| self.references(&p)),
+            Completion::METHOD => serde_json::from_value::<CompletionParams>(req.params)
+                .map_err(|e| e.to_string())
+                .map(|p| self.completion(&p)),
             PrepareRenameRequest::METHOD => {
                 serde_json::from_value::<TextDocumentPositionParams>(req.params)
                     .map_err(|e| e.to_string())
@@ -346,6 +358,56 @@ impl Server {
             });
         }
         serde_json::to_value(out).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// `textDocument/completion`: the service's candidates for the identifier under the
+    /// cursor, each replacing that whole identifier, in the service's order — or `null`
+    /// where the service has no complete answer.
+    fn completion(&self, p: &CompletionParams) -> serde_json::Value {
+        let tdp = &p.text_document_position;
+        let Some((path, version, offset)) = self.locate(&tdp.text_document.uri, tdp.position)
+        else {
+            return serde_json::Value::Null;
+        };
+        let (Ok(found), Some(text)) = (
+            self.service.completion(&path, version, offset),
+            self.service.text(&path),
+        ) else {
+            return serde_json::Value::Null;
+        };
+        let index = LineIndex::new(&text);
+        let range = Range {
+            start: index.position(found.start),
+            end: index.position(found.end),
+        };
+        let items = found
+            .items
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| CompletionItem {
+                kind: Some(match c.kind {
+                    "local" => CompletionItemKind::VARIABLE,
+                    "function" | "built-in function" => CompletionItemKind::FUNCTION,
+                    "enum" => CompletionItemKind::ENUM,
+                    "type parameter" => CompletionItemKind::TYPE_PARAMETER,
+                    _ => CompletionItemKind::STRUCT,
+                }),
+                detail: c.detail.or_else(|| Some(c.kind.to_owned())),
+                // The service's canonical order, kept by the client's sort.
+                sort_text: Some(format!("{i:06}")),
+                text_edit: Some(CompletionTextEdit::Edit(lsp_types::TextEdit {
+                    range,
+                    new_text: c.name.clone(),
+                })),
+                label: c.name,
+                ..CompletionItem::default()
+            })
+            .collect();
+        serde_json::to_value(CompletionResponse::List(CompletionList {
+            is_incomplete: false,
+            items,
+        }))
+        .unwrap_or(serde_json::Value::Null)
     }
 
     /// `textDocument/prepareRename`: the token and its current spelling, or `null` for a
