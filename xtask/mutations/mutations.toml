@@ -3235,6 +3235,8 @@ targets = [
     { package = "nazm-cli", test = "propagation" },
     { package = "nazm-cli", test = "resolution" },
     { package = "nazm-cli", test = "visibility" },
+    # N17: which use the checker recorded for which entity is what references read.
+    { package = "nazm-service", test = "references" },
 ]
 
 [[profile]]
@@ -3266,6 +3268,9 @@ targets = [
     { package = "nazm-cli", test = "prelude" },
     { package = "nazm-cli", test = "incremental" },
     { package = "nazm-cli", test = "durable_identity" },
+    # N17: the reference index is derived here, from the resolution, and observed through
+    # the language service.
+    { package = "nazm-service", test = "references" },
 ]
 
 [[profile]]
@@ -3307,6 +3312,7 @@ targets = [
     { package = "nazm-cli", bin = "nazm" },
     { package = "nazm-service", lib = true },
     { package = "nazm-service", test = "service" },
+    { package = "nazm-service", test = "references" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
@@ -4079,11 +4085,15 @@ killers = [{ package = "nazm-service", test = "service", name = "a_fix_publishes
 
 [[mutation]]
 name = "n16-a-local-is-found-by-its-spelling"
+# Repointed in N17: definition no longer reads a function's locals itself. It goes through
+# the reference index, which is where a local's declaration now comes from, so the same
+# defect — a binding's declaration taken from the first binding of its spelling — is
+# injected there. The killer is unchanged.
 why = "a use of a local goes to the first binding of that name rather than to the slot resolution gave it, so a shadowing `let` is skipped"
-file = "crates/nazm-service/src/service.rs"
-find = """        return Some(("local", f.locals.get(usize::try_from(slot).ok()?)?.span));"""
-replace = """        let named = &f.locals.get(usize::try_from(slot).ok()?)?.name;
-        return Some(("local", f.locals.iter().find(|l| &l.name == named)?.span));"""
+file = "crates/nazm-sema/src/references.rs"
+find = "                index.declare(ReferenceTarget::Local(LocalRef { function, slot }), l.span);"
+replace = """                let first = f.locals.iter().find(|m| m.name == l.name).map_or(l.span, |m| m.span);
+                index.declare(ReferenceTarget::Local(LocalRef { function, slot }), first);"""
 killers = [{ package = "nazm-service", test = "service", name = "one_spelling_with_three_meanings_goes_to_three_definitions" }]
 
 [[mutation]]
@@ -4109,6 +4119,181 @@ file = "crates/nazm-service/src/service.rs"
 find = "        .find(|l| is_name(l.kind) && l.span.end == offset)"
 replace = "        .find(|l| is_name(l.kind) && l.span.end <= offset && offset <= l.span.end + 1)"
 killers = [{ package = "nazm-service", test = "service", name = "a_position_is_on_a_name_or_on_nothing" }]
+
+# ---------------------------------------------------------------------------------------
+# N17 — the reference index and `textDocument/references`. Each attacks one invariant: that
+# an occurrence's entity is resolution's identity and never its spelling, that a
+# declaration is not a use, that the reverse relation is complete across files and
+# compilations, and that only the current version answers.
+# ---------------------------------------------------------------------------------------
+
+[[mutation]]
+name = "n17-a-slot-without-its-function"
+why = "a variable use records its slot but not which function's, so the uses of every function's slot 0 are one binding's"
+file = "crates/nazm-sema/src/resolve.rs"
+find = "            f(*span, T::Local(*local));"
+replace = "            f(*span, T::Local(LocalRef { function: FnId::from_index(0), ..*local }));"
+killers = [{ package = "nazm-service", test = "references", name = "references_follow_semantic_identity_not_spelling" }]
+
+[[mutation]]
+name = "n17-a-local-is-its-functions-first-slot"
+why = "the slot a use resolved to is ignored, so a shadowing binding's uses are the shadowed one's"
+file = "crates/nazm-sema/src/resolve.rs"
+find = "            f(*span, T::Local(*local));"
+replace = "            f(*span, T::Local(LocalRef { slot: 0, ..*local }));"
+killers = [{ package = "nazm-service", test = "references", name = "a_shadowed_use_belongs_to_the_inner_binding_and_no_further" }]
+
+[[mutation]]
+name = "n17-same-named-functions-are-one-function"
+why = "a call is indexed under the first function of its spelling anywhere, so two modules' private `helper`s share their uses"
+file = "crates/nazm-sema/src/resolve.rs"
+find = "                f(*span, T::Function(*id));"
+replace = "                f(*span, T::Function(self.defined_anywhere(&self.functions[id.index()].name).next().unwrap_or(*id)));"
+killers = [{ package = "nazm-service", test = "references", name = "references_follow_semantic_identity_not_spelling" }]
+
+[[mutation]]
+name = "n17-same-named-fields-are-one-field"
+why = "a field use is indexed under the first record's field of that spelling, so `A.value` and `B.value` are one set"
+file = "crates/nazm-sema/src/references.rs"
+find = """        ReferenceTarget::Field(f) => ReferenceTarget::Field(FieldRef {
+            record: record(f.record),
+            ..f
+        }),"""
+replace = """        ReferenceTarget::Field(f) => {
+            let name = res.records().get(f.record).and_then(|d| d.fields.get(f.field as usize)).map(|x| x.name.clone()).unwrap_or_default();
+            let first = res.records().all().iter().enumerate().find_map(|(i, d)| d.field(&name).map(|(j, _)| FieldRef { record: RecordId::from_index(i), field: j }));
+            ReferenceTarget::Field(first.unwrap_or(f))
+        }"""
+killers = [{ package = "nazm-service", test = "references", name = "references_follow_semantic_identity_not_spelling" }]
+
+[[mutation]]
+name = "n17-same-named-variants-are-one-variant"
+why = "a variant use is indexed under the first enum's variant of that spelling, so `E.Ready` and `F.Ready` are one set"
+file = "crates/nazm-sema/src/references.rs"
+find = """        ReferenceTarget::Variant(v) => ReferenceTarget::Variant(VariantRef {
+            enumeration: enumeration(v.enumeration),
+            ..v
+        }),"""
+replace = """        ReferenceTarget::Variant(v) => {
+            let name = res.enums().get(v.enumeration).and_then(|d| d.variants.get(v.variant as usize)).map(|x| x.name.clone()).unwrap_or_default();
+            let first = res.enums().all().iter().enumerate().find_map(|(i, d)| d.variant(&name).map(|(j, _)| VariantRef { enumeration: EnumId::from_index(i), variant: j }));
+            ReferenceTarget::Variant(first.unwrap_or(v))
+        }"""
+killers = [{ package = "nazm-service", test = "references", name = "references_follow_semantic_identity_not_spelling" }]
+
+[[mutation]]
+name = "n17-an-instance-field-is-its-own-field"
+why = "a use through an applied record is not taken to the definition it applies, so `Box[Int].value` and `Box[Str].value` are two fields"
+file = "crates/nazm-sema/src/references.rs"
+find = """    let record = |id: RecordId| {
+        res.records()
+            .get(id)
+            .and_then(|d| d.instance.as_ref())
+            .map_or(id, |i| i.template)
+    };"""
+replace = """    let record = |id: RecordId| {
+        res.records()
+            .get(id)
+            .and_then(|d| d.instance.as_ref())
+            .map_or(id, |_| id)
+    };"""
+killers = [{ package = "nazm-service", test = "references", name = "a_field_reached_through_two_instances_of_one_generic_record_is_one_field" }]
+
+[[mutation]]
+name = "n17-a-cross-file-use-is-dropped"
+why = "a use in another file than its entity's declaration is not indexed, so an imported function's callers are missing"
+file = "crates/nazm-sema/src/references.rs"
+find = "        if entry.declaration != Some(at) {"
+replace = "        if entry.declaration != Some(at) && entry.declaration.map_or(true, |d| d.file == at.file) {"
+killers = [{ package = "nazm-service", test = "references", name = "references_follow_semantic_identity_not_spelling" }]
+
+[[mutation]]
+name = "n17-a-declaration-is-a-use-of-itself"
+why = "the span where a `let` introduces its binding, which the checker records for the backend, is listed among the binding's uses"
+file = "crates/nazm-sema/src/references.rs"
+find = "        if entry.declaration != Some(at) {"
+replace = "        if true {"
+killers = [{ package = "nazm-service", test = "references", name = "references_follow_semantic_identity_not_spelling" }]
+
+[[mutation]]
+name = "n17-uses-in-map-order"
+why = "an entity's uses are left in the order a hash map yielded them, so two identical analyses can list them differently"
+file = "crates/nazm-sema/src/references.rs"
+find = "            entry.uses.sort_unstable();"
+replace = "            let _ = &entry.uses;"
+killers = [{ package = "nazm-service", test = "references", name = "every_resolved_occurrence_is_in_exactly_one_entitys_set" }]
+
+[[mutation]]
+name = "n17-a-construction-label-is-no-field-use"
+why = "the checker does not record which field a construction's initialiser names, so a field's references miss every construction that sets it"
+file = "crates/nazm-core/src/check.rs"
+find = """            self.res.record_field(
+                f.name_span,
+                FieldRef {
+                    record: id,
+                    field: index,
+                },
+            );"""
+replace = "            let _ = index;"
+killers = [{ package = "nazm-service", test = "references", name = "references_follow_semantic_identity_not_spelling" }]
+
+[[mutation]]
+name = "n17-only-the-asking-compilation-is-searched"
+why = "references are read from the queried document's own compilation only, so a dependency's declaration never sees the importers that use it"
+file = "crates/nazm-service/src/service.rs"
+find = "        for other in self.documents.values().filter_map(|d| d.analysis.as_ref()) {"
+replace = "        for other in std::iter::once(s) {"
+killers = [{ package = "nazm-service", test = "references", name = "references_are_for_the_current_unsaved_program" }]
+
+[[mutation]]
+name = "n17-an-imported-use-is-placed-in-the-asking-file"
+why = "a use in a dependency is reported at its offsets in the compilation's root file, so it points into the wrong document"
+file = "crates/nazm-service/src/service.rs"
+find = "                    (other.files.get(u.file.index()), other.target(*u))"
+replace = "                    (other.files.get(u.file.index()), other.target(Span::new(FileId::ROOT, u.start, u.end)))"
+killers = [{ package = "nazm-service", test = "references", name = "a_use_in_a_dependency_nobody_opened_is_reported_in_that_dependency" }]
+
+[[mutation]]
+name = "n17-one-use-is-listed-once-per-compilation"
+why = "a use found by two open compilations that both load its file is listed twice"
+file = "crates/nazm-service/src/service.rs"
+find = "                uses.entry((key.clone(), u.start, u.end)).or_insert(l);"
+replace = """                let n = u32::try_from(uses.len()).unwrap_or(0);
+                uses.insert((key.clone(), u.start, u.end.wrapping_add(n << 20)), l);"""
+killers = [{ package = "nazm-service", test = "references", name = "references_follow_semantic_identity_not_spelling" }]
+
+[[mutation]]
+name = "n17-an-old-version-answers-references"
+why = "a references query is answered from whatever analysis the document has, whatever version the client asked about"
+file = "crates/nazm-service/src/service.rs"
+find = """        let s = self.current(path, version)?;
+        let at = name_at(&s.cst, offset)?;
+        let entity = s.index.target(at)?;
+        // The anchor"""
+replace = """        let s = self.documents.get(&identity(path))?.analysis.as_ref()?;
+        let _ = version;
+        let at = name_at(&s.cst, offset)?;
+        let entity = s.index.target(at)?;
+        // The anchor"""
+# The first killer tried, the unsaved-program test, is NOT A KILLER: its version-1 query
+# lands in a comment of the version-2 text, which answers nothing either way.
+killers = [{ package = "nazm-service", test = "references", name = "a_thousand_edits_that_add_and_remove_uses_leave_one_current_index" }]
+
+[[mutation]]
+name = "n17-the-declaration-is-always-included"
+why = "the declaration is returned among the references whether or not the client asked for it"
+file = "crates/nazm-service/src/service.rs"
+find = "        if include_declaration {"
+replace = "        if include_declaration || true {"
+killers = [{ package = "nazm-service", test = "references", name = "the_declaration_is_kept_apart_and_added_only_when_asked_for" }]
+
+[[mutation]]
+name = "n17-the-declaration-is-never-included"
+why = "the declaration is left out even when the client asks for it"
+file = "crates/nazm-service/src/service.rs"
+find = "        if include_declaration {"
+replace = "        if include_declaration && false {"
+killers = [{ package = "nazm-service", test = "references", name = "the_declaration_is_kept_apart_and_added_only_when_asked_for" }]
 
 [[mutation]]
 name = "n16-a-column-is-a-byte-count"
