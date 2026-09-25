@@ -1102,6 +1102,76 @@ fn a_dependent_checks_generic_apis_against_a_deserialised_interface_with_the_dep
 }
 
 #[test]
+fn a_call_checked_against_an_interface_alone_records_the_interfaces_signature() {
+    // N20: what signature help reads of a call is the checker's record of it, and for an
+    // imported callee that record comes from the interface the call was checked against —
+    // not from the dependency's body, which here does not exist.
+    use nazm_core::sema::{Callee, Type};
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn twice(n: Int, label: Str) -> Int { n * 2 }
+         pub fn identity[T](value: T) -> T { value }
+",
+    );
+    let a_source =
+        "use \"b.nz\";\nfn main() -> Int { twice(21, \"x\") + identity(1) + identity[Int](2) }\n";
+    write(dir.path(), "a.nz", a_source);
+    let published = interface_of(&dir.path().join("b.nz"));
+    std::fs::remove_file(dir.path().join("b.nz")).expect("remove B");
+
+    let interface = PersistentUnitInterface::from_json(&published).expect("valid");
+    let (program, parse_errors) = nazm_core::__syntax::parse_source(a_source);
+    assert!(parse_errors.is_empty(), "{parse_errors:#?}");
+    let mut graph = ModuleGraph::default();
+    let a = graph.add(FileId::ROOT, ModuleKey::relative("a.nz"));
+    let b = graph.add(FileId::from_index(1), interface.module_key());
+    graph.import(a, b, nazm_span::Span::synthetic());
+    let units = [nazm_core::Unit::of(&program, &graph, a)];
+    let mut res = Resolution::default();
+    let mut errors = Vec::new();
+    let rehydrated = interface.rehydrate(b, FnId::from_index(4096), res.types_mut());
+    nazm_core::declare_types(&units, &mut res, &mut errors);
+    nazm_core::declare_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+    nazm_core::check_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+    assert!(errors.is_empty(), "{errors:#?}");
+
+    let callee = |needle: &str| {
+        let start = u32::try_from(a_source.find(needle).unwrap()).unwrap();
+        nazm_span::Span::new(
+            FileId::ROOT,
+            start,
+            start + u32::try_from(needle.len()).unwrap(),
+        )
+    };
+    let export = |name: &str| rehydrated.export(name).expect("exported");
+    let twice = res.checked_call(callee("twice")).expect("recorded");
+    assert_eq!(twice.callee, Callee::Function(export("twice").def));
+    assert_eq!(twice.params, export("twice").params);
+    assert_eq!(twice.params, [Type::Int, Type::Str]);
+    assert_eq!(twice.args.len(), 2);
+    assert!(
+        res.function(export("twice").def).is_none(),
+        "no body, no definition"
+    );
+
+    let inferred = res.checked_call(callee("identity")).expect("recorded");
+    assert_eq!(inferred.callee, Callee::Function(export("identity").def));
+    let instance = inferred.instance.as_ref().expect("generic");
+    assert_eq!(
+        (instance.written, instance.args.as_slice()),
+        (false, &[Some(Type::Int)][..])
+    );
+    assert_eq!(instance.params, [Some(Type::Int)]);
+    let start = u32::try_from(a_source.rfind("identity").unwrap()).unwrap();
+    let written = res
+        .checked_call(nazm_span::Span::new(FileId::ROOT, start, start + 8))
+        .expect("recorded");
+    assert!(written.instance.as_ref().unwrap().written);
+}
+
+#[test]
 fn a_dependent_derives_equality_from_a_deserialised_interface_with_the_dependency_deleted() {
     // N13. Whether an imported record, enum or core instance has `==` is derived from its
     // shape, and an interface carries the shape and nothing else: no "has equality" fact is
