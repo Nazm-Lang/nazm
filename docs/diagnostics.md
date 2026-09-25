@@ -78,6 +78,13 @@ at all, so a span cannot be serialised by accident; `cargo xtask check`'s **span
 gate fails if that changes. A test pins the exact bytes of a diagnostic in the second file
 of a two-file program.
 
+**An editor sees the same diagnostics, converted at its own boundary (N16, 2026-09-25).**
+`nazm lsp` publishes diagnostics as the Language Server Protocol requires: per file, with
+positions as lines and UTF-16 columns. That is the protocol's shape, not a new Nazm schema:
+the code, message and severity are the diagnostic's own, the range is its primary span
+converted from file-local byte offsets at the adapter, and nothing in `nazm.diagnostic/1`
+changed. Standard LSP messages are not Nazm machine interfaces and carry no `schema` field.
+
 ## Fixes, and when to apply one
 
 A fix is `replace these bytes with this text`. Two things make it usable unattended:
