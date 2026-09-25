@@ -2732,8 +2732,8 @@ warm edit is about 80 ms on one CPU (`performance.md`) — the evidence that inc
 reparse is not yet needed.
 
 **Protocol surface.** Full-document synchronisation, `publishDiagnostics`, definition and
-hover, positions in UTF-16 — and, since N17, references (§7.19), and since N18 prepare-rename
-and rename (§7.20). Nothing else is advertised. The core prelude has no file, so a
+hover, positions in UTF-16 — and, since N17, references (§7.19), since N18 prepare-rename
+and rename (§7.20), and since N19 completion (§7.21). Nothing else is advertised. The core prelude has no file, so a
 definition in it has no location. Diagnostics keep their Nazm codes and messages; the
 protocol message is an adapter's rendering of a `nazm.diagnostic/1` object's primary span,
 not a new schema.
@@ -2905,6 +2905,69 @@ closed-file refusal is the rule's guarantee rather than a case that arises today
 **Not here.** Rename of an exported or prelude entity, any other code action, an edit command
 (`nazm rename --apply` was not needed and does not exist), a general edit engine, and any
 schema: rename is standard protocol traffic.
+
+## 7.21 Scope at a position, and completion — settled by N19, 2026-09-25
+
+> **Completion does not resolve names. It enumerates the semantic candidates the checker
+> recorded as available.**
+
+```text
+Checker          decides what is visible where — its frames, its lookups, its environments
+ScopeTrace       records those decisions as the checker makes them   (nazm-sema/src/scope.rs)
+CST              says which kind of name a position expects           (the node around the token)
+LanguageService  intersects the two, for the current document only    (nazm-service/src/completion.rs)
+LSP adapter      renders ordered CompletionItems, UTF-16 at the edge  (nazm-cli/src/lsp.rs)
+```
+
+**What the checker records.** `Resolution::scopes()` is a `ScopeTrace`, written at the points
+the checker already acts: every scope it pushes — a function's parameters (`f.span`), every
+block (`b.span`: a body, an `if` branch, a `while` body, `scope { … }`, a block expression) and
+every match arm (`arm.span`) — with its parent; every binding it defines, with **the byte it
+becomes visible from** and **the binding its own lookup found under that name** at that
+moment, which it now hides; each definition's type parameters over the definition, with the
+type name each hides (again the checker's lookup); and each module's environment as the checker
+built it — built-ins (`Intrinsic::ALL`), own and directly imported functions, own and directly
+imported types, the built-in types (`Type::ALL`, `Vec`) — **less every name it refused** as an
+ambiguous import or a collision with a local definition.
+
+| Scope | Opens | Closes | What enters it, visible from |
+| --- | --- | --- | --- |
+| function | its declaration | its end | each parameter, after its name |
+| block | `{` | `}` | each `let`, after the end of its statement — never in its own initializer |
+| match arm | the pattern | the arm's end | each pattern binding, after its name; never a sibling arm |
+| module | — | — | every function and type in the module's environment, in any order (declarations are collected before bodies) |
+| type parameters | a function, record or enum | its end | its type parameters, in type positions only |
+
+**Reading it back resolves nothing.** `ScopeTrace::visible_at(module, file, offset)` finds the
+innermost frame around the position and walks its parents; a binding is visible if it was
+introduced at or before the position; one is hidden if a visible binding recorded that it
+hides it; a binding the checker refused as a same-scope duplicate names nothing, and neither
+does the one it collided with. No name is compared with another anywhere in the file, which a
+unit test holds. The answer is three lists by namespace — values (locals), callables (functions
+and built-ins) and types — because the language keeps them apart: a record and a function may
+share a spelling, and there are no function values.
+
+**When the scope is complete.** The checker saw a recovered tree wherever N15 recovered, and a
+recovered statement may have been a declaration it never saw. So a position's **locals** are
+offered only when the function around it parsed without recovery, and a module's **functions
+and types** only when no file of the compilation needed recovery (`Analysis::syntax_errors`).
+Otherwise there is no answer (`NoCompletion::RecoveredSyntax`) rather than a list that could
+be missing a name. A type error, an undefined name or a refused duplicate is not a recovery:
+the checker's scope is still its own, and completion answers from it. A stale version is never
+answered, and the last clean analysis is never consulted.
+
+**The service.** `LanguageService::scope_at(path, version, offset)` answers at any position, not
+only on a name. `LanguageService::completion(path, version, offset)` completes the identifier
+under the cursor: the node around it chooses the context — `NameRef` or an assignment's root
+is a **value**, `CallExpr`'s head a **call**, `Type` a **type** — and the candidates are that
+namespace's, filtered by exact byte prefix of what is written up to the cursor, ordered by
+name then identity, each with the hover-style detail the resolution already has and its
+declaration's location. An accepted completion replaces the whole identifier. It is one
+document's compilation: another open program's names never enter it.
+
+**Deliberately not here.** Completion of a field after `.`, a variant after `E.`, a construction
+or payload label, a pattern, an import path; auto-import; trigger characters; ranking; fuzzy
+matching; signature help. Nothing is persisted: the trace lives and dies with its analysis.
 
 ## 8. Toolchain, and one real incompatibility
 

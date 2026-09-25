@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,417 passed, 0 failed, 13 ignored, across 74 suites**, run contained at
-N18 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
-13 passed, contained). N17 ended at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,435 passed, 0 failed, 13 ignored, across 75 suites**, run contained at
+N19 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
+13 passed, contained). N18 ended at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1244,7 +1244,34 @@ edit with every range in UTF-16 after `é→😀`, an unsaved edit's new version
 reasons, and a client without versioned edits refused. Fourteen N18 mutations, all caught at
 tier 1 (area 30).
 
-**Limitation** · Diagnostics, definition, hover, references and rename only: no completion,
+*N19, 2026-09-25: completion — VERIFIED for identifier completion in value, call-head and type
+contexts only.* `LanguageService::scope_at` answers what may be written at any position, and
+`completion` and `textDocument/completion` complete the identifier under the cursor, from a
+`ScopeTrace` the checker writes as it pushes scopes, defines bindings and builds environments
+(`crates/nazm-sema/src/scope.rs`, `architecture.md` §7.21) — with no lookup of its own. Values
+are locals (parameters, `let`s, pattern bindings), visible from where the checker introduced
+them and hidden where it recorded a nearer binding hiding them; calls are the module's
+functions, its direct imports' exports and the built-ins (`Intrinsic::ALL`); types are type
+parameters in their own definition, the module's and its direct imports' records and enums,
+and the built-in types (`Type::ALL`, `Vec`). A name the checker refused (an ambiguous import, a
+collision, a same-scope duplicate) is offered as nothing. A position whose function needed
+syntax recovery has no locals, and a compilation with any recovery has no function or type
+completion. Invoked only (no trigger characters), `resolveProvider` false, `isIncomplete`
+false. Evidence: `crates/nazm-service/tests/completion.rs` — one spelling as a record, a
+function, a parameter and a shadowing `let`, each offered only in its own context and scope;
+later locals absent, a `let` absent from its own initializer, loop, branch, `scope` and arm
+bindings not leaking, sibling arms apart; a later top-level function callable; type parameters
+in their own definition only; built-ins from the compiler's inventories and none spelled in the
+service; direct imports' exports only — no private, no transitive; an ambiguous import offering
+neither; another open program never mixed in; unsaved locals, imports and dependencies, and the
+disk back on close; recovery refused, type errors not; non-sites refused; a thousand edits with
+constant retained state; and over the repository's own clean compilations every one of 23,821
+resolved names offered, once, as exactly what it resolved to. `crates/nazm-cli/tests/lsp.rs`
+adds the real process: the capability, the whole identifier replaced in UTF-16 after `é😀`, a
+built-in call head by prefix, a string refused, an unsaved local. Fourteen N19 mutations (area
+30).
+
+**Limitation** · Diagnostics, definition, hover, references, rename and completion only: no
 symbols, formatting, code actions, semantic tokens, signature help or inlay hints, no
 cancellation and no watched files. Every change re-analyses every open document in full; no
 incremental reparse or graph maintenance, and no persistent cache in the editor. A built-in, a
@@ -1254,7 +1281,10 @@ no location and a references answer for one of its entities has no declaration. 
 cover the programs being analysed — each open document's compilation — and not files on disk
 that no open document loads. Rename covers locals and private definitions only: an exported
 entity is refused, because a module no open program loads may use it, and a closed file is
-never edited, because the protocol cannot make its content a precondition.
+never edited, because the protocol cannot make its content a precondition. Completion is of an
+identifier in a value, call-head or type position only — no field, variant, label, pattern or
+import-path completion, no auto-import, no trigger characters, no ranking — and there is none
+where the source needed syntax recovery.
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
 are published for open documents only. MCP does not exist.
 
@@ -1349,8 +1379,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **348** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17), **160** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **362** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18), **174** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -1680,6 +1710,25 @@ record's field). **18 of 18 caught at tier 1**; no survivor, crash, timeout, unu
 uninjected entry, no runner error. The `rename` suite joined the `cli`, `semantics` and
 `checker` profiles. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were
 not re-run and are as they were.
+
+*N19 (2026-09-25) added fourteen, repointed one and renamed one,* on the frozen final source.
+Every killer was verified by `--verify-killer`, contained at P1, one at a time, with no host
+build running — the fourteen, and the two N16 entries whose killer,
+`the_server_speaks_the_protocol_end_to_end`, N19 edited: 16 of 16, none rejected, and no source
+changed after. The fourteen attack N19's invariants: a `let` visible in its own initializer, a
+later local visible early, a shadowed binding offered, a closed scope left open, a refused
+duplicate offered, locals in walk order, a type parameter leaking out of its definition, a
+refused import offered, a type offered as a value, a function offered as a type, the prefix
+ignored, a completion inserting rather than replacing, and a recovered function or file offered
+names. `imports-become-transitive` (N2) was repointed — its pattern gained the line that starts
+the environment's refused-name list — and `n16-completion-is-advertised` became
+`n16-signature-help-is-advertised`, the same defect with a capability the server still lacks.
+**Campaign `d2e4e1af3eba6c1f`, targeted, P1, one session, 994 s:** those seventeen. **17 of 17
+caught — 16 at tier 1, and `imports-become-transitive`, which names no killer, at tier 2 by
+`nazm-cli --test visibility`**; no survivor, crash, timeout, unusable or uninjected entry, no
+runner error. The `completion` suite joined the `cli`, `semantics` and `checker` profiles.
+N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and are
+as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

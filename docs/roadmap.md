@@ -370,9 +370,49 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N19, in dependency order
+
+No item is chosen here; N19 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Signature help | scope at a position ✓ | needs the call being written and which argument, which the scope does not say |
+| Member, variant-dot, construction-label and payload-label completion | completion ✓, field identity ✓ | each is a structure-aware contract — the type of what precedes `.`, the record being built — not lexical scope |
+| Document and workspace symbols | a language service ✓ | not started |
+| Semantic tokens, code actions | a language service ✓ | not started |
+| Rename of exported definitions; edits of files not open | rename ✓ | unchanged since N18 |
+| MCP, semantic context packets | a language service ✓, scope at a position ✓ | not started |
+| Incremental reparse | a lossless CST ✓ | N19 measured a warm edit of the whole compiler at about 81 ms on one CPU; the evidence that would justify it still does not exist |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+
+### N19 — Semantic scope-at-position and context-aware completion — **complete, 2026-09-25**
+
+What may be written at a position is now recorded by the checker as it decides it — frames,
+visibility, the binding each hides, type parameters, module environments less the names it
+refused — and read back without resolving anything; completion of a value, a call head or a
+type is that answer, filtered by what is written, for the current document's compilation only.
+No language, interface, cache-key or bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`,
+fixpoint `0e1a40e6…`.
+
+| Settled | Where |
+| --- | --- |
+| the scope trace, written by the checker; `visible_at` | `crates/nazm-sema/src/scope.rs`, `crates/nazm-core/src/check.rs`, `architecture.md` §7.21 |
+| which files needed recovery | `Analysis::syntax_errors` in `crates/nazm-core/src/lib.rs` |
+| `scope_at`, `completion`, contexts, completeness | `crates/nazm-service/src/completion.rs` |
+| `textDocument/completion`, invoked, whole-identifier replacement in UTF-16 | `crates/nazm-cli/src/lsp.rs` |
+| what it costs: 0.7 ms a scope query and 2.1 ms a completion on the compiler | `performance.md` |
+
+Mutation evidence: 14 new, 1 repointed, 1 renamed; all 16 direct killers verified on the final
+source; one targeted campaign of 17 — 16 caught at tier 1 and 1 at tier 2, no survivor
+(`capability-matrix.md` §30).
+
+**N20 has not started.**
+
 ### After N18, in dependency order
 
-No item is chosen here; N18 left these standing.
+No item is chosen here; N18 left these standing. *Superseded by "After N19" above.*
 
 | | Depends on | Why not before |
 | --- | --- | --- |
