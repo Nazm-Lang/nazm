@@ -261,6 +261,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
             "positionEncoding",
             "referencesProvider",
             "renameProvider",
+            "signatureHelpProvider",
             "textDocumentSync"
         ],
         "only what is implemented is advertised: {init}"
@@ -277,6 +278,11 @@ fn the_server_speaks_the_protocol_end_to_end() {
         caps["completionProvider"],
         json!({"resolveProvider": false}),
         "invoked only: no trigger characters, nothing to resolve"
+    );
+    assert_eq!(
+        caps["signatureHelpProvider"],
+        json!({"triggerCharacters": ["(", ","]}),
+        "triggered where the active call or argument changes; no retrigger characters"
     );
 
     // 2. Open: a diagnostic, its code, and its exact UTF-16 range after non-ASCII text.
@@ -325,7 +331,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
         json!({"textDocument": {"uri": uri(&main)}, "position": {"line": 1, "character": utf16(line, call)}}),
     );
     assert_eq!(
-        h["result"]["contents"]["value"], "fn helper(Int) -> Int",
+        h["result"]["contents"]["value"], "fn helper(n: Int) -> Int",
         "{h}"
     );
 
@@ -368,7 +374,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
     );
 
     // 7. Something not implemented is an error response, and the server carries on.
-    let r = c.request("textDocument/signatureHelp", json!({}));
+    let r = c.request("textDocument/documentSymbol", json!({}));
     assert_eq!(r["error"]["code"], -32601, "{r}");
     let r = c.request("textDocument/definition", json!({"nonsense": true}));
     assert_eq!(r["error"]["code"], -32602, "{r}");
@@ -882,4 +888,101 @@ fn completion_crosses_the_protocol_replacing_the_identifier_in_utf16() {
     let (status, stderr) = c.finish();
     assert_eq!(status, Some(0), "{stderr}");
     assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+// Non-ASCII before the call and inside its first argument, on its line.
+const SIGNATURE_MAIN: &str = "fn pair(a: Str, b: Int) -> Int { b }\nfn ping() -> Int { 0 }\n\
+fn main() -> Int { let s = \"é😀\"; pair(\"😀, é\", str_len(s)) + ping() + pair(s, 1, 2) }\n";
+
+#[test]
+fn signature_help_crosses_the_protocol_with_utf16_positions_and_label_offsets() {
+    let (_dir, root) = project(&[("main.nz", SIGNATURE_MAIN)]);
+    let main = root.join("main.nz");
+    let mut c = Client::start(&root);
+    c.initialize(&root);
+    c.open(&main, 1, SIGNATURE_MAIN);
+    c.diagnostics_for(&uri(&main));
+    let line = SIGNATURE_MAIN.lines().nth(2).unwrap();
+    let help = |c: &mut Client, byte: usize| {
+        c.at(
+            "textDocument/signatureHelp",
+            &main,
+            2,
+            utf16(line, byte),
+            json!({}),
+        )["result"]
+            .clone()
+    };
+
+    // Inside the first argument, a string with a comma after `😀`: parameter 0.
+    let first = line.find("😀, é").unwrap() + "😀,".len();
+    let r = help(&mut c, first);
+    assert_eq!(r["signatures"].as_array().unwrap().len(), 1, "{r}");
+    let sig = &r["signatures"][0];
+    assert_eq!(sig["label"], "fn pair(a: Str, b: Int) -> Int");
+    assert_eq!(
+        sig["parameters"],
+        json!([{"label": [8, 14]}, {"label": [16, 22]}]),
+        "each parameter as offsets into the label"
+    );
+    assert_eq!(
+        (r["activeSignature"].clone(), r["activeParameter"].clone()),
+        (json!(0), json!(0))
+    );
+    assert_eq!(sig["activeParameter"], 0);
+    assert_ne!(
+        utf16(line, first) as usize,
+        first,
+        "bytes and units differ here"
+    );
+
+    // After the separator, in the nested call's argument: the nested call.
+    let nested = line.find("str_len(s)").unwrap() + "str_len(".len();
+    let r = help(&mut c, nested);
+    assert_eq!(r["signatures"][0]["label"], "fn str_len(Str) -> Int");
+    assert_eq!(
+        r["signatures"][0]["parameters"],
+        json!([{"label": [11, 14]}])
+    );
+    // After that call's `)`, still in the outer second argument.
+    let r = help(&mut c, nested + "s)".len());
+    assert_eq!(
+        r["signatures"][0]["label"],
+        "fn pair(a: Str, b: Int) -> Int"
+    );
+    assert_eq!(r["activeParameter"], 1);
+
+    // No parameters: the signature, and no active parameter at all.
+    let r = help(&mut c, line.find("ping()").unwrap() + "ping(".len());
+    assert_eq!(r["signatures"][0]["label"], "fn ping() -> Int");
+    assert_eq!(r["signatures"][0]["parameters"], json!([]));
+    assert!(r.get("activeParameter").is_none(), "{r}");
+    assert!(r["signatures"][0].get("activeParameter").is_none(), "{r}");
+
+    // Past the last parameter of a call with too many arguments: nothing, rather than an
+    // absent index the protocol would read as the first parameter.
+    let r = help(&mut c, line.rfind(", 2)").unwrap() + 2);
+    assert_eq!(r, Value::Null);
+    // Outside any call's argument list: nothing, not the nearest call.
+    let r = help(&mut c, line.find(") + ping").unwrap() + 1);
+    assert_eq!(r, Value::Null);
+
+    // The current, unsaved text.
+    let edited = SIGNATURE_MAIN.replace("fn pair(a: Str, b: Int)", "fn pair(first: Str, b: Int)");
+    c.change(&main, 2, &edited);
+    c.diagnostics_for(&uri(&main));
+    let line = edited.lines().nth(2).unwrap();
+    let r = c.at(
+        "textDocument/signatureHelp",
+        &main,
+        2,
+        utf16(line, line.find("😀, é").unwrap()),
+        json!({}),
+    );
+    assert_eq!(
+        r["result"]["signatures"][0]["label"],
+        "fn pair(first: Str, b: Int) -> Int"
+    );
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
 }
