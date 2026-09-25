@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,435 passed, 0 failed, 13 ignored, across 75 suites**, run contained at
-N19 (2026-09-25); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
-13 passed, contained). N18 ended at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,448 passed, 0 failed, 13 ignored, across 76 suites**, run contained at
+N20 (2026-09-26); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
+13 passed, contained). N19 ended at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1271,8 +1271,40 @@ adds the real process: the capability, the whole identifier replaced in UTF-16 a
 built-in call head by prefix, a string refused, an unsaved local. Fourteen N19 mutations (area
 30).
 
-**Limitation** · Diagnostics, definition, hover, references, rename and completion only: no
-symbols, formatting, code actions, semantic tokens, signature help or inlay hints, no
+*N20, 2026-09-26: signature help — VERIFIED for calls of user functions (the module's own and
+imported ones), generic instantiations (written and inferred) and built-ins, and for `spawn`.*
+`LanguageService::call_at` and `signature_help`, and `textDocument/signatureHelp`, report the
+call whose argument list holds the position from a `CheckedCall` the checker records wherever
+it checks a call against a resolved callee (`Resolution::checked_call`, `architecture.md`
+§7.22): the callee, the argument spans, the parameter and return types the environment gave —
+an import's from its interface — and what a generic call settled. The tree decides only which
+argument list holds the position (innermost by nesting) and which argument (that list's own
+commas). Too few or too many arguments and wrong argument types still answer; an unresolved
+callee, a record or variant construction, a position outside any argument list and a
+compilation with any syntax recovery do not. One `Signature` and one renderer serve hover,
+completion and signature help. Triggered by `(` and `,`, no retrigger characters, one
+signature, parameters as UTF-16 label offsets; `null` past the last parameter; no active
+parameter for a callee with none. Evidence: `crates/nazm-service/tests/signature.rs` — a record,
+a function, a local and another module's private function sharing a spelling, each call shown
+as the function it resolved to (by declaration, through the reference index); a generic call
+inferred and written, with its settled arguments; a built-in; `[T: Equality]`; a zero-parameter
+call; a construction refused; twenty-two positions across nested calls, strings, comments,
+parenthesised arguments, constructions and nested type arguments, each with its exact active
+parameter; too few, too many, wrong types, an unresolved callee, a `spawn`; a stale version, a
+broken and a repaired source, a recovery elsewhere in the file, an unsaved and then closed
+dependency signature, another open program; a thousand edits with constant retained state and
+checked-call count; hover and signature help rendering one signature; a structural test that
+the module looks nothing up and substitutes nothing; and over the repository's own clean
+compilations 9,030 calls (71 generic) whose record is the resolution's callee with the
+declaring signature and the backend's type arguments, 4,814 of them asked of the service.
+`crates/nazm-cli/tests/durable_identity.rs` adds a call checked against a deserialised interface
+with the dependency deleted, recorded with the interface's signature. `crates/nazm-cli/tests/lsp.rs`
+adds the real process: the capability, label offsets, a comma inside a string after `😀`, a
+nested built-in, no active parameter, `null` past the end and outside the call, an unsaved edit.
+Fourteen N20 mutations (area 30).
+
+**Limitation** · Diagnostics, definition, hover, references, rename, completion and signature
+help only: no symbols, formatting, code actions, semantic tokens or inlay hints, no
 cancellation and no watched files. Every change re-analyses every open document in full; no
 incremental reparse or graph maintenance, and no persistent cache in the editor. A built-in, a
 type parameter and anything in a body that did not parse have no definition and no references;
@@ -1284,7 +1316,10 @@ entity is refused, because a module no open program loads may use it, and a clos
 never edited, because the protocol cannot make its content a precondition. Completion is of an
 identifier in a value, call-head or type position only — no field, variant, label, pattern or
 import-path completion, no auto-import, no trigger characters, no ranking — and there is none
-where the source needed syntax recovery.
+where the source needed syntax recovery. Signature help is for calls and `spawn`s whose callee
+the checker resolved — not record or variant constructions, and none while any file of the
+compilation needs syntax recovery (an unclosed argument list included); a built-in's parameters
+are shown by type, having no names; no documentation.
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
 are published for open documents only. MCP does not exist.
 
@@ -1379,8 +1414,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **362** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18), **174** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **376** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19), **188** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -1729,6 +1764,30 @@ caught — 16 at tier 1, and `imports-become-transitive`, which names no killer,
 runner error. The `completion` suite joined the `cli`, `semantics` and `checker` profiles.
 N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and are
 as they were.
+
+*N20 (2026-09-26) added fourteen and renamed one,* on the frozen final source. Every killer was
+verified by `--verify-killer`, contained at P1, one at a time, with no host build running — the
+fourteen, and the two N16 entries whose killer, `the_server_speaks_the_protocol_end_to_end`,
+N20 edited: 16 of 16. A fifteenth candidate — the argument list's upper bound moved from the
+`)`'s start to its end — was **not a killer's mutant at all**: `--verify-killer` found the
+mutant passing, because the walk down the tree enters only a node strictly containing the
+position, so either guard alone keeps the byte after `)` out of the call. It is recorded as a
+comment in the catalogue, not catalogued; the behaviour stays pinned by a test case. The
+fourteen attack N20's invariants: a rejected call not recorded, written type arguments recorded
+as inferred, inferred ones discarded, instantiated parameters recorded as declared, the outer
+call chosen, every argument the first, a nested comma or a type argument's comma counted, a
+position before `(` in the call, a recovered compilation answering, no parameter reported as
+a parameter, hover and signature help disagreeing, a requirement hidden, and an absent active
+parameter sent past the end. `n16-signature-help-is-advertised` became
+`n16-document-symbols-are-advertised`, the same defect with a capability the server still
+lacks. **Campaign `ea2f47200328923f`, targeted, P1, one session, 1,003 s:** those sixteen, and
+seven N16 and N19 entries on the code signature help shares — a stale version answered, a broken
+buffer keeping the last clean analysis, an edit reaching only its own document, the disk winning
+over a buffer, a closed buffer staying authoritative, an incoming column counted in bytes, a
+recovered file answering. **23 of 23 caught at tier 1**; no survivor, crash, timeout, unusable
+or uninjected entry, no runner error. The `signature` suite joined the `cli`, `semantics` and
+`checker` profiles. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were
+not re-run and are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a
