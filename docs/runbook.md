@@ -55,9 +55,30 @@ budget, with verified cleanup.
 
 ### Serial execution
 
-One Cargo build job and one test thread where applicable. No competing heavy workloads.
+No competing heavy workloads: one contained workload at a time, and one mutant at a time.
 **When a workload exceeds a budget, investigate the cause rather than raising the limit.**
 Do not change machine-wide settings and do not delete unrelated files.
+
+*History.* Until N14.1 this section also said "one Cargo build job and one test thread where
+applicable". That rule came from the 2026-09-21 incident, when an unbounded selfhost run
+took the host down, and it was kept because nothing had measured what parallelism *inside*
+a bounded container cost. N14.1 measured it (`performance.md`, *Development and evidence
+pipeline parallelism*) and relaxed exactly one thing: the **internal** parallelism of a
+workload, chosen by a named profile.
+
+| Workload | Default profile | Why |
+| --- | --- | --- |
+| `contained tests` | P4T4 — 4 CPUs, 4 jobs, 4 test threads | 3.03× faster, inside every memory gate |
+| `contained selfhost` | P4T4 | 3.44× faster, inside every memory gate |
+| `contained mutate` | P1 — 1 CPU, 1 job, 1 thread | every parallel profile crossed the total-memory gate |
+| `contained bootstrap`, `release`, `run` | P1 | not calibrated |
+| `contained bench` | P1, permanently | a measurement shares the machine with nothing |
+
+`cargo xtask contained --profile p1 <workload>` reproduces any older result. What did not
+change: containment is mandatory, the memory, swap, pid, storage and deadline ceilings are
+the same numbers, workloads never overlap, mutants never run two at once, and a campaign's
+journal is bound to the profile it ran under — a resume under another profile reuses
+nothing.
 
 ### Autonomy limits
 
@@ -243,10 +264,16 @@ a later tier passing would not mean the earlier one said nothing.
 
 ### Serial, and alone
 
-One Cargo job, one test thread, one mutant at a time, and nothing else heavy on the
-machine: no bootstrap, no benchmark, no second campaign, no full verification. The speed of
-v2 comes from running fewer tests, which holds on a constrained machine; it must never come
-from parallelism, which makes deadline-bearing verdicts a function of scheduling.
+One mutant at a time, and nothing else heavy on the machine: no bootstrap, no benchmark, no
+second campaign, no full verification. The speed of v2 comes from running fewer tests, which
+holds on a constrained machine; it must never come from running mutants concurrently, which
+makes deadline-bearing verdicts a function of scheduling.
+
+A campaign runs under P1 — one CPU, one Cargo job, one test thread — by default. N14.1 tried
+P4T4 and a two-job variant: verdicts and tiers matched P1, but both crossed the frozen
+total-memory gate (`performance.md`), so the default did not move. `--profile` still sizes
+each step if given, and the profile is part of the campaign identity: a journal recorded
+under one profile is never read by a resume under another.
 
 ### Deadlines and process trees
 
