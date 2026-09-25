@@ -46,6 +46,7 @@ pub mod key;
 pub mod module;
 pub mod prelude;
 pub mod record;
+pub mod references;
 pub mod resolve;
 pub mod types;
 pub mod udt;
@@ -56,9 +57,10 @@ pub use intrinsic::{Intrinsic, Shape};
 pub use key::{DefKey, DefKind, ModuleKey};
 pub use module::{Dependency, ModuleGraph, ModuleId};
 pub use record::{FieldDef, RecordDef, RecordId, Records, TaskUnsafe};
+pub use references::{ReferenceIndex, ReferenceTarget};
 pub use resolve::{
-    CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Propagation, Resolution,
-    VariantRef,
+    CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, LocalRef, PayloadRef, Propagation,
+    Resolution, VariantRef,
 };
 pub use types::{ParamOwner, Type, TypeParam, VecId};
 pub use udt::{

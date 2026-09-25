@@ -85,6 +85,18 @@ pub struct LocalDef {
     pub span: Span,
 }
 
+/// Which binding a variable mention refers to: a slot **of a particular function**.
+///
+/// A slot alone is a position in one function's storage, so two functions' slot 0 are two
+/// bindings. N17 records the owner beside it, at the point the checker already knows it,
+/// so that a consumer asking "which binding is this" does not have to work out which body
+/// a span sits in. Session-local, like everything else here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LocalRef {
+    pub function: FnId,
+    pub slot: u32,
+}
+
 /// One function's resolved shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FnDef {
@@ -147,7 +159,7 @@ pub struct CallSite {
 /// and the field's index in declaration order — and the backend decides where that field
 /// sits. A semantic stage that recorded a byte offset here would have made the layout
 /// part of the language's meaning, and no later layout work could change it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FieldRef {
     pub record: RecordId,
     /// The field's index in the record's **declaration order**, which is the session-local
@@ -162,7 +174,7 @@ pub struct FieldRef {
 /// order at lowering; what resolution decides is *which variant*, spelled as the enum's
 /// identity and the variant's index in declaration order. A semantic stage that recorded a
 /// tag would have made the representation part of the language's meaning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VariantRef {
     pub enumeration: EnumId,
     /// The variant's index in the enum's **declaration order**, which is the session-local
@@ -197,7 +209,7 @@ pub struct Propagation {
 /// Which payload field of which variant an initialiser or a pattern field names.
 ///
 /// The enum's answer to [`FieldRef`], and not an offset for the same reason.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PayloadRef {
     pub enumeration: EnumId,
     pub variant: u32,
@@ -224,10 +236,11 @@ pub struct Resolution {
     by_module: Vec<HashMap<String, FnId>>,
     /// Keyed by the span of the **callee name**, which is written once per call site.
     calls: HashMap<Span, Callee>,
-    /// Keyed by the span of the variable mention, which is written once per use.
-    vars: HashMap<Span, u32>,
-    /// Keyed by the span of the **field name** in a projection or a field assignment,
-    /// which is written once per access.
+    /// Keyed by the span of the variable mention, which is written once per use — and by
+    /// the name a `let` or a pattern field introduces, which resolves to its own binding.
+    vars: HashMap<Span, LocalRef>,
+    /// Keyed by the span of the **field name** in a projection, a field assignment or a
+    /// record construction's initialiser, which is written once per access.
     fields: HashMap<Span, FieldRef>,
     /// Keyed by the span of the **type name** in a record construction.
     constructions: HashMap<Span, RecordId>,
@@ -403,7 +416,44 @@ impl Resolution {
     /// Which slot the variable mentioned at `span` refers to.
     #[must_use]
     pub fn var(&self, span: Span) -> Option<u32> {
+        self.vars.get(&span).map(|l| l.slot)
+    }
+
+    /// Which binding — which function's slot — the variable mentioned at `span` refers
+    /// to.
+    #[must_use]
+    pub fn local(&self, span: Span) -> Option<LocalRef> {
         self.vars.get(&span).copied()
+    }
+
+    /// Every use this resolution recorded, with what it was resolved to, in a fixed order
+    /// of kinds — calls, variables, constructions, variants, fields, payload fields — and
+    /// in no particular order within one. For [`crate::references`], which is the only
+    /// consumer that wants them all rather than one at a time.
+    ///
+    /// A call to a built-in is not here: it refers to nothing a program declared.
+    pub(crate) fn each_use(&self, mut f: impl FnMut(Span, crate::references::ReferenceTarget)) {
+        use crate::references::ReferenceTarget as T;
+        for (span, callee) in &self.calls {
+            if let Callee::Function(id) = callee {
+                f(*span, T::Function(*id));
+            }
+        }
+        for (span, local) in &self.vars {
+            f(*span, T::Local(*local));
+        }
+        for (span, id) in &self.constructions {
+            f(*span, T::Record(*id));
+        }
+        for (span, v) in &self.variants {
+            f(*span, T::Variant(*v));
+        }
+        for (span, field) in &self.fields {
+            f(*span, T::Field(*field));
+        }
+        for (span, p) in &self.payloads {
+            f(*span, T::PayloadField(*p));
+        }
     }
 
     // ---- construction, for the checker ----
@@ -441,8 +491,8 @@ impl Resolution {
         self.calls.insert(span, callee);
     }
 
-    pub fn record_var(&mut self, span: Span, slot: u32) {
-        self.vars.insert(span, slot);
+    pub fn record_var(&mut self, span: Span, to: LocalRef) {
+        self.vars.insert(span, to);
     }
 
     pub fn record_field(&mut self, span: Span, to: FieldRef) {

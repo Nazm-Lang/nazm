@@ -25,8 +25,8 @@ use nazm_sema::intrinsic::{Intrinsic, Shape};
 use nazm_sema::module::{Dependency, ModuleGraph, ModuleId};
 use nazm_sema::record::{FieldDef, RecordDef, RecordId};
 use nazm_sema::resolve::{
-    CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, PayloadRef, Propagation, Resolution,
-    VariantRef,
+    CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, LocalRef, PayloadRef, Propagation,
+    Resolution, VariantRef,
 };
 use nazm_sema::types::{ParamOwner, Type, TypeParam};
 use nazm_sema::udt::{TypeNode, UserTypes, MAX_TYPE_DEPTH};
@@ -2037,6 +2037,18 @@ impl Checker<'_> {
             .unwrap_or(0)
     }
 
+    /// Record that the variable written at `span` is the binding in `slot` of the function
+    /// being checked.
+    ///
+    /// The owner is the function this body belongs to, which is known here and nowhere
+    /// more cheaply. Outside a declared function there is no binding to name, and nothing
+    /// is recorded — the same condition under which [`Self::allocate`] allocates nothing.
+    fn record_var(&mut self, span: Span, slot: u32) {
+        if let Some(function) = self.current {
+            self.res.record_var(span, LocalRef { function, slot });
+        }
+    }
+
     /// Record what a call resolved to, and answer the same question for the caller.
     ///
     /// **Built-ins are resolved before user functions.** A user definition of a built-in's
@@ -2361,8 +2373,8 @@ impl Checker<'_> {
                 .res
                 .records()
                 .get(id)
-                .and_then(|d| d.field(&f.name).map(|(_, fd)| (fd.ty, fd.name_span)));
-            let Some((want, declared_at)) = declared else {
+                .and_then(|d| d.field(&f.name).map(|(i, fd)| (i, fd.ty, fd.name_span)));
+            let Some((index, want, declared_at)) = declared else {
                 let name = self.res.types().show(Type::Record(id)).to_owned();
                 self.errors.push(
                     Diagnostic::error(
@@ -2392,6 +2404,16 @@ impl Checker<'_> {
                 continue;
             }
             given.push((f.name.clone(), f.name_span));
+            // Which field this initialiser gives a value to — decided just above, and
+            // recorded (N17) so that a field's uses include the constructions that set it,
+            // not only the projections that read it.
+            self.res.record_field(
+                f.name_span,
+                FieldRef {
+                    record: id,
+                    field: index,
+                },
+            );
             let got = self.value_type(&f.value, Some(want));
             if got != want {
                 let (swant, sgot) = (self.show(want), self.show(got));
@@ -2931,7 +2953,7 @@ impl Checker<'_> {
             // binding that names a sequence still reaches shared mutable storage, which
             // `docs/spec.md` says in as many words.
             let slot = self.allocate(binding, f.binding_span, ty, false);
-            self.res.record_var(f.binding_span, slot);
+            self.record_var(f.binding_span, slot);
             self.scopes
                 .define(binding, ty, false, Some(f.binding_span), slot);
         }
@@ -3229,7 +3251,7 @@ impl Checker<'_> {
                 // The declaration site resolves to the binding it introduces, so the
                 // backend can find the slot for a `let` the same way it finds one for a
                 // mention.
-                self.res.record_var(l.name_span, slot);
+                self.record_var(l.name_span, slot);
                 self.scopes
                     .define(&l.name, ty, l.mutable, Some(l.name_span), slot);
                 false
@@ -3455,7 +3477,7 @@ impl Checker<'_> {
             return;
         };
 
-        self.res.record_var(place.name_span, binding.slot);
+        self.record_var(place.name_span, binding.slot);
 
         // Mutability is checked at the **root binding**, whatever the path. `p.x = 2`
         // replaces part of what `p` holds, so it needs `let mut p` for the same reason
@@ -3655,7 +3677,7 @@ impl Checker<'_> {
                 Some(b) => {
                     // Which binding this mention refers to, recorded where the question
                     // was answered. The backend reads this instead of walking scopes again.
-                    self.res.record_var(*span, b.slot);
+                    self.record_var(*span, b.slot);
                     Completion::Value(b.ty)
                 }
                 None => {
