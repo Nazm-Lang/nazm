@@ -436,6 +436,9 @@ pub(crate) struct Options {
     pub(crate) source_commit: Option<String>,
     /// Print journal lines on stdout for a supervisor to collect.
     pub(crate) export_journal: bool,
+    /// Each step's internal parallelism. N14.1; serial unless a profile says otherwise,
+    /// and part of the campaign's identity either way.
+    pub(crate) parallelism: plan::Parallelism,
 }
 
 impl Options {
@@ -453,6 +456,7 @@ impl Options {
             deadlines: Deadlines::default(),
             source_commit: None,
             export_journal: false,
+            parallelism: plan::Parallelism::SERIAL,
         }
     }
 
@@ -523,12 +527,21 @@ fn harness(root: &Path) -> String {
         .map_or_else(|| "unknown".to_owned(), |b| campaign::blake(&b))
 }
 
+/// The CPU quota this process runs under, as its cgroup states it — `cpu.max`, such as
+/// `400000 100000` for four CPUs — or `unbounded` where there is no cgroup file to read.
+/// Part of a campaign's identity since N14.1.
+fn cpu_quota() -> String {
+    fs::read_to_string("/sys/fs/cgroup/cpu.max")
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_else(|_| "unbounded".to_owned())
+}
+
 /// Build and run the workspace suite on the pristine tree. Returns how many binaries
 /// reported, which every later workspace-suite run must match.
 fn baseline(o: &Options, identity_tree: &str) -> Result<usize, String> {
     let build = procs::run(&Invocation {
         program: campaign::cargo(),
-        args: plan::workspace_build(),
+        args: plan::workspace_build(o.parallelism),
         cwd: o.root.clone(),
         env: Vec::new(),
         deadline: Duration::from_secs(o.deadlines.build_secs),
@@ -562,7 +575,7 @@ fn baseline(o: &Options, identity_tree: &str) -> Result<usize, String> {
     }
     let suite = procs::run(&Invocation {
         program: campaign::cargo(),
-        args: plan::broad_suite(),
+        args: plan::broad_suite(o.parallelism),
         cwd: o.root.clone(),
         env: Vec::new(),
         deadline: Duration::from_secs(o.deadlines.broad_secs),
@@ -605,7 +618,7 @@ fn verify_listed(o: &Options, plans: &[MutationPlan]) -> Result<(), Vec<String>>
         let list = |ignored: bool| -> Result<BTreeSet<String>, String> {
             let f = procs::run(&Invocation {
                 program: campaign::cargo(),
-                args: target.list_args(ignored),
+                args: target.list_args(ignored, o.parallelism),
                 cwd: o.root.clone(),
                 env: Vec::new(),
                 deadline: Duration::from_secs(o.deadlines.list_secs),
@@ -705,6 +718,8 @@ pub(crate) fn run_all(o: &Options) -> End {
         selected: plans.iter().map(|p| p.name.clone()).collect(),
         deadlines: o.deadlines,
         reset_derived: o.reset_derived,
+        parallelism: o.parallelism,
+        cpu_quota: cpu_quota(),
     };
     let key = identity.key();
     let header = campaign::Header {
@@ -732,7 +747,8 @@ pub(crate) fn run_all(o: &Options) -> End {
             println!(
                 "resume: no journal for campaign {key} under {}. Nothing is reused; a journal \
                  recorded against any other tree, catalogue, harness, toolchain, strategy, \
-                 selection or deadline set has a different key and is never read.",
+                 selection, deadline set or execution profile has a different key and is \
+                 never read.",
                 from.display()
             );
         }
@@ -1006,6 +1022,7 @@ fn run_one(
     let mut ex = campaign::Real {
         root: &o.root,
         deadlines: o.deadlines,
+        parallelism: o.parallelism,
         reset_derived: o.reset_derived,
         logs,
         failing: Vec::new(),
@@ -1117,6 +1134,7 @@ pub(crate) fn verify_killer(
     let mut ex = campaign::Real {
         root: &o.root,
         deadlines: o.deadlines,
+        parallelism: o.parallelism,
         reset_derived: o.reset_derived,
         logs: None,
         failing: Vec::new(),

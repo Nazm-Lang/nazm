@@ -176,10 +176,11 @@ impl Target {
     }
 
     /// `cargo test` arguments that list this target's tests, one `name: test` line each.
-    pub(crate) fn list_args(&self, ignored_only: bool) -> Vec<String> {
+    pub(crate) fn list_args(&self, ignored_only: bool, par: Parallelism) -> Vec<String> {
         let mut v = vec!["test".to_owned()];
         v.extend(self.flags());
-        v.extend(["--jobs", "1", "--", "--list", "--format", "terse"].map(str::to_owned));
+        v.extend(["--jobs".to_owned(), par.cargo_jobs.to_string()]);
+        v.extend(["--", "--list", "--format", "terse"].map(str::to_owned));
         if ignored_only {
             v.push("--ignored".to_owned());
         }
@@ -211,12 +212,13 @@ impl TestSelector {
         }
     }
 
-    /// The `cargo test` arguments. Serial on both axes, like the broad suite: the same
-    /// execution model, so a test cannot pass here and fail there for scheduling reasons.
-    pub(crate) fn cargo_args(&self) -> Vec<String> {
+    /// The `cargo test` arguments, under the same [`Parallelism`] as the broad suite: the
+    /// same execution model, so a test cannot pass here and fail there for scheduling
+    /// reasons.
+    pub(crate) fn cargo_args(&self, par: Parallelism) -> Vec<String> {
         let mut v = vec!["test".to_owned()];
         v.extend(self.target.flags());
-        v.extend(["--jobs", "1", "--no-fail-fast", "--", "--test-threads", "1"].map(str::to_owned));
+        v.extend(par.test_flags());
         if let Some(name) = &self.exact {
             v.push(name.clone());
             v.push("--exact".to_owned());
@@ -238,29 +240,56 @@ impl TestSelector {
 /// oracle and the optimisation each spelled the command, they could drift apart and the
 /// optimisation would be checked against a suite nobody runs.
 ///
-/// The same invocation the legacy runner used, flag for flag: one build job, one test
-/// thread, and `--no-fail-fast` so a caught mutant still reports every binary.
-pub(crate) fn broad_suite() -> Vec<String> {
-    [
-        "test",
-        "--workspace",
-        "--jobs",
-        "1",
-        "--no-fail-fast",
-        "--",
-        "--test-threads",
-        "1",
-    ]
-    .map(str::to_owned)
-    .to_vec()
+/// Under [`Parallelism::SERIAL`] it is the invocation the legacy runner used, flag for
+/// flag: one build job, one test thread, and `--no-fail-fast` so a caught mutant still
+/// reports every binary.
+pub(crate) fn broad_suite(par: Parallelism) -> Vec<String> {
+    let mut v = vec!["test".to_owned(), "--workspace".to_owned()];
+    v.extend(par.test_flags());
+    v
 }
 
 /// Does the tree build, tests included? The legacy runner's check, unchanged, and still
 /// the thing that separates UNUSABLE from CAUGHT.
-pub(crate) fn workspace_build() -> Vec<String> {
-    ["build", "--workspace", "--tests", "--quiet", "--jobs", "1"]
+pub(crate) fn workspace_build(par: Parallelism) -> Vec<String> {
+    let mut v: Vec<String> = ["build", "--workspace", "--tests", "--quiet"]
         .map(str::to_owned)
-        .to_vec()
+        .to_vec();
+    v.extend(["--jobs".to_owned(), par.cargo_jobs.to_string()]);
+    v
+}
+
+/// How much parallelism **one** step of a campaign may use inside itself. N14.1.
+///
+/// Never how many mutants run at once — that is always one. This is the Cargo job count
+/// for each build and the libtest thread count for each test run, and it is part of a
+/// campaign's identity: a verdict that carries a deadline is evidence about the
+/// execution that produced it, so a journal written under one setting is never resumed
+/// under another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Parallelism {
+    pub(crate) cargo_jobs: u32,
+    pub(crate) test_threads: u32,
+}
+
+impl Parallelism {
+    /// One job, one thread: the legacy runner's execution, and the default.
+    pub(crate) const SERIAL: Self = Self {
+        cargo_jobs: 1,
+        test_threads: 1,
+    };
+
+    /// `--jobs N --no-fail-fast -- --test-threads M`.
+    fn test_flags(self) -> Vec<String> {
+        vec![
+            "--jobs".to_owned(),
+            self.cargo_jobs.to_string(),
+            "--no-fail-fast".to_owned(),
+            "--".to_owned(),
+            "--test-threads".to_owned(),
+            self.test_threads.to_string(),
+        ]
+    }
 }
 
 /// Where a profile choice came from, so a plan can say.
@@ -791,7 +820,7 @@ replace = "r"
         ));
         let p = plan(&c, &[0]).expect("plan");
         assert_eq!(
-            p[0].killers[0].cargo_args(),
+            p[0].killers[0].cargo_args(super::Parallelism::SERIAL),
             [
                 "test",
                 "-p",
@@ -813,7 +842,7 @@ replace = "r"
     #[test]
     fn the_broad_suite_is_the_legacy_invocation() {
         assert_eq!(
-            broad_suite(),
+            broad_suite(super::Parallelism::SERIAL),
             [
                 "test",
                 "--workspace",
