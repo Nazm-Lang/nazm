@@ -5,6 +5,8 @@
 **Purpose:** Define what Nazm is ultimately trying to solve and why.  
 **Status:** Authoritative long-term goals; not an implementation-status document.
 
+**Constitution revision — 2026-09-22.** This revision preserves the original historical-barrier and AI-era constitution, aligns the long-term memory ambition with the N7 memory constitution, and extends the domain ambition to best-in-class multi-profile compilation, WebAssembly and decentralized/Web3 execution. It does **not** upgrade any capability status; implementation truth remains owned by `capability-matrix.md`.
+
 ---
 
 ## 0. Authority and Interpretation
@@ -77,6 +79,14 @@ simpler languages + integrated tooling
 human-readable source is still opaque to machines and AI
         ↓
 semantic compiler interfaces
+
+general-purpose execution assumes one trusted machine
+        ↓
+deterministic, capability-restricted and metered execution for decentralized systems
+
+one compiler/runtime model rarely fits every domain
+        ↓
+one semantic language with restriction profiles and multiple backends
 ```
 
 Nazm's ambition is to attack these barriers together without simply stacking all historical solutions on top of each other.
@@ -107,9 +117,82 @@ AI-readable semantics
 developer productivity
 +
 AI-era token efficiency
++
+deterministic decentralized execution
++
+portable sandboxed execution
++
+resource-aware smart contracts
 ```
 
 under one coherent language model.
+
+## 1.1 What “best of the best” means
+
+Nazm does not define “best” as winning one universal ranking. Programming-language goals conflict:
+
+```text
+maximum low-level freedom        ↔ strongest static guarantees
+maximum clean-build optimization ↔ minimum development latency
+fully automatic management       ↔ deterministic resource lifetime
+ambient convenience              ↔ capability security
+general OS execution             ↔ deterministic smart-contract execution
+```
+
+The goal is therefore **Pareto excellence under explicit profiles**, not pretending the trade-offs do not exist.
+
+Nazm should aim to be best-in-class, with evidence, across independently measured dimensions:
+
+- semantic correctness;
+- memory and concurrency safety;
+- native runtime performance;
+- predictable latency and resource use;
+- compiler and incremental latency;
+- binary size and startup;
+- portability and cross compilation;
+- embedded and systems control;
+- server concurrency and fault isolation;
+- high-assurance analyzability;
+- WebAssembly portability;
+- decentralized/Web3 determinism and resource metering;
+- diagnostics and repair quality;
+- interoperability and ecosystem adoption;
+- reproducibility and provenance;
+- AI semantic context efficiency;
+- human and agent task-completion efficiency.
+
+A claim of superiority in one dimension never silently becomes a claim about another.
+
+## 1.2 One semantic language, many execution environments
+
+The long-term shape is:
+
+```text
+                         Nazm source
+                              │
+                     one semantic language
+                              │
+       ┌──────────────────────┼──────────────────────┐
+       │                      │                      │
+    General                Systems                Critical
+       │                      │                      │
+     Server                Embedded               Verified
+       │                      │                      │
+     AI/HPC                  WASM                  Web3
+       └──────────────────────┼──────────────────────┘
+                              │
+                       profile restrictions
+                              │
+       ┌──────────────────────┼──────────────────────┐
+       │                      │                      │
+   native LLVM            WebAssembly         contract backends
+                                                  │
+                                   ┌──────────────┼──────────────┐
+                                   │              │              │
+                                  EVM           sBPF/SVM     future VMs
+```
+
+A profile may refuse constructs, authorities or nondeterministic operations. It must not reinterpret ordinary Nazm semantics. Web3 must therefore be a restricted execution profile and backend family, **not a forked language dialect**.
 
 ---
 
@@ -753,6 +836,112 @@ Higher-level ecosystem bridges may follow.
 
 ---
 
+## 2.18 ML / OCaml — The Typed-Abstraction and Compiler-Construction Barrier
+
+### Lesson
+
+Algebraic data types, exhaustive pattern matching, local type inference and compositional modules can make complex symbolic programs concise without surrendering static reasoning.
+
+### Nazm goal
+
+User-defined product and sum types should be first-class, and pattern matching should make state machines, compilers, protocols and error handling explicit rather than encoding them through integer tags and parallel arrays.
+
+The lesson is semantic compression, not a mandate to reproduce the entire ML module/type system.
+
+---
+
+## 2.19 TypeScript — The Large Dynamic-Ecosystem Tooling Barrier
+
+### Lesson
+
+A language can add powerful static tooling to a large existing ecosystem without requiring every boundary to become statically pure. Structural typing, editor services and gradual adoption show that tooling quality can drive language adoption.
+
+### Nazm goal
+
+Nazm should make semantic tooling, language-server services, migration and interoperability first-class, while avoiding a type system whose complexity exists mainly to model unrestricted dynamic-language patterns Nazm does not have.
+
+---
+
+## 2.20 WebAssembly — The Portable Sandboxed Execution Barrier
+
+### Barrier
+
+Native machine code is efficient but tied to target ABIs and host authority. Browser and plugin environments require portable, sandbox-friendly execution with explicit host integration.
+
+### Nazm lesson
+
+Portability should not require one heavyweight VM, and sandboxing should not require a separate source language.
+
+### Nazm goal
+
+WebAssembly should become a first-class compilation target where the language subset and host capabilities are explicit. The same semantic source should be usable for browser, server, plugin and contract-oriented WASM environments where their host APIs permit it.
+
+---
+
+## 2.21 Solidity / EVM — The Deterministic Smart-Contract Barrier
+
+### Barrier
+
+On-chain programs run under consensus. Ordinary assumptions about filesystem access, wall clock, networking, unrestricted loops and unmetered computation do not hold. Persistent state, external calls, ABI compatibility and resource cost become part of correctness.
+
+### Nazm lesson
+
+A smart-contract language is not merely a normal language with a different code generator. Determinism, persistent state, external-call boundaries, storage layout and resource metering must be visible to the compiler.
+
+### Nazm goal
+
+A future Web3 profile should permit EVM-oriented smart contracts without making EVM-specific semantics part of General Nazm. ABI, storage and event artefacts should be generated from typed semantic definitions rather than duplicated handwritten descriptions.
+
+---
+
+## 2.22 Move — The Digital-Asset Resource-Safety Barrier
+
+### Barrier
+
+Ordinary copy/discard semantics are dangerous for scarce digital assets. A token, capability or ownership resource may need to be impossible to duplicate or silently destroy.
+
+### Nazm lesson
+
+Some values represent **resources**, not ordinary freely copyable data. Asset conservation is a type/resource-semantics problem, not merely a library convention.
+
+### Nazm goal
+
+Nazm should research an asset/resource kind that composes with its broader ownership constitution and can express “cannot duplicate”, “cannot silently discard”, “must transfer/store/explicitly consume”, without forcing resource semantics onto ordinary values.
+
+---
+
+## 2.23 Solana / Account-Oriented On-Chain Execution — The High-Throughput State-Access Barrier
+
+### Barrier
+
+Some decentralized runtimes separate executable program code from mutable account/state objects and require programs to declare or receive the state they may access. Throughput depends on making access sets and resource budgets explicit enough for the runtime to schedule safely.
+
+### Nazm lesson
+
+Explicit state authority can improve both security and parallel execution. A compiler that understands signer, writable/read-only state and cross-program call boundaries can reject mistakes before deployment.
+
+### Nazm goal
+
+A future Web3 profile should be able to target account-oriented VMs such as sBPF/SVM-style environments through typed state and capability adapters, while keeping the source-language semantics chain-neutral where possible.
+
+---
+
+## 2.24 Decentralized Systems — The Consensus and Ambient-Nondeterminism Barrier
+
+### Barrier
+
+A normal program can consult ambient time, randomness, filesystem state, process environment or the network. A consensus-executed program cannot permit each validator to observe a different world.
+
+### Nazm lesson
+
+Determinism is not merely a testing preference in decentralized systems. It is a correctness condition.
+
+### Nazm goal
+
+Effects and capabilities should eventually allow the compiler to prove that a contract profile has no undeclared nondeterministic authority. Time, randomness, oracle data and external state must arrive through explicit execution-environment capabilities whose semantics are defined by the target profile.
+
+---
+
 # 3. Historical Barrier Compression
 
 The previous history can be reduced to a smaller set of root barriers.
@@ -966,13 +1155,71 @@ Nazm goal:
 
 maximize verified semantic value per unit of AI context while preserving human readability and compiler precision.
 
+## B19 — General Execution vs Consensus Determinism
+
+Historical tension:
+
+```text
+ambient OS authority
+↔
+identical execution on independent validators
+```
+
+Nazm goal:
+
+profile-controlled deterministic execution where nondeterministic inputs exist only through explicit target capabilities.
+
+## B20 — Ordinary Values vs Scarce Digital Assets
+
+Historical tension:
+
+```text
+copy/discard convenience
+↔
+asset conservation and ownership integrity
+```
+
+Nazm goal:
+
+resource/asset semantics that prevent accidental duplication or loss without infecting every ordinary value with affine restrictions.
+
+## B21 — General Computation vs Metered Computation
+
+Historical tension:
+
+```text
+unbounded local computation
+↔
+consensus-executed gas / compute / storage budgets
+```
+
+Nazm goal:
+
+make resource cost visible enough that profiles may meter, bound or statically reject execution without changing the meaning of ordinary operations.
+
+## B22 — Chain Portability vs Chain-Specific State Models
+
+Historical tension:
+
+```text
+one contract source
+↔
+EVM storage, WASM host APIs, account models, chain-specific ABI
+```
+
+Nazm goal:
+
+keep core semantics chain-neutral and isolate unavoidable chain semantics behind typed profile capabilities, standard libraries and backend adapters.
+
 ---
 
 # 4. Nazm Grand Mission
 
 Nazm aims to become:
 
-> A human-readable, machine-native, AI-native, memory-safe-by-default, concurrency-first, high-performance programming language and toolchain capable of scaling from ordinary software to systems programming, embedded computing, cybersecurity, AI/HPC and restricted high-assurance environments while making machine cost, effects, token cost and correctness evidence unusually visible.
+> A human-readable, machine-native, AI-native, memory-safe-by-default, concurrency-first, high-performance programming language and compiler platform capable of scaling from ordinary software to systems programming, servers, embedded computing, cybersecurity, AI/HPC, WebAssembly, decentralized/Web3 execution and restricted high-assurance environments while making machine cost, effects, authority, resource use, token cost and correctness evidence unusually visible.
+
+The ambition is **best-in-class by measured dimension**, not “one implementation choice wins every workload.” Native, embedded, critical, WASM and Web3 environments may use different runtimes and backends while preserving one semantic language.
 
 The objective is not merely to run programs.
 
@@ -1108,22 +1355,35 @@ They must be:
 
 ---
 
-## G05 — Value-Oriented Ownership Ergonomics
+## G05 — Intent-Oriented Ownership and Aliasing Ergonomics
 
-Nazm should investigate whether ordinary programmers can work mainly with intuitive value semantics while the compiler handles richer ownership reasoning internally.
+Nazm should make ownership, aliasing and reclamation safe without forcing ordinary code to carry lifetime syntax whose only purpose is to explain compiler internals.
 
-Potential surface intentions:
+The goal is **not** to predetermine that every heap-backed value has value semantics. Different semantic kinds may legitimately exist when their observable behaviour demands it:
 
 ```text
-observe
-mutate exclusively
-move/consume
-initialize
+immediate value
+shared immutable value
+owned/shared mutable handle
+runtime-managed shared handle
+future resource/asset value
 ```
 
-The syntax is not frozen.
+Assignment, parameter passing, return, mutation and task transfer must have explicit language meaning for each kind. Existing observable aliasing must not be rewritten merely to simplify implementation.
 
-The semantics matter.
+User-defined records already have settled meaning: they are nominal value types, whose copy behaviour — including that of any shared handle they contain — the specification defines. Ownership research may still investigate copy elision, unique ownership, regions or new resource/value kinds where they solve new problems — hypotheses to test against real workloads, not a constitution imposed on every existing type — and none of it may silently change what an existing record value observably does.
+
+The surface objective remains intent-oriented:
+
+```text
+read / observe
+mutate
+share
+transfer / consume
+return / publish
+```
+
+with expensive ownership operations explainable by compiler tooling.
 
 ---
 
@@ -3406,6 +3666,438 @@ It should also be **efficient to communicate, understand, generate, modify, vali
 
 That is a fundamental language requirement.
 
+
+---
+
+# 6A. Best-in-Class Compiler and Decentralized/Web3 Constitution
+
+The goals below extend the original ninety-nine goals without changing their authority class. They are ambitions, not status claims. They exist because “best of the best” must be translated into engineering dimensions, and because decentralized execution introduces requirements ordinary native software does not.
+
+## G100 — Best-in-Class by Evidence, Not Slogan
+
+Nazm should pursue the strongest practical combination of:
+
+```text
+clarity
+safety
+performance
+compile latency
+memory efficiency
+portability
+reliability
+determinism
+security
+verification
+interoperability
+AI efficiency
+```
+
+No universal score may hide trade-offs. Every “best” claim names a comparator, workload, machine/profile and evidence class.
+
+## G101 — One Semantic Core, Multiple Backends
+
+Nazm should support several execution environments without forking program meaning.
+
+Potential backend families:
+
+```text
+LLVM/native
+Cranelift/JIT or dev AOT if justified
+WebAssembly
+EVM-oriented contract backend
+sBPF/SVM-oriented backend
+future accelerator backends
+future verified/restricted backends
+```
+
+Backends translate settled semantics. They do not invent new source-language meaning.
+
+## G102 — Backend Contract Precision
+
+Every backend boundary should consume an explicit representation whose semantics, ABI assumptions, failure behaviour and target inputs are known. Backend caches should key the **actual transformation input** where possible rather than a fragile approximation of upstream dependencies.
+
+## G103 — WebAssembly as a First-Class Portable Target
+
+Nazm should eventually target WebAssembly for:
+
+- browser components;
+- sandboxed server plugins;
+- edge runtimes;
+- portable extensions;
+- WASM-oriented smart-contract environments.
+
+The source language must not become browser-specific. Host authority belongs in imported capabilities/interfaces.
+
+## G104 — Web3 as a Restriction Profile, Never a Dialect
+
+A future Web3 profile must use the same Nazm semantics and may only:
+
+- refuse nondeterministic or unavailable operations;
+- restrict allocation/control flow/resource use;
+- grant chain-specific capabilities;
+- impose additional verification obligations;
+- choose a contract backend and ABI.
+
+It must never reinterpret ordinary arithmetic, ownership, evaluation order or error semantics merely because code is on-chain.
+
+## G105 — Deterministic Consensus Execution
+
+A contract-capable profile should make consensus determinism statically checkable where possible.
+
+Disallowed ambient sources should include, unless supplied by an explicit deterministic host capability:
+
+```text
+wall clock
+process environment
+filesystem
+arbitrary network
+ambient randomness
+thread scheduling observation
+unspecified platform state
+```
+
+Target-provided time, randomness, oracle or block metadata must be explicit inputs/capabilities with defined semantics.
+
+## G106 — Metered and Explainable Resource Cost
+
+Web3 execution introduces gas/compute/storage budgets. Nazm should eventually explain and, where possible, statically bound:
+
+```text
+compute
+storage reads
+storage writes
+memory
+allocations
+external calls
+cryptographic host calls
+event/log output
+loop bounds
+```
+
+Where a static upper bound is impossible, the compiler should distinguish that from an unknown implementation detail.
+
+## G107 — Persistent State as Explicit Authority
+
+Persistent contract state must not look like an ordinary hidden global variable.
+
+The compiler should eventually know:
+
+- what state a function may read;
+- what state it may mutate;
+- who authorizes the mutation;
+- which layout/version is stored;
+- which external calls can observe intermediate state.
+
+## G108 — Digital Asset / Resource Safety
+
+Nazm should research an asset/resource semantic kind suitable for tokens, capabilities, ownership certificates and other scarce values.
+
+Potential guarantees:
+
+```text
+no accidental duplication
+no silent discard where conservation is required
+explicit transfer
+explicit authorized destruction
+well-defined storage ownership
+```
+
+This must compose with, not replace, ordinary Nazm ownership semantics.
+
+## G109 — Financial Numeric Correctness
+
+Smart contracts and financial systems require arithmetic beyond a single signed machine integer. Nazm should eventually support or standardize:
+
+```text
+fixed-width signed/unsigned integers
+large integers such as 128/256-bit where targets require them
+fixed-point decimal/rational representations with explicit scale
+checked conversion
+explicit rounding rules
+no implicit floating-point money semantics
+```
+
+Numeric semantics must be target-independent unless a profile explicitly exposes a target-specific primitive.
+
+## G110 — Typed Cryptographic and Address Primitives
+
+Addresses, hashes, signatures and public keys should not all degrade into unstructured byte arrays at API boundaries.
+
+Nazm should prefer typed library/profile primitives with explicit algorithms and lengths while keeping cryptographic implementations in audited libraries or target host functions rather than making every algorithm a language keyword.
+
+## G111 — Contract Interface / ABI Generation
+
+From one typed source definition the toolchain should eventually be able to generate target artefacts such as:
+
+```text
+contract ABI
+client bindings
+event schemas
+storage/interface metadata
+source maps
+interface fingerprints
+```
+
+Duplicated handwritten ABI descriptions are a correctness risk.
+
+## G112 — Storage Layout and Upgrade Safety
+
+Persistent-state layout can outlive a compiler version. Nazm should eventually make contract storage layout explicit, inspectable and version-aware.
+
+An upgrade should be able to answer:
+
+```text
+Is the old state readable?
+Which fields moved or changed?
+Is migration required?
+Did an interface or storage compatibility contract break?
+```
+
+## G113 — External-Call and Reentrancy Awareness
+
+The compiler should eventually model external contract/program calls as effects with explicit authority and state-ordering consequences.
+
+Where a target admits reentrant execution, tooling should be able to identify dangerous patterns such as:
+
+```text
+state read
+external call
+state write based on stale assumption
+```
+
+The goal is analysis and explicitness, not pretending all reentrancy can be universally prohibited.
+
+## G114 — Signer and Authorization Semantics
+
+Contract APIs should make authorization requirements visible in types, capabilities or contracts.
+
+The compiler should eventually help answer:
+
+```text
+Who may invoke this transition?
+Which signer/authority is required?
+Which state may that authority modify?
+```
+
+Authentication policy remains application logic; authority flow should not remain invisible.
+
+## G115 — Chain-Neutral Core, Typed Host Adapters
+
+EVM storage, WASM host imports, account-oriented state and future chain models differ. Nazm should isolate these differences behind typed backend/profile adapters.
+
+Core language semantics should not acquire a keyword merely because one chain exposes a particular syscall or account convention.
+
+## G116 — EVM Backend Goal
+
+Nazm should be architecturally capable of targeting EVM-compatible environments.
+
+Possible implementation routes may evolve:
+
+```text
+Nazm semantic contract model
+        ↓
+contract IR
+        ↓
+Yul/other verified intermediate route
+        ↓
+EVM bytecode
+```
+
+or a direct backend later if evidence justifies it.
+
+The goal is semantic correctness and tooling quality, not owning every low-level assembler immediately.
+
+## G117 — WASM Contract Backend Goal
+
+For chains and runtimes that execute WebAssembly, Nazm should reuse the ordinary WASM backend where possible and isolate chain-specific host functions in the Web3 profile/standard library.
+
+One WASM code generator should not be duplicated into a “blockchain WASM” compiler unless the execution semantics genuinely differ.
+
+## G118 — sBPF/SVM-Style Backend Goal
+
+Nazm should be capable of targeting account-oriented BPF-derived contract environments where the program code and mutable account state are separate.
+
+The compiler should aim to understand signer, writable/read-only state, account ownership/type constraints and cross-program calls sufficiently to produce useful static diagnostics.
+
+## G119 — Move and Resource-Oriented Interoperability
+
+Nazm should study Move-style resource semantics as evidence, not promise binary compatibility prematurely.
+
+Interop or a compatible backend is acceptable only when Nazm's asset/resource guarantees can be mapped without weakening either language's safety assumptions.
+
+## G120 — On-Chain / Off-Chain Semantic Continuity
+
+Where feasible, shared domain logic should be reusable between off-chain native/server code and on-chain code.
+
+The contract profile may refuse operations, but a pure function valid in both profiles should mean the same thing in both.
+
+This reduces duplicated business logic and makes differential testing possible.
+
+## G121 — Contract Testing as Compiler Tooling
+
+Future Web3 tooling should support:
+
+```text
+unit tests
+state-transition/property tests
+fuzzing
+mutation testing
+scenario simulation
+contract differential tests
+upgrade compatibility tests
+resource-budget tests
+```
+
+Testing must run against the semantics of the target backend, not only an optimistic mock.
+
+## G122 — Smart-Contract Security Analysis
+
+A mature Web3 profile should make the compiler/toolchain capable of analysing classes such as:
+
+- arithmetic/rounding mistakes;
+- missing authorization;
+- invalid state transitions;
+- asset duplication/loss;
+- unsafe external-call ordering;
+- storage-layout incompatibility;
+- unexpected capability use;
+- unbounded resource behaviour where the profile forbids it.
+
+No compiler can prove application business logic correct by default. That limitation must remain explicit.
+
+## G123 — Formal Contract Verification Path
+
+Web3 and Critical profiles should share as much contract/proof infrastructure as semantics permit.
+
+Future constructs may express:
+
+```text
+requires
+ensures
+invariant
+resource invariant
+state-transition invariant
+asset conservation invariant
+```
+
+and lower either to runtime checks, static analysis or proof obligations according to profile.
+
+## G124 — Reproducible Contract Builds
+
+On-chain deployment magnifies compiler provenance risk. Nazm should eventually support reproducible contract artefacts with:
+
+```text
+source digest
+compiler identity
+profile/backend identity
+target configuration
+ABI/storage metadata
+dependency provenance
+reproducible build instructions
+```
+
+A contract address or bytecode hash is not a substitute for knowing how it was produced.
+
+## G125 — Audit Artifact Generation
+
+The compiler should eventually be able to emit a compact audit bundle describing:
+
+```text
+public entry points
+authorities
+state reads/writes
+external calls
+effects
+resource estimates
+storage layout
+unsafe/foreign boundaries
+contracts/invariants
+compiler and dependency provenance
+```
+
+The bundle is evidence input for auditors, not an automatic certification.
+
+## G126 — Cross-Chain Architecture Without Semantic Fragmentation
+
+Supporting several chains must not produce several subtly incompatible Nazm dialects.
+
+If a target requires a fundamentally different semantic rule, the project must either:
+
+1. express it as a profile restriction/capability;
+2. isolate it in an explicit foreign/host boundary; or
+3. decline that target.
+
+“Target support” is not worth corrupting language coherence.
+
+## G127 — Multi-Objective Optimizer
+
+Nazm's optimizer should eventually support explicit goals such as:
+
+```text
+latency
+throughput
+code size
+energy
+memory
+compile time
+gas/compute units
+critical predictability
+```
+
+No one optimization profile is best for firmware, cloud services, HPC and contracts. The semantics remain one; optimization objectives differ.
+
+## G128 — Best-in-Class Development Loop
+
+The compiler should optimize the full edit→check→test→build loop, not only generated machine code.
+
+Target properties include:
+
+- instant incremental semantic feedback where possible;
+- deterministic structured diagnostics;
+- precise affected-test selection;
+- content-addressed reuse where it earns its cost;
+- fast dev backend/JIT where justified;
+- aggressive release optimization separately.
+
+## G129 — Best-in-Class Semantic Observability
+
+A future programmer or agent should be able to ask the compiler not only “did it compile?” but:
+
+```text
+what changed semantically?
+what did this allocate?
+what can this call?
+what can it mutate?
+what authority does it require?
+what state does it touch?
+what may block?
+what may fail?
+what resource budget remains?
+what tests and callers are affected?
+```
+
+The compiler's semantic model should become a product interface.
+
+## G130 — Universal Capability Without Universal Runtime
+
+Nazm's long-term ambition may span:
+
+```text
+CLI and applications
+servers and distributed systems
+OS/runtime components
+embedded and bare metal
+cybersecurity
+AI/HPC and accelerators
+WASM plugins
+decentralized/Web3 contracts
+critical/high-assurance subsets
+```
+
+This does **not** imply one runtime, allocator, scheduler, standard-library surface or backend is appropriate everywhere.
+
+The universal part is the semantic foundation and toolchain discipline.
+
 ---
 
 # 7. What "Super Fast" Means
@@ -3755,6 +4447,35 @@ Needs:
 - CPU/GPU interoperability;
 - distributed computation.
 
+## Web3 / Decentralized Execution Profile
+
+Target:
+
+- smart contracts;
+- decentralized applications;
+- protocol state machines;
+- token/asset systems;
+- chain runtime programs;
+- portable WASM contract environments.
+
+Requires, depending on target:
+
+```text
+deterministic execution
+restricted capabilities
+explicit persistent state
+resource / gas / compute metering
+checked and target-appropriate numerics
+typed addresses / hashes / signatures
+asset/resource safety
+contract ABI generation
+storage-layout/version discipline
+external-call effect analysis
+reproducible deployment artefacts
+```
+
+Web3 is a **restriction profile and backend family**, never permission to fork Nazm semantics. Chain-specific state or host operations belong behind typed profile capabilities/adapters.
+
 ## Critical Profile
 
 Target research domains:
@@ -3841,6 +4562,24 @@ What stable machine identity represents this definition across edits?
 ## 11.13 Context Packet
 
 What is the minimum semantic information required for an AI agent or tool to act correctly?
+
+## 11.14 Resource
+
+A value whose duplication, destruction or transfer carries semantic obligations. Ordinary values must not become resources merely because Web3 exists.
+
+## 11.15 Persistent State
+
+State whose lifetime exceeds one process/execution and whose reads/writes may require explicit authority, version/layout rules and metering. This may remain a profile/library abstraction if the core kernel does not need a new primitive.
+
+## 11.16 Execution Environment
+
+The explicitly supplied host capabilities, target facts and resource limits under which a program executes. This is the conceptual home for deterministic contract hosts without turning ambient process state into invisible semantics.
+
+## 11.17 Resource Cost Model
+
+A structured description of costs relevant to a profile: allocations, blocking, CPU work, storage access, gas/compute units, host calls or other metered operations. The cost model is an analysis/tooling concept unless a profile makes a limit semantic.
+
+These additions are **candidate semantic responsibilities**, not a command to add four new keywords or IR nodes. The Feature Admission Rule below still applies.
 
 ---
 
@@ -3956,13 +4695,14 @@ Typed Core
       ↓
 MIR
       ↓
-Monomorphised MIR
+Monomorphised / profile-specialised MIR
       ↓
-LIR
+LIR / target contract
       ↓
-Backend
-      ↓
-Native Machine Code
+┌───────────────┬───────────────┬────────────────────┐
+│ Native        │ WebAssembly   │ Contract backends  │
+│ LLVM/other    │               │ EVM / sBPF / ...  │
+└───────────────┴───────────────┴────────────────────┘
 ```
 
 This is conceptual responsibility separation.
@@ -4504,6 +5244,19 @@ A mature Nazm benchmark suite should include:
 - stack use;
 - no-heap execution.
 
+### Web3 / deterministic execution
+
+- contract compile time;
+- bytecode/object size;
+- gas / compute units;
+- storage reads/writes;
+- state-transition throughput;
+- deterministic replay;
+- cross-contract/program calls;
+- upgrade compatibility;
+- fuzz/property failures found;
+- audit artefact size/quality.
+
 ### AI-agent development
 
 - implementation tasks;
@@ -4561,6 +5314,17 @@ Critical:
 Ada/SPARK
 C with appropriate safety processes
 ```
+
+Web3 / smart contracts:
+
+```text
+Solidity / EVM toolchain
+Move-family languages where resource safety is the question
+Rust-based chain toolchains where account/program execution is the question
+WASM contract languages/toolchains where portability is the question
+```
+
+Never compare chain runtimes as though gas, host calls and state models were identical. Choose a comparator for the exact target and workload.
 
 AI-era token efficiency:
 
@@ -4651,7 +5415,12 @@ Nazm is NOT trying to:
 - hide hardware when hardware matters;
 - expose hardware complexity when it does not matter;
 - optimize permanent syntax for one temporary tokenizer;
-- minimize token count at the cost of human comprehension.
+- minimize token count at the cost of human comprehension;
+- turn blockchain concepts into mandatory semantics for ordinary programs;
+- promise identical runtime libraries across native, embedded, WASM and Web3 targets;
+- hide gas/compute/storage cost behind "automatic" abstractions when a profile meters them;
+- claim smart-contract correctness merely because code compiled or passed static analysis;
+- chase every blockchain VM or chain at the cost of semantic coherence.
 
 ---
 
@@ -4700,25 +5469,30 @@ That is not fragmentation if semantics remain coherent.
 
 # 40. North-Star Domain Matrix
 
-| Capability | General | Systems | Embedded | Cyber | AI/HPC | Critical |
-|---|---:|---:|---:|---:|---:|---:|
-| Native AOT | Required | Required | Required | Required | Required | Required |
-| Heap | Yes | Controlled | Optional | Controlled | Yes | Restricted |
-| Unsafe | Restricted | Explicit | Explicit | Highly audited | Explicit | Strongly restricted |
-| Concurrency | Yes | Yes | Profiled | Yes | Yes | Restricted/analyzable |
-| SIMD | Useful | Useful | Target-specific | Useful | Required | Controlled |
-| GPU | Optional | Optional | Rare | Optional | Major | Usually restricted |
-| Effects | Useful | Required | Required | Required | Useful | Required |
-| Capabilities | Useful | Useful | Useful | Required | Useful | Required |
-| Provenance | Optional | Useful | Optional | Major | Data lineage useful | Major |
-| Formal contracts | Optional | Useful | Useful | Useful | Useful | Major |
-| GC dependency | Optional future | No mandatory | No mandatory | No mandatory | Optional | No mandatory |
-| Dynamic allocation | Yes | Yes | Optional | Controlled | Yes | Restricted |
-| FFI | Yes | Major | Major | Controlled | Major | Restricted |
-| AI tooling | Yes | Yes | Yes | Yes | Yes | Review-controlled |
-| Token efficiency | Major | Major | Major | Major | Major | Major |
+| Capability | General | Systems | Embedded | Cyber | AI/HPC | Web3 | Critical |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Native AOT | Required | Required | Required | Required | Required | Target-dependent | Required |
+| WASM | Useful | Useful | Useful | Useful | Useful | Major | Optional |
+| Heap | Yes | Controlled | Optional | Controlled | Yes | Restricted/metered | Restricted |
+| Unsafe | Restricted | Explicit | Explicit | Highly audited | Explicit | Normally unavailable/restricted | Strongly restricted |
+| Concurrency | Yes | Yes | Profiled | Yes | Yes | Target-restricted/deterministic | Restricted/analyzable |
+| SIMD | Useful | Useful | Target-specific | Useful | Required | Usually unavailable/target-specific | Controlled |
+| GPU | Optional | Optional | Rare | Optional | Major | No ordinary ambient GPU | Usually restricted |
+| Effects | Useful | Required | Required | Required | Useful | **Required** | Required |
+| Capabilities | Useful | Useful | Useful | Required | Useful | **Required** | Required |
+| Provenance | Optional | Useful | Optional | Major | Data lineage useful | Asset/state lineage useful | Major |
+| Formal contracts | Optional | Useful | Useful | Useful | Useful | Major | Major |
+| Resource metering | Useful | Useful | Major | Useful | Major | **Required** | Major |
+| Determinism | Useful | Useful | Major | Useful | Workload-specific | **Consensus-critical** | Major |
+| Persistent state model | Library/app | Library/app | Target-specific | Library/app | Library/app | **Major** | Profile-specific |
+| Asset/resource semantics | Optional | Optional | Optional | Useful | Optional | **Major** | Useful |
+| GC dependency | Optional future | No mandatory | No mandatory | No mandatory | Optional | No mandatory default | No mandatory |
+| Dynamic allocation | Yes | Yes | Optional | Controlled | Yes | Restricted/metered | Restricted |
+| FFI | Yes | Major | Major | Controlled | Major | Host capability only | Restricted |
+| AI tooling | Yes | Yes | Yes | Yes | Yes | Yes/audit-controlled | Review-controlled |
+| Token efficiency | Major | Major | Major | Major | Major | Major | Major |
 
-This table describes goals, not current implementation.
+This table describes goals, not current implementation. A Web3 cell marked “Required” means required for that future profile to make the stated claim; it does not mean the feature exists today.
 
 ---
 
@@ -5025,6 +5799,18 @@ Nazm should learn:
 
 **from Kotlin:** interoperability and pragmatism accelerate adoption.
 
+**from ML/OCaml:** algebraic data, exhaustive matching and inference can compress complex symbolic programs without surrendering static meaning.
+
+**from TypeScript:** semantic tooling and incremental adoption can be adoption features as important as syntax.
+
+**from WebAssembly:** portable sandboxing can be a compilation target rather than a separate source language.
+
+**from Solidity/EVM:** consensus execution makes determinism, storage layout, ABI and resource cost part of correctness.
+
+**from Move:** scarce digital assets need resource semantics stronger than ordinary copy/discard conventions.
+
+**from account-oriented chains:** explicit state-access authority can improve security and parallel scheduling.
+
 **from the AI era:** context and reasoning tokens are part of software-development cost.
 
 Nazm must synthesize lessons, not syntax.
@@ -5055,6 +5841,14 @@ Haskell effect reasoning
 CUDA heterogeneous compute
 +
 Julia scientific performance/productivity
++
+WebAssembly portable sandboxing
++
+Move-style resource-safety lessons
++
+EVM smart-contract determinism and ABI lessons
++
+account-oriented decentralized execution lessons
 +
 modern AI semantic tooling
 +
@@ -5263,9 +6057,13 @@ Bare-metal and architecture controls mature.
 
 SIMD/GPU/accelerator model matures.
 
-## Stage J — High-assurance profile
+## Stage J — Portable / decentralized execution platform
 
-Formalized restricted semantics mature.
+WebAssembly and at least one evidence-backed Web3 contract backend mature under deterministic, capability-restricted and resource-metered profile semantics.
+
+## Stage K — High-assurance profile
+
+Formalized restricted semantics mature. Critical and Web3 verification infrastructure may share contracts/proof machinery where their semantic obligations overlap.
 
 These stages may overlap, but evidence must remain independent.
 
@@ -5477,6 +6275,10 @@ Nazm should allow a developer to express intent at a high level without forcing 
 
 The compiler should understand enough semantics to protect the programmer from major classes of failure, optimize aggressively, expose meaningful costs, support concurrent and heterogeneous execution, communicate precise program meaning to humans, IDEs and AI agents, and provide compact semantic context for automated development.
 
+For portable sandboxed and decentralized execution, the same semantics should be lowerable through WebAssembly and contract-oriented backends while profiles restrict ambient authority, enforce determinism, expose persistent state and make metered resource cost visible.
+
+For Web3, smart-contract features must remain a restriction/profile/backend concern rather than contaminating ordinary Nazm with chain-specific meaning. Asset/resource safety, authorization, ABI/storage generation and contract verification should reuse the general ownership, effects, capabilities, contracts and provenance architecture wherever sound.
+
 For critical domains, the same semantic foundation should be restrictable into profiles that prioritize analyzability, determinism and evidence.
 
 For low-level domains, the programmer must still be able to reach the hardware.
@@ -5501,6 +6303,6 @@ The ultimate objective is not:
 
 It is:
 
-> **one coherent semantic foundation that removes as many historical programming barriers as possible while preserving human clarity, machine efficiency, safety, evidence, control, and AI-era token efficiency.**
+> **one coherent semantic foundation that removes as many historical programming barriers as possible while preserving human clarity, machine efficiency, safety, determinism, evidence, control, portable/decentralized execution, and AI-era token efficiency.**
 
 That is the long-term Nazm goal.
