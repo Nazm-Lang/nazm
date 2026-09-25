@@ -2732,7 +2732,8 @@ warm edit is about 80 ms on one CPU (`performance.md`) — the evidence that inc
 reparse is not yet needed.
 
 **Protocol surface.** Full-document synchronisation, `publishDiagnostics`, definition and
-hover, positions in UTF-16 — and, since N17, references (§7.19). Nothing else is advertised. The core prelude has no file, so a
+hover, positions in UTF-16 — and, since N17, references (§7.19), and since N18 prepare-rename
+and rename (§7.20). Nothing else is advertised. The core prelude has no file, so a
 definition in it has no location. Diagnostics keep their Nazm codes and messages; the
 protocol message is an adapter's rendering of a `nazm.diagnostic/1` object's primary span,
 not a new schema.
@@ -2805,15 +2806,105 @@ answered only for the version asked about. A body that did not parse has no reso
 names are no one's references — the concrete tree knowing a name is there does not make it
 one. `retained()` and `indexed()` are functions of what is open now.
 
-**What has no references.** A built-in (it declares nothing); a type name in an annotation or
-a generic argument, and the enum name in `E.V(…)` (the resolution records no entity there, so
-a record's uses are its constructions); anything in a body that did not parse. A core-prelude
+**What has no references.** A built-in (it declares nothing), a type parameter, and anything
+in a body that did not parse. Until N18 a type name in an annotation or a generic argument, and
+the enum name in `E.V(…)`, had none either; they are occurrences now (§7.20). A core-prelude
 entity has uses in files and no declaration an editor can open, and the prelude's own uses are
 not navigable.
 
 **What is deliberately not here.** Rename, prepare-rename, any edit, call hierarchy, a
 general semantic graph, a persistent index, incremental invalidation (the index is rebuilt
 with its analysis), and MCP. The only edges are *occurrence → entity* and its reverse.
+
+## 7.20 Type-name identity, safe rename and stale-safe edit plans — settled by N18, 2026-09-25
+
+Four layers, each owning one thing, and the rule that binds them:
+
+```text
+Resolution      the entity each occurrence is                  (the checker)
+ReferenceIndex  entity → occurrences                            (§7.19, Resolution read backwards)
+RenamePlan      a complete, validated edit set + preconditions  (nazm-service/src/rename.rs)
+LSP adapter     prepareRename, rename, versioned WorkspaceEdit  (nazm-cli/src/lsp.rs)
+```
+
+> **Rename never resolves by spelling and never uses a text search to complete a semantic
+> occurrence set.** An entity whose occurrences are not all recorded is not renamed.
+
+**Type names now have identity (N18A).** Every user-defined type's name is resolved at one of
+two places in the checker — `resolve_written_inner`, for a type written in full (a parameter,
+a return, a record field's or a payload field's type, a type argument at any depth, a call's
+explicit type argument), and `Checker::resolve_type`, for a construction's head and the enum
+before the `.` of a variant construction or a pattern. Both now record the answer they already
+reached (`Resolution::record_type_name`, `TypeNode` by span), so a written type is an
+occurrence of the record or enum it names, and `ReferenceTarget` gains `Enum(EnumId)`. In
+`State.Ready()` the qualifier is the enum and `Ready` the variant — two occurrences, two
+entities. A built-in type and a type parameter are not recorded: neither is a definition a
+program wrote. Definition and references answer on written types and qualifiers through the
+same lookup as everything else — N16's type-annotation gap, closed as a consequence.
+
+**Coverage is explicit, and gated.** `ReferenceTarget::rename_coverage` states, per kind, that
+every position the grammar gives it is recorded; it is an exhaustive `match`, so a new kind
+cannot be added without answering. A new *position* for an existing kind is held by a corpus
+gate (`every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity`): every identifier token
+of every clean compilation of the repository's own source is either indexed or one of a short,
+syntactically recognised list of non-entities — a built-in type or call, a type parameter, `_`.
+
+| Kind | Declaration | Uses recorded | Rename |
+| --- | --- | --- | --- |
+| function | its name | every call, `spawn` included | complete |
+| local | parameter, `let`, pattern binding | every mention and assignment | complete |
+| record | its name | constructions; every written type (parameter, return, field, payload, type argument at any depth) | complete |
+| enum | its name | every written type; the qualifier of every variant construction and pattern | complete |
+| variant | its name | the name after `.` in every construction and pattern | complete |
+| field | its name | projections, assignment paths, construction labels | complete |
+| payload field | its name | construction labels, pattern labels | complete |
+
+**The safe scope.** A plan's occurrence universe must be provably complete, and two scopes are,
+from the language's own rules: a **local**, written only inside its function's body; and a
+**private** top-level entity with what it owns (a private record's fields, a private enum's
+variants and payload fields), which only its own module can name — resolution binds another
+module's names only to an import's exports, and `N0337` refuses a public item that would expose
+a private type, so no value of one reaches another module. Both put every occurrence in the
+declaring file, which a clean analysis resolved in full. An **exported** entity is refused: any
+file under any source root may import its module, the service knows only the programs rooted at
+open documents, and a directory an editor opened is not a project. No manifest is invented to
+make it one. A **core-prelude** entity is refused as toolchain-owned; a built-in or a type
+parameter is not an entity.
+
+**The plan.** `LanguageService::rename(path, version, offset, new_name)` returns a `RenamePlan` —
+the entity's kind, old and new names, the service generation, and for each file edited its
+path, the open document's version (or none), the **exact text** the plan was computed from, and
+the edits, each `start..end` with the bytes it expects and its replacement, ordered and
+disjoint. The exact text rather than `nazm-cache`'s `SourceFingerprint`: the service may not
+depend on the cache (`rules.rs`), and the bytes themselves, which it already holds, are a
+stronger precondition than a digest of them. `plan_is_current` holds only while the generation,
+every version and every text are unchanged. The service writes nothing.
+
+**Validation.** The new name must be one identifier by the lexer every compilation uses (not a
+keyword, not `_`, not empty, not punctuation). The program must be clean before: a resolution
+with errors is not a complete account of uses. Then the candidate — the buffers with the edits
+applied in memory — is loaded and checked by the same loader and checker, once for every open
+compilation containing the edited file, and must have no diagnostics, which is where every
+collision (two definitions, a built-in's name, one scope's two bindings) is found — the rename
+engine decides none of them. And its occurrences must group into entities exactly as the old
+program's did, with the old offsets moved past the edits: same groups, same kinds, ids ignored.
+So a rename that captures a use into another binding, merges or splits entities, or loses a
+resolution is refused though it checks. A top-level rename changes the entity's `DefKey` and
+may change its module's `InterfaceHash`; that is what renaming means, and neither is compared.
+
+**The protocol cannot carry the plan's precondition, so the adapter refuses what it cannot
+protect.** LSP can tie an edit to an open document's **version**; a `null` version means "the
+disk is the master", with no check of what the disk holds, and there is no content precondition
+for any file. So `rename` answers only with versioned `documentChanges` (never `changes`), only
+to a client that declares `workspaceEdit.documentChanges`, and only when every file the plan
+edits is an open document; otherwise it is refused with `RequestFailed` and the reason. Every
+rename N18 allows edits only its declaring file, which is the document asked about, so the
+closed-file refusal is the rule's guarantee rather than a case that arises today.
+`prepareRename` returns the token's range and spelling, or `null`.
+
+**Not here.** Rename of an exported or prelude entity, any other code action, an edit command
+(`nazm rename --apply` was not needed and does not exist), a general edit engine, and any
+schema: rename is standard protocol traffic.
 
 ## 8. Toolchain, and one real incompatibility
 

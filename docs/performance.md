@@ -1047,6 +1047,40 @@ complete rebuild with the analysis is cheap, and correct by construction.
 **What it added to the binary.** The release `nazm` grew from 2,768,592 to 2,823,040 bytes
 (+54,448, +2.0%); no dependency was added.
 
+### Rename — measured 2026-09-25
+
+N18 adds type-name occurrences to every index and a rename that re-analyses its candidate
+program. Measured as N17 was: in process, release, contained, P1, nothing else running;
+medians (`target/n18/bench`, not committed). Planning and validation are one call, so the
+validation's share is stated from its parts: a rename re-runs one full analysis per open
+compilation that contains the edited file.
+
+| What | Small (`sum_to` in `examples/sum.nz`) | The compiler (private `nl` in `emit.nz`) | Cross-file (private `is_digit` in `lex.nz`, `lex.nz` and `emit.nz` open) |
+| --- | --- | --- | --- |
+| prepareRename | 12.2 µs | 2.25 ms | 175 µs |
+| rename: plan, candidate re-analysis, partition comparison | 0.3 ms (2 edits) | **93.3 ms** (17 edits, 1 compilation) | 97.8 ms (4 edits, 2 compilations) |
+
+And against N17's figures, on the compiler: index construction 3.91 ms (N17: 3.85), now 22,088
+occurrences (N17: 21,884 — the difference is the written type names); warm edit 83.3 ms (N17:
+81.4); references 1.78 ms (N17: 1.76); cross-file references 2.17 ms (N17: 2.27); definition
+1.81 ms. Resident memory: 48.1 MB with the compiler open (N17: 48.1), 48.6 MB after 10 edits
+and 50.5 MB after 100 (N17: 50.2 at both) — one sample each, with retained documents, analyses,
+text and index sizes constant (`retained()`, `indexed()` and the thousand-plan test); a
+1.9 MB difference between two RSS samples is not evidence of growth, and is not claimed as its
+absence either.
+
+**What the numbers say.** Recording type names costs nothing measurable: every difference from
+N17 is inside the run-to-run spread. A rename costs what it proves: the plan itself is a
+references query, and the rest is one full check of the candidate program per compilation that
+contains the file — about 80 ms for the whole compiler, so a rename there is answered in under
+a tenth of a second, and a rename in a file anyone edits by hand in well under a millisecond. A
+rename request is expected to cost more than a cursor query, and this one does not make a case
+for incremental reparse. Serialising the edit is not measured separately: it is a handful of
+ranges.
+
+**What it added to the binary.** The release `nazm` grew from 2,823,040 to 2,888,576 bytes
+(+65,536, +2.3%); no dependency was added.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
