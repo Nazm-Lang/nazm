@@ -1,0 +1,21 @@
+[package]
+name = "nazm-service"
+description = "The compiler's driver library: source roots, module loading from disk or open buffers, and the long-lived language service."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+nazm-span = { workspace = true }
+nazm-diag = { workspace = true }
+nazm-core = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

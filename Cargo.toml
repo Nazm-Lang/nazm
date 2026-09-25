@@ -30,6 +30,7 @@ members = [
     "crates/nazm-cache",
     "crates/nazm-core",
     "crates/nazm-lir",
+    "crates/nazm-service",
     "crates/nazm-cli",
     "crates/nazm-bench",
     "xtask",
@@ -75,6 +76,7 @@ nazm-iface = { path = "crates/nazm-iface" }
 nazm-cache = { path = "crates/nazm-cache" }
 nazm-core = { path = "crates/nazm-core" }
 nazm-lir = { path = "crates/nazm-lir" }
+nazm-service = { path = "crates/nazm-service" }
 nazm-bench = { path = "crates/nazm-bench" }
 
 # --- cli / config ---
@@ -101,6 +103,13 @@ serde_json = "1"
 # `default-features = false` keeps it to `std` — no `derive` proc macro, no `lasso`, no
 # `serde`. `architecture.md` §8 records why `cstree` rather than `rowan`.
 cstree = { version = "=0.14.0", default-features = false, features = ["std"] }
+# --- editor protocol ---
+# `nazm lsp`, N16. `lsp-server` is rust-analyzer's synchronous JSON-RPC transport over
+# stdio — framing, requests, responses, the initialize and shutdown handshakes — and owns
+# nothing about what a program means. `lsp-types` is the protocol's message types. Both
+# pinned exactly: a protocol crate's minor version is allowed to change its types.
+lsp-server = "=0.10.0"
+lsp-types = "=0.97.0"
 # Preserves insertion order. Run records are diffed and reviewed by hand; map
 # iteration order leaking into output would make every diff noise.
 indexmap = { version = "2", features = ["serde"] }

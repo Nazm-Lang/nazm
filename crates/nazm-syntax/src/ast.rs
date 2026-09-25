@@ -140,6 +140,8 @@ pub struct Function {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
     pub name: String,
+    /// The name as written. N16: where a use of the parameter resolves to.
+    pub name_span: Span,
     pub ty: TypeName,
     pub span: Span,
 }

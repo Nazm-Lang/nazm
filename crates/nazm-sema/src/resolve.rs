@@ -78,6 +78,11 @@ pub struct LocalDef {
     pub name: String,
     pub ty: Type,
     pub mutable: bool,
+    /// Where the binding's name is written: the `let`, the parameter or the pattern field
+    /// that introduced it. N16, so a use can be taken to its definition by the identity
+    /// resolution already gave it — the slot — rather than by its spelling. Presentation
+    /// only: nothing about what the binding means depends on where it was written.
+    pub span: Span,
 }
 
 /// One function's resolved shape.

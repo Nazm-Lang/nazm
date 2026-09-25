@@ -40,11 +40,11 @@
 use std::path::{Component, Path, PathBuf};
 
 /// The file whose presence declares a source root. Required to be empty.
-pub(crate) const MARKER: &str = "nazm.root";
+pub const MARKER: &str = "nazm.root";
 
 /// A compilation's source root, and how it was chosen.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SourceRoot {
+pub struct SourceRoot {
     path: PathBuf,
     how: How,
 }
@@ -55,7 +55,7 @@ pub(crate) struct SourceRoot {
 /// whichever file the compilation started from, so a reader of a cache report should not
 /// have to guess which of the two they got.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum How {
+pub enum How {
     /// `--source-root` named it.
     Given,
     /// A `nazm.root` marker was found at or above the root module.
@@ -68,17 +68,17 @@ pub(crate) enum How {
 }
 
 impl SourceRoot {
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 
-    pub(crate) fn how(&self) -> How {
+    pub fn how(&self) -> How {
         self.how
     }
 }
 
 impl How {
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Given => "given",
             Self::Marker => "marker",
@@ -94,7 +94,7 @@ impl How {
 /// durable identity where they could, which only works if this function does not quietly
 /// pick one of the two answers. The working directory is joined because a relative path
 /// means nothing without it, and it is removed again by the time a key exists.
-pub(crate) fn absolute(path: &Path) -> PathBuf {
+pub fn absolute(path: &Path) -> PathBuf {
     let joined = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -120,7 +120,7 @@ pub(crate) fn absolute(path: &Path) -> PathBuf {
 /// A `--source-root` that is not a directory or does not contain the root module, and a
 /// marker file that is not empty. Each is a mistake about the project's shape, said once
 /// rather than turned into a compilation that quietly computes different identities.
-pub(crate) fn decide(module: &Path, given: Option<&Path>) -> Result<SourceRoot, String> {
+pub fn decide(module: &Path, given: Option<&Path>) -> Result<SourceRoot, String> {
     let module = absolute(module);
     let here = module.parent().unwrap_or(Path::new("/")).to_path_buf();
 
