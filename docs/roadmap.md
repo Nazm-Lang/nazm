@@ -387,6 +387,25 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 that the equality wall is gone. Not traits: no program here yet needs user-defined behaviour
 abstraction, and N14's evidence is that the built-in requirement met the need N13 exposed.
 
+### N14.1 — Contained performance calibration — **complete, 2026-09-25**
+
+Tooling, between N14 and whatever follows it; no language, compiler, interface, cache-key or
+bootstrap change (`SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint `0e1a40e6…`). A contained
+workload now runs under a named execution profile — CPU quota, Cargo jobs and test threads
+as one value — inside the same memory, swap, pid, storage and deadline ceilings. The
+workspace suite and the selfhost suite default to P4T4 (**3.03×** and **3.44×**, measured);
+everything else stays P1, mutation because both parallel profiles tried crossed the frozen
+total-memory gate with identical verdicts.
+
+| Settled | Where |
+| --- | --- |
+| `ExecutionProfile`, P1 and P4T4, one owner for quota, jobs and threads; `--profile` | `xtask/src/contained.rs`, `xtask/src/main.rs` |
+| the measurements, the gates frozen before selection, why P6 and parallel mutation were refused | `docs/performance.md`, *Development and evidence pipeline parallelism* |
+| a campaign's identity includes its parallelism and CPU quota; a resume under another profile reuses nothing | `xtask/src/campaign.rs`, `xtask/tests/lifecycle.rs` |
+| the serial rule, what was relaxed and what was not | `docs/runbook.md`, *Serial execution* |
+
+*No language milestone has started since N14.*
+
 ### N14 — A type parameter may require equality — **complete, 2026-09-25**
 
 `fn same[T: Equality](a: T, b: T) -> Bool { a == b }` is valid; without `: Equality` it is
