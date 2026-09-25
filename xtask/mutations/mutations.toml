@@ -3237,6 +3237,8 @@ targets = [
     { package = "nazm-cli", test = "visibility" },
     # N17: which use the checker recorded for which entity is what references read.
     { package = "nazm-service", test = "references" },
+    # N18: and what a rename edits.
+    { package = "nazm-service", test = "rename" },
 ]
 
 [[profile]]
@@ -3271,6 +3273,7 @@ targets = [
     # N17: the reference index is derived here, from the resolution, and observed through
     # the language service.
     { package = "nazm-service", test = "references" },
+    { package = "nazm-service", test = "rename" },
 ]
 
 [[profile]]
@@ -3313,6 +3316,7 @@ targets = [
     { package = "nazm-service", lib = true },
     { package = "nazm-service", test = "service" },
     { package = "nazm-service", test = "references" },
+    { package = "nazm-service", test = "rename" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
@@ -4294,6 +4298,142 @@ file = "crates/nazm-service/src/service.rs"
 find = "        if include_declaration {"
 replace = "        if include_declaration && false {"
 killers = [{ package = "nazm-service", test = "references", name = "the_declaration_is_kept_apart_and_added_only_when_asked_for" }]
+
+# ---------------------------------------------------------------------------------------
+# N18 — type-name identity, and safe rename. Each attacks one invariant: that every written
+# type name is recorded as the definition it names, that a rename's edits are the entity's
+# recorded occurrences and never a spelling's, that only a provably complete scope is
+# renamed, that the candidate program is checked and compared, that a plan is valid only
+# against the exact source it was made from, and that the protocol is never handed an edit
+# it cannot tie to a version.
+# ---------------------------------------------------------------------------------------
+
+[[mutation]]
+name = "n18-a-written-type-is-not-recorded"
+why = "a record or enum named in a parameter, return, field or type argument is resolved and not recorded, so a type rename misses every annotation"
+file = "crates/nazm-core/src/check.rs"
+find = """    if let Some(node) = TypeNode::of(t) {
+        res.record_type_name(written.name_span, node);
+    }"""
+replace = "    let _ = TypeNode::of(t);"
+killers = [{ package = "nazm-service", test = "rename", name = "a_type_rename_changes_every_semantic_spelling_and_nothing_else" }]
+
+[[mutation]]
+name = "n18-an-enum-qualifier-is-not-recorded"
+why = "the enum before a variant's `.`, and a construction's head, are resolved and not recorded, so an enum rename misses every qualifier"
+file = "crates/nazm-core/src/check.rs"
+find = """            if let Some(node) = TypeNode::of(t) {
+                self.res.record_type_name(span, node);
+            }"""
+replace = "            let _ = TypeNode::of(t);"
+killers = [{ package = "nazm-service", test = "rename", name = "a_type_rename_changes_every_semantic_spelling_and_nothing_else" }]
+
+[[mutation]]
+name = "n18-a-rename-is-found-by-its-spelling"
+why = "a rename edits every occurrence of the old spelling in the declaring file rather than the entity's recorded occurrences"
+file = "crates/nazm-service/src/rename.rs"
+find = """        let mut spans = vec![declared];
+        spans.extend_from_slice(s.index.uses(entity));"""
+replace = """        let mut spans: Vec<Span> = s.texts[declared.file.index()]
+            .match_indices(found.name.as_str())
+            .map(|(i, _)| Span::new(declared.file, i as u32, (i + found.name.len()) as u32))
+            .collect();"""
+killers = [{ package = "nazm-service", test = "rename", name = "rename_preserves_semantic_partitions" }]
+
+[[mutation]]
+name = "n18-an-exported-entity-is-renamed"
+why = "every entity is treated as private, so a public function, record or field is renamed although modules no open program loads may use it"
+file = "crates/nazm-service/src/rename.rs"
+find = "    answer.unwrap_or(true)"
+replace = "    answer.map(|_| false).unwrap_or(false)"
+killers = [{ package = "nazm-service", test = "rename", name = "a_private_definition_is_renamed_in_its_module_and_an_exported_one_is_refused" }]
+
+[[mutation]]
+name = "n18-the-candidate-is-not-checked"
+why = "the renamed program's diagnostics are ignored, so a rename that collides with another definition or a built-in is offered"
+file = "crates/nazm-service/src/rename.rs"
+find = "            if !after.analysis.diagnostics.is_empty() {"
+replace = "            if false {"
+killers = [{ package = "nazm-service", test = "rename", name = "a_function_rename_that_collides_or_takes_a_built_ins_name_is_refused" }]
+
+[[mutation]]
+name = "n18-the-meaning-is-not-compared"
+why = "the renamed program is only checked, not compared, so an edit that captures a use into another binding is offered"
+file = "crates/nazm-service/src/rename.rs"
+find = "            if partition(before, Some((file, edits))) != partition(&after, None) {"
+replace = "            if false {"
+killers = [{ package = "nazm-service", test = "rename", name = "a_rename_that_would_capture_or_collide_is_refused_and_a_safe_one_is_not" }]
+
+[[mutation]]
+name = "n18-old-offsets-are-compared-unmoved"
+why = "the old program's occurrences are compared at their old offsets, so every rename that changes a name's length is refused as a change of meaning"
+file = "crates/nazm-service/src/rename.rs"
+find = "            Some((file, edits)) if file == span.file => moved(span, edits),"
+replace = "            Some((file, _)) if file == span.file => (span.start, span.end),"
+killers = [{ package = "nazm-service", test = "rename", name = "a_type_rename_changes_every_semantic_spelling_and_nothing_else" }]
+
+[[mutation]]
+name = "n18-a-program-with-errors-is-renamed"
+why = "a compilation with diagnostics is taken as a complete account of its uses"
+file = "crates/nazm-service/src/rename.rs"
+find = "            if !other.0.analysis.diagnostics.is_empty() {"
+replace = "            if false {"
+killers = [{ package = "nazm-service", test = "rename", name = "a_program_with_errors_offers_no_rename" }]
+
+[[mutation]]
+name = "n18-any-name-is-accepted"
+why = "a new name is not checked against the lexer, so a keyword, a space or punctuation is accepted as a name"
+file = "crates/nazm-service/src/rename.rs"
+find = """    if name.is_empty() {
+        return Err(Refusal::InvalidName("is empty"));
+    }"""
+replace = """    if !name.is_empty() {
+        return Ok(());
+    }"""
+killers = [{ package = "nazm-service", lib = true, name = "rename::tests::a_new_name_is_one_identifier_by_the_lexers_rules" }]
+
+[[mutation]]
+name = "n18-a-plan-outlives-its-generation"
+why = "a plan is taken as current after another document opened or changed, which may have changed what the edited file means to its importers"
+file = "crates/nazm-service/src/rename.rs"
+find = "        plan.generation == self.generation"
+replace = "        plan.generation <= self.generation"
+killers = [{ package = "nazm-service", test = "rename", name = "a_plan_is_current_only_for_the_exact_text_and_version_it_was_made_from" }]
+
+[[mutation]]
+name = "n18-a-plan-ignores-its-text"
+# Its killer was first reported NOT A KILLER: the forged text also moved the edited bytes,
+# so the per-edit check refused the plan and the whole-text comparison was never needed.
+# The test now forges a text that differs only outside the edits, and verified.
+why = "a plan is current whatever text its file now holds, so its offsets may land in other bytes"
+file = "crates/nazm-service/src/rename.rs"
+find = "                text_now.is_some_and(|t| *t == *f.text)"
+replace = "                text_now.is_some()"
+killers = [{ package = "nazm-service", test = "rename", name = "a_plan_is_current_only_for_the_exact_text_and_version_it_was_made_from" }]
+
+[[mutation]]
+name = "n18-a-closed-file-is-edited-without-a-version"
+why = "an edit to a file that is not open is sent, although the protocol can hold the client to no precondition about its contents"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "        let Some(version) = f.version else {"
+replace = "        let Some(version) = f.version.or(Some(0)) else {"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "lsp::tests::a_rename_that_the_protocol_cannot_protect_is_refused" }]
+
+[[mutation]]
+name = "n18-an-edit-loses-its-version"
+why = "a rename's edit goes out with a null version, which the protocol reads as the disk being the master, so a changed buffer is edited at stale offsets"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "                version: Some(version),"
+replace = "                version: None.filter(|_: &i32| version > 0),"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "lsp::tests::a_rename_edit_is_versioned_and_positioned_in_utf16" }]
+
+[[mutation]]
+name = "n18-an-unversioned-client-is-sent-an-edit"
+why = "a client that does not accept versioned changes is sent a rename it can apply to a document that has changed"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "    if !versioned {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "lsp", name = "a_client_that_cannot_take_versioned_edits_is_refused_a_rename" }]
 
 [[mutation]]
 name = "n16-a-column-is-a-byte-count"
