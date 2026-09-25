@@ -255,6 +255,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
     assert_eq!(
         advertised,
         [
+            "completionProvider",
             "definitionProvider",
             "hoverProvider",
             "positionEncoding",
@@ -272,6 +273,11 @@ fn the_server_speaks_the_protocol_end_to_end() {
     assert_eq!(caps["textDocumentSync"]["openClose"], true);
     assert_eq!(caps["referencesProvider"], true);
     assert_eq!(caps["renameProvider"], json!({"prepareProvider": true}));
+    assert_eq!(
+        caps["completionProvider"],
+        json!({"resolveProvider": false}),
+        "invoked only: no trigger characters, nothing to resolve"
+    );
 
     // 2. Open: a diagnostic, its code, and its exact UTF-16 range after non-ASCII text.
     c.open(&main, 1, MAIN);
@@ -362,7 +368,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
     );
 
     // 7. Something not implemented is an error response, and the server carries on.
-    let r = c.request("textDocument/completion", json!({}));
+    let r = c.request("textDocument/signatureHelp", json!({}));
     assert_eq!(r["error"]["code"], -32601, "{r}");
     let r = c.request("textDocument/definition", json!({"nonsense": true}));
     assert_eq!(r["error"]["code"], -32602, "{r}");
@@ -769,4 +775,111 @@ fn a_client_that_cannot_take_versioned_edits_is_refused_a_rename() {
     );
     let (status, stderr) = c.finish();
     assert_eq!(status, Some(0), "{stderr}");
+}
+
+// Non-ASCII before the identifier being completed, on its line.
+const COMPLETE_MAIN: &str = "fn helper(n: Int) -> Int { n }\nfn help_me() -> Int { 1 }\n\
+fn main() -> Int { let s = \"é😀\"; let hel = str_len(s); hel + help }\n";
+
+#[test]
+fn completion_crosses_the_protocol_replacing_the_identifier_in_utf16() {
+    let (_dir, root) = project(&[("main.nz", COMPLETE_MAIN)]);
+    let main = root.join("main.nz");
+    let mut c = Client::start(&root);
+    c.initialize(&root);
+    c.open(&main, 1, COMPLETE_MAIN);
+    c.diagnostics_for(&uri(&main));
+    let line = COMPLETE_MAIN.lines().nth(2).unwrap();
+
+    // `hel` in `hel + help`, with the cursor at its end: a value position whose prefix is
+    // `hel` — the local `hel`, and nothing else (the functions `helper` and `help_me` are
+    // not values).
+    let word = line.rfind("hel +").unwrap();
+    let r = c.at(
+        "textDocument/completion",
+        &main,
+        2,
+        utf16(line, word + 3),
+        json!({}),
+    );
+    let list = &r["result"];
+    assert_eq!(list["isIncomplete"], false, "{r}");
+    let items = list["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{r}");
+    assert_eq!(items[0]["label"], "hel");
+    assert_eq!(items[0]["kind"], 6, "a variable");
+    assert_eq!(items[0]["detail"], "hel: Int");
+    // The edit replaces the whole identifier, in UTF-16 after `é😀`.
+    let range = json!({"start": {"line": 2, "character": utf16(line, word)},
+                       "end": {"line": 2, "character": utf16(line, word + 3)}});
+    assert_eq!(items[0]["textEdit"]["range"], range);
+    assert_eq!(items[0]["textEdit"]["newText"], "hel");
+    assert_ne!(
+        utf16(line, word) as usize,
+        word,
+        "bytes and units differ here"
+    );
+
+    // A call head: `str_len` with the prefix `str`, from the compiler's built-ins; the
+    // user's functions only where the prefix fits.
+    let call = line.find("str_len").unwrap();
+    let r = c.at(
+        "textDocument/completion",
+        &main,
+        2,
+        utf16(line, call + 3),
+        json!({}),
+    );
+    let labels: Vec<&str> = r["result"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert!(
+        labels.contains(&"str_len") && labels.iter().all(|l| l.starts_with("str")),
+        "{r}"
+    );
+    assert_eq!(
+        r["result"]["items"][0]["textEdit"]["range"]["end"],
+        json!({"line": 2, "character": utf16(line, call + "str_len".len())}),
+        "the whole call head is replaced, not only its prefix"
+    );
+    // Nowhere to complete: a string's contents.
+    let r = c.at(
+        "textDocument/completion",
+        &main,
+        2,
+        utf16(line, line.find('😀').unwrap()),
+        json!({}),
+    );
+    assert_eq!(r["result"], Value::Null, "{r}");
+
+    // An unsaved edit is what is completed.
+    let edited = COMPLETE_MAIN.replace(
+        "let hel = str_len(s);",
+        "let hel = str_len(s); let helium = 2;",
+    );
+    c.change(&main, 2, &edited);
+    c.diagnostics_for(&uri(&main));
+    let line = edited.lines().nth(2).unwrap();
+    let word = line.rfind("hel +").unwrap();
+    let r = c.at(
+        "textDocument/completion",
+        &main,
+        2,
+        utf16(line, word + 3),
+        json!({}),
+    );
+    let labels: Vec<&str> = r["result"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels, ["hel", "helium"], "{r}");
+
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
 }
