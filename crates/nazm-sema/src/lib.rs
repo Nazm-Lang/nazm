@@ -48,6 +48,7 @@ pub mod prelude;
 pub mod record;
 pub mod references;
 pub mod resolve;
+pub mod scope;
 pub mod types;
 pub mod udt;
 
@@ -62,6 +63,7 @@ pub use resolve::{
     CallSite, Callee, FieldRef, FnDef, FnId, LocalDef, LocalRef, PayloadRef, Propagation,
     Resolution, VariantRef,
 };
+pub use scope::{Candidate, Named, ScopeTrace, Unavailable, Visible};
 pub use types::{ParamOwner, Type, TypeParam, VecId};
 pub use udt::{
     CycleEdge, LayoutCycle, NoEquality, OwnershipCycle, Reach, TypeNode, UserTypes, MAX_TYPE_DEPTH,
