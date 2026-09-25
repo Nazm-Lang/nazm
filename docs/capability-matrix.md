@@ -1512,9 +1512,15 @@ tier 1 and 4 at tier 2; no survivor, nothing unusable or unapplied, no crash, no
 workspace suite never ran. N14 did not touch the native equality code, so N13's known
 use-after-free survivor was not re-run and stays as it was: live, SURVIVED, no killer.
 
-*N15 (2026-09-25) added sixteen and repointed three,* each with its regression test and a
-killer verified by `--verify-killer` (17 of 17: pristine passes, mutant fails, restored
-passes). They break the tree's promises — whitespace, comments, a refused character or the
+*N15 (2026-09-25) added sixteen and repointed three.* Of those nineteen entries, **seventeen
+list a killer** — the sixteen new ones and the repointed `a-failed-body-drops-the-function` —
+and each was verified by `--verify-killer` (17 of 17: pristine passes, mutant fails, restored
+passes), first in a session a host build overlapped and then again uncontended, contained at
+P1, with the same result. The other two repointed entries, `a-block-does-not-count-its-contents`
+and `parentheses-count-as-a-node`, list no killer, as before N15; their tier-2 profile decides
+them, and the campaign below caught both there. The seventeen killers are fourteen distinct
+tests: `a_lossless_tree_preserves_every_byte_and_recovers_inside_a_function` kills three
+entries and `the_abstract_tree_keeps_its_contract_for_a_body_that_recovered` two. They break the tree's promises — whitespace, comments, a refused character or the
 trailing trivia missing from it, a leaf normalised or spelled from its kind, trivia inside
 the construct before it, nodes at one position nested inside out, a token given the wrong
 kind — and recovery's: abandoning the block as before N15, consuming nothing, swallowing
