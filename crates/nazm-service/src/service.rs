@@ -22,7 +22,7 @@
 //!
 //! The concrete tree ([`nazm_core::__syntax::Cst`]) finds *which token* a position is on. What that
 //! token *means* is only ever read from the resolution. A query that the resolution cannot
-//! answer — a name in a body that did not parse, a type name it does not record — has no
+//! answer — a name in a body that did not parse, a built-in, a type parameter — has no
 //! answer; nothing here guesses from spelling.
 //!
 //! Definition and references are one lookup: the occurrence under the position is taken to
@@ -166,38 +166,38 @@ pub struct Published {
 
 /// One open document.
 #[derive(Debug)]
-struct Document {
+pub(crate) struct Document {
     /// The path the client named, for everything that reports it.
-    path: PathBuf,
-    version: i32,
-    text: Arc<str>,
-    analysis: Option<Snapshot>,
+    pub(crate) path: PathBuf,
+    pub(crate) version: i32,
+    pub(crate) text: Arc<str>,
+    pub(crate) analysis: Option<Snapshot>,
 }
 
 /// Everything one analysis of one document produced, kept only until the next mutation.
 #[derive(Debug)]
-struct Snapshot {
-    generation: u64,
+pub(crate) struct Snapshot {
+    pub(crate) generation: u64,
     version: i32,
     map: SourceMap,
     graph: ModuleGraph,
-    analysis: Analysis,
+    pub(crate) analysis: Analysis,
     /// Every entity of the compilation with its declaration and uses, read from
     /// `analysis.resolution` once, when the analysis is made, and dropped with it.
-    index: ReferenceIndex,
+    pub(crate) index: ReferenceIndex,
     /// The document's own concrete tree, for finding the token under a position.
-    cst: Cst,
+    pub(crate) cst: Cst,
     /// The texts of the compilation's files, shared with what is handed out.
-    texts: Vec<Arc<str>>,
+    pub(crate) texts: Vec<Arc<str>>,
     /// Which file each of the compilation's files is, by [`FileId`] index, so that one file
     /// can be recognised in two compilations.
-    files: Vec<FileKey>,
+    pub(crate) files: Vec<FileKey>,
 }
 
 /// A file, as the same file in any compilation: its [`identity`] path, or the core
 /// prelude, which every compilation has and none reads from a path.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum FileKey {
+pub(crate) enum FileKey {
     Path(PathBuf),
     Prelude,
 }
@@ -211,16 +211,16 @@ enum FileKey {
 #[derive(Debug, Default)]
 pub struct LanguageService {
     /// By identity path ([`identity`]), so two spellings of one file are one document.
-    documents: BTreeMap<PathBuf, Document>,
-    generation: u64,
+    pub(crate) documents: BTreeMap<PathBuf, Document>,
+    pub(crate) generation: u64,
     /// `--source-root`, if it was given: the same override `nazm check` takes.
-    source_root: Option<PathBuf>,
+    pub(crate) source_root: Option<PathBuf>,
 }
 
 /// The path a file is identified by here: canonical when it exists, and otherwise its
 /// canonical directory joined with its name, so a buffer for a file not yet on disk still
 /// matches the path an import would reach it by.
-fn identity(path: &Path) -> PathBuf {
+pub(crate) fn identity(path: &Path) -> PathBuf {
     if let Ok(c) = path.canonicalize() {
         return c;
     }
@@ -233,21 +233,34 @@ fn identity(path: &Path) -> PathBuf {
     }
 }
 
-/// Open buffers first, then the disk.
-struct Overlaid<'a> {
-    documents: &'a BTreeMap<PathBuf, Document>,
+/// Open buffers first, then the disk — and, for a rename's candidate program (N18), one
+/// file's proposed text before either.
+pub(crate) struct Overlaid<'a> {
+    pub(crate) documents: &'a BTreeMap<PathBuf, Document>,
+    /// `(identity path, text)`: a file as a rename would leave it, read in place of its
+    /// buffer or its disk contents. Never written anywhere.
+    pub(crate) replaced: Option<(&'a Path, &'a str)>,
 }
 
 impl Sources for Overlaid<'_> {
     fn read(&self, path: &Path) -> io::Result<String> {
-        match self.documents.get(&identity(path)) {
+        let key = identity(path);
+        if let Some((at, text)) = self.replaced {
+            if at == key {
+                return Ok(text.to_owned());
+            }
+        }
+        match self.documents.get(&key) {
             Some(d) => Ok(d.text.to_string()),
             None => Disk.read(path),
         }
     }
 
     fn exists(&self, path: &Path) -> bool {
-        self.documents.contains_key(&identity(path)) || Disk.exists(path)
+        let key = identity(path);
+        self.replaced.is_some_and(|(at, _)| at == key)
+            || self.documents.contains_key(&key)
+            || Disk.exists(path)
     }
 }
 
@@ -369,8 +382,12 @@ impl LanguageService {
                 continue;
             };
             let (path, version) = (doc.path.clone(), doc.version);
+            let sources = Overlaid {
+                documents: &self.documents,
+                replaced: None,
+            };
             let snapshot = analyse(
-                &self.documents,
+                &sources,
                 self.source_root.as_deref(),
                 &path,
                 version,
@@ -395,7 +412,7 @@ impl LanguageService {
     }
 
     /// The analysis of `path` at `version`, if it is the current one.
-    fn current(&self, path: &Path, version: i32) -> Option<&Snapshot> {
+    pub(crate) fn current(&self, path: &Path, version: i32) -> Option<&Snapshot> {
         let doc = self.documents.get(&identity(path))?;
         let s = doc.analysis.as_ref()?;
         (doc.version == version && s.version == version && s.generation == self.generation)
@@ -406,7 +423,7 @@ impl LanguageService {
     ///
     /// `None` when the position is not on a name, when the document is not at `version`,
     /// or when the compiler's resolution has no identity for that use — a name inside a
-    /// body that did not parse, a type annotation, a built-in.
+    /// body that did not parse, a built-in, a type parameter.
     #[must_use]
     pub fn definition(&self, path: &Path, version: i32, offset: u32) -> Option<Definition> {
         let s = self.current(path, version)?;
@@ -423,7 +440,7 @@ impl LanguageService {
     ///
     /// `None` exactly when [`Self::definition`] would have no entity to go to: not on a
     /// name, not the current version, or a name the resolution identified as nothing — a
-    /// built-in, a type annotation, a name in a body that did not parse. An entity with no
+    /// built-in, a type parameter, a name in a body that did not parse. An entity with no
     /// uses is `Some`, with none.
     ///
     /// What *is* the entity is decided by `path`'s own compilation. Its uses are gathered
@@ -521,7 +538,7 @@ impl LanguageService {
 
 impl Snapshot {
     /// A definition span as a place a client can go.
-    fn target(&self, span: Span) -> Option<Target> {
+    pub(crate) fn target(&self, span: Span) -> Option<Target> {
         let module = self.graph.module_of(span.file)?;
         if Some(module) == self.graph.prelude() {
             return Some(Target::Prelude {
@@ -541,18 +558,17 @@ impl Snapshot {
 /// Load `path` as the root of a compilation against the open buffers, and analyse it —
 /// exactly the compilation `nazm check <path>` would load, with the buffers in place of
 /// the files.
-fn analyse(
-    documents: &BTreeMap<PathBuf, Document>,
+pub(crate) fn analyse(
+    sources: &Overlaid<'_>,
     source_root: Option<&Path>,
     path: &Path,
     version: i32,
     generation: u64,
 ) -> Snapshot {
-    let sources = Overlaid { documents };
     // The CLI's rule, unchanged: a declared root beats a marker beats the file's own
     // directory. A root that cannot be decided is reported the way `nazm check` reports it.
     let (loaded, mut early) = match root::decide(path, source_root) {
-        Ok(r) => match load::load_from(path, r.path(), &sources) {
+        Ok(r) => match load::load_from(path, r.path(), sources) {
             Ok(l) => (l, Vec::new()),
             Err((partial, d)) => (partial, d),
         },
@@ -619,7 +635,7 @@ fn own_diagnostics(s: &Snapshot) -> Vec<Diagnostic> {
 /// immediately before it — so a cursor just after a name is on the name, as an editor
 /// places it after typing. Any other position — whitespace, a comment, punctuation, a
 /// keyword, a literal, the end of the file — is on no name. No nearest token is guessed.
-fn name_at(cst: &Cst, offset: u32) -> Option<Span> {
+pub(crate) fn name_at(cst: &Cst, offset: u32) -> Option<Span> {
     let leaves = cst.leaves();
     let is_name = |k: SyntaxKind| k == SyntaxKind::Ident;
     let inside = leaves
