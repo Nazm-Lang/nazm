@@ -180,7 +180,7 @@ pub(crate) struct Snapshot {
     pub(crate) generation: u64,
     version: i32,
     map: SourceMap,
-    graph: ModuleGraph,
+    pub(crate) graph: ModuleGraph,
     pub(crate) analysis: Analysis,
     /// Every entity of the compilation with its declaration and uses, read from
     /// `analysis.resolution` once, when the analysis is made, and dropped with it.
@@ -330,6 +330,19 @@ impl LanguageService {
             .filter_map(|d| d.analysis.as_ref())
             .fold((0, 0), |(t, u), s| {
                 (t + s.index.targets(), u + s.index.use_count())
+            })
+    }
+
+    /// What the scope traces are holding: `(frames, bindings)`, over every analysis (N19).
+    /// A function of what is open now, like [`Self::retained`] and [`Self::indexed`].
+    #[must_use]
+    pub fn scoped(&self) -> (usize, usize) {
+        self.documents
+            .values()
+            .filter_map(|d| d.analysis.as_ref())
+            .fold((0, 0), |(f, b), s| {
+                let (sf, sb) = s.analysis.resolution.scopes().size();
+                (f + sf, b + sb)
             })
     }
 
