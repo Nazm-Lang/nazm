@@ -2579,6 +2579,96 @@ change.
 - **No user-defined behaviour behind a bound.** `==` is N13's everywhere; a bound only proves
   an operand is in its domain.
 
+## 7.17 The lossless concrete syntax tree — settled by N15, 2026-09-25
+
+**Why it exists.** The abstract tree is what a program means, and it forgets exactly what
+an editing tool needs: whitespace, comments, parentheses, punctuation, and the whole body of
+a function with a syntax error in it. Until N15 comments reached nothing but the formatter,
+as a side list of spans, and one malformed statement discarded the rest of its function. The
+concrete tree is the file as written. It owns what no other layer owns — the source
+structure, every byte of trivia, the structure of malformed regions, and stable node
+boundaries — and nothing else: no name is resolved in it and no type is in it, and nothing
+downstream of the parser reads it.
+
+**One scan, one parser, two trees.**
+
+```text
+UTF-8 bytes ─ lex_lossless_in ─▶ [Lexeme]  (every byte: token | whitespace | comment | invalid)
+                                    │
+                         tokens, borrowed in order
+                                    │
+                           parser.rs (one grammar)
+                            ├──▶ Program (AST)      → checker, evaluator, backend
+                            └──▶ events ─▶ Cst      → tools; nothing in the compiler
+```
+
+The lexer produces one lossless stream; the token list the parser reads, and the comment
+list the formatter reads, are views of it, so nothing scans a file twice
+(`crates/nazm-syntax/src/lexer.rs`). The parser (`parser.rs`) builds both trees from the
+same decisions: every consumed token passes through one `bump`, which records it for the
+concrete tree, and every construct records where it began and wraps its concrete node at the
+point it builds its abstract one. **`parser.rs` is where concrete syntax becomes abstract
+syntax** — not a pass over the concrete tree. This is the transitional shape the directive
+allowed, stated as such: a later milestone may make the abstract tree a projection of the
+concrete one, and nothing here depends on it not being. What makes it one grammar rather
+than two is that neither tree can be built without the other's decisions, and
+`the_abstract_and_concrete_trees_agree_on_every_construct` checks, over every clean file in
+the repository, that each construct the checker sees has a concrete node over the same bytes.
+
+**The tree** (`crates/nazm-syntax/src/cst.rs`) is a `cstree` 0.14 green tree with a red
+layer, wrapped: the workspace sees `Cst`, `CstNode`, `Leaf` and `SyntaxKind`, never a
+`cstree` type. `SyntaxKind` is one vocabulary — a leaf kind per lexer token (by an
+exhaustive mapping, so a new token does not compile without one), three trivia kinds, a node
+kind per grammar construct, and `Error`. **No kind has a fixed spelling**: `cstree` would
+store such a token without its text and print it back from the kind, which is reconstruction
+from canonical spelling; every leaf is interned from the bytes it was scanned from instead.
+The end of the file is not a leaf.
+
+**Trivia placement** is decided once, after parsing, from an event log: trivia before a token
+is emitted immediately before it, after every node that closed before it and before every
+node that opens at it. So no node begins or ends with trivia, and a comment between two
+statements belongs to the block around them. Deciding it during parsing put trivia inside
+whatever construct was being attempted when it was seen — including ones that then failed —
+which the invariant tests caught on the first run.
+
+**Error structure.** A malformed region is an `Error` node over the bytes it covers: the
+leaves of the construct that failed and the tokens skipped after it. A character the lexer
+refuses is an `Invalid` leaf owning its bytes. There is no synthetic token; a missing `;` is
+a diagnostic, not a zero-width leaf.
+
+**Recovery boundaries.** Inside a block, a statement that fails is skipped to the nearest
+place a statement can start — past a `;`, before the block's own `}`, or before a keyword
+that can only begin a statement (`let`, `while`, `return`, `break`, `continue`, `scope`,
+`spawn`) — counting braces from those the failed statement left open, so a `match` it
+opened does not end the block. `if` and `match` are not boundaries: they begin expressions,
+and the tail of a malformed statement is full of them. Reaching `fn`, `pub` or the end of
+the file abandons the block, which is the missing `}` already reported. Every path consumes
+a token or ends the block. At the top level, recovery is what it was: skip to the next item.
+**The abstract tree keeps its contract**: a body that recovered is complete in the concrete
+tree and absent from the abstract one, exactly as a failed body was, so the checker never
+sees a statement list with a hole in it and the signature still serves every caller.
+
+**Cascades.** A later independent mistake in the same function is its own diagnostic. When
+the item's delimiters do not balance, which block a later statement belongs to is what the
+mistake made ambiguous, so after its first recovery the item's further syntax diagnostics
+are withheld until the next item begins. Measured against the pre-N15 parser on 4,240
+single-token deletions and duplications of real programs: the first diagnostic and the
+abstract tree identical in every case, no diagnostic lost, one case with one more.
+
+**What it costs**, measured in process (`performance.md`): the whole compiler written in Nazm
+(606 KB) parses in 28.9 ms against 14.3 ms, with 29.2 MB peak heap against 15.8 MB, and a
+retained tree of 2.7 MB. Every parse builds the tree, the compiler's included; it is built
+and dropped when only the abstract tree is wanted. Removing that cost would mean a parse
+path that builds only one tree, which is a second path; it has not been taken.
+
+**Still future work.** Full-file parsing only: no incremental relexing, no subtree reuse, no
+persisted green nodes. Recovery is local at statements inside blocks; errors inside an
+item's signature, a record, an enum or a `use` still skip to the next item. The formatter
+still lays out from tokens — it reads comments from the same scan the tree is built from,
+but not through the tree. No language server, no structured-edit command. The compiler
+written in Nazm has no concrete tree and does not recover; bootstrap parity is about the
+language it accepts, not about this.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
@@ -2589,7 +2679,7 @@ Availability is not compatibility. Declared MSRVs checked 2026-09-19:
 | `cranelift` | 0.132.3 | 1.93.0 | ok |
 | `redb` | 4.3.0 | 1.90 | ok |
 | `salsa` | 0.28.4 | 1.88 | ok |
-| `cstree` | 0.14.0 | 1.85 | ok |
+| `cstree` | 0.14.0 | 1.85 | ok — added in N15 against 1.98.1, resolved and built (§7.17) |
 
 The machine's `stable` was **1.93.1 (2026-02-11)** while current stable was **1.98.1
 (2026-09-01)** — seven months behind. Resolved by pinning 1.98.1 rather than holding

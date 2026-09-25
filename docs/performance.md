@@ -939,6 +939,44 @@ survives — and is not a regression of N14.
 **Dogfood**: none. No compiler code uses a requirement, so the bootstrap's size and speed
 moved only by the checker's own new code (`bootstrap.md`).
 
+### The lossless syntax tree — measured 2026-09-25, and it doubles the parse
+
+N15 builds a concrete tree on every parse, so parsing now keeps what it used to discard:
+every byte of trivia, every punctuation token, and a node per construct. Measured in
+process, because a parse is below process-launch noise: the committed pre-N15 parser
+(`git show a129cae`'s `nazm-syntax`, abstract tree only) against the N15 parser on the same
+text, release build, median of 30 parses after 3 warm-ups, heap from a counting allocator.
+Contained, P1, nothing else running (`target/n15/bench`, not committed).
+
+| Input | Bytes | Leaves / nodes | pre-N15 | N15 `parse_file` | N15 `parse_cst` | Peak heap, pre-N15 → N15 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `compiler/*.nz`, concatenated | 606,088 | 136,056 / 56,847 | 14.3 ms | 28.9 ms (**2.0×**) | 29.0 ms | 15.8 MB → 29.2 MB (1.8×) |
+| the same, every 40th token removed | 599,185 | 133,089 / 9,912 | 5.1 ms | 15.7 ms (3.1×) | 14.8 ms | 9.6 MB → 19.1 MB |
+| `examples/sum.nz` | 550 | 197 / 70 | 13.5 µs | 36.2 µs | 34.4 µs | 15 KB → 38 KB |
+| `library/core/prelude.nz` | 901 | 83 / 23 | 2.8 µs | 14.2 µs | 12.8 µs | 6 KB → 20 KB |
+
+**What the numbers say.** On real code the tree costs about as much as the parse did before
+it: 2.0× the time and 1.8× the peak heap, for a tree that holds 2.7 MB of a 606 KB source.
+The malformed input is 3.1× because the pre-N15 parser did less work there, not because
+recovery is slow: it abandoned every broken body, and N15 parses the rest of each. The two
+small files show a fixed cost of about 10 µs — the builder and its interner — which is
+invisible in any command but is most of their ratio. `parse_file`, which the compiler uses,
+builds the tree and drops it; a parse that built only one tree would be a second path
+through the grammar, which N15 does not have.
+
+**Where it does not show.** Parsing is a small part of any command: the contained selfhost
+suite, which parses the compiler written in Nazm many times over, took 42.8 s of test time
+against 37.2 s at N14.1's final run (contained, P4T4, one run each): +15%, which is the tree's
+cost where parsing is a large share of the work. The workspace suite took 150 s against
+118 s, with 27 more tests in it. The release `nazm` binary grew from 2,312,000 to 2,397,984 bytes
+(+3.7%), and the workspace gained ten locked crates, nine of them `cstree`'s: `lock_api`,
+`parking_lot`, `parking_lot_core`, `rustc-hash`, `scopeguard`, `stable_deref_trait`,
+`text-size`, `triomphe`, and `redox_syscall`, which is only resolved for that target.
+
+One cost was removed after it was measured: the first version copied every token — each
+identifier's and string's text — out of the lossless scan for the parser to read. Borrowing
+them took the compiler's parse from 33.6 ms and 34.6 MB to the figures above.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
