@@ -132,9 +132,16 @@ impl Client {
     }
 
     fn initialize(&mut self, root: &Path) -> Value {
+        self.initialize_with(
+            root,
+            json!({"workspace": {"workspaceEdit": {"documentChanges": true}}}),
+        )
+    }
+
+    fn initialize_with(&mut self, root: &Path, capabilities: Value) -> Value {
         let r = self.request(
             "initialize",
-            json!({"processId": null, "rootUri": uri(root), "capabilities": {}}),
+            json!({"processId": null, "rootUri": uri(root), "capabilities": capabilities}),
         );
         self.notify("initialized", json!({}));
         r
@@ -252,6 +259,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
             "hoverProvider",
             "positionEncoding",
             "referencesProvider",
+            "renameProvider",
             "textDocumentSync"
         ],
         "only what is implemented is advertised: {init}"
@@ -263,6 +271,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
     );
     assert_eq!(caps["textDocumentSync"]["openClose"], true);
     assert_eq!(caps["referencesProvider"], true);
+    assert_eq!(caps["renameProvider"], json!({"prepareProvider": true}));
 
     // 2. Open: a diagnostic, its code, and its exact UTF-16 range after non-ASCII text.
     c.open(&main, 1, MAIN);
@@ -597,4 +606,167 @@ fn references_do_not_depend_on_whether_semantic_analysis_was_cached() {
     let from_cold = references_in(&cold);
     assert_eq!(from_warm.len(), 3, "{from_warm:?}");
     assert_eq!(from_warm, from_cold);
+}
+
+// Non-ASCII before the declaration and before both calls, on their lines.
+const RENAME_LIB: &str = "pub fn exported() -> Int { 1 }\n";
+const RENAME_MAIN: &str = "use \"lib.nz\";\nfn helper(n: Int) -> Int { n } // é→😀\n\
+fn main() -> Int { let s = \"é→😀\"; helper(str_len(s)) + helper(exported()) }\n";
+
+impl Client {
+    fn at(&mut self, method: &str, path: &Path, line: u32, character: u32, extra: Value) -> Value {
+        let mut params = json!({"textDocument": {"uri": uri(path)}, "position": {"line": line, "character": character}});
+        if let (Some(p), Some(e)) = (params.as_object_mut(), extra.as_object()) {
+            p.extend(e.clone());
+        }
+        self.request(method, params)
+    }
+}
+
+#[test]
+fn rename_crosses_the_protocol_as_a_versioned_edit_in_utf16() {
+    let (_dir, root) = project(&[("lib.nz", RENAME_LIB), ("main.nz", RENAME_MAIN)]);
+    let main = root.join("main.nz");
+    let mut c = Client::start(&root);
+    c.initialize(&root);
+    c.open(&main, 1, RENAME_MAIN);
+    let d = c.diagnostics_for(&uri(&main));
+    assert_eq!(d["diagnostics"], json!([]), "{d}");
+
+    let decl_line = RENAME_MAIN.lines().nth(1).unwrap();
+    let call_line = RENAME_MAIN.lines().nth(2).unwrap();
+    let first = call_line.find("helper").unwrap();
+    let second = call_line.rfind("helper").unwrap();
+    let range = |line: u64, text: &str, at: usize| {
+        json!({"start": {"line": line, "character": utf16(text, at)},
+               "end": {"line": line, "character": utf16(text, at + "helper".len())}})
+    };
+
+    // prepareRename: the token under the cursor and its spelling.
+    let q = utf16(call_line, second) + 2;
+    let r = c.at("textDocument/prepareRename", &main, 2, q, json!({}));
+    assert_eq!(r["result"]["range"], range(2, call_line, second), "{r}");
+    assert_eq!(r["result"]["placeholder"], "helper");
+    // ...and nothing for a built-in, a string, or an exported function.
+    for (character, what) in [
+        (
+            utf16(call_line, call_line.find("str_len").unwrap()) + 1,
+            "a built-in",
+        ),
+        (utf16(call_line, call_line.find('→').unwrap()), "a string"),
+        (
+            utf16(call_line, call_line.find("exported").unwrap()) + 1,
+            "an exported function",
+        ),
+    ] {
+        let r = c.at("textDocument/prepareRename", &main, 2, character, json!({}));
+        assert_eq!(r["result"], Value::Null, "{what}: {r}");
+    }
+
+    // rename: one versioned change for the document, three edits, every range in UTF-16.
+    let r = c.at(
+        "textDocument/rename",
+        &main,
+        2,
+        q,
+        json!({"newName": "assist"}),
+    );
+    let edit = &r["result"];
+    assert_eq!(
+        edit["changes"],
+        Value::Null,
+        "never the unversioned form: {r}"
+    );
+    let change = &edit["documentChanges"][0];
+    assert_eq!(edit["documentChanges"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        change["textDocument"],
+        json!({"uri": uri(&main), "version": 1})
+    );
+    let ranges: Vec<Value> = change["edits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            assert_eq!(e["newText"], "assist");
+            e["range"].clone()
+        })
+        .collect();
+    assert_eq!(
+        ranges,
+        [
+            range(1, decl_line, decl_line.find("helper").unwrap()),
+            range(2, call_line, first),
+            range(2, call_line, second),
+        ]
+    );
+
+    // After an unsaved edit the rename is of the new version.
+    let edited = RENAME_MAIN.replace("+ helper(exported())", "+ helper(exported()) + helper(3)");
+    c.change(&main, 2, &edited);
+    c.diagnostics_for(&uri(&main));
+    let r = c.at(
+        "textDocument/rename",
+        &main,
+        2,
+        q,
+        json!({"newName": "assist"}),
+    );
+    let change = &r["result"]["documentChanges"][0];
+    assert_eq!(change["textDocument"]["version"], 2, "{r}");
+    assert_eq!(change["edits"].as_array().unwrap().len(), 4);
+
+    // Refusals are errors with the reason: an exported function, an invalid name.
+    let exported = utf16(call_line, call_line.find("exported").unwrap()) + 1;
+    let r = c.at(
+        "textDocument/rename",
+        &main,
+        2,
+        exported,
+        json!({"newName": "x"}),
+    );
+    assert_eq!(r["error"]["code"], -32803, "{r}");
+    assert!(
+        r["error"]["message"].as_str().unwrap().contains("exported"),
+        "{r}"
+    );
+    let r = c.at("textDocument/rename", &main, 2, q, json!({"newName": "fn"}));
+    assert_eq!(r["error"]["code"], -32803, "{r}");
+
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+#[test]
+fn a_client_that_cannot_take_versioned_edits_is_refused_a_rename() {
+    let (_dir, root) = project(&[("lib.nz", RENAME_LIB), ("main.nz", RENAME_MAIN)]);
+    let main = root.join("main.nz");
+    let mut c = Client::start(&root);
+    c.initialize_with(&root, json!({}));
+    c.open(&main, 1, RENAME_MAIN);
+    c.diagnostics_for(&uri(&main));
+    let call_line = RENAME_MAIN.lines().nth(2).unwrap();
+    let q = utf16(call_line, call_line.rfind("helper").unwrap());
+    // prepareRename still answers — the entity is renameable — but the edit cannot be
+    // tied to a version, so no edit is sent.
+    let r = c.at("textDocument/prepareRename", &main, 2, q, json!({}));
+    assert_eq!(r["result"]["placeholder"], "helper", "{r}");
+    let r = c.at(
+        "textDocument/rename",
+        &main,
+        2,
+        q,
+        json!({"newName": "assist"}),
+    );
+    assert_eq!(r["error"]["code"], -32803, "{r}");
+    assert!(
+        r["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("versioned"),
+        "{r}"
+    );
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
 }
