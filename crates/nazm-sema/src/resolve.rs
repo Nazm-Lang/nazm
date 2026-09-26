@@ -331,6 +331,12 @@ pub struct Resolution {
     /// `type_names` and are uses in the reference index; these are not, because neither a
     /// built-in nor a type parameter is an entity a program declares.
     written_types: HashMap<Span, WrittenType>,
+    /// Whether this is a completion probe's compilation (N26) — never an ordinary one.
+    probing: bool,
+    /// For a completion probe only (N26): the callee name of the call the probe's hole is
+    /// in, so that the checker, finding no function by that name, can say which record the
+    /// module's types name by it. `None` in every ordinary compilation.
+    completion_call: Option<Span>,
 }
 
 /// A written type name that names no declared entity, as the checker resolved it (N23).
@@ -529,6 +535,26 @@ impl Resolution {
     }
 
     /// Record that the member name at `span` was looked for on `on` and not found.
+    /// The callee name of a completion probe's hole (N26), or `None` in every ordinary
+    /// compilation.
+    #[must_use]
+    pub const fn completion_call(&self) -> Option<Span> {
+        self.completion_call
+    }
+
+    /// Whether this is a completion probe's compilation (N26).
+    #[must_use]
+    pub const fn probing(&self) -> bool {
+        self.probing
+    }
+
+    /// Mark this a completion probe's compilation, and name the callee of its hole if the
+    /// hole is in a call, before checking (N26).
+    pub fn set_completion_probe(&mut self, callee: Option<Span>) {
+        self.probing = true;
+        self.completion_call = callee;
+    }
+
     pub fn record_unresolved_member(&mut self, span: Span, on: Type) {
         self.unresolved_members.insert(span, on);
     }

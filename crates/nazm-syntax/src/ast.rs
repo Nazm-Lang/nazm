@@ -29,6 +29,28 @@ pub struct Program {
     /// `Program` reaches the checker every import has already been loaded and merged,
     /// so these are here for tooling and for the diagnostic when one cannot be found.
     pub imports: Vec<Import>,
+    /// The completion hole a probe parse was asked about and found (N26); `None` for every
+    /// ordinary parse. See [`HoleSite`].
+    pub hole: Option<HoleSite>,
+}
+
+/// Where a completion probe's hole is, as the parser read it (N26).
+///
+/// Only a parse told the byte offset of an editor's cursor makes one, and only at exactly
+/// that offset, right after a `.` or a `(` with nothing written after it. The hole is a
+/// zero-width, empty name, which no source can spell; the tree around it is what the
+/// grammar reads, and the checker decides what it means. Never produced by `nazm check`,
+/// `nazm build` or the language service's ordinary analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoleSite {
+    /// After `.`: the empty member name of a projection — or, after `Name[T, …].`, the
+    /// empty variant name of a variant construction.
+    Member { name: Span },
+    /// After `Name(`, with no label written: a call of `Name`, which is how the grammar
+    /// reads a `(` without labels.
+    Call { callee: Span },
+    /// After `E.V(`, in a variant construction or (`pattern`) a match pattern.
+    Payload { variant: Span, pattern: bool },
 }
 
 /// `use "path";`

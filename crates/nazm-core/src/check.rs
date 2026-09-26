@@ -425,6 +425,13 @@ pub fn check_reusing(
     unparsable: &[ModuleId],
 ) -> (Resolution, Vec<Diagnostic>) {
     let mut res = Resolution::default();
+    // A completion probe (N26): never an ordinary program, whose `hole` is `None`.
+    if let Some(hole) = program.hole {
+        res.set_completion_probe(match hole {
+            nazm_syntax::HoleSite::Call { callee } => Some(callee),
+            _ => None,
+        });
+    }
     let mut errors = Vec::new();
 
     let units: Vec<Unit<'_>> = graph.ids().map(|m| Unit::of(program, graph, m)).collect();
@@ -2231,6 +2238,28 @@ impl Checker<'_> {
         Some(visible.sig)
     }
 
+    /// The record a completion probe's hole call names, recorded as a construction's head
+    /// would be (N26).
+    fn called_record(&mut self, name: &str, at: Span, written: Option<&[TypeName]>) {
+        if self.refused(name) {
+            return;
+        }
+        let Some(def) = self.resolve_record(name, at) else {
+            return;
+        };
+        if let Some(Type::Record(id)) = self.applied(Type::Record(def), written, at) {
+            self.res.record_construction(at, id);
+        }
+    }
+
+    /// Whether a completion probe must not anchor through the type name `name` (N26): the
+    /// module's types refused it as an ambiguity or a collision, so it means nothing
+    /// unambiguously here, whatever the table goes on to answer. Always `false` outside a
+    /// probe, so nothing an ordinary compilation records depends on it.
+    fn refused(&self, name: &str) -> bool {
+        self.res.probing() && self.types.refused.iter().any(|n| n == name)
+    }
+
     /// Why this module cannot write `name`, when something in the compilation has it.
     ///
     /// Returns the diagnostic to raise instead of a plain "not defined". Both cases point
@@ -2642,9 +2671,12 @@ impl Checker<'_> {
         fields: &[FieldInit],
         span: Span,
     ) -> Option<Type> {
-        let applied = self
-            .resolve_enum(ty, ty_span)
-            .and_then(|def| self.applied(Type::Enum(def), type_args, ty_span));
+        let applied = if self.refused(ty) {
+            None
+        } else {
+            self.resolve_enum(ty, ty_span)
+                .and_then(|def| self.applied(Type::Enum(def), type_args, ty_span))
+        };
         let Some(Type::Enum(id)) = applied else {
             // Still check the initialisers: one unknown type should not silence every
             // error inside it.
@@ -3925,6 +3957,14 @@ impl Checker<'_> {
                         )
                     });
                     self.errors.push(d);
+                    // A completion probe's `Name(` with no function `Name` (N26): which
+                    // record the module's types name by it, read and applied exactly as a
+                    // construction's head is — so a generic record with no type arguments
+                    // written names no instance, and nothing is recorded. Never in an
+                    // ordinary program, whose `completion_call` is `None`.
+                    if self.res.completion_call() == Some(*callee_span) {
+                        self.called_record(callee, *callee_span, type_args.as_deref());
+                    }
                     for a in args {
                         self.check_expr(a, None);
                     }
@@ -4045,9 +4085,12 @@ impl Checker<'_> {
                 {
                     let is_value = self.scopes.lookup(qualifier).is_some();
                     let is_param = self.type_scope.iter().any(|(n, _)| n == qualifier);
-                    if let (false, false, Some(Type::Enum(id))) =
-                        (is_value, is_param, self.types.names.get(qualifier).copied())
-                    {
+                    if let (false, false, false, Some(Type::Enum(id))) = (
+                        is_value,
+                        is_param,
+                        self.refused(qualifier),
+                        self.types.names.get(qualifier).copied(),
+                    ) {
                         if self.res.types().arity(ParamOwner::Enum(id)) == 0 {
                             self.res
                                 .record_unresolved_member(*name_span, Type::Enum(id));

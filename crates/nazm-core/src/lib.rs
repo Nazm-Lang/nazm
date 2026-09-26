@@ -29,6 +29,8 @@ pub use nazm_sema as sema;
 /// Re-exported so the CLI can parse without taking its own dependency on the syntax
 /// crate. The double underscore marks it as plumbing rather than interface.
 pub mod __syntax {
+    /// A completion probe's hole (N26).
+    pub use nazm_syntax::HoleSite;
     pub use nazm_syntax::{
         format, lex, lex_in, parse_file, parse_map, parse_source, Block, Enum, Expr, Field,
         FieldInit, Function, MatchArm, PatternField, Place, PlaceField, Program, Record, Stmt,
@@ -378,6 +380,46 @@ pub fn analyse(map: &nazm_span::SourceMap, graph: &sema::ModuleGraph, entry: Ent
         resolution,
         diagnostics,
         syntax_errors,
+    }
+}
+
+/// A completion probe (N26): what the checker made of the current source with a hole at
+/// byte `offset` of the root file, where the grammar has one there.
+///
+/// The same loader's map and graph, the same parser told the cursor's offset, the same
+/// checker. Nothing about it is kept or published: its diagnostics describe a program with
+/// a hole in it, and its resolution is only for reading what the hole is a member of.
+#[derive(Debug)]
+pub struct Probe {
+    pub analysis: Analysis,
+    /// The hole the parser found, if it found one.
+    pub hole: Option<__syntax::HoleSite>,
+    /// The root file's concrete tree, as the probe parsed it.
+    pub root: Option<__syntax::Cst>,
+}
+
+/// Parse and check `map` with a completion hole at byte `offset` of the root file. As
+/// [`analyse`] in every other respect, stack included.
+#[must_use]
+pub fn probe(map: &nazm_span::SourceMap, graph: &sema::ModuleGraph, offset: u32) -> Probe {
+    let (program, diagnostics, root) = nazm_syntax::parse_map_at(map, Some(offset));
+    let hole = program.hole;
+    let mut syntax_errors: Vec<nazm_span::FileId> =
+        diagnostics.iter().map(|d| d.primary.span.file).collect();
+    syntax_errors.sort_unstable();
+    syntax_errors.dedup();
+    let (resolution, check_errors) = check(&program, graph);
+    let mut diagnostics = diagnostics;
+    diagnostics.extend(check_errors);
+    Probe {
+        analysis: Analysis {
+            program,
+            resolution,
+            diagnostics,
+            syntax_errors,
+        },
+        hole,
+        root,
     }
 }
 

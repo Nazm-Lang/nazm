@@ -12,9 +12,9 @@ pub mod lexer;
 pub mod parser;
 
 pub use ast::{
-    Assign, BinOp, Block, Enum, Expr, Field, FieldInit, Function, Import, Let, MatchArm, Param,
-    PatternField, Place, PlaceField, Program, Record, Requirement, Return, Scope, Spawn, Stmt,
-    TypeName, TypeParam, Variant, While,
+    Assign, BinOp, Block, Enum, Expr, Field, FieldInit, Function, HoleSite, Import, Let, MatchArm,
+    Param, PatternField, Place, PlaceField, Program, Record, Requirement, Return, Scope, Spawn,
+    Stmt, TypeName, TypeParam, Variant, While,
 };
 pub use cst::{Cst, CstNode, CstParse, Leaf, SyntaxKind};
 pub use format::format;
@@ -66,6 +66,17 @@ pub fn parse_both(
     file: nazm_span::FileId,
     text: &str,
 ) -> (Program, Cst, Vec<nazm_diag::Diagnostic>) {
+    parse_both_at(file, text, None)
+}
+
+/// As [`parse_both`], for a completion probe: a hole at byte `hole` of this file, if the
+/// grammar has one there (N26, [`HoleSite`]). The hole is the one unfinished construct the
+/// probe tolerates; everything else is parsed and reported exactly as [`parse_both`] does.
+pub fn parse_both_at(
+    file: nazm_span::FileId,
+    text: &str,
+    hole: Option<u32>,
+) -> (Program, Cst, Vec<nazm_diag::Diagnostic>) {
     let (lexemes, mut errors) = lex_lossless_in(file, text);
     let tokens: Vec<&Token> = lexemes
         .iter()
@@ -74,7 +85,7 @@ pub fn parse_both(
             _ => None,
         })
         .collect();
-    let (program, parse_errors, cst) = parser::parse_lossless(file, text, &lexemes, &tokens);
+    let (program, parse_errors, cst) = parser::parse_lossless(file, text, &lexemes, &tokens, hole);
     errors.extend(parse_errors);
     (program, cst, errors)
 }
@@ -94,13 +105,34 @@ pub fn parse_both(
 /// in source order. Two functions with the same name are a duplicate wherever they are,
 /// exactly as before.
 pub fn parse_map(map: &nazm_span::SourceMap) -> (Program, Vec<nazm_diag::Diagnostic>) {
+    let (program, errors, _) = parse_map_at(map, None);
+    (program, errors)
+}
+
+/// As [`parse_map`], for a completion probe (N26): the root file parsed with a hole at byte
+/// `hole`, if the grammar has one there, and its concrete tree returned beside the rest.
+pub fn parse_map_at(
+    map: &nazm_span::SourceMap,
+    hole: Option<u32>,
+) -> (Program, Vec<nazm_diag::Diagnostic>, Option<Cst>) {
     let mut functions = Vec::new();
     let mut records = Vec::new();
     let mut enums = Vec::new();
     let mut imports = Vec::new();
     let mut errors = Vec::new();
+    let mut found = None;
+    let mut root = None;
     for id in map.ids() {
-        let (program, file_errors) = parse_file(id, map.text(id));
+        let at = if id == nazm_span::FileId::ROOT {
+            hole
+        } else {
+            None
+        };
+        let (program, cst, file_errors) = parse_both_at(id, map.text(id), at);
+        if id == nazm_span::FileId::ROOT && hole.is_some() {
+            found = program.hole;
+            root = Some(cst);
+        }
         functions.extend(program.functions);
         records.extend(program.records);
         enums.extend(program.enums);
@@ -113,7 +145,9 @@ pub fn parse_map(map: &nazm_span::SourceMap) -> (Program, Vec<nazm_diag::Diagnos
             records,
             enums,
             imports,
+            hole: found,
         },
         errors,
+        root,
     )
 }
