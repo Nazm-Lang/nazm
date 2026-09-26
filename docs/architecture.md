@@ -2735,8 +2735,8 @@ reparse is not yet needed.
 hover, positions in UTF-16 — and, since N17, references (§7.19), since N18 prepare-rename
 and rename (§7.20), since N19 completion (§7.21), since N20 signature help (§7.22), since
 N21 structure completion and constructor signature help (§7.23), since N22 document and
-workspace symbols (§7.24), and since N23 `semanticTokens/full` (§7.25). Nothing else is
-advertised. The core prelude has no file, so a
+workspace symbols (§7.24), since N23 `semanticTokens/full` (§7.25), and since N24 quick
+fixes over `textDocument/codeAction` (§7.26). Nothing else is advertised. The core prelude has no file, so a
 definition in it has no location. Diagnostics keep their Nazm codes and messages; the
 protocol message is an adapter's rendering of a `nazm.diagnostic/1` object's primary span,
 not a new schema.
@@ -3309,6 +3309,66 @@ did not is omitted, and nothing from an earlier version is ever served.
 **Deliberately not here.** `semanticTokens/range` and `semanticTokens/full/delta` (no
 `resultId`, no previous token array, no cache); lexical tokens; read/write distinctions; a
 workspace-wide token query. Nothing is persisted.
+
+## 7.26 Quick fixes from current diagnostics — settled by N24, 2026-09-26
+
+> **N24 does not derive repairs from diagnostic codes, messages, spelling or syntax. It only
+> presents fixes already attached to current compiler diagnostics. Returning a
+> `WorkspaceEdit` is not applying it; the client must send the resulting `didChange` before
+> server state changes.**
+
+```text
+Compiler diagnostic   owns its fixes                                     (nazm-diag Fix)
+Fix                   one span (one file), replacement, applicability,
+                      precondition, description
+LanguageService       current diagnostic · current version and generation ·
+                      open document · exact bytes at the span           (nazm-service/src/fixes.rs)
+FixPlan               the fix as one validated, versioned edit
+LSP adapter           quick fix · versioned documentChanges · UTF-16     (nazm-cli/src/lsp.rs)
+```
+
+**What a fix is.** `nazm_diag::Fix { span, replacement, description, applicability,
+precondition }`: one span, so one edit to one file. `Applicability` is `Automatic` or
+`NeedsReview`, and the precondition is always present. It carries no expected text; the bytes
+at its span in the analysed source are what it expects, and both consumers record them when
+they take the fix.
+
+**The plan.** `LanguageService::fix_plans(path, version, start, end)` reads the diagnostics of
+the document's current analysis, keeps those in the document whose primary span the range
+touches (half-open overlap; a cursor touches a span it is inside or at either end of; an empty
+span, a range containing it), and makes one `FixPlan` per fix: the diagnostic, which fix of how
+many, the applicability, description and precondition, the generation, and one N18
+`FileEdit` — path, open version, exact text, and the edit with its expected bytes. The fix's
+span decides the edit, the diagnostic's span only relevance: `mut` goes on the `let`, not on
+the assignment. A fix whose file is not an open document has no plan — there is no version to
+protect it — and neither does one whose span is not a range of the text. One fix has one edit,
+so a plan cannot hold overlapping edits; two fixes of one diagnostic are two plans, which may
+overlap as alternatives, and nothing combines them.
+
+**Freshness.** `fix_plan_is_current` holds a plan to its generation, to its file being open at
+its version with exactly its text, and to its bytes still being the ones it replaces — through
+`file_is_current`, the one freshness law a rename's plan answers to as well. Version and bytes
+protect different boundaries and both are kept: the bytes, what the server analysed; the
+version, what the client applies to.
+
+**Over the protocol.** `codeAction` returns `CodeAction`s of kind `quickfix`, one per plan, each
+with the current diagnostic converted exactly as published and its edit as versioned
+`documentChanges` — the same conversion, and the same refusal, a rename uses: a client that does
+not accept versioned changes, or a file not open, gets no action rather than a weaker edit. An
+automatic fix is `isPreferred` when it is its diagnostic's only fix; a needs-review fix never
+is, and its title carries its precondition. The diagnostics a client sends are not consulted:
+a stale copy cannot resurrect a fix and a fabricated one cannot produce one. `only` asking for
+anything but quick fixes gets an empty list. No refactors, source actions, fix-all, commands,
+`data` or `codeAction/resolve`; nothing is cached between requests.
+
+**`nazm fix` beside it.** The command collects the same fixes and applies the automatic ones to
+disk right to left, skipping overlaps, stale bytes, spans that name no range, and a result that
+would not parse, with each of its seven skip reasons now reached by its own test. It writes and
+can roll back; the server writes nothing and cannot — it relies on each fix being tested to
+parse and to remove its diagnostic, on the bytes being checked, and on the version.
+
+**Deliberately not here.** Edits to files that are not open (N18's gap stands), fix-all,
+refactors, and any fix the compiler does not attach.
 
 ## 8. Toolchain, and one real incompatibility
 

@@ -1281,6 +1281,43 @@ adapter's share is about 6 ms there. Nothing justifies a range request, deltas o
 the same container, is 3,085,184 bytes at N22 and at N23 — the new code fits the layout step N22
 reached. No dependency was added.
 
+### Quick fixes — measured 2026-09-26
+
+N24 keeps nothing: a fix plan is made per request from the current analysis's diagnostics and
+dropped with the response — no action cache, no resolve state, no stored edit. **Persistent
+code-action state: zero entries**, and no checker record was added.
+
+Compared interleaved with N23 (`21f626e`), four rounds each in one container, contained, P1
+(`target/n24/ab`, not committed):
+
+| On the compiler (`emit.nz`) | N23 | N24 |
+| --- | --- | --- |
+| `analyse` | 35.33–36.16 ms | 35.29–36.18 ms |
+| warm edit | 85.72–87.41 ms | 85.21–87.79 ms |
+| resident, compiler open | 34.50–34.52 MB | 34.50–34.53 MB |
+
+The requests, two runs in the same container (`target/n24/bench`), medians:
+
+| Document | Fix-bearing diagnostics | `fix_plans` at a cursor | `fix_plans`, whole file | `fix_plan_is_current`, every plan | `codeAction` over stdio, cursor / whole file |
+| --- | ---: | --- | --- | --- | --- |
+| one automatic fix | 1 | 1.9–2.0 µs | 1.9 µs | 1.3 µs | 98 / 97 µs |
+| one fix needing review | 1 | 1.9–2.0 µs | 1.9 µs | 1.3 µs | 96–100 / 96–99 µs |
+| one fix after `é😀` | 1 | 1.9–2.0 µs | 1.9 µs | 1.3 µs | 98 / 97 µs |
+| 100 assignments to immutable bindings | 100 | 10–11 µs | 83–84 µs | 131 µs | 139–140 µs / 1.54–1.55 ms |
+
+**What the numbers say.** The interleaved comparison detected no analyse, warm-edit or resident
+delta, and none is expected: N24 changes no code that analysis runs, and keeps nothing. Planning
+a document's fixes is microseconds; the currency check compares the document's whole text once
+per plan, which is what makes 100 plans 131 µs. A request is dominated by the protocol round
+trip for a few actions (about 0.1 ms) and by building, converting and serialising the edits for
+many — 100 actions in 1.5 ms, of which the adapter's share, conversion to UTF-16 and JSON and
+the pipe, is about 1.3 ms.
+
+**What it added to the binary.** The release `nazm`, built from both trees in the same
+container, is 3,085,184 bytes at N23 and 3,150,720 bytes at N24: **+65,536 bytes, +2.1%**, one
+64 KiB step of the file's layout, for the fix-plan module, the quick-fix handler and their
+`lsp-types` structures. No dependency was added.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
