@@ -17,7 +17,9 @@
 //! - [`semantic`] — what each identifier of a document is, as the checker decided it:
 //!   class, declaration or reference, and identity (N23);
 //! - [`fixes`] — the fixes current diagnostics carry, as edits validated against the
-//!   current source, for an editor's quick fixes (N24).
+//!   current source, for an editor's quick fixes (N24);
+//! - [`hierarchy`] — a source function and the direct calls the checker recorded into and
+//!   out of it, in the compilation it was prepared from (N25).
 //!
 //! The first two were `nazm-cli`'s until N16 and moved here unchanged in what they decide,
 //! so the command line and the language service cannot disagree about a module graph.
@@ -26,6 +28,7 @@
 
 pub mod completion;
 pub mod fixes;
+pub mod hierarchy;
 pub mod load;
 pub mod rename;
 pub mod root;
@@ -37,6 +40,7 @@ pub mod symbols;
 
 pub use completion::{Completion, CompletionCandidate, Context, NoCompletion};
 pub use fixes::{FixPlan, NoFixes};
+pub use hierarchy::{HierarchyFunction, IncomingCall, Locator, NoHierarchy, OutgoingCall};
 pub use rename::{Edit, FileEdit, Refusal, RenamePlan, Renameable};
 pub use semantic::{
     NoIdentifiers, Role, SemanticClass, SemanticIdentifier, SemanticIdentifiers, SemanticTarget,
