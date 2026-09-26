@@ -632,15 +632,12 @@ fn a_position_that_is_not_a_completion_site_has_no_completion() {
         let mut s = LanguageService::new();
         s.open(&m, 1, T.into());
         let none = |o: u32| s.completion(&m, 1, o).unwrap_err();
+        // A field after `.` and a label are structure sites since N21 (`tests/structure.rs`);
+        // a construction's head and a declaration's name are still not completion sites.
         assert_eq!(
-            none(at(T, "p.x", 0, 2)),
+            none(at(T, "P(x", 0, 0)),
             NoCompletion::NotACompletionSite,
-            "a field"
-        );
-        assert_eq!(
-            none(at(T, "(x: 1", 0, 1)),
-            NoCompletion::NotACompletionSite,
-            "a label"
+            "a construction's head"
         );
         assert_eq!(
             none(at(T, "fn main", 0, 4)),
