@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,514 passed, 0 failed, 13 ignored, across 80 suites**, run contained at
-N24 (2026-09-26), at P4T4; the thirteen ignored are the xtask lifecycle tests,
-run on their own (13 of 13 passed, contained). N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,532 passed, 0 failed, 13 ignored, across 81 suites**, run contained at
+N25 (2026-09-26), at P4T4; the thirteen ignored are the xtask lifecycle tests,
+run on their own (13 of 13 passed, contained). N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1427,9 +1427,48 @@ sends `didChange`, then gone with its diagnostic; a stale and a fabricated clien
 producing nothing; a needs-review fix with its precondition; `only` honoured; a client without
 versioned edits offered none. Seventeen N24 mutations (area 30).
 
+*N25, 2026-09-26: `textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls` and
+`callHierarchy/outgoingCalls` — VERIFIED; source-backed functions only, the bound current
+compilation snapshot only, direct checked calls only, no filesystem or project-wide caller
+discovery, and no item for an intrinsic or a function without source.* An item is a function
+the checker declared from source, prepared from its declaration or a call through the reference
+index, with its outline symbol's ranges; an edge is a `CheckedCall` to such a function,
+attributed to the body whose call sites the checker recorded it in, grouped by the function at
+the other end and located at each callee name (`architecture.md` §7.27). No per-call state was
+added and nothing is kept between requests. An item's opaque locator binds it to the
+compilation it was prepared in and the generation it was prepared at; any change, or closing
+that root, leaves it unanswered. **This is complete only for the bound current compilation
+snapshot: it is not evidence that every importer or caller in a project is loaded**, and it
+does not lift the exported-rename refusal. Evidence: `crates/nazm-service/tests/hierarchy.rs` —
+preparation from a declaration, a call and the position just after a name, and none from a
+same-spelled record, a construction, a field, an enum, a variant, a payload label, a local, a
+parameter, an intrinsic or a type; items at their N22 symbol's ranges; two callers and two
+callees each grouped with every call in order, two calls on one line; calls nested in
+arguments, `if`, `while` and `match` owned by their function; recursion and mutual recursion;
+three instantiations of one generic function as one item, each range the callee name alone;
+constructions, variants and intrinsics not edges, a `spawn` an edge and a refused generic
+`spawn` — a reference with no checked call — none; four files through an import cycle, a
+private function, and two `helper`s kept apart as callees and as callers; a call with a type
+error kept, a misspelt call dropped beside a kept one, an unparsable body losing its calls with
+nothing brought back; unsaved callers, an unsaved dependency and its close; a refused duplicate
+declaration no item, its calls the checker's; two roots over one shared file each seeing only
+its own callers, and a closed root's item unanswered, never rebound; an item unanswered at
+another version, after an unrelated edit and after an identical one; 1,000 edits through six
+shapes with every old item unanswered and retained state constant; and, over the repository's
+own source, every checked call of 70 clean documents to a function with source exactly one edge
+occurrence from the body that holds it — found independently by containment — to the function
+the checker resolved, seen alike from both ends, at the entity the reference index records,
+at items matching their N22 symbols, and classified by N23 as a function declared or
+referenced. `crates/nazm-cli/tests/lsp.rs` the real process: prepare, incoming and outgoing
+after `é😀` with every range computed independently in UTF-16, a cross-file callee, a stale item
+and forged data answered `null`, and two roots over one file. Fourteen N25 mutations (area 30).
+
 **Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
-help, symbols, full-document semantic tokens and quick fixes only: no formatting, refactors,
-source actions, inlay hints or call hierarchy, no cancellation and no watched files. Quick fixes
+help, symbols, full-document semantic tokens, quick fixes and call hierarchy only: no
+formatting, refactors, source actions or inlay hints, no cancellation and no watched files.
+Call hierarchy is one level of direct checked calls per request within the compilation an item
+was prepared in: no transitive or persistent call graph, no callers from files that compilation
+does not load, and no item for an intrinsic or a function without source. Quick fixes
 are the fixes the compiler attaches, for open documents at their current version; a fix whose
 file is not open is not offered, and there is no post-apply rollback — the server never writes. Semantic tokens are
 `semanticTokens/full` only — no range, no delta, no token cache — and cover identifiers the
@@ -1551,8 +1590,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **435** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23), **247** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **449** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24), **261** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -2009,6 +2048,26 @@ at tier 1**; nothing at tier 2 or 3, no survivor, crash, timeout, unusable or un
 no runner error. The `fixes` suite joined the `cli`, `semantics` and `checker` profiles. N13's
 use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and are as
 they were.
+
+*N25 (2026-09-26) added fourteen and repointed two,* on the frozen final source; every killer
+was verified by `--verify-killer`, contained at P1, one at a time, with no host build running:
+16 of 16, each on its first run. They attack N25's invariants: an item found by spelling, a
+reference taken for a call, a recursive call dropped, a call given the wrong caller, a second
+call lost, same-named callers merged, another root's compilation answering, an old item
+answered after a change, a closed root's item rebound, an item's range its name, a call's range
+the whole call, edges ordered ignoring the file, a stale version prepared, and every file's
+ranges converted with one line index. `n22-a-selection-is-the-whole-declaration` moved with the
+function symbol into the helper the outline and the hierarchy share;
+`n16-code-actions-are-advertised`, then `n16-call-hierarchy-is-advertised`, became
+`n16-formatting-is-advertised`, the same defect with a capability the server still lacks. **Campaign
+`a52490106a612553`, targeted, P1, one session, 1,202 s:** those sixteen, and eight N16, N17,
+N20 and N22 entries on what N25 consumes — both column conversions counted in bytes, same-named
+functions indexed as one, a call with the wrong argument count not recorded, a write to stdout,
+a stale version answered, the position just after a name, and the protocol's selection range.
+**24 of 24 caught at tier 1**; nothing at tier 2 or 3, no survivor, crash, timeout, unusable or
+uninjected entry, no runner error. The `hierarchy` suite joined the `cli`, `semantics` and
+`checker` profiles. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were
+not re-run and are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

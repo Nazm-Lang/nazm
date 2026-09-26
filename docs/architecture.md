@@ -2735,8 +2735,9 @@ reparse is not yet needed.
 hover, positions in UTF-16 — and, since N17, references (§7.19), since N18 prepare-rename
 and rename (§7.20), since N19 completion (§7.21), since N20 signature help (§7.22), since
 N21 structure completion and constructor signature help (§7.23), since N22 document and
-workspace symbols (§7.24), since N23 `semanticTokens/full` (§7.25), and since N24 quick
-fixes over `textDocument/codeAction` (§7.26). Nothing else is advertised. The core prelude has no file, so a
+workspace symbols (§7.24), since N23 `semanticTokens/full` (§7.25), since N24 quick
+fixes over `textDocument/codeAction` (§7.26), and since N25 call hierarchy (§7.27). Nothing
+else is advertised. The core prelude has no file, so a
 definition in it has no location. Diagnostics keep their Nazm codes and messages; the
 protocol message is an adapter's rendering of a `nazm.diagnostic/1` object's primary span,
 not a new schema.
@@ -3369,6 +3370,85 @@ parse and to remove its diagnostic, on the bytes being checked, and on the versi
 
 **Deliberately not here.** Edits to files that are not open (N18's gap stands), fix-all,
 refactors, and any fix the compiler does not attach.
+
+## 7.27 Call hierarchy from checked calls — settled by N25, 2026-09-26
+
+> **N25 call hierarchy is a view of the current bound compilation. It does not establish a
+> complete project boundary and does not prove that all possible callers are loaded. An edge
+> exists only because the checker recorded a call from one source function to another; none
+> is inferred from names, references, syntax or text.**
+
+```text
+N17  occurrence -> function identity                      (ReferenceIndex)
+N20  checked call -> callee identity                      (CheckedCall, by callee name span)
+     the body being checked -> the calls it made          (FnDef::call_sites, the same point)
+N22  function identity -> source declaration and name     (symbols::function_symbol)
+N25  current source function
+       -> direct checked-call edges, grouped by the function at the other end
+       -> source-backed hierarchy items                    (nazm-service/src/hierarchy.rs)
+LanguageService   binds an item to one current compilation and generation (Locator)
+LSP adapter       opaque locator in item data · UTF-16 · the three standard methods
+```
+
+**Items.** A hierarchy item is a function the checker declared from an item this compilation
+parsed, with the declaration and name ranges of its outline symbol: the outline and the
+hierarchy read both from one function, `function_symbol`, so there is no second location
+table. A built-in or intrinsic has no declaration, the core prelude declares no function, and
+the service loads every module from source, so a function known only from a persisted
+interface does not occur in its compilations; the item builder refuses anything without a
+parsed item in a file an editor can open, and an edge to it is left out rather than given a
+place that does not exist. Records, variants, fields, locals and parameters are never items.
+Generic instantiations are one item: instantiation is call metadata, not identity.
+
+**Preparing.** `prepare_call_hierarchy(path, version, offset)` reads the entity the reference
+index records at the name under the cursor — a function's declaration or any call of it — and
+nothing else. It never looks a function up by its spelling; a record called `Box` is not the
+function `Box`. Nazm has no function values, so every non-declaration occurrence of a function
+is a call or a spawn; preparation answers *which function*, and edges answer *which checked
+calls*, separately.
+
+**Edges.** Each is read from two facts the checker already keeps, both recorded at the same
+point under the same resolved callee: a `CheckedCall` at the callee's name span (N20), and the
+same span in the `call_sites` of the body the checker was checking. So the caller is read, not
+derived from where a span sits; no per-call state was added. Incoming calls scan every body's
+call sites and keep those whose checked call resolved to the item — O(calls in the
+compilation), with a request-local map from caller to spans that is dropped with the answer.
+Outgoing calls read the item's own call sites — O(its calls). A call site with no checked call
+is no edge (a refused generic `spawn` resolves its name and checks no call), a reference is not
+a call, and a construction is not a call to the checker and is not one here. Calls nested in
+another call's arguments, or inside `if`, `while`, `match` or a block, belong to the function
+whose body holds them. A `spawn f(…)` is a checked call of `f`. A recursive call is an edge to
+itself; mutual recursion is an edge each way; nothing is transitive — one level per request.
+
+**Grouping and order.** Edges are grouped by the function at the other end, by identity, never
+by name: two modules' `helper` are two callers. Each edge's ranges are the callee's name at each
+call — the span N17 and N20 key the call by, without type arguments — in source order, each
+once. Edges are ordered by the other end's declaring file, then where its name is, then name.
+
+**Which program.** An item belongs to the compilation rooted at the document it was prepared
+from, at the generation it was prepared at: callers are the calls known in that compilation —
+the root and everything it imports — and no other. A shared file prepared through two open
+roots gives two items at the same place with different callers; neither is a claim about the
+project, and nothing reads a directory. So N25 does not lift N18's refusal to rename an
+exported definition.
+
+**Across requests.** An item carries a `Locator`: the root document's identity path, its
+version, the service generation, and the declaring file and name bytes — a position, never a
+session-local `FnId` or a spelling. Incoming and outgoing calls are answered only while the
+generation, the root's presence and version all still hold, and then from that root's own
+current analysis, where the function is found at exactly those bytes. After any change —
+unrelated ones included — or once the root is closed, the item has no answer and is never
+rebound to another root; it must be prepared again. Nothing is kept between requests: no item
+table and no graph.
+
+**Over the protocol.** `callHierarchyProvider` is advertised. An item's `range` is the whole
+declaration and `selectionRange` its name, kind `Function`, detail the shared signature
+renderer's, and `data` the locator's six fields and nothing more — opaque, and not a Nazm
+machine schema. Missing, forged or stale data is answered `null`. Byte ranges become UTF-16
+only in the adapter, through one line index per file text per response.
+
+**Deliberately not here.** A persistent or whole-program call graph, transitive closure,
+filesystem discovery of callers, and any claim that every caller in a project is known.
 
 ## 8. Toolchain, and one real incompatibility
 
