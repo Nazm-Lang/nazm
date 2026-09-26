@@ -25,9 +25,12 @@
 //! N23, `semanticTokens/full`: every identifier the checker resolved, by its class and
 //! whether it declares, under a fixed legend; no range or delta requests, and no lexical
 //! tokens — and, since N24, `codeAction`: the fixes current diagnostics carry, as quick
-//! fixes with versioned edits; no refactors, source actions or resolve. No formatting, call
-//! hierarchy, watched files or cancellation — a client is never told something exists that
-//! the server would then ignore.
+//! fixes with versioned edits; no refactors, source actions or resolve — and, since N25, call
+//! hierarchy: prepare, then incoming and outgoing calls, one level per request, from the
+//! checked calls of the compilation the item was prepared in, with the item's opaque `data`
+//! binding it to that compilation's current generation. No formatting, watched files or
+//! cancellation — a client is never told something exists that the server would then
+//! ignore.
 //!
 //! # What a rename can promise over this protocol
 //!
@@ -74,8 +77,8 @@ use lsp_types::{
     WorkspaceSymbolResponse,
 };
 use nazm_service::{
-    Help, LanguageService, Published, RenamePlan, Rendered, Role, SemanticClass,
-    SemanticIdentifier, Symbol, SymbolKind, Target,
+    Help, HierarchyFunction, LanguageService, Locator, Published, RenamePlan, Rendered, Role,
+    SemanticClass, SemanticIdentifier, Symbol, SymbolKind, Target,
 };
 
 /// `nazm lsp`: serve one client on stdin and stdout until it says `exit`.
@@ -140,6 +143,9 @@ fn capabilities() -> ServerCapabilities {
             work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
         })),
         document_symbol_provider: Some(OneOf::Left(true)),
+        // Prepare, then incoming and outgoing calls: one level per request, from the
+        // compilation the item was prepared in.
+        call_hierarchy_provider: Some(lsp_types::CallHierarchyServerCapability::Simple(true)),
         // Quick fixes only, each complete when sent: no refactors, no source actions, no
         // resolve.
         code_action_provider: Some(lsp_types::CodeActionProviderCapability::Options(
@@ -408,6 +414,7 @@ impl Server {
 
     fn request(&self, req: Request) -> Response {
         use lsp_types::request::{
+            CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
             CodeActionRequest, Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest,
             PrepareRenameRequest, References, Rename, SemanticTokensFullRequest,
             SignatureHelpRequest, WorkspaceSymbolRequest,
@@ -456,6 +463,21 @@ impl Server {
                     },
                     Err(e) => Err(e.to_string()),
                 }
+            }
+            CallHierarchyPrepare::METHOD => {
+                serde_json::from_value::<lsp_types::CallHierarchyPrepareParams>(req.params)
+                    .map_err(|e| e.to_string())
+                    .map(|p| self.prepare_call_hierarchy(&p))
+            }
+            CallHierarchyIncomingCalls::METHOD => {
+                serde_json::from_value::<lsp_types::CallHierarchyIncomingCallsParams>(req.params)
+                    .map_err(|e| e.to_string())
+                    .map(|p| self.incoming_calls(&p.item))
+            }
+            CallHierarchyOutgoingCalls::METHOD => {
+                serde_json::from_value::<lsp_types::CallHierarchyOutgoingCallsParams>(req.params)
+                    .map_err(|e| e.to_string())
+                    .map(|p| self.outgoing_calls(&p.item))
             }
             PrepareRenameRequest::METHOD => {
                 serde_json::from_value::<TextDocumentPositionParams>(req.params)
@@ -684,6 +706,68 @@ impl Server {
         serde_json::to_value(edit).map_err(|e| e.to_string())
     }
 
+    /// `textDocument/prepareCallHierarchy`: the source function the position declares or
+    /// calls, as one item whose `data` binds it to this document's current compilation —
+    /// or `null` for any other position, or a document that is not open.
+    fn prepare_call_hierarchy(
+        &self,
+        p: &lsp_types::CallHierarchyPrepareParams,
+    ) -> serde_json::Value {
+        let tdp = &p.text_document_position_params;
+        let item = self
+            .locate(&tdp.text_document.uri, tdp.position)
+            .and_then(|(path, version, offset)| {
+                self.service
+                    .prepare_call_hierarchy(&path, version, offset)
+                    .ok()
+                    .flatten()
+            })
+            .and_then(|f| hierarchy_item(&f));
+        match item {
+            Some(item) => serde_json::to_value([item]).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        }
+    }
+
+    /// `callHierarchy/incomingCalls`: each function of the item's compilation that calls
+    /// it, with every call in the caller's file — or `null` for an item whose `data` is no
+    /// longer current, which must be prepared again.
+    fn incoming_calls(&self, item: &lsp_types::CallHierarchyItem) -> serde_json::Value {
+        let Some(Ok(calls)) = locator(item).map(|l| self.service.incoming_calls(&l)) else {
+            return serde_json::Value::Null;
+        };
+        let out: Option<Vec<lsp_types::CallHierarchyIncomingCall>> = calls
+            .iter()
+            .map(|c| {
+                Some(lsp_types::CallHierarchyIncomingCall {
+                    from: hierarchy_item(&c.from)?,
+                    from_ranges: call_ranges(&c.calls),
+                })
+            })
+            .collect();
+        out.and_then(|o| serde_json::to_value(o).ok())
+            .unwrap_or(serde_json::Value::Null)
+    }
+
+    /// `callHierarchy/outgoingCalls`: each source function the item calls, with every call
+    /// in the item's file — or `null`, as for incoming calls.
+    fn outgoing_calls(&self, item: &lsp_types::CallHierarchyItem) -> serde_json::Value {
+        let Some(Ok(calls)) = locator(item).map(|l| self.service.outgoing_calls(&l)) else {
+            return serde_json::Value::Null;
+        };
+        let out: Option<Vec<lsp_types::CallHierarchyOutgoingCall>> = calls
+            .iter()
+            .map(|c| {
+                Some(lsp_types::CallHierarchyOutgoingCall {
+                    to: hierarchy_item(&c.to)?,
+                    from_ranges: call_ranges(&c.calls),
+                })
+            })
+            .collect();
+        out.and_then(|o| serde_json::to_value(o).ok())
+            .unwrap_or(serde_json::Value::Null)
+    }
+
     /// `textDocument/documentSymbol`: the document's declarations as the service derived
     /// them — nested, to a client that reads nesting, and otherwise flat with each naming
     /// its container — or `null` for a document that is not open.
@@ -844,6 +928,65 @@ impl Server {
         })
         .unwrap_or(serde_json::Value::Null)
     }
+}
+
+/// A source function as a call hierarchy item: its declaration as `range`, its name as
+/// `selectionRange`, and its locator as opaque `data` — `None` for a path no URI spells.
+fn hierarchy_item(f: &HierarchyFunction) -> Option<lsp_types::CallHierarchyItem> {
+    let index = LineIndex::new(&f.declaration.text);
+    let range = |start: u32, end: u32| Range {
+        start: index.position(start),
+        end: index.position(end),
+    };
+    let l = &f.locator;
+    Some(lsp_types::CallHierarchyItem {
+        name: f.name.clone(),
+        kind: LspSymbolKind::FUNCTION,
+        tags: None,
+        detail: f.detail.clone(),
+        uri: uri_of(&f.declaration.path)?,
+        range: range(f.declaration.start, f.declaration.end),
+        selection_range: range(f.selection.start, f.selection.end),
+        data: Some(serde_json::json!({
+            "root": l.root.to_str()?,
+            "version": l.version,
+            "generation": l.generation,
+            "file": l.file.to_str()?,
+            "start": l.name_start,
+            "end": l.name_end,
+        })),
+    })
+}
+
+/// The locator an item's `data` carries, exactly as [`hierarchy_item`] wrote it — `None`
+/// for an item this server did not prepare.
+fn locator(item: &lsp_types::CallHierarchyItem) -> Option<Locator> {
+    let data = item.data.as_ref()?;
+    let text = |k: &str| data.get(k)?.as_str().map(PathBuf::from);
+    let number = |k: &str| data.get(k)?.as_u64();
+    Some(Locator {
+        root: text("root")?,
+        version: i32::try_from(data.get("version")?.as_i64()?).ok()?,
+        generation: number("generation")?,
+        file: text("file")?,
+        name_start: u32::try_from(number("start")?).ok()?,
+        name_end: u32::try_from(number("end")?).ok()?,
+    })
+}
+
+/// Calls as ranges of the one file they are in, in order.
+fn call_ranges(calls: &[nazm_service::Location]) -> Vec<Range> {
+    let Some(first) = calls.first() else {
+        return Vec::new();
+    };
+    let index = LineIndex::new(&first.text);
+    calls
+        .iter()
+        .map(|l| Range {
+            start: index.position(l.start),
+            end: index.position(l.end),
+        })
+        .collect()
 }
 
 /// A symbol kind as the protocol names it.
@@ -1445,6 +1588,46 @@ mod tests {
             fix_title(&fix_plan(NeedsReview, 1)),
             "Review fix N0310: make the binding mutable — right only if nothing else makes it illegal"
         );
+    }
+
+    #[test]
+    fn a_hierarchy_item_carries_its_locator_and_nothing_more() {
+        let text: std::sync::Arc<str> = std::sync::Arc::from("// é😀\nfn f() -> Int { 1 }\n");
+        let at = |start: u32, end: u32| nazm_service::Location {
+            path: PathBuf::from("/p/main.nz"),
+            start,
+            end,
+            text: text.clone(),
+        };
+        let bound = Locator {
+            root: PathBuf::from("/p/root.nz"),
+            version: 7,
+            generation: 42,
+            file: PathBuf::from("/p/main.nz"),
+            name_start: 13,
+            name_end: 14,
+        };
+        let f = HierarchyFunction {
+            locator: bound.clone(),
+            name: "f".to_owned(),
+            detail: None,
+            declaration: at(10, 29),
+            selection: at(13, 14),
+        };
+        let item = hierarchy_item(&f).unwrap();
+        assert_eq!(item.kind, LspSymbolKind::FUNCTION);
+        assert_eq!(
+            (item.range.start, item.selection_range.start),
+            (Position::new(1, 0), Position::new(1, 3))
+        );
+        let data = item.data.clone().unwrap();
+        let mut keys: Vec<&String> = data.as_object().unwrap().keys().collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["end", "file", "generation", "root", "start", "version"]
+        );
+        assert_eq!(locator(&item), Some(bound));
     }
 
     #[test]
