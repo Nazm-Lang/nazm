@@ -5479,3 +5479,11 @@ replace = """        let root = identity(path);
             .and_then(|d| d.analysis.as_ref())
             .ok_or(NoHierarchy::NotCurrent)?;"""
 killers = [{ package = "nazm-service", test = "hierarchy", name = "a_thousand_edits_leave_only_the_current_graph" }]
+
+[[mutation]]
+name = "n25-one-line-index-serves-every-file"
+why = "a call hierarchy response converts every range with the first file's line index, so a range in another file is placed at the wrong line and column"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "        let at = match self.built.iter().position(|l| std::ptr::eq(l.text, text)) {"
+replace = "        let at = match self.built.iter().position(|_| true) {"
+killers = [{ package = "nazm-cli", test = "lsp", name = "call_hierarchy_crosses_the_protocol_in_utf16_and_an_old_item_has_no_answer" }]

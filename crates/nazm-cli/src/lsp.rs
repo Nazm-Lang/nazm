@@ -722,7 +722,7 @@ impl Server {
                     .ok()
                     .flatten()
             })
-            .and_then(|f| hierarchy_item(&f));
+            .and_then(|f| hierarchy_item(&f, &mut Lines::default()));
         match item {
             Some(item) => serde_json::to_value([item]).unwrap_or(serde_json::Value::Null),
             None => serde_json::Value::Null,
@@ -736,12 +736,13 @@ impl Server {
         let Some(Ok(calls)) = locator(item).map(|l| self.service.incoming_calls(&l)) else {
             return serde_json::Value::Null;
         };
+        let mut lines = Lines::default();
         let out: Option<Vec<lsp_types::CallHierarchyIncomingCall>> = calls
             .iter()
             .map(|c| {
                 Some(lsp_types::CallHierarchyIncomingCall {
-                    from: hierarchy_item(&c.from)?,
-                    from_ranges: call_ranges(&c.calls),
+                    from: hierarchy_item(&c.from, &mut lines)?,
+                    from_ranges: call_ranges(&c.calls, &mut lines),
                 })
             })
             .collect();
@@ -755,12 +756,13 @@ impl Server {
         let Some(Ok(calls)) = locator(item).map(|l| self.service.outgoing_calls(&l)) else {
             return serde_json::Value::Null;
         };
+        let mut lines = Lines::default();
         let out: Option<Vec<lsp_types::CallHierarchyOutgoingCall>> = calls
             .iter()
             .map(|c| {
                 Some(lsp_types::CallHierarchyOutgoingCall {
-                    to: hierarchy_item(&c.to)?,
-                    from_ranges: call_ranges(&c.calls),
+                    to: hierarchy_item(&c.to, &mut lines)?,
+                    from_ranges: call_ranges(&c.calls, &mut lines),
                 })
             })
             .collect();
@@ -932,8 +934,11 @@ impl Server {
 
 /// A source function as a call hierarchy item: its declaration as `range`, its name as
 /// `selectionRange`, and its locator as opaque `data` — `None` for a path no URI spells.
-fn hierarchy_item(f: &HierarchyFunction) -> Option<lsp_types::CallHierarchyItem> {
-    let index = LineIndex::new(&f.declaration.text);
+fn hierarchy_item<'a>(
+    f: &'a HierarchyFunction,
+    lines: &mut Lines<'a>,
+) -> Option<lsp_types::CallHierarchyItem> {
+    let index = lines.of(&f.declaration.text)?;
     let range = |start: u32, end: u32| Range {
         start: index.position(start),
         end: index.position(end),
@@ -974,19 +979,38 @@ fn locator(item: &lsp_types::CallHierarchyItem) -> Option<Locator> {
     })
 }
 
-/// Calls as ranges of the one file they are in, in order.
-fn call_ranges(calls: &[nazm_service::Location]) -> Vec<Range> {
-    let Some(first) = calls.first() else {
-        return Vec::new();
-    };
-    let index = LineIndex::new(&first.text);
+/// Calls as ranges of the file they are in, in order.
+fn call_ranges<'a>(calls: &'a [nazm_service::Location], lines: &mut Lines<'a>) -> Vec<Range> {
     calls
         .iter()
-        .map(|l| Range {
-            start: index.position(l.start),
-            end: index.position(l.end),
+        .filter_map(|l| {
+            let index = lines.of(&l.text)?;
+            Some(Range {
+                start: index.position(l.start),
+                end: index.position(l.end),
+            })
         })
         .collect()
+}
+
+/// The line index of each file text one response mentions, built once per text rather than
+/// once per item or range: a compiler-sized file has hundreds of calls in one answer.
+#[derive(Default)]
+struct Lines<'a> {
+    built: Vec<LineIndex<'a>>,
+}
+
+impl<'a> Lines<'a> {
+    fn of(&mut self, text: &'a str) -> Option<&LineIndex<'a>> {
+        let at = match self.built.iter().position(|l| std::ptr::eq(l.text, text)) {
+            Some(at) => at,
+            None => {
+                self.built.push(LineIndex::new(text));
+                self.built.len() - 1
+            }
+        };
+        self.built.get(at)
+    }
 }
 
 /// A symbol kind as the protocol names it.
@@ -1614,7 +1638,7 @@ mod tests {
             declaration: at(10, 29),
             selection: at(13, 14),
         };
-        let item = hierarchy_item(&f).unwrap();
+        let item = hierarchy_item(&f, &mut Lines::default()).unwrap();
         assert_eq!(item.kind, LspSymbolKind::FUNCTION);
         assert_eq!(
             (item.range.start, item.selection_range.start),
