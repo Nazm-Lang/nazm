@@ -5522,20 +5522,20 @@ killers = [{ package = "nazm-syntax", test = "holes", name = "a_hole_leaves_ever
 name = "n26-a-bare-paren-is-a-construction"
 why = "a probe reads `Name(` as a construction rather than the call the grammar reads, so a record is guessed where a function of the same name is what is called"
 file = "crates/nazm-syntax/src/parser.rs"
-find = """                    return Some(Expr::Call {
-                        callee: name,
-                        callee_span: span,
-                        type_args,
-                        args: Vec::new(),
-                        span: span.join(close),
-                    });"""
-replace = """                    return Some(Expr::Construct {
-                        ty: name,
-                        ty_span: span,
-                        type_args,
-                        fields: Vec::new(),
-                        span: span.join(close),
-                    });"""
+find = """        Some(Expr::Call {
+            callee: name,
+            callee_span: span,
+            type_args,
+            args: Vec::new(),
+            span: span.join(close),
+        })"""
+replace = """        Some(Expr::Construct {
+            ty: name,
+            ty_span: span,
+            type_args,
+            fields: Vec::new(),
+            span: span.join(close),
+        })"""
 killers = [{ package = "nazm-service", test = "incomplete", name = "a_record_and_a_function_of_one_spelling_are_never_guessed_at_a_bare_paren" }]
 
 [[mutation]]
