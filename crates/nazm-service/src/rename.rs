@@ -284,20 +284,26 @@ impl LanguageService {
     /// from. A plan that is not current must not be applied.
     #[must_use]
     pub fn plan_is_current(&self, plan: &RenamePlan) -> bool {
-        plan.generation == self.generation
-            && plan.files.iter().all(|f| {
-                let key = identity(&f.path);
-                let text_now: Option<Arc<str>> = match self.documents.get(&key) {
-                    Some(d) if f.version == Some(d.version) => Some(d.text.clone()),
-                    Some(_) => None,
-                    None if f.version.is_none() => Disk.read(&f.path).ok().map(Arc::from),
-                    None => None,
-                };
-                text_now.is_some_and(|t| *t == *f.text)
-                    && f.edits.iter().all(|e| {
-                        f.text.get(e.start as usize..e.end as usize) == Some(e.expected.as_str())
-                    })
-            })
+        plan.generation == self.generation && plan.files.iter().all(|f| self.file_is_current(f))
+    }
+
+    /// Whether one file's edits still describe that file: it is at the version the edits
+    /// were computed against (or, for a file that is not open, on disk) with exactly the
+    /// text they were computed from, and every edit's bytes are the ones it expects to
+    /// replace. The one freshness law every edit plan answers to — a rename's (N18) and a
+    /// fix's (N24).
+    pub(crate) fn file_is_current(&self, f: &FileEdit) -> bool {
+        let key = identity(&f.path);
+        let text_now: Option<Arc<str>> = match self.documents.get(&key) {
+            Some(d) if f.version == Some(d.version) => Some(d.text.clone()),
+            Some(_) => None,
+            None if f.version.is_none() => Disk.read(&f.path).ok().map(Arc::from),
+            None => None,
+        };
+        text_now.is_some_and(|t| *t == *f.text)
+            && f.edits
+                .iter()
+                .all(|e| f.text.get(e.start as usize..e.end as usize) == Some(e.expected.as_str()))
     }
 
     /// The entity at a position, if every rule but the new name's allows renaming it: with
