@@ -302,6 +302,14 @@ fn a_plan_is_current_only_at_its_generation_version_and_bytes() {
         let mut unversioned = plan.clone();
         unversioned.file.version = None;
         assert!(!s.fix_plan_is_current(&unversioned));
+        // Nor for a file that is not open, even when the disk holds exactly the plan's text:
+        // with no version, nothing could hold an editor to that text.
+        let disk = main.with_file_name("disk.nz");
+        std::fs::write(&disk, case.text).unwrap();
+        let mut closed = plan.clone();
+        closed.file.path = disk;
+        closed.file.version = None;
+        assert!(!s.fix_plan_is_current(&closed));
 
         // Another document opened: this one is untouched, at the same version with the same
         // text, but the generation has moved, and a plan belongs to one generation.
