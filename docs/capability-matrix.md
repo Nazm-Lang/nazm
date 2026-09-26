@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,491 passed, 0 failed, 13 ignored, across 79 suites**, run contained at
-N23 (2026-09-26), at P4T4; the thirteen ignored are the xtask lifecycle tests,
-run on their own (13 of 13 passed, contained). N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,514 passed, 0 failed, 13 ignored, across 80 suites**, run contained at
+N24 (2026-09-26), at P4T4; the thirteen ignored are the xtask lifecycle tests,
+run on their own (13 of 13 passed, contained). N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -74,7 +74,7 @@ run on their own (13 of 13 passed, contained). N22 ended at 1,476 across 78, N21
 | 21 | AI/HPC | RESEARCH |
 | 22 | Diagnostics | VERIFIED |
 | 23 | Formatter | VERIFIED |
-| 24 | Machine-applicable fixes | PARTIAL |
+| 24 | Machine-applicable fixes | VERIFIED |
 | 25 | LSP and MCP | PARTIAL / MISSING |
 | 26 | Package and build tooling | PARTIAL |
 | 27 | Debugger and profiler | MISSING |
@@ -1153,20 +1153,29 @@ out from tokens rather than from the tree.
 
 **Accepted when** · Met for formatting.
 
-### 24. Machine-applicable fixes — PARTIAL
+### 24. Machine-applicable fixes — VERIFIED
 
 **Evidence** · `crates/nazm-cli/src/fix.rs`, schema `schema/nazm.fix-1.json`. Only
 `Automatic` fixes apply; nothing is written without `--apply`; edits apply right-to-left;
 overlaps are skipped; and a result that no longer parses is rolled back wholesale. Ten
-workflow tests in `crates/nazm-cli/tests/workflow.rs`.
+workflow tests in `crates/nazm-cli/tests/workflow.rs`. *N24, 2026-09-26:* the code has
+**seven** skip reasons, not the four this entry used to count, and each is now reached by its
+own unit test in `fix.rs` — `write_back` reads and writes through injected functions, so an
+unreadable and an unwritable file are arranged rather than hoped for: a fix that needs review
+(`it needs review`), an unreadable file, two overlapping edits (the later applied, the earlier
+skipped, and exactly the one written), a span past the end and one inside a character (`the
+span does not name a range of this file`), bytes that are no longer the ones checked (nothing
+written), a result that does not parse (nothing written), and a failed write (not reported
+applied). Each asserts the exact `skipped` text. `docs/diagnostics.md` lists the seven. The
+same fixes reach an editor as quick fixes (area 25), a distinct consumer of one fix contract.
 
-**Limitation** · Stale-edit protection exists but is **by expected-bytes comparison, not a
-file hash or document version**, and it is **untested** — none of its four skip paths is
-asserted anywhere. The named test for it exercises a different path.
+**Limitation** · Stale-edit protection is by expected-bytes comparison, not a file hash or
+document version — which is what a command that reads and writes a file in one run needs.
 
-**Next dependency** · None; this is a test to write.
+**Next dependency** · None.
 
-**Accepted when** · Each of the four skip reasons has a test that reaches it.
+**Accepted when** · Each skip reason has a test that reaches it: met, 2026-09-26 (N24), for
+the seven the code has.
 
 ### 25. LSP — PARTIAL · MCP — MISSING
 
@@ -1394,9 +1403,35 @@ names found from the concrete tree alone all classified. `crates/nazm-cli/tests/
 process with `é😀` before tokens across blank lines, the exact integer array computed
 independently, and range and delta requests refused. Fourteen N23 mutations (area 30).
 
+*N24, 2026-09-26: `textDocument/codeAction` for current compiler diagnostic fixes — VERIFIED;
+quick fixes only, open versioned documents only, no resolve, no fix-all; both `automatic` and
+`needs_review` fixes are surfaced.* `LanguageService::fix_plans` turns each fix the current
+diagnostics touched by the requested range carry into a `FixPlan` — the diagnostic, the fix's
+applicability, description and precondition, the generation, and one versioned edit with the
+bytes it replaces — and `fix_plan_is_current` holds it to all of them with the freshness law
+renames use (`architecture.md` §7.26). Nothing is invented from a code or a message; the
+client's diagnostics are not consulted. An automatic fix is preferred when it is its
+diagnostic's only fix; a needs-review fix is titled with its precondition and never preferred.
+Evidence: `crates/nazm-service/tests/fixes.rs` — all five fixes the compiler attaches (`mut`
+on a `let`, `mut` off a parameter, `;` after a loop's value, `;` after an expression, a closing
+quote), each planned exactly from its diagnostic, applied in memory to text that parses, with
+its diagnostic gone and, when automatic, nothing outside its span changed; the edit on the
+fix's span while relevance is the diagnostic's; the range rule at a cursor inside, at either
+end, across two diagnostics and adjacent; a plan refused for other bytes, another version, no
+version, another generation, a change outside its edit and one inside it; unsaved buffers, an
+unsaved dependency and its close; no fix from an earlier analysis; 1,000 edits with retained
+state constant; and, at the plan layer, two overlapping alternatives kept apart and a fix in a
+file not open never planned. `crates/nazm-cli/tests/lsp.rs` the real process: a quick fix after
+`é😀` with its versioned edit's UTF-16 range computed independently, unchanged until the client
+sends `didChange`, then gone with its diagnostic; a stale and a fabricated client diagnostic
+producing nothing; a needs-review fix with its precondition; `only` honoured; a client without
+versioned edits offered none. Seventeen N24 mutations (area 30).
+
 **Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
-help, symbols and full-document semantic tokens only: no formatting, code actions, inlay hints
-or call hierarchy, no cancellation and no watched files. Semantic tokens are
+help, symbols, full-document semantic tokens and quick fixes only: no formatting, refactors,
+source actions, inlay hints or call hierarchy, no cancellation and no watched files. Quick fixes
+are the fixes the compiler attaches, for open documents at their current version; a fix whose
+file is not open is not offered, and there is no post-apply rollback — the server never writes. Semantic tokens are
 `semanticTokens/full` only — no range, no delta, no token cache — and cover identifiers the
 checker resolved: no keywords, comments, strings, numbers or operators, which an editor
 grammar colours, and nothing for a name the checker did not resolve. Workspace symbols cover the files the open
@@ -1516,8 +1551,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **418** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22), **230** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **435** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23), **247** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -1950,6 +1985,30 @@ caught at tier 1**; nothing at tier 2 or 3, no survivor, crash, timeout, unusabl
 entry, no runner error. The `semantic` suite joined the `cli`, `semantics` and `checker`
 profiles. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run
 and are as they were.
+
+*N24 (2026-09-26) added seventeen and repointed two,* on the frozen final source; every
+affected killer was verified by `--verify-killer`, contained at P1, one at a time, with no host
+build running: 20 of 20. They attack N24's invariants: the requested range ignored, a stale
+version planned, a plan of an older generation, one with no version or with the wrong bytes
+taken as current, the diagnostic's span edited instead of the fix's, a needs-review fix or one
+of several alternatives preferred, a precondition hidden, an unversioned client sent a fix, and
+requested kinds ignored — and `nazm fix`'s: a needs-review fix applied, an overlap applied, a
+span inside a character edited, changed bytes overwritten, an unparsable result written, and a
+failed write claimed. One killer was first verified NOT A KILLER: the plan with no version was
+refused by the shared file check for an open document, and the guard matters only for a file
+not open whose disk text matches; the test was extended to that case and every killer was
+verified again on the final source. `n18-a-plan-ignores-its-text` was repointed at the line
+that moved into `file_is_current`, `n16-code-actions-are-advertised` became
+`n16-call-hierarchy-is-advertised`, and `n16-the-server-writes-to-stdout`, whose killer test
+changed, was re-verified. **Campaign `abbba6ae23198600`, targeted, P1, one session, 1,010 s:**
+those twenty, and nine N16 and N18 entries on what N24 shares — the versioned edit's version,
+its closed-file and unversioned-client refusals, a rename plan outliving its generation, a stale
+version answered, the disk winning over a buffer, a closed buffer staying authoritative, an
+outgoing column counted in bytes, and an empty diagnostic set not published. **29 of 29 caught
+at tier 1**; nothing at tier 2 or 3, no survivor, crash, timeout, unusable or uninjected entry,
+no runner error. The `fixes` suite joined the `cli`, `semantics` and `checker` profiles. N13's
+use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and are as
+they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a
