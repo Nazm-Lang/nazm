@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,448 passed, 0 failed, 13 ignored, across 76 suites**, run contained at
-N20 (2026-09-26); the thirteen ignored are the xtask lifecycle tests, run on their own (13 of
-13 passed, contained). N19 ended at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,461 passed, 0 failed, 13 ignored, across 77 suites**, run contained at
+N21 (2026-09-26), at P4T4 and again at P1; the thirteen ignored are the xtask lifecycle tests,
+run on their own (13 of 13 passed, contained). N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1303,8 +1303,41 @@ adds the real process: the capability, label offsets, a comma inside a string af
 nested built-in, no active parameter, `null` past the end and outside the call, an unsaved edit.
 Fourteen N20 mutations (area 30).
 
+*N21, 2026-09-26: structure completion and constructor signature help — VERIFIED for member
+fields after `.` (variables, temporaries, chains, generic records), enum variants after `E.`
+(in a construction, a pattern, or before its `(` for a non-generic enum), record construction
+labels, variant construction payload labels, pattern payload labels, and record and variant
+constructor signature help.* `LanguageService::structure_at`, the structure contexts of
+`completion`, and `help_at` answer from what the checker recorded — a field's `FieldRef`, a
+variant's `VariantRef`, a construction's record, a payload's `PayloadRef` — and from one narrow
+checker fact, `Resolution::looked_up_on`, the record or enum an unresolved member name was
+looked for on, written only where a lookup failed (`architecture.md` §7.23); nothing is looked
+up by name. Candidates are that record's fields, that enum's variants or that variant's payload
+fields, in canonical order, with substituted types; labels given elsewhere are excluded by
+identity and the label being edited is kept. Constructor signature help is its own
+`Constructor`, never a call; its active field is its label's identity at its canonical
+position. Answered around a recovery only when it is inside another function's body.
+Evidence: `crates/nazm-service/tests/structure.rs` — two records sharing `value`, two enums
+sharing `Ready`, two variants sharing a payload `value`, a record and a function sharing `Box`,
+a temporary receiver, a chain through `Holder[A]`, `Pair[Int, Str]` and `Opt[Int]` substituted,
+each candidate identified by its declaration; a pattern binding refused as a label; labels given
+elsewhere excluded, the edited label kept, an unknown label offered what is not given; an
+unknown field, an unknown variant and `EA.Rea` with no `(` offered their anchor's members, and
+unknown receivers, constructors and enums refused; constructor help out of canonical order,
+between initialisers, on an unknown label, around a nested call, nested constructions, generics,
+variants, a construction inside a call; reordered fields, payloads and variants changing no
+answer; recoveries in another function answered and in the same function, the top level and
+another file refused; an unsaved and closed dependency, a private dependency record refused,
+another open program; a thousand edits with constant retained state; and over the repository's
+own source 518 resolved sites — 278 members, 126 variants, 73 construction labels, 31 pattern
+labels — each offered, once, as exactly the identity the checker gave it.
+`crates/nazm-cli/tests/durable_identity.rs` adds the construction, fields, unknown member and
+variant payload read from a deserialised interface with the dependency deleted;
+`crates/nazm-cli/tests/lsp.rs` the real process with `é😀` before every site. Fifteen N21
+mutations (area 30).
+
 **Limitation** · Diagnostics, definition, hover, references, rename, completion and signature
-help only: no symbols, formatting, code actions, semantic tokens or inlay hints, no
+help only: no symbols, formatting, code actions, semantic tokens, inlay hints or call hierarchy, no
 cancellation and no watched files. Every change re-analyses every open document in full; no
 incremental reparse or graph maintenance, and no persistent cache in the editor. A built-in, a
 type parameter and anything in a body that did not parse have no definition and no references;
@@ -1319,7 +1352,10 @@ import-path completion, no auto-import, no trigger characters, no ranking — an
 where the source needed syntax recovery. Signature help is for calls and `spawn`s whose callee
 the checker resolved — not record or variant constructions, and none while any file of the
 compilation needs syntax recovery (an unclosed argument list included); a built-in's parameters
-are shown by type, having no names; no documentation.
+are shown by type, having no names; no documentation. Structure completion needs a name
+written — nothing is offered after a bare `.` or `(`, so completion stays invoked only, with no
+`.` trigger — and offers no methods (the language has none), no generic variant before its
+type arguments and `(` are written, no import paths, no auto-import and no ranking.
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
 are published for open documents only. MCP does not exist.
 
@@ -1414,8 +1450,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **376** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19), **188** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **391** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20), **203** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -1788,6 +1824,25 @@ recovered file answering. **23 of 23 caught at tier 1**; no survivor, crash, tim
 or uninjected entry, no runner error. The `signature` suite joined the `cli`, `semantics` and
 `checker` profiles. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were
 not re-run and are as they were.
+
+*N21 (2026-09-26) added fifteen,* on the frozen final source; every killer was verified by
+`--verify-killer`, contained at P1, one at a time, with no host build running: 15 of 15. They
+attack N21's invariants: an unknown field or variant not recorded, a member offered any
+record's fields, an applied generic's fields unsubstituted, a variant offered any enum's, a
+payload label offered another variant's, a label given elsewhere offered, the label being
+edited counted as given, declaration order shown, the active field counted by commas, the
+outer construction chosen, a construction inside an argument answered as the call, a
+recovery ignored, a recovery in the site's own function answered, and an unmarked constructor
+marking the first parameter. **Campaign `443aa47f6a8821cd`, targeted, P1:** those fifteen, and
+nineteen N16, N17, N19 and N20 entries on code N21 edited or shares. **34 of 34 caught at tier
+1**; no survivor, crash, timeout, unusable or uninjected entry, no runner error. It took three
+sessions: the first ran out of its budget with 20 finalized while the host's load average was
+near 70 from other processes; the second refused to start because its baseline suite had 2
+failing tests, under the same load — the harness counts them and does not name them, and the
+same suite then passed contained at P1 on the frozen tree, 1,461 of 1,461, so they were not
+identified; the third resumed and finished the other 14. The `structure` suite joined the `cli`,
+`semantics` and `checker` profiles. N13's use-after-free survivor and the `nesting-unbounded`
+MUTANT CRASH were not re-run and are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

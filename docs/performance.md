@@ -1143,6 +1143,44 @@ language service, is left to review.
 **What it added to the binary.** The release `nazm` grew from 2,954,112 to 3,019,648 bytes
 (+65,536, +2.2%); no dependency was added.
 
+### Structure at a position — measured 2026-09-26
+
+N21 answers from facts the checker already recorded, plus `Resolution::looked_up_on`, which is
+written only where a field or variant lookup fails. **No persistent table was introduced.** The
+new fact holds **0 entries** in every clean fixture measured — the compiler included — and one
+per unresolved member name in a program being edited.
+
+The host was contended throughout (other processes drove its load average between 3 and 70),
+and two sequential runs of the usual benchmark disagreed by up to 5× on code N21 did not touch.
+So the cost to checking and editing was measured **interleaved**: the N20 tree (`b7bb35d`) and
+the N21 tree built side by side in one container and run alternately, four times each,
+contained, P1 (`target/n21/ab`, not committed).
+
+| On the compiler | N20 | N21 |
+| --- | --- | --- |
+| `analyse` | 38.5–48.9 ms | 37.7–41.6 ms (and one 117 ms run during a load spike) |
+| warm edit | 95.0–106.6 ms | 94.2–105.3 ms |
+| resident, compiler open | 34.40 MB | 34.40 MB (+4 kB) |
+| resident, after 15 edits | 35.5–36.2 MB | 35.5–36.8 MB |
+
+The queries, from the quieter of the two sequential runs (`target/n21/bench`), medians:
+
+| What | Small | The compiler (`emit.nz`) | Generic record and enum | Construction inside 200 nested calls | Imported record and enum |
+| --- | --- | --- | --- | --- | --- |
+| `structure_at` | 14–15 µs | 3.5–5.5 ms | 9–10 µs | 127–148 µs | 7–8 µs |
+| member / variant / label completion | 16 µs | 3.6–5.5 ms | 10–11 µs | 138–161 µs | 8–9 µs |
+| constructor signature help (`help_at`) | 5 µs | 14–17 µs | 5 µs | 147–167 µs | 5 µs |
+
+**What the numbers say.** Adding structure to the service costs nothing measurable to checking,
+editing or memory: nothing is recorded for a program that checks. A structure query on the whole
+compiler is a few milliseconds, and almost all of it is finding the token under the position —
+the same scan N19's completion and N16's definition make; constructor signature help, which
+walks down the tree from the root instead, is microseconds. The benchmark's usual whole-program
+figures for this run are not reported against N20's, because the host, not N21, moved them.
+
+**What it added to the binary.** Nothing measurable: the release `nazm` is 3,019,648 bytes, as it
+was at N20; no dependency was added.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

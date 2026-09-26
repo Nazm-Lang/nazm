@@ -2733,8 +2733,9 @@ reparse is not yet needed.
 
 **Protocol surface.** Full-document synchronisation, `publishDiagnostics`, definition and
 hover, positions in UTF-16 — and, since N17, references (§7.19), since N18 prepare-rename
-and rename (§7.20), since N19 completion (§7.21), and since N20 signature help (§7.22).
-Nothing else is advertised. The core prelude has no file, so a
+and rename (§7.20), since N19 completion (§7.21), since N20 signature help (§7.22), and
+since N21 structure completion and constructor signature help (§7.23). Nothing else is
+advertised. The core prelude has no file, so a
 definition in it has no location. Diagnostics keep their Nazm codes and messages; the
 protocol message is an adapter's rendering of a `nazm.diagnostic/1` object's primary span,
 not a new schema.
@@ -3041,6 +3042,91 @@ parameter as the first; a callee with no parameters has its signature and no act
 (neither is a call; each would be a label contract of its own); documentation; overloads, which
 the language does not have; call hierarchy. Nothing is persisted: the records live and die with
 their analysis.
+
+## 7.23 Structure at a position — settled by N21, 2026-09-26
+
+> **N21 never performs field, variant, record, enum or type resolution by spelling.**
+
+```text
+CST              which structured site the position is in:                (the node around the name)
+                 a field after `.`, a variant after `E.`, a label
+Checker          which record, enum or variant that site belongs to,      (nazm-core/src/check.rs)
+                 and every field's and variant's identity
+StructureSite    joins the two, for the current document                  (nazm-service/src/structure.rs)
+Completion       enumerates that record's fields, enum's variants or
+                 variant's payload fields
+Constructor help renders the construction's record or variant shape
+LSP adapter      byte spans to UTF-16                                     (nazm-cli/src/lsp.rs)
+```
+
+**What was already there.** Every name the checker resolved inside a structure is already in the
+resolution, keyed by its span: a projection's or an initialiser's field (`FieldRef`), a
+construction's record (`construction`), a variant construction's or pattern's variant
+(`VariantRef`), a payload label (`PayloadRef`). A record or enum identity of an applied generic
+is its **instance**, whose fields and payloads the type table substituted once, when the
+instance was made. So a site whose name resolved needs nothing new: `Pair[Int, Str]`'s `first`
+is `first: Int` because the instance says so.
+
+**What was added to the checker.** One narrow fact, `Resolution::looked_up_on(span)`: the type
+a member name **that did not resolve** was looked for on — the record an unknown field was
+looked for on (`check_projection`), the enum an unknown variant was looked for in
+(`find_variant`, for constructions and patterns alike), and, for `E.name` written before its
+`(` exists, the enum `E` names in the module's types when `E` is no value and the enum is not
+generic. It is written only where a lookup failed, so a program that checks holds **none** —
+there is no per-expression type table, no copy of any definition, and no index. The
+diagnostics are unchanged: the last case records what the checker's own environment says and
+reports exactly what it reported before.
+
+**The sites.** `LanguageService::structure_at(path, version, offset)` finds the node around the
+identifier and answers only where the name is a member position:
+
+| Site | Anchor | Candidates |
+| --- | --- | --- |
+| a projection's or an assignment place's field, after `.` | the field's record, or the record it was looked for on | the record's fields |
+| a variant construction's or pattern's variant, after `E.` | the variant's enum, or the enum it was looked for in | the enum's variants |
+| `E.name` with no `(` yet | the enum `E` names, when not generic | the enum's variants |
+| a record construction's label | the construction's record | its fields, less those given elsewhere |
+| a variant construction's or pattern's payload label | the variant | its payload fields, less those given elsewhere |
+
+A label given elsewhere is excluded **by the identity the checker recorded for it**; a label
+that did not resolve excludes nothing, and the label under the cursor is never counted as
+given — it is the one being replaced. A pattern's binding (`code: c`'s `c`) is a local, not a
+label, and is N19's. Candidates keep their identities (`Candidate::Entity(Field | Variant |
+PayloadField)`) and come in the definition's **canonical** order — fields and payloads by
+`in_layout_order`, variants by `in_tag_order`, both sorted by name, the order the backend
+already uses — because declaration order means nothing in this language, and a tool that showed
+it would make an edit with no meaning observable. Details are the field's type (`value: Int`)
+or the variant's payload shape (`Done(code: Int)`), from the instance.
+
+**Constructor signature help** is not function signature help: a construction has no callee
+and runs no function, so it is its own `Constructor::Record | Variant`, never a `Callee` or a
+`CheckedCall`. `LanguageService::help_at` finds the innermost call and the innermost
+construction by the same rule — strictly after the `(`, no later than the `)` — and answers the
+one whose parentheses open later: a call written in an initialiser is answered as the call, a
+construction written as an argument as the construction. The label is the instance's name and
+its fields in canonical order — `Point(label: Str, x: Int)`, `Box[Int](value: Int)`,
+`Maybe[Int].Some(value: Int)` — rendered by the same list renderer as a function's parameters.
+The active parameter is **the field whose initialiser holds the position, by its label's
+identity**, at its canonical position; initialisers are named and in any order, so how many
+precede it says nothing. Between initialisers, and on a label that did not resolve, no field is
+active; the protocol then gets the label without parameters, because an absent index would
+mark the first. `call_at` and `signature_help` are N20's, unchanged: they answer the innermost
+call.
+
+**When there is an answer.** One document at its current version, from its own compilation;
+never an earlier one. A candidate list comes from a definition and its anchor from the
+checker's reading of the site's function and of the module's names, and both are complete when
+every other file of the compilation parsed without recovery and every recovery in the document
+lies inside the body of a function other than the one the position is in — a recovered
+statement there can neither lose a declaration the module's names need nor change a local this
+site reads. A recovery at the top level, in a declaration, in the site's own function or in
+another file refuses (`RecoveredSyntax`); a site the checker anchored nowhere refuses
+(`Unanchored`) whatever it is spelled.
+
+**Deliberately not here.** Completion with nothing written after `.` or `(` (the source does not
+parse, so nothing anchors it) and therefore no `.` trigger character; methods, which the
+language does not have; import paths, auto-import, ranking; documentation. Nothing is
+persisted.
 
 ## 8. Toolchain, and one real incompatibility
 
