@@ -2734,8 +2734,9 @@ reparse is not yet needed.
 **Protocol surface.** Full-document synchronisation, `publishDiagnostics`, definition and
 hover, positions in UTF-16 — and, since N17, references (§7.19), since N18 prepare-rename
 and rename (§7.20), since N19 completion (§7.21), since N20 signature help (§7.22), since
-N21 structure completion and constructor signature help (§7.23), and since N22 document and
-workspace symbols (§7.24). Nothing else is advertised. The core prelude has no file, so a
+N21 structure completion and constructor signature help (§7.23), since N22 document and
+workspace symbols (§7.24), and since N23 `semanticTokens/full` (§7.25). Nothing else is
+advertised. The core prelude has no file, so a
 definition in it has no location. Diagnostics keep their Nazm codes and messages; the
 protocol message is an adapter's rendering of a `nazm.diagnostic/1` object's primary span,
 not a new schema.
@@ -3229,6 +3230,85 @@ function → Function, record → Struct, enum → Enum, variant → EnumMember,
 **Deliberately not here.** Locals in an outline, a syntax outline of text that did not declare
 anything, qualified-name queries, fuzzy search, a project index, symbol tags, semantic tokens,
 call hierarchy and any agent-facing export. Nothing is persisted.
+
+## 7.25 Semantic identifiers and semantic tokens — settled by N23, 2026-09-26
+
+> **N23 never classifies an unresolved identifier by syntactic position or spelling. N23
+> semantic tokens are a semantic-identifier layer, not a replacement for lexical syntax
+> highlighting.**
+
+```text
+Checker / Resolution  what each name at each span is                    (nazm-core/src/check.rs)
+ReferenceIndex        entity occurrences, declarations apart (N17)      (nazm-sema/src/references.rs)
+Resolution            built-in calls; written built-in and type-
+                      parameter names (new, N23)                        (nazm-sema/src/resolve.rs)
+SemanticIdentifier    identity + class + role + exact span, per span     (nazm-service/src/semantic.rs)
+LanguageService       one current document's identifiers, source order
+LSP adapter           static legend, UTF-16, relative encoding           (nazm-cli/src/lsp.rs)
+```
+
+**The rule.** The document's concrete tree lists its identifier tokens; each is classified by
+what the compiler recorded at exactly its span, and by nothing else:
+
+| Fact at the span | Class | Role |
+| --- | --- | --- |
+| an entity in the reference index | its kind; a local is a **parameter** when its slot is one of its function's parameter slots, which the checker allocates first | declaration when the index records the entity declared at this span |
+| a call to a built-in (`Callee::Builtin`) | intrinsic | reference |
+| `WrittenType::Builtin` | built-in type | reference |
+| `WrittenType::Param` / `ParamDeclaration` | type parameter | reference / declaration |
+| nothing | not an identifier | — |
+
+So an unknown call head is not a function, an unknown member after `.` is not a field, and a
+word in a comment or a string, a keyword or a name in a body that did not parse is nothing.
+Keywords, comments, strings, numbers, operators and punctuation are an editor grammar's.
+
+**What was already there.** Every program entity: functions, locals (parameters among them),
+records, enums, variants, fields and payload fields, declarations and uses, each by the
+identity references and rename use — N17's index, read by span. Built-in calls, in the
+resolution's call map. Parameterhood needed nothing new: `LocalDef` slots are allocated
+parameters first, and a slot below the function's parameter count is a parameter.
+
+**What was added to the checker.** One narrow record, `Resolution::written_type(span)`: the
+written type names the checker resolved to **something no program declares** — a built-in type
+(as the `Type` resolution decided, `Int` as `Type::Int`, the `Vec` of `Vec[Int]` as its vector
+type) or a type parameter (as its `TypeParam`: owner and position) — and each type parameter's
+declaration in its `[…]`. It is written at the two points that already decided these names
+(`resolve_written_inner` and the declaration of a definition's parameters), kept apart from the
+reference index because neither is an entity, and measured in `performance.md`. A function the
+checker refuses for redefining a built-in never has its body checked under an id, so the
+parameter uses resolved in its signature are forgotten rather than left under the id the next
+function receives; a refused *duplicate* is checked as the first definition, as it always has
+been, and its names are classified as the checker made them — its parameters as bindings of the
+first function after that function's own.
+
+**Roles and modifiers.** A declaration is marked `declaration`; a use is not; nothing is both.
+`defaultLibrary` marks exactly what is compiler-owned — intrinsics and built-in types — and
+never a source declaration, the core prelude's included: `Option` is an enum like any other.
+There is no `definition`, `readonly` or `modification`: an assignment is a reference.
+
+**The legend**, fixed at compile time and pinned by a test: token types `type`, `struct`,
+`enum`, `typeParameter`, `parameter`, `variable`, `property`, `enumMember`, `function`, in that
+order; modifiers `declaration`, `defaultLibrary`. Function → function, intrinsic → function +
+defaultLibrary, parameter → parameter, local → variable, record → struct, enum → enum, variant →
+enumMember, field and payload field → property, type parameter → typeParameter, built-in type →
+type + defaultLibrary. Two display kinds are one LSP type; their identities are not merged.
+
+**Encoding.** One identifier token is one span, so no span is classified twice, and tokens come
+in source order. The adapter converts each span to a line and UTF-16 columns with the one
+`LineIndex`, and encodes relatively — lines since the previous token, start column relative to
+the previous token on the same line and absolute on a new one, length in UTF-16 units. It
+**refuses** (an error response, never a token array) an identifier list that is out of order,
+overlapping, empty or spanning lines.
+
+**When there is an answer.** One document at its current version, from its own compilation;
+another open program never changes it, and a superseded version has none (`NotCurrent`).
+Unsaved buffers take effect at once and closing one restores the disk. Unlike completion, a
+recovery does not refuse the whole view: what the checker resolved is classified and what it
+did not is omitted, and nothing from an earlier version is ever served.
+
+**Deliberately not here.** `semanticTokens/range` and `semanticTokens/full/delta` (no
+`resultId`, no previous token array, no cache); lexical tokens; read/write distinctions; a
+workspace-wide token query. Nothing is persisted.
 
 ## 8. Toolchain, and one real incompatibility
 
