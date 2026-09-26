@@ -370,13 +370,55 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
-### After N23, in dependency order
+### After N24, in dependency order
 
-No item is chosen here; N23 left these standing.
+No item is chosen here; N24 left these standing.
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| Code actions | a language service ✓, `nazm.fix/1` ✓ | not started; mapping fixes to edits is its own safety contract |
+| Call hierarchy | checked calls ✓, references ✓, symbols ✓ | not asked for |
+| Completion after a bare `.` or `(`, and a `.` trigger | structure ✓ | needs an anchor for source that does not parse |
+| Rename of exported definitions | rename ✓ | unchanged since N18 |
+| Edits of files not open | rename ✓, quick fixes ✓ | unchanged since N18: neither a rename nor a fix edits a closed file |
+| MCP, semantic context packets | a language service ✓, scope, call, structure, symbols and identifiers ✓ | not started |
+| `semanticTokens/range` and `/full/delta` | semantic tokens ✓ | no evidence justifies them |
+| Refactors, source actions, fix-all | quick fixes ✓ | not asked for; each is its own contract |
+| Incremental reparse | a lossless CST ✓ | the interleaved N23/N24 comparison detected no warm-edit delta; still no evidence that forces it |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+
+### N24 — Diagnostic-backed code actions and versioned fix plans — **complete, 2026-09-26**
+
+The fixes the compiler already attaches to its diagnostics now reach an editor as quick fixes:
+each current diagnostic the requested range touches has one plan per fix — its applicability,
+description and precondition, the generation, and one edit tied to the open document's version
+with the bytes it replaces — held to the freshness law renames answer to, and sent as a
+versioned `documentChanges` edit. Nothing is invented from a code or message, and the server
+writes nothing. `nazm fix`'s seven skip reasons each have a test that reaches them, and area 24
+is VERIFIED. No language, interface, schema, cache-key or bootstrap change: `SEMANTIC_EPOCH` 7,
+`nazm.interface/5`, `nazm.fix/1`, fixpoint `0e1a40e6…`.
+
+| Settled | Where |
+| --- | --- |
+| `fix_plans`, `FixPlan`, `fix_plan_is_current`; `file_is_current` shared with rename | `crates/nazm-service/src/fixes.rs`, `crates/nazm-service/src/rename.rs`, `architecture.md` §7.26 |
+| `textDocument/codeAction` quick fixes, versioned, UTF-16; no resolve, refactor, source or fix-all | `crates/nazm-cli/src/lsp.rs` |
+| the seven `nazm fix` skip reasons, each reached by a test | `crates/nazm-cli/src/fix.rs`, `diagnostics.md` |
+| what it costs: no detected analyse/edit/RSS delta; no persistent state; a document's plans in microseconds, a request about 0.1 ms; +65,536 bytes of binary | `performance.md` |
+
+Mutation evidence: 17 new, 2 repointed, all 20 affected killers verified on the final source
+(one after its test was extended to reach the case it guards); one targeted campaign of 29, all
+caught at tier 1, in one session (`capability-matrix.md` §30).
+
+**N25 has not started.**
+
+### After N23, in dependency order
+
+No item is chosen here; N23 left these standing. *Superseded by "After N24" above.*
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Code actions | a language service ✓, `nazm.fix/1` ✓ | quick fixes done by N24 |
 | Call hierarchy | checked calls ✓, references ✓, symbols ✓ | not asked for |
 | Completion after a bare `.` or `(`, and a `.` trigger | structure ✓ | needs an anchor for source that does not parse |
 | Rename of exported definitions; edits of files not open | rename ✓ | unchanged since N18 |
@@ -406,8 +448,6 @@ fixpoint `0e1a40e6…`.
 
 Mutation evidence: 14 new, all 14 direct killers verified on the final source, 2 re-verified;
 one targeted campaign of 26, all caught at tier 1, in one session (`capability-matrix.md` §30).
-
-**N24 has not started.**
 
 ### After N22, in dependency order
 

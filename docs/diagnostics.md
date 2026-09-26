@@ -105,6 +105,37 @@ right-to-left so earlier offsets stay valid, and skips an edit that overlaps one
 already made — reporting each skip and why. Overlapping repairs are two answers to what
 may be one mistake, and applying both produces text neither suggested.
 
+Every reason an edit is not applied is reported in `skipped`, and there are exactly seven:
+
+| `skipped` | When |
+| --- | --- |
+| `it needs review` | the fix is `needs_review`, which is never applied unattended |
+| `the file could not be read` | the file to edit could not be read back |
+| `it overlaps an edit already applied in this run` | a later edit in the file touched these bytes first |
+| `the span does not name a range of this file` | the span is past the end of the file or inside a character |
+| `the file changed since it was checked` | the bytes at the span are no longer the ones the checker saw |
+| `applying it produced a file that does not parse` | the file's edits together left it unparsable; nothing in it is written |
+| `the file could not be written` | writing failed; the edit is not reported applied |
+
+### In an editor
+
+`nazm lsp` offers the same fixes as quick fixes (`textDocument/codeAction`), from the
+diagnostics of the document's current analysis and never from the diagnostics a client
+sends:
+
+- an **automatic** fix is a quick fix, marked preferred when it is its diagnostic's only
+  fix;
+- a **needs-review** fix is a quick fix the user chooses, titled with its precondition —
+  `Review fix N0300: discard the value — right only if …` — and never preferred.
+
+The two execution models differ, and neither pretends to be the other. `nazm fix --apply`
+writes files, and can roll a file back when the result would not parse. The language server
+writes nothing: it returns each fix as an edit tied to the open document's exact version, with
+the bytes it replaces checked against the current text, and the editor applies it — so there
+is no rollback after the fact. What stands in for one is that every fix the compiler attaches
+is tested to parse and to remove its diagnostic when applied alone, and that a client whose
+buffer has moved on cannot apply an edit tied to the old version.
+
 ## The capability inventory
 
 `nazm capabilities` reports what **this build** supports, read from the tables the
