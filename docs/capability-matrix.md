@@ -1311,8 +1311,12 @@ constructor signature help.* `LanguageService::structure_at`, the structure cont
 `completion`, and `help_at` answer from what the checker recorded — a field's `FieldRef`, a
 variant's `VariantRef`, a construction's record, a payload's `PayloadRef` — and from one narrow
 checker fact, `Resolution::looked_up_on`, the record or enum an unresolved member name was
-looked for on, written only where a lookup failed (`architecture.md` §7.23); nothing is looked
-up by name. Candidates are that record's fields, that enum's variants or that variant's payload
+looked for on, written only where a lookup failed (`architecture.md` §7.23). The service and
+the LSP adapter perform no name lookup and no semantic re-resolution; normal structure sites
+consume checker-recorded identities. The only spelling-based lookup N21 introduced is the
+canonical checker's incomplete-source anchor for `E.name` written before its `(`: after `E`
+fails as a value, the checker consults its existing module type environment and records a
+non-generic enum (§7.23). No diagnostic and no language semantics changed. Candidates are that record's fields, that enum's variants or that variant's payload
 fields, in canonical order, with substituted types; labels given elsewhere are excluded by
 identity and the label being edited is kept. Constructor signature help is its own
 `Constructor`, never a call; its active field is its label's identity at its canonical
