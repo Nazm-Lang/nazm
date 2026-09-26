@@ -3253,6 +3253,8 @@ targets = [
     { package = "nazm-service", test = "symbols" },
     # N23: and what each identifier is classified as.
     { package = "nazm-service", test = "semantic" },
+    # N24: and which fixes the current diagnostics carry.
+    { package = "nazm-service", test = "fixes" },
 ]
 
 [[profile]]
@@ -3293,6 +3295,7 @@ targets = [
     { package = "nazm-service", test = "structure" },
     { package = "nazm-service", test = "symbols" },
     { package = "nazm-service", test = "semantic" },
+    { package = "nazm-service", test = "fixes" },
 ]
 
 [[profile]]
@@ -3341,6 +3344,7 @@ targets = [
     { package = "nazm-service", test = "structure" },
     { package = "nazm-service", test = "symbols" },
     { package = "nazm-service", test = "semantic" },
+    { package = "nazm-service", test = "fixes" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
@@ -4428,11 +4432,13 @@ killers = [{ package = "nazm-service", test = "rename", name = "a_plan_is_curren
 name = "n18-a-plan-ignores-its-text"
 # Its killer was first reported NOT A KILLER: the forged text also moved the edited bytes,
 # so the per-edit check refused the plan and the whole-text comparison was never needed.
-# The test now forges a text that differs only outside the edits, and verified.
+# The test now forges a text that differs only outside the edits, and verified. Repointed
+# at N24, when the check moved into `file_is_current` — the freshness law a rename and a
+# fix share — and lost a level of indentation; the rule and the killer are unchanged.
 why = "a plan is current whatever text its file now holds, so its offsets may land in other bytes"
 file = "crates/nazm-service/src/rename.rs"
-find = "                text_now.is_some_and(|t| *t == *f.text)"
-replace = "                text_now.is_some()"
+find = "        text_now.is_some_and(|t| *t == *f.text)"
+replace = "        text_now.is_some()"
 killers = [{ package = "nazm-service", test = "rename", name = "a_plan_is_current_only_for_the_exact_text_and_version_it_was_made_from" }]
 
 [[mutation]]
@@ -4611,17 +4617,17 @@ replace = """    println!("nazm lsp: ready");
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
 
 [[mutation]]
-name = "n16-code-actions-are-advertised"
+name = "n16-call-hierarchy-is-advertised"
 # Was `n16-completion-is-advertised` until N19, `n16-signature-help-is-advertised` until
-# N20 and `n16-document-symbols-are-advertised` until N22, each of which implemented the
-# capability it named: the defect it stands for — claiming a capability the server does
-# not have — is now injected with code actions, which it still does not have. The killer
-# is unchanged.
-why = "the server claims code actions, which it does not implement, so a client sends requests it will refuse"
+# N20, `n16-document-symbols-are-advertised` until N22 and
+# `n16-code-actions-are-advertised` until N24, each of which implemented the capability it
+# named: the defect it stands for — claiming a capability the server does not have — is now
+# injected with call hierarchy, which it still does not have. The killer is unchanged.
+why = "the server claims call hierarchy, which it does not implement, so a client sends requests it will refuse"
 file = "crates/nazm-cli/src/lsp.rs"
 find = "        hover_provider: Some(HoverProviderCapability::Simple(true)),"
 replace = """        hover_provider: Some(HoverProviderCapability::Simple(true)),
-        code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),"""
+        call_hierarchy_provider: Some(lsp_types::CallHierarchyServerCapability::Simple(true)),"""
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
 
 # ---- N20: the call at a position, and signature help -------------------------------------
@@ -5177,3 +5183,146 @@ file = "crates/nazm-cli/src/lsp.rs"
 find = "                    range: Some(false),"
 replace = "                    range: Some(true),"
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
+
+# ---- N24: diagnostic-backed quick fixes, and `nazm fix` skip paths --------------------
+
+[[mutation]]
+name = "n24-the-requested-range-is-ignored"
+why = "every fix in the document is returned for any range, so a cursor on one line is offered repairs for another"
+file = "crates/nazm-service/src/fixes.rs"
+find = "            if at.file != FileId::ROOT || !touches(at.start, at.end, start, end) {"
+replace = "            if at.file != FileId::ROOT {"
+killers = [{ package = "nazm-service", test = "fixes", name = "a_request_gets_the_fixes_of_the_diagnostics_it_touches_and_no_others" }]
+
+[[mutation]]
+name = "n24-a-stale-version-is-planned"
+why = "fixes are planned from whatever analysis the document last had, whatever version was asked about"
+file = "crates/nazm-service/src/fixes.rs"
+find = "        let s = self.current(path, version).ok_or(NoFixes::NotCurrent)?;"
+replace = """        let _ = version;
+        let s = self
+            .documents
+            .get(&crate::service::identity(path))
+            .and_then(|d| d.analysis.as_ref())
+            .ok_or(NoFixes::NotCurrent)?;"""
+killers = [{ package = "nazm-service", test = "fixes", name = "a_thousand_edits_leave_only_the_current_fix" }]
+
+[[mutation]]
+name = "n24-an-old-generation-is-current"
+why = "a plan made before another document changed is still taken as current"
+file = "crates/nazm-service/src/fixes.rs"
+find = "        plan.generation == self.generation"
+replace = "        plan.generation <= self.generation"
+killers = [{ package = "nazm-service", test = "fixes", name = "a_plan_is_current_only_at_its_generation_version_and_bytes" }]
+
+[[mutation]]
+name = "n24-an-unversioned-plan-is-current"
+why = "a plan with no document version is taken as current, though nothing could stop an editor applying it to other text"
+file = "crates/nazm-service/src/fixes.rs"
+find = "            && plan.file.version.is_some()"
+replace = "            && true"
+killers = [{ package = "nazm-service", test = "fixes", name = "a_plan_is_current_only_at_its_generation_version_and_bytes" }]
+
+[[mutation]]
+name = "n24-expected-bytes-are-not-checked"
+why = "a plan whose bytes are not the ones it replaces is taken as current"
+file = "crates/nazm-service/src/fixes.rs"
+find = "            && self.file_is_current(&plan.file)"
+replace = "            && plan.file.version.is_some()"
+killers = [{ package = "nazm-service", test = "fixes", name = "a_plan_is_current_only_at_its_generation_version_and_bytes" }]
+
+[[mutation]]
+name = "n24-the-diagnostic-span-is-edited"
+why = "the edit is placed on the diagnostic's span instead of the fix's own, so `mut` would replace the assignment rather than go on the `let`"
+file = "crates/nazm-service/src/fixes.rs"
+find = "                if let Some(file) = self.planned(s, fix) {"
+replace = "                if let Some(file) = self.planned(s, &Fix { span: at, ..fix.clone() }) {"
+killers = [{ package = "nazm-service", test = "fixes", name = "the_edit_is_where_the_fix_is_and_relevance_is_where_the_diagnostic_is" }]
+
+[[mutation]]
+name = "n24-a-review-fix-is-preferred"
+why = "a fix that needs review is marked preferred, so an editor may apply it without the user choosing it"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "    plan.applicability == nazm_diag::Applicability::Automatic && plan.alternatives == 1"
+replace = "    plan.alternatives == 1"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "lsp::tests::a_quick_fix_is_preferred_only_when_automatic_and_alone_and_review_says_when" }]
+
+[[mutation]]
+name = "n24-alternatives-are-preferred"
+why = "one of several alternative automatic fixes is marked preferred, ranking fixes the server has no ground to rank"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "    plan.applicability == nazm_diag::Applicability::Automatic && plan.alternatives == 1"
+replace = "    plan.applicability == nazm_diag::Applicability::Automatic"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "lsp::tests::a_quick_fix_is_preferred_only_when_automatic_and_alone_and_review_says_when" }]
+
+[[mutation]]
+name = "n24-the-precondition-is-hidden"
+why = "a fix that needs review is titled without its precondition, so it is chosen without knowing when it is right"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "            plan.diagnostic.code, plan.description, plan.precondition"
+replace = """            plan.diagnostic.code, plan.description, """""
+killers = [{ package = "nazm-cli", test = "lsp", name = "quick_fixes_come_from_current_diagnostics_only_and_only_as_quick_fixes" }]
+
+[[mutation]]
+name = "n24-an-unversioned-client-is-sent-a-fix"
+why = "a client that cannot take versioned edits is sent a quick fix it could apply to a document that has since changed"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "            let Ok(edit) = versioned_edit(std::slice::from_ref(&plan.file), self.versioned_edits)"
+replace = "            let Ok(edit) = versioned_edit(std::slice::from_ref(&plan.file), true)"
+killers = [{ package = "nazm-cli", test = "lsp", name = "a_client_that_cannot_take_versioned_edits_is_offered_no_quick_fix" }]
+
+[[mutation]]
+name = "n24-requested-kinds-are-ignored"
+why = "quick fixes are returned to a client that asked only for refactors or source actions"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "        if let Some(only) = &p.context.only {"
+replace = "        if let Some(only) = None::<&Vec<lsp_types::CodeActionKind>> {"
+killers = [{ package = "nazm-cli", test = "lsp", name = "quick_fixes_come_from_current_diagnostics_only_and_only_as_quick_fixes" }]
+
+[[mutation]]
+name = "n24-a-review-fix-is-applied"
+why = "`nazm fix --apply` applies a fix that needs review, which a machine cannot decide"
+file = "crates/nazm-cli/src/fix.rs"
+find = """                    Applicability::NeedsReview => Some("it needs review"),"""
+replace = "                    Applicability::NeedsReview => None,"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "fix::tests::a_fix_that_needs_review_is_collected_and_never_applied" }]
+
+[[mutation]]
+name = "n24-an-overlap-is-applied"
+why = "`nazm fix --apply` applies two edits to the same bytes, producing text neither suggested"
+file = "crates/nazm-cli/src/fix.rs"
+find = "            if e.end > lowest {"
+replace = "            if false && e.end > lowest {"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "fix::tests::of_two_overlapping_edits_the_later_is_applied_and_the_earlier_skipped" }]
+
+[[mutation]]
+name = "n24-a-span-inside-a-character-is-edited"
+why = "`nazm fix --apply` edits at an offset inside a character, which is not a place in the file"
+file = "crates/nazm-cli/src/fix.rs"
+find = "            if to > text.len() || !text.is_char_boundary(from) || !text.is_char_boundary(to) {"
+replace = "            if to > text.len() {"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "fix::tests::a_span_inside_a_character_is_not_a_place_to_edit" }]
+
+[[mutation]]
+name = "n24-changed-bytes-are-overwritten"
+why = "`nazm fix --apply` writes an edit whose bytes are no longer the ones the checker saw"
+file = "crates/nazm-cli/src/fix.rs"
+find = "            if text.get(from..to) != Some(e.expected.as_str()) {"
+replace = "            if false && text.get(from..to) != Some(e.expected.as_str()) {"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "fix::tests::an_edit_whose_bytes_changed_is_refused" }]
+
+[[mutation]]
+name = "n24-an-unparsable-result-is-written"
+why = "`nazm fix --apply` writes a file its own fix left unparsable"
+file = "crates/nazm-cli/src/fix.rs"
+find = "        if !parses(&text) {"
+replace = "        if false && !parses(&text) {"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "fix::tests::an_edit_that_breaks_the_parse_is_rolled_back" }]
+
+[[mutation]]
+name = "n24-a-failed-write-is-claimed"
+why = "`nazm fix --apply` reports an edit applied although the file could not be written"
+file = "crates/nazm-cli/src/fix.rs"
+find = "        if text == original || write(&path, &text).is_ok() {"
+replace = "        if text == original || write(&path, &text).is_ok() || true {"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "fix::tests::a_file_that_cannot_be_written_is_not_claimed_applied" }]
