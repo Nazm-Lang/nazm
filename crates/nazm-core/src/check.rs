@@ -26,7 +26,7 @@ use nazm_sema::module::{Dependency, ModuleGraph, ModuleId};
 use nazm_sema::record::{FieldDef, RecordDef, RecordId};
 use nazm_sema::resolve::{
     CallSite, Callee, CheckedCall, FieldRef, FnDef, FnId, Instantiation, LocalDef, LocalRef,
-    PayloadRef, Propagation, Resolution, VariantRef,
+    PayloadRef, Propagation, Resolution, VariantRef, WrittenType,
 };
 use nazm_sema::types::{ParamOwner, Type, TypeParam};
 use nazm_sema::udt::{TypeNode, UserTypes, MAX_TYPE_DEPTH};
@@ -805,6 +805,18 @@ fn declared_requirements(
 const VEC: &str = "Vec";
 
 /// A declaration's type parameters as the types they are inside it, by name.
+/// Record each of `params` as the declaration of its parameter of `owner` (N23), at the
+/// name its `[…]` list writes — the identity [`param_scope`] gives the same position.
+fn declare_type_params(res: &mut Resolution, params: &[WrittenParam], owner: ParamOwner) {
+    for (i, p) in params.iter().enumerate() {
+        let index = u32::try_from(i).unwrap_or(u32::MAX);
+        res.record_written_type(
+            p.span,
+            WrittenType::ParamDeclaration(TypeParam { owner, index }),
+        );
+    }
+}
+
 fn param_scope(params: &[WrittenParam], owner: ParamOwner) -> Vec<(String, Type)> {
     params
         .iter()
@@ -845,6 +857,7 @@ pub fn resolve_type_fields(
             continue;
         }
         completed.push(&r.name);
+        declare_type_params(res, &r.type_params, ParamOwner::Record(id));
         let scope = param_scope(&r.type_params, ParamOwner::Record(id));
         record_type_scope(res, r.span, &scope, &types);
         let fields = resolve_fields(&types, res, &r.name, &r.fields, &scope, errors);
@@ -899,6 +912,7 @@ pub fn resolve_type_fields(
             );
         }
         let mut variants: Vec<VariantDef> = Vec::new();
+        declare_type_params(res, &e.type_params, ParamOwner::Enum(id));
         let scope = param_scope(&e.type_params, ParamOwner::Enum(id));
         record_type_scope(res, e.span, &scope, &types);
         for v in &e.variants {
@@ -1471,6 +1485,10 @@ fn resolve_written_inner(
         if args.is_some() {
             errors.push(not_generic(&written.name, "a type parameter", written.span));
         }
+        // Which parameter this name is, recorded where it was decided (N23).
+        if let Type::Param(p) = *t {
+            res.record_written_type(written.name_span, WrittenType::Param(p));
+        }
         return *t;
     }
     if written.name == VEC {
@@ -1489,7 +1507,10 @@ fn resolve_written_inner(
             errors.push(wrong_arity("Vec", 1, args.len(), written.span));
         }
         let elem = args.first().copied().unwrap_or(Type::Int);
-        return res.types_mut().vec_of(elem);
+        let vec = res.types_mut().vec_of(elem);
+        // The one generic built-in, as the vector type it was resolved to (N23).
+        res.record_written_type(written.name_span, WrittenType::Builtin(vec));
+        return vec;
     }
     let t = resolve_name(types, res, &written.name, written.name_span, errors);
     // Which definition this name is, recorded where it was decided (N18). A built-in is
@@ -1501,6 +1522,8 @@ fn resolve_written_inner(
         if args.is_some() {
             errors.push(not_generic(&written.name, "a built-in type", written.span));
         }
+        // A built-in, as the type resolution decided it is (N23).
+        res.record_written_type(written.name_span, WrittenType::Builtin(t));
         return t;
     }
     let Some(node) = TypeNode::of(t) else {
@@ -1627,6 +1650,9 @@ pub fn declare_unit(
                      always means the same thing; choose another name",
                 ),
             );
+            // Nothing was declared, so the id this signature's parameters were resolved
+            // under goes to the next function: what was recorded under it is not theirs.
+            res.forget_type_params_of(ParamOwner::Function(id));
             continue;
         }
 
@@ -1644,6 +1670,8 @@ pub fn declare_unit(
                 )
                 .secondary(existing.name_span, "first defined here"),
             );
+            // Its signature is resolved again with its body, under the first definition,
+            // which replaces what was recorded here under `id`.
             continue;
         }
 
@@ -1662,6 +1690,7 @@ pub fn declare_unit(
             mentions: Vec::new(),
         });
         debug_assert_eq!(declared, id);
+        declare_type_params(res, &f.type_params, ParamOwner::Function(id));
         res.types_mut()
             .name_params(ParamOwner::Function(id), generics.clone());
         declared_requirements(&f.type_params, ParamOwner::Function(id), res, errors);
