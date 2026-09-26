@@ -318,6 +318,12 @@ pub struct Resolution {
     /// Every call the checker checked against a resolved callee, by the span of the
     /// callee's name (N20). For tooling; nothing about compilation reads it.
     checked_calls: HashMap<Span, CheckedCall>,
+    /// The type a member name that did not resolve was looked for on (N21), by the span of
+    /// that name: a projection's field that its record lacks, a variant its enum lacks, and
+    /// the name after `E.` where `E` is not a value but names an enum. Written only where a
+    /// lookup failed, so a program that checks holds none — the names that did resolve are
+    /// already in `fields` and `variants`, whose identities say which record or enum.
+    unresolved_members: HashMap<Span, Type>,
 }
 
 impl Resolution {
@@ -488,6 +494,24 @@ impl Resolution {
     /// Record the call whose callee was written at `span`.
     pub fn record_checked_call(&mut self, span: Span, call: CheckedCall) {
         self.checked_calls.insert(span, call);
+    }
+
+    /// What the member name written at `span`, which did not resolve, was looked for on:
+    /// a record, or an enum (N21).
+    #[must_use]
+    pub fn looked_up_on(&self, span: Span) -> Option<Type> {
+        self.unresolved_members.get(&span).copied()
+    }
+
+    /// How many unresolved member names are recorded.
+    #[must_use]
+    pub fn unresolved_member_count(&self) -> usize {
+        self.unresolved_members.len()
+    }
+
+    /// Record that the member name at `span` was looked for on `on` and not found.
+    pub fn record_unresolved_member(&mut self, span: Span, on: Type) {
+        self.unresolved_members.insert(span, on);
     }
 
     /// What the checker recorded about its scopes and environments.
