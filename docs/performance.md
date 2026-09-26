@@ -1238,6 +1238,49 @@ is 3,019,648 bytes at N21 (the accepted baseline, reproduced) and 3,085,184 byte
 **+65,536 bytes, +2.2%**, one 64 KiB step of the file's layout, for the symbol module and the two
 protocol handlers and their `lsp-types` structures. No dependency was added.
 
+### Semantic identifiers and semantic tokens — measured 2026-09-26
+
+N23 derives its view on demand and keeps no token array, no previous result and no cache. It
+adds one checker record, `Resolution::written_type`: every written built-in type name and type
+parameter name the checker resolved, and every type parameter's declaration. That record is
+kept with each analysis like the other resolution maps, and it is the only new retained state:
+**1,989 entries** for `emit.nz`'s compilation (the compiler's emitter and its four imports),
+1,151 for `analyse.nz`'s, 12 for `examples/sum.nz`.
+
+Compared interleaved, as at N21 and N22: the N22 tree (`19be58e`) and the N23 tree built side
+by side in one container and run alternately, four times each, contained, P1, on a quiet host
+(`target/n23/ab`, not committed).
+
+| On the compiler (`emit.nz`) | N22 | N23 |
+| --- | --- | --- |
+| `analyse` | 34.70–34.85 ms | 34.77–35.58 ms |
+| warm edit | 84.45–84.91 ms | 84.03–87.12 ms |
+| resident, compiler open | 34.33–34.35 MB | 34.52–34.53 MB |
+| resident, after 15 edits | 35.4–36.5 MB | 35.6–36.7 MB |
+
+The queries, two runs in the same container (`target/n23/bench`), medians:
+
+| Document | Identifiers | `semantic_identifiers` | `semanticTokens/full`, real server over stdio |
+| --- | ---: | --- | --- |
+| `examples/sum.nz` | 34 | 9.9–10.0 µs | 88–91 µs |
+| `compiler/emit.nz` (286 KB) | 13,550 | 3.24 ms | 9.27 ms |
+| `compiler/analyse.nz` (210 KB) | 10,891 | 2.89–2.94 ms | — |
+| 200 functions of shadowing, generics and a record and a function both `Box` | 6,820 | 1.62 ms | 4.95 ms |
+
+**What the numbers say.** The resident delta is real and detected in every round: about
+**+180 kB (+0.5%)** with the compiler open, which is what 1,989 recorded spans cost in a hash
+map. `analyse` was at or above N22 in each paired round, by 0.0–0.9 ms; the ranges overlap and
+this measurement cannot say whether recording the names costs anything measurable — it is not
+evidence of zero. The warm edit showed no detectable delta. Deriving a whole compiler file's
+identifiers is a few milliseconds, one hash lookup or three per identifier token; the full
+request over the protocol, which adds line and UTF-16 conversion, the relative encoding, JSON
+of 67,750 integers and the pipe, is about 9 ms for the largest file in the repository, so the
+adapter's share is about 6 ms there. Nothing justifies a range request, deltas or a cache yet.
+
+**What it added to the binary.** Nothing measurable: the release `nazm`, built from both trees in
+the same container, is 3,085,184 bytes at N22 and at N23 — the new code fits the layout step N22
+reached. No dependency was added.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

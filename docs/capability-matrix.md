@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,476 passed, 0 failed, 13 ignored, across 78 suites**, run contained at
-N22 (2026-09-26), at P4T4; the thirteen ignored are the xtask lifecycle tests,
-run on their own (13 of 13 passed, contained). N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,491 passed, 0 failed, 13 ignored, across 79 suites**, run contained at
+N23 (2026-09-26), at P4T4; the thirteen ignored are the xtask lifecycle tests,
+run on their own (13 of 13 passed, contained). N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1367,9 +1367,39 @@ as four overlapping programs listing each of its 500 declarations in its 8 files
 `crates/nazm-cli/tests/lsp.rs` the real process, with `é😀` before every checked position.
 Thirteen N22 mutations (area 30).
 
+*N23, 2026-09-26: semantic identifiers and `textDocument/semanticTokens/full` — VERIFIED for
+functions, intrinsics, parameters, locals and pattern bindings, records, enums, variants,
+record fields, payload fields, type parameters and built-in types, each as a declaration or a
+reference.* `LanguageService::semantic_identifiers` classifies each identifier of an open
+document by what the checker recorded at exactly its span — an entity in the reference index,
+a built-in call, or a written built-in or type-parameter name (`Resolution::written_type`, the
+one checker record N23 added; `architecture.md` §7.25) — keeping the compiler's identity for
+what it names; an identifier the checker resolved to nothing is not classified. Over the
+protocol: `semanticTokens/full` only — no range, no delta, no `resultId`, no token cache —
+under a fixed legend of nine types and two modifiers (`declaration`, and `defaultLibrary` on
+intrinsics and built-in types only), relatively encoded in UTF-16. Semantic identifiers only:
+no keywords, comments, strings, numbers or operators. Evidence:
+`crates/nazm-service/tests/semantic.rs` — every identifier of a fixture pinned with its class
+and role, nothing from a comment or string; a record and a function both `Box`, two records'
+`value`, two enums' `Ready`, shadowed locals, a parameter named like a field, and `State.Done(code:
+code) => code` each keeping its identity, each declaration and its uses one identity; unknown
+call heads, members, types and qualifiers unclassified; a recovered body losing only what it
+left unresolved and a renamed declaration's old use disappearing, not remembered; a refused
+signature lending its type parameters to no one; an imported function, an unsaved edit,
+another open program and close; 1,000 edits with retained state constant; over the
+repository's own source, 24,870 entity occurrences in 70 clean documents each one identifier of
+the same entity and role, 817 declarations matching their N22 symbols, 2,371 built-in type
+names, 94 type-parameter names and 5,875 intrinsic calls, nothing unaccounted, and 2,679 type
+names found from the concrete tree alone all classified. `crates/nazm-cli/tests/lsp.rs` the real
+process with `é😀` before tokens across blank lines, the exact integer array computed
+independently, and range and delta requests refused. Fourteen N23 mutations (area 30).
+
 **Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
-help and symbols only: no formatting, code actions, semantic tokens, inlay hints or call
-hierarchy, no cancellation and no watched files. Workspace symbols cover the files the open
+help, symbols and full-document semantic tokens only: no formatting, code actions, inlay hints
+or call hierarchy, no cancellation and no watched files. Semantic tokens are
+`semanticTokens/full` only — no range, no delta, no token cache — and cover identifiers the
+checker resolved: no keywords, comments, strings, numbers or operators, which an editor
+grammar colours, and nothing for a name the checker did not resolve. Workspace symbols cover the files the open
 documents' compilations load: there is no manifest-defined complete project index, no
 filesystem scan, and no persistent workspace symbol database, so an unloaded orphan file is
 not searched, and a declaration known only from a persisted interface, with no source location,
@@ -1486,8 +1516,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **404** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21), **216** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **418** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22), **230** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -1901,6 +1931,25 @@ indexed as one, and one use listed once per compilation. **24 of 24 caught at ti
 at tier 2 or 3, no survivor, crash, timeout, unusable or uninjected entry, no runner error. The
 `symbols` suite joined the `cli`, `semantics` and `checker` profiles. N13's use-after-free
 survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and are as they were.
+
+*N23 (2026-09-26) added fourteen,* on the frozen final source; every killer was verified by
+`--verify-killer`, contained at P1, one at a time, with no host build running: 14 of 14. They
+attack N23's invariants: a parameter classified as a local, declarations never marked, every
+occurrence marked a declaration, a payload label classified as a local, an unresolved name
+classified, an identifier emitted twice, a stale classification served, the checker recording
+no built-in type or no type-parameter use, a refused signature keeping its type parameters, an
+intrinsic sent without `defaultLibrary`, overlapping identifiers encoded, a start column sent
+absolute on the previous token's line, and range tokens advertised.
+`n16-the-server-writes-to-stdout` and `n16-code-actions-are-advertised`, whose killer test
+changed again, were re-verified: 2 of 2. **Campaign `45707a4b609ee4d4`, targeted, P1, one session,
+1,219 s:** those sixteen, and ten N16, N17 and N18 entries on what N23 reads — a stale version
+answered, the disk winning over a buffer, a closed buffer staying authoritative, an outgoing
+column counted in bytes, same-named functions, fields and variants indexed as one, a local taken
+as its function's first slot, and a written type or an enum qualifier not recorded. **26 of 26
+caught at tier 1**; nothing at tier 2 or 3, no survivor, crash, timeout, unusable or uninjected
+entry, no runner error. The `semantic` suite joined the `cli`, `semantics` and `checker`
+profiles. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run
+and are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a
