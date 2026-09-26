@@ -1171,8 +1171,11 @@ The queries, from the quieter of the two sequential runs (`target/n21/bench`), m
 | member / variant / label completion | 16 µs | 3.6–5.5 ms | 10–11 µs | 138–161 µs | 8–9 µs |
 | constructor signature help (`help_at`) | 5 µs | 14–17 µs | 5 µs | 147–167 µs | 5 µs |
 
-**What the numbers say.** Adding structure to the service costs nothing measurable to checking,
-editing or memory: nothing is recorded for a program that checks. A structure query on the whole
+**What the numbers say.** Under the contended host, the interleaved N20/N21 comparison detected
+no N21-specific analyse, warm-edit or RSS delta. Because host load was high, this is not precise
+evidence that the true delta is zero; it establishes that no delta was detectable in this
+measurement. N21 adds no persistent clean-program structure table: `looked_up_on` has zero
+entries in clean code. A structure query on the whole
 compiler is a few milliseconds, and almost all of it is finding the token under the position —
 the same scan N19's completion and N16's definition make; constructor signature help, which
 walks down the tree from the root instead, is microseconds. The benchmark's usual whole-program
