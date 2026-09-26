@@ -257,12 +257,14 @@ fn the_server_speaks_the_protocol_end_to_end() {
         [
             "completionProvider",
             "definitionProvider",
+            "documentSymbolProvider",
             "hoverProvider",
             "positionEncoding",
             "referencesProvider",
             "renameProvider",
             "signatureHelpProvider",
-            "textDocumentSync"
+            "textDocumentSync",
+            "workspaceSymbolProvider"
         ],
         "only what is implemented is advertised: {init}"
     );
@@ -283,6 +285,12 @@ fn the_server_speaks_the_protocol_end_to_end() {
         caps["signatureHelpProvider"],
         json!({"triggerCharacters": ["(", ","]}),
         "triggered where the active call or argument changes; no retrigger characters"
+    );
+    assert_eq!(caps["documentSymbolProvider"], true);
+    assert_eq!(
+        caps["workspaceSymbolProvider"],
+        json!({"resolveProvider": false}),
+        "every workspace symbol is complete when sent: there is no resolve"
     );
 
     // 2. Open: a diagnostic, its code, and its exact UTF-16 range after non-ASCII text.
@@ -374,7 +382,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
     );
 
     // 7. Something not implemented is an error response, and the server carries on.
-    let r = c.request("textDocument/documentSymbol", json!({}));
+    let r = c.request("textDocument/codeAction", json!({}));
     assert_eq!(r["error"]["code"], -32601, "{r}");
     let r = c.request("textDocument/definition", json!({"nonsense": true}));
     assert_eq!(r["error"]["code"], -32602, "{r}");
@@ -1121,6 +1129,153 @@ fn structure_completion_and_constructor_help_cross_the_protocol_in_utf16() {
         "State.Done(code: Int)"
     );
     assert_eq!(r["result"]["activeParameter"], 0);
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+}
+
+// N22: `é` is two bytes and one UTF-16 unit, `😀` four bytes and two units, before every
+// declaration whose position is checked.
+const SYMBOL_LIB: &str =
+    "pub fn tag() -> Str { \"é😀\" } pub struct Pair { left: Int, right: Str }\n";
+const SYMBOL_MAIN: &str = "use \"lib.nz\";\nfn main() -> Int { let s = \"é😀\"; 0 } enum State { Idle, Done(code: Int) }\n";
+
+#[test]
+fn symbols_cross_the_protocol_nested_and_in_utf16() {
+    const FUNCTION: u64 = 12;
+    const ENUM: u64 = 10;
+    const ENUM_MEMBER: u64 = 22;
+    const FIELD: u64 = 8;
+    const STRUCT: u64 = 23;
+    let (_dir, root) = project(&[("lib.nz", SYMBOL_LIB), ("main.nz", SYMBOL_MAIN)]);
+    let (lib, main) = (root.join("lib.nz"), root.join("main.nz"));
+    let line = SYMBOL_MAIN.lines().nth(1).unwrap();
+    let range = |line: &str, n: u32, text: &str| {
+        let start = line.find(text).unwrap();
+        json!({"start": {"line": n, "character": utf16(line, start)},
+               "end": {"line": n, "character": utf16(line, start + text.len())}})
+    };
+
+    let mut c = Client::start(&root);
+    c.initialize_with(
+        &root,
+        json!({"textDocument": {"documentSymbol": {"hierarchicalDocumentSymbolSupport": true}}}),
+    );
+    c.open(&main, 1, SYMBOL_MAIN);
+    c.diagnostics_for(&uri(&main));
+    let r = c.request(
+        "textDocument/documentSymbol",
+        json!({"textDocument": {"uri": uri(&main)}}),
+    );
+    let symbols = &r["result"];
+    // Only this file's declarations: `lib.nz`'s are imported, not declared here.
+    assert_eq!(symbols.as_array().unwrap().len(), 2, "{r}");
+    assert_eq!(symbols[0]["name"], "main");
+    assert_eq!(symbols[0]["kind"], FUNCTION);
+    assert_eq!(symbols[0]["detail"], "fn main() -> Int");
+    assert!(symbols[0].get("children").is_none(), "no locals: {r}");
+    let state = &symbols[1];
+    assert_eq!(state["name"], "State");
+    assert_eq!(state["kind"], ENUM);
+    // The whole declaration, and the name, in UTF-16 columns after `é😀`.
+    assert_eq!(
+        state["range"],
+        range(line, 1, "enum State { Idle, Done(code: Int) }")
+    );
+    assert_eq!(state["selectionRange"], range(line, 1, "State"));
+    assert_ne!(
+        utf16(line, line.find("State").unwrap()) as usize,
+        line.find("State").unwrap(),
+        "bytes and units differ here"
+    );
+    let variants: Vec<(&str, u64)> = state["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| (v["name"].as_str().unwrap(), v["kind"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(variants, [("Idle", ENUM_MEMBER), ("Done", ENUM_MEMBER)]);
+    let code = &state["children"][1]["children"][0];
+    assert_eq!(code["name"], "code");
+    assert_eq!(code["kind"], FIELD);
+    assert_eq!(code["selectionRange"], range(line, 1, "code"));
+    assert_eq!(code["detail"], "Int");
+
+    // Workspace symbols: `lib.nz` is loaded by the open program, and is searched.
+    let r = c.request("workspace/symbol", json!({"query": "Pai"}));
+    let lib_line = SYMBOL_LIB.lines().next().unwrap();
+    assert_eq!(
+        r["result"],
+        json!([{"name": "Pair", "kind": STRUCT,
+                "location": {"uri": uri(&lib), "range": range(lib_line, 0, "Pair")}}]),
+        "{r}"
+    );
+    let r = c.request("workspace/symbol", json!({"query": ""}));
+    let listed: Vec<(&str, u64, Option<&str>)> = r["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| {
+            (
+                w["name"].as_str().unwrap(),
+                w["kind"].as_u64().unwrap(),
+                w["containerName"].as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("Done", ENUM_MEMBER, Some("State")),
+            ("Idle", ENUM_MEMBER, Some("State")),
+            ("Pair", STRUCT, None),
+            ("State", ENUM, None),
+            ("code", FIELD, Some("State.Done")),
+            ("left", FIELD, Some("Pair")),
+            ("main", FUNCTION, None),
+            ("right", FIELD, Some("Pair")),
+            ("tag", FUNCTION, None),
+        ]
+    );
+    let code = r["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["name"] == "code")
+        .unwrap();
+    assert_eq!(code["location"]["range"], range(line, 1, "code"));
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+
+    // A client that does not read nested symbols is sent them flat, each naming its
+    // container, each at its whole declaration.
+    let mut c = Client::start(&root);
+    c.initialize_with(&root, json!({}));
+    c.open(&main, 1, SYMBOL_MAIN);
+    c.diagnostics_for(&uri(&main));
+    let r = c.request(
+        "textDocument/documentSymbol",
+        json!({"textDocument": {"uri": uri(&main)}}),
+    );
+    let flat: Vec<(&str, Option<&str>)> = r["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["name"].as_str().unwrap(), s["containerName"].as_str()))
+        .collect();
+    assert_eq!(
+        flat,
+        [
+            ("main", None),
+            ("State", None),
+            ("Idle", Some("State")),
+            ("Done", Some("State")),
+            ("code", Some("Done")),
+        ]
+    );
+    assert_eq!(
+        r["result"][1]["location"],
+        json!({"uri": uri(&main), "range": range(line, 1, "enum State { Idle, Done(code: Int) }")})
+    );
     let (status, stderr) = c.finish();
     assert_eq!(status, Some(0), "{stderr}");
 }

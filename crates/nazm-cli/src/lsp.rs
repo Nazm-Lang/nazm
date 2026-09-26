@@ -18,9 +18,12 @@
 //! call's head or a type, invoked on an identifier, with no trigger characters — and
 //! signature help (N20), of the call the checker checked, triggered by `(` and `,` — and,
 //! since N21, completion of a field after `.`, a variant after `E.` and a construction's
-//! or pattern's label, and signature help for a record or variant construction. No
-//! formatting, symbols, code actions, semantic tokens, watched files or cancellation — a
-//! client is never told something exists that the server would then ignore.
+//! or pattern's label, and signature help for a record or variant construction — and,
+//! since N22, document symbols (one file's declarations, nested, in source order) and
+//! workspace symbols (every declaration of the files the open documents' compilations
+//! load, filtered by a case-sensitive substring, with nothing to resolve later). No
+//! formatting, code actions, semantic tokens, call hierarchy, watched files or cancellation
+//! — a client is never told something exists that the server would then ignore.
 //!
 //! # What a rename can promise over this protocol
 //!
@@ -55,15 +58,20 @@ use lsp_types::request::Request as _;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
     CompletionResponse, CompletionTextEdit, Diagnostic as LspDiagnostic, DiagnosticSeverity,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover as LspHover, HoverContents, HoverParams,
-    HoverProviderCapability, InitializeResult, Location as LspLocation, MarkupContent, MarkupKind,
-    NumberOrString, OneOf, ParameterInformation, ParameterLabel, Position, PositionEncodingKind,
-    PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions,
-    RenameParams, ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions,
-    SignatureHelpParams, SignatureInformation, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover as LspHover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeResult, Location as LspLocation, MarkupContent, MarkupKind, NumberOrString, OneOf,
+    ParameterInformation, ParameterLabel, Position, PositionEncodingKind, PrepareRenameResponse,
+    PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions, RenameParams,
+    ServerCapabilities, ServerInfo, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
+    SignatureInformation, SymbolInformation, SymbolKind as LspSymbolKind,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, Uri, WorkspaceSymbolOptions, WorkspaceSymbolParams,
+    WorkspaceSymbolResponse,
 };
-use nazm_service::{Help, LanguageService, Published, RenamePlan, Rendered, Target};
+use nazm_service::{
+    Help, LanguageService, Published, RenamePlan, Rendered, Symbol, SymbolKind, Target,
+};
 
 /// `nazm lsp`: serve one client on stdin and stdout until it says `exit`.
 pub(crate) fn run(source_root: Option<&Path>) -> ExitCode {
@@ -126,6 +134,12 @@ fn capabilities() -> ServerCapabilities {
             prepare_provider: Some(true),
             work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
         })),
+        document_symbol_provider: Some(OneOf::Left(true)),
+        // Every symbol is complete when it is sent: there is no `workspaceSymbol/resolve`.
+        workspace_symbol_provider: Some(OneOf::Right(WorkspaceSymbolOptions {
+            resolve_provider: Some(false),
+            work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+        })),
         ..ServerCapabilities::default()
     }
 }
@@ -150,6 +164,12 @@ fn serve(connection: &Connection, root: Option<PathBuf>) -> Result<(), String> {
         .pointer("/capabilities/workspace/workspaceEdit/documentChanges")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    // Whether the client reads nested document symbols. One that does not is sent the flat
+    // form, each symbol naming what it is declared in.
+    let nested_symbols = params
+        .pointer("/capabilities/textDocument/documentSymbol/hierarchicalDocumentSymbolSupport")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     connection
         .initialize_finish(id, init)
         .map_err(|e| format!("initialize: {e}"))?;
@@ -158,6 +178,7 @@ fn serve(connection: &Connection, root: Option<PathBuf>) -> Result<(), String> {
         service: LanguageService::with_source_root(root),
         versions: HashMap::new(),
         versioned_edits,
+        nested_symbols,
     };
     for message in &connection.receiver {
         match message {
@@ -200,6 +221,8 @@ struct Server {
     versions: HashMap<PathBuf, i32>,
     /// Whether the client said it accepts versioned `documentChanges`.
     versioned_edits: bool,
+    /// Whether the client said it reads hierarchical document symbols.
+    nested_symbols: bool,
 }
 
 impl Server {
@@ -257,8 +280,8 @@ impl Server {
 
     fn request(&self, req: Request) -> Response {
         use lsp_types::request::{
-            Completion, GotoDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
-            SignatureHelpRequest,
+            Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest, PrepareRenameRequest,
+            References, Rename, SignatureHelpRequest, WorkspaceSymbolRequest,
         };
         let id = req.id.clone();
         let result = match req.method.as_str() {
@@ -278,6 +301,16 @@ impl Server {
                 serde_json::from_value::<SignatureHelpParams>(req.params)
                     .map_err(|e| e.to_string())
                     .map(|p| self.signature_help(&p))
+            }
+            DocumentSymbolRequest::METHOD => {
+                serde_json::from_value::<DocumentSymbolParams>(req.params)
+                    .map_err(|e| e.to_string())
+                    .map(|p| self.document_symbols(&p))
+            }
+            WorkspaceSymbolRequest::METHOD => {
+                serde_json::from_value::<WorkspaceSymbolParams>(req.params)
+                    .map_err(|e| e.to_string())
+                    .map(|p| self.workspace_symbols(&p))
             }
             PrepareRenameRequest::METHOD => {
                 serde_json::from_value::<TextDocumentPositionParams>(req.params)
@@ -506,6 +539,73 @@ impl Server {
         serde_json::to_value(edit).map_err(|e| e.to_string())
     }
 
+    /// `textDocument/documentSymbol`: the document's declarations as the service derived
+    /// them — nested, to a client that reads nesting, and otherwise flat with each naming
+    /// its container — or `null` for a document that is not open.
+    fn document_symbols(&self, p: &DocumentSymbolParams) -> serde_json::Value {
+        let uri = &p.text_document.uri;
+        let Some(found) = path_of(uri).and_then(|path| {
+            let version = *self.versions.get(&path)?;
+            self.service.document_symbols(&path, version).ok()
+        }) else {
+            return serde_json::Value::Null;
+        };
+        let index = LineIndex::new(&found.text);
+        let response = if self.nested_symbols {
+            DocumentSymbolResponse::Nested(
+                found
+                    .symbols
+                    .iter()
+                    .map(|s| document_symbol(s, &index))
+                    .collect(),
+            )
+        } else {
+            let mut flat = Vec::new();
+            for s in &found.symbols {
+                flat_symbols(s, None, uri, &index, &mut flat);
+            }
+            DocumentSymbolResponse::Flat(flat)
+        };
+        serde_json::to_value(response).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// `workspace/symbol`: every declaration of the analysed source universe whose name
+    /// contains the query, each at its declared name — where definition goes — in the
+    /// service's order.
+    fn workspace_symbols(&self, p: &WorkspaceSymbolParams) -> serde_json::Value {
+        let found = self.service.workspace_symbols(&p.query);
+        let mut index: Option<(&str, LineIndex<'_>)> = None;
+        let mut out = Vec::with_capacity(found.len());
+        for w in &found {
+            let l = &w.selection;
+            if !index
+                .as_ref()
+                .is_some_and(|(t, _)| std::ptr::eq(*t, &*l.text))
+            {
+                index = Some((&l.text, LineIndex::new(&l.text)));
+            }
+            let (Some((_, lines)), Some(uri)) = (&index, uri_of(&l.path)) else {
+                continue;
+            };
+            out.push(lsp_types::WorkspaceSymbol {
+                name: w.name.clone(),
+                kind: symbol_kind(w.kind),
+                tags: None,
+                container_name: w.container.clone(),
+                location: OneOf::Left(LspLocation {
+                    uri,
+                    range: Range {
+                        start: lines.position(l.start),
+                        end: lines.position(l.end),
+                    },
+                }),
+                data: None,
+            });
+        }
+        serde_json::to_value(WorkspaceSymbolResponse::Nested(out))
+            .unwrap_or(serde_json::Value::Null)
+    }
+
     fn hover(&self, p: &HoverParams) -> serde_json::Value {
         let tdp = &p.text_document_position_params;
         let Some((path, version, offset)) = self.locate(&tdp.text_document.uri, tdp.position)
@@ -530,6 +630,71 @@ impl Server {
             }),
         })
         .unwrap_or(serde_json::Value::Null)
+    }
+}
+
+/// A symbol kind as the protocol names it.
+fn symbol_kind(kind: SymbolKind) -> LspSymbolKind {
+    match kind {
+        SymbolKind::Function => LspSymbolKind::FUNCTION,
+        SymbolKind::Record => LspSymbolKind::STRUCT,
+        SymbolKind::Enum => LspSymbolKind::ENUM,
+        SymbolKind::Variant => LspSymbolKind::ENUM_MEMBER,
+        SymbolKind::Field | SymbolKind::PayloadField => LspSymbolKind::FIELD,
+    }
+}
+
+/// A symbol and its children, with the declaration as `range` and the name as
+/// `selectionRange`.
+fn document_symbol(s: &Symbol, index: &LineIndex<'_>) -> DocumentSymbol {
+    let range = |start: u32, end: u32| Range {
+        start: index.position(start),
+        end: index.position(end),
+    };
+    #[allow(deprecated)] // `deprecated` is a required field of the struct, left unset.
+    DocumentSymbol {
+        name: s.name.clone(),
+        detail: s.detail.clone(),
+        kind: symbol_kind(s.kind),
+        tags: None,
+        deprecated: None,
+        range: range(s.start, s.end),
+        selection_range: range(s.name_start, s.name_end),
+        children: (!s.children.is_empty()).then(|| {
+            s.children
+                .iter()
+                .map(|c| document_symbol(c, index))
+                .collect()
+        }),
+    }
+}
+
+/// A symbol and its children, flat, each at its whole declaration and naming the symbol
+/// it is declared in.
+fn flat_symbols(
+    s: &Symbol,
+    container: Option<&str>,
+    uri: &Uri,
+    index: &LineIndex<'_>,
+    out: &mut Vec<SymbolInformation>,
+) {
+    #[allow(deprecated)] // `deprecated` is a required field of the struct, left unset.
+    out.push(SymbolInformation {
+        name: s.name.clone(),
+        kind: symbol_kind(s.kind),
+        tags: None,
+        deprecated: None,
+        location: LspLocation {
+            uri: uri.clone(),
+            range: Range {
+                start: index.position(s.start),
+                end: index.position(s.end),
+            },
+        },
+        container_name: container.map(str::to_owned),
+    });
+    for c in &s.children {
+        flat_symbols(c, Some(&s.name), uri, index, out);
     }
 }
 
