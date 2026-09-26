@@ -370,9 +370,47 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N21, in dependency order
+
+No item is chosen here; N21 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Document and workspace symbols | a language service ✓, structure ✓ | not started |
+| Semantic tokens, code actions | a language service ✓ | not started |
+| Call hierarchy | checked calls ✓, references ✓ | not asked for |
+| Completion after a bare `.` or `(`, and a `.` trigger | structure ✓ | needs an anchor for source that does not parse |
+| Rename of exported definitions; edits of files not open | rename ✓ | unchanged since N18 |
+| MCP, semantic context packets | a language service ✓, scope, call and structure at a position ✓ | not started |
+| Incremental reparse | a lossless CST ✓ | N21 added nothing measurable to a warm edit; still no evidence that forces it |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+
+### N21 — Typed structure at a position, structure completion, constructor signature help — **complete, 2026-09-26**
+
+Which record, enum or variant a field, variant or label position belongs to is now answered
+from identities the checker already recorded, plus one fact it recorded nowhere before — the
+type an unresolved member name was looked for on, written only where a lookup fails. Completion
+of fields, variants and labels, and signature help for record and variant constructions, are
+that answer. No language, interface, cache-key or bootstrap change: `SEMANTIC_EPOCH` 7,
+`nazm.interface/5`, fixpoint `0e1a40e6…`.
+
+| Settled | Where |
+| --- | --- |
+| `Resolution::looked_up_on`, written where a field or variant lookup fails | `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check.rs`, `architecture.md` §7.23 |
+| `structure_at`, structure completion, `constructor_help`, `help_at` | `crates/nazm-service/src/structure.rs`, `crates/nazm-service/src/signature.rs` |
+| fields as Field, variants as EnumMember, constructor help over `textDocument/signatureHelp` | `crates/nazm-cli/src/lsp.rs` |
+| what it costs: nothing measurable to checking, editing or memory; queries in microseconds, whole-compiler queries dominated by finding the token | `performance.md` |
+
+Mutation evidence: 15 new, all 15 direct killers verified on the final source; one targeted
+campaign of 34, all caught at tier 1, over three sessions (`capability-matrix.md` §30).
+
+**N22 has not started.**
+
 ### After N20, in dependency order
 
-No item is chosen here; N20 left these standing.
+No item is chosen here; N20 left these standing. *Superseded by "After N21" above.*
 
 | | Depends on | Why not before |
 | --- | --- | --- |
@@ -407,7 +445,6 @@ Mutation evidence: 14 new, 1 renamed, 1 candidate found equivalent and left unca
 direct killers verified on the final source; one targeted campaign of 23, all caught at tier 1
 (`capability-matrix.md` §30).
 
-**N21 has not started.**
 
 ### After N19, in dependency order
 
