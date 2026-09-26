@@ -1172,6 +1172,86 @@ fn a_call_checked_against_an_interface_alone_records_the_interfaces_signature() 
 }
 
 #[test]
+fn structure_checked_against_an_interface_alone_carries_its_fields_and_variants() {
+    // N21: what structure completion and constructor signature help read — the record a
+    // construction builds, a field's identity, a variant's, the type an unknown member was
+    // looked for on, and the substituted fields and payloads of an applied generic — comes
+    // from the interface the module was checked against, with the dependency deleted.
+    use nazm_core::sema::Type;
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub struct Box[T] {\n    value: T,\n    count: Int,\n}\n\
+         pub enum Maybe[T] {\n    None,\n    Some(value: T),\n}\n",
+    );
+    let a_source = "use \"b.nz\";\nfn main() -> Int { let b = Box[Str](value: \"s\", count: 1); \
+                    let m = Maybe[Int].Some(value: 2); b.count + b.nope }\n";
+    write(dir.path(), "a.nz", a_source);
+    let published = interface_of(&dir.path().join("b.nz"));
+    std::fs::remove_file(dir.path().join("b.nz")).expect("remove B");
+
+    let interface = PersistentUnitInterface::from_json(&published).expect("valid");
+    let (program, parse_errors) = nazm_core::__syntax::parse_source(a_source);
+    assert!(parse_errors.is_empty(), "{parse_errors:#?}");
+    let mut graph = ModuleGraph::default();
+    let a = graph.add(FileId::ROOT, ModuleKey::relative("a.nz"));
+    let b = graph.add(FileId::from_index(1), interface.module_key());
+    graph.import(a, b, nazm_span::Span::synthetic());
+    let units = [nazm_core::Unit::of(&program, &graph, a)];
+    let mut res = Resolution::default();
+    let mut errors = Vec::new();
+    let rehydrated = interface.rehydrate(b, FnId::from_index(4096), res.types_mut());
+    nazm_core::declare_types(&units, &mut res, &mut errors);
+    nazm_core::declare_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+    nazm_core::check_unit(&units[0], &[&rehydrated], &mut res, &mut errors);
+    // Exactly one error: `nope`, which is the unknown member this test is about.
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+
+    let span = |needle: &str, n: usize| {
+        let mut from = 0;
+        let mut at = 0;
+        for _ in 0..=n {
+            at = a_source[from..].find(needle).unwrap() + from;
+            from = at + needle.len();
+        }
+        let start = u32::try_from(at).unwrap();
+        nazm_span::Span::new(
+            FileId::ROOT,
+            start,
+            start + u32::try_from(needle.len()).unwrap(),
+        )
+    };
+    // The construction builds `Box[Str]`, whose fields are substituted.
+    let boxed = res.construction(span("Box", 0)).expect("recorded");
+    let fields: Vec<(String, Type)> = res
+        .records()
+        .get(boxed)
+        .unwrap()
+        .in_layout_order()
+        .map(|(_, f)| (f.name.clone(), f.ty))
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ("count".to_owned(), Type::Int),
+            ("value".to_owned(), Type::Str)
+        ]
+    );
+    assert_eq!(res.field(span("count", 1)).unwrap().record, boxed);
+    // The unknown member was looked for on that record.
+    assert_eq!(res.looked_up_on(span("nope", 0)), Some(Type::Record(boxed)));
+    // The variant is `Maybe[Int]`'s, with its payload substituted.
+    let v = res.variant(span("Some", 0)).expect("recorded");
+    let payload: Vec<(String, Type)> = res.enums().get(v.enumeration).unwrap().variants
+        [v.variant as usize]
+        .in_layout_order()
+        .map(|(_, f)| (f.name.clone(), f.ty))
+        .collect();
+    assert_eq!(payload, [("value".to_owned(), Type::Int)]);
+}
+
+#[test]
 fn a_dependent_derives_equality_from_a_deserialised_interface_with_the_dependency_deleted() {
     // N13. Whether an imported record, enum or core instance has `==` is derived from its
     // shape, and an interface carries the shape and nothing else: no "has equality" fact is

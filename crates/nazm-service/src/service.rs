@@ -357,6 +357,18 @@ impl LanguageService {
             .sum()
     }
 
+    /// How many unresolved member names the analyses are holding, over every analysis
+    /// (N21): the only structure fact the checker keeps for tooling, written where a
+    /// field or variant lookup failed. A function of what is open now.
+    #[must_use]
+    pub fn unresolved_members(&self) -> usize {
+        self.documents
+            .values()
+            .filter_map(|d| d.analysis.as_ref())
+            .map(|s| s.analysis.resolution.unresolved_member_count())
+            .sum()
+    }
+
     /// Open `path` at `version` with exactly `text`, which is from now on what every
     /// compilation reads for that file instead of the disk.
     pub fn open(&mut self, path: &Path, version: i32, text: String) -> Vec<Published> {

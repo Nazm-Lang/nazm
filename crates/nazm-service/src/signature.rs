@@ -141,28 +141,48 @@ impl Signature {
             label.push_str(&shown.join(", "));
             label.push(']');
         }
-        label.push('(');
-        let mut params = Vec::with_capacity(self.params.len());
-        for (i, p) in self.params.iter().enumerate() {
-            if i > 0 {
-                label.push_str(", ");
-            }
-            let ty = instance
-                .and_then(|x| x.params.get(i).copied().flatten())
-                .unwrap_or(p.ty);
-            let start = offset(&label);
-            if let Some(name) = &p.name {
-                label.push_str(name);
-                label.push_str(": ");
-            }
-            label.push_str(&types.show(ty));
-            params.push((start, offset(&label)));
-        }
+        let params = push_list(
+            &mut label,
+            res,
+            self.params.iter().enumerate().map(|(i, p)| {
+                let ty = instance
+                    .and_then(|x| x.params.get(i).copied().flatten())
+                    .unwrap_or(p.ty);
+                (p.name.as_deref(), ty)
+            }),
+        );
         let ret = instance.and_then(|x| x.ret).unwrap_or(self.ret);
-        label.push_str(") -> ");
+        label.push_str(" -> ");
         label.push_str(&types.show(ret));
         Rendered { label, params }
     }
+}
+
+/// `(a: Int, b: Str)` onto `label`, returning where each entry is in it: the one spelling
+/// of a parenthesised list of named, typed entries, shared by a function's parameters and
+/// a construction's fields (N21) — which are different things, rendered alike.
+pub(crate) fn push_list<'n>(
+    label: &mut String,
+    res: &Resolution,
+    entries: impl Iterator<Item = (Option<&'n str>, Type)>,
+) -> Vec<(u32, u32)> {
+    let types = res.types();
+    label.push('(');
+    let mut at = Vec::new();
+    for (i, (name, ty)) in entries.enumerate() {
+        if i > 0 {
+            label.push_str(", ");
+        }
+        let start = offset(label);
+        if let Some(name) = name {
+            label.push_str(name);
+            label.push_str(": ");
+        }
+        label.push_str(&types.show(ty));
+        at.push((start, offset(label)));
+    }
+    label.push(')');
+    at
 }
 
 fn offset(s: &str) -> u32 {
@@ -298,6 +318,46 @@ impl LanguageService {
             rendered,
             call,
         })
+    }
+}
+
+/// What signature help shows at a position: a call's signature, or a construction's shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Help {
+    Call(SignatureHelp),
+    Constructor(crate::structure::ConstructorHelp),
+}
+
+impl LanguageService {
+    /// Signature help for the innermost call or construction whose parentheses hold byte
+    /// `offset` of `path`, at `version` (N21): a function call's, by [`Self::signature_help`],
+    /// or a record or variant construction's, by [`Self::constructor_help`]. The two are
+    /// found by the same rule — strictly after the `(`, no later than the `)` — so the
+    /// innermost is the one whose parentheses open later; a call inside an initialiser
+    /// is answered as a call, and a construction inside an argument as a construction.
+    ///
+    /// # Errors
+    ///
+    /// The [`NoCall`] of whichever is innermost; never the outer one's answer instead.
+    pub fn help_at(
+        &self,
+        path: &std::path::Path,
+        version: i32,
+        offset: u32,
+    ) -> Result<Help, NoCall> {
+        let s = self.current(path, version).ok_or(NoCall::NotCurrent)?;
+        let root = s.cst.root();
+        let call = innermost(root, offset).map(|r| r.callee.start);
+        match (call, crate::structure::construction_at(root, offset)) {
+            (Some(c), Some((node, open))) if open > c => {
+                crate::structure::constructor_help(s, node, offset).map(Help::Constructor)
+            }
+            (Some(_), _) => self.signature_help(path, version, offset).map(Help::Call),
+            (None, Some((node, _))) => {
+                crate::structure::constructor_help(s, node, offset).map(Help::Constructor)
+            }
+            (None, None) => Err(NoCall::NotInACall),
+        }
     }
 }
 
