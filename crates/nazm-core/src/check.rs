@@ -3128,6 +3128,8 @@ impl Checker<'_> {
         if let Some((i, _)) = self.res.enums().get(id).and_then(|d| d.variant(name)) {
             return Some(i);
         }
+        // Which enum the name was looked for in, for a tool completing it (N21).
+        self.res.record_unresolved_member(at, Type::Enum(id));
         let shown = self.res.types().show(Type::Enum(id)).to_owned();
         let known: Vec<String> = self
             .res
@@ -3212,6 +3214,8 @@ impl Checker<'_> {
             .get(id)
             .and_then(|d| d.field(name).map(|(i, f)| (i, f.ty)));
         let Some((index, ty)) = found else {
+            // What the name was looked for on, for a tool completing it (N21).
+            self.res.record_unresolved_member(name_span, base_ty);
             let shown = self.show(base_ty);
             let at = self.res.records().get(id).map(|d| d.name_span);
             let mut d = Diagnostic::error(
@@ -4001,6 +4005,26 @@ impl Checker<'_> {
                 name_span,
                 ..
             } => {
+                // `State.Rea` while `State.Ready(…)` is being written: `State` is no value,
+                // so this is a projection that fails — but the module's types name `State`
+                // as an enum, and a tool completing the name after `.` needs which (N21).
+                // Recorded, not acted on: the diagnostics below are unchanged. A generic
+                // enum is not recorded, since which instance is meant is not written.
+                if let Expr::Var {
+                    name: qualifier, ..
+                } = &**base
+                {
+                    let is_value = self.scopes.lookup(qualifier).is_some();
+                    let is_param = self.type_scope.iter().any(|(n, _)| n == qualifier);
+                    if let (false, false, Some(Type::Enum(id))) =
+                        (is_value, is_param, self.types.names.get(qualifier).copied())
+                    {
+                        if self.res.types().arity(ParamOwner::Enum(id)) == 0 {
+                            self.res
+                                .record_unresolved_member(*name_span, Type::Enum(id));
+                        }
+                    }
+                }
                 // The base is checked with no expectation: what a projection wants of its
                 // base is "a record with this field", which is not a `Type` and so cannot
                 // be passed as one.
