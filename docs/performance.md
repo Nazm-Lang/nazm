@@ -1367,6 +1367,63 @@ container, is 3,150,720 bytes at N24 and 3,216,256 bytes at N25: **+65,536 bytes
 64 KiB step of the file's layout, for the hierarchy module, the three handlers and their
 `lsp-types` structures. No dependency was added.
 
+### Completion at a hole — measured 2026-09-27
+
+N26 keeps nothing and records nothing in an ordinary analysis: **clean-program N26 state is zero
+entries**, and an incomplete program's ordinary analysis is unchanged — `nazm check` from the N25
+and N26 release binaries gives byte-identical output and status on all 200 `.nz` files of the
+repository (the CLI's deliberately broken test programs among them) and thirteen unfinished
+fixtures (`target/n26/incomplete`). What a hole costs is its **probe**: one more parse and check
+of the compilation, made for the request and dropped with the response, whose resolution holds the
+hole's anchor — one unresolved-member or construction entry — and whose diagnostics are never
+published. No completion, probe or anchor is cached.
+
+Compared interleaved with N25 (`e0982a5`), four rounds each in one container, contained, P1
+(`target/n26/ab`, not committed), on the final source:
+
+| On the compiler (`emit.nz`) | N25 | N26 |
+| --- | --- | --- |
+| parse | 25.51–26.24 ms | 25.48–25.90 ms |
+| `analyse` | 35.02–35.75 ms | 35.20–35.40 ms |
+| warm edit | 84.64–85.50 ms | 85.47–86.74 ms |
+| resident, compiler open | 34.51–34.54 MB | 34.53–34.54 MB |
+
+**An ordinary-path regression, found and removed.** The first comparison, on the source frozen
+before this one, showed the ordinary parse 1.7 ms slower (25.3–25.9 against 27.2–28.2 ms, in
+either order across six more rounds, and not on the host) though that path runs no hole code: the
+hole blocks inlined into the parser's hottest recursive functions had changed their shape. Moved
+into cold, never-inlined helpers, parse and `analyse` overlap N25 again. The warm-edit ranges of
+the final run touch rather than overlap (N26's median about 1 ms, 1 %, higher); an earlier
+interleaved run of the same code gave 84.99–86.31 against 85.06–85.78 ms. No delta is detected
+beyond that, and none is claimed to be zero.
+
+The requests, two runs in the same container (`target/n26/bench`), medians:
+
+| Hole | `completion` in process | `.`-triggered over stdio |
+| --- | --- | --- |
+| `p.` on a record, small | 92.5–93.2 µs | 195–196 µs |
+| `b.` on `Box[Int]`, small | 94.8–94.9 µs | 194–196 µs |
+| `State.`, small | 91.8 µs | 191–192 µs |
+| `Maybe[Int].`, small | 94.5–95.1 µs | — |
+| `Point(`, small | 91.1–92.6 µs | — |
+| `State.Done(`, small | 92.3–92.4 µs | — |
+| a pattern's `State.Done(`, small | 93.7–94.5 µs | — |
+| a member hole in `emit.nz` (286,156 bytes, 19 candidates) | 41.0–41.8 ms | 41.7–42.3 ms |
+
+The probe apart, on the compiler's compilation: **parse 25.4–25.9 ms, parse and check together
+33.8–34.8 ms** — the same as an ordinary `analyse` (34.7–34.8 ms), which it is, less the
+reference index and concrete tree the service builds beside it. The rest of a compiler-scale
+request is finding the hole and building the candidates. Resident memory rises by the probe's
+peak while it is alive — 35.0 MB to 51.1–51.8 MB here, the high-water mark of one more analysis of
+the compiler — and nothing it allocated is kept. So a hole costs a compilation's analysis: about
+0.1 ms on a small file, about 42 ms on the compiler, which is the price of reading a buffer the
+ordinary analysis cannot. A name already written is answered from the current analysis as before,
+without a probe.
+
+**What it added to the binary.** The release `nazm`, built from both trees in the same
+container, is 3,216,256 bytes at N25 and at N26: **no change**, the additions inside the file's
+existing 64 KiB layout step. No dependency was added.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

@@ -370,13 +370,57 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
-### After N25, in dependency order
+### After N26, in dependency order
 
-No item is chosen here; N25 left these standing.
+No item is chosen here; N26 left these standing.
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| Completion after a bare `.` or `(`, and a `.` trigger | structure ✓ | needs an anchor for source that does not parse |
+| Rename of exported definitions | rename ✓ | unchanged since N18 |
+| Edits of files not open | rename ✓, quick fixes ✓ | unchanged since N18 |
+| MCP, semantic context packets | a language service ✓, scope, call, structure, symbols, identifiers, call hierarchy ✓ | not started |
+| `semanticTokens/range` and `/full/delta` | semantic tokens ✓ | no evidence justifies them |
+| Refactors, source actions, fix-all | quick fixes ✓ | not asked for; each is its own contract |
+| Completion after a comma, at an empty label slot later in a list | completion at a hole ✓ | not asked for; N26 answers an empty list only |
+| Incremental reparse | a lossless CST ✓ | a hole's probe re-checks the compilation (about 43 ms on the compiler); warm edits show no delta; still no evidence that forces it |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+
+### N26 — Incomplete-source semantic anchors and triggered structure completion — **complete, 2026-09-27**
+
+Completion now answers right after a `.` or a `(` with nothing written yet: a record's fields
+after `receiver.`, an enum's variants after `E.` or `E[T].`, a record's labels after `Name(` where
+the module calls no function `Name`, and a variant's payload labels after `E.V(` in a construction
+or a pattern. The request runs a completion probe — the same parser told the cursor's offset,
+which reads a zero-width empty name there, and the same checker, which anchors the hole where it
+already decides — and answers with N21's candidates and an empty range. `.` is the one trigger
+character. Nothing is recorded by an ordinary analysis, published from the probe, or kept; the
+unfinished programs stay invalid and `nazm check` reports them unchanged. No language, interface,
+schema, cache-key or bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint
+`0e1a40e6…`.
+
+| Settled | Where |
+| --- | --- |
+| a probe parse with a hole at the cursor; ordinary parses unchanged | `crates/nazm-syntax/src/parser.rs`, `crates/nazm-syntax/src/lib.rs`, `architecture.md` §7.28 |
+| `nazm_core::probe`; a bare `Name(`'s record, recorded only in a probe | `crates/nazm-core/src/lib.rs`, `crates/nazm-core/src/check.rs` |
+| completion at a hole from `structure::candidates`, shared with N21 | `crates/nazm-service/src/incomplete.rs`, `crates/nazm-service/src/structure.rs` |
+| `.` the one completion trigger | `crates/nazm-cli/src/lsp.rs` |
+| what it costs: a hole's probe is one parse and check of the compilation; no ordinary-path delta once the hole code was moved out of line | `performance.md` |
+
+Mutation evidence: 8 new mutations and 2 N21 mutations repointed; every killer verified, the four in the parser
+again on the final source; one targeted campaign of 28, all caught at tier 1
+(`capability-matrix.md` §30).
+
+**N27 has not started.**
+
+### After N25, in dependency order
+
+No item is chosen here; N25 left these standing. *Superseded by "After N26" above.*
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Completion after a bare `.` or `(`, and a `.` trigger | structure ✓ | done by N26 |
 | Rename of exported definitions | rename ✓ | unchanged since N18; call hierarchy is complete only for the compilation it was prepared in, so it proves nothing about other importers |
 | Edits of files not open | rename ✓, quick fixes ✓ | unchanged since N18 |
 | MCP, semantic context packets | a language service ✓, scope, call, structure, symbols, identifiers and call hierarchy ✓ | not started |
@@ -409,8 +453,6 @@ bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint `0e1a40e6…`
 Mutation evidence: 14 new, 2 repointed, all 16 killers verified on the final source on their
 first run; one targeted campaign of 24, all caught at tier 1, in one session
 (`capability-matrix.md` §30).
-
-**N26 has not started.**
 
 ### After N24, in dependency order
 

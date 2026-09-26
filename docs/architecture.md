@@ -2736,7 +2736,8 @@ hover, positions in UTF-16 — and, since N17, references (§7.19), since N18 pr
 and rename (§7.20), since N19 completion (§7.21), since N20 signature help (§7.22), since
 N21 structure completion and constructor signature help (§7.23), since N22 document and
 workspace symbols (§7.24), since N23 `semanticTokens/full` (§7.25), since N24 quick
-fixes over `textDocument/codeAction` (§7.26), and since N25 call hierarchy (§7.27). Nothing
+fixes over `textDocument/codeAction` (§7.26), since N25 call hierarchy (§7.27), and since
+N26 completion at a structured hole with `.` as the one trigger character (§7.28). Nothing
 else is advertised. The core prelude has no file, so a
 definition in it has no location. Diagnostics keep their Nazm codes and messages; the
 protocol message is an adapter's rendering of a `nazm.diagnostic/1` object's primary span,
@@ -3449,6 +3450,78 @@ only in the adapter, through one line index per file text per response.
 
 **Deliberately not here.** A persistent or whole-program call graph, transitive closure,
 filesystem discovery of callers, and any claim that every caller in a project is known.
+
+## 7.28 Completion at a structured hole — settled by N26, 2026-09-27
+
+> **N26 does not infer a receiver, record, enum, variant or construction from spelling.
+> Incomplete-source completion is available only where the canonical compiler can establish
+> one semantic anchor.** `point.`, `State.`, `Point(` and `State.Done(` remain invalid
+> programs; `nazm check` reports them exactly as before.
+
+```text
+Lossless CST / parser     the exact hole: a `.` or `(` token ending at the cursor
+                          (a probe parse: nazm-syntax parse_both_at / parse_map_at)
+Canonical checker         the anchor, at decision points it already has   (nazm-core probe)
+N21 candidate machinery   real FieldRef / VariantRef / PayloadRef candidates (structure::candidates)
+LanguageService           current version · the probe · zero-width completion (incomplete.rs)
+LSP                       "." trigger · UTF-16
+```
+
+**Why a probe, not a record in every analysis.** An unfinished statement makes the parser
+drop its function's body, so the ordinary analysis has no receiver, local or scope there — and
+which `.` or `(` is being completed is decided by the editor's cursor, which only the request
+knows; a `.` elsewhere is just broken code. So a completion request at a hole re-parses and
+re-checks the compilation's current sources — the same `SourceMap` and module graph the
+document's analysis loaded, overlays included, never the disk — with the parser told the
+cursor's byte offset (`nazm_core::probe`). Nothing is inserted into any text. At exactly that
+offset, right after the `.` or `(`, the parser reads a zero-width, empty name, which no source
+can spell, and takes the `;` or `)` the unfinished statement leaves unwritten as written, until
+that statement ends; a pattern's hole with no `=>` gets a zero-width body. Everything else is
+parsed and reported as ever. The ordinary parse never takes this path: a parse with no hole
+offset is unchanged, and a probe parse at an offset that is no hole is the ordinary parse
+(`crates/nazm-syntax/tests/holes.rs`, over the corpus).
+
+**The anchor.** The checker decides, at points it already had:
+
+| Hole | Anchor |
+| --- | --- |
+| `receiver.` | the type an unknown member was looked for on (N21's record) — a record's fields |
+| `E.`, `E` naming an enum and no value | the enum, when not generic (N21's rule; a value named `E` wins, as for any `E.x`) |
+| `E[T, …].` | the applied enum an unknown variant was looked for in |
+| `Name(` | only when the module has no function `Name`: the record its types name, resolved and applied as a construction's head is |
+| `E.V(`, construction or pattern | the variant |
+
+The one new checker behaviour is the `Name(` row, and it runs only in a probe: the probe's
+`Resolution` carries the hole's callee, and only when that call finds no function does the
+checker resolve the name as a construction head and record the construction. In a probe, a
+type name the module refused as an ambiguous import anchors nothing. An ordinary compilation
+records nothing new: **clean-program N26 state is zero**, and an incomplete program's ordinary
+analysis is unchanged.
+
+**A bare `(`.** Without a label, `Name(` is a call to the grammar, and the probe reads it as
+one. A function `Name` makes it that call — signature help's — whether or not a record is also
+called `Name`; only where no function is does a record anchor its labels. A generic record needs
+its type arguments written, as a construction does.
+
+**Completeness.** N21's rule, applied unchanged to the probe's own parse, in which the hole is
+not a recovery: no other file recovered, and every other recovery in the document is inside the
+body of another function. Another mistake in the hole's function, at the top level or in a
+dependency, leaves no answer.
+
+**Candidates.** `structure::candidates`, the function N21's completion uses: the anchor's
+members in canonical order, identities, substituted details. Only the range differs: empty, at
+the cursor — the `.` or `(` is not replaced — where a name being written is replaced whole.
+Declarations are the definitions' name spans in the same files. The probe's diagnostics are never
+published and its analysis is dropped with the response; nothing is cached.
+
+**Over the protocol.** `completionProvider.triggerCharacters` is `["."]`: not `(`, which
+signature help owns, nor `,` or `:`. The client's trigger is never read: whether a position is a
+hole is decided from the current source, so a `.` in a string or a comment, or a trigger reported
+where there is no `.`, completes nothing, and invoked and triggered requests answer alike.
+
+**Deliberately not here.** Completion after a comma or at an empty label slot later in a list,
+methods, ordinary call arguments, `(` as a trigger, ranking, snippets, and any reading of source
+that would make an unfinished construct valid.
 
 ## 8. Toolchain, and one real incompatibility
 

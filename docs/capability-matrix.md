@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,532 passed, 0 failed, 13 ignored, across 81 suites**, run contained at
-N25 (2026-09-26), at P4T4; the thirteen ignored are the xtask lifecycle tests,
-run on their own (13 of 13 passed, contained). N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,555 passed, 0 failed, 13 ignored, across 83 suites**, run contained at
+N26 (2026-09-27), at P4T4; the thirteen ignored are the xtask lifecycle tests,
+run on their own (13 of 13 passed, contained). N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1463,6 +1463,42 @@ referenced. `crates/nazm-cli/tests/lsp.rs` the real process: prepare, incoming a
 after `é😀` with every range computed independently in UTF-16, a cross-file callee, a stale item
 and forged data answered `null`, and two roots over one file. Fourteen N25 mutations (area 30).
 
+*N26, 2026-09-27: completion at a structured hole — a bare member after `.`, a bare enum variant
+after `E.` or `E[T].`, a bare construction or pattern label after `(` — and `.` as the
+completion trigger character — VERIFIED; anchored only where the canonical compiler establishes
+one record, enum or variant.* A request with no name at the cursor, right after a `.` or `(`
+token, runs a completion probe: the compilation's current sources parsed by the same parser told
+the cursor's offset — which reads a zero-width empty name there and nothing else differently — and
+checked by the same checker, which anchors the hole where it already decides: the type an unknown
+member was looked for on, the enum an `E.` names when no value does, the variant a construction
+or pattern names, and — only where the module calls no function by that name — the record a bare
+`Name(` would construct (`architecture.md` §7.28). Its candidates are N21's, from one function:
+identities, canonical order, substituted details; the range is empty at the cursor. Nothing is
+recorded by an ordinary analysis, the probe's diagnostics are never published, and nothing is
+kept. Evidence: `crates/nazm-service/tests/incomplete.rs` — a parameter, a local, a temporary, a
+projection chain and a call argument each giving exactly the receiver's fields; an applied generic
+record substituted; a non-generic and an applied generic enum's variants, and a generic enum with
+no arguments refused; a record type, an unknown name, an enum value, an `Int` and `p..` refused; a
+local named like an enum reading as the local; two records' `value`, two enums' `Ready` and two
+variants' `value` kept apart; a record's labels after `Point(`, `Point()` and `Point();`, a generic
+record's substituted, none for a generic record with no arguments, a function, an unknown name, a
+record and a function of one spelling, or a generic record and function of one spelling; payload
+labels in a construction, an applied generic's, and a pattern alone, before another arm and after
+one; the same candidates as `p.|x`, differing only in the range, and `p.x` unchanged; declaration
+order irrelevant; the hole alone answered, another error before or after it in its function, at the
+top level or in a dependency refused, another function's allowed; strings, comments, whitespace
+and a second dot no hole; a private dependency record and an ambiguous import never anchors;
+unsaved receivers, an unsaved dependency and its close, no earlier answer, a stale version refused,
+another open program lending nothing; the published diagnostics, the text and retained state
+unchanged by asking; 1,000 edits through ten shapes; and, over the repository's own source, cut
+member and variant sites each completing to a list holding exactly the member the checker had
+resolved there. `crates/nazm-syntax/tests/holes.rs` — over every corpus file, broken test programs
+included, a probe parse at an offset with no hole the ordinary parse exactly; the hole read only at
+the exact byte and changing only its statement; a later missing `;`, two dots and a written label
+still what they were. `crates/nazm-cli/tests/lsp.rs` the real process: `.` advertised alone,
+invoked and triggered completion identical after `é😀`, each edit empty at the UTF-16 cursor, and a
+trigger in a string, a comment or whitespace answered `null`. Eight N26 mutations (area 30).
+
 **Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
 help, symbols, full-document semantic tokens, quick fixes and call hierarchy only: no
 formatting, refactors, source actions or inlay hints, no cancellation and no watched files.
@@ -1488,14 +1524,19 @@ that no open document loads. Rename covers locals and private definitions only: 
 entity is refused, because a module no open program loads may use it, and a closed file is
 never edited, because the protocol cannot make its content a precondition. Completion is of an
 identifier in a value, call-head or type position only — no field, variant, label, pattern or
-import-path completion, no auto-import, no trigger characters, no ranking — and there is none
-where the source needed syntax recovery. Signature help is for calls and `spawn`s whose callee
+import-path completion, no auto-import, no ranking — and there is none where the source needed
+syntax recovery. Signature help is for calls and `spawn`s whose callee
 the checker resolved — not record or variant constructions, and none while any file of the
 compilation needs syntax recovery (an unclosed argument list included); a built-in's parameters
-are shown by type, having no names; no documentation. Structure completion needs a name
-written — nothing is offered after a bare `.` or `(`, so completion stays invoked only, with no
-`.` trigger — and offers no methods (the language has none), no generic variant before its
-type arguments and `(` are written, no import paths, no auto-import and no ranking.
+are shown by type, having no names; no documentation. Structure completion offers no methods
+(the language has none), no import paths, no auto-import and no ranking. At a hole — right after
+a `.` or `(` with nothing written (N26) — it needs the probe's anchor: nothing at a `(` the
+module calls as a function (a record of the same name included), after a generic enum or record
+with no type arguments, after a record type, an unknown name, an enum value or a second `.`; no
+completion after a comma or at an empty label slot later in a list; nothing in a function with
+another syntax error, and nothing when any other file, or the document's top level, recovered.
+`.` is the only trigger character; `(` is not one. A hole's completion costs a second parse and
+check of the compilation per request (`performance.md`).
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
 are published for open documents only. MCP does not exist.
 
@@ -1590,8 +1631,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **449** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24), **261** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **457** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25), **269** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -2068,6 +2109,30 @@ a stale version answered, the position just after a name, and the protocol's sel
 uninjected entry, no runner error. The `hierarchy` suite joined the `cli`, `semantics` and
 `checker` profiles. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were
 not re-run and are as they were.
+
+*N26 (2026-09-27) added eight and repointed two;* every killer was verified by
+`--verify-killer`, contained at P1, one at a time, with no host build running: 10 of 10, each on
+its first run — and, after the final source moved the parser's hole code out of line, the four in
+the parser verified again: 4 of 4. They attack N26's invariants: a `.` before the cursor taken
+for the hole, the hole forgiving every later statement, a bare `(` read as a construction, a
+pattern's hole requiring an arm, an ambiguous import anchoring, the probe ignoring other
+recoveries, a hole's completion replacing the `.`, and `(` advertised as a trigger. A ninth — a
+generic record with no type arguments anchoring — was written, survived, and showed its guard
+redundant with the checker's own application of type arguments; the guard and the entry were
+removed rather than kept as an equivalent mutant. `n21-a-label-given-elsewhere-is-offered` and
+`n21-a-recovery-is-ignored` moved with the code N21 and N26 now share. **Campaign
+`c9b1509745e3e043`, targeted, P1, one session, 1,539 s, on the final source:** those ten, and
+eighteen N15, N16, N17, N19 and N21 entries on what N26 consumes — a recovered body reaching the
+checker, a malformed statement with no error node, a stale version answered, both column
+conversions in bytes, a write to stdout, the formatting claim, same-named fields and variants as
+one, a completion inserting rather than replacing, an unknown field or variant not recorded, a
+member or variant from any definition, generic fields unsubstituted, another variant's label,
+declaration order shown, and N21's two recovery rules. **28 of 28 caught at tier 1**; nothing at
+tier 2 or 3, no survivor, crash, timeout, unusable or uninjected entry, no runner error. (The same
+28 on the source before the parser change: campaign `40d19aba85e2276e`, 28 of 28 at tier 1.) The
+`incomplete` suite joined the `cli`, `semantics`, `checker` and `syntax` profiles, and `holes` the
+`syntax` profile. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not
+re-run and are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a
