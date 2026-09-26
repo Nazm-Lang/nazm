@@ -29,6 +29,7 @@
 pub mod completion;
 pub mod fixes;
 pub mod hierarchy;
+mod incomplete;
 pub mod load;
 pub mod rename;
 pub mod root;

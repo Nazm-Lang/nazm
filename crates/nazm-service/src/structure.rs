@@ -150,7 +150,7 @@ fn structure(s: &Snapshot, at: Span) -> Result<Structure, NoStructure> {
         return Err(NoStructure::NotAStructureSite);
     }
     // Complete before anchored: where the rule fails, no anchor is trusted either way.
-    complete(s, at.start)?;
+    complete(&s.analysis.syntax_errors, s.cst.root(), at.start)?;
     let site = match node.kind() {
         SyntaxKind::FieldExpr | SyntaxKind::Place if after_dot => {
             match (res.field(at), res.looked_up_on(at)) {
@@ -263,15 +263,21 @@ fn path_to(root: CstNode<'_>, span: Span) -> Vec<CstNode<'_>> {
     path
 }
 
-/// This module's completeness rule, at `offset` of the document.
-fn complete(s: &Snapshot, offset: u32) -> Result<(), NoStructure> {
-    if s.analysis.syntax_errors.is_empty() {
+/// This module's completeness rule, at `offset` of the document: over the files with a
+/// syntax error, and the document's concrete tree. A completion probe (N26) applies it to
+/// its own parse, in which its hole is not a recovery.
+pub(crate) fn complete(
+    syntax_errors: &[FileId],
+    root: CstNode<'_>,
+    offset: u32,
+) -> Result<(), NoStructure> {
+    if syntax_errors.is_empty() {
         return Ok(());
     }
-    if s.analysis.syntax_errors.iter().any(|f| *f != FileId::ROOT) {
+    if syntax_errors.iter().any(|f| *f != FileId::ROOT) {
         return Err(NoStructure::RecoveredSyntax);
     }
-    for item in s.cst.root().children() {
+    for item in root.children() {
         let broken = item
             .descendants()
             .into_iter()
@@ -308,7 +314,7 @@ pub struct Member {
 }
 
 /// The members a site offers, canonical order, before filtering.
-fn members(res: &Resolution, site: StructureSite) -> Vec<Member> {
+pub(crate) fn members(res: &Resolution, site: StructureSite) -> Vec<Member> {
     match site {
         StructureSite::Member { record } | StructureSite::RecordLabel { record } => {
             record_fields(res, record)
@@ -384,30 +390,46 @@ pub(crate) fn completion(s: &Snapshot, at: Span, offset: u32) -> Result<Completi
     let prefix = text
         .get(at.start as usize..offset.min(at.end) as usize)
         .unwrap_or_default();
-    let (context, kind) = match found.site {
-        StructureSite::Member { .. } => (Context::Member, "field"),
-        StructureSite::Variant { .. } => (Context::Variant, "variant"),
-        StructureSite::RecordLabel { .. } => (Context::RecordLabel, "field"),
-        StructureSite::PayloadLabel { .. } => (Context::PayloadLabel, "payload field"),
-    };
-    let items = members(res, found.site)
-        .into_iter()
-        .filter(|m| m.name.starts_with(prefix))
-        .filter(|m| !found.provided.contains(&m.target))
-        .map(|m| CompletionCandidate {
-            detail: Some(detail(res, &m)),
-            declaration: crate::completion::declaration(s, Candidate::Entity(m.target)),
-            candidate: Candidate::Entity(m.target),
-            kind,
-            name: m.name,
-        })
-        .collect();
+    let (context, items) = candidates(res, found.site, prefix, &found.provided, |t| {
+        crate::completion::declaration(s, Candidate::Entity(t))
+    });
     Ok(Completion {
         context,
         start: found.start,
         end: found.end,
         items,
     })
+}
+
+/// A site's candidates: its members whose names begin with `prefix`, less the labels in
+/// `provided`, in canonical order, each with its identity, detail and declaration — one
+/// policy for a name being written (N21) and for a hole with nothing written yet (N26).
+pub(crate) fn candidates(
+    res: &Resolution,
+    site: StructureSite,
+    prefix: &str,
+    provided: &[ReferenceTarget],
+    declaration: impl Fn(ReferenceTarget) -> Option<crate::Location>,
+) -> (Context, Vec<CompletionCandidate>) {
+    let (context, kind) = match site {
+        StructureSite::Member { .. } => (Context::Member, "field"),
+        StructureSite::Variant { .. } => (Context::Variant, "variant"),
+        StructureSite::RecordLabel { .. } => (Context::RecordLabel, "field"),
+        StructureSite::PayloadLabel { .. } => (Context::PayloadLabel, "payload field"),
+    };
+    let items = members(res, site)
+        .into_iter()
+        .filter(|m| m.name.starts_with(prefix))
+        .filter(|m| !provided.contains(&m.target))
+        .map(|m| CompletionCandidate {
+            detail: Some(detail(res, &m)),
+            declaration: declaration(m.target),
+            candidate: Candidate::Entity(m.target),
+            kind,
+            name: m.name,
+        })
+        .collect();
+    (context, items)
 }
 
 /// `name: Int` for a field, `Done(code: Int)` for a variant — with the types the record
@@ -502,7 +524,8 @@ pub(crate) fn constructor_help(
     node: CstNode<'_>,
     offset: u32,
 ) -> Result<ConstructorHelp, NoCall> {
-    complete(s, offset).map_err(|_| NoCall::RecoveredSyntax)?;
+    complete(&s.analysis.syntax_errors, s.cst.root(), offset)
+        .map_err(|_| NoCall::RecoveredSyntax)?;
     let res = &s.analysis.resolution;
     let (constructor, fields, mut label) = if node.kind() == SyntaxKind::ConstructExpr {
         let head = significant(node)

@@ -135,7 +135,11 @@ impl LanguageService {
         let s = self
             .current(path, version)
             .ok_or(NoCompletion::NotCurrent)?;
-        let at = name_at(&s.cst, offset).ok_or(NoCompletion::NotAName)?;
+        // No name at the position: right after a `.` or `(` with nothing written yet, the
+        // hole a probe anchors (N26); anywhere else, nothing.
+        let Some(at) = name_at(&s.cst, offset) else {
+            return crate::incomplete::completion(s, offset);
+        };
         // Not a lexical name: a field, variant or label, answered from structure (N21).
         let Some(context) = context(s, at) else {
             return crate::structure::completion(s, at, offset);
