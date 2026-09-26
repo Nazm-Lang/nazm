@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,461 passed, 0 failed, 13 ignored, across 77 suites**, run contained at
-N21 (2026-09-26), at P4T4 and again at P1; the thirteen ignored are the xtask lifecycle tests,
-run on their own (13 of 13 passed, contained). N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,476 passed, 0 failed, 13 ignored, across 78 suites**, run contained at
+N22 (2026-09-26), at P4T4; the thirteen ignored are the xtask lifecycle tests,
+run on their own (13 of 13 passed, contained). N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1340,9 +1340,41 @@ variant payload read from a deserialised interface with the dependency deleted;
 `crates/nazm-cli/tests/lsp.rs` the real process with `é😀` before every site. Fifteen N21
 mutations (area 30).
 
-**Limitation** · Diagnostics, definition, hover, references, rename, completion and signature
-help only: no symbols, formatting, code actions, semantic tokens, inlay hints or call hierarchy, no
-cancellation and no watched files. Every change re-analyses every open document in full; no
+*N22, 2026-09-26: document symbols — VERIFIED; workspace symbols over the current analysed
+LanguageService universe — VERIFIED.* `LanguageService::document_symbols` is one open
+document's functions, records, enums, variants, fields and payload fields, nested — a record's
+fields under it, an enum's variants under it, a variant's payload fields under the variant — in
+source order, each with its whole declaration as its range and its declared name as its
+selection. `LanguageService::workspace_symbols` is every such declaration of every file the
+open documents' compilations load, each once however many compilations load it, identified by
+file, kind and name span and never by spelling, filtered by a case-sensitive substring of the
+name and ordered by name, file, position and kind. Both are derived on demand from the
+checker's definition tables and the parsed items their `decl` indices name
+(`architecture.md` §7.24); nothing is kept. Over the protocol: `textDocument/documentSymbol`
+(nested, or flat with container names for a client without hierarchical support) and
+`workspace/symbol` (`resolveProvider: false`). Evidence: `crates/nazm-service/tests/symbols.rs`
+— two records' `value`, two enums' `Ready`, a record and a function both `Box`, two modules'
+`helper`, each separate; an import absent from its importer's outline; a broken body kept, an
+unreadable item and refused duplicates absent, a type error kept; two roots sharing a module
+listing it once, then after one closes, then none; an unimported `orphan.nz` beside them never
+listed; the prelude and a missing module never located; unsaved edits seen at once and close
+restoring the disk; a stale version refused; the query rule pinned on `Point`, `Pointer`,
+`Checkpoint`; one order over ten runs; 1,000 edits with retained state constant; every symbol
+the entity the reference index records at its name and where definition goes from every use;
+over the repository's own source, every one of 817 declarations in 70 clean documents one
+symbol with the same kind, name, range and parent as its concrete tree, and the compiler opened
+as four overlapping programs listing each of its 500 declarations in its 8 files exactly once.
+`crates/nazm-cli/tests/lsp.rs` the real process, with `é😀` before every checked position.
+Thirteen N22 mutations (area 30).
+
+**Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
+help and symbols only: no formatting, code actions, semantic tokens, inlay hints or call
+hierarchy, no cancellation and no watched files. Workspace symbols cover the files the open
+documents' compilations load: there is no manifest-defined complete project index, no
+filesystem scan, and no persistent workspace symbol database, so an unloaded orphan file is
+not searched, and a declaration known only from a persisted interface, with no source location,
+is not a symbol. That is not a project boundary, and it does not lift the exported-rename
+refusal below. Every change re-analyses every open document in full; no
 incremental reparse or graph maintenance, and no persistent cache in the editor. A built-in, a
 type parameter and anything in a body that did not parse have no definition and no references;
 the core prelude has no file, so a definition in it has
@@ -1454,8 +1486,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **391** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20), **203** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **404** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21), **216** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -1847,6 +1879,28 @@ same suite then passed contained at P1 on the frozen tree, 1,461 of 1,461, so th
 identified; the third resumed and finished the other 14. The `structure` suite joined the `cli`,
 `semantics` and `checker` profiles. N13's use-after-free survivor and the `nesting-unbounded`
 MUTANT CRASH were not re-run and are as they were.
+
+*N22 (2026-09-26) added thirteen,* on the frozen final source; every killer was verified by
+`--verify-killer`, contained at P1, one at a time, with no host build running: 13 of 13. They
+attack N22's invariants: an outline listing imported declarations, record fields flattened
+beside their record, a payload field identified as another variant's, a selection that is the
+whole declaration, an outline in name order, workspace symbols merged by spelling or across
+files at the same offsets, private declarations hidden from workspace search, a stale outline
+served, a payload field's container missing its enum, workspace order ignoring the name, and
+the protocol's selection range and workspace location set to the whole declaration. One
+killer was first written against the ordering test that queries a single name, where the
+mutant is invisible: it was verified NOT A KILLER, moved to the query test whose names differ,
+and verified there. `n16-document-symbols-are-advertised` became
+`n16-code-actions-are-advertised`, the same defect with a capability the server still lacks; it
+and `n16-the-server-writes-to-stdout`, whose killer test changed, were re-verified: 2 of 2.
+**Campaign `e54921e1bd294310`, targeted, P1, one session, 1,107 s:** those fifteen, and nine N16
+and N17 entries on code N22 reads — the disk winning over a buffer, a closed buffer staying
+authoritative, a stale version answered, the prelude given a path, an imported definition
+placed in the asking file, an outgoing column counted in bytes, same-named fields and variants
+indexed as one, and one use listed once per compilation. **24 of 24 caught at tier 1**; nothing
+at tier 2 or 3, no survivor, crash, timeout, unusable or uninjected entry, no runner error. The
+`symbols` suite joined the `cli`, `semantics` and `checker` profiles. N13's use-after-free
+survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

@@ -2733,9 +2733,9 @@ reparse is not yet needed.
 
 **Protocol surface.** Full-document synchronisation, `publishDiagnostics`, definition and
 hover, positions in UTF-16 — and, since N17, references (§7.19), since N18 prepare-rename
-and rename (§7.20), since N19 completion (§7.21), since N20 signature help (§7.22), and
-since N21 structure completion and constructor signature help (§7.23). Nothing else is
-advertised. The core prelude has no file, so a
+and rename (§7.20), since N19 completion (§7.21), since N20 signature help (§7.22), since
+N21 structure completion and constructor signature help (§7.23), and since N22 document and
+workspace symbols (§7.24). Nothing else is advertised. The core prelude has no file, so a
 definition in it has no location. Diagnostics keep their Nazm codes and messages; the
 protocol message is an adapter's rendering of a `nazm.diagnostic/1` object's primary span,
 not a new schema.
@@ -3131,6 +3131,104 @@ another file refuses (`RecoveredSyntax`); a site the checker anchored nowhere re
 parse, so nothing anchors it) and therefore no `.` trigger character; methods, which the
 language does not have; import paths, auto-import, ranking; documentation. Nothing is
 persisted.
+
+## 7.24 Document and workspace symbols — settled by N22, 2026-09-26
+
+> **A symbol is a declaration the current analysis declared. Symbols are never reconstructed
+> by scanning identifier spellings, and workspace symbols do not establish a complete Nazm
+> project boundary and therefore do not close N18's exported-rename limitation.**
+
+```text
+Checker          which declarations exist, and what each is:          (nazm-sema definition tables)
+                 FnId, RecordId + field, EnumId + variant + payload field
+Parsed items     where each is written: the item the table's `decl`   (nazm-syntax Program, via Analysis)
+                 index names, and the child whose name span matches
+Symbol view      source-backed declarations, nested, derived on demand (nazm-service/src/symbols.rs)
+LanguageService  which files are analysed now: every file of every
+                 compilation rooted at an open document
+DocumentSymbol   one file's declarations, in source order
+WorkspaceSymbol  every analysed file's, once each, filtered by a substring
+LSP adapter      protocol kinds, nesting or its flat form, UTF-16        (nazm-cli/src/lsp.rs)
+```
+
+**What was already there.** Everything. The checker's definition tables hold every declared
+function, record, enum, variant, field and payload field with its identity (the same
+`ReferenceTarget` references and rename use) and its `name_span`; each function, record and
+enum also carries `decl`, its index in the parsed `Program` the resolution was produced from, so
+its item — and the item's span, the whole declaration — is one index away. A field, variant or
+payload field is found inside its parent's item by its name span: a position, never a spelling.
+N22 added no checker fact, no table and no index. An applied generic's instance is not a
+declaration and is skipped, as the reference index skips it.
+
+**What a symbol is, exactly.** It exists when the checker declared something:
+
+| Source | Symbol? |
+| --- | --- |
+| a function, record or enum the checker declared, private or `pub` | yes, with its visibility kept as metadata |
+| a function whose body did not parse (the parser keeps its signature) | yes; its range ends where the parser's item does |
+| a body with type errors | yes: existence is not a clean body |
+| an item the parser could not read | no — nothing was declared, and an outline of text is not this contract |
+| a second function, type, variant or field the checker refused as a duplicate | no; the first keeps its symbol |
+| a function that collides with an import | yes, in its own file; the import's is in the dependency's |
+| locals, parameters, pattern bindings, type parameters | no: an outline is structure, and scope is N19's |
+| built-ins, intrinsics, the core prelude's `Option` and `Result` | no: there is no file an editor can open |
+| a definition rehydrated from a persisted interface | no: its spans are synthetic and its `decl` is none |
+
+The language service never checks against a persisted interface — it reads source or reports
+the module missing — so the last row is guarded twice rather than reachable: a synthetic span
+is never a symbol, and an item must sit at `decl` with the same name span.
+
+**Range and selection.** A symbol's range is the parsed item's span (from `pub` or the keyword
+to the closing brace; a field's `name: Type`; a variant's name to its `)`); its selection is the
+table's `name_span` — the span definition goes to from any use, and the span the reference
+index records the declaration at, so the two cannot disagree. A symbol's range holds its
+selection and a parent's range holds each child's.
+
+**Order.** A document's symbols are in **source order** — the order the author wrote them —
+at every level. That is deliberately not N21's canonical order: declaration order means nothing
+to what a record or enum *is*, which is why candidates and constructor help are canonical, but
+an outline presents the file, and moving two fields does move them in it.
+
+**The workspace universe.** `LanguageService::workspace_symbols(query)` covers every file of
+every compilation the service holds at the current generation: each open document's
+compilation, loaded exactly as `nazm check <it>` would load it, with everything it imports.
+That is the union of the open roots and their loaded dependency graphs — **not** a directory:
+there is no filesystem walk, no manifest, no persistent index and no watcher, and a `.nz` file no
+open document's compilation loads is never read. Unlike completion, definition and signature
+help, which belong to the one requesting compilation, it deliberately spans every open root,
+and it does not apply import visibility: the question is what exists, not what one file may
+name.
+
+**One declaration, however many compilations load it.** Identity does not cross
+compilations, so a declaration is carried across them as N17 carries an entity: the same file
+(by identity path), the same kind, the same name span. `DefKey` is not used: its module key is
+measured from each compilation's source root, so one file can have two keys in two
+compilations, and one reached through a symbolic link has none. Deduplication is by that
+position and never by spelling: two modules' `helper`, a record and a function both called
+`Box`, two records' `value` and two enums' `Ready` are all distinct.
+
+**The query.** A case-sensitive substring of the declared name; the empty query is everything.
+It filters a universe already built — it loads, resolves and discovers nothing — and there is
+no fuzzy matching, case folding, ranking or truncation. Results are ordered by name, then file,
+then where the name is, then kind. Fields, variants and payload fields are included, each with
+the name of what it is declared in (`Point`, `State`, `State.Done`), read from its parent.
+
+**When there is an answer.** Document symbols are of one document at its current version,
+from its own compilation, and a superseded version has none (`NotCurrent`); workspace symbols
+are of the current generation only. Both see unsaved buffers at once, and closing a buffer makes
+the disk authoritative for it again. Neither refuses because of a recovery: a symbol is what
+the checker declared, and a recovery can only remove declarations, never invent one.
+
+**Over the protocol.** `textDocument/documentSymbol` returns nested `DocumentSymbol`s to a client
+that declares `hierarchicalDocumentSymbolSupport` and flat `SymbolInformation`s, each naming its
+container, to one that does not. `workspace/symbol` returns `WorkspaceSymbol`s located at the
+declared name; `resolveProvider` is `false` and there is no `workspaceSymbol/resolve`. Kinds:
+function → Function, record → Struct, enum → Enum, variant → EnumMember, field and payload field
+→ Field.
+
+**Deliberately not here.** Locals in an outline, a syntax outline of text that did not declare
+anything, qualified-name queries, fuzzy search, a project index, symbol tags, semantic tokens,
+call hierarchy and any agent-facing export. Nothing is persisted.
 
 ## 8. Toolchain, and one real incompatibility
 
