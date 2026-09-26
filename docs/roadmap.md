@@ -382,7 +382,7 @@ No item is chosen here; N21 left these standing.
 | Completion after a bare `.` or `(`, and a `.` trigger | structure ✓ | needs an anchor for source that does not parse |
 | Rename of exported definitions; edits of files not open | rename ✓ | unchanged since N18 |
 | MCP, semantic context packets | a language service ✓, scope, call and structure at a position ✓ | not started |
-| Incremental reparse | a lossless CST ✓ | N21 added nothing measurable to a warm edit; still no evidence that forces it |
+| Incremental reparse | a lossless CST ✓ | the contended interleaved N20/N21 comparison detected no N21-specific warm-edit delta; there is still no evidence that forces incremental reparse |
 | `nazm explain-cost` | nothing above | independent |
 | User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
 | `?` on `Option`, and conversion between error types | traits | unchanged |
@@ -401,7 +401,7 @@ that answer. No language, interface, cache-key or bootstrap change: `SEMANTIC_EP
 | `Resolution::looked_up_on`, written where a field or variant lookup fails | `crates/nazm-sema/src/resolve.rs`, `crates/nazm-core/src/check.rs`, `architecture.md` §7.23 |
 | `structure_at`, structure completion, `constructor_help`, `help_at` | `crates/nazm-service/src/structure.rs`, `crates/nazm-service/src/signature.rs` |
 | fields as Field, variants as EnumMember, constructor help over `textDocument/signatureHelp` | `crates/nazm-cli/src/lsp.rs` |
-| what it costs: nothing measurable to checking, editing or memory; queries in microseconds, whole-compiler queries dominated by finding the token | `performance.md` |
+| what it costs: no detected analyse/edit/RSS delta in the contended interleaved comparison; no persistent clean-code structure table; structure queries measured separately (microseconds, whole-compiler queries dominated by finding the token) | `performance.md` |
 
 Mutation evidence: 15 new, all 15 direct killers verified on the final source; one targeted
 campaign of 34, all caught at tier 1, over three sessions (`capability-matrix.md` §30).

@@ -3045,7 +3045,11 @@ their analysis.
 
 ## 7.23 Structure at a position — settled by N21, 2026-09-26
 
-> **N21 never performs field, variant, record, enum or type resolution by spelling.**
+> **N21's language-service and LSP layers never resolve fields, variants, records, enums or
+> types by spelling.** Structure queries consume semantic identities recorded by the checker.
+> The one incomplete-source exception is `E.name` before `(` exists: after `E` fails as a value,
+> the checker itself consults its existing module type environment and may record a non-generic
+> enum as a tooling anchor. This is the canonical checker environment, not a second resolver.
 
 ```text
 CST              which structured site the position is in:                (the node around the name)
