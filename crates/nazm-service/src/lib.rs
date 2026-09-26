@@ -11,7 +11,9 @@
 //!   from it (N20);
 //! - [`structure`] — the field, variant or label at a position, as the checker identified
 //!   its record, enum or variant, and completion and constructor signature help from it
-//!   (N21).
+//!   (N21);
+//! - [`symbols`] — the declarations the current analyses know, one document's as an
+//!   outline and every analysed file's as a searchable list (N22).
 //!
 //! The first two were `nazm-cli`'s until N16 and moved here unchanged in what they decide,
 //! so the command line and the language service cannot disagree about a module graph.
@@ -25,6 +27,7 @@ pub mod root;
 pub mod service;
 pub mod signature;
 pub mod structure;
+pub mod symbols;
 
 pub use completion::{Completion, CompletionCandidate, Context, NoCompletion};
 pub use rename::{Edit, FileEdit, Refusal, RenamePlan, Renameable};
@@ -33,3 +36,4 @@ pub use signature::{
     CallInfo, Help, NoCall, Parameter, Rendered, Signature, SignatureHelp, TypeParameter,
 };
 pub use structure::{Constructor, ConstructorHelp, Member, NoStructure, Structure, StructureSite};
+pub use symbols::{DocumentSymbols, NoSymbols, Symbol, SymbolKind, WorkspaceSymbol};
