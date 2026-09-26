@@ -255,6 +255,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
     assert_eq!(
         advertised,
         [
+            "callHierarchyProvider",
             "codeActionProvider",
             "completionProvider",
             "definitionProvider",
@@ -394,7 +395,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
     );
 
     // 7. Something not implemented is an error response, and the server carries on.
-    let r = c.request("textDocument/prepareCallHierarchy", json!({}));
+    let r = c.request("textDocument/formatting", json!({}));
     assert_eq!(r["error"]["code"], -32601, "{r}");
     let r = c.request("textDocument/definition", json!({"nonsense": true}));
     assert_eq!(r["error"]["code"], -32602, "{r}");
@@ -1549,6 +1550,195 @@ fn a_client_that_cannot_take_versioned_edits_is_offered_no_quick_fix() {
         json!([]),
         "an edit the client could apply to another version is not sent"
     );
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+}
+
+// ---------------------------------------------------------------------------------------
+// Call hierarchy (N25).
+// ---------------------------------------------------------------------------------------
+
+// `é` and `😀` before the declaration and before both calls, on their lines: a server that
+// counted bytes would be off by 2 + 4 - 3 = 3 columns, one that counted characters by 1.
+const CALL_LIB: &str = "pub fn far() -> Int { 0 }\n";
+const CALL_MAIN: &str = "use \"lib.nz\";\nfn s() -> Str { \"é😀\" } fn helper(n: Int) -> Int { n }\nfn caller() -> Int { let t = \"é😀\"; helper(1) + helper(far()) }\n";
+
+impl Client {
+    fn prepare_hierarchy(&mut self, path: &Path, line: u32, character: u32) -> Value {
+        self.request(
+            "textDocument/prepareCallHierarchy",
+            json!({"textDocument": {"uri": uri(path)}, "position": {"line": line, "character": character}}),
+        )
+    }
+}
+
+fn range(line: u32, text: &str, start: usize, end: usize) -> Value {
+    json!({"start": {"line": line, "character": utf16(text, start)},
+           "end": {"line": line, "character": utf16(text, end)}})
+}
+
+#[test]
+fn call_hierarchy_crosses_the_protocol_in_utf16_and_an_old_item_has_no_answer() {
+    let (_dir, root) = project(&[("lib.nz", CALL_LIB), ("main.nz", CALL_MAIN)]);
+    let (lib, main) = (root.join("lib.nz"), root.join("main.nz"));
+    let mut c = Client::start(&root);
+    let init = c.initialize(&root);
+    assert_eq!(
+        init["result"]["capabilities"]["callHierarchyProvider"],
+        true
+    );
+    c.open(&main, 1, CALL_MAIN);
+    let d = c.diagnostics_for(&uri(&main));
+    assert_eq!(d["diagnostics"], json!([]), "{d}");
+    let lines: Vec<&str> = CALL_MAIN.lines().collect();
+    let (l1, l2) = (lines[1], lines[2]);
+    let decl = l1.find("fn helper").unwrap();
+    let helper_name = l1.find("helper").unwrap();
+    let call1 = l2.find("helper(1)").unwrap();
+    let call2 = l2.find("helper(far").unwrap();
+    let far_call = l2.find("far()").unwrap();
+    assert_ne!(
+        utf16(l1, helper_name) as usize,
+        helper_name,
+        "bytes and units differ"
+    );
+
+    // Prepared from a call, with the cursor counted in UTF-16.
+    let r = c.prepare_hierarchy(&main, 2, utf16(l2, call1) + 1);
+    let items = r["result"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 1, "{r}");
+    let helper = &items[0];
+    assert_eq!(helper["name"], "helper");
+    assert_eq!(helper["kind"], 12, "a function");
+    assert_eq!(helper["detail"], "fn helper(n: Int) -> Int");
+    assert_eq!(helper["uri"], uri(&main));
+    assert_eq!(helper["range"], range(1, l1, decl, l1.len()));
+    assert_eq!(
+        helper["selectionRange"],
+        range(1, l1, helper_name, helper_name + 6)
+    );
+    assert!(helper["data"].is_object(), "{helper}");
+    // From its declaration: the same item.
+    let r = c.prepare_hierarchy(&main, 1, utf16(l1, helper_name));
+    assert_eq!(r["result"], json!([helper]));
+    // A string, a local, a keyword: nothing.
+    for (line, at) in [
+        (2, l2.find("é").unwrap()),
+        (2, l2.find("t =").unwrap()),
+        (1, 0),
+    ] {
+        let text = lines[line];
+        let r = c.prepare_hierarchy(&main, u32::try_from(line).unwrap(), utf16(text, at));
+        assert_eq!(r["result"], Value::Null, "{line}:{at}: {r}");
+    }
+
+    // Incoming: one caller, both calls on one line, in order.
+    let r = c.request("callHierarchy/incomingCalls", json!({"item": helper}));
+    let calls = r["result"].as_array().unwrap().clone();
+    assert_eq!(calls.len(), 1, "{r}");
+    let caller = calls[0]["from"].clone();
+    assert_eq!(caller["name"], "caller");
+    assert_eq!(caller["range"], range(2, l2, 0, l2.len()));
+    assert_eq!(caller["selectionRange"], range(2, l2, 3, 9));
+    assert_eq!(
+        calls[0]["fromRanges"],
+        json!([
+            range(2, l2, call1, call1 + 6),
+            range(2, l2, call2, call2 + 6)
+        ])
+    );
+
+    // Outgoing from the caller: `far` in the other file, then `helper` — each call where it
+    // is written, in the caller's file.
+    let r = c.request("callHierarchy/outgoingCalls", json!({"item": caller}));
+    let calls = r["result"].as_array().unwrap().clone();
+    assert_eq!(calls.len(), 2, "{r}");
+    assert_eq!(calls[0]["to"]["name"], "far");
+    assert_eq!(calls[0]["to"]["uri"], uri(&lib));
+    assert_eq!(calls[0]["to"]["selectionRange"], range(0, CALL_LIB, 7, 10));
+    assert_eq!(
+        calls[0]["fromRanges"],
+        json!([range(2, l2, far_call, far_call + 3)])
+    );
+    assert_eq!(calls[1]["to"], *helper);
+    assert_eq!(
+        calls[1]["fromRanges"],
+        json!([
+            range(2, l2, call1, call1 + 6),
+            range(2, l2, call2, call2 + 6)
+        ])
+    );
+    let r = c.request("callHierarchy/outgoingCalls", json!({"item": helper}));
+    assert_eq!(r["result"], json!([]));
+
+    // Asking changed nothing: the same request, the same answer.
+    let again = c.request("callHierarchy/incomingCalls", json!({"item": helper}));
+    assert_eq!(again["result"][0]["from"], caller);
+
+    // Any change ends the item — the same text again included. Prepared again, it answers.
+    c.change(&main, 2, CALL_MAIN);
+    let _ = c.diagnostics_for(&uri(&main));
+    for method in ["callHierarchy/incomingCalls", "callHierarchy/outgoingCalls"] {
+        let r = c.request(method, json!({"item": helper}));
+        assert_eq!(r["result"], Value::Null, "{method}: {r}");
+        assert!(r.get("error").is_none(), "{r}");
+    }
+    let r = c.prepare_hierarchy(&main, 2, utf16(l2, call1));
+    let fresh = r["result"][0].clone();
+    assert_ne!(fresh["data"], helper["data"]);
+    let r = c.request("callHierarchy/incomingCalls", json!({"item": fresh}));
+    assert_eq!(r["result"][0]["from"]["name"], "caller");
+
+    // An item this server did not prepare — no data, or data that is not a locator — has
+    // no answer, and is not looked up by its name.
+    let mut forged = fresh.clone();
+    forged.as_object_mut().unwrap().remove("data");
+    let r = c.request("callHierarchy/incomingCalls", json!({"item": forged}));
+    assert_eq!(r["result"], Value::Null, "{r}");
+    forged["data"] = json!({"name": "helper"});
+    let r = c.request("callHierarchy/incomingCalls", json!({"item": forged}));
+    assert_eq!(r["result"], Value::Null, "{r}");
+
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+}
+
+const SHARED: &str = "pub fn target() -> Int { 0 }\n";
+const ROOT_A: &str = "use \"shared.nz\";\nfn only_a() -> Int { target() }\n";
+const ROOT_B: &str = "use \"shared.nz\";\nfn only_b() -> Int { target() }\n";
+
+#[test]
+fn a_hierarchy_item_belongs_to_the_document_it_was_prepared_from() {
+    let (_dir, root) = project(&[("shared.nz", SHARED), ("a.nz", ROOT_A), ("b.nz", ROOT_B)]);
+    let (a, b) = (root.join("a.nz"), root.join("b.nz"));
+    let mut c = Client::start(&root);
+    c.initialize(&root);
+    c.open(&a, 1, ROOT_A);
+    let _ = c.diagnostics_for(&uri(&a));
+    c.open(&b, 1, ROOT_B);
+    let _ = c.diagnostics_for(&uri(&b));
+    let at = utf16(ROOT_A.lines().nth(1).unwrap(), 21);
+    let via_a = c.prepare_hierarchy(&a, 1, at)["result"][0].clone();
+    let via_b = c.prepare_hierarchy(&b, 1, at)["result"][0].clone();
+    // The same declaration, two items.
+    assert_eq!(via_a["uri"], via_b["uri"]);
+    assert_eq!(via_a["selectionRange"], via_b["selectionRange"]);
+    assert_ne!(via_a["data"], via_b["data"]);
+    let callers = |c: &mut Client, item: &Value| -> Vec<String> {
+        let r = c.request("callHierarchy/incomingCalls", json!({"item": item}));
+        r["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["from"]["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(callers(&mut c, &via_a), ["only_a"]);
+    assert_eq!(callers(&mut c, &via_b), ["only_b"]);
+    // `b` closed: its item is not answered from `a`, which still loads the file.
+    c.close(&b);
+    let r = c.request("callHierarchy/incomingCalls", json!({"item": via_b}));
+    assert_eq!(r["result"], Value::Null, "{r}");
     let (status, stderr) = c.finish();
     assert_eq!(status, Some(0), "{stderr}");
 }
