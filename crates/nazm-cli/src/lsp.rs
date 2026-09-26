@@ -16,7 +16,9 @@
 //! synchronisation (open, change, close), published diagnostics, definition, hover,
 //! references (N17), prepare-rename and rename (N18), completion (N19) — of a value, a
 //! call's head or a type, invoked on an identifier, with no trigger characters — and
-//! signature help (N20), of the call the checker checked, triggered by `(` and `,`. No
+//! signature help (N20), of the call the checker checked, triggered by `(` and `,` — and,
+//! since N21, completion of a field after `.`, a variant after `E.` and a construction's
+//! or pattern's label, and signature help for a record or variant construction. No
 //! formatting, symbols, code actions, semantic tokens, watched files or cancellation — a
 //! client is never told something exists that the server would then ignore.
 //!
@@ -61,7 +63,7 @@ use lsp_types::{
     SignatureHelpParams, SignatureInformation, TextDocumentPositionParams,
     TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
 };
-use nazm_service::{LanguageService, Published, RenamePlan, Target};
+use nazm_service::{Help, LanguageService, Published, RenamePlan, Rendered, Target};
 
 /// `nazm lsp`: serve one client on stdin and stdout until it says `exit`.
 pub(crate) fn run(source_root: Option<&Path>) -> ExitCode {
@@ -404,6 +406,8 @@ impl Server {
                 kind: Some(match c.kind {
                     "local" => CompletionItemKind::VARIABLE,
                     "function" | "built-in function" => CompletionItemKind::FUNCTION,
+                    "field" | "payload field" => CompletionItemKind::FIELD,
+                    "variant" => CompletionItemKind::ENUM_MEMBER,
                     "enum" => CompletionItemKind::ENUM,
                     "type parameter" => CompletionItemKind::TYPE_PARAMETER,
                     _ => CompletionItemKind::STRUCT,
@@ -440,37 +444,25 @@ impl Server {
         else {
             return serde_json::Value::Null;
         };
-        let Ok(help) = self.service.signature_help(&path, version, offset) else {
-            return serde_json::Value::Null;
+        let help = match self.service.help_at(&path, version, offset) {
+            Ok(Help::Call(help)) => help,
+            // A construction (N21): its shape, and its active field when the position is in
+            // an initialiser whose label resolved. Otherwise no parameter is marked — the
+            // parameters are left out, since an absent index would mark the first.
+            Ok(Help::Constructor(c)) => {
+                return signature_json(
+                    &c.rendered,
+                    c.active_parameter,
+                    c.active_parameter.is_some(),
+                )
+            }
+            Err(_) => return serde_json::Value::Null,
         };
         let params = &help.rendered.params;
         if help.active_parameter.is_none() && !params.is_empty() {
             return serde_json::Value::Null;
         }
-        // Offsets into the label, in the position encoding: the label is one line, so its
-        // own line index converts them.
-        let label = LineIndex::new(&help.rendered.label);
-        let parameters = params
-            .iter()
-            .map(|(start, end)| ParameterInformation {
-                label: ParameterLabel::LabelOffsets([
-                    label.position(*start).character,
-                    label.position(*end).character,
-                ]),
-                documentation: None,
-            })
-            .collect();
-        serde_json::to_value(SignatureHelp {
-            signatures: vec![SignatureInformation {
-                label: help.rendered.label.clone(),
-                documentation: None,
-                parameters: Some(parameters),
-                active_parameter: help.active_parameter,
-            }],
-            active_signature: Some(0),
-            active_parameter: help.active_parameter,
-        })
-        .unwrap_or(serde_json::Value::Null)
+        signature_json(&help.rendered, help.active_parameter, true)
     }
 
     /// `textDocument/prepareRename`: the token and its current spelling, or `null` for a
@@ -539,6 +531,35 @@ impl Server {
         })
         .unwrap_or(serde_json::Value::Null)
     }
+}
+
+/// One `SignatureHelp` with one signature: the label, and — with `parameters` — each
+/// parameter as its offsets into the label in the position encoding. The label is one line,
+/// so its own line index converts them.
+fn signature_json(rendered: &Rendered, active: Option<u32>, parameters: bool) -> serde_json::Value {
+    let label = LineIndex::new(&rendered.label);
+    let offsets = rendered
+        .params
+        .iter()
+        .map(|(start, end)| ParameterInformation {
+            label: ParameterLabel::LabelOffsets([
+                label.position(*start).character,
+                label.position(*end).character,
+            ]),
+            documentation: None,
+        })
+        .collect();
+    serde_json::to_value(SignatureHelp {
+        signatures: vec![SignatureInformation {
+            label: rendered.label.clone(),
+            documentation: None,
+            parameters: parameters.then_some(offsets),
+            active_parameter: active,
+        }],
+        active_signature: Some(0),
+        active_parameter: active,
+    })
+    .unwrap_or(serde_json::Value::Null)
 }
 
 /// A rename plan as the protocol's edit: `documentChanges`, one per file, each tied to the

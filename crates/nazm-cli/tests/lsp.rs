@@ -986,3 +986,141 @@ fn signature_help_crosses_the_protocol_with_utf16_positions_and_label_offsets() 
     let (status, stderr) = c.finish();
     assert_eq!(status, Some(0), "{stderr}");
 }
+
+// Non-ASCII before every structure site, on its line.
+const STRUCTURE_MAIN: &str = "struct Point { x: Int, label: Str, }\nenum State { Done(code: Int), Idle, }\n\
+fn main() -> Int { let s = \"é😀\"; let p = Point(x: 1, label: s); let d = State.Done(code: 2); let e = State.Idle(); p.label; match d { State.Done(code: c) => c, State.Idle() => p.x, } }\n";
+
+#[test]
+fn structure_completion_and_constructor_help_cross_the_protocol_in_utf16() {
+    let (_dir, root) = project(&[("main.nz", STRUCTURE_MAIN)]);
+    let main = root.join("main.nz");
+    let mut c = Client::start(&root);
+    let init = c.initialize(&root);
+    assert_eq!(
+        init["result"]["capabilities"]["completionProvider"],
+        json!({"resolveProvider": false}),
+        "still invoked only: no `.` trigger, since a name must be there to complete"
+    );
+    c.open(&main, 1, STRUCTURE_MAIN);
+    c.diagnostics_for(&uri(&main));
+    let line = STRUCTURE_MAIN.lines().nth(2).unwrap();
+    let complete = |c: &mut Client, byte: usize| {
+        c.at(
+            "textDocument/completion",
+            &main,
+            2,
+            utf16(line, byte),
+            json!({}),
+        )["result"]["items"]
+            .clone()
+    };
+    let labels = |items: &Value| -> Vec<(String, u64)> {
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| {
+                (
+                    i["label"].as_str().unwrap().to_owned(),
+                    i["kind"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    const FIELD: u64 = 5;
+    const ENUM_MEMBER: u64 = 20;
+
+    // A member, at the end of `lab` in `p.label`: `label`, a field, replacing `label` whole.
+    let member = line.find("p.label;").unwrap() + 2;
+    let items = complete(&mut c, member + 3);
+    assert_eq!(labels(&items), [("label".to_owned(), FIELD)]);
+    assert_eq!(items[0]["detail"], "label: Str");
+    assert_eq!(
+        items[0]["textEdit"]["range"],
+        json!({"start": {"line": 2, "character": utf16(line, member)},
+               "end": {"line": 2, "character": utf16(line, member + "label".len())}})
+    );
+    assert_ne!(
+        utf16(line, member) as usize,
+        member,
+        "bytes and units differ here"
+    );
+    // A variant, from the start of `Idle` in `State.Idle()`.
+    let variant = line.find("State.Idle()").unwrap() + "State.".len();
+    let items = complete(&mut c, variant);
+    assert_eq!(
+        labels(&items),
+        [
+            ("Done".to_owned(), ENUM_MEMBER),
+            ("Idle".to_owned(), ENUM_MEMBER)
+        ]
+    );
+    assert_eq!(items[0]["detail"], "Done(code: Int)");
+    // A construction label: `x` is given, so `label`.
+    let label = line.find("label: s").unwrap();
+    assert_eq!(
+        labels(&complete(&mut c, label)),
+        [("label".to_owned(), FIELD)]
+    );
+    // A payload label, in a construction and in a pattern.
+    let code = line.find("code: 2").unwrap();
+    assert_eq!(
+        labels(&complete(&mut c, code)),
+        [("code".to_owned(), FIELD)]
+    );
+    let pattern = line.find("code: c").unwrap();
+    assert_eq!(
+        labels(&complete(&mut c, pattern)),
+        [("code".to_owned(), FIELD)]
+    );
+
+    // Constructor signature help, inside `x`'s initialiser: `x` is parameter 1 of the
+    // canonical `Point(label: Str, x: Int)`, though written first.
+    let r = c.at(
+        "textDocument/signatureHelp",
+        &main,
+        2,
+        utf16(line, line.find("x: 1").unwrap() + 3),
+        json!({}),
+    );
+    let sig = &r["result"]["signatures"][0];
+    assert_eq!(sig["label"], "Point(label: Str, x: Int)", "{r}");
+    assert_eq!(
+        sig["parameters"],
+        json!([{"label": [6, 16]}, {"label": [18, 24]}])
+    );
+    assert_eq!(r["result"]["activeParameter"], 1);
+    // Between initialisers: the shape, and no parameter marked.
+    let r = c.at(
+        "textDocument/signatureHelp",
+        &main,
+        2,
+        utf16(line, line.find(", label: s").unwrap() + 1),
+        json!({}),
+    );
+    assert_eq!(
+        r["result"]["signatures"][0]["label"],
+        "Point(label: Str, x: Int)"
+    );
+    assert!(
+        r["result"]["signatures"][0].get("parameters").is_none(),
+        "{r}"
+    );
+    assert!(r["result"].get("activeParameter").is_none(), "{r}");
+    // A variant construction.
+    let r = c.at(
+        "textDocument/signatureHelp",
+        &main,
+        2,
+        utf16(line, code + "code: ".len()),
+        json!({}),
+    );
+    assert_eq!(
+        r["result"]["signatures"][0]["label"],
+        "State.Done(code: Int)"
+    );
+    assert_eq!(r["result"]["activeParameter"], 0);
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+}
