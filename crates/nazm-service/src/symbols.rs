@@ -249,6 +249,35 @@ fn flatten(symbol: Symbol, container: Option<&str>, out: &mut Vec<(Symbol, Optio
     }
 }
 
+/// The function `id` of `s`'s compilation as a symbol — `None` unless the checker declared
+/// it from an item this compilation parsed. The one place a function's declaration and name
+/// ranges are read, for an outline and for a call hierarchy's items (N25) alike.
+pub(crate) fn function_symbol(s: &Snapshot, id: FnId) -> Option<Symbol> {
+    let res = &s.analysis.resolution;
+    let def = res.function(id)?;
+    if def.name_span == Span::synthetic() {
+        return None;
+    }
+    let item = s
+        .analysis
+        .program
+        .functions
+        .get(def.decl as usize)
+        .filter(|f| f.name_span == def.name_span)?;
+    Some(Symbol {
+        target: ReferenceTarget::Function(id),
+        kind: SymbolKind::Function,
+        name: def.name.clone(),
+        exported: Some(def.visibility.is_exported()),
+        start: item.span.start,
+        end: item.span.end,
+        name_start: def.name_span.start,
+        name_end: def.name_span.end,
+        detail: crate::Signature::of_function(res, id).map(|s| s.render(res, None).label),
+        children: Vec::new(),
+    })
+}
+
 /// The declarations written in `file` of `s`'s compilation, top level in source order.
 fn declared_in(s: &Snapshot, file: FileId) -> Vec<Symbol> {
     let res = &s.analysis.resolution;
@@ -257,29 +286,9 @@ fn declared_in(s: &Snapshot, file: FileId) -> Vec<Symbol> {
     let mut out = Vec::new();
 
     for (i, def) in res.functions().iter().enumerate() {
-        if !here(def.name_span) {
-            continue;
+        if here(def.name_span) {
+            out.extend(function_symbol(s, FnId::from_index(i)));
         }
-        let Some(item) = program
-            .functions
-            .get(def.decl as usize)
-            .filter(|f| f.name_span == def.name_span)
-        else {
-            continue;
-        };
-        let id = FnId::from_index(i);
-        out.push(Symbol {
-            target: ReferenceTarget::Function(id),
-            kind: SymbolKind::Function,
-            name: def.name.clone(),
-            exported: Some(def.visibility.is_exported()),
-            start: item.span.start,
-            end: item.span.end,
-            name_start: def.name_span.start,
-            name_end: def.name_span.end,
-            detail: crate::Signature::of_function(res, id).map(|s| s.render(res, None).label),
-            children: Vec::new(),
-        });
     }
 
     for (r, def) in res.records().all().iter().enumerate() {
