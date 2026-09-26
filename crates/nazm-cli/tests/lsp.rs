@@ -255,6 +255,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
     assert_eq!(
         advertised,
         [
+            "codeActionProvider",
             "completionProvider",
             "definitionProvider",
             "documentSymbolProvider",
@@ -288,6 +289,11 @@ fn the_server_speaks_the_protocol_end_to_end() {
         "triggered where the active call or argument changes; no retrigger characters"
     );
     assert_eq!(caps["documentSymbolProvider"], true);
+    assert_eq!(
+        caps["codeActionProvider"],
+        json!({"codeActionKinds": ["quickfix"], "resolveProvider": false}),
+        "quick fixes only, each complete when sent"
+    );
     assert_eq!(
         caps["semanticTokensProvider"]["full"], true,
         "the whole document, with no deltas"
@@ -388,7 +394,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
     );
 
     // 7. Something not implemented is an error response, and the server carries on.
-    let r = c.request("textDocument/codeAction", json!({}));
+    let r = c.request("textDocument/prepareCallHierarchy", json!({}));
     assert_eq!(r["error"]["code"], -32601, "{r}");
     let r = c.request("textDocument/definition", json!({"nonsense": true}));
     assert_eq!(r["error"]["code"], -32602, "{r}");
@@ -1384,6 +1390,165 @@ fn semantic_tokens_cross_the_protocol_relative_and_in_utf16() {
         let r = c.request(method, json!({}));
         assert_eq!(r["error"]["code"], -32601, "{method}: {r}");
     }
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+}
+
+// N24: `é` is two bytes and one UTF-16 unit, `😀` four bytes and two units, before the
+// edit on line 1; the diagnostic is on line 2.
+const FIX_MAIN: &str =
+    "fn main() -> Int {\n    let s = \"é😀\"; let x = str_len(s);\n    x = 2;\n    x\n}\n";
+const FIXED_MAIN: &str =
+    "fn main() -> Int {\n    let s = \"é😀\"; let mut x = str_len(s);\n    x = 2;\n    x\n}\n";
+
+impl Client {
+    fn code_action(&mut self, path: &Path, range: Value, context: Value) -> Value {
+        self.request(
+            "textDocument/codeAction",
+            json!({"textDocument": {"uri": uri(path)}, "range": range, "context": context}),
+        )
+    }
+}
+
+fn point(line: u32, character: u32) -> Value {
+    json!({"start": {"line": line, "character": character}, "end": {"line": line, "character": character}})
+}
+
+#[test]
+fn a_quick_fix_crosses_the_protocol_versioned_in_utf16_and_changes_nothing_until_applied() {
+    let (_dir, root) = project(&[("main.nz", FIX_MAIN)]);
+    let main = root.join("main.nz");
+    let mut c = Client::start(&root);
+    c.initialize(&root);
+    c.open(&main, 3, FIX_MAIN);
+    let d = c.diagnostics_for(&uri(&main));
+    let diagnostic = d["diagnostics"][0].clone();
+    assert_eq!(diagnostic["code"], "N0310", "{d}");
+    let lines: Vec<&str> = FIX_MAIN.lines().collect();
+
+    // A cursor on the assignment: the diagnostic's line, not the edit's.
+    let r = c.code_action(&main, point(2, 5), json!({"diagnostics": []}));
+    let actions = r["result"].as_array().unwrap().clone();
+    assert_eq!(actions.len(), 1, "{r}");
+    let a = &actions[0];
+    assert_eq!(a["title"], "Fix N0310: make the binding mutable");
+    assert_eq!(a["kind"], "quickfix");
+    assert_eq!(a["isPreferred"], true);
+    assert!(a.get("command").is_none() && a.get("data").is_none(), "{a}");
+    // The current diagnostic, exactly as it was published.
+    assert_eq!(a["diagnostics"], json!([diagnostic]));
+    // The edit: versioned, at the `let`'s `x` after `é😀` — columns counted independently.
+    let x = lines[1].find("x = str_len").unwrap();
+    assert_eq!(
+        a["edit"],
+        json!({"documentChanges": [{
+            "textDocument": {"uri": uri(&main), "version": 3},
+            "edits": [{
+                "range": {"start": {"line": 1, "character": utf16(lines[1], x)},
+                          "end": {"line": 1, "character": utf16(lines[1], x + 1)}},
+                "newText": "mut x"
+            }]
+        }]}),
+        "{a}"
+    );
+    assert_ne!(
+        utf16(lines[1], x) as usize,
+        x,
+        "bytes and units differ here"
+    );
+    assert!(
+        a["edit"].get("changes").is_none(),
+        "never the unversioned form"
+    );
+
+    // Returning it changed nothing: the same request gives the same answer.
+    let again = c.code_action(&main, point(2, 5), json!({"diagnostics": []}));
+    assert_eq!(again["result"], r["result"]);
+
+    // The client applies it and says so: the diagnostic and the action are gone.
+    c.change(&main, 4, FIXED_MAIN);
+    let d = c.diagnostics_for(&uri(&main));
+    assert_eq!(d["diagnostics"], json!([]), "{d}");
+    assert_eq!(d["version"], 4);
+    let r = c.code_action(&main, point(2, 5), json!({"diagnostics": [diagnostic]}));
+    assert_eq!(
+        r["result"],
+        json!([]),
+        "the client's stale copy of the diagnostic resurrects nothing"
+    );
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+}
+
+#[test]
+fn quick_fixes_come_from_current_diagnostics_only_and_only_as_quick_fixes() {
+    const REVIEW: &str =
+        "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; i }\n    i\n}\n";
+    let (_dir, root) = project(&[("main.nz", FIXED_MAIN), ("loop.nz", REVIEW)]);
+    let (main, looped) = (root.join("main.nz"), root.join("loop.nz"));
+    let mut c = Client::start(&root);
+    c.initialize(&root);
+    c.open(&main, 1, FIXED_MAIN);
+    c.diagnostics_for(&uri(&main));
+    // A plausible diagnostic the source does not have, with a real code: nothing.
+    let fabricated = json!({
+        "range": {"start": {"line": 2, "character": 4}, "end": {"line": 2, "character": 5}},
+        "severity": 1, "code": "N0310", "source": "nazm",
+        "message": "`x` is not mutable, so it cannot be assigned"
+    });
+    let r = c.code_action(&main, point(2, 4), json!({"diagnostics": [fabricated]}));
+    assert_eq!(r["result"], json!([]), "{r}");
+
+    // A fix that needs review: offered, never preferred, its precondition in the title.
+    c.open(&looped, 1, REVIEW);
+    c.diagnostics_for(&uri(&looped));
+    let line = REVIEW.lines().nth(2).unwrap();
+    let tail = u32::try_from(line.find("i }").unwrap()).unwrap();
+    let r = c.code_action(&looped, point(2, tail), json!({"diagnostics": []}));
+    let a = &r["result"][0];
+    assert_eq!(a["kind"], "quickfix", "{r}");
+    let title = a["title"].as_str().unwrap();
+    assert!(
+        title.starts_with("Review fix N0300: discard the value — right only if "),
+        "{title}"
+    );
+    assert!(title.contains("meant to be discarded"), "{title}");
+    assert!(a.get("isPreferred").is_none(), "{a}");
+    assert_eq!(a["edit"]["documentChanges"][0]["edits"][0]["newText"], ";");
+
+    // Only refactors or source actions asked for: none; quick fixes asked for: the same.
+    for only in [json!(["refactor"]), json!(["source", "source.fixAll"])] {
+        let r = c.code_action(
+            &looped,
+            point(2, tail),
+            json!({"diagnostics": [], "only": only}),
+        );
+        assert_eq!(r["result"], json!([]), "{only}: {r}");
+    }
+    let r = c.code_action(
+        &looped,
+        point(2, tail),
+        json!({"diagnostics": [], "only": ["quickfix"]}),
+    );
+    assert_eq!(r["result"].as_array().unwrap().len(), 1, "{r}");
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+}
+
+#[test]
+fn a_client_that_cannot_take_versioned_edits_is_offered_no_quick_fix() {
+    let (_dir, root) = project(&[("main.nz", FIX_MAIN)]);
+    let main = root.join("main.nz");
+    let mut c = Client::start(&root);
+    c.initialize_with(&root, json!({}));
+    c.open(&main, 1, FIX_MAIN);
+    c.diagnostics_for(&uri(&main));
+    let r = c.code_action(&main, point(2, 5), json!({"diagnostics": []}));
+    assert_eq!(
+        r["result"],
+        json!([]),
+        "an edit the client could apply to another version is not sent"
+    );
     let (status, stderr) = c.finish();
     assert_eq!(status, Some(0), "{stderr}");
 }
