@@ -3255,6 +3255,8 @@ targets = [
     { package = "nazm-service", test = "semantic" },
     # N24: and which fixes the current diagnostics carry.
     { package = "nazm-service", test = "fixes" },
+    # N25: and which calls it checked, from which body.
+    { package = "nazm-service", test = "hierarchy" },
 ]
 
 [[profile]]
@@ -3296,6 +3298,7 @@ targets = [
     { package = "nazm-service", test = "symbols" },
     { package = "nazm-service", test = "semantic" },
     { package = "nazm-service", test = "fixes" },
+    { package = "nazm-service", test = "hierarchy" },
 ]
 
 [[profile]]
@@ -3345,6 +3348,7 @@ targets = [
     { package = "nazm-service", test = "symbols" },
     { package = "nazm-service", test = "semantic" },
     { package = "nazm-service", test = "fixes" },
+    { package = "nazm-service", test = "hierarchy" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
@@ -4617,17 +4621,18 @@ replace = """    println!("nazm lsp: ready");
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
 
 [[mutation]]
-name = "n16-call-hierarchy-is-advertised"
+name = "n16-formatting-is-advertised"
 # Was `n16-completion-is-advertised` until N19, `n16-signature-help-is-advertised` until
-# N20, `n16-document-symbols-are-advertised` until N22 and
-# `n16-code-actions-are-advertised` until N24, each of which implemented the capability it
-# named: the defect it stands for — claiming a capability the server does not have — is now
-# injected with call hierarchy, which it still does not have. The killer is unchanged.
-why = "the server claims call hierarchy, which it does not implement, so a client sends requests it will refuse"
+# N20, `n16-document-symbols-are-advertised` until N22, `n16-code-actions-are-advertised`
+# until N24 and `n16-call-hierarchy-is-advertised` until N25, each of which implemented the
+# capability it named: the defect it stands for — claiming a capability the server does not
+# have — is now injected with formatting, which it still does not have. The killer is
+# unchanged.
+why = "the server claims formatting, which it does not implement, so a client sends requests it will refuse"
 file = "crates/nazm-cli/src/lsp.rs"
 find = "        hover_provider: Some(HoverProviderCapability::Simple(true)),"
 replace = """        hover_provider: Some(HoverProviderCapability::Simple(true)),
-        call_hierarchy_provider: Some(lsp_types::CallHierarchyServerCapability::Simple(true)),"""
+        document_formatting_provider: Some(OneOf::Left(true)),"""
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
 
 # ---- N20: the call at a position, and signature help -------------------------------------
@@ -4965,12 +4970,14 @@ killers = [{ package = "nazm-service", test = "symbols", name = "a_symbol_is_the
 name = "n22-a-selection-is-the-whole-declaration"
 why = "a function's selection range is its whole declaration, so an editor highlights the body where the name belongs"
 file = "crates/nazm-service/src/symbols.rs"
-find = """            name_start: def.name_span.start,
-            name_end: def.name_span.end,
-            detail: crate::Signature::of_function"""
-replace = """            name_start: item.span.start,
-            name_end: item.span.end,
-            detail: crate::Signature::of_function"""
+# Repointed in N25: the function symbol is built by `function_symbol`, which the outline
+# and the call hierarchy share, one indentation level out. The killer is unchanged.
+find = """        name_start: def.name_span.start,
+        name_end: def.name_span.end,
+        detail: crate::Signature::of_function"""
+replace = """        name_start: item.span.start,
+        name_end: item.span.end,
+        detail: crate::Signature::of_function"""
 killers = [{ package = "nazm-service", test = "symbols", name = "document_symbols_are_the_declarations_nested_in_source_order" }]
 
 [[mutation]]
@@ -5326,3 +5333,149 @@ file = "crates/nazm-cli/src/fix.rs"
 find = "        if text == original || write(&path, &text).is_ok() {"
 replace = "        if text == original || write(&path, &text).is_ok() || true {"
 killers = [{ package = "nazm-cli", bin = "nazm", name = "fix::tests::a_file_that_cannot_be_written_is_not_claimed_applied" }]
+
+# ---- N25: call hierarchy ------------------------------------------------------------------
+
+[[mutation]]
+name = "n25-prepare-finds-a-function-by-spelling"
+why = "an item is the first function spelled like the name under the cursor, so a record of that spelling — or another module's function — prepares a function it is not"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = "            .and_then(|at| s.index.target(at))"
+replace = """            .and_then(|at| {
+                let text = s.texts.first()?.get(at.start as usize..at.end as usize)?;
+                let def = s.analysis.resolution.functions().iter().position(|d| d.name == text)?;
+                Some(ReferenceTarget::Function(FnId::from_index(def)))
+            })"""
+killers = [{ package = "nazm-service", test = "hierarchy", name = "an_item_is_the_function_a_declaration_or_a_call_names_and_nothing_else" }]
+
+[[mutation]]
+name = "n25-incoming-calls-are-references"
+why = "incoming calls are every reference to the function inside a body, so a use the checker checked no call at — a refused generic spawn — is an edge"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = """        for (i, def) in res.functions().iter().enumerate() {
+            for site in &def.call_sites {
+                if res.checked_call(site.span).map(|c| c.callee) == Some(Callee::Function(target)) {"""
+replace = """        for (i, def) in res.functions().iter().enumerate() {
+            let body = s.analysis.program.functions.get(def.decl as usize).map(|f| f.span);
+            let uses: Vec<nazm_core::sema::CallSite> = s.index.uses(ReferenceTarget::Function(target)).iter().filter(|u| body.is_some_and(|b| b.file == u.file && b.start <= u.start && u.end <= b.end)).map(|&span| nazm_core::sema::CallSite { span, callee: Callee::Function(target), type_args: Vec::new(), spawned: false }).collect();
+            for site in &uses {
+                if def.name_span.file == site.span.file {"""
+killers = [{ package = "nazm-service", test = "hierarchy", name = "constructions_and_intrinsics_are_not_edges_and_a_spawn_is_a_call" }]
+
+[[mutation]]
+name = "n25-a-recursive-call-is-dropped"
+why = "a function's calls of itself are left out of its outgoing calls, so recursion is invisible"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = "                callees.entry(to).or_default().push(site.span);"
+replace = """                if to != caller {
+                    callees.entry(to).or_default().push(site.span);
+                }"""
+killers = [{ package = "nazm-service", test = "hierarchy", name = "recursion_is_an_edge_and_instantiations_are_one_function" }]
+
+[[mutation]]
+name = "n25-a-call-is-given-the-wrong-caller"
+why = "a checked call is attributed to the function declared before the one whose body holds it"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = "                        .entry(FnId::from_index(i))"
+replace = "                        .entry(FnId::from_index(i.saturating_sub(1)))"
+killers = [{ package = "nazm-service", test = "hierarchy", name = "calls_are_grouped_by_the_function_at_the_other_end_each_at_its_callee" }]
+
+[[mutation]]
+name = "n25-a-second-call-is-lost"
+why = "an edge keeps only the first of several calls, so the other call sites cannot be navigated to"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = "    spans.dedup();"
+replace = "    spans.truncate(1);"
+killers = [{ package = "nazm-service", test = "hierarchy", name = "calls_are_grouped_by_the_function_at_the_other_end_each_at_its_callee" }]
+
+[[mutation]]
+name = "n25-callers-merge-by-spelling"
+why = "two callers with one spelling become one incoming edge, so a function in another module disappears"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = "        out.sort_by(|a, b| order(&a.from, &b.from));"
+replace = """        out.sort_by(|a, b| order(&a.from, &b.from));
+        out.dedup_by(|a, b| a.from.name == b.from.name);"""
+killers = [{ package = "nazm-service", test = "hierarchy", name = "two_callers_of_one_spelling_are_two_callers" }]
+
+[[mutation]]
+name = "n25-another-root-answers"
+why = "an item is answered from the first open compilation that loads its file, so another root's callers pollute it"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = """        let doc = self
+            .documents
+            .get(&item.root)
+            .ok_or(NoHierarchy::NotCurrent)?;"""
+replace = """        let file = FileKey::Path(item.file.clone());
+        let doc = self
+            .documents
+            .values()
+            .find(|d| d.analysis.as_ref().is_some_and(|s| s.files.contains(&file)))
+            .ok_or(NoHierarchy::NotCurrent)?;"""
+killers = [{ package = "nazm-service", test = "hierarchy", name = "an_item_answers_from_the_compilation_it_was_prepared_in_and_no_other" }]
+
+[[mutation]]
+name = "n25-an-old-item-is-answered"
+why = "an item prepared before a change is still answered after it, against source it was not prepared from"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = """        if item.generation != self.generation {
+            return Err(NoHierarchy::NotCurrent);
+        }"""
+replace = """        if item.generation > self.generation {
+            return Err(NoHierarchy::NotCurrent);
+        }"""
+killers = [{ package = "nazm-service", test = "hierarchy", name = "a_prepared_item_has_no_answer_once_anything_changes" }]
+
+[[mutation]]
+name = "n25-a-closed-root-is-rebound"
+why = "an item whose root was closed is answered from another open document's compilation"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = """            .get(&item.root)
+            .ok_or(NoHierarchy::NotCurrent)?;"""
+replace = """            .get(&item.root)
+            .or_else(|| self.documents.values().next())
+            .ok_or(NoHierarchy::NotCurrent)?;"""
+killers = [{ package = "nazm-service", test = "hierarchy", name = "an_item_answers_from_the_compilation_it_was_prepared_in_and_no_other" }]
+
+[[mutation]]
+name = "n25-an-item-range-is-its-name"
+why = "an item's range is its name rather than the declaration its outline symbol has"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = "        s.target(Span::new(file, symbol.start, symbol.end))?,"
+replace = "        s.target(Span::new(file, symbol.name_start, symbol.name_end))?,"
+killers = [{ package = "nazm-service", test = "hierarchy", name = "an_item_is_where_its_outline_symbol_is" }]
+
+[[mutation]]
+name = "n25-a-call-range-is-the-whole-call"
+why = "an outgoing call's range is the whole call, arguments included, rather than the callee's name the checker keys it by"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = """            if let Some(Callee::Function(to)) = res.checked_call(site.span).map(|c| c.callee) {
+                callees.entry(to).or_default().push(site.span);"""
+replace = """            if let Some((Callee::Function(to), whole)) = res.checked_call(site.span).map(|c| (c.callee, c.span)) {
+                callees.entry(to).or_default().push(whole);"""
+killers = [{ package = "nazm-service", test = "hierarchy", name = "calls_are_grouped_by_the_function_at_the_other_end_each_at_its_callee" }]
+
+[[mutation]]
+name = "n25-order-ignores-the-file"
+why = "edges are ordered by where a name is in whichever file it is in, so the order interleaves files and is not the documented one"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = """    (&a.locator.file, a.locator.name_start, &a.name).cmp(&(
+        &b.locator.file,
+        b.locator.name_start,
+        &b.name,
+    ))"""
+replace = "    (a.locator.name_start, &a.name).cmp(&(b.locator.name_start, &b.name))"
+killers = [{ package = "nazm-service", test = "hierarchy", name = "edges_cross_files_and_same_named_functions_stay_apart" }]
+
+[[mutation]]
+name = "n25-a-stale-version-is-prepared"
+why = "an item is prepared for a version the document is no longer at"
+file = "crates/nazm-service/src/hierarchy.rs"
+find = """        let s = self.current(path, version).ok_or(NoHierarchy::NotCurrent)?;
+        let root = identity(path);"""
+replace = """        let root = identity(path);
+        let s = self
+            .documents
+            .get(&root)
+            .and_then(|d| d.analysis.as_ref())
+            .ok_or(NoHierarchy::NotCurrent)?;"""
+killers = [{ package = "nazm-service", test = "hierarchy", name = "a_thousand_edits_leave_only_the_current_graph" }]
