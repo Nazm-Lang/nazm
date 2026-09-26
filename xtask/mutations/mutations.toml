@@ -3247,6 +3247,8 @@ targets = [
     { package = "nazm-service", test = "completion" },
     # N20: and what signature help reports of a call.
     { package = "nazm-service", test = "signature" },
+    # N21: and what a field, variant or label position is a member of.
+    { package = "nazm-service", test = "structure" },
 ]
 
 [[profile]]
@@ -3284,6 +3286,7 @@ targets = [
     { package = "nazm-service", test = "rename" },
     { package = "nazm-service", test = "completion" },
     { package = "nazm-service", test = "signature" },
+    { package = "nazm-service", test = "structure" },
 ]
 
 [[profile]]
@@ -3329,6 +3332,7 @@ targets = [
     { package = "nazm-service", test = "rename" },
     { package = "nazm-service", test = "completion" },
     { package = "nazm-service", test = "signature" },
+    { package = "nazm-service", test = "structure" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
@@ -4743,3 +4747,162 @@ file = "crates/nazm-cli/src/lsp.rs"
 find = "        if help.active_parameter.is_none() && !params.is_empty() {"
 replace = "        if false {"
 killers = [{ package = "nazm-cli", test = "lsp", name = "signature_help_crosses_the_protocol_with_utf16_positions_and_label_offsets" }]
+
+# ---- N21: structure at a position, structure completion, constructor signature help -------
+
+[[mutation]]
+name = "n21-an-unknown-field-is-not-recorded"
+why = "a projection whose field the record lacks records nothing, so completing the name being written has no receiver"
+file = "crates/nazm-core/src/check.rs"
+find = "            self.res.record_unresolved_member(name_span, base_ty);"
+replace = "            let _ = base_ty;"
+killers = [{ package = "nazm-service", test = "structure", name = "what_does_not_resolve_is_offered_what_its_anchor_has_or_nothing" }]
+
+[[mutation]]
+name = "n21-an-unknown-variant-is-not-recorded"
+why = "a variant the enum lacks records nothing, so completing the variant being written has no enum"
+file = "crates/nazm-core/src/check.rs"
+find = "        self.res.record_unresolved_member(at, Type::Enum(id));"
+replace = "        let _ = id;"
+killers = [{ package = "nazm-service", test = "structure", name = "what_does_not_resolve_is_offered_what_its_anchor_has_or_nothing" }]
+
+[[mutation]]
+name = "n21-a-member-is-any-records-field"
+why = "a member's candidates are the first record's fields, whatever record the receiver is"
+file = "crates/nazm-service/src/structure.rs"
+find = "                (Some(f), _) => StructureSite::Member { record: f.record },"
+replace = """                (Some(_), _) => StructureSite::Member {
+                    record: RecordId::from_index(0),
+                },"""
+killers = [{ package = "nazm-service", test = "structure", name = "structure_completion_follows_type_and_identity_not_spelling" }]
+
+[[mutation]]
+name = "n21-a-generic-records-fields-are-not-substituted"
+why = "an applied generic's fields are read from its definition, so `Pair[Int, Str]` offers `first: F`"
+file = "crates/nazm-service/src/structure.rs"
+find = """fn record_fields(res: &Resolution, record: RecordId) -> Vec<Member> {
+    res.records()
+        .get(record)"""
+replace = """fn record_fields(res: &Resolution, record: RecordId) -> Vec<Member> {
+    res.records()
+        .get(
+            res.records()
+                .get(record)
+                .and_then(|r| r.instance.clone())
+                .map_or(record, |i| i.template),
+        )"""
+killers = [{ package = "nazm-service", test = "structure", name = "structure_completion_follows_type_and_identity_not_spelling" }]
+
+[[mutation]]
+name = "n21-a-variant-is-any-enums"
+why = "a variant site's candidates are the first enum's variants, whatever enum the qualifier is"
+file = "crates/nazm-service/src/structure.rs"
+find = """            .enums()
+            .get(enumeration)"""
+replace = """            .enums()
+            .get(nazm_core::sema::EnumId::from_index(0))"""
+killers = [{ package = "nazm-service", test = "structure", name = "structure_completion_follows_type_and_identity_not_spelling" }]
+
+[[mutation]]
+name = "n21-a-payload-label-is-another-variants"
+why = "a payload label's candidates are the enum's first variant's, whatever variant is written"
+file = "crates/nazm-service/src/structure.rs"
+find = """        .get(variant.enumeration)
+        .and_then(|e| e.variants.get(variant.variant as usize))
+        .map(|v| {
+            v.in_layout_order()"""
+replace = """        .get(variant.enumeration)
+        .and_then(|e| e.variants.first())
+        .map(|v| {
+            v.in_layout_order()"""
+killers = [{ package = "nazm-service", test = "structure", name = "structure_completion_follows_type_and_identity_not_spelling" }]
+
+[[mutation]]
+name = "n21-a-label-given-elsewhere-is-offered"
+why = "a field the construction already gives is offered again"
+file = "crates/nazm-service/src/structure.rs"
+find = "        .filter(|m| !found.provided.contains(&m.target))"
+replace = "        .filter(|m| !m.name.is_empty())"
+killers = [{ package = "nazm-service", test = "structure", name = "a_label_given_elsewhere_is_not_offered_and_the_one_being_edited_is" }]
+
+[[mutation]]
+name = "n21-the-label-being-edited-is-given-elsewhere"
+why = "the label under the cursor counts as given, so editing it never offers it"
+file = "crates/nazm-service/src/structure.rs"
+find = "        .filter(|l| l.kind == SyntaxKind::Ident && l.span != at)"
+replace = "        .filter(|l| l.kind == SyntaxKind::Ident)"
+killers = [{ package = "nazm-service", test = "structure", name = "a_label_given_elsewhere_is_not_offered_and_the_one_being_edited_is" }]
+
+[[mutation]]
+name = "n21-declaration-order-is-shown"
+why = "fields are offered in declaration order, so reordering a record's fields — which means nothing — changes what a tool shows"
+file = "crates/nazm-service/src/structure.rs"
+find = """        .map(|r| {
+            r.in_layout_order()"""
+replace = """        .map(|r| {
+            r.fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (u32::try_from(i).unwrap_or(u32::MAX), f))"""
+killers = [{ package = "nazm-service", test = "structure", name = "reordering_declarations_changes_no_structure_answer" }]
+
+[[mutation]]
+name = "n21-the-active-field-is-counted-by-commas"
+why = "a construction's active field is the number of initialisers before the position, though initialisers are named and in any order"
+file = "crates/nazm-service/src/structure.rs"
+find = "        .and_then(|a| fields.iter().position(|f| f.target == a))"
+replace = """        .and_then(|_| {
+            node.children()
+                .into_iter()
+                .find(|c| c.kind() == SyntaxKind::FieldInitList)
+        })
+        .map(|list| {
+            list.child_leaves()
+                .iter()
+                .filter(|l| l.kind == SyntaxKind::Comma && l.span.end <= offset)
+                .count()
+        })"""
+killers = [{ package = "nazm-service", test = "structure", name = "constructor_signature_help_follows_the_label_not_the_order" }]
+
+[[mutation]]
+name = "n21-the-outer-construction-is-chosen"
+why = "the first construction met on the way down the tree is kept, so a position inside a nested construction is given the one around it"
+file = "crates/nazm-service/src/structure.rs"
+find = "                    found = Some((node, open.end));"
+replace = "                    found = found.or(Some((node, open.end)));"
+killers = [{ package = "nazm-service", test = "structure", name = "constructor_signature_help_follows_the_label_not_the_order" }]
+
+[[mutation]]
+name = "n21-a-construction-in-an-argument-is-the-call"
+why = "inside a construction written as a call's argument, the call is answered instead of the innermost structure"
+file = "crates/nazm-service/src/signature.rs"
+find = "            (Some(c), Some((node, open))) if open > c => {"
+replace = "            (Some(c), Some((node, open))) if open < c => {"
+killers = [{ package = "nazm-service", test = "structure", name = "constructor_signature_help_follows_the_label_not_the_order" }]
+
+[[mutation]]
+name = "n21-a-recovery-is-ignored"
+why = "structure answers whatever the compilation recovered from, though a lost declaration or local could change the anchor"
+file = "crates/nazm-service/src/structure.rs"
+find = """    if s.analysis.syntax_errors.is_empty() {
+        return Ok(());"""
+replace = """    if true {
+        return Ok(());"""
+killers = [{ package = "nazm-service", test = "structure", name = "a_recovery_is_answered_around_only_when_it_cannot_change_the_answer" }]
+
+[[mutation]]
+name = "n21-a-recovery-in-the-sites-function-is-answered"
+why = "a recovery inside the function the position is in is treated as unrelated, though it may have lost a local the site reads"
+file = "crates/nazm-service/src/structure.rs"
+find = "        if item.kind() != SyntaxKind::FnItem || here || !broken.iter().all(inside_body) {"
+replace = """        if item.kind() != SyntaxKind::FnItem || !broken.iter().all(inside_body) {
+            let _ = here;"""
+killers = [{ package = "nazm-service", test = "structure", name = "a_recovery_is_answered_around_only_when_it_cannot_change_the_answer" }]
+
+[[mutation]]
+name = "n21-an-unmarked-constructor-marks-the-first"
+why = "constructor signature help with no active field still sends its parameters, which the protocol reads as the first one active"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "                    c.active_parameter.is_some(),"
+replace = "                    true,"
+killers = [{ package = "nazm-cli", test = "lsp", name = "structure_completion_and_constructor_help_cross_the_protocol_in_utf16" }]
