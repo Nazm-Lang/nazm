@@ -34,7 +34,7 @@ use crate::intrinsic::Intrinsic;
 use crate::key::{DefKey, DefKind, ModuleKey};
 use crate::module::ModuleId;
 use crate::record::{RecordId, Records};
-use crate::types::Type;
+use crate::types::{Type, TypeParam};
 use crate::udt::{TypeNode, UserTypes};
 
 /// A function of this compilation, by position in declaration order.
@@ -324,6 +324,25 @@ pub struct Resolution {
     /// lookup failed, so a program that checks holds none — the names that did resolve are
     /// already in `fields` and `variants`, whose identities say which record or enum.
     unresolved_members: HashMap<Span, Type>,
+    /// What each written type name the checker resolved to something **no program
+    /// declared** is (N23), by the span of that name: a built-in type (`Int`, `Str`, the
+    /// `Vec` of `Vec[Int]`) or a type parameter — and, for a type parameter, the span its
+    /// `[T]` declares it at. The names that resolved to a record or an enum are in
+    /// `type_names` and are uses in the reference index; these are not, because neither a
+    /// built-in nor a type parameter is an entity a program declares.
+    written_types: HashMap<Span, WrittenType>,
+}
+
+/// A written type name that names no declared entity, as the checker resolved it (N23).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WrittenType {
+    /// A built-in type, as the type the checker resolved the name to: `Int` is
+    /// `Type::Int`, and the `Vec` of `Vec[Int]` is the vector type it applies to.
+    Builtin(Type),
+    /// A use of a type parameter.
+    Param(TypeParam),
+    /// A type parameter's declaration, in a `[…]` list.
+    ParamDeclaration(TypeParam),
 }
 
 impl Resolution {
@@ -512,6 +531,41 @@ impl Resolution {
     /// Record that the member name at `span` was looked for on `on` and not found.
     pub fn record_unresolved_member(&mut self, span: Span, on: Type) {
         self.unresolved_members.insert(span, on);
+    }
+
+    /// What the type name written at `span` is, when it names a built-in or a type
+    /// parameter, or declares a type parameter (N23).
+    #[must_use]
+    pub fn written_type(&self, span: Span) -> Option<WrittenType> {
+        self.written_types.get(&span).copied()
+    }
+
+    /// How many written built-in and type-parameter names are recorded (N23).
+    #[must_use]
+    pub fn written_type_count(&self) -> usize {
+        self.written_types.len()
+    }
+
+    /// Every written built-in and type-parameter name, by span, in no particular order.
+    /// For audits: a tool asks [`Self::written_type`] of one span.
+    pub fn written_types(&self) -> impl Iterator<Item = (Span, WrittenType)> + '_ {
+        self.written_types.iter().map(|(s, w)| (*s, *w))
+    }
+
+    /// Record what the type name written at `span` is. The same span may be resolved more
+    /// than once — a signature at declaration and again with its body — and always to the
+    /// same answer.
+    pub fn record_written_type(&mut self, span: Span, what: WrittenType) {
+        self.written_types.insert(span, what);
+    }
+
+    /// Forget every recorded use or declaration of a parameter of `owner`: a definition the
+    /// checker refused, whose id will be another's (N23).
+    pub fn forget_type_params_of(&mut self, owner: crate::types::ParamOwner) {
+        self.written_types.retain(|_, w| match w {
+            WrittenType::Param(p) | WrittenType::ParamDeclaration(p) => p.owner != owner,
+            WrittenType::Builtin(_) => true,
+        });
     }
 
     /// What the checker recorded about its scopes and environments.
