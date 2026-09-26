@@ -3249,6 +3249,8 @@ targets = [
     { package = "nazm-service", test = "signature" },
     # N21: and what a field, variant or label position is a member of.
     { package = "nazm-service", test = "structure" },
+    # N22: and which declarations exist, where, and what contains them.
+    { package = "nazm-service", test = "symbols" },
 ]
 
 [[profile]]
@@ -3287,6 +3289,7 @@ targets = [
     { package = "nazm-service", test = "completion" },
     { package = "nazm-service", test = "signature" },
     { package = "nazm-service", test = "structure" },
+    { package = "nazm-service", test = "symbols" },
 ]
 
 [[profile]]
@@ -3333,6 +3336,7 @@ targets = [
     { package = "nazm-service", test = "completion" },
     { package = "nazm-service", test = "signature" },
     { package = "nazm-service", test = "structure" },
+    { package = "nazm-service", test = "symbols" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
@@ -4603,16 +4607,17 @@ replace = """    println!("nazm lsp: ready");
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
 
 [[mutation]]
-name = "n16-document-symbols-are-advertised"
-# Was `n16-completion-is-advertised` until N19 and `n16-signature-help-is-advertised` until
-# N20, each of which implemented the capability it named: the defect it stands for —
-# claiming a capability the server does not have — is now injected with document symbols,
-# which it still does not have. The killer is unchanged.
-why = "the server claims document symbols, which it does not implement, so a client sends requests it will refuse"
+name = "n16-code-actions-are-advertised"
+# Was `n16-completion-is-advertised` until N19, `n16-signature-help-is-advertised` until
+# N20 and `n16-document-symbols-are-advertised` until N22, each of which implemented the
+# capability it named: the defect it stands for — claiming a capability the server does
+# not have — is now injected with code actions, which it still does not have. The killer
+# is unchanged.
+why = "the server claims code actions, which it does not implement, so a client sends requests it will refuse"
 file = "crates/nazm-cli/src/lsp.rs"
 find = "        hover_provider: Some(HoverProviderCapability::Simple(true)),"
 replace = """        hover_provider: Some(HoverProviderCapability::Simple(true)),
-        document_symbol_provider: Some(OneOf::Left(true)),"""
+        code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),"""
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
 
 # ---- N20: the call at a position, and signature help -------------------------------------
@@ -4906,3 +4911,143 @@ file = "crates/nazm-cli/src/lsp.rs"
 find = "                    c.active_parameter.is_some(),"
 replace = "                    true,"
 killers = [{ package = "nazm-cli", test = "lsp", name = "structure_completion_and_constructor_help_cross_the_protocol_in_utf16" }]
+
+# ---- N22: document and workspace symbols -------------------------------------------------
+
+[[mutation]]
+name = "n22-an-outline-lists-imported-declarations"
+why = "a document's outline includes every declaration of its compilation, so an imported record or function appears as if written in the importer"
+file = "crates/nazm-service/src/symbols.rs"
+find = "    let here = |at: Span| at.file == file && at != Span::synthetic();"
+replace = "    let here = |at: Span| at != Span::synthetic();"
+killers = [{ package = "nazm-service", test = "symbols", name = "an_imported_declaration_is_not_in_the_importers_outline" }]
+
+[[mutation]]
+name = "n22-record-fields-are-flattened"
+why = "a record's fields are listed beside it rather than under it, so the outline loses which record each field belongs to"
+file = "crates/nazm-service/src/symbols.rs"
+find = """        in_source_order(&mut children);
+        out.push(Symbol {
+            target: ReferenceTarget::Record(record),"""
+replace = """        in_source_order(&mut children);
+        out.append(&mut children);
+        out.push(Symbol {
+            target: ReferenceTarget::Record(record),"""
+killers = [{ package = "nazm-service", test = "symbols", name = "document_symbols_are_the_declarations_nested_in_source_order" }]
+
+[[mutation]]
+name = "n22-a-payload-field-belongs-to-another-variant"
+why = "a payload field is identified as a field of its enum's first variant, so its symbol is not the entity references and rename use"
+file = "crates/nazm-service/src/symbols.rs"
+find = """                            ReferenceTarget::PayloadField(PayloadRef {
+                                enumeration,
+                                variant,
+                                field,
+                            }),"""
+replace = """                            ReferenceTarget::PayloadField(PayloadRef {
+                                enumeration,
+                                variant: 0,
+                                field,
+                            }),"""
+killers = [{ package = "nazm-service", test = "symbols", name = "a_symbol_is_the_entity_references_and_definition_name" }]
+
+[[mutation]]
+name = "n22-a-selection-is-the-whole-declaration"
+why = "a function's selection range is its whole declaration, so an editor highlights the body where the name belongs"
+file = "crates/nazm-service/src/symbols.rs"
+find = """            name_start: def.name_span.start,
+            name_end: def.name_span.end,
+            detail: crate::Signature::of_function"""
+replace = """            name_start: item.span.start,
+            name_end: item.span.end,
+            detail: crate::Signature::of_function"""
+killers = [{ package = "nazm-service", test = "symbols", name = "document_symbols_are_the_declarations_nested_in_source_order" }]
+
+[[mutation]]
+name = "n22-an-outline-is-in-name-order"
+why = "the outline is sorted by name, the canonical order of what a record means, instead of the order the file is written in"
+file = "crates/nazm-service/src/symbols.rs"
+find = "    symbols.sort_by_key(|s| (s.start, s.name_start));"
+replace = "    symbols.sort_by(|a, b| a.name.cmp(&b.name));"
+killers = [{ package = "nazm-service", test = "symbols", name = "reordering_fields_reorders_the_outline_and_nothing_else" }]
+
+[[mutation]]
+name = "n22-workspace-merges-by-spelling"
+why = "workspace symbols keep one declaration per name and kind, so two modules' `helper` become one"
+file = "crates/nazm-service/src/symbols.rs"
+find = """        out
+    }
+}
+
+/// A symbol and everything under it"""
+replace = """        out.dedup_by(|a, b| a.name == b.name && a.kind == b.kind);
+        out
+    }
+}
+
+/// A symbol and everything under it"""
+killers = [{ package = "nazm-service", test = "symbols", name = "workspace_symbols_are_the_open_programs_declarations_each_once" }]
+
+[[mutation]]
+name = "n22-workspace-dedup-ignores-the-file"
+why = "two declarations at the same bytes of different files are taken for one, so a distinct declaration disappears from the workspace"
+file = "crates/nazm-service/src/symbols.rs"
+find = "                    let id = (key.clone(), symbol.name_start, symbol.name_end, symbol.kind);"
+replace = "                    let id = (FileKey::Prelude, symbol.name_start, symbol.name_end, symbol.kind);"
+killers = [{ package = "nazm-service", test = "symbols", name = "workspace_symbols_are_the_open_programs_declarations_each_once" }]
+
+[[mutation]]
+name = "n22-workspace-hides-private-declarations"
+why = "workspace search applies import visibility, so a private declaration of an analysed module cannot be found"
+file = "crates/nazm-service/src/symbols.rs"
+find = "            .filter(|w| w.name.contains(query))"
+replace = "            .filter(|w| w.name.contains(query) && w.exported != Some(false))"
+killers = [{ package = "nazm-service", test = "symbols", name = "workspace_symbols_are_the_open_programs_declarations_each_once" }]
+
+[[mutation]]
+name = "n22-a-stale-outline-is-served"
+why = "document symbols answer from whatever analysis the document last had, whatever version was asked about"
+file = "crates/nazm-service/src/symbols.rs"
+find = "        let s = self.current(path, version).ok_or(NoSymbols::NotCurrent)?;"
+replace = """        let _ = version;
+        let s = self
+            .documents
+            .get(&crate::service::identity(path))
+            .and_then(|d| d.analysis.as_ref())
+            .ok_or(NoSymbols::NotCurrent)?;"""
+killers = [{ package = "nazm-service", test = "symbols", name = "a_thousand_edits_leave_one_current_outline" }]
+
+[[mutation]]
+name = "n22-a-payload-container-omits-its-enum"
+why = "a payload field's container is its variant alone, so `Done` of two enums cannot be told apart in the workspace"
+file = "crates/nazm-service/src/symbols.rs"
+find = """        Some(c) if symbol.kind == SymbolKind::Variant => format!("{c}.{}", symbol.name),"""
+replace = "        Some(_) if symbol.kind == SymbolKind::Variant => symbol.name.clone(),"
+killers = [{ package = "nazm-service", test = "symbols", name = "symbols_are_the_current_buffers_and_close_restores_the_disk" }]
+
+[[mutation]]
+name = "n22-workspace-order-ignores-the-name"
+why = "workspace symbols are ordered by file and position alone, so same-named declarations are not together and the order is not the documented one"
+file = "crates/nazm-service/src/symbols.rs"
+find = """            (&a.name, &a.selection.path, a.selection.start, a.kind).cmp(&(
+                &b.name,
+                &b.selection.path,"""
+replace = """            (&a.selection.path, a.selection.start, a.kind).cmp(&(
+                &b.selection.path,"""
+killers = [{ package = "nazm-service", test = "symbols", name = "workspace_order_is_name_file_position_kind_every_time" }]
+
+[[mutation]]
+name = "n22-a-protocol-selection-is-the-declaration"
+why = "the protocol's selection range is the whole declaration, so a client selects the body when it means the name"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "        selection_range: range(s.name_start, s.name_end),"
+replace = "        selection_range: range(s.start, s.end),"
+killers = [{ package = "nazm-cli", test = "lsp", name = "symbols_cross_the_protocol_nested_and_in_utf16" }]
+
+[[mutation]]
+name = "n22-a-workspace-location-is-the-declaration"
+why = "a workspace symbol's location is its whole declaration, not its name, so it disagrees with where definition goes"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "            let l = &w.selection;"
+replace = "            let l = &w.declaration;"
+killers = [{ package = "nazm-cli", test = "lsp", name = "symbols_cross_the_protocol_nested_and_in_utf16" }]
