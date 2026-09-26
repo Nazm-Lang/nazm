@@ -3251,6 +3251,8 @@ targets = [
     { package = "nazm-service", test = "structure" },
     # N22: and which declarations exist, where, and what contains them.
     { package = "nazm-service", test = "symbols" },
+    # N23: and what each identifier is classified as.
+    { package = "nazm-service", test = "semantic" },
 ]
 
 [[profile]]
@@ -3290,6 +3292,7 @@ targets = [
     { package = "nazm-service", test = "signature" },
     { package = "nazm-service", test = "structure" },
     { package = "nazm-service", test = "symbols" },
+    { package = "nazm-service", test = "semantic" },
 ]
 
 [[profile]]
@@ -3337,6 +3340,7 @@ targets = [
     { package = "nazm-service", test = "signature" },
     { package = "nazm-service", test = "structure" },
     { package = "nazm-service", test = "symbols" },
+    { package = "nazm-service", test = "semantic" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
@@ -5051,3 +5055,125 @@ file = "crates/nazm-cli/src/lsp.rs"
 find = "            let l = &w.selection;"
 replace = "            let l = &w.declaration;"
 killers = [{ package = "nazm-cli", test = "lsp", name = "symbols_cross_the_protocol_nested_and_in_utf16" }]
+
+# ---- N23: semantic identifiers and semantic tokens ---------------------------------------
+
+[[mutation]]
+name = "n23-a-parameter-is-a-variable"
+why = "a parameter is classified as an ordinary local, though the checker allocated it one of its function's parameter slots"
+file = "crates/nazm-service/src/semantic.rs"
+find = "                if (l.slot as usize) < parameters {"
+replace = "                if false && (l.slot as usize) < parameters {"
+killers = [{ package = "nazm-service", test = "semantic", name = "every_identifier_is_what_the_checker_resolved_it_to" }]
+
+[[mutation]]
+name = "n23-a-declaration-is-never-marked"
+why = "every identifier is a reference, so a declaration is indistinguishable from its uses"
+file = "crates/nazm-service/src/semantic.rs"
+find = "        let role = if s.index.declaration(entity) == Some(at) {"
+replace = "        let role = if false && s.index.declaration(entity) == Some(at) {"
+killers = [{ package = "nazm-service", test = "semantic", name = "every_identifier_is_what_the_checker_resolved_it_to" }]
+
+[[mutation]]
+name = "n23-a-reference-is-marked-a-declaration"
+why = "any occurrence of a declared entity is marked as declaring it, so every use carries the declaration modifier"
+file = "crates/nazm-service/src/semantic.rs"
+find = "        let role = if s.index.declaration(entity) == Some(at) {"
+replace = "        let role = if s.index.declaration(entity).is_some() {"
+killers = [{ package = "nazm-service", test = "semantic", name = "every_identifier_is_what_the_checker_resolved_it_to" }]
+
+[[mutation]]
+name = "n23-a-payload-label-is-a-local"
+why = "a payload field's label is classified as a local, so `State.Done(code: code)` shows the label and the binding as one kind"
+file = "crates/nazm-service/src/semantic.rs"
+find = "            ReferenceTarget::PayloadField(_) => SemanticClass::PayloadField,"
+replace = "            ReferenceTarget::PayloadField(_) => SemanticClass::Variable,"
+killers = [{ package = "nazm-service", test = "semantic", name = "every_identifier_is_what_the_checker_resolved_it_to" }]
+
+[[mutation]]
+name = "n23-an-unresolved-name-is-classified"
+why = "a name the checker resolved to nothing is classified anyway, as a built-in type, whatever it is or where it is written"
+file = "crates/nazm-service/src/semantic.rs"
+find = "        match res.written_type(at)? {"
+replace = "        match res.written_type(at).unwrap_or(WrittenType::Builtin(Type::Int)) {"
+killers = [{ package = "nazm-service", test = "semantic", name = "what_did_not_resolve_is_not_classified_wherever_it_is_written" }]
+
+[[mutation]]
+name = "n23-an-identifier-is-emitted-twice"
+why = "each identifier is classified twice, so the protocol would receive two tokens over one span"
+file = "crates/nazm-service/src/semantic.rs"
+find = "            .filter_map(|l| classify(s, l.span))"
+replace = "            .flat_map(|l| classify(s, l.span).into_iter().chain(classify(s, l.span)))"
+killers = [{ package = "nazm-service", test = "semantic", name = "every_identifier_is_what_the_checker_resolved_it_to" }]
+
+[[mutation]]
+name = "n23-a-stale-classification-is-served"
+why = "identifiers are classified from whatever analysis the document last had, whatever version was asked about"
+file = "crates/nazm-service/src/semantic.rs"
+find = """        let s = self
+            .current(path, version)
+            .ok_or(NoIdentifiers::NotCurrent)?;"""
+replace = """        let _ = version;
+        let s = self
+            .documents
+            .get(&crate::service::identity(path))
+            .and_then(|d| d.analysis.as_ref())
+            .ok_or(NoIdentifiers::NotCurrent)?;"""
+killers = [{ package = "nazm-service", test = "semantic", name = "a_thousand_edits_leave_one_current_classification" }]
+
+[[mutation]]
+name = "n23-a-built-in-type-is-not-recorded"
+why = "the checker resolves a written built-in type and records nothing, so `Int` and `Str` are never classified"
+file = "crates/nazm-core/src/check.rs"
+find = "        res.record_written_type(written.name_span, WrittenType::Builtin(t));"
+replace = "        let _ = t;"
+killers = [{ package = "nazm-service", test = "semantic", name = "every_identifier_is_what_the_checker_resolved_it_to" }]
+
+[[mutation]]
+name = "n23-a-type-parameter-use-is-not-recorded"
+why = "the checker resolves a written type parameter and records nothing, so its uses are never classified"
+file = "crates/nazm-core/src/check.rs"
+find = "            res.record_written_type(written.name_span, WrittenType::Param(p));"
+replace = "            let _ = p;"
+killers = [{ package = "nazm-service", test = "semantic", name = "every_identifier_is_what_the_checker_resolved_it_to" }]
+
+[[mutation]]
+name = "n23-a-refused-signature-keeps-its-type-parameters"
+why = "a function refused for redefining a built-in keeps the type-parameter uses resolved under the id the next function receives, so they are classified as that function's"
+file = "crates/nazm-core/src/check.rs"
+find = """            res.forget_type_params_of(ParamOwner::Function(id));
+"""
+replace = ""
+killers = [{ package = "nazm-service", test = "semantic", name = "a_refused_duplicate_lends_its_type_parameters_to_no_one" }]
+
+[[mutation]]
+name = "n23-an-intrinsic-is-not-default-library"
+why = "a built-in function is sent as an ordinary function, indistinguishable from one a program declared"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "        SemanticClass::Intrinsic => (8, true),"
+replace = "        SemanticClass::Intrinsic => (8, false),"
+killers = [{ package = "nazm-cli", test = "lsp", name = "semantic_tokens_cross_the_protocol_relative_and_in_utf16" }]
+
+[[mutation]]
+name = "n23-an-overlap-is-encoded"
+why = "identifiers that overlap or are out of order are encoded, producing a token array that means something else"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "            if id.start < end {"
+replace = "            if id.start < end && false {"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "lsp::tests::an_identifier_list_that_would_mean_something_else_is_refused" }]
+
+[[mutation]]
+name = "n23-a-start-is-not-relative"
+why = "a token's start on the previous token's line is sent as its absolute column, so every later token on that line lands too far right"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "            Some((_, p)) if p.line == start.line => (0, start.character - p.character),"
+replace = "            Some((_, p)) if p.line == start.line => (0, start.character),"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "lsp::tests::semantic_tokens_are_relative_and_counted_in_utf16" }]
+
+[[mutation]]
+name = "n23-range-tokens-are-advertised"
+why = "the server claims semantic tokens for a range, which it does not implement"
+file = "crates/nazm-cli/src/lsp.rs"
+find = "                    range: Some(false),"
+replace = "                    range: Some(true),"
+killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
