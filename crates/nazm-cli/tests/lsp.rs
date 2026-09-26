@@ -262,6 +262,7 @@ fn the_server_speaks_the_protocol_end_to_end() {
             "positionEncoding",
             "referencesProvider",
             "renameProvider",
+            "semanticTokensProvider",
             "signatureHelpProvider",
             "textDocumentSync",
             "workspaceSymbolProvider"
@@ -287,6 +288,11 @@ fn the_server_speaks_the_protocol_end_to_end() {
         "triggered where the active call or argument changes; no retrigger characters"
     );
     assert_eq!(caps["documentSymbolProvider"], true);
+    assert_eq!(
+        caps["semanticTokensProvider"]["full"], true,
+        "the whole document, with no deltas"
+    );
+    assert_eq!(caps["semanticTokensProvider"]["range"], false);
     assert_eq!(
         caps["workspaceSymbolProvider"],
         json!({"resolveProvider": false}),
@@ -1276,6 +1282,108 @@ fn symbols_cross_the_protocol_nested_and_in_utf16() {
         r["result"][1]["location"],
         json!({"uri": uri(&main), "range": range(line, 1, "enum State { Idle, Done(code: Int) }")})
     );
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+}
+
+// N23: `é` is two bytes and one UTF-16 unit, `😀` four bytes and two units, before the
+// identifiers of the last line; a blank line between.
+const TOKENS_MAIN: &str = "struct Pt[T] {\n    x: T,\n}\n\nfn main() -> Int { let s = \"é😀\"; let p = Pt[Int](x: str_len(s)); p.x }\n";
+
+#[test]
+fn semantic_tokens_cross_the_protocol_relative_and_in_utf16() {
+    const TYPE: u32 = 0;
+    const STRUCT: u32 = 1;
+    const TYPE_PARAMETER: u32 = 3;
+    const VARIABLE: u32 = 5;
+    const PROPERTY: u32 = 6;
+    const FUNCTION: u32 = 8;
+    const DECLARATION: u32 = 1;
+    const DEFAULT_LIBRARY: u32 = 2;
+    let (_dir, root) = project(&[("main.nz", TOKENS_MAIN)]);
+    let main = root.join("main.nz");
+    let mut c = Client::start(&root);
+    let init = c.initialize(&root);
+    assert_eq!(
+        init["result"]["capabilities"]["semanticTokensProvider"]["legend"]["tokenTypes"][8],
+        "function"
+    );
+    c.open(&main, 1, TOKENS_MAIN);
+    let d = c.diagnostics_for(&uri(&main));
+    assert_eq!(d["diagnostics"], json!([]), "{d}");
+
+    // The expected tokens, as (line, text of the n-th occurrence on that line, type,
+    // modifiers), positioned here by counting UTF-16 units independently of the server.
+    let lines: Vec<&str> = TOKENS_MAIN.lines().collect();
+    let expected: [(usize, &str, usize, u32, u32); 15] = [
+        (0, "Pt", 0, STRUCT, DECLARATION),
+        (0, "T", 0, TYPE_PARAMETER, DECLARATION),
+        (1, "x", 0, PROPERTY, DECLARATION),
+        (1, "T", 0, TYPE_PARAMETER, 0),
+        (4, "main", 0, FUNCTION, DECLARATION),
+        (4, "Int", 0, TYPE, DEFAULT_LIBRARY),
+        (4, "s", 0, VARIABLE, DECLARATION),
+        (4, "p", 0, VARIABLE, DECLARATION),
+        (4, "Pt", 0, STRUCT, 0),
+        (4, "Int", 1, TYPE, DEFAULT_LIBRARY),
+        (4, "x", 0, PROPERTY, 0),
+        (4, "str_len", 0, FUNCTION, DEFAULT_LIBRARY),
+        (4, "s", 1, VARIABLE, 0),
+        (4, "p", 1, VARIABLE, 0),
+        (4, "x", 1, PROPERTY, 0),
+    ];
+    // Each needle as a whole word: the n-th occurrence bounded by non-identifier bytes.
+    let word = |line: &str, needle: &str, n: usize| -> usize {
+        let b = line.as_bytes();
+        let is = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+        (0..line.len())
+            .filter(|&i| {
+                line.is_char_boundary(i)
+                    && line[i..].starts_with(needle)
+                    && (i == 0 || !is(b[i - 1]))
+                    && b.get(i + needle.len()).is_none_or(|&c| !is(c))
+            })
+            .nth(n)
+            .unwrap_or_else(|| panic!("{needle:?} #{n} on {line:?}"))
+    };
+    let mut data = Vec::new();
+    let (mut previous_line, mut previous_start) = (0u32, 0u32);
+    for (line, needle, n, kind, modifiers) in expected {
+        let at = word(lines[line], needle, n);
+        let start = utf16(lines[line], at);
+        let length = u32::try_from(needle.encode_utf16().count()).unwrap();
+        let line = u32::try_from(line).unwrap();
+        let (dl, ds) = if line == previous_line {
+            (0, start - previous_start)
+        } else {
+            (line - previous_line, start)
+        };
+        data.extend([dl, ds, length, kind, modifiers]);
+        (previous_line, previous_start) = (line, start);
+    }
+    assert_ne!(
+        utf16(lines[4], word(lines[4], "p", 1)) as usize,
+        word(lines[4], "p", 1),
+        "bytes and units differ on the last line"
+    );
+    let r = c.request(
+        "textDocument/semanticTokens/full",
+        json!({"textDocument": {"uri": uri(&main)}}),
+    );
+    assert_eq!(r["result"], json!({"data": data}), "{r}");
+    assert!(
+        r["result"].get("resultId").is_none(),
+        "no deltas, so no result id"
+    );
+
+    // Neither a range nor a delta is implemented, and neither is answered.
+    for method in [
+        "textDocument/semanticTokens/range",
+        "textDocument/semanticTokens/full/delta",
+    ] {
+        let r = c.request(method, json!({}));
+        assert_eq!(r["error"]["code"], -32601, "{method}: {r}");
+    }
     let (status, stderr) = c.finish();
     assert_eq!(status, Some(0), "{stderr}");
 }

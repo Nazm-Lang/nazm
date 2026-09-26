@@ -21,9 +21,11 @@
 //! or pattern's label, and signature help for a record or variant construction — and,
 //! since N22, document symbols (one file's declarations, nested, in source order) and
 //! workspace symbols (every declaration of the files the open documents' compilations
-//! load, filtered by a case-sensitive substring, with nothing to resolve later). No
-//! formatting, code actions, semantic tokens, call hierarchy, watched files or cancellation
-//! — a client is never told something exists that the server would then ignore.
+//! load, filtered by a case-sensitive substring, with nothing to resolve later) — and, since
+//! N23, `semanticTokens/full`: every identifier the checker resolved, by its class and
+//! whether it declares, under a fixed legend; no range or delta requests, and no lexical
+//! tokens. No formatting, code actions, call hierarchy, watched files or cancellation — a
+//! client is never told something exists that the server would then ignore.
 //!
 //! # What a rename can promise over this protocol
 //!
@@ -70,7 +72,8 @@ use lsp_types::{
     WorkspaceSymbolResponse,
 };
 use nazm_service::{
-    Help, LanguageService, Published, RenamePlan, Rendered, Symbol, SymbolKind, Target,
+    Help, LanguageService, Published, RenamePlan, Rendered, Role, SemanticClass,
+    SemanticIdentifier, Symbol, SymbolKind, Target,
 };
 
 /// `nazm lsp`: serve one client on stdin and stdout until it says `exit`.
@@ -140,8 +143,122 @@ fn capabilities() -> ServerCapabilities {
             resolve_provider: Some(false),
             work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
         })),
+        // The whole document only: no range requests and no deltas, so nothing is kept
+        // between requests to compute one from.
+        semantic_tokens_provider: Some(
+            lsp_types::SemanticTokensServerCapabilities::SemanticTokensOptions(
+                lsp_types::SemanticTokensOptions {
+                    work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+                    legend: legend(),
+                    range: Some(false),
+                    full: Some(lsp_types::SemanticTokensFullOptions::Bool(true)),
+                },
+            ),
+        ),
         ..ServerCapabilities::default()
     }
+}
+
+/// The token types, in the legend's order: a token's type is its index here.
+const TOKEN_TYPES: [&str; 9] = [
+    "type",
+    "struct",
+    "enum",
+    "typeParameter",
+    "parameter",
+    "variable",
+    "property",
+    "enumMember",
+    "function",
+];
+
+/// The token modifiers, in the legend's order: modifier `i` is bit `1 << i`.
+const TOKEN_MODIFIERS: [&str; 2] = ["declaration", "defaultLibrary"];
+
+/// The one legend this server encodes against, fixed at compile time.
+fn legend() -> lsp_types::SemanticTokensLegend {
+    lsp_types::SemanticTokensLegend {
+        token_types: TOKEN_TYPES
+            .iter()
+            .map(|t| lsp_types::SemanticTokenType::new(t))
+            .collect(),
+        token_modifiers: TOKEN_MODIFIERS
+            .iter()
+            .map(|m| lsp_types::SemanticTokenModifier::new(m))
+            .collect(),
+    }
+}
+
+/// A class's token type, as its index in [`TOKEN_TYPES`], and whether it is compiler-owned.
+const fn token_type(class: SemanticClass) -> (u32, bool) {
+    match class {
+        SemanticClass::BuiltinType => (0, true),
+        SemanticClass::Record => (1, false),
+        SemanticClass::Enum => (2, false),
+        SemanticClass::TypeParameter => (3, false),
+        SemanticClass::Parameter => (4, false),
+        SemanticClass::Variable => (5, false),
+        SemanticClass::Field | SemanticClass::PayloadField => (6, false),
+        SemanticClass::Variant => (7, false),
+        SemanticClass::Function => (8, false),
+        SemanticClass::Intrinsic => (8, true),
+    }
+}
+
+/// `declaration` and `defaultLibrary`, as bits of [`TOKEN_MODIFIERS`].
+const DECLARATION: u32 = 1 << 0;
+const DEFAULT_LIBRARY: u32 = 1 << 1;
+
+/// The protocol's relative encoding of `identifiers` in `text`: per token, the lines since
+/// the previous one, its start column (relative to the previous token's on the same line),
+/// its length, its type and its modifiers — columns in UTF-16 units.
+///
+/// Refused, not encoded, when the identifiers are not in strictly increasing order, overlap,
+/// or one spans lines: each would be a token array that means something else.
+fn encode_tokens(text: &str, identifiers: &[SemanticIdentifier]) -> Result<Vec<u32>, String> {
+    let index = LineIndex::new(text);
+    let mut data = Vec::with_capacity(identifiers.len() * 5);
+    let mut previous: Option<(u32, Position)> = None;
+    for id in identifiers {
+        if id.start >= id.end {
+            return Err(format!("an empty identifier at {}", id.start));
+        }
+        if let Some((end, _)) = previous {
+            if id.start < end {
+                return Err(format!(
+                    "identifiers overlap or are out of order at {}",
+                    id.start
+                ));
+            }
+        }
+        let start = index.position(id.start);
+        let stop = index.position(id.end);
+        if start.line != stop.line {
+            return Err(format!("an identifier spans lines at {}", id.start));
+        }
+        let (kind, owned) = token_type(id.class);
+        let mut modifiers = 0;
+        if id.role == Role::Declaration {
+            modifiers |= DECLARATION;
+        }
+        if owned {
+            modifiers |= DEFAULT_LIBRARY;
+        }
+        let (line, column) = match previous {
+            Some((_, p)) if p.line == start.line => (0, start.character - p.character),
+            Some((_, p)) => (start.line - p.line, start.character),
+            None => (start.line, start.character),
+        };
+        data.extend([
+            line,
+            column,
+            stop.character - start.character,
+            kind,
+            modifiers,
+        ]);
+        previous = Some((id.end, start));
+    }
+    Ok(data)
 }
 
 fn serve(connection: &Connection, root: Option<PathBuf>) -> Result<(), String> {
@@ -281,7 +398,8 @@ impl Server {
     fn request(&self, req: Request) -> Response {
         use lsp_types::request::{
             Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest, PrepareRenameRequest,
-            References, Rename, SignatureHelpRequest, WorkspaceSymbolRequest,
+            References, Rename, SemanticTokensFullRequest, SignatureHelpRequest,
+            WorkspaceSymbolRequest,
         };
         let id = req.id.clone();
         let result = match req.method.as_str() {
@@ -311,6 +429,17 @@ impl Server {
                 serde_json::from_value::<WorkspaceSymbolParams>(req.params)
                     .map_err(|e| e.to_string())
                     .map(|p| self.workspace_symbols(&p))
+            }
+            SemanticTokensFullRequest::METHOD => {
+                match serde_json::from_value::<lsp_types::SemanticTokensParams>(req.params) {
+                    Ok(p) => match self.semantic_tokens(&p) {
+                        Ok(tokens) => Ok(tokens),
+                        Err(why) => {
+                            return Response::new_err(id, ErrorCode::InternalError as i32, why);
+                        }
+                    },
+                    Err(e) => Err(e.to_string()),
+                }
             }
             PrepareRenameRequest::METHOD => {
                 serde_json::from_value::<TextDocumentPositionParams>(req.params)
@@ -604,6 +733,24 @@ impl Server {
         }
         serde_json::to_value(WorkspaceSymbolResponse::Nested(out))
             .unwrap_or(serde_json::Value::Null)
+    }
+
+    /// `textDocument/semanticTokens/full`: the document's classified identifiers, relatively
+    /// encoded against [`legend`], with no `resultId` — there are no deltas to ask for — or
+    /// `null` for a document that is not open. An identifier list the encoder refuses is an
+    /// error, never a token array that means something else.
+    fn semantic_tokens(
+        &self,
+        p: &lsp_types::SemanticTokensParams,
+    ) -> Result<serde_json::Value, String> {
+        let Some(found) = path_of(&p.text_document.uri).and_then(|path| {
+            let version = *self.versions.get(&path)?;
+            self.service.semantic_identifiers(&path, version).ok()
+        }) else {
+            return Ok(serde_json::Value::Null);
+        };
+        let data = encode_tokens(&found.text, &found.identifiers)?;
+        Ok(serde_json::json!({ "data": data }))
     }
 
     fn hover(&self, p: &HoverParams) -> serde_json::Value {
@@ -1070,6 +1217,91 @@ mod tests {
         assert!(why.contains("not open"), "{why}");
         // A client that does not accept versioned changes gets no edit at all.
         assert!(workspace_edit(&plan(Some(1)), false).is_err());
+    }
+
+    #[test]
+    fn the_semantic_token_legend_is_fixed_and_every_class_is_in_it() {
+        // The legend is a protocol contract: its order is what every token's type and
+        // modifier bits mean.
+        let l = serde_json::to_value(legend()).unwrap();
+        assert_eq!(
+            l,
+            serde_json::json!({
+                "tokenTypes": ["type", "struct", "enum", "typeParameter", "parameter",
+                               "variable", "property", "enumMember", "function"],
+                "tokenModifiers": ["declaration", "defaultLibrary"]
+            })
+        );
+        use SemanticClass as C;
+        let named = |c: C| {
+            let (i, owned) = token_type(c);
+            (TOKEN_TYPES[i as usize], owned)
+        };
+        assert_eq!(named(C::Function), ("function", false));
+        assert_eq!(named(C::Intrinsic), ("function", true));
+        assert_eq!(named(C::Parameter), ("parameter", false));
+        assert_eq!(named(C::Variable), ("variable", false));
+        assert_eq!(named(C::Record), ("struct", false));
+        assert_eq!(named(C::Enum), ("enum", false));
+        assert_eq!(named(C::Variant), ("enumMember", false));
+        assert_eq!(named(C::Field), ("property", false));
+        assert_eq!(named(C::PayloadField), ("property", false));
+        assert_eq!(named(C::TypeParameter), ("typeParameter", false));
+        assert_eq!(named(C::BuiltinType), ("type", true));
+        assert_eq!(
+            TOKEN_MODIFIERS[DECLARATION.trailing_zeros() as usize],
+            "declaration"
+        );
+        assert_eq!(
+            TOKEN_MODIFIERS[DEFAULT_LIBRARY.trailing_zeros() as usize],
+            "defaultLibrary"
+        );
+    }
+
+    fn ident(start: u32, end: u32, class: SemanticClass, role: Role) -> SemanticIdentifier {
+        SemanticIdentifier {
+            start,
+            end,
+            class,
+            role,
+            target: nazm_service::SemanticTarget::Intrinsic(nazm_core::sema::Intrinsic::StrLen),
+        }
+    }
+
+    #[test]
+    fn semantic_tokens_are_relative_and_counted_in_utf16() {
+        // Line 0: `é😀 ab cd` — `ab` at bytes 7..9, UTF-16 column 4; `cd` at 10..12, 7.
+        // Line 1 is blank. Line 2: `😀x` — `x` at byte 18, column 2.
+        let text = "é😀 ab cd\n\n😀x";
+        let ids = [
+            ident(7, 9, SemanticClass::Function, Role::Declaration),
+            ident(10, 12, SemanticClass::Intrinsic, Role::Reference),
+            ident(18, 19, SemanticClass::Variable, Role::Reference),
+        ];
+        assert_eq!(&text[18..19], "x");
+        assert_eq!(
+            encode_tokens(text, &ids).unwrap(),
+            [0, 4, 2, 8, 1, 0, 3, 2, 8, 2, 2, 2, 1, 5, 0],
+            "same line: start relative to the previous token; new line: absolute column"
+        );
+    }
+
+    #[test]
+    fn an_identifier_list_that_would_mean_something_else_is_refused() {
+        let text = "abcd efgh\nij";
+        let v = |s, e| ident(s, e, SemanticClass::Variable, Role::Reference);
+        assert!(encode_tokens(text, &[v(0, 4), v(2, 6)]).is_err(), "overlap");
+        assert!(
+            encode_tokens(text, &[v(5, 9), v(0, 4)]).is_err(),
+            "out of order"
+        );
+        assert!(
+            encode_tokens(text, &[v(0, 4), v(0, 4)]).is_err(),
+            "one span twice"
+        );
+        assert!(encode_tokens(text, &[v(5, 12)]).is_err(), "across lines");
+        assert!(encode_tokens(text, &[v(3, 3)]).is_err(), "empty");
+        assert!(encode_tokens(text, &[v(0, 4), v(5, 9), v(10, 12)]).is_ok());
     }
 
     #[test]
