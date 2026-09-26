@@ -179,7 +179,7 @@ pub(crate) struct Document {
 pub(crate) struct Snapshot {
     pub(crate) generation: u64,
     version: i32,
-    map: SourceMap,
+    pub(crate) map: SourceMap,
     pub(crate) graph: ModuleGraph,
     pub(crate) analysis: Analysis,
     /// Every entity of the compilation with its declaration and uses, read from
