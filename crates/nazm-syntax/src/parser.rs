@@ -35,9 +35,9 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, Span};
 
 use crate::ast::{
-    Assign, BinOp, Block, Enum, Expr, Field, FieldInit, Function, Import, Let, MatchArm, Param,
-    PatternField, Place, PlaceField, Program, Record, Requirement, Return, Scope, Spawn, Stmt,
-    TypeName, TypeParam, Variant, While,
+    Assign, BinOp, Block, Enum, Expr, Field, FieldInit, Function, HoleSite, Import, Let, MatchArm,
+    Param, PatternField, Place, PlaceField, Program, Record, Requirement, Return, Scope, Spawn,
+    Stmt, TypeName, TypeParam, Variant, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -98,6 +98,15 @@ pub struct Parser<'a> {
     /// Whether syntax diagnostics are being withheld as cascades of one already reported.
     /// See [`Parser::report`].
     muted: bool,
+    /// For a completion probe (N26): the byte offset of the editor's cursor, until a hole
+    /// is found there. `None` for every ordinary parse, and after the hole is taken.
+    hole: Option<u32>,
+    /// The hole found, if any.
+    hole_site: Option<HoleSite>,
+    /// Whether the statement holding the hole is still being read. While it is, the `;`
+    /// or `)` the unfinished construct leaves unwritten is taken as written — only then,
+    /// and only those — so the statement ends where the author has not yet ended it.
+    hole_open: bool,
 }
 
 /// What one position in a block turned out to hold.
@@ -118,6 +127,7 @@ pub(crate) fn parse_lossless(
     text: &str,
     lexemes: &[Lexeme],
     tokens: &[&Token],
+    hole: Option<u32>,
 ) -> (Program, Vec<Diagnostic>, Cst) {
     let mut p = Parser {
         file,
@@ -131,6 +141,9 @@ pub(crate) fn parse_lossless(
         poisoned: false,
         item_start: 0,
         muted: false,
+        hole,
+        hole_site: None,
+        hole_open: false,
     };
     let mut functions = Vec::new();
     let mut records = Vec::new();
@@ -181,13 +194,19 @@ pub(crate) fn parse_lossless(
         }
     }
 
-    let Parser { errors, sink, .. } = p;
+    let Parser {
+        errors,
+        sink,
+        hole_site,
+        ..
+    } = p;
     (
         Program {
             functions,
             records,
             enums,
             imports,
+            hole: hole_site,
         },
         errors,
         sink.finish(file),
@@ -400,6 +419,11 @@ impl<'a> Parser<'a> {
             self.bump();
             return Some(s);
         }
+        // A probe's unfinished statement: the `;` or `)` its hole left unwritten (N26).
+        if self.hole_open && matches!(kind, TokenKind::Semi | TokenKind::RParen) {
+            let at = self.peek_span().start;
+            return Some(Span::new(self.file, at, at));
+        }
         let found = self.peek().describe();
         let span = self.peek_span();
         self.report(
@@ -411,6 +435,44 @@ impl<'a> Parser<'a> {
             .primary_label(format!("expected {}", kind.describe())),
         );
         None
+    }
+
+    /// Whether the token at `index` ends exactly at the probe's hole (N26).
+    fn ends_at_hole(&self, index: usize) -> bool {
+        self.hole
+            .is_some_and(|h| self.tokens.get(index).is_some_and(|t| t.span.end == h))
+    }
+
+    /// Whether the token at `index` is an identifier.
+    fn ident_at(&self, index: usize) -> bool {
+        matches!(
+            self.tokens.get(index).map(|t| &t.kind),
+            Some(TokenKind::Ident(_))
+        )
+    }
+
+    /// Whether a label — an identifier and its `:` — starts at `index`: the grammar's own
+    /// test for a construction's or pattern's field, which a hole never is.
+    fn label_at(&self, index: usize) -> bool {
+        self.ident_at(index)
+            && matches!(
+                self.tokens.get(index + 1).map(|t| &t.kind),
+                Some(TokenKind::Colon)
+            )
+    }
+
+    /// Take the hole: it is found once, and the statement holding it is now being read.
+    fn take_hole(&mut self, site: HoleSite) -> Span {
+        let at = self.hole.take().unwrap_or_default();
+        self.hole_site = Some(site);
+        self.hole_open = true;
+        Span::new(self.file, at, at)
+    }
+
+    /// The zero-width span at the hole, for a node whose name the hole is.
+    fn hole_span(&self) -> Span {
+        let at = self.hole.unwrap_or_default();
+        Span::new(self.file, at, at)
     }
 
     /// Skip to the next token that can start an item.
@@ -1066,7 +1128,10 @@ impl<'a> Parser<'a> {
         while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
             let stmt = self.checkpoint();
             let start = self.pos;
-            match self.statement(&mut deepest) {
+            let parsed = self.statement(&mut deepest);
+            // A probe's hole ends with the statement holding it (N26).
+            self.hole_open = false;
+            match parsed {
                 Some(Parsed::Stmt(s)) => statements.push(s),
                 Some(Parsed::Tail(e)) => {
                     tail = Some(Box::new(e));
@@ -1161,9 +1226,10 @@ impl<'a> Parser<'a> {
             Some(Parsed::Stmt(Stmt::Expr(e)))
         } else if self.at(&TokenKind::RBrace) {
             Some(Parsed::Tail(e))
-        } else if block_like {
+        } else if block_like || self.hole_open {
             // `if c { … }` followed by more statements needs no `;`, the same rule
-            // every block-like expression follows.
+            // every block-like expression follows — and neither does a probe's unfinished
+            // statement (N26).
             self.wrap(at, SyntaxKind::ExprStmt);
             Some(Parsed::Stmt(Stmt::Expr(e)))
         } else {
@@ -1456,12 +1522,24 @@ impl<'a> Parser<'a> {
     ///
     /// Returns the fields, the closing parenthesis and the deepest subtree any initialiser
     /// built, because the caller is the node that has to account for it.
-    fn field_inits(&mut self) -> Option<(Vec<FieldInit>, Span, usize)> {
+    fn field_inits(&mut self, variant: Option<Span>) -> Option<(Vec<FieldInit>, Span, usize)> {
         let list = self.checkpoint();
+        let open = self.pos;
         self.expect(&TokenKind::LParen, "to start the fields")?;
+        // `E.V(` with the cursor right after the `(` and no label: a probe's hole (N26).
+        let mut empty = false;
+        if let Some(variant) = variant {
+            if self.ends_at_hole(open) && !self.label_at(self.pos) {
+                self.take_hole(HoleSite::Payload {
+                    variant,
+                    pattern: false,
+                });
+                empty = true;
+            }
+        }
         let mut fields = Vec::new();
         let mut deepest = 0;
-        while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+        while !empty && !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
             let field = self.checkpoint();
             let name_span = self.peek_span();
             let name = match self.advance() {
@@ -1508,7 +1586,7 @@ impl<'a> Parser<'a> {
         ty_span: Span,
         type_args: Option<Vec<TypeName>>,
     ) -> Option<Expr> {
-        let (fields, close, deepest) = self.field_inits()?;
+        let (fields, close, deepest) = self.field_inits(None)?;
         self.built(deepest + 1)?;
         self.wrap(at, SyntaxKind::ConstructExpr);
         Some(Expr::Construct {
@@ -1537,7 +1615,7 @@ impl<'a> Parser<'a> {
             // Unreachable: the caller looked at this token before calling.
             return None;
         };
-        let (fields, close, deepest) = self.field_inits()?;
+        let (fields, close, deepest) = self.field_inits(Some(variant_span))?;
         self.built(deepest + 1)?;
         self.wrap(at, SyntaxKind::VariantExpr);
         Some(Expr::Variant {
@@ -1598,10 +1676,21 @@ impl<'a> Parser<'a> {
                     return None;
                 }
             };
-            let fields = self.pattern_fields()?;
+            let holed = self.hole.is_some();
+            let fields = self.pattern_fields(variant_span)?;
             self.wrap(arm, SyntaxKind::Pattern);
-            self.expect(&TokenKind::FatArrow, "between a pattern and its arm")?;
-            let body = self.expr()?;
+            // A probe's hole in this pattern, with no `=>` written yet: the arm has no body
+            // to read, and is given a zero-width `0` so the pattern can be checked (N26).
+            let hole_arm = holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);
+            let body = if hole_arm {
+                Expr::Int {
+                    value: 0,
+                    span: Span::new(self.file, variant_span.end, variant_span.end),
+                }
+            } else {
+                self.expect(&TokenKind::FatArrow, "between a pattern and its arm")?;
+                self.expr()?
+            };
             deepest = deepest.max(self.child());
             self.wrap(arm, SyntaxKind::MatchArm);
             arms.push(MatchArm {
@@ -1613,7 +1702,7 @@ impl<'a> Parser<'a> {
                 span: ty_span.join(body.span()),
                 body,
             });
-            if !self.eat(&TokenKind::Comma) {
+            if !self.eat(&TokenKind::Comma) && !(hole_arm && !self.at(&TokenKind::RBrace)) {
                 break;
             }
         }
@@ -1633,11 +1722,21 @@ impl<'a> Parser<'a> {
     /// Each field is named and bound to an identifier, or discarded with `_`. Whether every
     /// field of the variant is present, and whether two bindings share a name, are the
     /// checker's questions: both are about a variant the parser has not resolved.
-    fn pattern_fields(&mut self) -> Option<Vec<PatternField>> {
+    fn pattern_fields(&mut self, variant: Span) -> Option<Vec<PatternField>> {
         let list = self.checkpoint();
+        let open = self.pos;
         self.expect(&TokenKind::LParen, "to start the payload")?;
+        // `E.V(` in a pattern, with the cursor right after the `(` and no label (N26).
+        let mut empty = false;
+        if self.ends_at_hole(open) && !self.label_at(self.pos) {
+            self.take_hole(HoleSite::Payload {
+                variant,
+                pattern: true,
+            });
+            empty = true;
+        }
         let mut fields = Vec::new();
-        while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+        while !empty && !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
             let field = self.checkpoint();
             let name_span = self.peek_span();
             let name = match self.advance() {
@@ -1798,6 +1897,23 @@ impl<'a> Parser<'a> {
             }
             if !self.at(&TokenKind::Dot) {
                 break;
+            }
+            // `receiver.` with the cursor right after the `.` and no name: a probe's hole,
+            // an empty member name the checker looks for on the receiver's type (N26).
+            if self.ends_at_hole(self.pos) && !self.ident_at(self.pos + 1) {
+                let name_span = self.hole_span();
+                self.advance();
+                self.take_hole(HoleSite::Member { name: name_span });
+                depth += 1;
+                self.built(depth)?;
+                self.wrap(at, SyntaxKind::FieldExpr);
+                out = Expr::Field {
+                    span: out.span().join(name_span),
+                    base: Box::new(out),
+                    name: String::new(),
+                    name_span,
+                };
+                continue;
             }
             self.advance();
             let name_span = self.peek_span();
@@ -1976,6 +2092,27 @@ impl<'a> Parser<'a> {
                 // variant. Nothing else can follow a name with `[`: there is no indexing.
                 let type_args = if self.at(&TokenKind::LBracket) {
                     let (args, _) = self.type_args()?;
+                    // `Maybe[Int].` with the cursor right after the `.`: a probe's hole,
+                    // the empty variant name of an applied enum's construction (N26).
+                    if self.at(&TokenKind::Dot)
+                        && self.ends_at_hole(self.pos)
+                        && !self.ident_at(self.pos + 1)
+                    {
+                        let variant_span = self.hole_span();
+                        self.advance();
+                        self.take_hole(HoleSite::Member { name: variant_span });
+                        self.built(1)?;
+                        self.wrap(at, SyntaxKind::VariantExpr);
+                        return Some(Expr::Variant {
+                            ty: name,
+                            ty_span: span,
+                            type_args: Some(args),
+                            variant: String::new(),
+                            variant_span,
+                            fields: Vec::new(),
+                            span: span.join(variant_span),
+                        });
+                    }
                     let applies = self.at(&TokenKind::LParen)
                         || (self.at(&TokenKind::Dot)
                             && matches!(
@@ -2040,6 +2177,25 @@ impl<'a> Parser<'a> {
                     );
                 if constructing {
                     return self.construction(at, name, span, type_args);
+                }
+                // `Name(` with the cursor right after the `(` and no label: a probe's hole.
+                // The grammar reads a `(` without labels as a call, and so does this; what
+                // `Name` is, the checker decides (N26).
+                if self.at(&TokenKind::LParen) && self.ends_at_hole(self.pos) {
+                    let args_at = self.checkpoint();
+                    self.bump();
+                    self.take_hole(HoleSite::Call { callee: span });
+                    let close = self.expect(&TokenKind::RParen, "to close the argument list")?;
+                    self.wrap(args_at, SyntaxKind::ArgList);
+                    self.built(1)?;
+                    self.wrap(at, SyntaxKind::CallExpr);
+                    return Some(Expr::Call {
+                        callee: name,
+                        callee_span: span,
+                        type_args,
+                        args: Vec::new(),
+                        span: span.join(close),
+                    });
                 }
                 if self.at(&TokenKind::LParen) {
                     // Taken only once the `(` is there: a checkpoint emits the trivia before
