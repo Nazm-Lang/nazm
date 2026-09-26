@@ -469,6 +469,76 @@ impl<'a> Parser<'a> {
         Span::new(self.file, at, at)
     }
 
+    /// `receiver.` at the hole: the projection of an empty member name (N26). Out of line,
+    /// like every hole below: no ordinary parse reaches them.
+    #[cold]
+    #[inline(never)]
+    fn member_hole(&mut self, at: Checkpoint, base: Expr, depth: usize) -> Option<Expr> {
+        let name_span = self.hole_span();
+        self.advance();
+        self.take_hole(HoleSite::Member { name: name_span });
+        self.built(depth)?;
+        self.wrap(at, SyntaxKind::FieldExpr);
+        Some(Expr::Field {
+            span: base.span().join(name_span),
+            base: Box::new(base),
+            name: String::new(),
+            name_span,
+        })
+    }
+
+    /// `Name[T, …].` at the hole: an applied enum's construction of an empty variant name.
+    #[cold]
+    #[inline(never)]
+    fn variant_hole(
+        &mut self,
+        at: Checkpoint,
+        name: String,
+        span: Span,
+        args: Vec<TypeName>,
+    ) -> Option<Expr> {
+        let variant_span = self.hole_span();
+        self.advance();
+        self.take_hole(HoleSite::Member { name: variant_span });
+        self.built(1)?;
+        self.wrap(at, SyntaxKind::VariantExpr);
+        Some(Expr::Variant {
+            ty: name,
+            ty_span: span,
+            type_args: Some(args),
+            variant: String::new(),
+            variant_span,
+            fields: Vec::new(),
+            span: span.join(variant_span),
+        })
+    }
+
+    /// `Name(` at the hole: a call of `Name` with nothing written, as the grammar reads it.
+    #[cold]
+    #[inline(never)]
+    fn call_hole(
+        &mut self,
+        at: Checkpoint,
+        name: String,
+        span: Span,
+        type_args: Option<Vec<TypeName>>,
+    ) -> Option<Expr> {
+        let args_at = self.checkpoint();
+        self.bump();
+        self.take_hole(HoleSite::Call { callee: span });
+        let close = self.expect(&TokenKind::RParen, "to close the argument list")?;
+        self.wrap(args_at, SyntaxKind::ArgList);
+        self.built(1)?;
+        self.wrap(at, SyntaxKind::CallExpr);
+        Some(Expr::Call {
+            callee: name,
+            callee_span: span,
+            type_args,
+            args: Vec::new(),
+            span: span.join(close),
+        })
+    }
+
     /// The zero-width span at the hole, for a node whose name the hole is.
     fn hole_span(&self) -> Span {
         let at = self.hole.unwrap_or_default();
@@ -1900,19 +1970,9 @@ impl<'a> Parser<'a> {
             }
             // `receiver.` with the cursor right after the `.` and no name: a probe's hole,
             // an empty member name the checker looks for on the receiver's type (N26).
-            if self.ends_at_hole(self.pos) && !self.ident_at(self.pos + 1) {
-                let name_span = self.hole_span();
-                self.advance();
-                self.take_hole(HoleSite::Member { name: name_span });
+            if self.hole.is_some() && self.ends_at_hole(self.pos) && !self.ident_at(self.pos + 1) {
                 depth += 1;
-                self.built(depth)?;
-                self.wrap(at, SyntaxKind::FieldExpr);
-                out = Expr::Field {
-                    span: out.span().join(name_span),
-                    base: Box::new(out),
-                    name: String::new(),
-                    name_span,
-                };
+                out = self.member_hole(at, out, depth)?;
                 continue;
             }
             self.advance();
@@ -2094,24 +2154,12 @@ impl<'a> Parser<'a> {
                     let (args, _) = self.type_args()?;
                     // `Maybe[Int].` with the cursor right after the `.`: a probe's hole,
                     // the empty variant name of an applied enum's construction (N26).
-                    if self.at(&TokenKind::Dot)
+                    if self.hole.is_some()
+                        && self.at(&TokenKind::Dot)
                         && self.ends_at_hole(self.pos)
                         && !self.ident_at(self.pos + 1)
                     {
-                        let variant_span = self.hole_span();
-                        self.advance();
-                        self.take_hole(HoleSite::Member { name: variant_span });
-                        self.built(1)?;
-                        self.wrap(at, SyntaxKind::VariantExpr);
-                        return Some(Expr::Variant {
-                            ty: name,
-                            ty_span: span,
-                            type_args: Some(args),
-                            variant: String::new(),
-                            variant_span,
-                            fields: Vec::new(),
-                            span: span.join(variant_span),
-                        });
+                        return self.variant_hole(at, name, span, args);
                     }
                     let applies = self.at(&TokenKind::LParen)
                         || (self.at(&TokenKind::Dot)
@@ -2181,21 +2229,9 @@ impl<'a> Parser<'a> {
                 // `Name(` with the cursor right after the `(` and no label: a probe's hole.
                 // The grammar reads a `(` without labels as a call, and so does this; what
                 // `Name` is, the checker decides (N26).
-                if self.at(&TokenKind::LParen) && self.ends_at_hole(self.pos) {
-                    let args_at = self.checkpoint();
-                    self.bump();
-                    self.take_hole(HoleSite::Call { callee: span });
-                    let close = self.expect(&TokenKind::RParen, "to close the argument list")?;
-                    self.wrap(args_at, SyntaxKind::ArgList);
-                    self.built(1)?;
-                    self.wrap(at, SyntaxKind::CallExpr);
-                    return Some(Expr::Call {
-                        callee: name,
-                        callee_span: span,
-                        type_args,
-                        args: Vec::new(),
-                        span: span.join(close),
-                    });
+                if self.hole.is_some() && self.at(&TokenKind::LParen) && self.ends_at_hole(self.pos)
+                {
+                    return self.call_hole(at, name, span, type_args);
                 }
                 if self.at(&TokenKind::LParen) {
                     // Taken only once the `(` is there: a checkpoint emits the trivia before
