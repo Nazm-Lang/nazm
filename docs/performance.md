@@ -1184,6 +1184,60 @@ figures for this run are not reported against N20's, because the host, not N21, 
 **What it added to the binary.** Nothing measurable: the release `nazm` is 3,019,648 bytes, as it
 was at N20; no dependency was added.
 
+### Document and workspace symbols — measured 2026-09-26
+
+N22 adds no work to analysis and keeps nothing: both queries are derived on demand from the
+checker's definition tables and the parsed items, when asked. **No persistent symbol table was
+introduced**; the compiler open as four programs holds exactly the documents, analyses and
+text it held before (`retained` = 4 documents, 4 analyses, 1,316,013 bytes of text), and the
+number of symbol entries kept between queries is zero by construction.
+
+The host was quiet this time (load average about 2.4–3.6), but the comparison was made the same
+way as N21's, **interleaved**: the N21 tree (`ce0c4ae`) and the N22 tree built side by side in
+one container and run alternately, four times each, contained, P1 (`target/n22/ab`, not
+committed).
+
+| On the compiler (`emit.nz`) | N21 | N22 |
+| --- | --- | --- |
+| `analyse` | 35.5–36.1 ms | 35.4–36.6 ms |
+| warm edit | 85.8–87.5 ms | 86.2–88.2 ms |
+| resident, compiler open | 34.39–34.61 MB | 34.33–34.54 MB |
+| resident, after 15 edits | 35.5–36.6 MB | 35.4–36.5 MB |
+
+The queries, two runs in the same container (`target/n22/bench`), medians:
+
+| What | Result |
+| --- | --- |
+| `document_symbols`, small (`examples/sum.nz`, 3 symbols) | 2.4–2.5 µs |
+| `document_symbols`, generic record and enum (9 symbols) | 3.5–3.7 µs |
+| `document_symbols`, the compiler's `emit.nz` (135 symbols) | 133 µs |
+| `document_symbols`, one of 40 modules declaring the same names (29 symbols) | 11.5–11.6 µs |
+| `workspace_symbols("")`, small | 3.2 µs |
+| `workspace_symbols("")`, the compiler, 1 root (5 files, 497 symbols) | 1.48–1.49 ms |
+| `workspace_symbols("")`, the compiler, 4 roots sharing `lex.nz` (8 files, 500 symbols) | 2.18–2.19 ms |
+| `workspace_symbols("emit")`, same (14 symbols) | 1.88–1.89 ms |
+| `workspace_symbols("Zzz")`, same (none) | 1.89 ms |
+| `workspace_symbols("")`, 40 roots declaring the same names (1,160 symbols) | 4.19–4.20 ms |
+| `workspace_symbols("Point")`, same (40 symbols) | 3.12–3.19 ms |
+| `workspace_symbols("f1")`, same (440 symbols) | 3.45–3.54 ms |
+
+**What the numbers say.** The interleaved N21/N22 comparison detected no N22-specific analyse,
+warm-edit or RSS delta, and none is expected: N22 changes no code that analysis runs. This is
+still a measurement, not a proof — the ranges overlap, which is all it can show. A document's
+outline is microseconds, the whole compiler's file 0.13 ms. A workspace query derives every
+analysed file's symbols from every current compilation and deduplicates them, so it costs
+about the same whatever the query: the filter is applied to a universe built each time, and
+most of the cost is building it (four compilations of the compiler, 2.2 ms; forty small
+programs, 4.2 ms). That is well inside an interactive request, so no index was kept to make it
+cheaper and no result is truncated; if an open universe grows until it is not, an index is the
+measured next step, not an assumption. The protocol conversion was not timed separately: it is
+one line-table pass per file over results of this size.
+
+**What it added to the binary.** The release `nazm`, built from both trees in the same container,
+is 3,019,648 bytes at N21 (the accepted baseline, reproduced) and 3,085,184 bytes at N22:
+**+65,536 bytes, +2.2%**, one 64 KiB step of the file's layout, for the symbol module and the two
+protocol handlers and their `lsp-types` structures. No dependency was added.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

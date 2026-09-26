@@ -370,13 +370,51 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
-### After N21, in dependency order
+### After N22, in dependency order
 
-No item is chosen here; N21 left these standing.
+No item is chosen here; N22 left these standing.
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| Document and workspace symbols | a language service ✓, structure ✓ | not started |
+| Semantic tokens, code actions | a language service ✓, symbols ✓ | not started |
+| Call hierarchy | checked calls ✓, references ✓, symbols ✓ | not asked for |
+| Completion after a bare `.` or `(`, and a `.` trigger | structure ✓ | needs an anchor for source that does not parse |
+| Rename of exported definitions; edits of files not open | rename ✓ | unchanged since N18; workspace symbols cover what is loaded, which is not every possible importer, so they do not lift it |
+| MCP, semantic context packets | a language service ✓, scope, call, structure and symbols ✓ | not started |
+| Incremental reparse | a lossless CST ✓ | N22 adds no analysis-time work, and the interleaved N21/N22 comparison detected no warm-edit delta; still no evidence that forces it |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+
+### N22 — Semantic document and workspace symbols — **complete, 2026-09-26**
+
+Which declarations exist, where each is written and what contains it is now answered from the
+checker's definition tables and the parsed items their `decl` indices name — derived on demand,
+with nothing kept. One document's outline is its declarations, nested, in source order; the
+workspace is every declaration of every file the open documents' compilations load, once each,
+identified by file, kind and name span. It is not a project index and does not lift N18's
+exported-rename refusal. No language, interface, cache-key or bootstrap change:
+`SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint `0e1a40e6…`.
+
+| Settled | Where |
+| --- | --- |
+| `document_symbols`, `workspace_symbols`, `Symbol`, `SymbolKind`, `WorkspaceSymbol` | `crates/nazm-service/src/symbols.rs`, `architecture.md` §7.24 |
+| `textDocument/documentSymbol` (nested, or flat for a client without hierarchy) and `workspace/symbol` (no resolve) | `crates/nazm-cli/src/lsp.rs` |
+| what it costs: no detected analyse/edit/RSS delta in the interleaved comparison; no persistent symbol table; an outline in microseconds, a workspace query 2.2 ms over the compiler as four programs; +65,536 bytes of binary | `performance.md` |
+
+Mutation evidence: 13 new, all 13 direct killers verified on the final source (one after its
+killer was moved to the test that observes it), 2 re-verified; one targeted campaign of 24, all
+caught at tier 1, in one session (`capability-matrix.md` §30).
+
+**N23 has not started.**
+
+### After N21, in dependency order
+
+No item is chosen here; N21 left these standing. *Superseded by "After N22" above.*
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Document and workspace symbols | a language service ✓, structure ✓ | done by N22 |
 | Semantic tokens, code actions | a language service ✓ | not started |
 | Call hierarchy | checked calls ✓, references ✓ | not asked for |
 | Completion after a bare `.` or `(`, and a `.` trigger | structure ✓ | needs an anchor for source that does not parse |
@@ -405,8 +443,6 @@ that answer. No language, interface, cache-key or bootstrap change: `SEMANTIC_EP
 
 Mutation evidence: 15 new, all 15 direct killers verified on the final source; one targeted
 campaign of 34, all caught at tier 1, over three sessions (`capability-matrix.md` §30).
-
-**N22 has not started.**
 
 ### After N20, in dependency order
 
