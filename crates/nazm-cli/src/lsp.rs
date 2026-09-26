@@ -24,8 +24,10 @@
 //! load, filtered by a case-sensitive substring, with nothing to resolve later) — and, since
 //! N23, `semanticTokens/full`: every identifier the checker resolved, by its class and
 //! whether it declares, under a fixed legend; no range or delta requests, and no lexical
-//! tokens. No formatting, code actions, call hierarchy, watched files or cancellation — a
-//! client is never told something exists that the server would then ignore.
+//! tokens — and, since N24, `codeAction`: the fixes current diagnostics carry, as quick
+//! fixes with versioned edits; no refactors, source actions or resolve. No formatting, call
+//! hierarchy, watched files or cancellation — a client is never told something exists that
+//! the server would then ignore.
 //!
 //! # What a rename can promise over this protocol
 //!
@@ -138,6 +140,15 @@ fn capabilities() -> ServerCapabilities {
             work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
         })),
         document_symbol_provider: Some(OneOf::Left(true)),
+        // Quick fixes only, each complete when sent: no refactors, no source actions, no
+        // resolve.
+        code_action_provider: Some(lsp_types::CodeActionProviderCapability::Options(
+            lsp_types::CodeActionOptions {
+                code_action_kinds: Some(vec![lsp_types::CodeActionKind::QUICKFIX]),
+                work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+                resolve_provider: Some(false),
+            },
+        )),
         // Every symbol is complete when it is sent: there is no `workspaceSymbol/resolve`.
         workspace_symbol_provider: Some(OneOf::Right(WorkspaceSymbolOptions {
             resolve_provider: Some(false),
@@ -397,9 +408,9 @@ impl Server {
 
     fn request(&self, req: Request) -> Response {
         use lsp_types::request::{
-            Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest, PrepareRenameRequest,
-            References, Rename, SemanticTokensFullRequest, SignatureHelpRequest,
-            WorkspaceSymbolRequest,
+            CodeActionRequest, Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest,
+            PrepareRenameRequest, References, Rename, SemanticTokensFullRequest,
+            SignatureHelpRequest, WorkspaceSymbolRequest,
         };
         let id = req.id.clone();
         let result = match req.method.as_str() {
@@ -419,6 +430,11 @@ impl Server {
                 serde_json::from_value::<SignatureHelpParams>(req.params)
                     .map_err(|e| e.to_string())
                     .map(|p| self.signature_help(&p))
+            }
+            CodeActionRequest::METHOD => {
+                serde_json::from_value::<lsp_types::CodeActionParams>(req.params)
+                    .map_err(|e| e.to_string())
+                    .map(|p| self.code_actions(&p))
             }
             DocumentSymbolRequest::METHOD => {
                 serde_json::from_value::<DocumentSymbolParams>(req.params)
@@ -753,6 +769,56 @@ impl Server {
         Ok(serde_json::json!({ "data": data }))
     }
 
+    /// `textDocument/codeAction`: one quick fix per fix of each current diagnostic the range
+    /// touches, as the service planned it — never from the diagnostics the client sends,
+    /// which are not consulted. Each carries its versioned edit; a fix the protocol cannot
+    /// protect (a client without versioned changes, a file not open) is left out, never sent
+    /// weaker. Empty when the client asks only for kinds other than quick fixes.
+    fn code_actions(&self, p: &lsp_types::CodeActionParams) -> serde_json::Value {
+        let quickfix = lsp_types::CodeActionKind::QUICKFIX;
+        if let Some(only) = &p.context.only {
+            // A requested kind covers the kinds below it: `quickfix` and the empty base.
+            if !only.iter().any(|k| k.as_str().is_empty() || *k == quickfix) {
+                return serde_json::json!([]);
+            }
+        }
+        let Some((path, version)) = path_of(&p.text_document.uri).and_then(|path| {
+            let version = *self.versions.get(&path)?;
+            Some((path, version))
+        }) else {
+            return serde_json::Value::Null;
+        };
+        let Some(text) = self.service.text(&path) else {
+            return serde_json::Value::Null;
+        };
+        let index = LineIndex::new(&text);
+        let (start, end) = (index.offset(p.range.start), index.offset(p.range.end));
+        let Ok(plans) = self.service.fix_plans(&path, version, start, end) else {
+            return serde_json::Value::Null;
+        };
+        let mut actions = Vec::new();
+        for plan in &plans {
+            if !self.service.fix_plan_is_current(plan) {
+                continue;
+            }
+            let Ok(edit) = versioned_edit(std::slice::from_ref(&plan.file), self.versioned_edits)
+            else {
+                continue;
+            };
+            actions.push(lsp_types::CodeAction {
+                title: fix_title(plan),
+                kind: Some(quickfix.clone()),
+                diagnostics: Some(vec![lsp_diagnostic(&plan.diagnostic, &index)]),
+                edit: Some(edit),
+                command: None,
+                is_preferred: preferred(plan).then_some(true),
+                disabled: None,
+                data: None,
+            });
+        }
+        serde_json::to_value(actions).unwrap_or(serde_json::Value::Null)
+    }
+
     fn hover(&self, p: &HoverParams) -> serde_json::Value {
         let tdp = &p.text_document_position_params;
         let Some((path, version, offset)) = self.locate(&tdp.text_document.uri, tdp.position)
@@ -874,14 +940,23 @@ fn signature_json(rendered: &Rendered, active: Option<u32>, parameters: bool) ->
     .unwrap_or(serde_json::Value::Null)
 }
 
-/// A rename plan as the protocol's edit: `documentChanges`, one per file, each tied to the
-/// version of the open document the plan was validated against.
-///
-/// Refused, not weakened, when the protocol cannot hold the client to the plan's
-/// precondition: a client that does not accept versioned changes, or a file the plan edits
-/// that is not open — whose version would be `null`, which the protocol defines as "the
-/// disk is the master", with no check of what the disk now holds.
+/// A rename plan as the protocol's edit. See [`versioned_edit`].
 fn workspace_edit(plan: &RenamePlan, versioned: bool) -> Result<lsp_types::WorkspaceEdit, String> {
+    versioned_edit(&plan.files, versioned)
+}
+
+/// Edits as the protocol's edit: `documentChanges`, one per file, each tied to the version
+/// of the open document the edits were validated against. The one form in which this server
+/// sends any edit — a rename (N18) or a quick fix (N24).
+///
+/// Refused, not weakened, when the protocol cannot hold the client to the edits'
+/// precondition: a client that does not accept versioned changes, or a file to edit that is
+/// not open — whose version would be `null`, which the protocol defines as "the disk is the
+/// master", with no check of what the disk now holds.
+fn versioned_edit(
+    files: &[nazm_service::FileEdit],
+    versioned: bool,
+) -> Result<lsp_types::WorkspaceEdit, String> {
     use lsp_types::{
         DocumentChanges, OptionalVersionedTextDocumentIdentifier, TextDocumentEdit, TextEdit,
     };
@@ -891,8 +966,8 @@ fn workspace_edit(plan: &RenamePlan, versioned: bool) -> Result<lsp_types::Works
                 .to_owned(),
         );
     }
-    let mut changes = Vec::with_capacity(plan.files.len());
-    for f in &plan.files {
+    let mut changes = Vec::with_capacity(files.len());
+    for f in files {
         let Some(version) = f.version else {
             return Err(format!(
                 "{} must change and is not open; a closed file's content cannot be made a                  condition of the edit, so open it and ask again",
@@ -935,22 +1010,7 @@ fn publish(p: &Published) -> Option<Notification> {
     let diagnostics = p
         .diagnostics
         .iter()
-        .map(|d| {
-            let span = d.primary.span;
-            LspDiagnostic {
-                range: Range {
-                    start: index.position(span.start),
-                    end: index.position(span.end),
-                },
-                severity: Some(match d.severity {
-                    nazm_diag::Severity::Error => DiagnosticSeverity::ERROR,
-                }),
-                code: Some(NumberOrString::String(d.code.to_string())),
-                source: Some("nazm".to_owned()),
-                message: d.message.clone(),
-                ..LspDiagnostic::default()
-            }
-        })
+        .map(|d| lsp_diagnostic(d, &index))
         .collect();
     let params = PublishDiagnosticsParams {
         uri: uri_of(&p.path)?,
@@ -961,6 +1021,46 @@ fn publish(p: &Published) -> Option<Notification> {
         lsp_types::notification::PublishDiagnostics::METHOD.to_owned(),
         params,
     ))
+}
+
+/// A Nazm diagnostic as the protocol's, positioned in the text `index` is of: the one
+/// conversion both published diagnostics and quick fixes use.
+fn lsp_diagnostic(d: &nazm_diag::Diagnostic, index: &LineIndex<'_>) -> LspDiagnostic {
+    let span = d.primary.span;
+    LspDiagnostic {
+        range: Range {
+            start: index.position(span.start),
+            end: index.position(span.end),
+        },
+        severity: Some(match d.severity {
+            nazm_diag::Severity::Error => DiagnosticSeverity::ERROR,
+        }),
+        code: Some(NumberOrString::String(d.code.to_string())),
+        source: Some("nazm".to_owned()),
+        message: d.message.clone(),
+        ..LspDiagnostic::default()
+    }
+}
+
+/// A fix plan's title: what it does and which diagnostic it repairs — and, for a fix that
+/// needs review, when it is right, so the choice is made knowing that.
+fn fix_title(plan: &nazm_service::FixPlan) -> String {
+    match plan.applicability {
+        nazm_diag::Applicability::Automatic => {
+            format!("Fix {}: {}", plan.diagnostic.code, plan.description)
+        }
+        nazm_diag::Applicability::NeedsReview => format!(
+            "Review fix {}: {} — right only if {}",
+            plan.diagnostic.code, plan.description, plan.precondition
+        ),
+    }
+}
+
+/// Whether a quick fix is the one an editor may apply without asking: an automatic fix
+/// that is its diagnostic's only one. A fix that needs review never is, and neither is one
+/// of several alternatives, which this server has no ground to rank.
+fn preferred(plan: &nazm_service::FixPlan) -> bool {
+    plan.applicability == nazm_diag::Applicability::Automatic && plan.alternatives == 1
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1302,6 +1402,59 @@ mod tests {
         assert!(encode_tokens(text, &[v(5, 12)]).is_err(), "across lines");
         assert!(encode_tokens(text, &[v(3, 3)]).is_err(), "empty");
         assert!(encode_tokens(text, &[v(0, 4), v(5, 9), v(10, 12)]).is_ok());
+    }
+
+    fn fix_plan(
+        applicability: nazm_diag::Applicability,
+        alternatives: usize,
+    ) -> nazm_service::FixPlan {
+        let span = nazm_span::Span::new(nazm_span::FileId::ROOT, 0, 1);
+        nazm_service::FixPlan {
+            diagnostic: nazm_diag::Diagnostic::error(
+                nazm_diag::codes::ASSIGN_TO_IMMUTABLE,
+                span,
+                "m",
+            ),
+            index: 0,
+            alternatives,
+            description: "make the binding mutable".to_owned(),
+            applicability,
+            precondition: "nothing else makes it illegal".to_owned(),
+            generation: 1,
+            file: plan(Some(1)).files.remove(0),
+        }
+    }
+
+    #[test]
+    fn a_quick_fix_is_preferred_only_when_automatic_and_alone_and_review_says_when() {
+        use nazm_diag::Applicability::{Automatic, NeedsReview};
+        assert!(preferred(&fix_plan(Automatic, 1)));
+        assert!(
+            !preferred(&fix_plan(Automatic, 2)),
+            "one of several alternatives"
+        );
+        assert!(
+            !preferred(&fix_plan(NeedsReview, 1)),
+            "review is never preferred"
+        );
+        assert_eq!(
+            fix_title(&fix_plan(Automatic, 1)),
+            "Fix N0310: make the binding mutable"
+        );
+        assert_eq!(
+            fix_title(&fix_plan(NeedsReview, 1)),
+            "Review fix N0310: make the binding mutable — right only if nothing else makes it illegal"
+        );
+    }
+
+    #[test]
+    fn the_server_never_writes_a_source_file() {
+        // A quick fix or a rename is returned as an edit for the client to apply; nothing in
+        // this module writes a file. Spelled in halves so this test does not find itself.
+        let source = include_str!("lsp.rs");
+        for forbidden in [concat!("fs::", "write"), concat!("File::", "create")] {
+            assert!(!source.contains(forbidden), "`{forbidden}` in lsp.rs");
+        }
     }
 
     #[test]
