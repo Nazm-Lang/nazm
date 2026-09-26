@@ -13,7 +13,9 @@
 //!   its record, enum or variant, and completion and constructor signature help from it
 //!   (N21);
 //! - [`symbols`] — the declarations the current analyses know, one document's as an
-//!   outline and every analysed file's as a searchable list (N22).
+//!   outline and every analysed file's as a searchable list (N22);
+//! - [`semantic`] — what each identifier of a document is, as the checker decided it:
+//!   class, declaration or reference, and identity (N23).
 //!
 //! The first two were `nazm-cli`'s until N16 and moved here unchanged in what they decide,
 //! so the command line and the language service cannot disagree about a module graph.
@@ -24,6 +26,7 @@ pub mod completion;
 pub mod load;
 pub mod rename;
 pub mod root;
+pub mod semantic;
 pub mod service;
 pub mod signature;
 pub mod structure;
@@ -31,6 +34,9 @@ pub mod symbols;
 
 pub use completion::{Completion, CompletionCandidate, Context, NoCompletion};
 pub use rename::{Edit, FileEdit, Refusal, RenamePlan, Renameable};
+pub use semantic::{
+    NoIdentifiers, Role, SemanticClass, SemanticIdentifier, SemanticIdentifiers, SemanticTarget,
+};
 pub use service::{Definition, Hover, LanguageService, Location, Published, References, Target};
 pub use signature::{
     CallInfo, Help, NoCall, Parameter, Rendered, Signature, SignatureHelp, TypeParameter,
