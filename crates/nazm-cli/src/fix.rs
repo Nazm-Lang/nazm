@@ -170,6 +170,20 @@ fn collect(diagnostics: &[Diagnostic], map: &SourceMap) -> Vec<Edit> {
 /// and the other is reported as skipped so the next run can offer it against the new
 /// text.
 fn write_back(edits: &mut [Edit]) {
+    write_back_with(
+        edits,
+        |p| std::fs::read_to_string(p),
+        |p, t| std::fs::write(p, t),
+    );
+}
+
+/// [`write_back`], reading and writing through `read` and `write` — the file system in
+/// every run, and a failure a test can arrange in the unit tests of each skip reason.
+fn write_back_with(
+    edits: &mut [Edit],
+    read: impl Fn(&Path) -> std::io::Result<String>,
+    mut write: impl FnMut(&Path, &str) -> std::io::Result<()>,
+) {
     // Keyed by an owned name rather than a borrow of `edits`, which the loop below
     // writes back into.
     let mut by_file: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -181,7 +195,7 @@ fn write_back(edits: &mut [Edit]) {
 
     for (name, mut indices) in by_file {
         let path = PathBuf::from(&name);
-        let Ok(original) = std::fs::read_to_string(&path) else {
+        let Ok(original) = read(&path) else {
             for i in indices {
                 if let Some(e) = edits.get_mut(i) {
                     e.skipped = Some("the file could not be read");
@@ -237,7 +251,7 @@ fn write_back(edits: &mut [Edit]) {
             }
             continue;
         }
-        if text == original || std::fs::write(&path, &text).is_ok() {
+        if text == original || write(&path, &text).is_ok() {
             for i in written {
                 if let Some(e) = edits.get_mut(i) {
                     e.applied = true;
@@ -290,4 +304,177 @@ fn summarise(applied: usize, wrote: bool, remaining: usize) {
         if applied == 1 { "" } else { "s" },
         if remaining == 1 { "" } else { "s" }
     );
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    //! One test per reason an edit is not applied, each reaching its own branch: the reason
+    //! is the exact one reported, and what was written — or that nothing was — is checked.
+
+    use std::cell::RefCell;
+    use std::io;
+
+    use super::*;
+
+    const FILE: &str = "prog.nz";
+    const TEXT: &str = "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n";
+
+    /// An automatic edit to [`FILE`] replacing `start..end`, expecting what [`TEXT`] has
+    /// there.
+    fn edit(start: u32, end: u32, replacement: &str) -> Edit {
+        Edit {
+            schema: SCHEMA,
+            code: "N0310".to_owned(),
+            file: FILE.to_owned(),
+            start,
+            end,
+            replacement: replacement.to_owned(),
+            description: "d".to_owned(),
+            applicability: Applicability::Automatic,
+            precondition: "p".to_owned(),
+            expected: TEXT
+                .get(start as usize..end as usize)
+                .unwrap_or_default()
+                .to_owned(),
+            applied: false,
+            skipped: None,
+        }
+    }
+
+    /// `write_back_with` over [`TEXT`], returning what was written, if anything.
+    fn run(edits: &mut [Edit], readable: bool, writable: bool) -> Option<String> {
+        let written = RefCell::new(None);
+        write_back_with(
+            edits,
+            |_| match readable {
+                true => Ok(TEXT.to_owned()),
+                false => Err(io::Error::other("unreadable")),
+            },
+            |_, t| {
+                *written.borrow_mut() = Some(t.to_owned());
+                match writable {
+                    true => Ok(()),
+                    false => Err(io::Error::other("unwritable")),
+                }
+            },
+        );
+        written.into_inner()
+    }
+
+    fn at(needle: &str) -> u32 {
+        u32::try_from(TEXT.find(needle).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_fix_that_needs_review_is_collected_and_never_applied() {
+        let map = SourceMap::single(FILE.to_owned(), TEXT.to_owned());
+        let span = nazm_span::Span::new(nazm_span::FileId::ROOT, 0, 0);
+        let d = Diagnostic::error(nazm_diag::codes::TYPE_MISMATCH, span, "m").fix_with_review(
+            span,
+            ";",
+            "discard the value",
+            "the value was meant to be discarded",
+        );
+        let mut edits = collect(&[d], &map);
+        assert_eq!(edits[0].skipped, Some("it needs review"));
+        assert_eq!(run(&mut edits, true, true), None, "nothing to write");
+        assert!(!edits[0].applied);
+    }
+
+    #[test]
+    fn an_unreadable_file_is_left_alone() {
+        let mut edits = [edit(at("x ="), at("x =") + 1, "mut x")];
+        assert_eq!(run(&mut edits, false, true), None);
+        assert_eq!(edits[0].skipped, Some("the file could not be read"));
+        assert!(!edits[0].applied);
+    }
+
+    #[test]
+    fn of_two_overlapping_edits_the_later_is_applied_and_the_earlier_skipped() {
+        // `let x` — one edit over `let x`, one over `x`: the later in the file wins.
+        let x = at("x =");
+        let mut edits = [edit(x - 4, x + 1, "let mut x"), edit(x, x + 1, "mut x")];
+        let written = run(&mut edits, true, true).unwrap();
+        assert_eq!(
+            edits[0].skipped,
+            Some("it overlaps an edit already applied in this run")
+        );
+        assert!(!edits[0].applied);
+        assert!(edits[1].applied);
+        assert_eq!(written, TEXT.replacen("let x", "let mut x", 1));
+    }
+
+    #[test]
+    fn a_span_outside_the_file_is_not_a_place_to_edit() {
+        let len = u32::try_from(TEXT.len()).unwrap();
+        let mut edits = [edit(len, len + 3, "!")];
+        assert_eq!(run(&mut edits, true, true), None);
+        assert_eq!(
+            edits[0].skipped,
+            Some("the span does not name a range of this file")
+        );
+    }
+
+    #[test]
+    fn a_span_inside_a_character_is_not_a_place_to_edit() {
+        // `é` is two bytes: offset 1 is inside it.
+        let text = "fn é() -> Int { 1 }\n";
+        let mut e = edit(0, 0, "!");
+        e.start = 4;
+        e.end = 5;
+        e.expected = String::new();
+        let written = RefCell::new(None);
+        let mut edits = [e];
+        write_back_with(
+            &mut edits,
+            |_| Ok(text.to_owned()),
+            |_, t| {
+                *written.borrow_mut() = Some(t.to_owned());
+                Ok(())
+            },
+        );
+        assert_eq!(written.into_inner(), None);
+        assert_eq!(
+            edits[0].skipped,
+            Some("the span does not name a range of this file")
+        );
+    }
+
+    #[test]
+    fn an_edit_whose_bytes_changed_is_refused() {
+        let x = at("x =");
+        let mut e = edit(x, x + 1, "mut x");
+        // The checker saw `y` here; the file says `x`.
+        e.expected = "y".to_owned();
+        let mut edits = [e];
+        assert_eq!(run(&mut edits, true, true), None, "nothing is written");
+        assert_eq!(
+            edits[0].skipped,
+            Some("the file changed since it was checked")
+        );
+        assert!(!edits[0].applied);
+    }
+
+    #[test]
+    fn an_edit_that_breaks_the_parse_is_rolled_back() {
+        let x = at("x =");
+        let mut edits = [edit(x, x + 1, "{{{")];
+        assert_eq!(run(&mut edits, true, true), None, "nothing is written");
+        assert_eq!(
+            edits[0].skipped,
+            Some("applying it produced a file that does not parse")
+        );
+        assert!(!edits[0].applied);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_written_is_not_claimed_applied() {
+        let x = at("x =");
+        let mut edits = [edit(x, x + 1, "mut x")];
+        let attempted = run(&mut edits, true, false);
+        assert_eq!(attempted, Some(TEXT.replacen("let x", "let mut x", 1)));
+        assert_eq!(edits[0].skipped, Some("the file could not be written"));
+        assert!(!edits[0].applied);
+    }
 }
