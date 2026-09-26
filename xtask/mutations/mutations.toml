@@ -5034,7 +5034,7 @@ find = """            (&a.name, &a.selection.path, a.selection.start, a.kind).cm
                 &b.selection.path,"""
 replace = """            (&a.selection.path, a.selection.start, a.kind).cmp(&(
                 &b.selection.path,"""
-killers = [{ package = "nazm-service", test = "symbols", name = "workspace_order_is_name_file_position_kind_every_time" }]
+killers = [{ package = "nazm-service", test = "symbols", name = "a_workspace_query_is_a_case_sensitive_substring_of_the_name" }]
 
 [[mutation]]
 name = "n22-a-protocol-selection-is-the-declaration"
