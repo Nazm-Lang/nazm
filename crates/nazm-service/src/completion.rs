@@ -39,6 +39,14 @@ pub enum Context {
     Value,
     Call,
     Type,
+    /// A field name after `.` (N21, [`crate::structure`]).
+    Member,
+    /// A variant name after `E.` (N21).
+    Variant,
+    /// A record construction's label (N21).
+    RecordLabel,
+    /// A variant construction's or pattern's payload label (N21).
+    PayloadLabel,
 }
 
 /// One suggestion: a name, what it means, and what the compiler already knows about it.
@@ -78,6 +86,9 @@ pub enum NoCompletion {
     NotACompletionSite,
     /// The checker could not establish the scope there.
     Unavailable(Unavailable),
+    /// A field, variant or label position whose record, enum or variant the checker did
+    /// not identify (N21).
+    Unanchored,
     /// The source is a syntax recovery where this answer depends on it: the function the
     /// position is in, for its locals; any file of the compilation, for the functions and
     /// types a module may name. A recovered tree may have lost a declaration, so the
@@ -125,10 +136,16 @@ impl LanguageService {
             .current(path, version)
             .ok_or(NoCompletion::NotCurrent)?;
         let at = name_at(&s.cst, offset).ok_or(NoCompletion::NotAName)?;
-        let context = context(s, at).ok_or(NoCompletion::NotACompletionSite)?;
+        // Not a lexical name: a field, variant or label, answered from structure (N21).
+        let Some(context) = context(s, at) else {
+            return crate::structure::completion(s, at, offset);
+        };
         match context {
             Context::Value => locals_are_complete(s, at.start)?,
             Context::Call | Context::Type => module_names_are_complete(s)?,
+            Context::Member | Context::Variant | Context::RecordLabel | Context::PayloadLabel => {
+                return Err(NoCompletion::NotACompletionSite)
+            }
         }
         // The scope where the identifier starts: what could be written in its place.
         let names = visible(s, at.start)?;
@@ -140,6 +157,9 @@ impl LanguageService {
             Context::Value => names.values,
             Context::Call => names.callables,
             Context::Type => names.types,
+            Context::Member | Context::Variant | Context::RecordLabel | Context::PayloadLabel => {
+                return Err(NoCompletion::NotACompletionSite)
+            }
         };
         let mut items: Vec<CompletionCandidate> = pool
             .into_iter()
@@ -229,7 +249,7 @@ fn context(s: &Snapshot, at: nazm_span::Span) -> Option<Context> {
 }
 
 /// Where a program's own candidate is declared, read from the reference index.
-fn declaration(s: &Snapshot, c: Candidate) -> Option<Location> {
+pub(crate) fn declaration(s: &Snapshot, c: Candidate) -> Option<Location> {
     let Candidate::Entity(t) = c else { return None };
     match s.target(s.index.declaration(t)?)? {
         Target::File(l) => Some(l),
