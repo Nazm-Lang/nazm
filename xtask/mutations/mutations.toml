@@ -3257,6 +3257,7 @@ targets = [
     { package = "nazm-service", test = "fixes" },
     # N25: and which calls it checked, from which body.
     { package = "nazm-service", test = "hierarchy" },
+    { package = "nazm-service", test = "incomplete" },
 ]
 
 [[profile]]
@@ -3267,6 +3268,9 @@ targets = [
     { package = "nazm-syntax", lib = true },
     { package = "nazm-syntax", test = "grammar" },
     { package = "nazm-syntax", test = "format" },
+    # N26: a completion probe's parse, and what the service makes of it.
+    { package = "nazm-syntax", test = "holes" },
+    { package = "nazm-service", test = "incomplete" },
     { package = "nazm-core", test = "language" },
     { package = "nazm-core", test = "records" },
     { package = "nazm-core", test = "enums" },
@@ -3299,6 +3303,7 @@ targets = [
     { package = "nazm-service", test = "semantic" },
     { package = "nazm-service", test = "fixes" },
     { package = "nazm-service", test = "hierarchy" },
+    { package = "nazm-service", test = "incomplete" },
 ]
 
 [[profile]]
@@ -3349,6 +3354,7 @@ targets = [
     { package = "nazm-service", test = "semantic" },
     { package = "nazm-service", test = "fixes" },
     { package = "nazm-service", test = "hierarchy" },
+    { package = "nazm-service", test = "incomplete" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
@@ -4841,7 +4847,9 @@ killers = [{ package = "nazm-service", test = "structure", name = "structure_com
 name = "n21-a-label-given-elsewhere-is-offered"
 why = "a field the construction already gives is offered again"
 file = "crates/nazm-service/src/structure.rs"
-find = "        .filter(|m| !found.provided.contains(&m.target))"
+# Repointed in N26: the candidate list is built by `candidates`, which a name being written
+# and a hole share. The killer is unchanged.
+find = "        .filter(|m| !provided.contains(&m.target))"
 replace = "        .filter(|m| !m.name.is_empty())"
 killers = [{ package = "nazm-service", test = "structure", name = "a_label_given_elsewhere_is_not_offered_and_the_one_being_edited_is" }]
 
@@ -4904,7 +4912,9 @@ killers = [{ package = "nazm-service", test = "structure", name = "constructor_s
 name = "n21-a-recovery-is-ignored"
 why = "structure answers whatever the compilation recovered from, though a lost declaration or local could change the anchor"
 file = "crates/nazm-service/src/structure.rs"
-find = """    if s.analysis.syntax_errors.is_empty() {
+# Repointed in N26: the rule now takes the files with a syntax error and a concrete tree, so a
+# completion probe applies it to its own parse. The killer is unchanged.
+find = """    if syntax_errors.is_empty() {
         return Ok(());"""
 replace = """    if true {
         return Ok(());"""
@@ -5487,3 +5497,84 @@ file = "crates/nazm-cli/src/lsp.rs"
 find = "        let at = match self.built.iter().position(|l| std::ptr::eq(l.text, text)) {"
 replace = "        let at = match self.built.iter().position(|_| true) {"
 killers = [{ package = "nazm-cli", test = "lsp", name = "call_hierarchy_crosses_the_protocol_in_utf16_and_an_old_item_has_no_answer" }]
+
+# ---- N26: completion at a hole ------------------------------------------------------------
+
+[[mutation]]
+name = "n26-a-hole-is-any-earlier-dot"
+why = "a probe takes a `.` before the cursor for the hole, so a position after it — in whitespace, or further on — is completed as if the cursor were at the `.`"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "            .is_some_and(|h| self.tokens.get(index).is_some_and(|t| t.span.end == h))"
+replace = "            .is_some_and(|h| self.tokens.get(index).is_some_and(|t| t.span.end <= h))"
+killers = [{ package = "nazm-syntax", test = "holes", name = "a_hole_is_read_only_at_the_cursor_and_changes_only_its_statement" }]
+
+[[mutation]]
+name = "n26-the-hole-forgives-every-statement"
+why = "the `;` the hole's statement leaves unwritten is forgiven in every later statement too, so another mistake in the hole's function is parsed as if it were not one"
+file = "crates/nazm-syntax/src/parser.rs"
+find = """            self.hole_open = false;
+"""
+replace = """
+"""
+killers = [{ package = "nazm-syntax", test = "holes", name = "a_hole_leaves_every_other_mistake_a_mistake" }]
+
+[[mutation]]
+name = "n26-a-bare-paren-is-a-construction"
+why = "a probe reads `Name(` as a construction rather than the call the grammar reads, so a record is guessed where a function of the same name is what is called"
+file = "crates/nazm-syntax/src/parser.rs"
+find = """                    return Some(Expr::Call {
+                        callee: name,
+                        callee_span: span,
+                        type_args,
+                        args: Vec::new(),
+                        span: span.join(close),
+                    });"""
+replace = """                    return Some(Expr::Construct {
+                        ty: name,
+                        ty_span: span,
+                        type_args,
+                        fields: Vec::new(),
+                        span: span.join(close),
+                    });"""
+killers = [{ package = "nazm-service", test = "incomplete", name = "a_record_and_a_function_of_one_spelling_are_never_guessed_at_a_bare_paren" }]
+
+[[mutation]]
+name = "n26-a-pattern-hole-needs-an-arm"
+why = "a pattern's hole must be followed by `=>` and a body, so the payload labels of a pattern being written are never offered"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "            let hole_arm = holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);"
+replace = "            let hole_arm = false && holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);"
+killers = [{ package = "nazm-service", test = "incomplete", name = "a_bare_paren_after_a_variant_offers_its_payload_labels" }]
+
+[[mutation]]
+name = "n26-an-ambiguous-name-anchors"
+why = "a probe anchors through a type name the module refused as ambiguous, picking one of two imports' records"
+file = "crates/nazm-core/src/check.rs"
+find = "        self.res.probing() && self.types.refused.iter().any(|n| n == name)"
+replace = "        self.res.probing() && self.types.refused.iter().any(|n| n == name) && false"
+killers = [{ package = "nazm-service", test = "incomplete", name = "private_and_ambiguous_imports_are_never_anchors" }]
+
+[[mutation]]
+name = "n26-the-probe-ignores-recovery"
+why = "a hole is answered whatever else the compilation recovered from — a lost declaration at the top level, or a broken dependency"
+file = "crates/nazm-service/src/incomplete.rs"
+find = """    complete(&probe.analysis.syntax_errors, root.root(), offset)
+        .map_err(|_| NoCompletion::RecoveredSyntax)?;"""
+replace = "    let _ = (&probe.analysis.syntax_errors, root.root());"
+killers = [{ package = "nazm-service", test = "incomplete", name = "only_the_hole_is_forgiven" }]
+
+[[mutation]]
+name = "n26-a-hole-replaces-the-dot"
+why = "a hole's completion replaces the character before the cursor, so accepting a field deletes the `.`"
+file = "crates/nazm-service/src/incomplete.rs"
+find = "        start: offset,"
+replace = "        start: offset.saturating_sub(1),"
+killers = [{ package = "nazm-service", test = "incomplete", name = "a_bare_dot_offers_the_receivers_fields_whatever_the_receiver_is" }]
+
+[[mutation]]
+name = "n26-open-paren-triggers-completion"
+why = "`(` is advertised as a completion trigger, so every call's argument list pops a completion that signature help owns"
+file = "crates/nazm-cli/src/lsp.rs"
+find = """            trigger_characters: Some(vec![".".to_owned()]),"""
+replace = """            trigger_characters: Some(vec![".".to_owned(), "(".to_owned()]),"""
+killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
