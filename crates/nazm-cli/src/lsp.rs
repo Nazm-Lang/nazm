@@ -15,10 +15,12 @@
 //! Exactly what is implemented, and the initialize response says so: full-document
 //! synchronisation (open, change, close), published diagnostics, definition, hover,
 //! references (N17), prepare-rename and rename (N18), completion (N19) — of a value, a
-//! call's head or a type, invoked on an identifier, with no trigger characters — and
+//! call's head or a type, invoked on an identifier — and
 //! signature help (N20), of the call the checker checked, triggered by `(` and `,` — and,
 //! since N21, completion of a field after `.`, a variant after `E.` and a construction's
 //! or pattern's label, and signature help for a record or variant construction — and,
+//! since N26, the same completion with nothing written yet, right after a `.` or a `(`,
+//! anchored by a completion probe, with `.` as the one trigger character — and,
 //! since N22, document symbols (one file's declarations, nested, in source order) and
 //! workspace symbols (every declaration of the files the open documents' compilations
 //! load, filtered by a case-sensitive substring, with nothing to resolve later) — and, since
@@ -124,10 +126,13 @@ fn capabilities() -> ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         references_provider: Some(OneOf::Left(true)),
-        // Invoked, not triggered: completion is of an identifier being written, and every
-        // item is final — there is nothing more to resolve.
+        // Invoked, and triggered by `.` alone (N26): after a `.` a field or variant is
+        // what comes next. Not `(`, which signature help answers, nor `,` or `:`. What a
+        // request is about is decided from the current source, never from the trigger the
+        // client reports. Every item is final — there is nothing more to resolve.
         completion_provider: Some(CompletionOptions {
             resolve_provider: Some(false),
+            trigger_characters: Some(vec![".".to_owned()]),
             ..CompletionOptions::default()
         }),
         // `(` opens an argument list and `,` moves to the next argument: the two

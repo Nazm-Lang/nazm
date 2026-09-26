@@ -281,8 +281,8 @@ fn the_server_speaks_the_protocol_end_to_end() {
     assert_eq!(caps["renameProvider"], json!({"prepareProvider": true}));
     assert_eq!(
         caps["completionProvider"],
-        json!({"resolveProvider": false}),
-        "invoked only: no trigger characters, nothing to resolve"
+        json!({"resolveProvider": false, "triggerCharacters": ["."]}),
+        "`.` the one trigger — not `(`, `,` or `:` — and nothing to resolve"
     );
     assert_eq!(
         caps["signatureHelpProvider"],
@@ -1020,8 +1020,8 @@ fn structure_completion_and_constructor_help_cross_the_protocol_in_utf16() {
     let init = c.initialize(&root);
     assert_eq!(
         init["result"]["capabilities"]["completionProvider"],
-        json!({"resolveProvider": false}),
-        "still invoked only: no `.` trigger, since a name must be there to complete"
+        json!({"resolveProvider": false, "triggerCharacters": ["."]}),
+        "`.` alone triggers completion since N26"
     );
     c.open(&main, 1, STRUCTURE_MAIN);
     c.diagnostics_for(&uri(&main));
@@ -1739,6 +1739,107 @@ fn a_hierarchy_item_belongs_to_the_document_it_was_prepared_from() {
     c.close(&b);
     let r = c.request("callHierarchy/incomingCalls", json!({"item": via_b}));
     assert_eq!(r["result"], Value::Null, "{r}");
+    let (status, stderr) = c.finish();
+    assert_eq!(status, Some(0), "{stderr}");
+}
+
+// ---------------------------------------------------------------------------------------
+// Completion at a hole, and the `.` trigger (N26).
+// ---------------------------------------------------------------------------------------
+
+// `é😀` before each hole on its line; each hole in a function of its own, so each is the
+// only unfinished statement of its function.
+const HOLE_MAIN: &str = "struct Point {\n    y: Int,\n    x: Int,\n}\nenum State {\n    Ready,\n    Done(code: Int),\n}\n\
+fn a(p: Point) -> Int {\n    let s = \"é😀\"; let n = p.\n    0\n}\n\
+fn b() -> Int {\n    let s = \"é😀\"; let t = State.\n    0\n}\n\
+fn c() -> Int {\n    let s = \"p.\"; // State.\n    0\n}\n";
+
+#[test]
+fn a_hole_completes_over_the_protocol_triggered_by_a_dot_in_utf16() {
+    let (_dir, root) = project(&[("main.nz", HOLE_MAIN)]);
+    let main = root.join("main.nz");
+    let mut c = Client::start(&root);
+    c.initialize(&root);
+    c.open(&main, 1, HOLE_MAIN);
+    c.diagnostics_for(&uri(&main));
+    let lines: Vec<&str> = HOLE_MAIN.lines().collect();
+    let triggered = json!({"context": {"triggerKind": 2, "triggerCharacter": "."}});
+    let invoked = json!({"context": {"triggerKind": 1}});
+    let edit = |line: u32, character: u32, text: &str| {
+        json!({"range": {"start": {"line": line, "character": character},
+                         "end": {"line": line, "character": character}},
+               "newText": text})
+    };
+    for (line, needle, expected) in [
+        (9, "p.", vec![("x", "x: Int"), ("y", "y: Int")]),
+        (
+            13,
+            "State.",
+            vec![("Done", "Done(code: Int)"), ("Ready", "Ready()")],
+        ),
+    ] {
+        let text = lines[line];
+        let byte = text.find(needle).unwrap() + needle.len();
+        let character = utf16(text, byte);
+        assert_ne!(character as usize, byte, "bytes and units differ here");
+        let line = u32::try_from(line).unwrap();
+        let by_dot = c.at(
+            "textDocument/completion",
+            &main,
+            line,
+            character,
+            triggered.clone(),
+        );
+        let asked = c.at(
+            "textDocument/completion",
+            &main,
+            line,
+            character,
+            invoked.clone(),
+        );
+        // What the source says, however the client says it asked.
+        assert_eq!(by_dot["result"], asked["result"], "{needle}");
+        let items = by_dot["result"]["items"].as_array().unwrap().clone();
+        let got: Vec<(String, String)> = items
+            .iter()
+            .map(|i| {
+                (
+                    i["label"].as_str().unwrap().to_owned(),
+                    i["detail"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        let want: Vec<(String, String)> = expected
+            .iter()
+            .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+            .collect();
+        assert_eq!(got, want, "{needle}");
+        // Each inserts its name at the cursor and replaces nothing: not the `.`.
+        for i in &items {
+            assert_eq!(
+                i["textEdit"],
+                edit(line, character, i["label"].as_str().unwrap())
+            );
+        }
+        assert_eq!(by_dot["result"]["isIncomplete"], false);
+    }
+    // A `.` the client reports as a trigger where the source has no hole: in a string, in a
+    // comment, and after whitespace. Nothing is made up.
+    let text = lines[17];
+    for byte in [
+        text.find("p.").unwrap() + 2,
+        text.find("State.").unwrap() + 6,
+        text.find("    ").unwrap() + 2,
+    ] {
+        let r = c.at(
+            "textDocument/completion",
+            &main,
+            17,
+            utf16(text, byte),
+            triggered.clone(),
+        );
+        assert_eq!(r["result"], Value::Null, "{byte}: {r}");
+    }
     let (status, stderr) = c.finish();
     assert_eq!(status, Some(0), "{stderr}");
 }
