@@ -370,13 +370,55 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
-### After N24, in dependency order
+### After N25, in dependency order
 
-No item is chosen here; N24 left these standing.
+No item is chosen here; N25 left these standing.
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| Call hierarchy | checked calls ✓, references ✓, symbols ✓ | not asked for |
+| Completion after a bare `.` or `(`, and a `.` trigger | structure ✓ | needs an anchor for source that does not parse |
+| Rename of exported definitions | rename ✓ | unchanged since N18; call hierarchy is complete only for the compilation it was prepared in, so it proves nothing about other importers |
+| Edits of files not open | rename ✓, quick fixes ✓ | unchanged since N18 |
+| MCP, semantic context packets | a language service ✓, scope, call, structure, symbols, identifiers and call hierarchy ✓ | not started |
+| `semanticTokens/range` and `/full/delta` | semantic tokens ✓ | no evidence justifies them |
+| Refactors, source actions, fix-all | quick fixes ✓ | not asked for; each is its own contract |
+| Incremental reparse | a lossless CST ✓ | the interleaved N24/N25 comparison detected no warm-edit delta; still no evidence that forces it |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+| `?` on `Option`, and conversion between error types | traits | unchanged |
+
+### N25 — Semantic call hierarchy: prepare, incoming and outgoing calls — **complete, 2026-09-26**
+
+An editor can now ask which source functions call a function and which it calls, one level at a
+time. An item is a function the checker declared from source, prepared from its declaration or
+a call through the reference index, at its outline symbol's ranges; an edge is a checked call to
+such a function, attributed to the body the checker recorded it in, grouped by the function at
+the other end with every callee name. No per-call state, no graph and no item table: each answer
+is derived from the current analysis and dropped. An item is bound to the compilation it was
+prepared in and the generation it was prepared at, and is unanswered after any change or once
+its root closes. It is complete only for that compilation snapshot — not every caller in a
+project — so exported rename stays refused. No language, interface, schema, cache-key or
+bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint `0e1a40e6…`.
+
+| Settled | Where |
+| --- | --- |
+| `prepare_call_hierarchy`, `incoming_calls`, `outgoing_calls`, `Locator`; `function_symbol` shared with the outline | `crates/nazm-service/src/hierarchy.rs`, `crates/nazm-service/src/symbols.rs`, `architecture.md` §7.27 |
+| `textDocument/prepareCallHierarchy` and `callHierarchy/incomingCalls` / `outgoingCalls`, UTF-16, stale item `null` | `crates/nazm-cli/src/lsp.rs` |
+| what it costs: no detected analyse/edit/RSS delta; no persistent state; incoming over the compiler about 0.5 ms; +65,536 bytes of binary | `performance.md` |
+
+Mutation evidence: 14 new, 2 repointed, all 16 killers verified on the final source on their
+first run; one targeted campaign of 24, all caught at tier 1, in one session
+(`capability-matrix.md` §30).
+
+**N26 has not started.**
+
+### After N24, in dependency order
+
+No item is chosen here; N24 left these standing. *Superseded by "After N25" above.*
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Call hierarchy | checked calls ✓, references ✓, symbols ✓ | done by N25 |
 | Completion after a bare `.` or `(`, and a `.` trigger | structure ✓ | needs an anchor for source that does not parse |
 | Rename of exported definitions | rename ✓ | unchanged since N18 |
 | Edits of files not open | rename ✓, quick fixes ✓ | unchanged since N18: neither a rename nor a fix edits a closed file |
@@ -409,8 +451,6 @@ is VERIFIED. No language, interface, schema, cache-key or bootstrap change: `SEM
 Mutation evidence: 17 new, 2 repointed, all 20 affected killers verified on the final source
 (one after its test was extended to reach the case it guards); one targeted campaign of 29, all
 caught at tier 1, in one session (`capability-matrix.md` §30).
-
-**N25 has not started.**
 
 ### After N23, in dependency order
 

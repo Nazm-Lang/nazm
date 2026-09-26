@@ -1318,6 +1318,55 @@ container, is 3,085,184 bytes at N23 and 3,150,720 bytes at N24: **+65,536 bytes
 64 KiB step of the file's layout, for the fix-plan module, the quick-fix handler and their
 `lsp-types` structures. No dependency was added.
 
+### Call hierarchy — measured 2026-09-26
+
+N25 adds no per-call state: the caller of each checked call is the body whose `call_sites` the
+checker already records at the same point. **Persistent call-hierarchy state: zero entries** —
+no item table, no graph, no field on `CheckedCall`. Incoming calls scan every call site of the
+item's compilation once (O(calls), a hash lookup each, into a request-local map from caller to
+spans that is dropped with the answer); outgoing calls read the item's own call sites
+(O(its calls)). On the compiler's largest compilation (`emit.nz`, 286,160 bytes): 120 functions
+in the file, 8,873 checked calls in its compilation, 603 outgoing edges carrying 1,702
+navigable call occurrences from the file's functions, to 191 distinct callees.
+
+Compared interleaved with N24 (`7406b3e`), four rounds each in one container, contained, P1
+(`target/n25/ab`, not committed):
+
+| On the compiler (`emit.nz`) | N24 | N25 |
+| --- | --- | --- |
+| `analyse` | 34.63–35.28 ms | 34.68–35.76 ms |
+| warm edit | 84.58–85.69 ms | 84.98–85.16 ms |
+| resident, compiler open | 34.51–34.53 MB | 34.51–34.72 MB |
+
+The requests, two runs in the same container (`target/n25/bench`), medians:
+
+| Fixture | prepare | incoming | outgoing | over stdio: prepare / incoming / outgoing |
+| --- | --- | --- | --- | --- |
+| two functions, two calls | 4.8 µs | 2.7 µs | 1.4 µs | 83–96 / 91–104 / 79–91 µs |
+| four modules, an import cycle | 4.3 µs | 3.8 µs | 3.7 µs | — |
+| two roots over one file, each root | 4.1–4.2 µs | 2.5–2.7 µs | 1.5 µs | — |
+| one target, 200 callers | 285 µs | 239 µs | 1.7 µs | 587–593 µs / 2.98–2.99 ms / 102–103 µs |
+| one caller, 200 callees | 288 µs | 10 µs | 235 µs | 639–680 µs / 110–111 µs / 2.94–2.98 ms |
+| `emit.nz`, its busiest caller (30 callees, 260 calls) | 1.84 ms | 369 µs | 124 µs | 2.04–2.15 / 0.78–0.79 / 1.32 ms |
+| `emit.nz`, its most-called function (48 callers, 372 calls) | 1.81 ms | 567 µs | 2.1 µs | 2.45–2.46 / 2.04–2.06 ms / 101 µs |
+
+**What the numbers say.** The interleaved comparison detected no analyse, warm-edit or resident
+delta beyond the rounds' own spread — one N25 round's resident figure is 0.2 MB higher, within
+what the edits leave behind — and none is expected: N25 changes no code analysis runs and keeps
+nothing. Preparing costs what finding the name under the cursor costs: `definition` at the same
+name in `emit.nz` is 1.84 ms, the same as prepare, because both walk the document's concrete
+tree to find the token (N16's rule, shared). Incoming calls over the whole compiler's
+compilation are about half a millisecond; outgoing, a tenth. Over stdio, a request with many
+edges is dominated by building and serialising the items — 200 items with their data in about
+3 ms. Before any evidence run the adapter built a line index of the whole file for every item
+and range list, which made incoming calls of `emit.nz`'s most-called function 21 ms over stdio
+on the host; it now builds one per file per response (and a mutation guards that).
+
+**What it added to the binary.** The release `nazm`, built from both trees in the same
+container, is 3,150,720 bytes at N24 and 3,216,256 bytes at N25: **+65,536 bytes, +2.1%**, one
+64 KiB step of the file's layout, for the hierarchy module, the three handlers and their
+`lsp-types` structures. No dependency was added.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
