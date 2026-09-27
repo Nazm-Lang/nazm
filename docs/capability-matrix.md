@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,555 passed, 0 failed, 13 ignored, across 83 suites**, run contained at
-N26 (2026-09-27), at P4T4; the thirteen ignored are the xtask lifecycle tests,
-run on their own (13 of 13 passed, contained). N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,580 passed, 0 failed, 13 ignored, across 86 suites**, run contained at
+N27 (2026-09-27), at P4T4; the thirteen ignored are the xtask lifecycle tests,
+run on their own (13 of 13 passed, contained). N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -75,7 +75,7 @@ run on their own (13 of 13 passed, contained). N25 ended at 1,532 across 81, N24
 | 22 | Diagnostics | VERIFIED |
 | 23 | Formatter | VERIFIED |
 | 24 | Machine-applicable fixes | VERIFIED |
-| 25 | LSP and MCP | PARTIAL / MISSING |
+| 25 | LSP and MCP | PARTIAL / PARTIAL |
 | 26 | Package and build tooling | PARTIAL |
 | 27 | Debugger and profiler | MISSING |
 | 28 | Performance measurement | PARTIAL |
@@ -1177,7 +1177,7 @@ document version — which is what a command that reads and writes a file in one
 **Accepted when** · Each skip reason has a test that reaches it: met, 2026-09-26 (N24), for
 the seven the code has.
 
-### 25. LSP — PARTIAL · MCP — MISSING
+### 25. LSP — PARTIAL · MCP — PARTIAL
 
 **Evidence** · *N16, 2026-09-25.* `nazm lsp` serves the Language Server Protocol over stdio
 (`crates/nazm-cli/src/lsp.rs`) as an adapter over a protocol-independent language service
@@ -1499,6 +1499,41 @@ still what they were. `crates/nazm-cli/tests/lsp.rs` the real process: `.` adver
 invoked and triggered completion identical after `é😀`, each edit empty at the UTF-16 cursor, and a
 trigger in a string, a comment or whitespace answered `null`. Eight N26 mutations (area 30).
 
+*N27, 2026-09-27: Semantic Context Packet v1, `nazm.context/1` — VERIFIED for source-backed
+functions, records and enums, in the current root compilation, with direct semantic links and
+target-local diagnostics; and MCP — PARTIAL: one read-only stdio tool, `nazm.semantic_context`,
+reading the disk at each call.* A packet (`crates/nazm-service/src/context.rs`, `architecture.md`
+§7.29) is the target found through the reference index at a byte offset, its durable identity, its
+signature or shape by the existing renderers, its exact source by N22's range, and compact links —
+identity, kind, name, place — for its dependencies (every entity used inside it, grouped by
+identity), related types (written type names, directly), references (uses only), callers and
+callees (N25; `not_applicable` for a type) and diagnostics inside it; effects, capabilities, tests,
+semantic changes and deltas are `unsupported`, never empty. Paths are source-root-relative and
+nothing session-local is serialised. `nazm context --json` prints it; `nazm-mcp`
+(`crates/nazm-mcp/src/main.rs`), on the official Rust SDK, serves it with
+`schema/nazm.context-1.json` as its output schema. This establishes semantic context retrieval for
+those three kinds and a compact-by-design contract for the fields it promises; it does not make a
+packet sufficient for every task, and G68–G70 remain broader. Evidence:
+`crates/nazm-service/tests/context.rs` — a function, record and enum each the same packet from its
+declaration and from a use, a record and a function of one name and two modules' `helper` apart;
+locals, parameters, fields, variants, labels, intrinsics, built-in types, whitespace, keywords and
+comments refused, a file beside the root and `/etc/passwd` not in the compilation; the exact source
+slice; dependencies grouped by identity with every occurrence, same-named fields of two records
+apart, locals, intrinsics and the target itself excluded; related types direct, the prelude named
+with no place; references every use and not the declaration; callers and callees equal to call
+hierarchy's, a type's not applicable; diagnostics only the target's; availability unsupported; a
+syntax error or a missing module refusing; two roots over one file each seeing its own; a hundred
+serialisations and a copy in another directory byte-identical with no absolute path; each packet of
+the disk as it is then; and, over the repository's own source, 649 packets of 70 clean documents
+matching N22's ranges and signatures and N23's classification, every dependency occurrence the
+reference index's use of the linked entity, and callers and callees N25's. `crates/nazm-cli/tests/schemas.rs`
+the real command's packets and refusals valid against the schema. `crates/nazm-mcp/tests/protocol.rs`
+the real server through the SDK's client: only tools advertised, one read-only tool with the
+published output schema, packets equal to the service's, protocol errors for an unknown tool and bad
+arguments, refusals for files outside the compilation, the disk re-read between calls with a broken
+edit refused and a repair answered, two servers with two roots isolated, 1,000 calls with flat
+resident memory, and nothing but JSON-RPC on standard output. Thirteen N27 mutations (area 30).
+
 **Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
 help, symbols, full-document semantic tokens, quick fixes and call hierarchy only: no
 formatting, refactors, source actions or inlay hints, no cancellation and no watched files.
@@ -1538,13 +1573,20 @@ another syntax error, and nothing when any other file, or the document's top lev
 `.` is the only trigger character; `(` is not one. A hole's completion costs a second parse and
 check of the compilation per request (`performance.md`).
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
-are published for open documents only. MCP does not exist.
+are published for open documents only. **MCP is one read-only tool** (N27): the semantic context
+packet over stdio, from disk, for one fixed root — no resources, prompts, completions, sampling or
+edits, no HTTP, and no view of an editor's unsaved buffers. A packet has no effects, capabilities,
+test mapping, semantic history or semantic delta (each `unsupported`), covers only the root's
+compilation — no project-wide completeness — and is refused for a compilation that needed syntax
+recovery.
 
 **Next dependency** · None for what exists. Each further request needs its own semantic
 contract; incremental reparse needs latency evidence, which N16's measurements do not give.
 
 **Accepted when** · Met for the LSP, 2026-09-25 (N16): an adapter shares the compiler's
-semantic engine rather than re-implementing it. MCP: not started.
+semantic engine rather than re-implementing it. MCP: partial since N27 (2026-09-27) — one read-only
+tool over the same service; not accepted, since it answers one question of the many the service
+can.
 
 ### 26. Package and build tooling — PARTIAL
 
@@ -1631,8 +1673,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **457** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25), **269** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **470** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26), **282** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -2133,6 +2175,23 @@ tier 2 or 3, no survivor, crash, timeout, unusable or uninjected entry, no runne
 `incomplete` suite joined the `cli`, `semantics`, `checker` and `syntax` profiles, and `holes` the
 `syntax` profile. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not
 re-run and are as they were.
+
+*N27 (2026-09-27) added thirteen,* on the frozen final source; every killer was verified by
+`--verify-killer`, contained at P1, one at a time, with no host build running: 13 of 13, the two in
+`nazm-mcp` against the real server inside the container. They attack N27's invariants: a target
+found by spelling, a local reported as a dependency, dependencies grouped by name, the declaration
+listed as a reference, effects claimed, an absolute path serialised, a type given empty callers, the
+source not the declaration, a file outside the compilation answered, a recovered compilation
+answered, every diagnostic put in every packet, the server printing to stdout, and resources
+advertised. **Campaign `fa7cfe95c8339d2e`, targeted, P1, one session, 1,700 s:** those thirteen, and
+eleven N17, N18, N22 and N25 entries on what a packet consumes — same-named functions or fields
+indexed as one, a cross-file use dropped, a declaration taken for a use, uses in map order, a written
+type not recorded, the selection range, another root answering, the wrong caller, references taken
+for calls, and edge order ignoring the file. **24 of 24 caught at tier 1**; nothing at tier 2 or 3,
+no survivor, crash, timeout, unusable or uninjected entry, no runner error. The `context` suite
+joined the `cli`, `semantics` and `checker` profiles, and `crates/nazm-mcp/src/` the `cli` profile
+with its binary and `protocol` suite. N13's use-after-free survivor and the `nesting-unbounded`
+MUTANT CRASH were not re-run and are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

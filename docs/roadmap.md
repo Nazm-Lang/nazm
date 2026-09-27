@@ -370,15 +370,56 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N27, in dependency order
+
+No item is chosen here; N27 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| MCP expansion | the context packet ✓, one read-only tool ✓ | only where a question needs it; each tool is its own contract |
+| Semantic delta (G71) | context packets ✓ | needs its own contract; comparing two packets is not one |
+| Test-to-definition mapping | a relation the compiler owns | tests are not tied to definitions today |
+| Effect and capability context | the language owning effects and capabilities | both are MISSING as language features |
+| Rename of exported definitions | rename ✓ | unchanged since N18 |
+| Edits of files not open | rename ✓, quick fixes ✓ | unchanged since N18 |
+| `semanticTokens/range` and `/full/delta` | semantic tokens ✓ | no evidence justifies them |
+| Refactors, source actions, fix-all | quick fixes ✓ | not asked for; each is its own contract |
+| Incremental reparse, or a persistent analysis for MCP | a lossless CST ✓ | each MCP call re-analyses its root; no evidence yet forces a cache and its freshness contract |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+
+### N27 — Semantic context packet v1 and read-only MCP — **complete, 2026-09-27**
+
+The first AI-facing semantic unit. `nazm.context/1` is one function's, record's or enum's exact
+source and compact links — identity, kind, name, place — to what it uses, the types it names, what
+uses it, what it calls and what calls it, and its own diagnostics, all read from the layers that
+already answer them; effects, capabilities, tests and semantic changes are marked unsupported.
+Durable identities, source-root-relative paths, one deterministic serialisation. `nazm context`
+prints it, and `nazm-mcp`, on the official Rust SDK, serves it as one read-only stdio tool that
+reads the disk at every call. No language, interface, cache-key or bootstrap change:
+`SEMANTIC_EPOCH` 7, `nazm.interface/5`, fixpoint `0e1a40e6…`; one new machine schema.
+
+| Settled | Where |
+| --- | --- |
+| the packet, `nazm.context/1`, from N17/N18/N20/N21/N22/N25 | `crates/nazm-service/src/context.rs`, `schema/nazm.context-1.json`, `architecture.md` §7.29 |
+| `nazm context --root --file --byte --json` | `crates/nazm-cli/src/context.rs` |
+| `nazm-mcp`: one read-only stdio tool, disk per call, no other file readable | `crates/nazm-mcp/src/main.rs`, `docs/mcp.md` |
+| what it costs | `performance.md` |
+
+Mutation evidence: 13 new mutations, every killer verified; one targeted campaign of 24
+(`capability-matrix.md` §30).
+
+**N28 has not started.**
+
 ### After N26, in dependency order
 
-No item is chosen here; N26 left these standing.
+No item is chosen here; N26 left these standing. *Superseded by "After N27" above.*
 
 | | Depends on | Why not before |
 | --- | --- | --- |
 | Rename of exported definitions | rename ✓ | unchanged since N18 |
 | Edits of files not open | rename ✓, quick fixes ✓ | unchanged since N18 |
-| MCP, semantic context packets | a language service ✓, scope, call, structure, symbols, identifiers, call hierarchy ✓ | not started |
+| MCP, semantic context packets | a language service ✓, scope, call, structure, symbols, identifiers, call hierarchy ✓ | done by N27: one packet, one read-only tool |
 | `semanticTokens/range` and `/full/delta` | semantic tokens ✓ | no evidence justifies them |
 | Refactors, source actions, fix-all | quick fixes ✓ | not asked for; each is its own contract |
 | Completion after a comma, at an empty label slot later in a list | completion at a hole ✓ | not asked for; N26 answers an empty list only |
@@ -411,8 +452,6 @@ schema, cache-key or bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`, f
 Mutation evidence: 8 new mutations and 2 N21 mutations repointed; every killer verified, the four in the parser
 again on the final source; one targeted campaign of 28, all caught at tier 1
 (`capability-matrix.md` §30).
-
-**N27 has not started.**
 
 ### After N25, in dependency order
 
