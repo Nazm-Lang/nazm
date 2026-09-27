@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.delta-1.json",
+  "title": "nazm.delta/1",
+  "description": "What changed between a baseline `nazm.snapshot/1` and the current compilation of the same root, from `nazm delta --json` and the `nazm-mcp` tool `nazm.semantic_delta`. Definitions are matched by durable key only: a rename is a removal and an addition. A changed definition names exactly which recorded sections changed; `source` alone is a change in text the other recorded sections do not see. Nothing here claims behaviour is unchanged: `unsupported` lists what is not recorded. `status` is `available` with every section, or `unavailable` with a `reason` and no other section.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": { "const": "nazm.delta/1" },
+    "status": { "enum": ["available", "unavailable"] },
+    "reason": {
+      "enum": [
+        "not_current",
+        "incomplete_compilation",
+        "no_durable_root",
+        "baseline_wrong_schema",
+        "baseline_unavailable",
+        "baseline_malformed",
+        "baseline_invalid_identity",
+        "baseline_duplicate_identity",
+        "baseline_invalid_digest",
+        "baseline_wrong_root",
+        "baseline_wrong_compiler"
+      ],
+      "description": "Why there is no delta: the current compilation has no snapshot, or the baseline is not exactly a `nazm.snapshot/1` of this root by this compiler. A baseline is refused, never compared as well as it can be. Present only when `status` is `unavailable`."
+    },
+    "root": { "$ref": "#/$defs/root" },
+    "baseline": { "$ref": "#/$defs/counts" },
+    "current": { "$ref": "#/$defs/counts" },
+    "added": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/definition" },
+      "description": "In the current compilation and not the baseline, where each is declared now. Ordered by identity."
+    },
+    "removed": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/definition" },
+      "description": "In the baseline and not the current compilation, where each was declared. Ordered by identity."
+    },
+    "changed": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/change" },
+      "description": "In both, with a different digest in at least one recorded section. Ordered by identity."
+    },
+    "unchanged": { "type": "integer", "minimum": 0, "description": "In both, with every recorded section's digest equal." },
+    "unsupported": {
+      "const": ["effects", "capabilities", "tests", "semantic_history", "behavioural_equivalence"],
+      "description": "Not recorded, so never reported as changed or unchanged."
+    }
+  },
+  "$defs": {
+    "root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "compiler"],
+      "properties": {
+        "module": { "type": "string", "description": "The root module's durable key." },
+        "compiler": { "type": "string" }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["definitions", "untracked"],
+      "properties": {
+        "definitions": { "type": "integer", "minimum": 0 },
+        "untracked": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "start", "end"],
+      "properties": {
+        "file": { "type": "string" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "kind", "declaration"],
+      "properties": {
+        "identity": { "type": "string" },
+        "kind": { "enum": ["function", "record", "enum"] },
+        "declaration": { "$ref": "#/$defs/span" }
+      }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "kind", "declaration", "sections"],
+      "properties": {
+        "identity": { "type": "string" },
+        "kind": { "enum": ["function", "record", "enum"] },
+        "declaration": { "$ref": "#/$defs/span", "description": "Where it is declared now." },
+        "sections": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "shape", "dependencies", "related_types", "references", "callers", "callees", "diagnostics"],
+          "description": "Whether each recorded section's digest differs. `callers` and `callees` are null for a record or an enum: not applicable.",
+          "properties": {
+            "source": { "type": "boolean" },
+            "shape": { "type": "boolean" },
+            "dependencies": { "type": "boolean" },
+            "related_types": { "type": "boolean" },
+            "references": { "type": "boolean" },
+            "callers": { "type": ["boolean", "null"] },
+            "callees": { "type": ["boolean", "null"] },
+            "diagnostics": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

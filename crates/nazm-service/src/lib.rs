@@ -21,7 +21,11 @@
 //! - [`hierarchy`] — a source function and the direct calls the checker recorded into and
 //!   out of it, in the compilation it was prepared from (N25);
 //! - [`context`] — one source definition's exact source and compact semantic links, as a
-//!   `nazm.context/1` packet (N27).
+//!   `nazm.context/1` packet (N27);
+//! - [`snapshot`] — one root compilation's durable definitions, with a digest per recorded
+//!   semantic section, as `nazm.snapshot/1` (N28);
+//! - [`delta`] — a baseline snapshot against the current compilation of its root: what was
+//!   added, removed, or changed in which recorded section, as `nazm.delta/1` (N28).
 //!
 //! The first two were `nazm-cli`'s until N16 and moved here unchanged in what they decide,
 //! so the command line and the language service cannot disagree about a module graph.
@@ -30,6 +34,7 @@
 
 pub mod completion;
 pub mod context;
+pub mod delta;
 pub mod fixes;
 pub mod hierarchy;
 mod incomplete;
@@ -39,11 +44,13 @@ pub mod root;
 pub mod semantic;
 pub mod service;
 pub mod signature;
+pub mod snapshot;
 pub mod structure;
 pub mod symbols;
 
 pub use completion::{Completion, CompletionCandidate, Context, NoCompletion};
 pub use context::{ContextPacket, ContextResult, NoContext};
+pub use delta::{DeltaResult, NoDelta, SemanticDelta};
 pub use fixes::{FixPlan, NoFixes};
 pub use hierarchy::{HierarchyFunction, IncomingCall, Locator, NoHierarchy, OutgoingCall};
 pub use rename::{Edit, FileEdit, Refusal, RenamePlan, Renameable};
@@ -54,5 +61,6 @@ pub use service::{Definition, Hover, LanguageService, Location, Published, Refer
 pub use signature::{
     CallInfo, Help, NoCall, Parameter, Rendered, Signature, SignatureHelp, TypeParameter,
 };
+pub use snapshot::{NoSnapshot, SemanticSnapshot, SnapshotResult};
 pub use structure::{Constructor, ConstructorHelp, Member, NoStructure, Structure, StructureSite};
 pub use symbols::{DocumentSymbols, NoSymbols, Symbol, SymbolKind, WorkspaceSymbol};

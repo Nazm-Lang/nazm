@@ -108,7 +108,7 @@ pub struct ContextTarget {
 
 /// A durable name for an entity: the definition's key and, for a field, variant or payload
 /// field, which member of it. `definition` is `None` when the module has no durable key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Identity {
     pub definition: Option<String>,
     pub member: Option<String>,
@@ -297,12 +297,7 @@ impl LanguageService {
             .position(|k| *k == wanted)
             .map(FileId::from_index)
             .ok_or(NoContext::NotInCompilation)?;
-        if !s.analysis.syntax_errors.is_empty()
-            || s.analysis
-                .diagnostics
-                .iter()
-                .any(|d| d.code == nazm_diag::codes::MODULE_NOT_FOUND)
-        {
+        if incomplete(s) {
             return Err(NoContext::IncompleteCompilation);
         }
         let text = s.texts.get(f.index()).ok_or(NoContext::NotInCompilation)?;
@@ -492,6 +487,17 @@ impl crate::symbols::Symbol {
     }
 }
 
+/// Whether some file of the compilation needed syntax recovery, or a module could not be
+/// loaded — so what was lost could be a use, a caller or a declaration. Such a compilation
+/// has no packet, and no semantic snapshot (N28).
+pub(crate) fn incomplete(s: &Snapshot) -> bool {
+    !s.analysis.syntax_errors.is_empty()
+        || s.analysis
+            .diagnostics
+            .iter()
+            .any(|d| d.code == nazm_diag::codes::MODULE_NOT_FOUND)
+}
+
 /// The outline symbol of a function, record or enum target, and the file it is in — `None`
 /// for anything else, or a definition with no source an editor can open.
 fn target_symbol(
@@ -516,7 +522,7 @@ fn target_symbol(
 
 /// A function's signature, a record's fields or an enum's variants, by the renderers other
 /// answers use.
-fn shape(
+pub(crate) fn shape(
     res: &nazm_core::Resolution,
     entity: ReferenceTarget,
 ) -> (
@@ -576,7 +582,7 @@ fn shape(
 }
 
 /// The durable identity of an entity: its definition's key, and which member.
-fn identity_of(s: &Snapshot, t: ReferenceTarget) -> Identity {
+pub(crate) fn identity_of(s: &Snapshot, t: ReferenceTarget) -> Identity {
     let res = &s.analysis.resolution;
     let module_key = |m| s.graph.key(m).cloned();
     let key = |d: Option<DefKey>| d.map(|k| k.to_string());
@@ -731,12 +737,12 @@ fn call(
 }
 
 /// Paths relative to the compilation's source root, for every file it loaded.
-struct Paths {
+pub(crate) struct Paths {
     files: Vec<Option<String>>,
 }
 
 impl Paths {
-    fn of(s: &Snapshot, root: &Path, source_root: Option<&Path>) -> Self {
+    pub(crate) fn of(s: &Snapshot, root: &Path, source_root: Option<&Path>) -> Self {
         let base = crate::root::decide(root, source_root)
             .ok()
             .map(|r| identity(r.path()));
@@ -758,11 +764,11 @@ impl Paths {
         Self { files }
     }
 
-    fn file(&self, f: FileId) -> Option<String> {
+    pub(crate) fn file(&self, f: FileId) -> Option<String> {
         self.files.get(f.index()).cloned().flatten()
     }
 
-    fn span(&self, at: Span) -> Option<SourceSpan> {
+    pub(crate) fn span(&self, at: Span) -> Option<SourceSpan> {
         Some(SourceSpan {
             file: self.file(at.file)?,
             start: at.start,

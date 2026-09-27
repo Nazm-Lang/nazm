@@ -148,7 +148,7 @@ impl LanguageService {
         let mut callers: BTreeMap<FnId, Vec<Span>> = BTreeMap::new();
         for (i, def) in res.functions().iter().enumerate() {
             for site in &def.call_sites {
-                if res.checked_call(site.span).map(|c| c.callee) == Some(Callee::Function(target)) {
+                if callee(res, site.span) == Some(target) {
                     callers
                         .entry(FnId::from_index(i))
                         .or_default()
@@ -180,7 +180,7 @@ impl LanguageService {
         let res = &s.analysis.resolution;
         let mut callees: BTreeMap<FnId, Vec<Span>> = BTreeMap::new();
         for site in res.function(caller).map_or(&[][..], |f| &f.call_sites) {
-            if let Some(Callee::Function(to)) = res.checked_call(site.span).map(|c| c.callee) {
+            if let Some(to) = callee(res, site.span) {
                 callees.entry(to).or_default().push(site.span);
             }
         }
@@ -225,6 +225,16 @@ impl LanguageService {
             }
             _ => Err(NoHierarchy::NotCurrent),
         }
+    }
+}
+
+/// The function a call site of a body calls, if the checker checked a call there to a
+/// function — the one edge rule incoming and outgoing calls, and a semantic snapshot's
+/// callers and callees (N28), all read. A built-in is no function here.
+pub(crate) fn callee(res: &nazm_core::Resolution, site: Span) -> Option<FnId> {
+    match res.checked_call(site).map(|c| c.callee) {
+        Some(Callee::Function(to)) => Some(to),
+        _ => None,
     }
 }
 
