@@ -137,14 +137,21 @@ fn validate(value: &Value, node: &Value, root: &Value, at: &str, problems: &mut 
             problems.push(format!("{at}: {n} is below the minimum"));
         }
     }
-    // The only pattern these schemas use is the diagnostic code's. Checked for what it
-    // means rather than by a regex engine, and asserted to be that pattern so a new one
-    // cannot slip through unchecked.
+    // The only patterns these schemas use are the diagnostic code's and a snapshot
+    // digest's (N28). Checked for what they mean rather than by a regex engine, and
+    // asserted to be those patterns so a new one cannot slip through unchecked.
     if let Some(Value::String(p)) = map.get("pattern") {
-        assert_eq!(p, "^N[0-9]{4}$", "{at}: the test only knows one pattern");
-        let ok = value.as_str().is_some_and(|s| {
-            s.len() == 5 && s.starts_with('N') && s[1..].bytes().all(|b| b.is_ascii_digit())
-        });
+        let ok = match p.as_str() {
+            "^N[0-9]{4}$" => value.as_str().is_some_and(|s| {
+                s.len() == 5 && s.starts_with('N') && s[1..].bytes().all(|b| b.is_ascii_digit())
+            }),
+            "^[0-9a-f]{64}$" => value.as_str().is_some_and(|s| {
+                s.len() == 64
+                    && s.bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            }),
+            other => panic!("{at}: the test does not know the pattern {other:?}"),
+        };
         if !ok {
             problems.push(format!("{at}: {value} does not match {p}"));
         }
@@ -535,4 +542,77 @@ fn h() -> Int { match f(P(x: 1), S.A()) { Option.Some(value: v) => v, Option.Non
     assert_eq!(packets[6]["reason"], "out_of_range");
     assert_eq!(packets[7]["reason"], "not_in_compilation");
     check_against("nazm.context-1.json", &packets);
+}
+
+#[test]
+fn a_snapshot_and_a_delta_are_nazm_snapshot_1_and_nazm_delta_1_available_or_not() {
+    // A function with callers, callees, dependencies and a diagnostic; a record and an enum,
+    // whose calls are not applicable; each reason there is no snapshot, and several there
+    // is no delta.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let main = dir.path().join("main.nz");
+    let lib = dir.path().join("lib.nz");
+    let text = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nenum S {\n    A,\n    B(v: Int),\n}\n\
+fn f(p: P, s: S) -> Int { let y = 1 + \"s\"; g(p.x) }\n\
+fn h() -> Int { f(P(x: 1), S.A()) }\n";
+    std::fs::write(&main, text).unwrap();
+    std::fs::write(&lib, "pub fn g(n: Int) -> Int { n }\n").unwrap();
+    let run = |args: &[&std::ffi::OsStr]| -> (Value, Option<i32>) {
+        let out = Command::new(NAZM).args(args).output().expect("run nazm");
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(stdout.lines().count(), 1, "one compact line: {stdout}");
+        (serde_json::from_str(&stdout).unwrap(), out.status.code())
+    };
+    let snapshot = |root: &Path| {
+        run(&[
+            "snapshot".as_ref(),
+            "--json".as_ref(),
+            "--root".as_ref(),
+            root.as_os_str(),
+        ])
+    };
+    let (good, code) = snapshot(&main);
+    assert_eq!(code, Some(0));
+    assert_eq!(good["status"], "available");
+    let baseline = dir.path().join("baseline.json");
+    std::fs::write(&baseline, good.to_string()).unwrap();
+    let delta = |root: &Path, baseline: &Path| {
+        run(&[
+            "delta".as_ref(),
+            "--json".as_ref(),
+            "--root".as_ref(),
+            root.as_os_str(),
+            "--baseline".as_ref(),
+            baseline.as_os_str(),
+        ])
+    };
+    std::fs::write(
+        &lib,
+        "pub fn g(n: Int) -> Int { n + 1 }\npub fn k() -> Int { 2 }\n",
+    )
+    .unwrap();
+    let (changed, code) = delta(&main, &baseline);
+    assert_eq!(code, Some(0));
+    assert_eq!(changed["changed"][0]["identity"], "lib.nz::fn g");
+    assert_eq!(changed["added"][0]["identity"], "lib.nz::fn k");
+
+    let other = dir.path().join("other.json");
+    std::fs::write(&other, "{not json").unwrap();
+    let (malformed, code) = delta(&main, &other);
+    assert_eq!(code, Some(1));
+    assert_eq!(malformed["reason"], "baseline_malformed");
+    let (wrong_root, _) = delta(&lib, &baseline);
+    assert_eq!(wrong_root["reason"], "baseline_wrong_root");
+    std::fs::write(&lib, "pub fn g(n: Int) -> Int { n + }\n").unwrap();
+    let (broken, code) = snapshot(&main);
+    assert_eq!(code, Some(1));
+    assert_eq!(broken["reason"], "incomplete_compilation");
+    let (broken_delta, _) = delta(&main, &baseline);
+    assert_eq!(broken_delta["reason"], "incomplete_compilation");
+
+    check_against("nazm.snapshot-1.json", &[good, broken]);
+    check_against(
+        "nazm.delta-1.json",
+        &[changed, malformed, wrong_root, broken_delta],
+    );
 }

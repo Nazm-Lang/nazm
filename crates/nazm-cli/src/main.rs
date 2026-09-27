@@ -42,6 +42,7 @@ mod fix;
 mod fmt;
 mod interface;
 mod lsp;
+mod snapshot;
 // Moved to `nazm-service` in N16, so `nazm lsp` loads exactly as every command does.
 use nazm_service::{load, root};
 mod test;
@@ -181,6 +182,47 @@ enum Command {
         /// The position, as a byte offset into `--file`.
         #[arg(long)]
         byte: u32,
+        /// The one canonical compact serialisation. Without it, the same object indented.
+        #[arg(long)]
+        json: bool,
+        /// Measure every module's durable identity from this directory, as
+        /// `nazm check --source-root` does.
+        #[arg(long)]
+        source_root: Option<PathBuf>,
+    },
+    /// Print the semantic snapshot of a root's compilation, `nazm.snapshot/1`.
+    ///
+    /// Every durable function, record and enum the compilation rooted at `--root` declares,
+    /// each with one digest per semantic section the compiler records, from the disk as it
+    /// is now. Keep it as the baseline of a later `nazm delta`. A digest is evidence the
+    /// canonical data it was taken over is equal, not that behaviour is.
+    /// `docs/architecture.md` §7.30.
+    Snapshot {
+        /// The compilation's root module.
+        #[arg(long)]
+        root: PathBuf,
+        /// The one canonical compact serialisation. Without it, the same object indented.
+        #[arg(long)]
+        json: bool,
+        /// Measure every module's durable identity from this directory, as
+        /// `nazm check --source-root` does.
+        #[arg(long)]
+        source_root: Option<PathBuf>,
+    },
+    /// Print what changed since a baseline snapshot, `nazm.delta/1`.
+    ///
+    /// Compares `--baseline`, a `nazm.snapshot/1` file of the same root, with the
+    /// compilation rooted at `--root` as it is on disk now: durable definitions added,
+    /// removed, and changed — naming exactly which recorded sections changed. Matching is
+    /// by durable key only, so a rename is a removal and an addition. A baseline that is not
+    /// exactly a snapshot of this root, by this compiler, is refused.
+    Delta {
+        /// The compilation's root module.
+        #[arg(long)]
+        root: PathBuf,
+        /// A `nazm.snapshot/1` file, as `nazm snapshot --json` wrote it.
+        #[arg(long)]
+        baseline: PathBuf,
         /// The one canonical compact serialisation. Without it, the same object indented.
         #[arg(long)]
         json: bool,
@@ -365,6 +407,17 @@ fn main() -> ExitCode {
             json,
             source_root,
         } => return context::run(&root, &file, byte, json, source_root.as_deref()),
+        Command::Snapshot {
+            root,
+            json,
+            source_root,
+        } => return snapshot::snapshot(&root, json, source_root.as_deref()),
+        Command::Delta {
+            root,
+            baseline,
+            json,
+            source_root,
+        } => return snapshot::delta(&root, &baseline, json, source_root.as_deref()),
         Command::Fmt { files, check } => return fmt::run(&files, check),
         Command::Test {
             paths,
@@ -397,6 +450,8 @@ fn main() -> ExitCode {
         | Command::Check { .. }
         | Command::Fix { .. }
         | Command::Context { .. }
+        | Command::Snapshot { .. }
+        | Command::Delta { .. }
         | Command::Fmt { .. }
         | Command::Test { .. }
         | Command::Interface { .. }
