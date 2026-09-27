@@ -749,6 +749,7 @@ dependencies = [
 name = "nazm-service"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "nazm-core",
  "nazm-diag",
  "nazm-span",

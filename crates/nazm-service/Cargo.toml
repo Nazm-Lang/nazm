@@ -16,6 +16,8 @@ nazm-core = { workspace = true }
 # The context packet's one serialisation, `nazm.context/1` (N27).
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The semantic snapshot's section digests, `nazm.snapshot/1` (N28): the workspace's one hash.
+blake3 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
