@@ -25,6 +25,8 @@ use serde_json::{json, Value};
 
 const SERVER: &str = env!("CARGO_BIN_EXE_nazm-mcp");
 const TOOL: &str = "nazm.semantic_context";
+const SNAPSHOT: &str = "nazm.semantic_snapshot";
+const DELTA: &str = "nazm.semantic_delta";
 
 const LIB: &str = "pub fn far() -> Int { 1 }\n";
 const MAIN: &str = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nenum S {\n    A,\n    B(v: Int),\n}\nfn f(p: P) -> Int { far() + p.x }\nfn g() -> Int { f(P(x: 1)) }\n";
@@ -60,6 +62,41 @@ async fn call(client: &RunningService<RoleClient, ()>, file: &str, offset: u32) 
     (r.structured_content.unwrap(), r.is_error.unwrap_or(false))
 }
 
+/// A snapshot or delta tool call, and whether it was a tool error — checking, as for a
+/// packet, that the result travels once.
+async fn call_with(
+    client: &RunningService<RoleClient, ()>,
+    tool: &'static str,
+    arguments: Value,
+) -> (Value, bool) {
+    let r = client
+        .call_tool(
+            CallToolRequestParams::new(tool)
+                .with_arguments(serde_json::from_value(arguments).unwrap()),
+        )
+        .await
+        .unwrap();
+    assert!(r.content.is_empty(), "{:?}", r.content);
+    (r.structured_content.unwrap(), r.is_error.unwrap_or(false))
+}
+
+/// The snapshot the language service gives for the same root, directly.
+fn direct_snapshot(root: &Path) -> Value {
+    let root = root.to_path_buf();
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(nazm_core::__syntax::PARSE_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                let mut s = nazm_service::LanguageService::new();
+                s.open_from_disk(&root).unwrap();
+                serde_json::to_value(s.semantic_snapshot(&root, 0)).unwrap()
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    })
+}
+
 /// The packet the language service gives for the same question, directly.
 fn direct(root: &Path, file: &Path, offset: u32) -> Value {
     let (root, file) = (root.to_path_buf(), file.to_path_buf());
@@ -89,7 +126,7 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 #[test]
-fn the_server_offers_one_read_only_tool_and_nothing_else() {
+fn the_server_offers_read_only_tools_and_nothing_else() {
     let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
     let root = dir.path().join("main.nz");
     runtime().block_on(async {
@@ -100,12 +137,43 @@ fn the_server_offers_one_read_only_tool_and_nothing_else() {
         assert_eq!(keys, ["tools"], "only tools are advertised: {caps}");
         assert_eq!(info.server_info.as_ref().unwrap().name, "nazm-mcp");
         let tools = client.list_all_tools().await.unwrap();
-        assert_eq!(tools.len(), 1);
+        let names: Vec<&str> = tools.iter().map(|t| &*t.name).collect();
+        assert_eq!(names, [TOOL, SNAPSHOT, DELTA]);
+        for (tool, schema) in tools.iter().zip([
+            "nazm.context-1.json",
+            "nazm.snapshot-1.json",
+            "nazm.delta-1.json",
+        ]) {
+            let annotations = tool.annotations.as_ref().unwrap();
+            assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
+            assert_eq!(annotations.destructive_hint, Some(false), "{}", tool.name);
+            assert_eq!(annotations.open_world_hint, Some(false), "{}", tool.name);
+            // Each output schema is exactly the one the repository publishes.
+            let published: Value = serde_json::from_str(
+                &std::fs::read_to_string(
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../schema")
+                        .join(schema),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                Value::Object((*tool.output_schema.clone().unwrap()).clone()),
+                published,
+                "{}",
+                tool.name
+            );
+        }
+        // The snapshot takes nothing; the delta takes one baseline, as data.
+        let snapshot = Value::Object((*tools[1].input_schema).clone());
+        assert_eq!(snapshot["properties"], json!({}));
+        assert_eq!(snapshot["additionalProperties"], false);
+        let delta = Value::Object((*tools[2].input_schema).clone());
+        assert_eq!(delta["required"], json!(["baseline"]));
+        assert_eq!(delta["properties"]["baseline"]["type"], "object");
+        assert_eq!(delta["additionalProperties"], false);
         let tool = &tools[0];
-        assert_eq!(tool.name, TOOL);
-        let annotations = tool.annotations.as_ref().unwrap();
-        assert_eq!(annotations.read_only_hint, Some(true));
-        assert_eq!(annotations.destructive_hint, Some(false));
         let input = Value::Object((*tool.input_schema).clone());
         assert_eq!(input["required"], json!(["file", "byte_offset"]));
         assert_eq!(input["additionalProperties"], false);
@@ -375,4 +443,174 @@ fn standard_output_is_the_protocol_and_nothing_else() {
     assert!(by(4).get("error").is_some(), "unknown tool: {}", by(4));
     assert!(by(5).get("error").is_some(), "no resources: {}", by(5));
     assert!(by(6).get("error").is_some(), "no prompts: {}", by(6));
+}
+
+#[test]
+fn a_snapshot_crosses_the_protocol_unchanged_and_a_delta_needs_only_it() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, _) = connect(&root).await;
+        let (snapshot, error) = call_with(&client, SNAPSHOT, json!({})).await;
+        assert!(!error, "{snapshot}");
+        assert_eq!(snapshot["schema"], "nazm.snapshot/1");
+        assert_eq!(snapshot, direct_snapshot(&root));
+        // The client keeps the snapshot; the server keeps nothing. Handed back unchanged
+        // as the baseline, nothing has changed.
+        let (delta, error) = call_with(&client, DELTA, json!({"baseline": snapshot})).await;
+        assert!(!error, "{delta}");
+        assert_eq!(delta["schema"], "nazm.delta/1");
+        assert_eq!(delta["changed"], json!([]));
+        assert_eq!(
+            delta["unchanged"],
+            snapshot["definitions"].as_array().unwrap().len()
+        );
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_delta_is_of_the_disk_at_that_call_and_its_baseline_is_only_data() {
+    const ONE: &str = "fn h() -> Int { 1 }\nfn f() -> Int { h() }\n";
+    const TWO: &str = "fn h() -> Int { 1 }\nfn k() -> Int { 2 }\nfn f() -> Int { h() + k() }\n";
+    let dir = project(&[("main.nz", ONE)]);
+    std::fs::write(dir.path().join("notes.txt"), "secret\n").unwrap();
+    let root = dir.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, _) = connect(&root).await;
+        let (a, _) = call_with(&client, SNAPSHOT, json!({})).await;
+        // An agent edits the file: the delta against A sees it, with no restart.
+        std::fs::write(&root, TWO).unwrap();
+        let (d, error) = call_with(&client, DELTA, json!({"baseline": a})).await;
+        assert!(!error, "{d}");
+        assert_eq!(d["added"][0]["identity"], "main.nz::fn k");
+        assert_eq!(d["changed"][0]["identity"], "main.nz::fn f");
+        assert_eq!(d["changed"][0]["sections"]["callees"], true);
+        // A breaking edit: no delta — not one from before.
+        std::fs::write(
+            &root,
+            format!("{TWO}fn broken() -> Int {{ let x = ; 1 }}\n"),
+        )
+        .unwrap();
+        let (broken, error) = call_with(&client, DELTA, json!({"baseline": a})).await;
+        assert!(error);
+        assert_eq!(broken["reason"], "incomplete_compilation");
+        let (no_snapshot, error) = call_with(&client, SNAPSHOT, json!({})).await;
+        assert!(error);
+        assert_eq!(no_snapshot["reason"], "incomplete_compilation");
+        // Repaired: the same delta as before the break.
+        std::fs::write(&root, TWO).unwrap();
+        let (again, _) = call_with(&client, DELTA, json!({"baseline": a})).await;
+        assert_eq!(again, d);
+
+        // A baseline is data: a path is not opened, and is not a snapshot.
+        for baseline in [
+            json!("/etc/passwd"),
+            json!("notes.txt"),
+            json!({"path": "/etc/passwd"}),
+        ] {
+            let (v, error) = call_with(&client, DELTA, json!({"baseline": baseline})).await;
+            assert!(error);
+            assert_eq!(v["reason"], "baseline_wrong_schema", "{baseline}");
+            assert!(!v.to_string().contains("secret"));
+        }
+        // Protocol errors: no baseline, an argument the schema does not have, an argument
+        // to the snapshot, which takes none.
+        for (tool, arguments) in [
+            (DELTA, json!({})),
+            (
+                DELTA,
+                json!({"baseline": a, "baseline_file": "/etc/passwd"}),
+            ),
+            (SNAPSHOT, json!({"root": "/"})),
+        ] {
+            let request = CallToolRequestParams::new(tool)
+                .with_arguments(serde_json::from_value(arguments).unwrap());
+            assert!(client.call_tool(request).await.is_err(), "{tool}");
+        }
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_snapshot_and_a_delta_travel_once() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    let baseline = direct_snapshot(&root);
+    let mut child = Command::new(SERVER)
+        .arg("--root")
+        .arg(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let messages = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "raw", "version": "0"}}}),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": SNAPSHOT, "arguments": {}}}),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": DELTA, "arguments": {"baseline": baseline}}}),
+    ];
+    for m in &messages {
+        writeln!(stdin, "{m}").unwrap();
+    }
+    stdin.flush().unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut seen = Vec::new();
+    while seen.len() < 3 {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        seen.push((serde_json::from_str::<Value>(&line).unwrap(), line));
+    }
+    drop(stdin);
+    let _ = child.wait();
+    let by = |id: i64| seen.iter().find(|(v, _)| v["id"] == id).unwrap();
+    let (snapshot, wire) = by(2);
+    assert_eq!(snapshot["result"]["content"], json!([]));
+    assert_eq!(snapshot["result"]["structuredContent"], baseline);
+    assert_eq!(wire.matches("nazm.snapshot/1").count(), 1, "{wire}");
+    assert_eq!(wire.matches("\"unsupported\"").count(), 1, "{wire}");
+    let (delta, wire) = by(3);
+    assert_eq!(delta["result"]["content"], json!([]));
+    assert_eq!(delta["result"]["structuredContent"]["status"], "available");
+    assert_eq!(wire.matches("nazm.delta/1").count(), 1, "{wire}");
+    assert_eq!(wire.matches("\"unsupported\"").count(), 1, "{wire}");
+    eprintln!(
+        "nazm-mcp frames: snapshot {} bytes (structured {}), delta {} bytes (structured {})",
+        by(2).1.trim_end().len(),
+        snapshot["result"]["structuredContent"].to_string().len(),
+        by(3).1.trim_end().len(),
+        delta["result"]["structuredContent"].to_string().len(),
+    );
+}
+
+#[test]
+fn a_thousand_snapshots_and_deltas_keep_nothing() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, pid) = connect(&root).await;
+        let (baseline, _) = call_with(&client, SNAPSHOT, json!({})).await;
+        let (first_delta, _) = call_with(&client, DELTA, json!({"baseline": baseline})).await;
+        for _ in 0..25 {
+            call_with(&client, SNAPSHOT, json!({})).await;
+            call_with(&client, DELTA, json!({"baseline": baseline})).await;
+        }
+        let settled = rss_kb(pid);
+        for i in 0..500 {
+            let (s, _) = call_with(&client, SNAPSHOT, json!({})).await;
+            assert_eq!(s, baseline, "snapshot {i}");
+            let (d, _) = call_with(&client, DELTA, json!({"baseline": baseline})).await;
+            assert_eq!(d, first_delta, "delta {i}");
+        }
+        let after = rss_kb(pid);
+        assert!(after <= settled + 1024, "{settled} kB -> {after} kB");
+        eprintln!(
+            "nazm-mcp RSS: settled {settled} kB, after 1,000 snapshot and delta calls {after} kB"
+        );
+        client.cancel().await.unwrap();
+    });
 }
