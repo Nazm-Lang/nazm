@@ -162,8 +162,8 @@ pub struct ContextLink {
     /// `function`, `record`, `enum`, `field`, `variant` or `payload_field`.
     pub kind: &'static str,
     pub name: String,
-    /// Where its name is declared; `None` for the core prelude, which has no file.
-    pub declaration: Option<SourceSpan>,
+    /// Where its name is declared — always a file of the compilation.
+    pub declaration: SourceSpan,
     /// Where the target's declaration mentions it, in the target's file.
     pub occurrences: Vec<Occurrence>,
 }
@@ -378,9 +378,9 @@ impl LanguageService {
             if !typed.is_empty()
                 && matches!(t, ReferenceTarget::Record(_) | ReferenceTarget::Enum(_))
             {
-                related_types.push(link(s, &paths, t, typed));
+                related_types.extend(link(s, &paths, t, typed));
             }
-            dependencies.push(link(s, &paths, t, all));
+            dependencies.extend(link(s, &paths, t, all));
         }
 
         let mut references: Vec<SourceSpan> = s
@@ -669,10 +669,14 @@ fn link(
     paths: &Paths,
     t: ReferenceTarget,
     occurrences: Vec<Occurrence>,
-) -> ContextLink {
+) -> Option<ContextLink> {
+    // A link is a place to ask about next, so an entity with no declaration in a file of the
+    // compilation — the core prelude's — is no link: it shaped the checking, and the packet
+    // does not pretend it has a source.
+    let declaration = s.index.declaration(t).and_then(|d| paths.span(d))?;
     let identity = identity_of(s, t);
     let name = identity.member.clone().unwrap_or_else(|| name_of(s, t));
-    ContextLink {
+    Some(ContextLink {
         kind: match t {
             ReferenceTarget::Function(_) => "function",
             ReferenceTarget::Record(_) => "record",
@@ -683,10 +687,10 @@ fn link(
             ReferenceTarget::Local(_) => "local",
         },
         name,
-        declaration: s.index.declaration(t).and_then(|d| paths.span(d)),
+        declaration,
         identity,
         occurrences,
-    }
+    })
 }
 
 /// A definition's declared name, read from the definition tables.

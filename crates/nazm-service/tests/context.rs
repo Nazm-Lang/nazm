@@ -347,7 +347,7 @@ fn dependencies_are_the_entities_the_declaration_uses_grouped_by_identity() {
 }
 
 #[test]
-fn related_types_are_direct_and_the_prelude_is_named_not_located() {
+fn related_types_are_direct_and_a_source_less_definition_is_no_link() {
     const TEXT: &str = "\
 struct Inner {
     n: Int,
@@ -355,26 +355,96 @@ struct Inner {
 struct Outer {
     inner: Inner,
 }
-fn f(o: Outer) -> Option[Int] { Option.Some(value: o.inner.n) }
+fn wrap(o: Outer) -> Option[Int] { Option.Some(value: o.inner.n) }
+fn check(r: Result[Int, Str]) -> Bool { match r { Result.Ok(value: v) => v > 0, Result.Err(error: e) => false, } }
 ";
     let p = Project::new(&[("main.nz", TEXT)]);
     let main = p.path("main.nz");
-    let v = packet(&main, &main, at(TEXT, "f(o", 0));
+    let v = packet(&main, &main, at(TEXT, "wrap", 0));
     // `Outer` is written; `Inner` is only reached through it, and is no related type.
     let related = names(&v["related_types"]);
-    assert!(related.contains(&pair("record", "Outer")));
-    assert!(!related.contains(&pair("record", "Inner")));
-    // The core prelude's `Option` is a dependency and a related type with no file.
-    let option = v["related_types"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|l| l["name"] == "Option")
-        .unwrap();
-    assert_eq!(option["declaration"], Value::Null);
+    assert_eq!(related, [pair("record", "Outer")]);
+    // The core prelude's `Option` and its `Some` shaped the checking, and have no file:
+    // they are no link at all — not a link without a place. `Int`, a built-in, neither.
+    // The project's own record and field are still there, each at its declaration.
     assert_eq!(
-        option["identity"]["definition"],
-        "@core/prelude::enum Option"
+        names(&v["dependencies"]),
+        [
+            pair("record", "Outer"),
+            pair("field", "n"),
+            pair("field", "inner"),
+        ]
+    );
+    let r = packet(&main, &main, at(TEXT, "check", 0));
+    assert_eq!(r["dependencies"], json!([]), "{r}");
+    assert_eq!(r["related_types"], json!([]));
+    for packet in [&v, &r] {
+        let text = packet.to_string();
+        assert!(!text.contains("@core"), "{text}");
+        assert!(!text.contains("\"declaration\":null"), "{text}");
+    }
+}
+
+#[test]
+fn every_link_has_a_place_in_the_compilation() {
+    // Across a function's, a record's and an enum's packets: every dependency, related type,
+    // caller and callee is declared in a file the compilation loaded, at a real range.
+    let p = main_and_lib();
+    let main = p.path("main.nz");
+    let text = main_text();
+    for needle in [
+        "user(b",
+        "caller()",
+        "Box {",
+        "State {",
+        "helper(x",
+        "Box(value: Int)",
+    ] {
+        let v = packet(&main, &main, at(&text, needle, 0));
+        let mut links: Vec<Value> = Vec::new();
+        for section in ["dependencies", "related_types"] {
+            links.extend(v[section].as_array().unwrap().iter().cloned());
+        }
+        for calls in ["callers", "callees"] {
+            if let Some(items) = v[calls]["items"].as_array() {
+                links.extend(items.iter().cloned());
+            }
+        }
+        for l in &links {
+            let d = &l["declaration"];
+            let file = d["file"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{needle}: {l}"));
+            assert!(["main.nz", "lib.nz"].contains(&file), "{needle}: {l}");
+            let (start, end) = (d["start"].as_u64().unwrap(), d["end"].as_u64().unwrap());
+            assert!(start < end, "{needle}: {l}");
+            let source = std::fs::read_to_string(p.path(file)).unwrap();
+            assert_eq!(
+                &source[usize::try_from(start).unwrap()..usize::try_from(end).unwrap()],
+                l["name"].as_str().unwrap().rsplit('.').next().unwrap(),
+                "{needle}: {l}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_private_definition_is_a_dependency_like_any_other() {
+    // `hidden` is private to `lib.nz`, and `lib.nz`'s own `open` uses it: the packet of
+    // `open`, asked of `lib.nz` in `main.nz`'s compilation, links it with its place.
+    const LIB: &str = "fn hidden() -> Int { 1 }\npub fn open() -> Int { hidden() }\n";
+    const MAIN: &str = "use \"lib.nz\";\nfn m() -> Int { open() }\n";
+    let p = Project::new(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let v = packet(&p.path("main.nz"), &p.path("lib.nz"), at(LIB, "open", 0));
+    assert_eq!(
+        v["dependencies"],
+        json!([{
+            "identity": {"definition": "lib.nz::fn hidden", "member": null},
+            "kind": "function",
+            "name": "hidden",
+            "declaration": {"file": "lib.nz", "start": 3, "end": 9},
+            "occurrences": [{"start": at(LIB, "hidden()", 1), "end": at(LIB, "hidden()", 1) + 6}]
+        }])
     );
 }
 
@@ -688,14 +758,17 @@ fn every_definition_of_the_repository_has_a_packet_every_layer_agrees_with() {
                             ))
                             .unwrap();
                         assert!(!matches!(t, ReferenceTarget::Local(_)));
-                        let decl = index.declaration(t);
-                        match (&d.declaration, decl) {
-                            (Some(l), Some(span)) => {
-                                assert_eq!((l.start, l.end), (span.start, span.end), "{}", d.name);
-                            }
-                            (None, _) => {}
-                            (Some(_), None) => panic!("a located link to an undeclared entity"),
-                        }
+                        // Every link is declared in a file of the compilation, at the
+                        // place the reference index declares the entity.
+                        let span = index.declaration(t).unwrap();
+                        assert!(loaded.graph.module_of(span.file) != loaded.graph.prelude());
+                        assert_eq!(
+                            (d.declaration.start, d.declaration.end),
+                            (span.start, span.end),
+                            "{}",
+                            d.name
+                        );
+                        assert!(!d.declaration.file.is_empty());
                     }
                 }
                 // N25.
