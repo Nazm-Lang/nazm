@@ -46,7 +46,7 @@ fn schema(name: &str) -> Value {
 
 /// Validate `value` against `node`, resolving `$ref` against `root`.
 ///
-/// Supported keywords, and deliberately no others: `$ref` (to `#/$defs/*` only), `type`,
+/// Supported keywords, and deliberately no others: `$ref` (to `#/$defs/*` only), `oneOf`, `type`,
 /// `const`, `enum`, `required`, `properties`, `additionalProperties: false`, `items`,
 /// `minimum`, `pattern` (as a literal prefix/suffix-free substring check on the two
 /// patterns these schemas use). An unrecognised keyword is an error, so a schema cannot
@@ -97,12 +97,30 @@ fn validate(value: &Value, node: &Value, root: &Value, at: &str, problems: &mut 
                 | "items"
                 | "minimum"
                 | "pattern"
+                | "oneOf"
         );
         if !known {
             problems.push(format!("{at}: the test does not check the keyword {key:?}"));
         }
     }
 
+    // `oneOf` (N29's tagged operation): exactly one alternative accepts the value.
+    if let Some(Value::Array(options)) = map.get("oneOf") {
+        let accepting = options
+            .iter()
+            .filter(|o| {
+                let mut inner = Vec::new();
+                validate(value, o, root, at, &mut inner);
+                inner.is_empty()
+            })
+            .count();
+        if accepting != 1 {
+            problems.push(format!(
+                "{at}: {accepting} of {} alternatives accept {value}",
+                options.len()
+            ));
+        }
+    }
     if let Some(expected) = map.get("const") {
         if value != expected {
             problems.push(format!("{at}: expected {expected}, found {value}"));
@@ -614,5 +632,88 @@ fn h() -> Int { f(P(x: 1), S.A()) }\n";
     check_against(
         "nazm.delta-1.json",
         &[changed, malformed, wrong_root, broken_delta],
+    );
+}
+
+#[test]
+fn a_patch_is_nazm_patch_1_available_or_not() {
+    // A rename of a private function, of a local and of a field; an automatic and a
+    // needs-review fix; and refusals: exported, invalid name, no fix, a file outside.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let main = dir.path().join("main.nz");
+    let lib = dir.path().join("lib.nz");
+    let text = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nfn g(p: P) -> Int { let y = p.x; y + far() }\nfn main() -> Int { g(P(x: 1)) }\n";
+    std::fs::write(&main, text).unwrap();
+    std::fs::write(&lib, "pub fn far() -> Int { 1 }\n").unwrap();
+    let broken = dir.path().join("broken.nz");
+    let broken_text = "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    let mut i = 0;\n    while i < 3 {\n        i = i + 1;\n        i\n    }\n    x\n}\n";
+    std::fs::write(&broken, broken_text).unwrap();
+    let run = |args: &[&std::ffi::OsStr]| -> (Value, Option<i32>) {
+        let out = Command::new(NAZM).args(args).output().expect("run nazm");
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(stdout.lines().count(), 1, "one compact line: {stdout}");
+        (serde_json::from_str(&stdout).unwrap(), out.status.code())
+    };
+    let rename = |root: &Path, file: &Path, byte: usize, name: &str| {
+        run(&[
+            "patch".as_ref(),
+            "rename".as_ref(),
+            "--json".as_ref(),
+            "--root".as_ref(),
+            root.as_os_str(),
+            "--file".as_ref(),
+            file.as_os_str(),
+            "--byte".as_ref(),
+            byte.to_string().as_ref(),
+            "--new-name".as_ref(),
+            name.as_ref(),
+        ])
+    };
+    let fix = |byte: usize, index: usize| {
+        run(&[
+            "patch".as_ref(),
+            "fix".as_ref(),
+            "--json".as_ref(),
+            "--root".as_ref(),
+            broken.as_os_str(),
+            "--file".as_ref(),
+            broken.as_os_str(),
+            "--byte".as_ref(),
+            byte.to_string().as_ref(),
+            "--fix".as_ref(),
+            index.to_string().as_ref(),
+        ])
+    };
+    let at = |t: &str, needle: &str| t.find(needle).unwrap();
+    let (function, code) = rename(&main, &main, at(text, "g(p"), "go");
+    assert_eq!(code, Some(0));
+    assert_eq!(function["status"], "available", "{function}");
+    let (local, _) = rename(&main, &main, at(text, "y ="), "why");
+    let (field, _) = rename(&main, &main, at(text, "x: Int"), "ex");
+    let (automatic, code) = fix(at(broken_text, "x = 2"), 0);
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        automatic["operation"]["applicability"], "automatic",
+        "{automatic}"
+    );
+    let (review, _) = fix(at(broken_text, "i\n    }"), 0);
+    assert_eq!(
+        review["operation"]["applicability"], "needs_review",
+        "{review}"
+    );
+    let (exported, code) = rename(&main, &lib, 7, "near");
+    assert_eq!(code, Some(1));
+    assert_eq!(exported["reason"], "exported");
+    let (invalid, _) = rename(&main, &main, at(text, "g(p"), "fn");
+    assert_eq!(invalid["reason"], "invalid_name");
+    let (none, _) = fix(0, 0);
+    assert_eq!(none["reason"], "no_such_fix");
+    let (outside, _) = rename(&main, Path::new("/etc/passwd"), 0, "x");
+    assert_eq!(outside["reason"], "not_in_compilation");
+    check_against(
+        "nazm.patch-1.json",
+        &[
+            function, local, field, automatic, review, exported, invalid, none, outside,
+        ],
     );
 }
