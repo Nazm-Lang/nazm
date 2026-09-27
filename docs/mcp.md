@@ -1,10 +1,10 @@
 # `nazm-mcp`
 
 A read-only [Model Context Protocol](https://modelcontextprotocol.io) server over stdio, built on
-the official Rust SDK. It offers three tools: the compiler's semantic context packet for a
-definition (N27), and a semantic snapshot of the root's compilation and the delta against one kept
-earlier (N28). It is local compiler tooling — it answers questions about one program, and changes
-nothing.
+the official Rust SDK. It offers four tools: the compiler's semantic context packet for a
+definition (N27), a semantic snapshot of the root's compilation and the delta against one kept
+earlier (N28), and a planned rename or diagnostic fix (N29). It is local compiler tooling — it
+answers questions about one program, and changes nothing.
 
 ## Running it
 
@@ -34,6 +34,7 @@ claims to know every caller or importer in a project.
 | `nazm.semantic_context` | `file`, `byte_offset` | `nazm.context/1` |
 | `nazm.semantic_snapshot` | none | `nazm.snapshot/1` |
 | `nazm.semantic_delta` | `baseline`, a `nazm.snapshot/1` object | `nazm.delta/1` |
+| `nazm.semantic_patch` | `operation` (`rename` or `diagnostic_fix`) and its fields | `nazm.patch/1` |
 
 Each result is carried **once**, in the tool result's structured content, with an empty `content`,
 and each tool's output schema is the published one in `schema/`.
@@ -83,6 +84,27 @@ version, one with a field the schema does not define, a malformed identity, a du
 digest is refused with a reason and `isError: true` — never compared as well as it can be. A
 compilation that needed syntax recovery has no snapshot and no delta.
 
+### `nazm.semantic_patch`
+
+**N29 plans edits but never applies them.** A patch (`schema/nazm.patch-1.json`,
+`docs/architecture.md` §7.31) is a proposal bound to exact semantic and source state, not
+permission to change a file. Two operations:
+
+| `operation` | Fields | Plans |
+| --- | --- | --- |
+| `rename` | `file`, `byte_offset`, `new_name` | the compiler's validated rename of the entity there: locals and private definitions only |
+| `diagnostic_fix` | `file`, `byte_offset`, `fix` | fix number `fix` among those the current diagnostics at that byte carry |
+
+The result is minimal exact-byte edits — each renamed occurrence, or the compiler's one fix span —
+with three freshness layers: `baseline.snapshot`, BLAKE3 of the root's `nazm.snapshot/1`; each
+file's `digest`, BLAKE3 of its bytes; and each edit's `expected` bytes. A client that applies one
+checks all three first. A fix's `applicability` (`automatic` or `needs_review`) and `precondition`
+are structured fields: a `needs_review` patch is never safe to apply unread. An exported
+definition's rename is refused, because one root compilation is not every module that may import
+it; so is a fix at a position with no current diagnostic, whatever code a client expects there,
+and any fix of a syntax diagnostic, whose compilation has no snapshot to bind to. The input is
+typed: no root, no unknown argument, and no client-written replacement is accepted.
+
 ## What it reads, and when
 
 Every call opens the root **from disk as it is then**, derives its answer and drops the analysis.
@@ -91,7 +113,8 @@ delta, never a previous one. No snapshot, history or index is kept between calls
 
 ## What it does not do
 
-- Write, rename or delete anything, run a command, or offer any edit.
+- Write, rename or delete anything, or run a command. `nazm.semantic_patch` describes an edit
+  and applies nothing; there is no tool that applies one, and no plan is kept to apply later.
 - Read a file its root's compilation did not load: `file` is matched against the compilation's
   own files and is otherwise refused unopened, and a baseline is an object, never a path.
 - Keep a previous snapshot, watch the disk, or infer a rename.

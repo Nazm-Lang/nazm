@@ -16,6 +16,7 @@ against them — so these documents are tested rather than described.
 | `nazm.context/1` | `nazm context --json`, and the `nazm-mcp` tool `nazm.semantic_context` | stdout; the tool result's structured content | one object |
 | `nazm.snapshot/1` | `nazm snapshot --json`, and the `nazm-mcp` tool `nazm.semantic_snapshot` | stdout; the tool result's structured content | one object |
 | `nazm.delta/1` | `nazm delta --json`, and the `nazm-mcp` tool `nazm.semantic_delta` | stdout; the tool result's structured content | one object |
+| `nazm.patch/1` | `nazm patch rename --json`, `nazm patch fix --json`, and the `nazm-mcp` tool `nazm.semantic_patch` | stdout; the tool result's structured content | one object |
 
 Every object carries its own `schema` field. Not a header: the output is a stream of
 lines and a consumer may read, log or replay any single one of them, and a version that

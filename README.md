@@ -294,6 +294,8 @@ business raising the floor for the crates that ship.
 | `nazm context --root FILE --file FILE --byte N` | One definition's semantic context packet, `nazm.context/1`: the exact source of the function, record or enum declared or used at that byte, and compact links to what it uses, what uses it, what it calls and what calls it — in the root's compilation, read from disk. `--json` prints the canonical compact form |
 | `nazm snapshot --root FILE` | The root compilation's semantic snapshot, `nazm.snapshot/1`: every durable function, record and enum by identity, with one digest per section the compiler records — source, shape, dependencies, related types, references, callers, callees, diagnostics. Equal digests are not equal behaviour. `--json` prints the canonical compact form |
 | `nazm delta --root FILE --baseline FILE` | What changed since a kept snapshot, `nazm.delta/1`: definitions added, removed, and changed, naming which recorded sections changed — a comment or a literal is `source` alone, a rename is a removal and an addition. A baseline of another root or compiler, or not exactly `nazm.snapshot/1`, is refused. `--json` prints the canonical compact form |
+| `nazm patch rename --root FILE --file FILE --byte N --new-name NAME` | A planned rename, `nazm.patch/1`: the compiler's validated rename of the local or private definition at that byte — never an exported one — as minimal exact-byte edits bound to the root's snapshot, each file's digest and each edit's expected bytes. Plans; never applies. `--json` prints the canonical compact form |
+| `nazm patch fix --root FILE --file FILE --byte N --fix I` | A planned fix, `nazm.patch/1`: fix `I` of those the current diagnostics at that byte carry, with its applicability and precondition, bound the same way. Plans; never applies |
 | `nazm lsp` | Serve the Language Server Protocol to an editor over stdin and stdout: diagnostics, definition, hover, references, safe rename of locals and private definitions, completion of values, call heads and types (invoked on an identifier), completion of a field after `.`, a variant after `E.` and a construction's or pattern's label — also with nothing written yet, right after the `.` or `(`, where the compiler can tell what it belongs to, and triggered by `.`, signature help for calls of functions and built-ins and for record and variant constructions, document symbols (one file's declarations, nested, in source order) workspace symbols (the declarations of every file the open documents' programs load — not a directory scan) full-document semantic tokens (every identifier the checker resolved, by kind and whether it declares; not keywords, comments or literals) quick fixes (the fixes the compiler attaches to current diagnostics, as versioned edits the editor applies) and call hierarchy (a function's direct callers and callees, from the calls the checker recorded in the program the request came from — not every caller in a project), over unsaved buffers, from the same loader and checker as every other command. Nothing else is offered |
 
 An empty `nazm.root` file marks the directory it sits in as the project's source root, so a
@@ -310,12 +312,13 @@ result out, and report what is left as JSON.
 
 ### An MCP server, read-only
 
-`nazm-mcp` (a separate binary: `cargo build --release -p nazm-mcp`) serves three Model Context
+`nazm-mcp` (a separate binary: `cargo build --release -p nazm-mcp`) serves four Model Context
 Protocol tools over stdio, each answering from the compilation of the root it was started with,
 read from disk at every call: `nazm.semantic_context`, the same `nazm.context/1` packet as
 `nazm context` for a file and byte offset; `nazm.semantic_snapshot`, the same `nazm.snapshot/1` as
 `nazm snapshot`; and `nazm.semantic_delta`, the `nazm.delta/1` against a snapshot the client kept
-and passes back as data — the server keeps none. It writes nothing and reads no file that
+and passes back as data — the server keeps none; and `nazm.semantic_patch`, the same
+`nazm.patch/1` as `nazm patch`, a planned rename or fix it never applies. It writes nothing and reads no file that
 compilation does not load. An MCP client starts it as a stdio command:
 
 ```json

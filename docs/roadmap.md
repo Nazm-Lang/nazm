@@ -370,13 +370,59 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
-### After N28, in dependency order
+### After N29, in dependency order
 
-No item is chosen here; N28 left these standing.
+No item is chosen here; N29 left these standing.
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| Semantic patch plans (G72) | rename ✓, quick fixes ✓, snapshots ✓ | each operation is its own contract; a snapshot binds a plan to a compilation, it does not validate one |
+| Patch application, a transactional write | patch plans ✓ | its own safety milestone: checking the three freshness layers, writing atomically, and reporting what was and was not written |
+| Rename of exported definitions | rename ✓, a project/importer boundary | one root compilation is not every importer; unchanged since N18 |
+| A project or importer boundary | a manifest, or a declared universe of roots | nothing today says which files may import a module |
+| Fixes of syntax diagnostics as patches | a snapshot of a recovered compilation, or another binding | N28 has no snapshot where syntax needed recovery |
+| Semantic history, or a persistent snapshot store | snapshots ✓ | unchanged since N28 |
+| Effect and capability context | the language owning effects and capabilities | both are MISSING as language features |
+| Test-to-definition mapping | a relation the compiler owns | unchanged since N27 |
+| Machine-readable diagnostics beyond `nazm.diagnostic/1` | diagnostics ✓ | not asked for yet |
+| `semanticTokens/range` and `/full/delta` | semantic tokens ✓ | no evidence justifies them |
+| Refactors, source actions, fix-all | quick fixes ✓, patch plans ✓ | each is its own contract |
+| Incremental reparse | a lossless CST ✓ | still no evidence that forces it |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+
+### N29 — Minimal semantic patch plan v1 — **complete, 2026-09-27**
+
+The first executable step toward G72. `nazm.patch/1` is an edit the compiler already validates —
+N18's rename, or the fix a current diagnostic carries (N24) — as minimal exact-byte edits, bound
+to the root's N28 snapshot digest, each edited file's BLAKE3 digest and each edit's expected
+bytes. N29 plans edits but never applies them: a patch is a proposal bound to exact semantic and
+source state, not permission to mutate files. Exported rename remains refused, because one root
+compilation is not a complete importer universe; the language server's closed-file rule is
+unchanged. `nazm patch rename|fix` prints a plan; `nazm-mcp` adds one read-only planning tool,
+`nazm.semantic_patch`, and keeps no plan. No language, interface, cache-key or bootstrap change:
+`SEMANTIC_EPOCH` 7, `nazm.interface/5`, `nazm.context/1`, `nazm.snapshot/1`, `nazm.delta/1`
+unchanged; one new machine schema.
+
+| Settled | Where |
+| --- | --- |
+| the patch, `nazm.patch/1`, from N18/N24/N28 | `crates/nazm-service/src/patch.rs`, `schema/nazm.patch-1.json`, `architecture.md` §7.31 |
+| `nazm patch rename`, `nazm patch fix` | `crates/nazm-cli/src/patch.rs` |
+| `nazm-mcp`: `nazm.semantic_patch`, typed, read-only | `crates/nazm-mcp/src/main.rs`, `docs/mcp.md` |
+| what it costs | `performance.md` |
+
+Mutation evidence: 16 new mutations; 30 killers verified on the final source — the sixteen, the
+nine N18 entries in `rename.rs` and the five MCP entries of N27 and N28; one targeted campaign of
+27, all caught at tier 1 (`capability-matrix.md` §30).
+
+**N30 has not started.**
+
+### After N28, in dependency order
+
+No item is chosen here; N28 left these standing. *Superseded by "After N29" above.*
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Semantic patch plans (G72) | rename ✓, quick fixes ✓, snapshots ✓ | done in part by N29: rename and diagnostic-fix plans, never applied |
 | Rename inference, or definition lineage | snapshots ✓, deltas ✓ | a key's continuity is a name in a module; lineage needs a contract of its own |
 | Behavioural or body fingerprints beyond exact source | a semantic IR | N28's `source` section is exact bytes; nothing finer is sound without one |
 | Test impact, effect and capability deltas | a relation the compiler owns, effects and capabilities | tests are not tied to definitions; effects and capabilities are MISSING as language features |
@@ -414,8 +460,6 @@ language, interface, cache-key or bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.in
 Mutation evidence: 20 new mutations and five N25/N27 entries re-pointed onto code N28 now shares;
 49 killers verified on the final source; one targeted campaign of 25, all caught at tier 1
 (`capability-matrix.md` §30).
-
-**N29 has not started.**
 
 ### After N27, in dependency order
 
