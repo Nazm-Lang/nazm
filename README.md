@@ -306,6 +306,20 @@ schema**; the schemas are in [`schema/`](schema) and the compatibility rules are
 loop as one command: apply every automatic fix until a pass changes nothing, lay the
 result out, and report what is left as JSON.
 
+### An MCP server, read-only
+
+`nazm-mcp` (a separate binary: `cargo build --release -p nazm-mcp`) serves one Model Context
+Protocol tool over stdio, `nazm.semantic_context`: the same `nazm.context/1` packet as
+`nazm context`, for a file and byte offset in the compilation of the root it was started with,
+read from disk at every call. It writes nothing and reads no file that compilation does not
+load. An MCP client starts it as a stdio command:
+
+```json
+{ "command": "nazm-mcp", "args": ["--root", "/absolute/path/to/root.nz"] }
+```
+
+[`docs/mcp.md`](docs/mcp.md) says what it answers and what it does not.
+
 ## The documents
 
 | | |
@@ -319,6 +333,7 @@ result out, and report what is left as JSON.
 | [`docs/roadmap.md`](docs/roadmap.md) | What comes next, and why in that order |
 | [`docs/research-register.md`](docs/research-register.md) | Hypotheses, each with what would invalidate it. Not plans |
 | [`docs/diagnostics.md`](docs/diagnostics.md) | The machine interface: schemas, fixes, capabilities, exit statuses |
+| [`docs/mcp.md`](docs/mcp.md) | `nazm-mcp`, the read-only MCP server: its one tool, its root, and what it reads |
 | [`docs/bootstrap.md`](docs/bootstrap.md) | Self-hosting: how it was designed, what it does, and what it does **not** establish |
 | [`docs/performance.md`](docs/performance.md) | What has been measured, and the noise floor under it |
 | [`docs/runbook.md`](docs/runbook.md) | **Containment and resource safety. Read before running anything heavy** |
