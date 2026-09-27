@@ -3532,7 +3532,7 @@ that would make an unfinished construct valid.
 
 ```text
 N17  references, and every use inside a declaration      (ReferenceIndex)
-N18  written type names                                  (Resolution::type_name)
+N18  written names of program records and enums          (Resolution::type_name)
 N20  the one function signature renderer                 (Signature)
 N21  canonical fields, variants and payloads             (structure::members)
 N22  declaration and name ranges, exact source           (symbols::declared_in)
@@ -3563,7 +3563,17 @@ directly, not a closure; **references**, every use of the target, the declaratio
 **callers** and **callees**, call hierarchy's direct edges for a function and `not_applicable` for a
 record or enum; and **diagnostics** whose primary span is inside the declaration, by code, span and
 fix count. `availability` marks effects, capabilities, tests, semantic changes and semantic deltas
-`unsupported`. The core prelude's entities are linked with no declaration place, as it has no file.
+`unsupported`.
+
+**Source links only.** Context packet v1 exposes source-linked program dependencies only: every
+dependency, related type, caller and callee carries a declaration in a file of the compilation, and
+`link.declaration` is never null. Compiler-owned, built-in, interface-only or toolchain definitions
+without a navigable declaration — the core prelude's `Option` and `Result`, an intrinsic, `Int` —
+may affect checking but are omitted from the link sections, rather than linked with no place. (A
+link's `identity.definition` may still be null where its module has no durable key; its place is
+given all the same.) Related types come from N18's record of the written names of program records
+and enums; N23's `Resolution::written_type`, which records built-in types and type parameters, is
+not read, since neither is a definition with a source.
 
 **Minimum context.** The target's source is the only source text in a packet; everything else is a
 place to ask about next. That is a strategy for compact context — not a claim that a packet is
@@ -3582,7 +3592,8 @@ serialisation. The same sources and question give the same bytes, from any check
 **The CLI and the MCP server.** `nazm context` and `nazm-mcp` each open the root from disk, build
 the packet and drop everything: no packet, analysis or graph outlives a request. `nazm-mcp` is its
 own crate and binary on the official Rust SDK (`rmcp`), stdio only, with one tool,
-`nazm.semantic_context` (`file`, `byte_offset`), whose output schema is `schema/nazm.context-1.json`;
+`nazm.semantic_context` (`file`, `byte_offset`), whose output schema is `schema/nazm.context-1.json`
+and whose result carries the packet once, as structured content, with an empty `content`;
 it advertises tools and nothing else, and answers resources, prompts and completions as methods it
 does not have. The root is fixed at startup; each call reads the disk as it is then, so an agent's
 edit is seen at once and a broken file never gets an earlier packet. The `file` argument is only
