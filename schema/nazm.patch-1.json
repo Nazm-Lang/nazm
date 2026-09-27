@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.patch-1.json",
+  "title": "nazm.patch/1",
+  "description": "A semantic patch plan, from `nazm patch rename|fix --json` and the `nazm-mcp` tool `nazm.semantic_patch`: an edit the compiler already validates — a rename (N18) or a fix a current diagnostic carries (N24) — as minimal exact-byte edits, bound to the root's semantic snapshot (N28), each edited file's digest and each edit's expected bytes. A patch is a proposal bound to exact source state, not permission to mutate files: nothing that produces one applies it. `status` is `available` with every section, or `unavailable` with a `reason` and no other section. Paths are relative to the source root and byte offsets are into the named file; nothing session-local is included, so the same sources and request give the same bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": { "const": "nazm.patch/1" },
+    "status": { "enum": ["available", "unavailable"] },
+    "reason": {
+      "enum": [
+        "not_current",
+        "not_in_compilation",
+        "out_of_range",
+        "incomplete_compilation",
+        "no_durable_root",
+        "no_entity",
+        "incomplete_coverage",
+        "toolchain_owned",
+        "exported",
+        "not_clean",
+        "invalid_name",
+        "unchanged",
+        "rejected",
+        "meaning_changed",
+        "no_such_fix",
+        "empty_edit",
+        "duplicate_edit",
+        "overlapping_edits",
+        "internal"
+      ],
+      "description": "Why there is no patch. `exported`: one root compilation is not every module that may import it. `incomplete_compilation`: syntax recovery or a missing module left no snapshot to bind to — which includes every fix of a syntax diagnostic. `no_such_fix`: no current diagnostic at the position carries a fix with that index. Present only when `status` is `unavailable`."
+    },
+    "operation": {
+      "oneOf": [{ "$ref": "#/$defs/rename" }, { "$ref": "#/$defs/diagnostic_fix" }]
+    },
+    "root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "compiler"],
+      "properties": {
+        "module": { "type": "string", "description": "The root module's durable key, as `nazm.snapshot/1` gives it." },
+        "compiler": { "type": "string" }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot"],
+      "properties": {
+        "snapshot": { "$ref": "#/$defs/digest", "description": "BLAKE3 of the root's canonical `nazm.snapshot/1` bytes — what `nazm snapshot --json` prints, without its newline — when the patch was planned." }
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/file" },
+      "description": "Ordered by path; each file once."
+    },
+    "validation": {
+      "enum": ["reanalysed", "compiler_fix"],
+      "description": "`reanalysed`: the candidate program was re-parsed and re-checked, clean, with its occurrences grouped into entities exactly as before (N18). `compiler_fix`: the edit is the compiler's own fix, governed by its applicability and precondition."
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "start", "end"],
+      "properties": {
+        "file": { "type": "string" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["definition", "member"],
+      "properties": {
+        "definition": { "type": ["string", "null"], "description": "The durable definition key, `module::kind name`; null where the module has no durable key." },
+        "member": { "type": ["string", "null"], "description": "A field's, a variant's or (`Variant.field`) a payload field's name; null for the definition itself." }
+      }
+    },
+    "rename": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "target", "old_name", "new_name"],
+      "properties": {
+        "kind": { "const": "rename" },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "durable", "identity", "declaration", "within"],
+          "properties": {
+            "kind": { "enum": ["function", "local", "record", "enum", "variant", "field", "payload_field"] },
+            "durable": { "type": "boolean", "description": "Whether `identity` is a durable definition key. A local's never is." },
+            "identity": { "type": ["object", "null"], "$ref": "#/$defs/identity", "description": "Null for a local, which has no durable key and is not given one." },
+            "declaration": { "$ref": "#/$defs/span", "description": "Where it is declared now: the source-linked identity every target has." },
+            "within": { "type": ["string", "null"], "description": "A local's declaring function's durable key; null otherwise." }
+          }
+        },
+        "old_name": { "type": "string" },
+        "new_name": { "type": "string" }
+      }
+    },
+    "diagnostic_fix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "diagnostic", "fix", "alternatives", "applicability", "precondition", "description"],
+      "properties": {
+        "kind": { "const": "diagnostic_fix" },
+        "diagnostic": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "file", "start", "end"],
+          "properties": {
+            "code": { "type": "string", "pattern": "^N[0-9]{4}$" },
+            "file": { "type": "string" },
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 0 }
+          },
+          "description": "The current diagnostic the fix belongs to, by its code and primary span."
+        },
+        "fix": { "type": "integer", "minimum": 0, "description": "Which of the fixes at the requested position." },
+        "alternatives": { "type": "integer", "minimum": 1 },
+        "applicability": { "enum": ["automatic", "needs_review"], "description": "Exactly as the compiler attached it. A `needs_review` patch is never safe to apply without review." },
+        "precondition": { "type": "string", "description": "When the edit is the right one — the compiler's, present for every fix." },
+        "description": { "type": "string", "description": "For presentation only: never identity, selection or validation." }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest", "edits"],
+      "properties": {
+        "path": { "type": "string" },
+        "digest": { "$ref": "#/$defs/digest", "description": "BLAKE3 of the file's exact bytes at planning." },
+        "edits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["start", "end", "expected", "replacement"],
+            "properties": {
+              "start": { "type": "integer", "minimum": 0 },
+              "end": { "type": "integer", "minimum": 0 },
+              "expected": { "type": "string", "description": "The exact bytes at `start..end` the edit replaces." },
+              "replacement": { "type": "string" }
+            }
+          },
+          "description": "Ordered by start, then end; disjoint; no two at one point. Serialisation order, not application order."
+        }
+      }
+    }
+  }
+}
