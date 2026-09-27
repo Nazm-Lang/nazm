@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.snapshot-1.json",
+  "title": "nazm.snapshot/1",
+  "description": "One root compilation's durable definitions, from `nazm snapshot --json` and the `nazm-mcp` tool `nazm.semantic_snapshot`: every function, record and enum declared from a file of the compilation with a durable definition key, each with one BLAKE3 digest per semantic section the compiler records. `status` is `available` with every section, or `unavailable` with a `reason` and no other section. A digest is evidence that the canonical data it was taken over is equal, never that behaviour is. Paths are relative to the source root; nothing session-local or host-specific is included, so the same sources give the same bytes from any checkout.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": { "const": "nazm.snapshot/1" },
+    "status": { "enum": ["available", "unavailable"] },
+    "reason": {
+      "enum": ["not_current", "incomplete_compilation", "no_durable_root"],
+      "description": "Why there is no snapshot: some file needed syntax recovery or a module could not be loaded, or the root module has no durable key. Present only when `status` is `unavailable`."
+    },
+    "root": { "$ref": "#/$defs/root" },
+    "definitions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/definition" },
+      "description": "Ordered by identity; each identity once."
+    },
+    "untracked": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Definitions of the compilation with no durable identity — declared in a module outside the source root — left out rather than matched by a path or a name."
+    },
+    "unsupported": {
+      "const": ["effects", "capabilities", "tests", "semantic_history", "behavioural_equivalence"],
+      "description": "What a snapshot does not record, and so can never report unchanged."
+    }
+  },
+  "$defs": {
+    "root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "compiler"],
+      "properties": {
+        "module": { "type": "string", "description": "The root module's durable key: its path relative to the source root." },
+        "compiler": { "type": "string", "description": "The compiler whose canonical data the digests were taken over; a delta refuses a baseline from another." }
+      }
+    },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "kind", "declaration", "digests"],
+      "properties": {
+        "identity": { "type": "string", "description": "The durable definition key, `module::kind name`." },
+        "kind": { "enum": ["function", "record", "enum"] },
+        "declaration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "start", "end"],
+          "properties": {
+            "file": { "type": "string" },
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 0 }
+          },
+          "description": "Where it is declared, for navigation. Not compared: moving a definition is no change."
+        },
+        "digests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "shape", "dependencies", "related_types", "references", "callers", "callees", "diagnostics"],
+          "properties": {
+            "source": { "$ref": "#/$defs/digest", "description": "The declaration's exact bytes." },
+            "shape": { "$ref": "#/$defs/digest", "description": "Kind, visibility, and the signature, or the fields, or the variants and payloads." },
+            "dependencies": { "$ref": "#/$defs/digest", "description": "The source-linked entities it uses, by identity and count." },
+            "related_types": { "$ref": "#/$defs/digest", "description": "The records and enums it writes by name, by identity and count." },
+            "references": { "$ref": "#/$defs/digest", "description": "Its uses, by the identity of the definition each is in, and count." },
+            "callers": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "A function's direct checked callers, by identity and count; null for a record or an enum." },
+            "callees": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "A function's direct checked callees, by identity and count; null for a record or an enum." },
+            "diagnostics": { "$ref": "#/$defs/digest", "description": "Code, severity, fix count and relative range of each diagnostic whose primary span is inside it; never a message." }
+          }
+        }
+      }
+    }
+  }
+}
