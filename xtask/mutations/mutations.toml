@@ -3259,6 +3259,7 @@ targets = [
     { package = "nazm-service", test = "hierarchy" },
     { package = "nazm-service", test = "context" },
     { package = "nazm-service", test = "snapshot" },
+    { package = "nazm-service", test = "patch" },
     { package = "nazm-service", test = "incomplete" },
 ]
 
@@ -3307,6 +3308,7 @@ targets = [
     { package = "nazm-service", test = "hierarchy" },
     { package = "nazm-service", test = "context" },
     { package = "nazm-service", test = "snapshot" },
+    { package = "nazm-service", test = "patch" },
     { package = "nazm-service", test = "incomplete" },
 ]
 
@@ -3361,6 +3363,7 @@ targets = [
     { package = "nazm-service", test = "hierarchy" },
     { package = "nazm-service", test = "context" },
     { package = "nazm-service", test = "snapshot" },
+    { package = "nazm-service", test = "patch" },
     { package = "nazm-service", test = "incomplete" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-mcp", bin = "nazm-mcp" },
@@ -5969,3 +5972,190 @@ file = "crates/nazm-mcp/src/main.rs"
 find = "        Ok(once(value, matches!(result, SnapshotResult::Available(_))))"
 replace = "        Ok(CallToolResult::structured(value).into())"
 killers = [{ package = "nazm-mcp", test = "protocol", name = "a_snapshot_and_a_delta_travel_once" }]
+
+# ---------------------------------------------------------------------------------------
+# N29 — semantic patch plans, and the MCP tool that plans them.
+# ---------------------------------------------------------------------------------------
+
+[[mutation]]
+name = "n29-the-snapshot-binding-is-of-nothing"
+why = "a patch's baseline is a digest of no bytes rather than of the root's snapshot, so no applier could tell the program moved"
+file = "crates/nazm-service/src/patch.rs"
+find = """        let snapshot_digest = digest(
+            crate::SnapshotResult::Available(snapshot)
+                .to_json()
+                .as_bytes(),
+        );"""
+replace = """        let _ = snapshot;
+        let snapshot_digest = digest(b"");"""
+killers = [{ package = "nazm-service", test = "patch", name = "a_private_function_rename_is_its_declaration_and_calls_and_nothing_else" }]
+
+[[mutation]]
+name = "n29-the-file-digest-is-of-nothing"
+why = "an edited file's digest is of no bytes rather than of the file, so a changed file would pass for the planned one"
+file = "crates/nazm-service/src/patch.rs"
+find = "            digest: digest(fe.text.as_bytes()),"
+replace = "            digest: digest(b\"\"),"
+killers = [{ package = "nazm-service", test = "patch", name = "a_private_function_rename_is_its_declaration_and_calls_and_nothing_else" }]
+
+[[mutation]]
+name = "n29-expected-bytes-are-dropped"
+why = "an edit carries no expected bytes, so what it replaces is protected by nothing but the file digest"
+file = "crates/nazm-service/src/patch.rs"
+find = "            edits: fe.edits.clone(),"
+replace = """            edits: fe
+                .edits
+                .iter()
+                .map(|e| Edit {
+                    expected: String::new(),
+                    ..e.clone()
+                })
+                .collect(),"""
+killers = [{ package = "nazm-service", test = "patch", name = "a_private_function_rename_is_its_declaration_and_calls_and_nothing_else" }]
+
+[[mutation]]
+name = "n29-a-whole-file-is-emitted"
+why = "a patch rewrites the whole file as one edit instead of the bytes that change"
+file = "crates/nazm-service/src/patch.rs"
+find = "            edits: fe.edits.clone(),"
+replace = """            edits: vec![Edit {
+                start: 0,
+                end: u32::try_from(fe.text.len()).unwrap_or(u32::MAX),
+                expected: fe.text.to_string(),
+                replacement: {
+                    let mut t = fe.text.to_string();
+                    for e in fe.edits.iter().rev() {
+                        t.replace_range(e.start as usize..e.end as usize, &e.replacement);
+                    }
+                    t
+                },
+            }],"""
+killers = [{ package = "nazm-service", test = "patch", name = "a_private_function_rename_is_its_declaration_and_calls_and_nothing_else" }]
+
+[[mutation]]
+name = "n29-a-duplicate-edit-is-accepted"
+why = "two identical edits are not refused as a duplicate"
+file = "crates/nazm-service/src/patch.rs"
+find = "            if a == b {"
+replace = "            if false && a == b {"
+killers = [{ package = "nazm-service", lib = true, name = "patch::tests::edits_are_ordered_and_a_duplicate_or_an_overlap_refuses_the_patch" }]
+
+[[mutation]]
+name = "n29-overlapping-edits-are-accepted"
+why = "two edits that overlap, or insert at one point, are serialised as one patch whose meaning depends on the order an applier chooses"
+file = "crates/nazm-service/src/patch.rs"
+find = "            if a.end > b.start || a.start == b.start {"
+replace = "            if false {"
+killers = [{ package = "nazm-service", lib = true, name = "patch::tests::edits_are_ordered_and_a_duplicate_or_an_overlap_refuses_the_patch" }]
+
+[[mutation]]
+name = "n29-edits-keep-the-order-they-came-in"
+why = "edits are serialised in whatever order the operation produced them rather than by position"
+file = "crates/nazm-service/src/patch.rs"
+find = "        f.edits.sort_by_key(|e| (e.start, e.end));"
+replace = "        let _ = &f.edits;"
+killers = [{ package = "nazm-service", lib = true, name = "patch::tests::edits_are_ordered_and_a_duplicate_or_an_overlap_refuses_the_patch" }]
+
+[[mutation]]
+name = "n29-needs-review-becomes-automatic"
+why = "a fix the compiler marked as needing review is planned as automatic"
+file = "crates/nazm-service/src/patch.rs"
+find = """                    Applicability::NeedsReview => "needs_review","""
+replace = """                    Applicability::NeedsReview => "automatic","""
+killers = [{ package = "nazm-service", test = "patch", name = "a_needs_review_fix_stays_needs_review_with_its_precondition" }]
+
+[[mutation]]
+name = "n29-the-precondition-is-dropped"
+why = "a fix's precondition — when the edit is the right one — is left out of the patch"
+file = "crates/nazm-service/src/patch.rs"
+find = "                precondition: plan.precondition,"
+replace = "                precondition: String::new(),"
+killers = [{ package = "nazm-service", test = "patch", name = "a_needs_review_fix_stays_needs_review_with_its_precondition" }]
+
+[[mutation]]
+name = "n29-a-fix-is-taken-from-anywhere"
+why = "a request at a position with no diagnostic is answered with some other diagnostic's fix, so a client's guess becomes a patch"
+file = "crates/nazm-service/src/patch.rs"
+find = "        let plan = plans.into_iter().nth(fix).ok_or(NoPatch::NoSuchFix)?;"
+replace = """        let plan = plans
+            .into_iter()
+            .nth(fix)
+            .or_else(|| {
+                self.fix_plans(&bound.file, bound.version, 0, u32::MAX)
+                    .ok()?
+                    .into_iter()
+                    .next()
+            })
+            .ok_or(NoPatch::NoSuchFix)?;"""
+killers = [{ package = "nazm-service", test = "patch", name = "only_a_current_diagnostics_own_fix_is_a_patch" }]
+
+[[mutation]]
+name = "n29-a-fix-index-wraps"
+why = "an index past the fixes at a position selects one of them instead of none"
+file = "crates/nazm-service/src/patch.rs"
+find = "        let plan = plans.into_iter().nth(fix).ok_or(NoPatch::NoSuchFix)?;"
+replace = "        let plan = plans.into_iter().nth(fix % alternatives.max(1)).ok_or(NoPatch::NoSuchFix)?;"
+killers = [{ package = "nazm-service", test = "patch", name = "only_a_current_diagnostics_own_fix_is_a_patch" }]
+
+[[mutation]]
+name = "n29-an-unloaded-file-is-planned"
+why = "a file the root's compilation did not load is planned against the root's own text"
+file = "crates/nazm-service/src/patch.rs"
+find = """            .position(|k| *k == wanted)
+            .ok_or(NoPatch::NotInCompilation)?;"""
+replace = """            .position(|k| *k == wanted)
+            .unwrap_or(0);"""
+killers = [{ package = "nazm-service", test = "patch", name = "a_rename_that_n18_refuses_is_no_patch" }]
+
+[[mutation]]
+name = "n29-a-local-takes-its-functions-key"
+why = "a local is given the durable identity of the function it is declared in, as if it were durable"
+file = "crates/nazm-service/src/patch.rs"
+find = """            durable: false,
+            identity: None,"""
+replace = """            durable: true,
+            identity: Some(identity_of(s, ReferenceTarget::Function(l.function))),"""
+killers = [{ package = "nazm-service", test = "patch", name = "every_category_n18_renames_is_a_patch_of_exactly_its_occurrences" }]
+
+[[mutation]]
+name = "n29-the-mcp-server-applies-the-patch"
+why = "the MCP tool writes the planned edits into the files instead of only returning them"
+file = "crates/nazm-mcp/src/main.rs"
+find = """        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(once(value, matches!(result, PatchResult::Available(_))))"""
+replace = """        if let (PatchResult::Available(p), Some(base)) = (&result, self.root.parent()) {
+            for f in &p.files {
+                let path = base.join(&f.path);
+                if let Ok(mut t) = std::fs::read_to_string(&path) {
+                    for e in f.edits.iter().rev() {
+                        t.replace_range(e.start as usize..e.end as usize, &e.replacement);
+                    }
+                    let _ = std::fs::write(&path, t);
+                }
+            }
+        }
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(once(value, matches!(result, PatchResult::Available(_))))"""
+killers = [{ package = "nazm-mcp", test = "protocol", name = "a_patch_crosses_the_protocol_unchanged_and_is_only_a_plan" }]
+
+[[mutation]]
+name = "n29-a-patch-is-sent-twice"
+why = "the patch tool's result carries the patch again as text beside its structured content"
+file = "crates/nazm-mcp/src/main.rs"
+find = "        Ok(once(value, matches!(result, PatchResult::Available(_))))"
+replace = "        Ok(CallToolResult::structured(value).into())"
+killers = [{ package = "nazm-mcp", test = "protocol", name = "a_patch_travels_once" }]
+
+[[mutation]]
+name = "n29-the-mcp-server-keeps-a-plan"
+why = "the MCP tool answers every request with the first plan it made, so an edit on disk — or another request — is never seen"
+file = "crates/nazm-mcp/src/main.rs"
+find = "        Ok(once(value, matches!(result, PatchResult::Available(_))))"
+replace = """        static KEPT: std::sync::OnceLock<(serde_json::Value, bool)> = std::sync::OnceLock::new();
+        let (value, available) = KEPT
+            .get_or_init(|| (value, matches!(result, PatchResult::Available(_))))
+            .clone();
+        Ok(once(value, available))"""
+killers = [{ package = "nazm-mcp", test = "protocol", name = "a_patch_is_of_the_disk_at_that_call" }]
