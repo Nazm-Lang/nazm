@@ -3257,6 +3257,7 @@ targets = [
     { package = "nazm-service", test = "fixes" },
     # N25: and which calls it checked, from which body.
     { package = "nazm-service", test = "hierarchy" },
+    { package = "nazm-service", test = "context" },
     { package = "nazm-service", test = "incomplete" },
 ]
 
@@ -3303,6 +3304,7 @@ targets = [
     { package = "nazm-service", test = "semantic" },
     { package = "nazm-service", test = "fixes" },
     { package = "nazm-service", test = "hierarchy" },
+    { package = "nazm-service", test = "context" },
     { package = "nazm-service", test = "incomplete" },
 ]
 
@@ -3340,7 +3342,8 @@ why = "the driver is observed by its own unit tests and the CLI suites for loadi
 # `nazm-cli`, and the language service beside them is driver code too. Without it a loader
 # mutant has no focused profile and is decided by the workspace suite, which the N16
 # campaign showed.
-owns = ["crates/nazm-cli/src/", "crates/nazm-service/src/"]
+# `crates/nazm-mcp/src/` since N27: the MCP adapter is driver code over the service too.
+owns = ["crates/nazm-cli/src/", "crates/nazm-service/src/", "crates/nazm-mcp/src/"]
 targets = [
     { package = "nazm-cli", bin = "nazm" },
     { package = "nazm-service", lib = true },
@@ -3354,8 +3357,11 @@ targets = [
     { package = "nazm-service", test = "semantic" },
     { package = "nazm-service", test = "fixes" },
     { package = "nazm-service", test = "hierarchy" },
+    { package = "nazm-service", test = "context" },
     { package = "nazm-service", test = "incomplete" },
     { package = "nazm-cli", test = "lsp" },
+    { package = "nazm-mcp", bin = "nazm-mcp" },
+    { package = "nazm-mcp", test = "protocol" },
     { package = "nazm-cli", test = "cli" },
     { package = "nazm-cli", test = "source_root" },
     { package = "nazm-cli", test = "incremental" },
@@ -5578,3 +5584,143 @@ file = "crates/nazm-cli/src/lsp.rs"
 find = """            trigger_characters: Some(vec![".".to_owned()]),"""
 replace = """            trigger_characters: Some(vec![".".to_owned(), "(".to_owned()]),"""
 killers = [{ package = "nazm-cli", test = "lsp", name = "the_server_speaks_the_protocol_end_to_end" }]
+
+# ---- N27: semantic context packets and read-only MCP ------------------------------------
+
+[[mutation]]
+name = "n27-a-target-is-found-by-spelling"
+why = "a packet's target is the first definition in its file spelled like the one found, so a record and a function of one name are taken for each other"
+file = "crates/nazm-service/src/context.rs"
+find = """    let symbol = crate::symbols::declared_in(s, name.file)
+        .into_iter()
+        .find(|sym| sym.target == entity)?;"""
+replace = """    let spelled = s
+        .texts
+        .get(name.file.index())
+        .and_then(|t| t.get(name.start as usize..name.end as usize))
+        .unwrap_or_default()
+        .to_owned();
+    let symbol = crate::symbols::declared_in(s, name.file)
+        .into_iter()
+        .find(|sym| sym.name == spelled)?;"""
+killers = [{ package = "nazm-service", test = "context", name = "a_target_is_the_definition_a_declaration_or_a_use_names" }]
+
+[[mutation]]
+name = "n27-a-local-is-a-dependency"
+why = "a declaration's own locals and parameters are reported as dependencies"
+file = "crates/nazm-service/src/context.rs"
+find = "            if t == entity || matches!(t, ReferenceTarget::Local(_)) {"
+replace = "            if t == entity {"
+killers = [{ package = "nazm-service", test = "context", name = "dependencies_are_the_entities_the_declaration_uses_grouped_by_identity" }]
+
+[[mutation]]
+name = "n27-dependencies-merge-by-spelling"
+why = "dependencies are grouped by name, so two records' `value` fields become one dependency"
+file = "crates/nazm-service/src/context.rs"
+find = "    (rank, declaration, identity_of(s, t))"
+replace = """    let _ = declaration;
+    (
+        rank,
+        None,
+        Identity {
+            definition: None,
+            member: identity_of(s, t).member.or_else(|| Some(name_of(s, t))),
+        },
+    )"""
+killers = [{ package = "nazm-service", test = "context", name = "two_dependencies_of_one_spelling_are_two_dependencies" }]
+
+[[mutation]]
+name = "n27-the-declaration-is-a-reference"
+why = "the target's declaration is listed among its references, so the packet carries it twice and counts one use too many"
+file = "crates/nazm-service/src/context.rs"
+find = """            .uses(entity)
+            .iter()
+            .filter_map(|u| paths.span(*u))"""
+replace = """            .uses(entity)
+            .iter()
+            .chain(s.index.declaration(entity).iter())
+            .filter_map(|u| paths.span(*u))"""
+killers = [{ package = "nazm-service", test = "context", name = "references_are_every_use_and_not_the_declaration" }]
+
+[[mutation]]
+name = "n27-effects-are-claimed"
+why = "a packet says effects are supported, which the compiler has no facts for"
+file = "crates/nazm-service/src/context.rs"
+find = """        effects: "unsupported","""
+replace = """        effects: "supported","""
+killers = [{ package = "nazm-service", test = "context", name = "diagnostics_are_the_targets_own_and_what_is_not_known_is_unsupported" }]
+
+[[mutation]]
+name = "n27-an-absolute-path-is-serialised"
+why = "a packet names files by their absolute host path, so it differs between machines and leaks where it ran"
+file = "crates/nazm-service/src/context.rs"
+find = "                    return Some(key.as_str().to_owned());"
+replace = "                    return Some(p.display().to_string());"
+killers = [{ package = "nazm-service", test = "context", name = "the_same_sources_and_question_give_the_same_bytes" }]
+
+[[mutation]]
+name = "n27-a-type-has-callers"
+why = "a record or enum is given an empty list of callers and callees, which says it has none rather than that the question does not apply"
+file = "crates/nazm-service/src/context.rs"
+find = "            _ => (Calls::NOT_APPLICABLE, Calls::NOT_APPLICABLE),"
+replace = "            _ => (Calls::available(Vec::new()), Calls::available(Vec::new())),"
+killers = [{ package = "nazm-service", test = "context", name = "callers_and_callees_are_call_hierarchys_and_a_type_has_none" }]
+
+[[mutation]]
+name = "n27-the-source-is-not-the-declaration"
+why = "a target's source text starts at its name rather than being the declaration exactly as written"
+file = "crates/nazm-service/src/context.rs"
+find = "            .and_then(|t| t.get(symbol.start as usize..symbol.end as usize))"
+replace = "            .and_then(|t| t.get(symbol.name_start as usize..symbol.end as usize))"
+killers = [{ package = "nazm-service", test = "context", name = "the_target_source_is_the_declaration_byte_for_byte" }]
+
+[[mutation]]
+name = "n27-a-file-outside-the-compilation-is-answered"
+why = "a file the compilation did not load is answered as if it were the root, so a request can name any path"
+file = "crates/nazm-service/src/context.rs"
+find = """            .map(FileId::from_index)
+            .ok_or(NoContext::NotInCompilation)?;
+        if !s.analysis.syntax_errors.is_empty()"""
+replace = """            .map(FileId::from_index)
+            .unwrap_or(FileId::ROOT);
+        if !s.analysis.syntax_errors.is_empty()"""
+killers = [{ package = "nazm-service", test = "context", name = "a_position_that_names_no_source_definition_has_no_packet" }]
+
+[[mutation]]
+name = "n27-a-recovered-compilation-is-answered"
+why = "a packet is built from a compilation that needed syntax recovery, where a use, a caller or a declaration may have been lost"
+file = "crates/nazm-service/src/context.rs"
+find = "        if !s.analysis.syntax_errors.is_empty()"
+replace = "        if false && !s.analysis.syntax_errors.is_empty()"
+killers = [{ package = "nazm-service", test = "context", name = "diagnostics_are_the_targets_own_and_what_is_not_known_is_unsupported" }]
+
+[[mutation]]
+name = "n27-every-diagnostic-is-the-targets"
+why = "every diagnostic of the compilation is put in every packet, where it is not the target's and costs context"
+file = "crates/nazm-service/src/context.rs"
+find = "                p.file == decl.file && decl.start <= p.start && p.end <= decl.end"
+replace = """                let _ = p;
+                true"""
+killers = [{ package = "nazm-service", test = "context", name = "diagnostics_are_the_targets_own_and_what_is_not_known_is_unsupported" }]
+
+[[mutation]]
+name = "n27-the-server-prints-to-stdout"
+why = "the MCP server writes a line of its own to standard output, which is the protocol"
+file = "crates/nazm-mcp/src/main.rs"
+find = "    let server = Server { root, source_root };"
+replace = """    println!("nazm-mcp: serving");
+    let server = Server { root, source_root };"""
+killers = [{ package = "nazm-mcp", test = "protocol", name = "standard_output_is_the_protocol_and_nothing_else" }]
+
+[[mutation]]
+name = "n27-the-server-advertises-resources"
+why = "the MCP server advertises resources it does not have"
+file = "crates/nazm-mcp/src/main.rs"
+find = "        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())"
+replace = """        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )"""
+killers = [{ package = "nazm-mcp", test = "protocol", name = "the_server_offers_one_read_only_tool_and_nothing_else" }]
