@@ -3258,6 +3258,7 @@ targets = [
     # N25: and which calls it checked, from which body.
     { package = "nazm-service", test = "hierarchy" },
     { package = "nazm-service", test = "context" },
+    { package = "nazm-service", test = "snapshot" },
     { package = "nazm-service", test = "incomplete" },
 ]
 
@@ -3305,6 +3306,7 @@ targets = [
     { package = "nazm-service", test = "fixes" },
     { package = "nazm-service", test = "hierarchy" },
     { package = "nazm-service", test = "context" },
+    { package = "nazm-service", test = "snapshot" },
     { package = "nazm-service", test = "incomplete" },
 ]
 
@@ -3358,6 +3360,7 @@ targets = [
     { package = "nazm-service", test = "fixes" },
     { package = "nazm-service", test = "hierarchy" },
     { package = "nazm-service", test = "context" },
+    { package = "nazm-service", test = "snapshot" },
     { package = "nazm-service", test = "incomplete" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-mcp", bin = "nazm-mcp" },
@@ -5370,7 +5373,7 @@ why = "incoming calls are every reference to the function inside a body, so a us
 file = "crates/nazm-service/src/hierarchy.rs"
 find = """        for (i, def) in res.functions().iter().enumerate() {
             for site in &def.call_sites {
-                if res.checked_call(site.span).map(|c| c.callee) == Some(Callee::Function(target)) {"""
+                if callee(res, site.span) == Some(target) {"""
 replace = """        for (i, def) in res.functions().iter().enumerate() {
             let body = s.analysis.program.functions.get(def.decl as usize).map(|f| f.span);
             let uses: Vec<nazm_core::sema::CallSite> = s.index.uses(ReferenceTarget::Function(target)).iter().filter(|u| body.is_some_and(|b| b.file == u.file && b.start <= u.start && u.end <= b.end)).map(|&span| nazm_core::sema::CallSite { span, callee: Callee::Function(target), type_args: Vec::new(), spawned: false }).collect();
@@ -5464,7 +5467,7 @@ killers = [{ package = "nazm-service", test = "hierarchy", name = "an_item_is_wh
 name = "n25-a-call-range-is-the-whole-call"
 why = "an outgoing call's range is the whole call, arguments included, rather than the callee's name the checker keys it by"
 file = "crates/nazm-service/src/hierarchy.rs"
-find = """            if let Some(Callee::Function(to)) = res.checked_call(site.span).map(|c| c.callee) {
+find = """            if let Some(to) = callee(res, site.span) {
                 callees.entry(to).or_default().push(site.span);"""
 replace = """            if let Some((Callee::Function(to), whole)) = res.checked_call(site.span).map(|c| (c.callee, c.span)) {
                 callees.entry(to).or_default().push(whole);"""
@@ -5680,18 +5683,20 @@ why = "a file the compilation did not load is answered as if it were the root, s
 file = "crates/nazm-service/src/context.rs"
 find = """            .map(FileId::from_index)
             .ok_or(NoContext::NotInCompilation)?;
-        if !s.analysis.syntax_errors.is_empty()"""
+        if incomplete(s) {"""
 replace = """            .map(FileId::from_index)
             .unwrap_or(FileId::ROOT);
-        if !s.analysis.syntax_errors.is_empty()"""
+        if incomplete(s) {"""
 killers = [{ package = "nazm-service", test = "context", name = "a_position_that_names_no_source_definition_has_no_packet" }]
 
 [[mutation]]
 name = "n27-a-recovered-compilation-is-answered"
 why = "a packet is built from a compilation that needed syntax recovery, where a use, a caller or a declaration may have been lost"
 file = "crates/nazm-service/src/context.rs"
-find = "        if !s.analysis.syntax_errors.is_empty()"
-replace = "        if false && !s.analysis.syntax_errors.is_empty()"
+find = """        if incomplete(s) {
+            return Err(NoContext::IncompleteCompilation);"""
+replace = """        if false && incomplete(s) {
+            return Err(NoContext::IncompleteCompilation);"""
 killers = [{ package = "nazm-service", test = "context", name = "diagnostics_are_the_targets_own_and_what_is_not_known_is_unsupported" }]
 
 [[mutation]]
@@ -5723,14 +5728,14 @@ replace = """        ServerConfig::new(
                 .enable_resources()
                 .build(),
         )"""
-killers = [{ package = "nazm-mcp", test = "protocol", name = "the_server_offers_one_read_only_tool_and_nothing_else" }]
+killers = [{ package = "nazm-mcp", test = "protocol", name = "the_server_offers_read_only_tools_and_nothing_else" }]
 
 [[mutation]]
 name = "n27-the-packet-is-sent-twice"
 why = "a successful tool result carries the packet again as text beside its structured content, doubling what a client receives"
 file = "crates/nazm-mcp/src/main.rs"
-find = "        answer.content.clear();"
-replace = "        let _ = &mut answer;"
+find = "    answer.content.clear();"
+replace = "    let _ = &mut answer;"
 killers = [{ package = "nazm-mcp", test = "protocol", name = "a_packet_crosses_the_protocol_unchanged" }]
 
 [[mutation]]
@@ -5760,3 +5765,207 @@ replace = """    let declaration = s
         .and_then(|d| paths.span(d))
         .filter(|_| !matches!(t, ReferenceTarget::Field(_)))?;"""
 killers = [{ package = "nazm-service", test = "context", name = "dependencies_are_the_entities_the_declaration_uses_grouped_by_identity" }]
+
+# ---------------------------------------------------------------------------------------
+# N28 — semantic snapshots and deltas, and their MCP tools.
+# ---------------------------------------------------------------------------------------
+
+[[mutation]]
+name = "n28-definitions-are-matched-by-spelling"
+why = "a delta matches a current definition to the first baseline definition with its name, so two modules' `helper` are compared with each other"
+file = "crates/nazm-service/src/delta.rs"
+find = "        let Some(before) = baseline.definitions.get(*identity) else {"
+replace = """        let Some(before) = baseline
+            .definitions
+            .values()
+            .find(|b| b.identity.rsplit(' ').next() == identity.rsplit(' ').next())
+        else {"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "same_names_in_two_modules_are_two_definitions" }]
+
+[[mutation]]
+name = "n28-the-source-digest-is-ignored"
+why = "a delta never reports `source` changed, so a body edit the other sections do not see is no change at all"
+file = "crates/nazm-service/src/delta.rs"
+find = "            source: a.source != b.source,"
+replace = "            source: false,"
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_comment_or_a_literal_changes_source_and_nothing_else" }]
+
+[[mutation]]
+name = "n28-a-source-only-change-is-unchanged"
+why = "a definition whose only different digest is `source` — a comment, a literal — is counted unchanged, as if the sections Nazm records were the program's meaning"
+file = "crates/nazm-service/src/delta.rs"
+find = """        self.source
+            || self.shape"""
+replace = """        self.shape"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_comment_or_a_literal_changes_source_and_nothing_else" }]
+
+[[mutation]]
+name = "n28-a-rename-is-inferred"
+why = "a removed definition with the same kind and references as an added one is taken to be it renamed, and not reported removed"
+file = "crates/nazm-service/src/delta.rs"
+find = "        .filter(|(identity, _)| !now.contains_key(identity.as_str()))"
+replace = """        .filter(|(identity, d)| {
+            !now.contains_key(identity.as_str())
+                && !now.values().any(|n| {
+                    n.kind == d.kind
+                        && n.digests.references == d.digests.references
+                        && !baseline.definitions.contains_key(&n.identity)
+                })
+        })"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "added_removed_and_a_rename_is_both" }]
+
+[[mutation]]
+name = "n28-caller-changes-are-omitted"
+why = "a delta never reports a function's callers changed, so a new call into it is invisible there"
+file = "crates/nazm-service/src/delta.rs"
+find = "            callers: b.callers.as_ref().map(|c| a.callers.as_ref() != Some(c)),"
+replace = "            callers: b.callers.as_ref().map(|_| false),"
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_new_call_changes_the_callee_without_touching_its_source" }]
+
+[[mutation]]
+name = "n28-callee-changes-are-omitted"
+why = "a delta never reports a function's callees changed, so `f -> g` becoming `f -> h` is not a change of `f`'s calls"
+file = "crates/nazm-service/src/delta.rs"
+find = "            callees: b.callees.as_ref().map(|c| a.callees.as_ref() != Some(c)),"
+replace = "            callees: b.callees.as_ref().map(|_| false),"
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_new_call_changes_the_callee_without_touching_its_source" }]
+
+[[mutation]]
+name = "n28-references-are-ignored"
+why = "a definition's references digest counts nothing, so a use of it elsewhere never changes it"
+file = "crates/nazm-service/src/snapshot.rs"
+find = "                        *d.references.entry(from).or_default() += 1;"
+replace = "                        let _ = (d, from);"
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_use_elsewhere_changes_references_of_a_type" }]
+
+[[mutation]]
+name = "n28-effects-are-not-declared-unsupported"
+why = "a snapshot stops listing effects as unsupported, so their absence reads as nothing having changed"
+file = "crates/nazm-service/src/snapshot.rs"
+find = """    "effects",
+    "capabilities","""
+replace = """    "capabilities",
+    "capabilities","""
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_snapshot_is_every_durable_definition_of_the_compilation_by_identity" }]
+
+[[mutation]]
+name = "n28-the-prelude-is-a-definition-of-the-root"
+why = "files that are not source files of the compilation — the core prelude's — contribute definitions to the snapshot"
+file = "crates/nazm-service/src/snapshot.rs"
+find = """            if !matches!(k, FileKey::Path(_)) {
+                continue;
+            }"""
+replace = """            let _ = k;"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_snapshot_is_every_durable_definition_of_the_compilation_by_identity" }]
+
+[[mutation]]
+name = "n28-the-directory-is-scanned"
+why = "the snapshot looks at the root's directory, not only at what the compilation loaded"
+file = "crates/nazm-service/src/snapshot.rs"
+find = "        let paths = Paths::of(s, root, self.source_root.as_deref());"
+replace = """        let paths = Paths::of(s, root, self.source_root.as_deref());
+        let _scanned = root.parent().map(std::fs::read_dir);"""
+killers = [{ package = "nazm-service", lib = true, name = "snapshot::tests::a_snapshot_is_never_found_by_spelling_or_from_the_environment" }]
+
+[[mutation]]
+name = "n28-an-absolute-path-enters-the-snapshot"
+why = "the snapshot's root identity is the checkout's absolute path, so the same project in another directory is another root"
+file = "crates/nazm-service/src/snapshot.rs"
+find = """            root: RootIdentity {
+                module,"""
+replace = """            root: RootIdentity {
+                module: root.display().to_string(),"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "the_same_sources_give_the_same_bytes_from_any_directory" }]
+
+[[mutation]]
+name = "n28-the-session-generation-is-digested"
+why = "a source digest includes the service's generation, so unchanged sources differ after an unrelated edit"
+file = "crates/nazm-service/src/snapshot.rs"
+find = """                source: Digest::new("source").bytes(source.as_bytes()).hex(),"""
+replace = """                source: Digest::new("source")
+                    .bytes(source.as_bytes())
+                    .number(usize::try_from(s.generation).unwrap_or_default())
+                    .hex(),"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_snapshot_is_the_same_at_any_generation_of_the_service" }]
+
+[[mutation]]
+name = "n28-definitions-are-in-declaration-order"
+why = "definitions follow where they are declared rather than their identity, so the order is not the one the schema promises and moves when a file does"
+file = "crates/nazm-service/src/snapshot.rs"
+find = "        (out, untracked)"
+replace = """        out.sort_by_key(|d| (d.declaration.file.clone(), d.declaration.start));
+        (out, untracked)"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_snapshot_is_every_durable_definition_of_the_compilation_by_identity" }]
+
+[[mutation]]
+name = "n28-a-recovered-compilation-has-a-snapshot"
+why = "a compilation that needed syntax recovery is snapshotted, so a broken edit reads as definitions removed"
+file = "crates/nazm-service/src/snapshot.rs"
+find = """        if incomplete(s) {
+            return Err(NoSnapshot::IncompleteCompilation);"""
+replace = """        if false && incomplete(s) {
+            return Err(NoSnapshot::IncompleteCompilation);"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_compilation_that_needed_recovery_has_no_snapshot" }]
+
+[[mutation]]
+name = "n28-a-wrong-root-baseline-is-accepted"
+why = "a baseline of another root module is compared with this one, reporting every definition added and removed"
+file = "crates/nazm-service/src/delta.rs"
+find = "        if baseline.root.module != current.root.module {"
+replace = "        if false && baseline.root.module != current.root.module {"
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_baseline_that_is_not_exactly_a_snapshot_of_this_root_is_refused" }]
+
+[[mutation]]
+name = "n28-another-schema-is-accepted-as-a-baseline"
+why = "a baseline declaring another schema version is read as if it were `nazm.snapshot/1`"
+file = "crates/nazm-service/src/delta.rs"
+find = """        if value.get("schema").and_then(serde_json::Value::as_str) != Some(crate::snapshot::SCHEMA)
+        {
+            return Err(NoDelta::BaselineWrongSchema);
+        }"""
+replace = """        let mut value = value.clone();
+        if let Some(o) = value.as_object_mut() {
+            o.insert("schema".to_owned(), crate::snapshot::SCHEMA.into());
+        }
+        let value = &value;"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_baseline_that_is_not_exactly_a_snapshot_of_this_root_is_refused" }]
+
+[[mutation]]
+name = "n28-an-unknown-baseline-field-is-accepted"
+why = "a baseline with a field `nazm.snapshot/1` does not define is compared anyway, so a future or foreign object is reinterpreted"
+file = "crates/nazm-service/src/delta.rs"
+find = """#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Wire {"""
+replace = """#[derive(Deserialize)]
+struct Wire {"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_baseline_that_is_not_exactly_a_snapshot_of_this_root_is_refused" }]
+
+[[mutation]]
+name = "n28-a-duplicate-baseline-identity-is-accepted"
+why = "a baseline naming one definition twice is compared using whichever came last"
+file = "crates/nazm-service/src/delta.rs"
+find = """            if definitions.insert(d.identity, before).is_some() {
+                return Err(NoDelta::BaselineDuplicateIdentity);
+            }"""
+replace = """            definitions.insert(d.identity, before);"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_baseline_that_is_not_exactly_a_snapshot_of_this_root_is_refused" }]
+
+[[mutation]]
+name = "n28-the-mcp-server-keeps-a-snapshot"
+why = "the MCP server answers every snapshot call with the first one it derived, so an edit on disk — or a break — is never seen"
+file = "crates/nazm-mcp/src/main.rs"
+find = "            server.analysed(|service, root| service.semantic_snapshot(root, 0))"
+replace = """            static KEPT: std::sync::OnceLock<Result<SnapshotResult, String>> =
+                std::sync::OnceLock::new();
+            KEPT.get_or_init(|| server.analysed(|service, root| service.semantic_snapshot(root, 0)))
+                .clone()"""
+killers = [{ package = "nazm-mcp", test = "protocol", name = "a_delta_is_of_the_disk_at_that_call_and_its_baseline_is_only_data" }]
+
+[[mutation]]
+name = "n28-a-snapshot-is-sent-twice"
+why = "the snapshot tool's result carries the snapshot again as text beside its structured content, doubling what a client receives"
+file = "crates/nazm-mcp/src/main.rs"
+find = "        Ok(once(value, matches!(result, SnapshotResult::Available(_))))"
+replace = "        Ok(CallToolResult::structured(value).into())"
+killers = [{ package = "nazm-mcp", test = "protocol", name = "a_snapshot_and_a_delta_travel_once" }]
