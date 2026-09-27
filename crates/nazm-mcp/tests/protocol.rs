@@ -27,6 +27,7 @@ const SERVER: &str = env!("CARGO_BIN_EXE_nazm-mcp");
 const TOOL: &str = "nazm.semantic_context";
 const SNAPSHOT: &str = "nazm.semantic_snapshot";
 const DELTA: &str = "nazm.semantic_delta";
+const PATCH: &str = "nazm.semantic_patch";
 
 const LIB: &str = "pub fn far() -> Int { 1 }\n";
 const MAIN: &str = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nenum S {\n    A,\n    B(v: Int),\n}\nfn f(p: P) -> Int { far() + p.x }\nfn g() -> Int { f(P(x: 1)) }\n";
@@ -138,11 +139,12 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
         assert_eq!(info.server_info.as_ref().unwrap().name, "nazm-mcp");
         let tools = client.list_all_tools().await.unwrap();
         let names: Vec<&str> = tools.iter().map(|t| &*t.name).collect();
-        assert_eq!(names, [TOOL, SNAPSHOT, DELTA]);
+        assert_eq!(names, [TOOL, SNAPSHOT, DELTA, PATCH]);
         for (tool, schema) in tools.iter().zip([
             "nazm.context-1.json",
             "nazm.snapshot-1.json",
             "nazm.delta-1.json",
+            "nazm.patch-1.json",
         ]) {
             let annotations = tool.annotations.as_ref().unwrap();
             assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
@@ -173,6 +175,21 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
         assert_eq!(delta["required"], json!(["baseline"]));
         assert_eq!(delta["properties"]["baseline"]["type"], "object");
         assert_eq!(delta["additionalProperties"], false);
+        // The patch tool's input is the SDK's derivation of its typed request: an object,
+        // tagged by `operation`, with no root among its arguments.
+        let patch = Value::Object((*tools[3].input_schema).clone());
+        assert_eq!(patch["type"], "object");
+        let text = patch.to_string();
+        for word in [
+            "\"rename\"",
+            "\"diagnostic_fix\"",
+            "new_name",
+            "byte_offset",
+            "\"fix\"",
+        ] {
+            assert!(text.contains(word), "{word}: {text}");
+        }
+        assert!(!text.contains("\"root\""), "{text}");
         let tool = &tools[0];
         let input = Value::Object((*tool.input_schema).clone());
         assert_eq!(input["required"], json!(["file", "byte_offset"]));
@@ -611,6 +628,231 @@ fn a_thousand_snapshots_and_deltas_keep_nothing() {
         eprintln!(
             "nazm-mcp RSS: settled {settled} kB, after 1,000 snapshot and delta calls {after} kB"
         );
+        client.cancel().await.unwrap();
+    });
+}
+
+/// The patch the language service plans for the same request, directly.
+fn direct_patch(root: &Path, file: &Path, offset: u32, rename: Option<&str>) -> Value {
+    let (root, file, rename) = (
+        root.to_path_buf(),
+        file.to_path_buf(),
+        rename.map(str::to_owned),
+    );
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(nazm_core::__syntax::PARSE_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                let mut s = nazm_service::LanguageService::new();
+                s.open_from_disk(&root).unwrap();
+                let r = match rename {
+                    Some(name) => s.patch_rename(&root, 0, &file, offset, &name),
+                    None => s.patch_fix(&root, 0, &file, offset, 0),
+                };
+                serde_json::to_value(r).unwrap()
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    })
+}
+
+const BROKEN: &str = "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n";
+
+#[test]
+fn a_patch_crosses_the_protocol_unchanged_and_is_only_a_plan() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let fixes = project(&[("main.nz", BROKEN)]);
+    let root = dir.path().join("main.nz");
+    let broken = fixes.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, _) = connect(&root).await;
+        let offset = at(MAIN, "f(p");
+        let (patch, error) = call_with(
+            &client,
+            PATCH,
+            json!({"operation": "rename", "file": "main.nz", "byte_offset": offset, "new_name": "go"}),
+        )
+        .await;
+        assert!(!error, "{patch}");
+        assert_eq!(patch["schema"], "nazm.patch/1");
+        assert_eq!(patch["operation"]["kind"], "rename");
+        assert_eq!(patch, direct_patch(&root, &root, offset, Some("go")));
+        // Planned, not applied: the file is exactly as it was.
+        assert_eq!(std::fs::read_to_string(&root).unwrap(), MAIN);
+        // Exported: refused, as a tool result that says why.
+        let (far, error) = call_with(
+            &client,
+            PATCH,
+            json!({"operation": "rename", "file": "lib.nz", "byte_offset": 7, "new_name": "near"}),
+        )
+        .await;
+        assert!(error);
+        assert_eq!(far["reason"], "exported");
+        client.cancel().await.unwrap();
+
+        let (client, _) = connect(&broken).await;
+        let offset = at(BROKEN, "x = 2");
+        let (fixed, error) = call_with(
+            &client,
+            PATCH,
+            json!({"operation": "diagnostic_fix", "file": "main.nz", "byte_offset": offset, "fix": 0}),
+        )
+        .await;
+        assert!(!error, "{fixed}");
+        assert_eq!(fixed["operation"]["applicability"], "automatic");
+        assert!(fixed["operation"]["precondition"].as_str().is_some());
+        assert_eq!(fixed, direct_patch(&broken, &broken, offset, None));
+        assert_eq!(std::fs::read_to_string(&broken).unwrap(), BROKEN);
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_patch_request_names_only_files_of_the_root_and_never_another_root() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    std::fs::write(dir.path().join("loose.nz"), "fn loose() -> Int { 0 }\n").unwrap();
+    let root = dir.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, _) = connect(&root).await;
+        for file in ["/etc/passwd", "../../etc/passwd", "loose.nz", "notes.txt"] {
+            let (v, error) = call_with(
+                &client,
+                PATCH,
+                json!({"operation": "rename", "file": file, "byte_offset": 0, "new_name": "x"}),
+            )
+            .await;
+            assert!(error, "{file}");
+            assert_eq!(v["reason"], "not_in_compilation", "{file}");
+        }
+        // Protocol errors: no operation, an unknown one, a root, a missing or extra
+        // argument, a text replacement a client wrote itself.
+        for arguments in [
+            json!({"file": "main.nz", "byte_offset": 0, "new_name": "x"}),
+            json!({"operation": "apply", "file": "main.nz"}),
+            json!({"operation": "rename", "file": "main.nz", "byte_offset": 0, "new_name": "x", "root": "/"}),
+            json!({"operation": "rename", "file": "main.nz", "byte_offset": 0}),
+            json!({"operation": "diagnostic_fix", "file": "main.nz", "byte_offset": 0, "fix": 0, "replacement": "x"}),
+            json!({"operation": "rename", "file": "main.nz", "byte_offset": -1, "new_name": "x"}),
+        ] {
+            let request = CallToolRequestParams::new(PATCH)
+                .with_arguments(serde_json::from_value(arguments.clone()).unwrap());
+            assert!(client.call_tool(request).await.is_err(), "{arguments}");
+        }
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_patch_is_of_the_disk_at_that_call() {
+    const ONE: &str = "fn h() -> Int { 1 }\nfn f() -> Int { h() }\n";
+    const TWO: &str = "fn h() -> Int { 1 }\nfn f() -> Int { h() + h() }\n";
+    let dir = project(&[("main.nz", ONE)]);
+    let root = dir.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, _) = connect(&root).await;
+        let ask =
+            json!({"operation": "rename", "file": "main.nz", "byte_offset": 3, "new_name": "g"});
+        let (p1, _) = call_with(&client, PATCH, ask.clone()).await;
+        assert_eq!(p1["files"][0]["edits"].as_array().unwrap().len(), 2);
+        std::fs::write(&root, TWO).unwrap();
+        let (p2, _) = call_with(&client, PATCH, ask.clone()).await;
+        assert_eq!(p2["files"][0]["edits"].as_array().unwrap().len(), 3);
+        assert_ne!(p1["files"][0]["digest"], p2["files"][0]["digest"]);
+        assert_ne!(p1["baseline"], p2["baseline"]);
+        // A broken edit: no plan — not the one from before.
+        std::fs::write(&root, "fn h() -> Int { 1 }\nfn f() -> Int { h( }\n").unwrap();
+        let (p3, error) = call_with(&client, PATCH, ask.clone()).await;
+        assert!(error);
+        assert_eq!(p3["reason"], "incomplete_compilation");
+        // The target gone: refused, never the old plan.
+        std::fs::write(&root, "\n\n\n\nfn f() -> Int { 1 }\n").unwrap();
+        let (p4, error) = call_with(&client, PATCH, ask).await;
+        assert!(error);
+        assert_eq!(p4["reason"], "no_entity");
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_patch_travels_once() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    let expected = direct_patch(&root, &root, at(MAIN, "f(p"), Some("go"));
+    let mut child = Command::new(SERVER)
+        .arg("--root")
+        .arg(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for m in [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "raw", "version": "0"}}}),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": PATCH, "arguments": {"operation": "rename", "file": "main.nz", "byte_offset": at(MAIN, "f(p"), "new_name": "go"}}}),
+    ] {
+        writeln!(stdin, "{m}").unwrap();
+    }
+    stdin.flush().unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut wire = String::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        let v: Value = serde_json::from_str(&line).unwrap();
+        if v["id"] == 2 {
+            wire = line;
+            break;
+        }
+    }
+    drop(stdin);
+    let _ = child.wait();
+    let v: Value = serde_json::from_str(&wire).unwrap();
+    assert_eq!(v["result"]["content"], json!([]));
+    assert_eq!(v["result"]["structuredContent"], expected);
+    assert_eq!(wire.matches("nazm.patch/1").count(), 1, "{wire}");
+    assert_eq!(wire.matches("\"baseline\"").count(), 1, "{wire}");
+    eprintln!(
+        "nazm-mcp patch frame: {} bytes (structured {})",
+        wire.trim_end().len(),
+        expected.to_string().len()
+    );
+}
+
+#[test]
+fn a_thousand_plans_keep_nothing() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, pid) = connect(&root).await;
+        let asks = [
+            json!({"operation": "rename", "file": "main.nz", "byte_offset": at(MAIN, "f(p"), "new_name": "go"}),
+            json!({"operation": "rename", "file": "main.nz", "byte_offset": at(MAIN, "P {"), "new_name": "Q"}),
+            json!({"operation": "diagnostic_fix", "file": "main.nz", "byte_offset": 0, "fix": 0}),
+        ];
+        let mut first = Vec::new();
+        for a in &asks {
+            first.push(call_with(&client, PATCH, a.clone()).await.0);
+        }
+        assert_eq!(first[2]["reason"], "no_such_fix");
+        for _ in 0..25 {
+            for a in &asks {
+                call_with(&client, PATCH, a.clone()).await;
+            }
+        }
+        let settled = rss_kb(pid);
+        for i in 0..1000 {
+            let k = i % asks.len();
+            let (v, _) = call_with(&client, PATCH, asks[k].clone()).await;
+            assert_eq!(v, first[k], "call {i}");
+        }
+        let after = rss_kb(pid);
+        assert!(after <= settled + 1024, "{settled} kB -> {after} kB");
+        eprintln!("nazm-mcp RSS: settled {settled} kB, after 1,000 patch calls {after} kB");
         client.cancel().await.unwrap();
     });
 }
