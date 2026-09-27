@@ -36,10 +36,15 @@ claims to know every caller or importer in a project.
 
 The position must be on the declaration of a function, record or enum, or on a use of one. The
 result is a `nazm.context/1` object (`schema/nazm.context-1.json`, `docs/architecture.md` §7.29) in
-the tool result's structured content, and — as the protocol recommends for older clients — the same
-JSON as text. A position with no such definition, a file the compilation did not load, or a
+the tool result's structured content, **once**: `content` is an empty array, not a second copy of the
+packet as text (which the specification only suggests, and which would double every response). A position with no such definition, a file the compilation did not load, or a
 compilation that needed syntax recovery gives an `unavailable` object and `isError: true`; a
 malformed call (an unknown tool, a missing or mistyped argument) is a protocol error.
+
+A packet's links are **source-linked program dependencies only**: every link has a declaration in a
+file of the compilation. Compiler-owned, built-in, interface-only or toolchain definitions with no
+navigable declaration — the core prelude's `Option` and `Result`, `Int` — may affect checking but are
+omitted from the link sections.
 
 A packet holds the target's exact source and compact links — identity, kind, name, place — to what
 it uses, the types it names, what uses it, what it calls and what calls it, and the diagnostics

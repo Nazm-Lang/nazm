@@ -1461,10 +1461,10 @@ Over `stdio`, the real `nazm-mcp` process, medians of the full `tools/call` roun
 
 | Target | `tools/call` | response frame | server resident: before, after, peak |
 | --- | --- | ---: | --- |
-| small function | 0.50 ms | 3,643 B | 3.2 → 4.3 MB, peak 4.3 MB |
-| 500 callers | 16.8 ms | 347,632 B | 3.2 → 12.2–12.5 MB |
-| `emit.nz`, typical function | 104.9–105.0 ms | 2,752 B | 3.2 → 37.3 MB, peak 37.3 MB |
-| `emit.nz`, largest function | 107.7–108.4 ms | 214,808 B | 3.2 → 38.7–38.8 MB |
+| small function | 0.48 ms | 1,715 B (was 3,643) | 3.2 → 4.3 MB, peak 4.3 MB |
+| 500 callers | 16.2 ms | 159,796 B (was 347,632) | 3.2 → 11.4 MB |
+| `emit.nz`, typical function | 108.1 ms | 1,312 B (was 2,752) | 3.2 → 37.3 MB, peak 37.3 MB |
+| `emit.nz`, largest function | 108.4 ms | 103,518 B (was 214,808) | 3.2 → 38.5 MB |
 
 **What the numbers say.** A packet costs one analysis of its root: about 80 ms of the compiler's
 105 ms tool call is loading and analysing the compilation from disk, which every call does so
@@ -1482,8 +1482,11 @@ with many references carries one link per use — 500 callers and 1,000 referenc
 times the fixture's source, because nothing is truncated — and a large function carries its own
 source, 59 kB of `emit_module`'s 103 kB packet. These are byte ratios, not token counts: no
 tokenizer was measured, and no token saving is claimed. Over MCP the frame carries the packet
-twice — as structured content, and as the same JSON in a text block, which the protocol recommends
-for older clients and the SDK writes — so it is roughly twice the packet.
+**once**, as structured content, with an empty `content`: each frame is the packet plus an 87-byte
+JSON-RPC envelope. The first measurement (the "was" column) sent it twice — the SDK's constructor
+also copies structured content into a text block, which the specification only suggests for older
+clients — and the closure correction removed the copy: **52–54 % fewer bytes per response**, in
+bytes, not tokens.
 
 **What it added to the binaries.** Built from both trees in the same container: `nazm` is
 3,216,256 bytes at N26 and 3,347,328 at N27, **+131,072 bytes (+4.1 %)**, two 64 KiB steps, for the
