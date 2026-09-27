@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,580 passed, 0 failed, 13 ignored, across 86 suites**, run contained at
-N27 (2026-09-27), at P4T4; the thirteen ignored are the xtask lifecycle tests,
-run on their own (13 of 13 passed, contained). N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,609 passed, 0 failed, 13 ignored, across 87 suites**, run contained at
+N28 (2026-09-27), at P4T4; the thirteen ignored are the xtask lifecycle tests,
+run on their own (13 of 13 passed, contained). N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1539,6 +1539,43 @@ resident memory, and nothing but JSON-RPC on standard output. Sixteen N27 mutati
 packet v1 exposes source-linked program dependencies only: compiler-owned, built-in, interface-only
 or toolchain definitions with no navigable declaration may affect checking but are not linked.
 
+*N28, 2026-09-27: Semantic snapshot v1, `nazm.snapshot/1` — VERIFIED; Semantic delta v1,
+`nazm.delta/1` — VERIFIED; for durable source-backed functions, records and enums of the current
+root compilation, and the sections the compiler records of them. G71 — PARTIAL; MCP — PARTIAL,
+three read-only tools.* A snapshot (`crates/nazm-service/src/snapshot.rs`, `architecture.md` §7.30)
+is every such definition by `DefKey`, with one BLAKE3 digest each for its exact source, shape
+(kind, visibility, signature or fields or variants), source-linked dependencies, related types,
+references, callers and callees (a function's; null for a type) and diagnostics — relationships
+digested by identity and count, never offset — plus the root's module key and compiler, a count of
+definitions with no durable key, and `unsupported` naming effects, capabilities, tests, semantic
+history and behavioural equivalence. A delta (`crates/nazm-service/src/delta.rs`) validates a
+baseline as data and reports added, removed and changed definitions by key, with a record of which
+sections changed. N28 reports changes in the semantic surfaces Nazm currently records; it is not a
+proof of behavioural equivalence: `{ 1 }` to `{ 2 }` is `source` alone, and effects, capabilities
+and tests are unsupported, not unchanged. G71 is partial for that reason — a delta names what the
+compiler records, and no behavioural, effect or test delta. Evidence:
+`crates/nazm-service/tests/snapshot.rs` — every durable definition by identity, ordered, with two
+modules' `helper` apart and no source text or packet inside; byte-identical from fresh services, at
+any service generation, and from a copy in another directory with no host path and no git
+repository; a file nothing imports absent and another root's compilation its own; a module outside
+the source root counted untracked, never matched; recovery and a missing module refusing; no edit
+and a moved definition no change; a comment and a changed literal `source` alone; a function added,
+an enum and a function and a record removed, a rename removed plus added and never inferred; a
+signature, a field, a variant and visibility `shape`; a new call changing the callee's references
+and callers and the caller's dependencies and callees, and a second call counting; a use elsewhere
+changing only a record's references; a new diagnostic changing only its definition; a broken edit
+refusing and the repair answering; every malformed baseline refused with its reason — another
+schema, an unavailable snapshot, an unknown or missing field, a record's callers, a non-canonical,
+wrong-kind, absolute or prelude identity, a duplicate, a bad digest, another root, another
+compiler; and 500 snapshot and delta pairs leaving the service's retained state unchanged.
+`crates/nazm-cli/tests/schemas.rs` the real commands' snapshots, deltas and refusals valid against
+both schemas. `crates/nazm-mcp/tests/protocol.rs` the real server: three read-only tools with the
+published output schemas, a snapshot equal to the service's and a delta needing only it, each
+carried once on the wire, an edit seen between calls, a broken edit refused for both tools and the
+repair answered, a path or path-shaped object refused as a baseline without being read, protocol
+errors for missing or extra arguments, and 1,000 snapshot and delta calls with flat resident
+memory. Twenty N28 mutations (area 30).
+
 **Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
 help, symbols, full-document semantic tokens, quick fixes and call hierarchy only: no
 formatting, refactors, source actions or inlay hints, no cancellation and no watched files.
@@ -1578,20 +1615,22 @@ another syntax error, and nothing when any other file, or the document's top lev
 `.` is the only trigger character; `(` is not one. A hole's completion costs a second parse and
 check of the compilation per request (`performance.md`).
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
-are published for open documents only. **MCP is one read-only tool** (N27): the semantic context
-packet over stdio, from disk, for one fixed root — no resources, prompts, completions, sampling or
-edits, no HTTP, and no view of an editor's unsaved buffers. A packet has no effects, capabilities,
-test mapping, semantic history or semantic delta (each `unsupported`), covers only the root's
-compilation — no project-wide completeness — and is refused for a compilation that needed syntax
-recovery.
+are published for open documents only. **MCP is three read-only tools** (N27, N28): the semantic
+context packet, the semantic snapshot and the delta against a client-kept snapshot, over stdio, from
+disk, for one fixed root — no resources, prompts, completions, sampling or edits, no HTTP, no
+server-side history, and no view of an editor's unsaved buffers. A packet has no effects,
+capabilities, test mapping or semantic history (each `unsupported`); a snapshot's digests are of the
+sections the compiler records, so equal digests are not equal behaviour, and a delta has no rename
+inference and no effect, capability or test delta. All three cover only the root's compilation — no
+project-wide completeness — and are refused for a compilation that needed syntax recovery.
 
 **Next dependency** · None for what exists. Each further request needs its own semantic
 contract; incremental reparse needs latency evidence, which N16's measurements do not give.
 
 **Accepted when** · Met for the LSP, 2026-09-25 (N16): an adapter shares the compiler's
-semantic engine rather than re-implementing it. MCP: partial since N27 (2026-09-27) — one read-only
-tool over the same service; not accepted, since it answers one question of the many the service
-can.
+semantic engine rather than re-implementing it. MCP: partial since N27 (2026-09-27) — read-only
+tools over the same service, three since N28; not accepted, since they answer a few of the
+questions the service can, and none edits.
 
 ### 26. Package and build tooling — PARTIAL
 
@@ -1678,8 +1717,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **470** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26), **282** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **493** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction), **305** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -2197,6 +2236,24 @@ no survivor, crash, timeout, unusable or uninjected entry, no runner error. The 
 joined the `cli`, `semantics` and `checker` profiles, and `crates/nazm-mcp/src/` the `cli` profile
 with its binary and `protocol` suite. N13's use-after-free survivor and the `nesting-unbounded`
 MUTANT CRASH were not re-run and are as they were.
+
+*N28 (2026-09-27) added twenty,* on the frozen final source, and moved five whose code N28 now
+shares — two N25 entries onto the one checked-call rule `hierarchy::callee`, two N27 entries onto
+`context::incomplete`, and N27's duplicate-payload entry onto the MCP server's one `once` path —
+each re-pointed at the same defect. Every killer of the twenty, and of the 29 existing entries in
+the files N28 changed or whose killing suite it changed, was verified by `--verify-killer`,
+contained at P1, one at a time, with no host build running: **49 of 49**. The twenty attack N28's
+invariants: definitions matched by spelling, the source digest ignored, a source-only change
+counted unchanged, a rename inferred, caller and callee changes omitted, references ignored,
+effects no longer declared unsupported, the prelude's definitions taken for the root's, the
+directory scanned, an absolute path as root identity, the service generation digested, definitions
+in declaration order, a recovered compilation snapshotted, a wrong-root, another-schema,
+unknown-field or duplicate-identity baseline accepted, the MCP server keeping a snapshot, and a
+snapshot sent twice. **Campaign `d7286651a2e99c5c`, targeted, P1, one session, 1,740 s:** those
+twenty and the five re-pointed entries. **25 of 25 caught at tier 1**; nothing at tier 2 or 3, no
+survivor, crash, timeout, unusable or uninjected entry, no runner error. The `snapshot` suite joined
+the `cli`, `semantics` and `checker` profiles. N13's use-after-free survivor and the
+`nesting-unbounded` MUTANT CRASH were not re-run and are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

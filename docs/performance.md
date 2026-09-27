@@ -1496,6 +1496,70 @@ bytes**, carrying the SDK: 54 crates new to `Cargo.lock` (`rmcp` 3.4.1 and its t
 `futures`, `schemars`, `chrono`, `pastey` and others), all in that crate alone, and a one-time
 rebuild of the contained image so they are fetched ahead of offline runs.
 
+### Semantic snapshots, deltas and their MCP tools — measured 2026-09-27
+
+N28 keeps nothing between requests: a snapshot or delta is derived from one analysis of its root,
+serialised and dropped with it — no snapshot cache, dependency graph, call graph or history.
+**Persistent N28 state: zero entries.** The ordinary compiler path does no snapshot work; the only
+change on it is two helpers N27 and N25 code now calls (`context::incomplete`,
+`hierarchy::callee`) with the bodies they had inline.
+
+In process, contained, P1 (`target/n28/bench`, not committed), medians — opening the root from disk
+and analysing it, deriving the snapshot, serialising it:
+
+| Root | definitions | open + analyse | derive | serialise | snapshot | loaded source | all N27 packets |
+| --- | ---: | --- | --- | --- | ---: | ---: | ---: |
+| small (a record, an enum, two functions) | 4 | 0.13 ms | 0.046 ms | 0.003 ms | 2,958 B | 1,021 B | 4,028 B |
+| 500 callers, 1,000 references | 501 | 6.24 ms | 6.29 ms | 0.27 ms | 376,319 B | 21,316 B | 721,000 B |
+| 2,000 definitions (250 records, 250 enums, 1,500 functions) | 2,000 | 32.0 ms | 29.7 ms | 1.40 ms | 1,441,797 B | 82,794 B | 3,376,156 B |
+| the compiler (`emit.nz` and its imports) | 438 | 80.7 ms | 13.4 ms | 0.33 ms | 332,252 B | 601,518 B | 2,227,799 B |
+
+A delta, in process, against a baseline of the same root — parsing the baseline, validating it (a
+baseline refused at its last digest, so every entry is checked), deriving the current snapshot, the
+whole delta, and serialising it:
+
+| Root and edit | parse | validate | current snapshot | whole delta | delta |
+| --- | --- | --- | --- | --- | ---: |
+| small, no edit | 0.007 ms | 0.007 ms | 0.045 ms | 0.053 ms | 329 B |
+| 500 callers, no edit | 0.86 ms | 1.08 ms | 6.40 ms | 7.59 ms | 334 B |
+| 2,000 definitions, no edit | 3.12 ms | 5.52 ms | 30.3 ms | 36.6 ms | 337 B |
+| compiler, no edit | 0.82 ms | 1.19 ms | 13.2 ms | 14.4 ms | 334 B |
+| compiler, a comment in one body | 0.80 ms | 1.19 ms | 13.4 ms | 14.5 ms | 600 B — one definition, `source` alone |
+| compiler, one new call (`add_line` → `max_instances`) | 0.84 ms | 1.24 ms | 13.6 ms | 15.7 ms | 871 B — the caller's source, dependencies and callees; the callee's references and callers |
+| compiler, one added function | 0.81 ms | 1.20 ms | 13.1 ms | 14.6 ms | 449 B — one added |
+
+Comparing is under a millisecond everywhere; a delta costs a snapshot plus reading the baseline.
+Over `stdio`, the real `nazm-mcp` process, medians of the full `tools/call` round trip:
+
+| Root | snapshot call | snapshot frame | delta call (baseline sent) | delta frame | server resident: before, after |
+| --- | --- | ---: | --- | ---: | --- |
+| small | 0.48 ms | 3,045 B | 0.64 ms | 416 B | 3.3 → 4.5 MB |
+| 500 callers | 16.8 ms | 376,405 B | 36.0 ms | 420 B | 3.2 → 13.2 MB |
+| 2,000 definitions | 76.2 ms | 1,441,883 B | 190 ms | 423 B | 3.2 → 45.7 MB |
+| compiler | 99.9 ms | 332,338 B | 125 ms | 420 B | 3.2 → 40.4 MB |
+
+Each frame is the result plus an 86–87-byte JSON-RPC envelope: the result travels once. A delta
+call costs more than a snapshot call because the client sends the whole baseline, which the server
+parses from the request and validates before deriving the current snapshot. Resident memory rises
+by one analysis and stays at that high-water mark (the allocator keeps its pages); 1,000 snapshot
+and delta calls in `crates/nazm-mcp/tests/protocol.rs` stay within a megabyte of where they settled,
+which the test asserts.
+
+**What a snapshot weighs.** About 720–760 bytes per definition — an identity, a place and eight
+64-digit digests — whatever the definition's size. So a snapshot is **smaller than its sources
+where definitions are real** — the compiler's is 55 % of its 601 kB of source, and 15 % of the
+2.2 MB its 438 N27 packets would be — and **larger** where they are tiny: the generated fixtures of
+one-line functions are 17–18 times their source, and the four-definition file is three times its.
+A delta is proportional to what changed, not to the compilation: 329–337 bytes for no change,
+about 270 more per changed definition. These are byte counts, not token counts: no tokenizer was
+measured, and no token saving is claimed.
+
+**What it added to the binaries.** Built in the same container: `nazm` is 3,347,328 bytes at N27
+and **3,478,400** at N28, **+131,072 bytes (+3.9 %)**, two 64 KiB steps, for the snapshot and delta
+modules, the baseline parser and two commands; `nazm-mcp` is 2,627,296 and **2,823,904**, +196,608
+bytes. No crate was added to `Cargo.lock` — one dependency edge: `nazm-service` now uses the
+workspace's existing `blake3`, the one hash the cache and interface already use.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
