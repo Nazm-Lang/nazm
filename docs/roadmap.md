@@ -370,14 +370,61 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N28, in dependency order
+
+No item is chosen here; N28 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Semantic patch plans (G72) | rename ✓, quick fixes ✓, snapshots ✓ | each operation is its own contract; a snapshot binds a plan to a compilation, it does not validate one |
+| Rename inference, or definition lineage | snapshots ✓, deltas ✓ | a key's continuity is a name in a module; lineage needs a contract of its own |
+| Behavioural or body fingerprints beyond exact source | a semantic IR | N28's `source` section is exact bytes; nothing finer is sound without one |
+| Test impact, effect and capability deltas | a relation the compiler owns, effects and capabilities | tests are not tied to definitions; effects and capabilities are MISSING as language features |
+| Semantic history, or a persistent snapshot store | snapshots ✓ | the client keeps its baseline; no evidence yet needs server-side history and its retention contract |
+| Test-to-definition mapping | a relation the compiler owns | unchanged since N27 |
+| Rename of exported definitions | rename ✓ | unchanged since N18; a snapshot is of one root, not every importer |
+| Edits of files not open | rename ✓, quick fixes ✓ | unchanged since N18 |
+| Incremental reparse, or a persistent analysis for MCP | a lossless CST ✓ | each MCP call re-analyses its root; still no evidence that forces a cache and its freshness contract |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+
+### N28 — Semantic snapshot manifest and semantic delta v1 — **complete, 2026-09-27**
+
+The first executable step toward G71. `nazm.snapshot/1` is one root compilation's durable
+functions, records and enums, by `DefKey` alone, each with one BLAKE3 digest per section the
+compiler records — exact source, shape, dependencies, related types, references, callers, callees,
+diagnostics — taken over identities and counts, never offsets or session ids. `nazm.delta/1`
+compares a baseline snapshot, validated strictly as data, with the current compilation: added,
+removed, and changed with exactly which sections changed. A rename is removed plus added; a comment
+or a literal is `source` alone. N28 reports changes in the semantic surfaces Nazm currently records;
+it is not a proof of behavioural equivalence, and effects, capabilities, tests, history and
+behavioural equivalence are unsupported, not unchanged. `nazm snapshot` and `nazm delta` print
+them; `nazm-mcp` adds two read-only tools and keeps no snapshot — the client keeps its baseline. No
+language, interface, cache-key or bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.interface/5`,
+`nazm.context/1` unchanged; two new machine schemas.
+
+| Settled | Where |
+| --- | --- |
+| the snapshot, `nazm.snapshot/1`, from N17/N18/N20/N21/N22/N25/N27 | `crates/nazm-service/src/snapshot.rs`, `schema/nazm.snapshot-1.json`, `architecture.md` §7.30 |
+| the delta, `nazm.delta/1`, and baseline validation | `crates/nazm-service/src/delta.rs`, `schema/nazm.delta-1.json` |
+| `nazm snapshot --root --json`, `nazm delta --root --baseline --json` | `crates/nazm-cli/src/snapshot.rs` |
+| `nazm-mcp`: `nazm.semantic_snapshot`, `nazm.semantic_delta`, stateless | `crates/nazm-mcp/src/main.rs`, `docs/mcp.md` |
+| what it costs | `performance.md` |
+
+Mutation evidence: 20 new mutations and five N25/N27 entries re-pointed onto code N28 now shares;
+49 killers verified on the final source; one targeted campaign of 25, all caught at tier 1
+(`capability-matrix.md` §30).
+
+**N29 has not started.**
+
 ### After N27, in dependency order
 
-No item is chosen here; N27 left these standing.
+No item is chosen here; N27 left these standing. *Superseded by "After N28" above.*
 
 | | Depends on | Why not before |
 | --- | --- | --- |
 | MCP expansion | the context packet ✓, one read-only tool ✓ | only where a question needs it; each tool is its own contract |
-| Semantic delta (G71) | context packets ✓ | needs its own contract; comparing two packets is not one |
+| Semantic delta (G71) | context packets ✓ | done in part by N28: snapshots and deltas of the sections the compiler records, not behaviour |
 | Test-to-definition mapping | a relation the compiler owns | tests are not tied to definitions today |
 | Effect and capability context | the language owning effects and capabilities | both are MISSING as language features |
 | Rename of exported definitions | rename ✓ | unchanged since N18 |
@@ -410,8 +457,6 @@ Mutation evidence: 13 new mutations, every killer verified; one targeted campaig
 (`capability-matrix.md` §30). Closure correction: the MCP result carries the packet once, and v1
 links only entities with a declaration in a file of the compilation — three more mutations, all 16
 killers re-verified on the corrected source, one campaign of 16.
-
-**N28 has not started.**
 
 ### After N26, in dependency order
 
