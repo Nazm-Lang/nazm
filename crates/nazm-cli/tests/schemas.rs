@@ -16,7 +16,12 @@
 //! [`validate`] so a schema that reaches for a keyword outside it fails loudly rather
 //! than being silently unchecked.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -51,6 +56,17 @@ fn validate(value: &Value, node: &Value, root: &Value, at: &str, problems: &mut 
         problems.push(format!("{at}: schema node is not an object"));
         return;
     };
+
+    // A node whose `type` admits null accepts null and describes nothing further about it:
+    // `nazm.context/1`'s sections that do not apply are null, not empty.
+    let admits_null = match map.get("type") {
+        Some(Value::Array(a)) => a.iter().any(|t| t == "null"),
+        Some(Value::String(t)) => t == "null",
+        _ => false,
+    };
+    if value.is_null() && admits_null {
+        return;
+    }
 
     if let Some(Value::String(r)) = map.get("$ref") {
         let Some(name) = r.strip_prefix("#/$defs/") else {
@@ -474,4 +490,49 @@ fn the_build_report_matches_the_published_schema() {
     check_against("nazm.build-report-1.json", &off);
     assert_eq!(native(&off, "reused"), Value::from(0));
     assert_eq!(native(&off, "stored"), Value::from(0));
+}
+
+#[test]
+fn a_context_packet_is_nazm_context_1_available_or_not() {
+    // A function with callers, callees, dependencies, a diagnostic and a prelude type; a
+    // record and an enum, whose calls are not applicable; and each reason there is no packet.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let main = dir.path().join("main.nz");
+    let text = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nenum S {\n    A,\n    B(v: Int),\n}\n\
+fn f(p: P, s: S) -> Option[Int] { let y = 1 + \"s\"; Option.Some(value: g(p.x)) }\n\
+fn h() -> Int { match f(P(x: 1), S.A()) { Option.Some(value: v) => v, Option.None() => 0, } }\n";
+    std::fs::write(&main, text).unwrap();
+    std::fs::write(dir.path().join("lib.nz"), "pub fn g(n: Int) -> Int { n }\n").unwrap();
+    let run = |file: &Path, byte: usize| -> Value {
+        let out = Command::new(NAZM)
+            .args(["context", "--json", "--root"])
+            .arg(&main)
+            .arg("--file")
+            .arg(file)
+            .args(["--byte", &byte.to_string()])
+            .output()
+            .expect("run nazm context");
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(stdout.lines().count(), 1, "one compact line: {stdout}");
+        serde_json::from_str(&stdout).unwrap()
+    };
+    let at = |needle: &str| text.find(needle).unwrap();
+    let packets = vec![
+        run(&main, at("f(p")),
+        run(&main, at("P {")),
+        run(&main, at("S {")),
+        run(&main, at("h()")),
+        run(&main, at("y =")),
+        run(&main, 0),
+        run(&main, text.len() + 5),
+        run(&dir.path().join("elsewhere.nz"), 0),
+    ];
+    assert_eq!(packets[0]["status"], "available");
+    assert!(!packets[0]["diagnostics"].as_array().unwrap().is_empty());
+    assert_eq!(packets[1]["callers"]["status"], "not_applicable");
+    assert_eq!(packets[4]["reason"], "not_a_target");
+    assert_eq!(packets[5]["reason"], "not_a_name");
+    assert_eq!(packets[6]["reason"], "out_of_range");
+    assert_eq!(packets[7]["reason"], "not_in_compilation");
+    check_against("nazm.context-1.json", &packets);
 }

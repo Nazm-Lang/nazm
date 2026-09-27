@@ -36,6 +36,7 @@ mod backend;
 mod build;
 mod capabilities;
 mod checking;
+mod context;
 mod derived;
 mod fix;
 mod fmt;
@@ -163,6 +164,30 @@ enum Command {
         /// One JSON object per edit, on stdout. See `docs/diagnostics.md`.
         #[arg(long)]
         json: bool,
+    },
+    /// Print one definition's semantic context packet, `nazm.context/1`.
+    ///
+    /// The function, record or enum declared or used at byte `--byte` of `--file`, a file
+    /// the compilation rooted at `--root` loads: its exact source, and compact links to what
+    /// it uses, what uses it, what it calls and what calls it, from the disk as it is now.
+    /// `docs/architecture.md` §7.29.
+    Context {
+        /// The compilation's root module: every fact in the packet is of this program.
+        #[arg(long)]
+        root: PathBuf,
+        /// The file the position is in. It must be one the root's compilation loads.
+        #[arg(long)]
+        file: PathBuf,
+        /// The position, as a byte offset into `--file`.
+        #[arg(long)]
+        byte: u32,
+        /// The one canonical compact serialisation. Without it, the same object indented.
+        #[arg(long)]
+        json: bool,
+        /// Measure every module's durable identity from this directory, as
+        /// `nazm check --source-root` does.
+        #[arg(long)]
+        source_root: Option<PathBuf>,
     },
     /// Serve the Language Server Protocol to an editor, on stdin and stdout.
     ///
@@ -333,6 +358,13 @@ fn main() -> ExitCode {
         } => return interface::run(&file, hash, source_root.as_deref()),
         Command::Capabilities { json } => return capabilities::run(json),
         Command::Lsp { source_root } => return lsp::run(source_root.as_deref()),
+        Command::Context {
+            root,
+            file,
+            byte,
+            json,
+            source_root,
+        } => return context::run(&root, &file, byte, json, source_root.as_deref()),
         Command::Fmt { files, check } => return fmt::run(&files, check),
         Command::Test {
             paths,
@@ -364,6 +396,7 @@ fn main() -> ExitCode {
         Command::Build { .. }
         | Command::Check { .. }
         | Command::Fix { .. }
+        | Command::Context { .. }
         | Command::Fmt { .. }
         | Command::Test { .. }
         | Command::Interface { .. }
