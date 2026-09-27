@@ -3604,6 +3604,98 @@ nothing imports — is ever opened. It does not see an editor's unsaved buffers.
 edit tools, HTTP transports, a persistent index or daemon, and any claim that every caller or
 importer in a project is known.
 
+## 7.30 Semantic snapshot manifest and semantic delta v1 — settled by N28, 2026-09-27
+
+> **N28 reports changes in the semantic surfaces Nazm currently records. It is not a proof of
+> behavioural equivalence.** Effects, capabilities and tests are unsupported, not unchanged.
+
+```text
+N17  every use of an entity, by where it is             (ReferenceIndex)
+N18  written names of program records and enums         (Resolution::type_name)
+N20  the one function signature renderer                (Signature)
+N21  canonical fields, variants and payloads            (structure::members)
+N22  top-level declarations and their exact ranges      (symbols::declared_in)
+N25  the one checked-call edge rule                     (hierarchy::callee)
+N27  identity, shape and source-link rules              (context::{identity_of, shape, Paths})
+        ↓
+SemanticSnapshot, nazm.snapshot/1                       (nazm-service/src/snapshot.rs)
+        +  a baseline snapshot, as data
+        ↓
+SemanticDelta, nazm.delta/1                             (nazm-service/src/delta.rs)
+        ↓
+nazm snapshot --json · nazm delta --baseline --json     (nazm-cli/src/snapshot.rs)
+nazm-mcp: nazm.semantic_snapshot · nazm.semantic_delta  (nazm-mcp)
+```
+
+**Which definitions.** Every function, record and enum the checker declared from a file of the
+root's compilation — the root and what it imports, no directory read — that has a durable
+definition key. `DefKey` is the only identity: no `FnId`, `RecordId` or `EnumId` is serialised, and
+nothing is matched by path or name. A definition in a module outside the source root has no key; it
+is left out and counted in `untracked`. A key the compilation gave two declarations would be no
+identity for either and is counted the same way (the checker refuses a second declaration, so this
+is a guard, not a case that occurs today). Built-ins and the core prelude's definitions are not the
+root's definitions.
+
+**What a snapshot holds.** The root's identity — its module key and the compiler (`nazm <version>`)
+— then per definition its key, kind, declaration place (for navigation, not compared) and one BLAKE3
+digest per section, over a length-prefixed framing that names schema and section:
+
+| Section | Canonical data digested |
+| --- | --- |
+| `source` | the declaration's exact bytes |
+| `shape` | kind, visibility, and the rendered signature, or the fields, or the variants and payloads |
+| `dependencies` | every source-linked entity used inside (N27's rule), by kind and identity, with a count |
+| `related_types` | the records and enums written by name inside, by identity, with a count |
+| `references` | every use of it, by the identity of the definition the use is in, with a count |
+| `callers`, `callees` | a function's direct checked calls in and out, by the identity at the other end, with a count; null for a record or an enum |
+| `diagnostics` | code, severity, fix count and declaration-relative range of each diagnostic inside it — never its message |
+
+Relationship digests take identities and counts, never byte offsets, so a line added above a
+definition changes nothing below it; a reference or call is attributed to the declaration whose
+range contains it, found by binary search over each file's declarations. No complete packet is
+stored per definition — a snapshot is a manifest. `unsupported` lists effects, capabilities, tests,
+semantic history and behavioural equivalence.
+
+**What a digest proves.** Equal digests mean the canonical bytes above were equal, and nothing
+more. `fn answer() -> Int { 1 }` and `{ 2 }` agree in every section but `source`. A digest is not
+the program's meaning.
+
+**Root identity and determinism.** The root is its module key, relative to the source root, so
+the same project in another directory has the same identity and the same bytes; no absolute path,
+generation, numeric id, time or random value is digested or written. Definitions are ordered by
+identity; every map is ordered. The same sources and compiler give byte-identical snapshots across
+calls, processes and checkouts. Two different projects whose root modules have the same key share
+a root identity; a delta between them is still exact about which keys differ.
+
+**The delta.** A baseline is data: parsed as JSON and validated before anything is compared. It is
+refused — never compared as well as it can be — for another schema, an unavailable snapshot, any
+field `nazm.snapshot/1` does not define or a missing one, an identity not in canonical `DefKey`
+spelling or not of its entry's kind, a duplicate identity, a digest that is not 64 lowercase
+hexadecimal digits, callers or callees present on a record or absent on a function, another root
+module, or another compiler. Otherwise the current snapshot is derived and compared by key:
+`added`, `removed` (with its baseline place), `changed` with a record of which sections differ —
+`callers` and `callees` null for a type, not false — and an `unchanged` count. A rename is its old
+key removed and its new key added; nothing is inferred. A comment, a reformatting or a different
+literal is `source` alone.
+
+**No state.** Snapshot and delta are derived per request from one analysis and dropped with it:
+no snapshot cache, dependency graph, call graph or history outlives a call. Nothing needs, or asks,
+git.
+
+**The CLI and the MCP server.** `nazm snapshot --root FILE --json` prints a snapshot; `nazm delta
+--root FILE --baseline FILE --json` reads a snapshot file the caller kept and prints the delta — a
+file that is not JSON is a malformed baseline. `nazm-mcp` adds `nazm.semantic_snapshot` (no
+arguments) and `nazm.semantic_delta` (`baseline`, a `nazm.snapshot/1` object), with the two schemas
+as output schemas and each result carried once, as structured content. The server keeps no
+previous snapshot: the client keeps the baseline and hands it back. A baseline is never a path,
+so no file a client names is read. Each call reads the disk as it is then, so an edit is seen at
+once and a broken one gets no snapshot or delta, never an earlier one. `nazm.semantic_context` is
+unchanged.
+
+**Deliberately not here.** Rename inference, test impact, effect and capability deltas, semantic
+history, a persistent snapshot cache or index, git integration, patch application, and any claim
+that equal digests mean equal behaviour.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
