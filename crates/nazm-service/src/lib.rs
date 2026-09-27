@@ -25,7 +25,10 @@
 //! - [`snapshot`] — one root compilation's durable definitions, with a digest per recorded
 //!   semantic section, as `nazm.snapshot/1` (N28);
 //! - [`delta`] — a baseline snapshot against the current compilation of its root: what was
-//!   added, removed, or changed in which recorded section, as `nazm.delta/1` (N28).
+//!   added, removed, or changed in which recorded section, as `nazm.delta/1` (N28);
+//! - [`patch`] — a validated rename or a compiler-owned fix as minimal exact-byte edits,
+//!   bound to the root's snapshot, each file's digest and each edit's expected bytes, as
+//!   `nazm.patch/1`; planned, never applied (N29).
 //!
 //! The first two were `nazm-cli`'s until N16 and moved here unchanged in what they decide,
 //! so the command line and the language service cannot disagree about a module graph.
@@ -39,6 +42,7 @@ pub mod fixes;
 pub mod hierarchy;
 mod incomplete;
 pub mod load;
+pub mod patch;
 pub mod rename;
 pub mod root;
 pub mod semantic;
@@ -53,6 +57,7 @@ pub use context::{ContextPacket, ContextResult, NoContext};
 pub use delta::{DeltaResult, NoDelta, SemanticDelta};
 pub use fixes::{FixPlan, NoFixes};
 pub use hierarchy::{HierarchyFunction, IncomingCall, Locator, NoHierarchy, OutgoingCall};
+pub use patch::{NoPatch, PatchResult, SemanticPatch};
 pub use rename::{Edit, FileEdit, Refusal, RenamePlan, Renameable};
 pub use semantic::{
     NoIdentifiers, Role, SemanticClass, SemanticIdentifier, SemanticIdentifiers, SemanticTarget,

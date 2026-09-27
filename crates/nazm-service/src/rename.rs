@@ -72,8 +72,9 @@ use crate::service::{analyse, identity, name_at, FileKey, LanguageService, Overl
 use crate::Target;
 
 /// One replacement: the bytes `start..end` of a file, which must read `expected`, become
-/// `replacement`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `replacement`. The one edit every plan is made of — a rename's (N18), a fix's (N24) and a
+/// patch's (N29), which serialises it as it is.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Edit {
     pub start: u32,
     pub end: u32,
@@ -308,7 +309,7 @@ impl LanguageService {
 
     /// The entity at a position, if every rule but the new name's allows renaming it: with
     /// the entity and where it is declared.
-    fn renameable(
+    pub(crate) fn renameable(
         &self,
         path: &Path,
         version: i32,
