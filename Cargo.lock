@@ -733,6 +733,7 @@ dependencies = [
  "nazm-core",
  "nazm-service",
  "rmcp",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

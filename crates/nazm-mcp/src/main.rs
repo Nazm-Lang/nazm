@@ -1,8 +1,8 @@
-//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27, N28.
+//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27, N28, N29.
 //!
 //! # What it is
 //!
-//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves three tools,
+//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves four tools,
 //! each result exactly the object the matching command prints with `--json`:
 //!
 //! | Tool | Result | Command |
@@ -10,6 +10,7 @@
 //! | `nazm.semantic_context` | `nazm.context/1` for a position (N27) | `nazm context` |
 //! | `nazm.semantic_snapshot` | `nazm.snapshot/1` of the root's compilation (N28) | `nazm snapshot` |
 //! | `nazm.semantic_delta` | `nazm.delta/1` against a baseline snapshot the client supplies (N28) | `nazm delta` |
+//! | `nazm.semantic_patch` | `nazm.patch/1`, a planned rename or fix (N29) | `nazm patch` |
 //!
 //! Each is carried once, as the result's structured content, with no second copy as text.
 //! It creates no semantic fact of its own: every answer is the compiler's, derived for the
@@ -21,6 +22,14 @@
 //! the snapshot it was given and hands it back as `baseline` — data, validated as
 //! `nazm.snapshot/1` and compared with a snapshot derived from the disk at that call. A
 //! baseline is never a path: the server reads no file a client names.
+//!
+//! # A patch is a plan
+//!
+//! `nazm.semantic_patch` plans a rename or a diagnostic fix and returns it; it applies
+//! nothing, and there is no tool that does. A patch is a proposal bound to exact source
+//! state — the root's snapshot, each file's digest, each edit's expected bytes — not
+//! permission to change a file. No plan is kept: the same request later is planned again
+//! from the disk as it is then.
 //!
 //! # Which program, and which text
 //!
@@ -42,7 +51,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use nazm_service::{ContextResult, DeltaResult, LanguageService, SnapshotResult};
+use nazm_service::{ContextResult, DeltaResult, LanguageService, PatchResult, SnapshotResult};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, JsonObject,
     ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -68,6 +77,40 @@ const DELTA: &str = "nazm.semantic_delta";
 
 /// `nazm.delta/1`, exactly as the repository publishes it.
 const DELTA_SCHEMA: &str = include_str!("../../../schema/nazm.delta-1.json");
+
+/// The patch-planning tool (N29).
+const PATCH: &str = "nazm.semantic_patch";
+
+/// `nazm.patch/1`, exactly as the repository publishes it.
+const PATCH_SCHEMA: &str = include_str!("../../../schema/nazm.patch-1.json");
+
+/// What `nazm.semantic_patch` is asked, tagged by `operation`: typed, so its input schema is
+/// the SDK's derivation of it and an argument it does not define is refused.
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum PatchRequest {
+    /// Rename the entity declared or used at `byte_offset` of `file`: locals and private
+    /// definitions only, as the language service validates a rename.
+    Rename {
+        /// A file of the root's compilation, relative to its source root or absolute.
+        file: String,
+        /// A UTF-8 byte offset into that file.
+        byte_offset: u32,
+        /// The new name: one identifier.
+        new_name: String,
+    },
+    /// The fix at index `fix` among those the current diagnostics at `byte_offset` of
+    /// `file` carry, in the order the compiler attached them.
+    DiagnosticFix {
+        /// A file of the root's compilation, relative to its source root or absolute.
+        file: String,
+        /// A UTF-8 byte offset into that file: a diagnostic's primary span there.
+        byte_offset: u32,
+        /// Which of the fixes at that position.
+        fix: u32,
+    },
+}
 
 fn main() -> ExitCode {
     let (root, source_root) = match arguments(std::env::args().skip(1)) {
@@ -136,7 +179,12 @@ struct Server {
 impl Server {
     /// Every tool the server has.
     fn tools() -> Vec<Tool> {
-        vec![Self::tool(), Self::snapshot_tool(), Self::delta_tool()]
+        vec![
+            Self::tool(),
+            Self::snapshot_tool(),
+            Self::delta_tool(),
+            Self::patch_tool(),
+        ]
     }
 
     /// The context tool, with `nazm.context/1` as its output schema.
@@ -214,6 +262,21 @@ impl Server {
         )
     }
 
+    /// The patch tool: a tagged operation in, `nazm.patch/1` as its output schema.
+    fn patch_tool() -> Tool {
+        let mut input = (*rmcp::handler::server::common::schema_for_type::<PatchRequest>()).clone();
+        // A tool's input is an object; the derivation of a tagged enum says so per variant.
+        input
+            .entry("type")
+            .or_insert_with(|| serde_json::Value::from("object"));
+        Self::read_only(
+            PATCH,
+            "Plan a semantic patch (nazm.patch/1) in the server's root compilation as it is on disk now: a rename (operation `rename`: file, byte_offset, new_name — locals and private definitions only; exported ones are refused) or a compiler-owned diagnostic fix (operation `diagnostic_fix`: file, byte_offset, fix). The result is minimal exact-byte edits bound to the root's snapshot digest, each file's digest and each edit's expected bytes, with a fix's applicability and precondition. It plans and never applies: nothing is written.",
+            input,
+            PATCH_SCHEMA,
+        )
+    }
+
     fn read_only(
         name: &'static str,
         description: &'static str,
@@ -247,7 +310,7 @@ impl Server {
     /// it `f`, and drop both.
     fn analysed<T: Send>(
         &self,
-        f: impl FnOnce(&LanguageService, &Path) -> T + Send,
+        f: impl FnOnce(&mut LanguageService, &Path) -> T + Send,
     ) -> Result<T, String> {
         let (root, source_root) = (self.root.clone(), self.source_root.clone());
         std::thread::scope(|scope| {
@@ -258,7 +321,7 @@ impl Server {
                     service
                         .open_from_disk(&root)
                         .map_err(|e| format!("{}: {e}", root.display()))?;
-                    Ok(f(&service, &root))
+                    Ok(f(&mut service, &root))
                 })
                 .map_err(|e| e.to_string())?
                 .join()
@@ -292,8 +355,10 @@ impl ServerHandler for Server {
                  definition; follow a link by calling it again at the linked declaration. \
                  nazm.semantic_snapshot: the compilation's durable definitions with a digest \
                  per recorded section; keep it. nazm.semantic_delta: pass a kept snapshot as \
-                 baseline to learn what was added, removed or changed since. The server keeps \
-                 nothing between calls.",
+                 baseline to learn what was added, removed or changed since. \
+                 nazm.semantic_patch: plan a rename or a diagnostic fix as exact edits bound to \
+                 the current source; it never applies one. The server keeps nothing between \
+                 calls.",
             )
     }
 
@@ -364,6 +429,7 @@ impl ServerHandler for Server {
             TOOL => {}
             SNAPSHOT => return self.snapshot(&args).await,
             DELTA => return self.delta(args).await,
+            PATCH => return self.patch(args).await,
             _ => return Err(ErrorData::invalid_params("tool not found", None)),
         }
         let file = args
@@ -414,6 +480,38 @@ impl Server {
         let value = serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(once(value, matches!(result, SnapshotResult::Available(_))))
+    }
+
+    /// `nazm.semantic_patch`: a tagged operation, planned against the disk as it is now.
+    async fn patch(&self, args: JsonObject) -> Result<CallToolResponse, ErrorData> {
+        let request: PatchRequest = serde_json::from_value(serde_json::Value::Object(args))
+            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        let base = nazm_service::root::decide(&self.root, self.source_root.as_deref())
+            .map(|r| r.path().to_path_buf())
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let server = self.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            // Relative to the source root, as a patch names files; the path is only ever
+            // compared with the compilation's own files, never opened.
+            server.analysed(move |service, root| match request {
+                PatchRequest::Rename {
+                    file,
+                    byte_offset,
+                    new_name,
+                } => service.patch_rename(root, 0, &base.join(file), byte_offset, &new_name),
+                PatchRequest::DiagnosticFix {
+                    file,
+                    byte_offset,
+                    fix,
+                } => service.patch_fix(root, 0, &base.join(file), byte_offset, fix as usize),
+            })
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
+        .map_err(|e| ErrorData::internal_error(e, None))?;
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(once(value, matches!(result, PatchResult::Available(_))))
     }
 
     /// `nazm.semantic_delta`: exactly one argument, the baseline snapshot, as data.
@@ -491,6 +589,7 @@ mod tests {
             (super::TOOL, super::OUTPUT_SCHEMA),
             (super::SNAPSHOT, super::SNAPSHOT_SCHEMA),
             (super::DELTA, super::DELTA_SCHEMA),
+            (super::PATCH, super::PATCH_SCHEMA),
         ]) {
             let published: serde_json::Value = serde_json::from_str(schema).unwrap();
             assert_eq!(

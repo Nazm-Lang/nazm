@@ -19,6 +19,8 @@ path = "src/main.rs"
 [dependencies]
 nazm-core = { workspace = true }
 nazm-service = { workspace = true }
+# `nazm.semantic_patch`'s typed request (N29); already in the tree through `rmcp`.
+serde = { workspace = true }
 serde_json = { workspace = true }
 rmcp = { workspace = true, features = ["server", "transport-io"] }
 tokio = { workspace = true, features = ["rt", "macros", "io-std", "time"] }
