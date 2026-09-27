@@ -1,12 +1,26 @@
-//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27.
+//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27, N28.
 //!
 //! # What it is
 //!
-//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves one tool,
-//! `nazm.semantic_context`, whose result is the language service's `nazm.context/1` packet
-//! for a position — exactly the object `nazm context --json` prints — carried once, as the
-//! result's structured content, with no second copy as text. It creates no semantic
-//! fact of its own: every answer is the compiler's, derived for the call and dropped.
+//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves three tools,
+//! each result exactly the object the matching command prints with `--json`:
+//!
+//! | Tool | Result | Command |
+//! | --- | --- | --- |
+//! | `nazm.semantic_context` | `nazm.context/1` for a position (N27) | `nazm context` |
+//! | `nazm.semantic_snapshot` | `nazm.snapshot/1` of the root's compilation (N28) | `nazm snapshot` |
+//! | `nazm.semantic_delta` | `nazm.delta/1` against a baseline snapshot the client supplies (N28) | `nazm delta` |
+//!
+//! Each is carried once, as the result's structured content, with no second copy as text.
+//! It creates no semantic fact of its own: every answer is the compiler's, derived for the
+//! call and dropped.
+//!
+//! # A delta is stateless
+//!
+//! The server keeps no previous snapshot. A client that wants to know what changed keeps
+//! the snapshot it was given and hands it back as `baseline` — data, validated as
+//! `nazm.snapshot/1` and compared with a snapshot derived from the disk at that call. A
+//! baseline is never a path: the server reads no file a client names.
 //!
 //! # Which program, and which text
 //!
@@ -28,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use nazm_service::{ContextResult, LanguageService};
+use nazm_service::{ContextResult, DeltaResult, LanguageService, SnapshotResult};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, JsonObject,
     ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -37,11 +51,23 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 
-/// The one tool.
+/// The context tool (N27).
 const TOOL: &str = "nazm.semantic_context";
 
-/// `nazm.context/1`, the tool's output schema, exactly as the repository publishes it.
+/// `nazm.context/1`, the context tool's output schema, exactly as the repository publishes it.
 const OUTPUT_SCHEMA: &str = include_str!("../../../schema/nazm.context-1.json");
+
+/// The snapshot tool (N28).
+const SNAPSHOT: &str = "nazm.semantic_snapshot";
+
+/// `nazm.snapshot/1`, exactly as the repository publishes it.
+const SNAPSHOT_SCHEMA: &str = include_str!("../../../schema/nazm.snapshot-1.json");
+
+/// The delta tool (N28).
+const DELTA: &str = "nazm.semantic_delta";
+
+/// `nazm.delta/1`, exactly as the repository publishes it.
+const DELTA_SCHEMA: &str = include_str!("../../../schema/nazm.delta-1.json");
 
 fn main() -> ExitCode {
     let (root, source_root) = match arguments(std::env::args().skip(1)) {
@@ -99,8 +125,8 @@ fn arguments(mut args: impl Iterator<Item = String>) -> Result<(PathBuf, Option<
     Ok((root.ok_or("--root is required")?, source_root))
 }
 
-/// The server: a root, fixed for its lifetime, and nothing else — no analysis, no packet
-/// and no history is kept between calls.
+/// The server: a root, fixed for its lifetime, and nothing else — no analysis, no packet,
+/// no snapshot and no history is kept between calls.
 #[derive(Debug, Clone)]
 struct Server {
     root: PathBuf,
@@ -108,7 +134,12 @@ struct Server {
 }
 
 impl Server {
-    /// The one tool, with `nazm.context/1` as its output schema.
+    /// Every tool the server has.
+    fn tools() -> Vec<Tool> {
+        vec![Self::tool(), Self::snapshot_tool(), Self::delta_tool()]
+    }
+
+    /// The context tool, with `nazm.context/1` as its output schema.
     fn tool() -> Tool {
         let input: JsonObject = serde_json::from_value(serde_json::json!({
             "type": "object",
@@ -145,15 +176,80 @@ impl Server {
         tool
     }
 
+    /// The snapshot tool: no arguments, `nazm.snapshot/1` as its output schema.
+    fn snapshot_tool() -> Tool {
+        let input: JsonObject = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .unwrap_or_default();
+        Self::read_only(
+            SNAPSHOT,
+            "The semantic snapshot (nazm.snapshot/1) of the server's root compilation as it is on disk now: every durable function, record and enum, by identity, with one digest per semantic section the compiler records — source, shape, dependencies, related types, references, callers, callees, diagnostics. Keep it and pass it to nazm.semantic_delta later. Digest equality is not behavioural equivalence; effects, capabilities and tests are unsupported.",
+            input,
+            SNAPSHOT_SCHEMA,
+        )
+    }
+
+    /// The delta tool: a baseline snapshot in, `nazm.delta/1` as its output schema.
+    fn delta_tool() -> Tool {
+        let input: JsonObject = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "baseline": {
+                    "type": "object",
+                    "description": "A nazm.snapshot/1 object exactly as nazm.semantic_snapshot returned it. Data, never a path."
+                }
+            },
+            "required": ["baseline"],
+            "additionalProperties": false
+        }))
+        .unwrap_or_default();
+        Self::read_only(
+            DELTA,
+            "What changed (nazm.delta/1) between a baseline nazm.snapshot/1 the client kept and the server's root compilation as it is on disk now: durable definitions added, removed, and changed, with exactly which recorded sections changed. Matched by durable key only — a rename is a removal and an addition. A baseline of another root or compiler, or not exactly nazm.snapshot/1, is refused. The server keeps no previous snapshot.",
+            input,
+            DELTA_SCHEMA,
+        )
+    }
+
+    fn read_only(
+        name: &'static str,
+        description: &'static str,
+        input: JsonObject,
+        output: &str,
+    ) -> Tool {
+        let output: JsonObject = serde_json::from_str(output).unwrap_or_default();
+        let mut tool = Tool::new(name, description, Arc::new(input)).annotate(
+            ToolAnnotations::new()
+                .read_only(true)
+                .destructive(false)
+                .idempotent(true)
+                .open_world(false),
+        );
+        tool.output_schema = Some(Arc::new(output));
+        tool
+    }
+
     /// The packet for `file` at `offset`, from the disk as it is now.
     fn packet(&self, file: &str, offset: u32) -> Result<ContextResult, String> {
-        let (root, source_root) = (self.root.clone(), self.source_root.clone());
         // Relative to the source root, as a packet names files; the path is only ever
         // compared with the compilation's own files, never opened.
-        let base = nazm_service::root::decide(&root, source_root.as_deref())
+        let base = nazm_service::root::decide(&self.root, self.source_root.as_deref())
             .map(|r| r.path().to_path_buf())
             .map_err(|e| e.to_string())?;
         let file = base.join(Path::new(file));
+        self.analysed(move |service, root| service.context(root, 0, &file, offset))
+    }
+
+    /// Open the root from disk as it is now, in a fresh service on the parser's stack, ask
+    /// it `f`, and drop both.
+    fn analysed<T: Send>(
+        &self,
+        f: impl FnOnce(&LanguageService, &Path) -> T + Send,
+    ) -> Result<T, String> {
+        let (root, source_root) = (self.root.clone(), self.source_root.clone());
         std::thread::scope(|scope| {
             std::thread::Builder::new()
                 .stack_size(nazm_core::__syntax::PARSE_STACK_BYTES)
@@ -162,7 +258,7 @@ impl Server {
                     service
                         .open_from_disk(&root)
                         .map_err(|e| format!("{}: {e}", root.display()))?;
-                    Ok(service.context(&root, 0, &file, offset))
+                    Ok(f(&service, &root))
                 })
                 .map_err(|e| e.to_string())?
                 .join()
@@ -171,14 +267,33 @@ impl Server {
     }
 }
 
+/// One result, once: as structured content, with no second copy as text. The SDK's
+/// constructors also copy it into a text block, as the specification suggests for older
+/// clients; that would send the whole object twice, so the text is left out. `content` is
+/// a required array with no minimum length, so an empty one is valid in every version the
+/// SDK negotiates.
+fn once(value: serde_json::Value, available: bool) -> CallToolResponse {
+    let mut answer = if available {
+        CallToolResult::structured(value)
+    } else {
+        CallToolResult::structured_error(value)
+    };
+    answer.content.clear();
+    answer.into()
+}
+
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("nazm-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "One read-only tool, nazm.semantic_context: the compiler's semantic context \
-                 packet for a definition in this server's root compilation, read from disk \
-                 at each call. Follow a link by calling it again at the linked declaration.",
+                "Read-only tools over this server's root compilation, read from disk at each \
+                 call. nazm.semantic_context: the compiler's semantic context packet for a \
+                 definition; follow a link by calling it again at the linked declaration. \
+                 nazm.semantic_snapshot: the compilation's durable definitions with a digest \
+                 per recorded section; keep it. nazm.semantic_delta: pass a kept snapshot as \
+                 baseline to learn what was added, removed or changed since. The server keeps \
+                 nothing between calls.",
             )
     }
 
@@ -188,7 +303,7 @@ impl ServerHandler for Server {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult {
-            tools: vec![Self::tool()],
+            tools: Self::tools(),
             ..ListToolsResult::default()
         })
     }
@@ -236,7 +351,7 @@ impl ServerHandler for Server {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        (name == TOOL).then(Self::tool)
+        Self::tools().into_iter().find(|t| t.name == name)
     }
 
     async fn call_tool(
@@ -244,10 +359,13 @@ impl ServerHandler for Server {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        if request.name != TOOL {
-            return Err(ErrorData::invalid_params("tool not found", None));
-        }
         let args = request.arguments.unwrap_or_default();
+        match &*request.name {
+            TOOL => {}
+            SNAPSHOT => return self.snapshot(&args).await,
+            DELTA => return self.delta(args).await,
+            _ => return Err(ErrorData::invalid_params("tool not found", None)),
+        }
         let file = args
             .get("file")
             .and_then(serde_json::Value::as_str)
@@ -273,16 +391,52 @@ impl ServerHandler for Server {
             .map_err(|e| ErrorData::internal_error(e, None))?;
         let value = serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        // The packet once, as structured content. The SDK's constructors also copy it into a
-        // text block, as the specification suggests for older clients; that would send the
-        // whole packet twice, so the text is left out. `content` is a required array with no
-        // minimum length, so an empty one is valid in every version the SDK negotiates.
-        let mut answer = match result {
-            ContextResult::Available(_) => CallToolResult::structured(value),
-            ContextResult::Unavailable(_) => CallToolResult::structured_error(value),
-        };
-        answer.content.clear();
-        Ok(answer.into())
+        Ok(once(value, matches!(result, ContextResult::Available(_))))
+    }
+}
+
+impl Server {
+    /// `nazm.semantic_snapshot`: no arguments.
+    async fn snapshot(&self, args: &JsonObject) -> Result<CallToolResponse, ErrorData> {
+        if let Some(extra) = args.keys().next() {
+            return Err(ErrorData::invalid_params(
+                format!("unexpected argument `{extra}`"),
+                None,
+            ));
+        }
+        let server = self.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            server.analysed(|service, root| service.semantic_snapshot(root, 0))
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
+        .map_err(|e| ErrorData::internal_error(e, None))?;
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(once(value, matches!(result, SnapshotResult::Available(_))))
+    }
+
+    /// `nazm.semantic_delta`: exactly one argument, the baseline snapshot, as data.
+    async fn delta(&self, mut args: JsonObject) -> Result<CallToolResponse, ErrorData> {
+        let baseline = args
+            .remove("baseline")
+            .ok_or_else(|| ErrorData::invalid_params("`baseline` is required", None))?;
+        if let Some(extra) = args.keys().next() {
+            return Err(ErrorData::invalid_params(
+                format!("unexpected argument `{extra}`"),
+                None,
+            ));
+        }
+        let server = self.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            server.analysed(move |service, root| service.semantic_delta(root, 0, &baseline))
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
+        .map_err(|e| ErrorData::internal_error(e, None))?;
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(once(value, matches!(result, DeltaResult::Available(_))))
     }
 }
 
@@ -332,12 +486,18 @@ mod tests {
 
     #[test]
     fn the_output_schema_is_the_published_one() {
-        let tool = super::Server::tool();
-        let published: serde_json::Value = serde_json::from_str(super::OUTPUT_SCHEMA).unwrap();
-        assert_eq!(
-            serde_json::Value::Object((*tool.output_schema.unwrap()).clone()),
-            published
-        );
-        assert_eq!(tool.name, super::TOOL);
+        let tools = super::Server::tools();
+        for (tool, (name, schema)) in tools.into_iter().zip([
+            (super::TOOL, super::OUTPUT_SCHEMA),
+            (super::SNAPSHOT, super::SNAPSHOT_SCHEMA),
+            (super::DELTA, super::DELTA_SCHEMA),
+        ]) {
+            let published: serde_json::Value = serde_json::from_str(schema).unwrap();
+            assert_eq!(
+                serde_json::Value::Object((*tool.output_schema.unwrap()).clone()),
+                published
+            );
+            assert_eq!(tool.name, name);
+        }
     }
 }
