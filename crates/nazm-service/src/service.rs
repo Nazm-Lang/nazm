@@ -384,6 +384,18 @@ impl LanguageService {
         self.refresh()
     }
 
+    /// Open `path` at version 0 with its current contents on disk — for a one-shot client
+    /// that has no buffers, such as `nazm context` and `nazm-mcp` (N27), which open their
+    /// root this way on every request so that each answer is of the disk as it is then.
+    ///
+    /// # Errors
+    ///
+    /// The file could not be read.
+    pub fn open_from_disk(&mut self, path: &Path) -> io::Result<Vec<Published>> {
+        let text = Disk.read(path)?;
+        Ok(self.open(path, 0, text))
+    }
+
     /// Replace an open document's text. A change to a document that is not open is
     /// treated as opening it, which is what the text now is either way.
     pub fn change(&mut self, path: &Path, version: i32, text: String) -> Vec<Published> {

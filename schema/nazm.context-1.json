@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.context-1.json",
+  "title": "nazm.context/1",
+  "description": "One source definition's semantic context, from `nazm context --json` and the `nazm-mcp` tool `semantic_context`: its exact source and compact links to what the compiler knows it is connected to, in the compilation of one root. `status` is `available` with every section, or `unavailable` with a `reason` and no other section. Paths are relative to the compilation's source root; byte offsets are into the named file. Nothing session-local is included, so the same sources and query give the same bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": { "const": "nazm.context/1" },
+    "status": { "enum": ["available", "unavailable"] },
+    "reason": {
+      "enum": ["not_current", "not_in_compilation", "out_of_range", "not_a_name", "not_a_target", "incomplete_compilation"],
+      "description": "Why there is no packet: the file is not one the compilation loaded; the offset is past its end; not on a name; on a name that is not a function, record or enum declared from source; or some file needed syntax recovery or could not be loaded. Present only when `status` is `unavailable`."
+    },
+    "root": { "type": "string", "description": "The compilation's root module." },
+    "target": { "$ref": "#/$defs/target" },
+    "dependencies": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/link" },
+      "description": "Every entity the declaration uses, other than its own locals, parameters and bindings and the target itself, each once with every occurrence. Ordered by kind, then declaration, then identity."
+    },
+    "related_types": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/link" },
+      "description": "The records and enums whose names the declaration writes — as a type, a construction's head or a variant's enum — directly, not a transitive closure, with those written occurrences."
+    },
+    "references": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/span" },
+      "description": "Every use of the target in the compilation, ordered by file then offset. The declaration is not among them: it is `target.source`."
+    },
+    "callers": { "$ref": "#/$defs/calls" },
+    "callees": { "$ref": "#/$defs/calls" },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" },
+      "description": "The compiler's diagnostics whose primary span is inside the declaration."
+    },
+    "availability": { "$ref": "#/$defs/availability" }
+  },
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["definition", "member"],
+      "properties": {
+        "definition": { "type": ["string", "null"], "description": "The durable definition key, `module::kind name`, or null where the module has no durable key." },
+        "member": { "type": ["string", "null"], "description": "A field's, a variant's or (`Variant.field`) a payload field's name within that definition; null for the definition itself." }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "start", "end"],
+      "properties": {
+        "file": { "type": "string" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "occurrence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "fields"],
+      "properties": {
+        "name": { "type": "string" },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "kind", "name", "signature", "fields", "variants", "source"],
+      "properties": {
+        "identity": { "$ref": "#/$defs/identity" },
+        "kind": { "enum": ["function", "record", "enum"] },
+        "name": { "type": "string" },
+        "signature": { "type": ["string", "null"], "description": "A function's signature; null otherwise." },
+        "fields": { "type": ["array", "null"], "items": { "$ref": "#/$defs/field" }, "description": "A record's fields in canonical order; null otherwise." },
+        "variants": { "type": ["array", "null"], "items": { "$ref": "#/$defs/variant" }, "description": "An enum's variants and payloads in canonical order; null otherwise." },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "start", "end", "name_start", "name_end", "text"],
+          "properties": {
+            "file": { "type": "string" },
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 0 },
+            "name_start": { "type": "integer", "minimum": 0 },
+            "name_end": { "type": "integer", "minimum": 0 },
+            "text": { "type": "string", "description": "The declaration exactly as it is in the file, byte for byte." }
+          }
+        }
+      }
+    },
+    "link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "kind", "name", "declaration", "occurrences"],
+      "properties": {
+        "identity": { "$ref": "#/$defs/identity" },
+        "kind": { "enum": ["function", "record", "enum", "field", "variant", "payload_field"] },
+        "name": { "type": "string" },
+        "declaration": { "type": ["object", "null"], "$ref": "#/$defs/span", "description": "Where its name is declared; null for the core prelude, which has no file." },
+        "occurrences": { "type": "array", "items": { "$ref": "#/$defs/occurrence" }, "description": "In the target's file." }
+      }
+    },
+    "call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "name", "declaration", "calls"],
+      "properties": {
+        "identity": { "$ref": "#/$defs/identity" },
+        "name": { "type": "string" },
+        "declaration": { "$ref": "#/$defs/span" },
+        "calls": { "type": "array", "items": { "$ref": "#/$defs/span" }, "description": "Each call's callee name, in the calling function's file." }
+      }
+    },
+    "calls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "items"],
+      "properties": {
+        "status": { "enum": ["available", "not_applicable"], "description": "`not_applicable` for a record or an enum, which calls nothing and is called by nothing." },
+        "items": { "type": ["array", "null"], "items": { "$ref": "#/$defs/call" }, "description": "Every direct call, grouped by the function at the other end; null when not applicable." }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "start", "end", "fixes"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^N[0-9]{4}$" },
+        "severity": { "enum": ["error"] },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "fixes": { "type": "integer", "minimum": 0, "description": "How many fixes the compiler attached." }
+      }
+    },
+    "availability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["effects", "capabilities", "tests", "semantic_changes", "semantic_delta"],
+      "description": "Sections the compiler has no facts for. `unsupported` means not known — never that none exist.",
+      "properties": {
+        "effects": { "const": "unsupported" },
+        "capabilities": { "const": "unsupported" },
+        "tests": { "const": "unsupported" },
+        "semantic_changes": { "const": "unsupported" },
+        "semantic_delta": { "const": "unsupported" }
+      }
+    }
+  }
+}
