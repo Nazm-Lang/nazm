@@ -1424,6 +1424,75 @@ without a probe.
 container, is 3,216,256 bytes at N25 and at N26: **no change**, the additions inside the file's
 existing 64 KiB layout step. No dependency was added.
 
+### Semantic context packets and `nazm-mcp` — measured 2026-09-27
+
+N27 keeps nothing between requests: a packet is derived from one analysis of its root, serialised
+and dropped with it — no packet, dependency graph or analysis cache. **Persistent N27 state: zero
+entries.** The ordinary compiler path does no packet work.
+
+Compared interleaved with N26 (`2798b98`), four rounds each in one container, contained, P1
+(`target/n27/ab`, not committed):
+
+| On the compiler (`emit.nz`) | N26 | N27 |
+| --- | --- | --- |
+| parse | 25.06–25.46 ms | 24.92–25.67 ms |
+| `analyse` | 34.33–36.42 ms | 34.20–34.52 ms |
+| warm edit | 83.34–84.17 ms | 82.88–83.86 ms |
+| resident, compiler open | 34.54–34.56 MB | 34.53–34.54 MB |
+
+No delta is detected; the ranges overlap.
+
+A packet, in process, two runs in the same container (`target/n27/bench`), medians — opening the
+root from disk and analysing it, deriving the packet, and serialising it, which is what
+`nazm context` does once per run:
+
+| Target | open + analyse | derive | serialise | packet | target source | compilation source |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| small function | 0.13 ms | 0.049 ms | 0.004 ms | 1,627 B | 35 B | 1,021 B |
+| small record | 0.12 ms | 0.036 ms | 0.003 ms | 714 B | 24 B | 1,021 B |
+| small enum | 0.12 ms | 0.036 ms | 0.003 ms | 732 B | 32 B | 1,021 B |
+| a function with 500 callers, 1,000 references | 6.09 ms | 5.43–5.48 ms | 0.37 ms | 159,709 B | 24 B | 21,316 B |
+| `emit.nz`, a typical function (`hex_digit`) | 80.4–80.6 ms | 21.2–21.3 ms | 0.013 ms | 1,225 B | 234 B | 601,518 B |
+| `emit.nz`, its largest function (`emit_module`) | 80.4–80.5 ms | 21.6–21.7 ms | 0.14 ms | 103,431 B | 59,243 B | 601,518 B |
+| `emit.nz`, a record | 80.6 ms | 20.9 ms | 0.011 ms | 835 B | 48 B | 601,518 B |
+| `emit.nz`, an enum | 80.3–80.4 ms | 20.4–20.7 ms | 0.016 ms | 3,284 B | 375 B | 601,518 B |
+
+Over `stdio`, the real `nazm-mcp` process, medians of the full `tools/call` round trip:
+
+| Target | `tools/call` | response frame | server resident: before, after, peak |
+| --- | --- | ---: | --- |
+| small function | 0.50 ms | 3,643 B | 3.2 → 4.3 MB, peak 4.3 MB |
+| 500 callers | 16.8 ms | 347,632 B | 3.2 → 12.2–12.5 MB |
+| `emit.nz`, typical function | 104.9–105.0 ms | 2,752 B | 3.2 → 37.3 MB, peak 37.3 MB |
+| `emit.nz`, largest function | 107.7–108.4 ms | 214,808 B | 3.2 → 38.7–38.8 MB |
+
+**What the numbers say.** A packet costs one analysis of its root: about 80 ms of the compiler's
+105 ms tool call is loading and analysing the compilation from disk, which every call does so
+that it answers the disk as it is; the protocol adds a few milliseconds. Deriving a packet at
+compiler scale is about 21 ms whatever the target, because it walks the compilation's reference
+index once and re-parses the target's file for the token at the offset; serialising is
+negligible. Resident memory rises by one analysis during a call and stays at that high-water
+mark afterwards (the allocator keeps its pages): 1,000 calls in `crates/nazm-mcp/tests/protocol.rs`
+leave it within a megabyte of where it settled, which the test asserts (48 kB in the host run). No cache was added to reduce the 80 ms: that would need a
+freshness contract this milestone does not have.
+
+**What a packet weighs.** A typical function's packet is 0.2 % of the bytes its compilation's
+sources hold, a record's 0.1 %, an enum's 0.5 %. It is not always smaller than source: a target
+with many references carries one link per use — 500 callers and 1,000 references make 160 kB, 7.5
+times the fixture's source, because nothing is truncated — and a large function carries its own
+source, 59 kB of `emit_module`'s 103 kB packet. These are byte ratios, not token counts: no
+tokenizer was measured, and no token saving is claimed. Over MCP the frame carries the packet
+twice — as structured content, and as the same JSON in a text block, which the protocol recommends
+for older clients and the SDK writes — so it is roughly twice the packet.
+
+**What it added to the binaries.** Built from both trees in the same container: `nazm` is
+3,216,256 bytes at N26 and 3,347,328 at N27, **+131,072 bytes (+4.1 %)**, two 64 KiB steps, for the
+packet module, its serialisation and the `context` command — no MCP crate reaches it (`cargo tree
+-p nazm-cli` has no `rmcp`, `tokio` or `schemars`). `nazm-mcp` is a separate binary of **2,627,296
+bytes**, carrying the SDK: 54 crates new to `Cargo.lock` (`rmcp` 3.4.1 and its tree — `tokio`,
+`futures`, `schemars`, `chrono`, `pastey` and others), all in that crate alone, and a one-time
+rebuild of the contained image so they are fetched ahead of offline runs.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

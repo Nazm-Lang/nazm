@@ -3523,6 +3523,76 @@ where there is no `.`, completes nothing, and invoked and triggered requests ans
 methods, ordinary call arguments, `(` as a trigger, ranking, snippets, and any reading of source
 that would make an unfinished construct valid.
 
+## 7.29 Semantic context packet v1 and read-only MCP — settled by N27, 2026-09-27
+
+> **MCP does not create semantic facts. It serialises a protocol-independent packet derived
+> from the compiler's current root compilation.** A packet reports what the compiler already
+> knows — never effects, capabilities, tests or changes it does not have, which are marked
+> unsupported rather than empty.
+
+```text
+N17  references, and every use inside a declaration      (ReferenceIndex)
+N18  written type names                                  (Resolution::type_name)
+N20  the one function signature renderer                 (Signature)
+N21  canonical fields, variants and payloads             (structure::members)
+N22  declaration and name ranges, exact source           (symbols::declared_in)
+N25  direct callers and callees                          (incoming_calls / outgoing_calls)
+        ↓
+ContextPacket, nazm.context/1                            (nazm-service/src/context.rs)
+        ↓
+nazm context --json                                      (nazm-cli/src/context.rs)
+        ↓
+nazm-mcp: one read-only stdio tool                       (nazm-mcp, rmcp)
+```
+
+**The target.** A function, record or enum the checker declared from source, found through the
+entity the reference index records at a byte offset — its declaration or any use. A local, a
+parameter, a field, a variant, an intrinsic or a built-in type is not a target; neither is a
+position on no name. Nothing is looked up by spelling, so a record and a function called `Box`, or
+two modules' `helper`, are always distinct.
+
+**What a packet holds.** The target's durable identity (`module::kind name`, the `DefKey` the
+interface already persists; null where a module has no durable key — never a session-local id),
+kind, name, and a function's signature or a record's fields or an enum's variants and payloads,
+by the existing renderers; its exact source, sliced from the declaration range N22 uses —
+comments and all. Then compact links, each an identity, kind, name and declaration place:
+**dependencies**, every entity used inside the declaration other than its own locals and itself,
+grouped by identity with every occurrence; **related types**, the records and enums whose names
+the checker recorded as written there — as a type, a construction's head or a variant's enum —
+directly, not a closure; **references**, every use of the target, the declaration excluded;
+**callers** and **callees**, call hierarchy's direct edges for a function and `not_applicable` for a
+record or enum; and **diagnostics** whose primary span is inside the declaration, by code, span and
+fix count. `availability` marks effects, capabilities, tests, semantic changes and semantic deltas
+`unsupported`. The core prelude's entities are linked with no declaration place, as it has no file.
+
+**Minimum context.** The target's source is the only source text in a packet; everything else is a
+place to ask about next. That is a strategy for compact context — not a claim that a packet is
+sufficient for every task, or minimal in any proven sense.
+
+**Which program.** The compilation rooted at one chosen file — its imports, and nothing else; no
+directory is read and no project boundary is claimed. A compilation that needed syntax recovery, or
+could not load a module, has no packet: what was lost could be a use, a caller or a declaration.
+Type errors do not stop one.
+
+**Determinism.** Paths are relative to the source root, every list has an explicit order (links by
+kind, declaring file and place, then identity; references and diagnostics by position), and
+nothing session-local — generation, numeric id, host path, time — is serialised; one compact
+serialisation. The same sources and question give the same bytes, from any checkout.
+
+**The CLI and the MCP server.** `nazm context` and `nazm-mcp` each open the root from disk, build
+the packet and drop everything: no packet, analysis or graph outlives a request. `nazm-mcp` is its
+own crate and binary on the official Rust SDK (`rmcp`), stdio only, with one tool,
+`nazm.semantic_context` (`file`, `byte_offset`), whose output schema is `schema/nazm.context-1.json`;
+it advertises tools and nothing else, and answers resources, prompts and completions as methods it
+does not have. The root is fixed at startup; each call reads the disk as it is then, so an agent's
+edit is seen at once and a broken file never gets an earlier packet. The `file` argument is only
+compared with the compilation's own files by identity, so no other path — `/etc/passwd`, a file
+nothing imports — is ever opened. It does not see an editor's unsaved buffers.
+
+**Deliberately not here.** Semantic deltas, test mapping, effects and capabilities, history,
+edit tools, HTTP transports, a persistent index or daemon, and any claim that every caller or
+importer in a project is known.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
