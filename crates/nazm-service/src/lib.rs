@@ -19,7 +19,9 @@
 //! - [`fixes`] — the fixes current diagnostics carry, as edits validated against the
 //!   current source, for an editor's quick fixes (N24);
 //! - [`hierarchy`] — a source function and the direct calls the checker recorded into and
-//!   out of it, in the compilation it was prepared from (N25).
+//!   out of it, in the compilation it was prepared from (N25);
+//! - [`context`] — one source definition's exact source and compact semantic links, as a
+//!   `nazm.context/1` packet (N27).
 //!
 //! The first two were `nazm-cli`'s until N16 and moved here unchanged in what they decide,
 //! so the command line and the language service cannot disagree about a module graph.
@@ -27,6 +29,7 @@
 //! [`nazm_core::analyse`], the same parse and check every command runs.
 
 pub mod completion;
+pub mod context;
 pub mod fixes;
 pub mod hierarchy;
 mod incomplete;
@@ -40,6 +43,7 @@ pub mod structure;
 pub mod symbols;
 
 pub use completion::{Completion, CompletionCandidate, Context, NoCompletion};
+pub use context::{ContextPacket, ContextResult, NoContext};
 pub use fixes::{FixPlan, NoFixes};
 pub use hierarchy::{HierarchyFunction, IncomingCall, Locator, NoHierarchy, OutgoingCall};
 pub use rename::{Edit, FileEdit, Refusal, RenamePlan, Renameable};

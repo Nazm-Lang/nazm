@@ -13,6 +13,9 @@ publish.workspace = true
 nazm-span = { workspace = true }
 nazm-diag = { workspace = true }
 nazm-core = { workspace = true }
+# The context packet's one serialisation, `nazm.context/1` (N27).
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

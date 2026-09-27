@@ -279,7 +279,7 @@ pub(crate) fn function_symbol(s: &Snapshot, id: FnId) -> Option<Symbol> {
 }
 
 /// The declarations written in `file` of `s`'s compilation, top level in source order.
-fn declared_in(s: &Snapshot, file: FileId) -> Vec<Symbol> {
+pub(crate) fn declared_in(s: &Snapshot, file: FileId) -> Vec<Symbol> {
     let res = &s.analysis.resolution;
     let program = &s.analysis.program;
     let here = |at: Span| at.file == file && at != Span::synthetic();
