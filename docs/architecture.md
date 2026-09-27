@@ -3696,6 +3696,80 @@ unchanged.
 history, a persistent snapshot cache or index, git integration, patch application, and any claim
 that equal digests mean equal behaviour.
 
+## 7.31 Minimal semantic patch plan v1 — settled by N29, 2026-09-27
+
+> **N29 plans edits but never applies them.** A patch is a proposal bound to exact semantic and
+> source state, not permission to mutate files.
+
+```text
+N18  rename: entity at a position, declaration + uses, scope rule,      (rename.rs)
+     new-name lexing, candidate re-parsed, re-checked, same partition
+N24  the fix a current diagnostic carries, as one validated edit          (fixes.rs)
+N28  the root's snapshot and identity                                     (snapshot.rs)
+        ↓
+SemanticPatch, nazm.patch/1                                               (nazm-service/src/patch.rs)
+        ↓
+nazm patch rename|fix --json                                              (nazm-cli/src/patch.rs)
+nazm-mcp: nazm.semantic_patch, read-only                                  (nazm-mcp)
+```
+
+**Two operations, and no others.** `rename` is N18's validated plan: the entity the reference
+index records at the position, its declaration and every use, nothing found by spelling, the new
+name lexed as one identifier, and the candidate program re-parsed and re-checked — clean, its
+occurrences grouped into entities exactly as before. Every category N18 renames: function,
+local, record, enum, variant, field, payload field. `diagnostic_fix` is N24's projection of a
+`Fix` a current diagnostic owns — selected by the file, a byte its primary span touches, and the
+fix's index among those at that byte, in the order the compiler attached them — never by a code, a
+message or a spelling, so a position with no diagnostic has no fix whatever a client believes.
+Its applicability (`automatic` or `needs_review`) and precondition are carried as structured
+fields, exactly as the compiler wrote them.
+
+**Exported rename remains refused because one root compilation is not a complete importer
+universe.** A snapshot of that compilation describes it; it does not make every module that may
+import an exported name known. N18's refusal is unchanged and reported as `exported`.
+
+**N29 does not alter LSP closed-file safety.** The disk plan reads the root and analyses it;
+when the edit is in another file of that compilation, the request's own service opens that file
+from the text the analysis read — no second read — and N18 or N24 plan against it as against an
+open document. The plan may therefore describe a file no editor has open, protected by the
+freshness below. `textDocument/rename` and `textDocument/codeAction` still edit open documents
+only.
+
+**Three freshness layers.** `baseline.snapshot` is BLAKE3 of the root's canonical
+`nazm.snapshot/1` bytes (N28) — the semantic state of the whole compilation; `files[].digest` is
+BLAKE3 of each edited file's exact bytes; `edits[].expected` is the exact bytes each edit replaces.
+None implies another — a comment in another definition of the file moves the file and the
+snapshot but not the edit's bytes, an edit in another file moves only the snapshot, and a line
+above the target moves the expected bytes out from under the range — so all three are kept, and a
+future applier refuses unless all three hold. `root` is N28's `RootIdentity`: the durable
+compilation namespace, not proof of project lineage.
+
+**Minimal and canonical.** One edit per renamed occurrence, each the name's bytes; a fix's one
+span. No file text is carried. Files are ordered by root-relative path, edits by start then end;
+a duplicate, an overlap, two insertions at one point, or an edit that changes nothing refuse the
+whole patch. Serialisation order is not application order — right-to-left application is the
+applier's concern. No session id, generation, host path or time is written: the same sources and
+request give the same bytes from any checkout.
+
+**Targets.** A top-level function, record or enum, and a member of one, carries its durable key
+(`module::kind name`, with the member); `durable` says so. A local has no durable key and is not
+given one: it is named by its declaration's place and the durable key of the function it is in.
+
+**What a patch is not.** Not applied, by any command or tool; not cached — each request analyses
+the disk and drops everything; not a refactoring framework; not a text replacement a client
+supplies. A fix of a syntax diagnostic has no patch: the compilation that carries it needed
+recovery, so N28 has no snapshot to bind it to, and it is refused as `incomplete_compilation`.
+
+**The CLI and the MCP server.** `nazm patch rename --root --file --byte --new-name --json` and
+`nazm patch fix --root --file --byte --fix --json` print exactly `nazm.patch/1`. `nazm-mcp` adds
+`nazm.semantic_patch`, whose input is a typed request tagged by `operation` (`rename` or
+`diagnostic_fix`), its schema the SDK's derivation of that type — no root field and no unknown
+argument is accepted — and whose result is the patch once, as structured content.
+
+**Deliberately not here.** Patch application or any write, MCP write tools, exported rename,
+project-wide importer discovery, multi-file renames (N18's scope rule keeps a private entity's
+occurrences in its declaring file), fix-all, refactors, git.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
