@@ -32,6 +32,7 @@ members = [
     "crates/nazm-lir",
     "crates/nazm-service",
     "crates/nazm-cli",
+    "crates/nazm-mcp",
     "crates/nazm-bench",
     "xtask",
 ]
@@ -110,6 +111,12 @@ cstree = { version = "=0.14.0", default-features = false, features = ["std"] }
 # pinned exactly: a protocol crate's minor version is allowed to change its types.
 lsp-server = "=0.10.0"
 lsp-types = "=0.97.0"
+# `nazm-mcp`, N27: the official Rust SDK for the Model Context Protocol — framing,
+# `initialize`, `tools/list`, `tools/call`, version negotiation — and the runtime it runs
+# on. Only in that crate, so the compiler binary carries neither. Pinned exactly, as the
+# editor protocol crates are; no default features, so no HTTP, no OAuth, no macros.
+rmcp = { version = "=3.4.1", default-features = false }
+tokio = { version = "1", default-features = false }
 # Preserves insertion order. Run records are diffed and reviewed by hand; map
 # iteration order leaking into output would make every diff noise.
 indexmap = { version = "2", features = ["serde"] }
