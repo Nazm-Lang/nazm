@@ -407,7 +407,9 @@ reads the disk at every call. No language, interface, cache-key or bootstrap cha
 | what it costs | `performance.md` |
 
 Mutation evidence: 13 new mutations, every killer verified; one targeted campaign of 24
-(`capability-matrix.md` §30).
+(`capability-matrix.md` §30). Closure correction: the MCP result carries the packet once, and v1
+links only entities with a declaration in a file of the compilation — three more mutations, all 16
+killers re-verified on the corrected source, one campaign of 16.
 
 **N28 has not started.**
 

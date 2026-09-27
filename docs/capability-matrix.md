@@ -1506,7 +1506,7 @@ reading the disk at each call.* A packet (`crates/nazm-service/src/context.rs`, 
 §7.29) is the target found through the reference index at a byte offset, its durable identity, its
 signature or shape by the existing renderers, its exact source by N22's range, and compact links —
 identity, kind, name, place — for its dependencies (every entity used inside it, grouped by
-identity), related types (written type names, directly), references (uses only), callers and
+identity), related types (N18's written names of program records and enums, directly), references (uses only), callers and
 callees (N25; `not_applicable` for a type) and diagnostics inside it; effects, capabilities, tests,
 semantic changes and deltas are `unsupported`, never empty. Paths are source-root-relative and
 nothing session-local is serialised. `nazm context --json` prints it; `nazm-mcp`
@@ -1519,8 +1519,10 @@ declaration and from a use, a record and a function of one name and two modules'
 locals, parameters, fields, variants, labels, intrinsics, built-in types, whitespace, keywords and
 comments refused, a file beside the root and `/etc/passwd` not in the compilation; the exact source
 slice; dependencies grouped by identity with every occurrence, same-named fields of two records
-apart, locals, intrinsics and the target itself excluded; related types direct, the prelude named
-with no place; references every use and not the declaration; callers and callees equal to call
+apart, locals, intrinsics and the target itself excluded; related types direct; the core prelude's
+`Option` and `Result` and a built-in type never linked, since v1 links only entities with a
+declaration in a file of the compilation, and every link's place checked to be one; a private definition of an imported module still linked; references every use and not the
+declaration; callers and callees equal to call
 hierarchy's, a type's not applicable; diagnostics only the target's; availability unsupported; a
 syntax error or a missing module refusing; two roots over one file each seeing its own; a hundred
 serialisations and a copy in another directory byte-identical with no absolute path; each packet of
@@ -1529,10 +1531,13 @@ matching N22's ranges and signatures and N23's classification, every dependency 
 reference index's use of the linked entity, and callers and callees N25's. `crates/nazm-cli/tests/schemas.rs`
 the real command's packets and refusals valid against the schema. `crates/nazm-mcp/tests/protocol.rs`
 the real server through the SDK's client: only tools advertised, one read-only tool with the
-published output schema, packets equal to the service's, protocol errors for an unknown tool and bad
+published output schema, packets equal to the service's and carried once — structured content, an
+empty `content`, the packet's schema string exactly once on the wire — protocol errors for an unknown tool and bad
 arguments, refusals for files outside the compilation, the disk re-read between calls with a broken
 edit refused and a repair answered, two servers with two roots isolated, 1,000 calls with flat
-resident memory, and nothing but JSON-RPC on standard output. Thirteen N27 mutations (area 30).
+resident memory, and nothing but JSON-RPC on standard output. Sixteen N27 mutations (area 30). Context
+packet v1 exposes source-linked program dependencies only: compiler-owned, built-in, interface-only
+or toolchain definitions with no navigable declaration may affect checking but are not linked.
 
 **Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
 help, symbols, full-document semantic tokens, quick fixes and call hierarchy only: no
