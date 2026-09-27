@@ -42,6 +42,7 @@ mod fix;
 mod fmt;
 mod interface;
 mod lsp;
+mod patch;
 mod snapshot;
 // Moved to `nazm-service` in N16, so `nazm lsp` loads exactly as every command does.
 use nazm_service::{load, root};
@@ -83,6 +84,57 @@ mod exit {
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+/// The operations `nazm patch` plans.
+#[derive(Subcommand, Debug)]
+enum PatchOperation {
+    /// Rename the entity declared or used at `--byte` of `--file`, by the language
+    /// service's validated rename: locals and private definitions only.
+    Rename {
+        /// The compilation's root module.
+        #[arg(long)]
+        root: PathBuf,
+        /// The file the position is in. It must be one the root's compilation loads.
+        #[arg(long)]
+        file: PathBuf,
+        /// The position, as a byte offset into `--file`.
+        #[arg(long)]
+        byte: u32,
+        /// The new name: one identifier.
+        #[arg(long)]
+        new_name: String,
+        /// The one canonical compact serialisation. Without it, the same object indented.
+        #[arg(long)]
+        json: bool,
+        /// Measure every module's durable identity from this directory, as
+        /// `nazm check --source-root` does.
+        #[arg(long)]
+        source_root: Option<PathBuf>,
+    },
+    /// Apply, as a plan, fix `--fix` of those the current diagnostics at `--byte` of
+    /// `--file` carry, in the order the compiler attached them.
+    Fix {
+        /// The compilation's root module.
+        #[arg(long)]
+        root: PathBuf,
+        /// The file the position is in. It must be one the root's compilation loads.
+        #[arg(long)]
+        file: PathBuf,
+        /// The position, as a byte offset into `--file`: a diagnostic's primary span there.
+        #[arg(long)]
+        byte: u32,
+        /// Which of the fixes at that position.
+        #[arg(long, default_value_t = 0)]
+        fix: usize,
+        /// The one canonical compact serialisation. Without it, the same object indented.
+        #[arg(long)]
+        json: bool,
+        /// Measure every module's durable identity from this directory, as
+        /// `nazm check --source-root` does.
+        #[arg(long)]
+        source_root: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -230,6 +282,17 @@ enum Command {
         /// `nazm check --source-root` does.
         #[arg(long)]
         source_root: Option<PathBuf>,
+    },
+    /// Print a semantic patch plan, `nazm.patch/1`. Plans; never applies.
+    ///
+    /// A validated rename (`rename`) or a compiler-owned fix (`fix`), as minimal exact-byte
+    /// edits bound to the root's semantic snapshot, each edited file's digest and each
+    /// edit's expected bytes, from the disk as it is now. Nothing is written: a patch is a
+    /// proposal bound to exact source state, not permission to change a file.
+    /// `docs/architecture.md` §7.31.
+    Patch {
+        #[command(subcommand)]
+        operation: PatchOperation,
     },
     /// Serve the Language Server Protocol to an editor, on stdin and stdout.
     ///
@@ -418,6 +481,40 @@ fn main() -> ExitCode {
             json,
             source_root,
         } => return snapshot::delta(&root, &baseline, json, source_root.as_deref()),
+        Command::Patch { operation } => {
+            return match operation {
+                PatchOperation::Rename {
+                    root,
+                    file,
+                    byte,
+                    new_name,
+                    json,
+                    source_root,
+                } => patch::run(
+                    &root,
+                    &file,
+                    byte,
+                    &patch::Ask::Rename(new_name),
+                    json,
+                    source_root.as_deref(),
+                ),
+                PatchOperation::Fix {
+                    root,
+                    file,
+                    byte,
+                    fix,
+                    json,
+                    source_root,
+                } => patch::run(
+                    &root,
+                    &file,
+                    byte,
+                    &patch::Ask::Fix(fix),
+                    json,
+                    source_root.as_deref(),
+                ),
+            }
+        }
         Command::Fmt { files, check } => return fmt::run(&files, check),
         Command::Test {
             paths,
@@ -452,6 +549,7 @@ fn main() -> ExitCode {
         | Command::Context { .. }
         | Command::Snapshot { .. }
         | Command::Delta { .. }
+        | Command::Patch { .. }
         | Command::Fmt { .. }
         | Command::Test { .. }
         | Command::Interface { .. }
