@@ -1,0 +1,32 @@
+[package]
+name = "nazm-mcp"
+description = "A read-only Model Context Protocol server over stdio: one tool, the semantic context packet of a definition in one root's compilation."
+version.workspace = true
+edition.workspace = true
+# The official Rust MCP SDK declares 1.88. This crate is a tool beside the compiler, like
+# `xtask`, and its floor is its own: the crates the compiler is built from keep the
+# workspace's.
+rust-version = "1.88"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "nazm-mcp"
+path = "src/main.rs"
+
+[dependencies]
+nazm-core = { workspace = true }
+nazm-service = { workspace = true }
+serde_json = { workspace = true }
+rmcp = { workspace = true, features = ["server", "transport-io"] }
+tokio = { workspace = true, features = ["rt", "macros", "io-std", "time"] }
+
+[dev-dependencies]
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+tokio = { workspace = true, features = ["rt", "macros", "process"] }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -60,6 +60,9 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
             "nazm-service",
         ],
 
+        // A read-only Model Context Protocol server, N27. It serialises what the language
+        // service answers and nothing else: no parser, no checker of its own, no cache.
+        "nazm-mcp" => &["nazm-core", "nazm-service"],
         // The measurement instrument answers to nothing. It must stay usable — and
         // auditable — with no compiler present, because it has to run against arms A1 and
         // A2 before Nazm exists, and its results have to be defensible independently of it.
