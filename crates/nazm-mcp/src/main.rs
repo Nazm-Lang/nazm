@@ -4,7 +4,8 @@
 //!
 //! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves one tool,
 //! `nazm.semantic_context`, whose result is the language service's `nazm.context/1` packet
-//! for a position — exactly the object `nazm context --json` prints. It creates no semantic
+//! for a position — exactly the object `nazm context --json` prints — carried once, as the
+//! result's structured content, with no second copy as text. It creates no semantic
 //! fact of its own: every answer is the compiler's, derived for the call and dropped.
 //!
 //! # Which program, and which text
@@ -272,11 +273,16 @@ impl ServerHandler for Server {
             .map_err(|e| ErrorData::internal_error(e, None))?;
         let value = serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        Ok(match result {
+        // The packet once, as structured content. The SDK's constructors also copy it into a
+        // text block, as the specification suggests for older clients; that would send the
+        // whole packet twice, so the text is left out. `content` is a required array with no
+        // minimum length, so an empty one is valid in every version the SDK negotiates.
+        let mut answer = match result {
             ContextResult::Available(_) => CallToolResult::structured(value),
             ContextResult::Unavailable(_) => CallToolResult::structured_error(value),
-        }
-        .into())
+        };
+        answer.content.clear();
+        Ok(answer.into())
     }
 }
 

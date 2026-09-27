@@ -5724,3 +5724,39 @@ replace = """        ServerConfig::new(
                 .build(),
         )"""
 killers = [{ package = "nazm-mcp", test = "protocol", name = "the_server_offers_one_read_only_tool_and_nothing_else" }]
+
+[[mutation]]
+name = "n27-the-packet-is-sent-twice"
+why = "a successful tool result carries the packet again as text beside its structured content, doubling what a client receives"
+file = "crates/nazm-mcp/src/main.rs"
+find = "        answer.content.clear();"
+replace = "        let _ = &mut answer;"
+killers = [{ package = "nazm-mcp", test = "protocol", name = "a_packet_crosses_the_protocol_unchanged" }]
+
+[[mutation]]
+name = "n27-a-source-less-entity-is-linked"
+why = "an entity with no declaration in a file of the compilation — the core prelude's — is linked with an empty place, as if it had a source"
+file = "crates/nazm-service/src/context.rs"
+find = "    let declaration = s.index.declaration(t).and_then(|d| paths.span(d))?;"
+replace = """    let declaration = s
+        .index
+        .declaration(t)
+        .and_then(|d| paths.span(d))
+        .unwrap_or(SourceSpan {
+            file: String::new(),
+            start: 0,
+            end: 0,
+        });"""
+killers = [{ package = "nazm-service", test = "context", name = "related_types_are_direct_and_a_source_less_definition_is_no_link" }]
+
+[[mutation]]
+name = "n27-a-navigable-dependency-is-dropped"
+why = "fields, which have a declaration in the compilation like any other dependency, are left out of the links"
+file = "crates/nazm-service/src/context.rs"
+find = "    let declaration = s.index.declaration(t).and_then(|d| paths.span(d))?;"
+replace = """    let declaration = s
+        .index
+        .declaration(t)
+        .and_then(|d| paths.span(d))
+        .filter(|_| !matches!(t, ReferenceTarget::Field(_)))?;"""
+killers = [{ package = "nazm-service", test = "context", name = "dependencies_are_the_entities_the_declaration_uses_grouped_by_identity" }]

@@ -55,6 +55,8 @@ async fn call(client: &RunningService<RoleClient, ()>, file: &str, offset: u32) 
         .call_tool(CallToolRequestParams::new(TOOL).with_arguments(args(file, json!(offset))))
         .await
         .unwrap();
+    // The packet once: as structured content, and not again as text.
+    assert!(r.content.is_empty(), "{:?}", r.content);
     (r.structured_content.unwrap(), r.is_error.unwrap_or(false))
 }
 
@@ -358,7 +360,18 @@ fn standard_output_is_the_protocol_and_nothing_else() {
     ids.sort_unstable();
     assert_eq!(ids, [1, 2, 3, 4, 5, 6]);
     let by = |id: i64| seen.iter().find(|v| v["id"] == id).unwrap();
-    assert_eq!(by(3)["result"]["structuredContent"]["status"], "available");
+    // The packet's schema field is on the wire once: the packet travels once, as
+    // `structuredContent`, with an empty `content` — no second serialisation as text.
+    let answer = by(3);
+    assert_eq!(answer["result"]["structuredContent"]["status"], "available");
+    assert_eq!(answer["result"]["content"], json!([]));
+    assert_eq!(
+        answer["result"]["structuredContent"],
+        direct(&root, &root, at(MAIN, "f(p"))
+    );
+    let wire = answer.to_string();
+    assert_eq!(wire.matches("nazm.context/1").count(), 1, "{wire}");
+    assert_eq!(wire.matches("\"availability\"").count(), 1, "{wire}");
     assert!(by(4).get("error").is_some(), "unknown tool: {}", by(4));
     assert!(by(5).get("error").is_some(), "no resources: {}", by(5));
     assert!(by(6).get("error").is_some(), "no prompts: {}", by(6));
