@@ -1560,6 +1560,62 @@ modules, the baseline parser and two commands; `nazm-mcp` is 2,627,296 and **2,8
 bytes. No crate was added to `Cargo.lock` — one dependency edge: `nazm-service` now uses the
 workspace's existing `blake3`, the one hash the cache and interface already use.
 
+### Semantic patch plans and `nazm.semantic_patch` — measured 2026-09-28
+
+N29 keeps nothing between requests: a patch is planned from one analysis of its root, serialised
+and dropped. **Persistent N29 state: zero entries** — no patch cache, patch history or
+application history, and nothing is applied. The ordinary compiler path does no patch work; the
+only change on it is `rename::Edit` gaining a serialisation and one of N18's functions becoming
+visible to the patch module.
+
+In process, contained, P1 (`target/n29/bench`, not committed), medians — opening the root from disk
+and analysing it; binding the snapshot (deriving `nazm.snapshot/1`, serialising it, BLAKE3); the
+whole patch; the underlying N18 rename or N24 fix plan alone; and serialising:
+
+| Case | open + analyse | snapshot binding | whole patch | N18 / N24 plan | serialise | edits | patch | replacement | affected source |
+| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |
+| small, local rename | 0.19 ms | 0.083 ms | 0.31 ms | 0.19 ms | 0.001 ms | 2 | 667 B | 6 B | 312 B |
+| small, private function rename | 0.19 ms | 0.083 ms | 0.31 ms | 0.19 ms | 0.002 ms | 2 | 708 B | 12 B | 312 B |
+| small, field rename | 0.19 ms | 0.083 ms | 0.32 ms | 0.20 ms | 0.002 ms | 3 | 738 B | 6 B | 312 B |
+| small, variant rename | 0.19 ms | 0.083 ms | 0.32 ms | 0.20 ms | 0.002 ms | 3 | 756 B | 12 B | 312 B |
+| small, automatic fix | 0.09 ms | 0.017 ms | 0.029 ms | 0.002 ms | 0.001 ms | 1 | 733 B | 5 B | 53 B |
+| small, needs-review fix | 0.10 ms | 0.017 ms | 0.029 ms | 0.002 ms | 0.001 ms | 1 | 745 B | 1 B | 99 B |
+| compiler, private function `v` (373 occurrences) | 82.7 ms | 14.0 ms | 117 ms | 97.4 ms | 0.036 ms | 373 | 25,096 B | 1,865 B | 286,160 B |
+| compiler, automatic fix | 82.1 ms | 14.2 ms | 14.0 ms | 0.012 ms | 0.003 ms | 1 | 749 B | 5 B | 286,216 B |
+
+A rename costs N18's validation — the candidate program re-parsed and re-checked, about 97 ms on
+the compiler — plus the snapshot binding, about 14 ms there (N28's derivation and a hash). A fix
+costs the binding and almost nothing else: the compiler already attached it. No multi-file case
+exists: N18's scope rule keeps a private entity's occurrences in its declaring file.
+
+Over `stdio`, the real `nazm-mcp` process, medians of the full `tools/call` round trip:
+
+| Case | `tools/call` | frame | server resident: before, after |
+| --- | --- | ---: | --- |
+| small, local rename | 0.82 ms | 754 B | 3.3 → 4.5 MB |
+| small, automatic fix | 0.41 ms | 820 B | 3.3 → 4.3 MB |
+| compiler, private function rename | 203 ms | 25,182 B | 3.4 → 64.2 MB |
+| compiler, automatic fix | 101 ms | 835 B | 3.4 → 36.1 MB |
+
+Each frame is the patch plus an 86–87-byte JSON-RPC envelope: the patch travels once. Resident
+memory rises to one analysis's high-water mark — a rename's, which analyses the candidate too, is
+higher — and stays there; 1,000 planning calls in `crates/nazm-mcp/tests/protocol.rs` stay within a
+megabyte of where they settled, which the test asserts.
+
+**What a patch weighs.** About 650–750 bytes of fixed structure — the operation, the target or
+the fix's facts and precondition, three 64-digit digests, the root — plus about 65 bytes per edit.
+So **a patch is larger than the source for tiny fixtures**: 2.1–2.4 times the 312-byte file for a
+small rename, and 7.5–14 times a one-function file for a fix. At compiler scale it is small beside
+what it edits: a 373-occurrence rename is 8.8 % of its 286 kB file, and a fix 0.26 %. The bytes a
+patch changes are only its replacements — 1,865 bytes for the 373-edit rename. These are byte
+counts, not token counts: no tokenizer was measured, and no token saving is claimed.
+
+**What it added to the binaries.** Built in the same container: `nazm` is 3,478,400 bytes at N28
+and **3,609,504** at N29, **+131,104 bytes (+3.8 %)**, for the patch module and the `patch`
+command; `nazm-mcp` is 2,823,904 and **3,020,512**, +196,608 bytes, for the tool and its typed
+request. No crate was added to `Cargo.lock` — one dependency edge: `nazm-mcp` names `serde`
+directly for the request, and uses the `schemars` derivation `rmcp` already carries.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.

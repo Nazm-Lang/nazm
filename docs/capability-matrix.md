@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,609 passed, 0 failed, 13 ignored, across 87 suites**, run contained at
-N28 (2026-09-27), at P4T4; the thirteen ignored are the xtask lifecycle tests,
-run on their own (13 of 13 passed, contained). N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,629 passed, 0 failed, 13 ignored, across 88 suites**, run contained at
+N29 (2026-09-28), at P4T4; the thirteen ignored are the xtask lifecycle tests,
+run on their own (13 of 13 passed, contained). N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1576,6 +1576,39 @@ repair answered, a path or path-shaped object refused as a baseline without bein
 errors for missing or extra arguments, and 1,000 snapshot and delta calls with flat resident
 memory. Twenty N28 mutations (area 30).
 
+*N29, 2026-09-27: Semantic Patch Plan v1, `nazm.patch/1` — VERIFIED, for two operations,
+`rename` and `diagnostic_fix`; patch application — MISSING; MCP write or edit tools — MISSING;
+G72 — PARTIAL.* A patch (`crates/nazm-service/src/patch.rs`, `architecture.md` §7.31) is N18's
+validated rename or the fix a current diagnostic carries (N24), as minimal exact-byte edits, bound
+to BLAKE3 of the root's `nazm.snapshot/1`, each edited file's BLAKE3 digest and each edit's
+expected bytes; a fix's applicability and precondition are structured fields. N29 plans edits but
+never applies them. Exported rename remains refused, because one root compilation is not a
+complete importer universe; N29 does not alter LSP closed-file safety. G72 is partial because
+minimal structured edit planning exists for these two operations, and generic semantic edits,
+application and write automation do not. Evidence: `crates/nazm-service/tests/patch.rs` — a
+private function renamed at exactly its declaration and call, with its durable key, the file's
+digest, the snapshot's digest, each edit's bytes and no other text; every N18 category — local,
+record, field, enum, variant, payload field — at exactly its occurrences, each applied to a copy
+and checking clean; a local named by its place and its function, never a key; a private function
+of an imported file no editor has open planned from disk while the service's own rename there is
+still refused; exported, invalid, unchanged, colliding, unentitied, out-of-range, unloaded,
+unclean and unparsable requests refused; an automatic and a needs-review fix with the compiler's
+applicability and precondition, each applied and its diagnostic gone; no fix at a position with no
+diagnostic, at an index past the fixes, after the repair, or for a syntax diagnostic; each
+freshness layer going stale when what it protects moves, and the same request re-planned fresh;
+byte-identical plans from another directory; the N28 delta after a rename (the old key removed,
+the new added, the caller's source, dependencies and callees, and the record it took's references)
+and after a fix (the definition's source and diagnostics); and 500 rename and fix plans each
+leaving retained state unchanged. The unit tests order edits and refuse duplicates, overlaps and
+two insertions at one point. `crates/nazm-cli/tests/schemas.rs` the real commands' patches and
+refusals valid against the schema (with `oneOf` added to its validator for the tagged operation).
+`crates/nazm-mcp/tests/protocol.rs` the real server: four read-only tools, `nazm.semantic_patch`'s
+input the SDK's derivation of its typed request, patches equal to the service's and carried once,
+the files untouched, exported refused, unloaded files and `/etc/passwd` refused, a root, an unknown
+operation or argument and a client-written replacement protocol errors, a disk edit re-planned, a
+broken edit and a vanished target refused, and 1,000 plans with flat resident memory.
+Sixteen N29 mutations (area 30).
+
 **Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
 help, symbols, full-document semantic tokens, quick fixes and call hierarchy only: no
 formatting, refactors, source actions or inlay hints, no cancellation and no watched files.
@@ -1615,10 +1648,13 @@ another syntax error, and nothing when any other file, or the document's top lev
 `.` is the only trigger character; `(` is not one. A hole's completion costs a second parse and
 check of the compilation per request (`performance.md`).
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
-are published for open documents only. **MCP is three read-only tools** (N27, N28): the semantic
-context packet, the semantic snapshot and the delta against a client-kept snapshot, over stdio, from
-disk, for one fixed root — no resources, prompts, completions, sampling or edits, no HTTP, no
-server-side history, and no view of an editor's unsaved buffers. A packet has no effects,
+are published for open documents only. **MCP is four read-only tools** (N27, N28, N29): the
+semantic context packet, the semantic snapshot, the delta against a client-kept snapshot, and a
+planned rename or fix, over stdio, from disk, for one fixed root — no resources, prompts,
+completions, sampling or edits, no tool that applies a patch, no HTTP, no server-side history, and
+no view of an editor's unsaved buffers. A patch covers rename and compiler-owned fixes only — no
+exported rename, no multi-file edit, and no fix of a syntax diagnostic, whose compilation has no
+snapshot to bind it to. A packet has no effects,
 capabilities, test mapping or semantic history (each `unsupported`); a snapshot's digests are of the
 sections the compiler records, so equal digests are not equal behaviour, and a delta has no rename
 inference and no effect, capability or test delta. All three cover only the root's compilation — no
@@ -1629,8 +1665,8 @@ contract; incremental reparse needs latency evidence, which N16's measurements d
 
 **Accepted when** · Met for the LSP, 2026-09-25 (N16): an adapter shares the compiler's
 semantic engine rather than re-implementing it. MCP: partial since N27 (2026-09-27) — read-only
-tools over the same service, three since N28; not accepted, since they answer a few of the
-questions the service can, and none edits.
+tools over the same service, three since N28, four since N29; not accepted, since they answer a
+few of the questions the service can, and none edits.
 
 ### 26. Package and build tooling — PARTIAL
 
@@ -1717,8 +1753,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **493** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction), **305** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **509** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28), **321** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -2254,6 +2290,25 @@ twenty and the five re-pointed entries. **25 of 25 caught at tier 1**; nothing a
 survivor, crash, timeout, unusable or uninjected entry, no runner error. The `snapshot` suite joined
 the `cli`, `semantics` and `checker` profiles. N13's use-after-free survivor and the
 `nesting-unbounded` MUTANT CRASH were not re-run and are as they were.
+
+*N29 (2026-09-28) added sixteen,* on the frozen final source. Every killer of the sixteen, of
+the nine N18 entries in `rename.rs` (which N29 touched to share its `Edit` and its entity lookup),
+and of the five N27 and N28 entries in the MCP server N29 extended, was verified by
+`--verify-killer`, contained at P1, one at a time, with no host build running: **30 of 30**. The
+sixteen attack N29's invariants: the snapshot binding, a file's digest or each edit's expected
+bytes of nothing, a whole file emitted as one edit, a duplicate, an overlap, or edits left in the
+order they came, needs-review planned as automatic, the precondition dropped, a fix taken from
+another position or an index that wraps, an unloaded file planned against the root's text, a
+local given its function's key, the MCP server applying the patch, sending it twice, or keeping
+the first plan. **Campaign `e0bc0b9125753c45`, targeted, P1, one session, 1,830 s:** those sixteen,
+six N18 entries N29 consumes (a rename by spelling, an exported entity renamed, the candidate not
+checked, its meaning not compared, any name accepted, a program with errors renamed), two N24
+entries (the requested range ignored, the diagnostic's span edited) and three N28 entries on the
+snapshot a patch binds to (an absolute path, the service generation, a recovered compilation).
+**27 of 27 caught at tier 1**; nothing at tier 2 or 3, no survivor, crash, timeout, unusable or
+uninjected entry, no runner error. The `patch` suite joined the `cli`, `semantics` and `checker`
+profiles. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and
+are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a
