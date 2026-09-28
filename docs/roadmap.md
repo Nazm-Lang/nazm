@@ -370,16 +370,67 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N31, in dependency order
+
+No item is chosen here; N31 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Progressive test-detail retrieval | test summaries ✓ | `nazm test --json` is the detail today; no evidence yet needs a per-case query |
+| Test impact, test-to-definition mapping | a relation the compiler owns | tests are not tied to definitions |
+| Build and test summaries over MCP | a write and execution boundary | building writes an executable and tests run programs; the MCP server is read-only |
+| Typed diagnostic facts (expected, actual, entity) | the checker recording them | unchanged since N30 |
+| Further verbosity levels (G75) | compact and detail ✓ | not asked for |
+| Diagnostic or build-log history | a retention contract | nothing is kept between requests |
+| Patch application, a transactional write | patch plans ✓ | its own safety milestone |
+| Rename of exported definitions | rename ✓, a project/importer boundary | unchanged since N18 |
+| A project or importer boundary | a manifest, or a declared universe of roots | nothing says which files may import a module |
+| Fixes of syntax diagnostics as patches | a binding for a recovered compilation | unchanged since N29 |
+| Effect and capability context | the language owning effects and capabilities | both are MISSING as language features |
+| `semanticTokens/range` and `/full/delta` | semantic tokens ✓ | no evidence justifies them |
+| Refactors, source actions, fix-all | quick fixes ✓, patch plans ✓ | each is its own contract |
+| Incremental reparse | a lossless CST ✓ | still no evidence that forces it |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+
+### N31 — Token-efficient build and test output v1 — **complete, 2026-09-28**
+
+The first executable step toward G76. `--summary-json` on `nazm check` and `nazm build` prints one
+`nazm.command-summary/1`: the command's own status — one per exit path — and exit status, and a
+reference to every diagnostic it reported, with N30's id where N30 indexes it and an explicit
+command reference where it does not (a missing `main`, a backend's refusal). On `nazm test` it
+prints one `nazm.test-summary/1`: counts from each case's verdict, and only the cases that did not
+pass, with how each leg ended, read from what the runner did. Summary is an additive view, not a
+replacement for existing detailed machine output, and absence of diagnostics does not imply
+command success. `nazm-mcp` adds `nazm.command_summary` for `check` only — building and testing are
+not read-only. Human output, `--json`, `nazm.test/1`, `nazm.check-report/1`, `nazm.build-report/1`,
+every exit status and every existing schema are unchanged: `SEMANTIC_EPOCH` 7, `nazm.interface/5`;
+two new machine schemas.
+
+| Settled | Where |
+| --- | --- |
+| command summaries, and their references to N30 | `crates/nazm-service/src/summary.rs`, `schema/nazm.command-summary-1.json`, `architecture.md` §7.33 |
+| `nazm check|build --summary-json` | `crates/nazm-cli/src/checking.rs`, `build.rs`, `summary.rs` |
+| `nazm test --summary-json` | `crates/nazm-cli/src/test.rs`, `schema/nazm.test-summary-1.json` |
+| `nazm-mcp`: `nazm.command_summary`, check only | `crates/nazm-mcp/src/main.rs`, `docs/mcp.md` |
+| what it costs | `performance.md` |
+
+Mutation evidence: 15 new mutations; 41 killers verified on the final source — the fifteen, the
+sixteen N30 entries whose order N31 shares, and the ten MCP entries of N27–N30; one targeted
+campaign of 23, all caught — 21 at tier 1, one each at tiers 2 and 3 (`capability-matrix.md` §30).
+
+**N32 has not started.**
+
 ### After N30, in dependency order
 
-No item is chosen here; N30 left these standing.
+No item is chosen here; N30 left these standing. *Superseded by "After N31" above.*
 
 | | Depends on | Why not before |
 | --- | --- | --- |
 | Typed diagnostic facts (expected, actual, entity) | diagnostics ✓, the checker recording them | no diagnostic carries them today; reading them from prose is refused |
 | Further verbosity levels (explain, and the rest of G75) | compact and detail ✓ | not asked for; each is its own contract |
 | Diagnostic history | a retention contract | unchanged: nothing is kept between requests |
-| Build and test output redesign (G76) | diagnostics ✓ | independent |
+| Build and test output redesign (G76) | diagnostics ✓ | done in part by N31: compact command and test summaries |
 | Patch application, a transactional write | patch plans ✓ | its own safety milestone |
 | Rename of exported definitions | rename ✓, a project/importer boundary | unchanged since N18 |
 | A project or importer boundary | a manifest, or a declared universe of roots | nothing says which files may import a module |
@@ -416,8 +467,6 @@ existing schema are unchanged: `SEMANTIC_EPOCH` 7, `nazm.interface/5`; two new m
 Mutation evidence: 18 new mutations; 26 killers verified on the final source — the eighteen and
 the eight MCP entries of N27–N29; one targeted campaign of 25, all caught at tier 1
 (`capability-matrix.md` §30).
-
-**N31 has not started.**
 
 ### After N29, in dependency order
 

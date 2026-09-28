@@ -1,10 +1,10 @@
 # `nazm-mcp`
 
 A read-only [Model Context Protocol](https://modelcontextprotocol.io) server over stdio, built on
-the official Rust SDK. It offers six tools: the compiler's semantic context packet for a
+the official Rust SDK. It offers seven tools: the compiler's semantic context packet for a
 definition (N27), a semantic snapshot of the root's compilation and the delta against one kept
-earlier (N28), a planned rename or diagnostic fix (N29), and the current diagnostics compactly or
-one in full (N30). It is local compiler tooling — it answers questions about one program, and
+earlier (N28), a planned rename or diagnostic fix (N29), the current diagnostics compactly or
+one in full (N30), and a compact summary of the root's check (N31). It is local compiler tooling — it answers questions about one program, and
 changes nothing.
 
 ## Running it
@@ -38,6 +38,7 @@ claims to know every caller or importer in a project.
 | `nazm.semantic_patch` | `operation` (`rename` or `diagnostic_fix`) and its fields | `nazm.patch/1` |
 | `nazm.diagnostics` | none | `nazm.diagnostic-index/1` |
 | `nazm.diagnostic_detail` | `id`, `state` | `nazm.diagnostic-detail/1` |
+| `nazm.command_summary` | `operation`: `check` | `nazm.command-summary/1` |
 
 Each result is carried **once**, in the tool result's structured content, with an empty `content`,
 and each tool's output schema is the published one in `schema/`.
@@ -119,6 +120,16 @@ publishes it, with its places in their files, and for each fix the `nazm.semanti
 that plans it where N29 can — a compiler fix of a syntax diagnostic has none. If the sources have
 changed since the index, the detail is refused as `stale_state`; ask for a fresh index. No fact is
 read from prose, and `facts` is `unavailable`: the compiler records none.
+
+### `nazm.command_summary`
+
+What `nazm check` concludes for the root as it is on disk now (`schema/nazm.command-summary-1.json`,
+`docs/architecture.md` §7.33): its status and exit status, and a reference to every diagnostic it
+reports — code, place, fix counts and, where `nazm.diagnostics` indexes it, its `id` — including a
+program's missing `main`, which the index does not hold. No prose; `nazm.diagnostic_detail` answers
+an `id`. The only `operation` is `check`, and it runs without the check cache, so nothing is
+written. Building writes an executable and testing runs programs that may write files, so neither
+is offered here; `nazm build --summary-json` and `nazm test --summary-json` are the command line's.
 
 ## What it reads, and when
 
