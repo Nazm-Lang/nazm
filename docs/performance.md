@@ -1616,6 +1616,57 @@ command; `nazm-mcp` is 2,823,904 and **3,020,512**, +196,608 bytes, for the tool
 request. No crate was added to `Cargo.lock` — one dependency edge: `nazm-mcp` names `serde`
 directly for the request, and uses the `schemars` derivation `rmcp` already carries.
 
+### Compact diagnostics and diagnostic detail — measured 2026-09-28
+
+N30 keeps nothing between requests: an index or a detail is derived from one analysis of its
+root and dropped. **Persistent N30 state: zero entries** — no index or detail cache, no history.
+The ordinary compiler path, `nazm check --json` and the language server's diagnostics do no N30
+work.
+
+In process, contained, P1 (`target/n30/bench`, not committed), medians. `nazm.diagnostic/1` stream
+is every diagnostic as `nazm check --json` prints it, one line each:
+
+| Fixture | diagnostics | open + analyse | index | serialise | detail | index | one detail | `nazm.diagnostic/1` stream |
+| --- | ---: | --- | --- | --- | --- | ---: | ---: | ---: |
+| unterminated string (a syntax error) | 2 | 0.080 ms | 0.008 ms | 0.001 ms | 0.008 ms | 682 B | 881 B | 909 B |
+| one type error, two secondary labels | 1 | 0.082 ms | 0.023 ms | 0.001 ms | 0.026 ms | 611 B | 948 B | 356 B |
+| one error with help and a fix | 1 | 0.093 ms | 0.023 ms | 0.001 ms | 0.027 ms | 623 B | 1,280 B | 571 B |
+| 20 functions, each with help, a fix and labels | 40 | 0.53 ms | 0.31 ms | 0.016 ms | 0.30 ms | 10,156 B | 1,276 B | 18,798 B |
+| 500 type errors | 500 | 6.26 ms | 7.25 ms | 0.28 ms | 7.01 ms | 123,238 B | 950 B | 184,864 B |
+| the compiler, with 20 such functions added | 40 | 83.0 ms | 16.0 ms | 0.024 ms | 16.2 ms | 10,862 B | 1,334 B | 19,500 B |
+
+A detail costs what an index does: it derives the current diagnostics to find its id and check
+its state, then projects one. At compiler scale both are about 16 ms after the 83 ms analysis —
+the snapshot binding and the outline behind owners.
+
+**What the bytes say.** An index is about 330 bytes of fixed structure — root, two 64-digit state
+digests, counts — plus about 245 bytes per diagnostic (180 for a syntax error with no owner),
+whatever its prose. So **for one or two
+diagnostics the index is not smaller**: 611 bytes against a 356-byte diagnostic, 1.7 times, and
+75 % of a two-diagnostic stream. From about twenty it is **54–67 % of the stream** — 10,156 against
+18,798 bytes for forty diagnostics with help, fixes and labels, 123,238 against 184,864 for five
+hundred terse ones — the saving larger where the prose is longer. Progressive disclosure: an
+agent that reads the index of forty diagnostics and then one in full receives 11,432 bytes, 61 %
+of the stream (12,196, 63 %, at compiler scale). These are byte counts, not token counts: no
+tokenizer was measured, and no token saving is claimed.
+
+Over `stdio`, the real `nazm-mcp` process, medians of the full `tools/call` round trip:
+
+| Fixture | `nazm.diagnostics` | frame | `nazm.diagnostic_detail` | frame | server resident: before, after |
+| --- | --- | ---: | --- | ---: | --- |
+| unterminated string | 0.34 ms | 769 B | 0.37 ms | 968 B | 3.4 → 4.7 MB |
+| 40 diagnostics | 1.30 ms | 10,243 B | 1.14 ms | 1,363 B | 3.4 → 5.0 MB |
+| the compiler, 40 diagnostics | 98.4 ms | 10,948 B | 99.0 ms | 1,420 B | 3.3 → 36.7 MB |
+
+Each frame is the result plus an 87-byte envelope: it travels once. 1,000 index, detail, edit and
+repair calls in `crates/nazm-mcp/tests/protocol.rs` stay within a megabyte of resident memory,
+which the test asserts.
+
+**What it added to the binaries.** Built in the same container: `nazm` is 3,609,504 bytes at N29
+and **3,675,040** at N30, **+65,536 bytes (+1.8 %)**, one 64 KiB step, for the diagnostics module
+and the `diagnostics` command; `nazm-mcp` is 3,020,512 and **3,151,584**, +131,072 bytes, for the
+two tools. No crate and no dependency edge was added: `Cargo.lock` is unchanged.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
