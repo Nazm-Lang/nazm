@@ -3260,6 +3260,7 @@ targets = [
     { package = "nazm-service", test = "context" },
     { package = "nazm-service", test = "snapshot" },
     { package = "nazm-service", test = "patch" },
+    { package = "nazm-service", test = "diagnostics" },
     { package = "nazm-service", test = "incomplete" },
 ]
 
@@ -3309,6 +3310,7 @@ targets = [
     { package = "nazm-service", test = "context" },
     { package = "nazm-service", test = "snapshot" },
     { package = "nazm-service", test = "patch" },
+    { package = "nazm-service", test = "diagnostics" },
     { package = "nazm-service", test = "incomplete" },
 ]
 
@@ -3364,6 +3366,7 @@ targets = [
     { package = "nazm-service", test = "context" },
     { package = "nazm-service", test = "snapshot" },
     { package = "nazm-service", test = "patch" },
+    { package = "nazm-service", test = "diagnostics" },
     { package = "nazm-service", test = "incomplete" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-mcp", bin = "nazm-mcp" },
@@ -6159,3 +6162,181 @@ replace = """        static KEPT: std::sync::OnceLock<(serde_json::Value, bool)>
             .clone();
         Ok(once(value, available))"""
 killers = [{ package = "nazm-mcp", test = "protocol", name = "a_patch_is_of_the_disk_at_that_call" }]
+
+# ---------------------------------------------------------------------------------------
+# N30 — compact diagnostics, diagnostic detail, and their MCP tools.
+# ---------------------------------------------------------------------------------------
+
+[[mutation]]
+name = "n30-the-index-carries-the-message"
+why = "a compact entry carries the diagnostic's message beside its code, so the index is the prose it exists to leave out"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "                    code: e.d.code.to_string(),"
+replace = "                    code: format!(\"{} {}\", e.d.code, e.d.message),"
+killers = [{ package = "nazm-service", test = "diagnostics", name = "an_index_is_every_diagnostic_as_compiler_owned_facts_and_no_prose" }]
+
+[[mutation]]
+name = "n30-an-id-hashes-the-message"
+why = "a diagnostic's id includes a digest of its message, so rewording a diagnostic changes which id selects it"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "            let stem = format!(\"{}@{place}\", d.code);"
+replace = "            let stem = format!(\"{}@{place}~{}\", d.code, digest(d.message.as_bytes()));"
+killers = [{ package = "nazm-service", lib = true, name = "diagnostics::tests::prose_is_no_part_of_an_index" }]
+
+[[mutation]]
+name = "n30-an-id-is-only-its-code"
+why = "a diagnostic's id is its code and an ordinal, so an id from one state names whatever diagnostic of that code comes first in another"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "            let stem = format!(\"{}@{place}\", d.code);"
+replace = """            let _ = &place;
+            let stem = d.code.to_string();"""
+killers = [{ package = "nazm-service", test = "diagnostics", name = "a_detail_of_another_state_is_stale_and_never_another_diagnostic" }]
+
+[[mutation]]
+name = "n30-an-id-is-only-an-ordinal"
+why = "a diagnostic's id is its position in the list alone"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "            let stem = format!(\"{}@{place}\", d.code);"
+replace = """            let _ = &place;
+            let stem = String::new();"""
+killers = [{ package = "nazm-service", lib = true, name = "diagnostics::tests::two_diagnostics_structure_cannot_tell_apart_are_told_apart_by_an_ordinal" }]
+
+[[mutation]]
+name = "n30-a-stale-state-is-answered"
+why = "a detail request for an old state is answered from the current sources, so an old id can select whatever now has it"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "            if c.state.source != state {"
+replace = "            if false && c.state.source != state {"
+killers = [{ package = "nazm-service", test = "diagnostics", name = "a_detail_of_another_state_is_stale_and_never_another_diagnostic" }]
+
+[[mutation]]
+name = "n30-the-state-is-of-the-root-file-only"
+why = "the source state covers only the root file, so an edit to an imported file leaves an old state current"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "    for (i, k) in s.files.iter().enumerate() {"
+replace = "    for (i, k) in s.files.iter().enumerate().take(1) {"
+killers = [{ package = "nazm-service", test = "diagnostics", name = "the_same_sources_give_the_same_bytes_from_any_directory_and_only_the_roots_files" }]
+
+[[mutation]]
+name = "n30-an-absolute-path-enters-the-state"
+why = "the source state is taken over absolute paths, so the same sources in another checkout are another state"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "        let path = paths.file(FileId::from_index(i)).unwrap_or_default();"
+replace = """        let _ = paths;
+        let path = match k {
+            FileKey::Path(p) => p.display().to_string(),
+            FileKey::Prelude => String::new(),
+        };"""
+killers = [{ package = "nazm-service", test = "diagnostics", name = "the_same_sources_give_the_same_bytes_from_any_directory_and_only_the_roots_files" }]
+
+[[mutation]]
+name = "n30-concatenation-offsets-are-given-as-file-offsets"
+why = "a primary place is the published concatenation offset labelled with a file, so every diagnostic after the first file is misplaced"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "            let primary = span(d.primary.span);"
+replace = """            let primary = (d.primary.span != Span::synthetic())
+                .then(|| {
+                    let (start, end) = s.map.global(d.primary.span);
+                    paths
+                        .file(d.primary.span.file)
+                        .map(|file| SourceSpan { file, start, end })
+                })
+                .flatten();"""
+killers = [{ package = "nazm-service", test = "diagnostics", name = "one_code_twice_is_two_ids_in_one_file_and_across_files" }]
+
+[[mutation]]
+name = "n30-an-owner-is-taken-from-a-recovery"
+why = "an owner is read from the outline of a compilation that needed syntax recovery, which is not the source as written"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "            let owner = if complete && d.primary.span != Span::synthetic() {"
+replace = "            let owner = if d.primary.span != Span::synthetic() {"
+killers = [{ package = "nazm-service", test = "diagnostics", name = "syntax_diagnostics_are_indexed_without_a_snapshot_and_their_fixes_are_no_patches" }]
+
+[[mutation]]
+name = "n30-an-owner-is-the-nearest-declaration"
+why = "a diagnostic outside every declaration is owned by the last declaration before it, found by proximity rather than containment"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "        .find(|sym| sym.start <= at.start && at.end <= sym.end)?;"
+replace = """        .filter(|sym| sym.start <= at.start)
+        .last()?;"""
+killers = [{ package = "nazm-service", test = "diagnostics", name = "every_kind_of_semantic_diagnostic_is_indexed_with_its_owner_and_detail" }]
+
+[[mutation]]
+name = "n30-a-syntax-error-has-no-index"
+why = "a compilation with no semantic snapshot is refused an index, so syntax diagnostics are never reported"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "        let complete = !incomplete(s);"
+replace = """        let complete = !incomplete(s);
+        if !complete {
+            return Err(NoDiagnostics::NotCurrent);
+        }"""
+killers = [{ package = "nazm-service", test = "diagnostics", name = "syntax_diagnostics_are_indexed_without_a_snapshot_and_their_fixes_are_no_patches" }]
+
+[[mutation]]
+name = "n30-compiler-fixes-are-counted-as-patches"
+why = "a detail reports every compiler fix as a semantic patch, though N29 cannot plan a syntax diagnostic's"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = """        detail.semantic_patches = detail
+            .fixes
+            .iter()
+            .filter(|f| f.semantic_patch.is_some())
+            .count();"""
+replace = "        detail.semantic_patches = detail.compiler_fixes;"
+killers = [{ package = "nazm-service", test = "diagnostics", name = "syntax_diagnostics_are_indexed_without_a_snapshot_and_their_fixes_are_no_patches" }]
+
+[[mutation]]
+name = "n30-a-syntax-fix-is-offered-as-a-patch"
+why = "a fix is offered as a patch selector in a compilation with no snapshot, which N29 refuses to plan"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "            (bound, primary_file, text, detail.locations.primary.clone())"
+replace = "            ((bound, true).1, primary_file, text, detail.locations.primary.clone())"
+killers = [{ package = "nazm-service", test = "diagnostics", name = "syntax_diagnostics_are_indexed_without_a_snapshot_and_their_fixes_are_no_patches" }]
+
+[[mutation]]
+name = "n30-needs-review-is-counted-automatic"
+why = "every compiler fix is counted as automatic in the index"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "        .filter(|f| f.applicability == Applicability::Automatic)"
+replace = "        .filter(|f| f.applicability == Applicability::Automatic || f.applicability == Applicability::NeedsReview)"
+killers = [{ package = "nazm-service", test = "diagnostics", name = "a_fix_n29_can_plan_carries_the_request_that_plans_it_and_needs_review_stays" }]
+
+[[mutation]]
+name = "n30-a-detail-drops-the-help"
+why = "a detail's diagnostic loses its help text, so it is no longer the canonical diagnostic"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "                    diagnostic: d.published(&c.s.map),"
+replace = """                    diagnostic: {
+                        let mut p = d.published(&c.s.map);
+                        p.help = None;
+                        p
+                    },"""
+killers = [{ package = "nazm-cli", test = "schemas", name = "a_diagnostic_index_and_detail_are_their_schemas_and_detail_is_nazm_check_s_diagnostic" }]
+
+[[mutation]]
+name = "n30-the-directory-is-scanned"
+why = "the diagnostic index looks at the root's directory, not only at what the compilation loaded"
+file = "crates/nazm-service/src/diagnostics.rs"
+find = "        let paths = Paths::of(s, root, self.source_root.as_deref());"
+replace = """        let paths = Paths::of(s, root, self.source_root.as_deref());
+        let _scanned = root.parent().map(std::fs::read_dir);"""
+killers = [{ package = "nazm-service", lib = true, name = "diagnostics::tests::a_compact_diagnostic_is_never_read_from_prose" }]
+
+[[mutation]]
+name = "n30-an-index-is-sent-twice"
+why = "the index tool's result carries the index again as text beside its structured content"
+file = "crates/nazm-mcp/src/main.rs"
+find = "        Ok(once(value, matches!(result, IndexResult::Available(_))))"
+replace = "        Ok(CallToolResult::structured(value).into())"
+killers = [{ package = "nazm-mcp", test = "protocol", name = "an_index_travels_once" }]
+
+[[mutation]]
+name = "n30-the-mcp-server-keeps-an-index"
+why = "the MCP index tool answers every call with the first index it derived, so an edit on disk is never seen"
+file = "crates/nazm-mcp/src/main.rs"
+find = "        Ok(once(value, matches!(result, IndexResult::Available(_))))"
+replace = """        static KEPT: std::sync::OnceLock<(serde_json::Value, bool)> = std::sync::OnceLock::new();
+        let (value, available) = KEPT
+            .get_or_init(|| (value, matches!(result, IndexResult::Available(_))))
+            .clone();
+        Ok(once(value, available))"""
+killers = [{ package = "nazm-mcp", test = "protocol", name = "a_diagnostic_id_is_of_its_state_and_a_later_edit_makes_it_stale" }]
