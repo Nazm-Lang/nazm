@@ -39,6 +39,7 @@ mod checking;
 mod context;
 mod derived;
 mod diagnostics;
+mod docs;
 mod fix;
 mod fmt;
 mod interface;
@@ -317,6 +318,38 @@ enum Command {
         #[arg(long)]
         source_root: Option<PathBuf>,
     },
+    /// Retrieve Nazm's own documentation by section: a compact index, `nazm.docs-index/1`,
+    /// or one section's exact canonical text, `nazm.docs-section/1`.
+    ///
+    /// The index lists every document of the corpus with its authority — normative, goal,
+    /// planning, evidence and the rest — and every section's stable id, title, parent and
+    /// digest, with no body. `--section ID` returns that section's own text byte for byte,
+    /// never its subsections', and never a paraphrase; `--state` binds the request to the
+    /// corpus an index described. Read from the repository's documentation as it is now;
+    /// ids are exact, with no search. `docs/architecture.md` §7.34.
+    #[command(group(clap::ArgGroup::new("ask").required(true).args(["index", "section"])))]
+    Docs {
+        /// Print the index.
+        #[arg(long)]
+        index: bool,
+        /// Only this document's sections, by its id.
+        #[arg(long, conflicts_with = "section")]
+        document: Option<String>,
+        /// Print one section, by its exact id.
+        #[arg(long)]
+        section: Option<String>,
+        /// The index's `state`: refuse the section if the corpus has changed since.
+        #[arg(long, conflicts_with = "index")]
+        state: Option<String>,
+        /// The one canonical compact serialisation. Without it, a section's text or the
+        /// index's ids and titles.
+        #[arg(long)]
+        json: bool,
+        /// The repository whose `docs/` to read. Without it, the one this binary was built
+        /// from.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
     /// Print a semantic patch plan, `nazm.patch/1`. Plans; never applies.
     ///
     /// A validated rename (`rename`) or a compiler-owned fix (`fix`), as minimal exact-byte
@@ -586,6 +619,21 @@ fn main() -> ExitCode {
             }
         }
         Command::Fmt { files, check } => return fmt::run(&files, check),
+        Command::Docs {
+            index,
+            document,
+            section,
+            state,
+            json,
+            root,
+        } => {
+            let root = root.unwrap_or_else(nazm_docs::default_root);
+            return match (index, section) {
+                (true, _) => docs::index(&root, document.as_deref(), json),
+                (false, Some(id)) => docs::section(&root, &id, state.as_deref(), json),
+                (false, None) => unreachable!("clap requires one"),
+            };
+        }
         Command::Test {
             paths,
             json,
@@ -622,6 +670,7 @@ fn main() -> ExitCode {
         | Command::Delta { .. }
         | Command::Patch { .. }
         | Command::Diagnostics { .. }
+        | Command::Docs { .. }
         | Command::Fmt { .. }
         | Command::Test { .. }
         | Command::Interface { .. }
