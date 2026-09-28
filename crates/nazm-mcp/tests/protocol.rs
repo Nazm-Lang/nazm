@@ -30,6 +30,7 @@ const DELTA: &str = "nazm.semantic_delta";
 const PATCH: &str = "nazm.semantic_patch";
 const DIAGNOSTICS: &str = "nazm.diagnostics";
 const DETAIL: &str = "nazm.diagnostic_detail";
+const SUMMARY: &str = "nazm.command_summary";
 
 const LIB: &str = "pub fn far() -> Int { 1 }\n";
 const MAIN: &str = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nenum S {\n    A,\n    B(v: Int),\n}\nfn f(p: P) -> Int { far() + p.x }\nfn g() -> Int { f(P(x: 1)) }\n";
@@ -141,7 +142,10 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
         assert_eq!(info.server_info.as_ref().unwrap().name, "nazm-mcp");
         let tools = client.list_all_tools().await.unwrap();
         let names: Vec<&str> = tools.iter().map(|t| &*t.name).collect();
-        assert_eq!(names, [TOOL, SNAPSHOT, DELTA, PATCH, DIAGNOSTICS, DETAIL]);
+        assert_eq!(
+            names,
+            [TOOL, SNAPSHOT, DELTA, PATCH, DIAGNOSTICS, DETAIL, SUMMARY]
+        );
         for (tool, schema) in tools.iter().zip([
             "nazm.context-1.json",
             "nazm.snapshot-1.json",
@@ -149,6 +153,7 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
             "nazm.patch-1.json",
             "nazm.diagnostic-index-1.json",
             "nazm.diagnostic-detail-1.json",
+            "nazm.command-summary-1.json",
         ]) {
             let annotations = tool.annotations.as_ref().unwrap();
             assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
@@ -207,6 +212,13 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
             .collect();
         required.sort_unstable();
         assert_eq!(required, ["id", "state"]);
+        // The summary takes one operation, and the only one is `check`: no build, no test,
+        // no command.
+        let summary = Value::Object((*tools[6].input_schema).clone()).to_string();
+        assert!(summary.contains("\"check\""), "{summary}");
+        for word in ["build", "\"test\"", "shell", "command\"", "\"root\""] {
+            assert!(!summary.contains(word), "{word}: {summary}");
+        }
         let tool = &tools[0];
         let input = Value::Object((*tool.input_schema).clone());
         assert_eq!(input["required"], json!(["file", "byte_offset"]));
@@ -1047,6 +1059,101 @@ fn a_thousand_diagnostic_calls_are_each_of_the_disk_and_keep_nothing() {
         let after = rss_kb(pid);
         assert!(after <= settled + 1024, "{settled} kB -> {after} kB");
         eprintln!("nazm-mcp RSS: settled {settled} kB, after 1,000 diagnostic calls {after} kB");
+        client.cancel().await.unwrap();
+    });
+}
+
+/// The service's summary for the same root, directly.
+fn direct_summary(root: &Path) -> Value {
+    let root = root.to_path_buf();
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(nazm_core::__syntax::PARSE_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                serde_json::to_value(nazm_service::summary::check(&root, None)).unwrap()
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    })
+}
+
+const NO_MAIN: &str = "fn helper() -> Int { 1 + true }\n";
+
+#[test]
+fn a_check_summary_crosses_the_protocol_and_is_nazm_check_s() {
+    let dir = project(&[("main.nz", NO_MAIN)]);
+    let root = dir.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, _) = connect(&root).await;
+        let (s, error) = call_with(&client, SUMMARY, json!({"operation": "check"})).await;
+        assert!(!error, "{s}");
+        assert_eq!(s["schema"], "nazm.command-summary/1");
+        assert_eq!(s["status"], "rejected");
+        // The service's summary, which `nazm check --summary-json` equals
+        // (`crates/nazm-cli/tests/summary.rs`).
+        assert_eq!(s, direct_summary(&root));
+        // The program's missing `main` is the check's own, and kept.
+        assert!(s["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["code"] == "N0204" && d["id"].is_null()));
+        // Only `check`, and only it, with nothing else.
+        for arguments in [
+            json!({}),
+            json!({"operation": "build"}),
+            json!({"operation": "test"}),
+            json!({"operation": "check", "root": "/"}),
+            json!({"operation": "check", "args": ["--cache-report"]}),
+            json!({"command": "sh -c true"}),
+        ] {
+            let request = CallToolRequestParams::new(SUMMARY)
+                .with_arguments(serde_json::from_value(arguments.clone()).unwrap());
+            assert!(client.call_tool(request).await.is_err(), "{arguments}");
+        }
+        // Nothing was written: the source is as it was, and no cache or executable appeared.
+        assert_eq!(std::fs::read_to_string(&root).unwrap(), NO_MAIN);
+        let entries: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, ["main.nz"], "{entries:?}");
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_thousand_check_summaries_are_each_of_the_disk_and_keep_nothing() {
+    let dir = project(&[("main.nz", NO_MAIN)]);
+    let root = dir.path().join("main.nz");
+    let fixed = "fn main() -> Int { 1 }\n";
+    let broken = "fn main() -> Int { 1 +  }\n";
+    runtime().block_on(async {
+        let (client, pid) = connect(&root).await;
+        let (first, _) = call_with(&client, SUMMARY, json!({"operation": "check"})).await;
+        for _ in 0..10 {
+            call_with(&client, SUMMARY, json!({"operation": "check"})).await;
+        }
+        let settled = rss_kb(pid);
+        for i in 0..250 {
+            let (a, _) = call_with(&client, SUMMARY, json!({"operation": "check"})).await;
+            assert_eq!(a, first, "{i}");
+            std::fs::write(&root, broken).unwrap();
+            let (b, _) = call_with(&client, SUMMARY, json!({"operation": "check"})).await;
+            assert_eq!(b["status"], "rejected", "{i}");
+            assert_eq!(b["diagnostics"][0]["code"], "N0100", "{i}");
+            std::fs::write(&root, fixed).unwrap();
+            let (c, _) = call_with(&client, SUMMARY, json!({"operation": "check"})).await;
+            assert_eq!(c["status"], "success", "{i}");
+            assert_eq!(c["diagnostics"], json!([]), "{i}");
+            std::fs::write(&root, NO_MAIN).unwrap();
+            let (d, _) = call_with(&client, SUMMARY, json!({"operation": "check"})).await;
+            assert_eq!(d, first, "{i}");
+        }
+        let after = rss_kb(pid);
+        assert!(after <= settled + 1024, "{settled} kB -> {after} kB");
+        eprintln!("nazm-mcp RSS: settled {settled} kB, after 1,000 summary calls {after} kB");
         client.cancel().await.unwrap();
     });
 }
