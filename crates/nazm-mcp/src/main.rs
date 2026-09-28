@@ -1,8 +1,8 @@
-//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27–N30.
+//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27–N31.
 //!
 //! # What it is
 //!
-//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves six tools,
+//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves seven tools,
 //! each result exactly the object the matching command prints with `--json`:
 //!
 //! | Tool | Result | Command |
@@ -13,6 +13,11 @@
 //! | `nazm.semantic_patch` | `nazm.patch/1`, a planned rename or fix (N29) | `nazm patch` |
 //! | `nazm.diagnostics` | `nazm.diagnostic-index/1`, every current diagnostic compactly (N30) | `nazm diagnostics` |
 //! | `nazm.diagnostic_detail` | `nazm.diagnostic-detail/1`, one of them in full (N30) | `nazm diagnostics --detail` |
+//! | `nazm.command_summary` | `nazm.command-summary/1` of a check (N31) | `nazm check --summary-json --no-cache` |
+//!
+//! `nazm.command_summary` checks and does not build: a build writes an executable, and
+//! running a program's tests runs programs, which may write files — neither is read-only,
+//! so neither is offered. The check runs without the check cache, so it writes nothing.
 //!
 //! Each is carried once, as the result's structured content, with no second copy as text.
 //! It creates no semantic fact of its own: every answer is the compiler's, derived for the
@@ -100,6 +105,22 @@ const DETAIL: &str = "nazm.diagnostic_detail";
 
 /// `nazm.diagnostic-detail/1`, exactly as the repository publishes it.
 const DETAIL_SCHEMA: &str = include_str!("../../../schema/nazm.diagnostic-detail-1.json");
+
+/// The command summary tool (N31).
+const SUMMARY: &str = "nazm.command_summary";
+
+/// `nazm.command-summary/1`, exactly as the repository publishes it.
+const SUMMARY_SCHEMA: &str = include_str!("../../../schema/nazm.command-summary-1.json");
+
+/// What `nazm.command_summary` is asked: one operation, from a finite set that is read-only
+/// — only `check`. Typed, so its input schema is the SDK's derivation of it.
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum SummaryRequest {
+    /// `nazm check` of the root, as it is on disk now, without the check cache.
+    Check {},
+}
 
 /// What `nazm.diagnostic_detail` is asked: one diagnostic, by the id and the state an index
 /// gave it. Typed, so its input schema is the SDK's derivation of it.
@@ -215,6 +236,7 @@ impl Server {
             Self::patch_tool(),
             Self::diagnostics_tool(),
             Self::detail_tool(),
+            Self::summary_tool(),
         ]
     }
 
@@ -339,6 +361,21 @@ impl Server {
         )
     }
 
+    /// The summary tool: a typed operation in, `nazm.command-summary/1` as its output schema.
+    fn summary_tool() -> Tool {
+        let mut input =
+            (*rmcp::handler::server::common::schema_for_type::<SummaryRequest>()).clone();
+        input
+            .entry("type")
+            .or_insert_with(|| serde_json::Value::from("object"));
+        Self::read_only(
+            SUMMARY,
+            "What `nazm check` concludes for the server's root as it is on disk now, compactly (nazm.command-summary/1): its status and exit status, and a reference to every diagnostic it reports — code, place, fix counts and, where nazm.diagnostics indexes it, its id — including a program's missing `main`. No prose. operation: `check` only; building and testing write files and are not offered. Nothing is written.",
+            input,
+            SUMMARY_SCHEMA,
+        )
+    }
+
     fn read_only(
         name: &'static str,
         description: &'static str,
@@ -421,7 +458,8 @@ impl ServerHandler for Server {
                  nazm.semantic_patch: plan a rename or a diagnostic fix as exact edits bound to \
                  the current source; it never applies one. nazm.diagnostics: every current \
                  diagnostic compactly; nazm.diagnostic_detail: one in full, by its id and the \
-                 index's state. The server keeps nothing between calls.",
+                 index's state. nazm.command_summary: what `nazm check` concludes, compactly. \
+                 The server keeps nothing between calls.",
             )
     }
 
@@ -495,6 +533,7 @@ impl ServerHandler for Server {
             PATCH => return self.patch(args).await,
             DIAGNOSTICS => return self.diagnostics(&args).await,
             DETAIL => return self.detail(args).await,
+            SUMMARY => return self.summary(args).await,
             _ => return Err(ErrorData::invalid_params("tool not found", None)),
         }
         let file = args
@@ -565,6 +604,33 @@ impl Server {
         let value = serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(once(value, matches!(result, IndexResult::Available(_))))
+    }
+
+    /// `nazm.command_summary`: a check of the root, from the disk as it is now.
+    async fn summary(&self, args: JsonObject) -> Result<CallToolResponse, ErrorData> {
+        let SummaryRequest::Check {} = serde_json::from_value(serde_json::Value::Object(args))
+            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        let (root, source_root) = (self.root.clone(), self.source_root.clone());
+        let summary = tokio::task::spawn_blocking(move || {
+            std::thread::scope(|scope| {
+                std::thread::Builder::new()
+                    .stack_size(nazm_core::__syntax::PARSE_STACK_BYTES)
+                    .spawn_scoped(scope, || {
+                        nazm_service::summary::check(&root, source_root.as_deref())
+                    })
+                    .map_err(|e| e.to_string())?
+                    .join()
+                    .map_err(|_| "the check stopped unexpectedly".to_owned())
+            })
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
+        .map_err(|e| ErrorData::internal_error(e, None))?;
+        let value = serde_json::to_value(&summary)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        // The summary is the answer whatever the check concluded: a rejected program is a
+        // result reported, not a tool error. Its `status` says how the check ended.
+        Ok(once(value, true))
     }
 
     /// `nazm.diagnostic_detail`: an id and the state it is of.
@@ -695,6 +761,7 @@ mod tests {
             (super::PATCH, super::PATCH_SCHEMA),
             (super::DIAGNOSTICS, super::INDEX_SCHEMA),
             (super::DETAIL, super::DETAIL_SCHEMA),
+            (super::SUMMARY, super::SUMMARY_SCHEMA),
         ]) {
             let published: serde_json::Value = serde_json::from_str(schema).unwrap();
             assert_eq!(
