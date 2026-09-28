@@ -274,22 +274,49 @@ impl DetailResult {
 }
 
 /// The current diagnostics, identified and ordered, and the state they are of.
-struct Current<'a> {
-    s: &'a Snapshot,
-    paths: Paths,
-    root: RootIdentity,
-    state: State,
+pub(crate) struct Current<'a> {
+    pub(crate) s: &'a Snapshot,
+    pub(crate) paths: Paths,
+    pub(crate) root: RootIdentity,
+    pub(crate) state: State,
     /// Canonical order.
-    entries: Vec<Entry<'a>>,
+    pub(crate) entries: Vec<Entry<'a>>,
 }
 
-struct Entry<'a> {
-    id: String,
-    d: &'a Diagnostic,
-    primary: Option<SourceSpan>,
-    owner: Option<Owner>,
+pub(crate) struct Entry<'a> {
+    pub(crate) id: String,
+    pub(crate) d: &'a Diagnostic,
+    pub(crate) primary: Option<SourceSpan>,
+    /// Its secondary and fix places, in its own order: with `primary` and the code, the
+    /// structure the canonical order and a command summary's matching read (N31).
+    pub(crate) secondary: Vec<Option<SourceSpan>>,
+    pub(crate) fixes: Vec<Option<SourceSpan>>,
+    pub(crate) owner: Option<Owner>,
     /// Earlier diagnostics, in the compiler's order, with the same code and primary span.
-    compiler_ordinal: usize,
+    pub(crate) compiler_ordinal: usize,
+}
+
+/// A diagnostic's place in the canonical order, from its structure alone: primary file,
+/// start and end, code, then secondary and fix places. Ties keep the order they came in.
+pub(crate) type Structure = (
+    Option<(String, u32, u32)>,
+    String,
+    Vec<Option<SourceSpan>>,
+    Vec<Option<SourceSpan>>,
+);
+
+pub(crate) fn structure(
+    primary: &Option<SourceSpan>,
+    code: &str,
+    secondary: &[Option<SourceSpan>],
+    fixes: &[Option<SourceSpan>],
+) -> Structure {
+    (
+        primary.as_ref().map(|p| (p.file.clone(), p.start, p.end)),
+        code.to_owned(),
+        secondary.to_vec(),
+        fixes.to_vec(),
+    )
 }
 
 impl LanguageService {
@@ -479,7 +506,11 @@ impl LanguageService {
     }
 
     /// The root's current diagnostics, identified and in canonical order.
-    fn current_diagnostics(&self, root: &Path, version: i32) -> Result<Current<'_>, NoDiagnostics> {
+    pub(crate) fn current_diagnostics(
+        &self,
+        root: &Path,
+        version: i32,
+    ) -> Result<Current<'_>, NoDiagnostics> {
         let s = self
             .current(root, version)
             .ok_or(NoDiagnostics::NotCurrent)?;
@@ -540,18 +571,11 @@ impl LanguageService {
             keyed.push((primary, secondary, fixes, k, d, owner, compiler_ordinal));
         }
         keyed.sort_by(|a, b| {
-            let place =
-                |p: &Option<SourceSpan>| p.as_ref().map(|p| (p.file.clone(), p.start, p.end));
-            (place(&a.0), a.4.code.as_str(), &a.1, &a.2, a.3).cmp(&(
-                place(&b.0),
-                b.4.code.as_str(),
-                &b.1,
-                &b.2,
-                b.3,
-            ))
+            (structure(&a.0, a.4.code.as_str(), &a.1, &a.2), a.3)
+                .cmp(&(structure(&b.0, b.4.code.as_str(), &b.1, &b.2), b.3))
         });
         let mut entries: Vec<Entry<'_>> = Vec::with_capacity(keyed.len());
-        for (primary, _, _, _, d, owner, compiler_ordinal) in keyed {
+        for (primary, secondary, fixes, _, d, owner, compiler_ordinal) in keyed {
             let place = primary.as_ref().map_or_else(
                 || "-".to_owned(),
                 |p| format!("{}:{}-{}", p.file, p.start, p.end),
@@ -565,6 +589,8 @@ impl LanguageService {
                 id: format!("{stem}#{n}"),
                 d,
                 primary,
+                secondary,
+                fixes,
                 owner,
                 compiler_ordinal,
             });
@@ -622,7 +648,7 @@ fn source_digest(s: &Snapshot, paths: &Paths, root: &RootIdentity) -> String {
     h.finalize().to_hex().to_string()
 }
 
-fn fix_counts(d: &Diagnostic) -> FixCounts {
+pub(crate) fn fix_counts(d: &Diagnostic) -> FixCounts {
     let automatic = d
         .fixes
         .iter()
@@ -640,7 +666,7 @@ fn fix_counts(d: &Diagnostic) -> FixCounts {
     }
 }
 
-const fn severity(d: &Diagnostic) -> &'static str {
+pub(crate) const fn severity(d: &Diagnostic) -> &'static str {
     match d.severity {
         nazm_diag::Severity::Error => "error",
     }
