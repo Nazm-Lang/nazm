@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.command-summary-1.json",
+  "title": "nazm.command-summary/1",
+  "description": "What a `nazm check` or `nazm build` concluded, compactly, from `--summary-json` and the `nazm-mcp` tool `nazm.command_summary`: the command's own outcome and exit status, and a reference to every diagnostic it reported — code, severity, place and fix counts, no prose. An additive view, not a replacement: `--json` gives every diagnostic in full, and `nazm.check-report/1` and `nazm.build-report/1` are unchanged. Absence of diagnostics does not imply command success: `status` is the command's outcome. No timing, timestamp or host path is included.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "command", "status", "exit_code", "root", "state", "counts", "diagnostics", "artifact"],
+  "properties": {
+    "schema": { "const": "nazm.command-summary/1" },
+    "command": { "enum": ["check", "build"] },
+    "status": {
+      "enum": ["success", "rejected", "unreadable", "refused", "toolchain_failed"],
+      "description": "`success`: checked clean, or the executable written. `rejected`: the program did not check or the backend refused a construct. `unreadable`: the input could not be read or loaded. `refused`: an action the command will not take, such as writing an executable over its source. `toolchain_failed`: the toolchain was missing or failed, or an output could not be written."
+    },
+    "exit_code": { "type": "integer", "minimum": 0, "description": "The process exit status, exactly as without `--summary-json`." },
+    "root": { "type": ["string", "null"], "description": "The root module's durable key; null where no compilation could be read." },
+    "state": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "N30's `state.source` for the sources the command read: the state every `id` is of, for `nazm diagnostics --detail`. Null when the sources could not be read, or changed between the command's read and N30's, in which case no id is given." },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["diagnostics", "error", "with_fixes", "automatic_fixes", "needs_review_fixes"],
+      "properties": {
+        "diagnostics": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 },
+        "with_fixes": { "type": "integer", "minimum": 0 },
+        "automatic_fixes": { "type": "integer", "minimum": 0 },
+        "needs_review_fixes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/reference" },
+      "description": "Every diagnostic the command reported, in N30's canonical order."
+    },
+    "artifact": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "description": "As `nazm build` prints it: `-o`'s path as given, or the source's stem, relative to the working directory." }
+      },
+      "description": "The executable a build wrote; null for a check and for a build that wrote none."
+    }
+  },
+  "$defs": {
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "scope", "code", "severity", "primary", "fixes"],
+      "properties": {
+        "id": { "type": ["string", "null"], "description": "N30's diagnostic id, within `state`, where N30 indexes the diagnostic; null for a command reference." },
+        "scope": { "enum": ["index", "command"], "description": "`index`: N30 indexes it, and `id` selects its detail. `command`: only the command reports it — a program's missing `main` (`N0204`), a backend's refusal — and it has no N30 id." },
+        "code": { "type": "string", "pattern": "^N[0-9]{4}$" },
+        "severity": { "enum": ["error"] },
+        "primary": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["file", "start", "end"],
+          "properties": {
+            "file": { "type": "string" },
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 0 }
+          },
+          "description": "Root-relative file and UTF-8 byte range; null for a diagnostic with no place, or when `state` is null."
+        },
+        "fixes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["total", "automatic", "needs_review"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "automatic": { "type": "integer", "minimum": 0 },
+            "needs_review": { "type": "integer", "minimum": 0 }
+          },
+          "description": "The compiler fixes it carries; not semantic patches, which N30's detail reports."
+        }
+      }
+    }
+  }
+}

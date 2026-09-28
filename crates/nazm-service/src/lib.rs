@@ -31,7 +31,9 @@
 //!   `nazm.patch/1`; planned, never applied (N29);
 //! - [`diagnostics`] — every current diagnostic as a compact, prose-free index, and one
 //!   selected diagnostic in full on request, as `nazm.diagnostic-index/1` and
-//!   `nazm.diagnostic-detail/1` (N30).
+//!   `nazm.diagnostic-detail/1` (N30);
+//! - [`summary`] — what a `check` or a `build` concluded, with a reference to each diagnostic
+//!   it reported — N30's id where N30 indexes it — as `nazm.command-summary/1` (N31).
 //!
 //! The first two were `nazm-cli`'s until N16 and moved here unchanged in what they decide,
 //! so the command line and the language service cannot disagree about a module graph.
@@ -54,6 +56,7 @@ pub mod service;
 pub mod signature;
 pub mod snapshot;
 pub mod structure;
+pub mod summary;
 pub mod symbols;
 
 pub use completion::{Completion, CompletionCandidate, Context, NoCompletion};
