@@ -21,6 +21,8 @@ against them — so these documents are tested rather than described.
 | `nazm.diagnostic-detail/1` | `nazm diagnostics --detail ID --state DIGEST --json`, and the `nazm-mcp` tool `nazm.diagnostic_detail` | stdout; the tool result's structured content | one object |
 | `nazm.command-summary/1` | `nazm check --summary-json`, `nazm build --summary-json`, and the `nazm-mcp` tool `nazm.command_summary` (check only) | stdout; the tool result's structured content | one object |
 | `nazm.test-summary/1` | `nazm test --summary-json` | stdout | one object |
+| `nazm.docs-index/1` | `nazm docs --index --json`, and the `nazm-mcp` tool `nazm.docs_index` | stdout; the tool result's structured content | one object |
+| `nazm.docs-section/1` | `nazm docs --section ID --json`, and the `nazm-mcp` tool `nazm.docs_section` | stdout; the tool result's structured content | one object |
 
 Every object carries its own `schema` field. Not a header: the output is a stream of
 lines and a consumer may read, log or replay any single one of them, and a version that

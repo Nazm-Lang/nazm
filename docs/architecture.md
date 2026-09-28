@@ -3903,6 +3903,89 @@ read-only, so neither is offered.
 **Deliberately not here.** Test-detail retrieval, test impact, failure explanations, a build-log
 store, timing, remote CI, and any MCP tool that builds, tests or runs a command.
 
+## 7.34 Machine-addressable documentation and selective retrieval — settled by N32, 2026-09-28
+
+```text
+canonical documents under docs/                       (the authorities)
+        ↓
+structural section index                              (crates/nazm-docs)
+        ↓
+stable ids + authority classes
+        ↓
+selective exact retrieval                             nazm.docs-index/1 · nazm.docs-section/1
+        ↓
+nazm docs  ·  nazm-mcp nazm.docs_index / nazm.docs_section  (read-only)
+```
+
+**The index is not a second source of documentation truth.** The documents are. `nazm-docs`
+reads them, as they are on disk at each request, into sections, and answers with their bytes;
+it holds no copy of any rule, title or example. Its manifest is fourteen rows — a document's id,
+its path, its authority and which reader it takes — in the order of `master-architecture.md`
+§5's authority table, with `mcp.md` beside `diagnostics.md` and the grammar beside the guide.
+Nothing is found by walking a directory: `README.md`, `releases/` (frozen evidence) and
+`research/` (a draft protocol) are outside it, and so is every user project's documentation.
+
+**Goals, roadmaps, architecture, evidence and normative specification retain distinct
+authority classes.** Every document, and so every section, carries one of eleven: `goal`
+(`NAZM_LANGUAGE_GOALS.md` — aspiration, never evidence of what exists), `law`
+(`master-architecture.md`), `architecture`, `normative` (`spec.md`), `grammar`, `guide`,
+`interface` (`diagnostics.md`, `mcp.md`), `evidence` (`capability-matrix.md`, `performance.md`,
+`bootstrap.md`), `planning` (`roadmap.md`), `research` and `operational` (`runbook.md`). The
+class is the document's, from §5; nothing classifies a section by its words, and a section's
+`kind` is structural only — `document`, `heading` or `production`.
+
+**Retrieval never paraphrases canonical text.** A section's body is exact bytes of its file:
+a heading's line through the byte before the next heading of any level. That is its **direct**
+text — a parent never carries its subsections, which are listed as children — so a document's
+sections, in order, are the document. A grammar production's body is its attached comments
+and the production through `;`, with the production's text and its `@example`s beside it,
+exactly.
+
+**Identity.** `document:local`, and a document's root — its title and the text before its
+first subheading — is `document`. The local part is an explicit anchor, `<!-- id: name -->` on
+the line under a heading, which survives rewording and moving; else the heading's own label
+where the document numbers its sections (`architecture:7.33`, `capabilities:2a`, `goals:G78`,
+`roadmap:N31`, `research:R1`), which survives rewording; else the heading's text as a segment
+under its parent (`spec:generics/identity`), which does not. Never a line, an offset, an
+ordinal, a hash, a random value or a commit. `spec.md` gained forty-three anchors, one under each
+of its `##` and `###` headings, and no other change; no other document was edited for this. A
+production is `grammar:name`. Two sections with one id are refused, never numbered apart — which
+is also the one mechanical G79 audit this milestone makes: no anchor, and so no rule id an anchor
+carries, is defined twice.
+
+**Structure is read, not guessed.** ATX headings outside fenced code (backticks or tildes, at any
+indentation) and outside HTML comments; a `#` line inside a fence is code. Setext and HTML
+headings, which the corpus does not use, are refused rather than mis-sectioned. The grammar is
+read as productions — a comment separated from every rule by a blank line, after the header, is
+refused — and a production's `references` are the nonterminals it names: a grammar reference,
+not a semantic dependency.
+
+**Links are explicit or absent.** A Markdown link into the corpus resolves to a section id — a
+`#fragment` by the anchor a reader's browser gives the heading — and one that resolves to nothing
+makes the corpus unavailable, never quietly partial. A link outside the corpus or to the web is
+kept as written. A guide section between the generator's markers titled `` `name` `` is
+`generated_from` `grammar:name`. Nothing links sections because their words are alike.
+
+**Freshness.** The corpus `state` is BLAKE3 over a domain tag and, in manifest order, each
+document's id, repository-relative path and bytes; a section's digest is BLAKE3 over another tag,
+its document, its id and its body — so moving an anchored section changes its parent and not its
+digest. No absolute path, time, process or commit enters either, and a copy of the repository
+elsewhere gives the same bytes. A section asked for with a state that is not the current one is
+`stale_state`; an unknown id is `not_found` — never the nearest one. The MCP tool requires the
+state, as N30's detail does; the command line takes it optionally.
+
+**Surfaces.** `nazm docs --index [--document ID]` and `nazm docs --section ID [--state S]`, with
+`--json` one object on stdout and nothing on stderr, and `--root` for another checkout; without a
+root, the repository the binary was built from, used to find files and never written into an
+answer. `nazm-mcp` adds `nazm.docs_index` and `nazm.docs_section`, whose arguments are a document
+id, or a section id and a state — never a path — over the repository given as `--docs`, fixed at
+startup. Both read at every call and keep nothing. `cargo xtask check` has a `docs corpus` gate
+that loads the corpus with the same reader.
+
+**Deliberately not here.** Semantic, fuzzy or full-text search, embeddings, summaries,
+documentation history, Git, fine-grained normative rule ids below section level, an installed
+copy of the documentation, and any user project's documents.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
