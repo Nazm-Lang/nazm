@@ -15,6 +15,7 @@ that after 150k lines of compiler is the entire reason this document exists firs
 ---
 
 ## Settled
+<!-- id: settled -->
 
 These are design commitments. Changing one is a re-founding decision, not an edit.
 
@@ -35,6 +36,7 @@ These are design commitments. Changing one is a re-founding decision, not an edi
    authorise dropping, reordering, memoizing, or parallelising a call.
 
 ## Settled for v0.1 — the executable subset
+<!-- id: v0-1 -->
 
 These are the decisions the first interpreter needs and no more. Each is chosen for the
 same reason: **a reader should be able to predict what a line does from the line and the
@@ -42,6 +44,7 @@ compiler's response to it.** Where two designs are defensible, the one that remo
 question wins over the one that adds an option.
 
 ### Integer overflow — traps, identically in every build
+<!-- id: overflow -->
 
 `Int` is 64-bit signed. Overflow is an error that stops the program, in development and in
 release alike.
@@ -53,12 +56,14 @@ check per operation, which matters for a language claiming performance, and the 
 hatch when it does is an explicit wrapping operator, not a build flag.
 
 ### Division by zero — an error, not a value and not undefined
+<!-- id: division -->
 
 `/` and `%` by zero stop the program with a diagnostic. Not a NaN-like sentinel, which
 propagates silently; not undefined behaviour, which is unrepresentable in a language with
 no `unsafe` yet.
 
 ### Shadowing — allowed in a nested scope, refused in the same one
+<!-- id: shadowing -->
 
 ```nazm
 let x = 1;
@@ -72,6 +77,7 @@ which binding it means requires scanning upward for every intervening `let`. A d
 inserts one silently changes the meaning of code it does not touch.
 
 ### Argument evaluation order — left to right, specified
+<!-- id: evaluation-order -->
 
 Specified, not "unspecified for optimisation". Unspecified order is a licence for two
 correct compilers to disagree, and the resulting bug appears only after a toolchain
@@ -79,6 +85,7 @@ upgrade. v0.1 has no side effects for the order to be observable through, which 
 precisely why it costs nothing to fix it now and would be a breaking change later.
 
 ### Function returns — the final expression, and nothing else
+<!-- id: returns -->
 
 A function body is a block; the block's value is its final expression; that is the return
 value. There is no `return` statement in v0.1.
@@ -94,6 +101,7 @@ something to guard against.
 > value is still its final expression, and `return` is for the paths that leave early.
 
 ### Types — `Int`, `Bool`, `Str`, and no inference across function boundaries
+<!-- id: types -->
 
 Parameter and return types are always written. Local `let` bindings infer from their
 initialiser. Both branches of an `if` must have the same type, and a condition must be
@@ -101,6 +109,7 @@ initialiser. Both branches of an `if` must have the same type, and a condition m
 
 
 ### Records — the first user-defined type
+<!-- id: records -->
 
 Settled by N9, 2026-09-23. A **record** is a nominal product type with named fields. The
 source keyword is `struct`; the word *record* names the category everywhere else.
@@ -369,6 +378,7 @@ serialisation format and no storage layout; each of those needs an explicit cont
 none is made here.
 
 ### Enums — the second user-defined type, and the first sum
+<!-- id: enums -->
 
 Settled by N10, 2026-09-23. An **enum** is a nominal sum type: a closed set of named
 variants, exactly one of which is active in any value, each carrying its own named payload
@@ -711,6 +721,7 @@ layout.
 
 
 ### Generics — first-order parametric types, and `Vec[T]`
+<!-- id: generics -->
 
 Settled by N11, 2026-09-23. A record, an enum and a function may declare **type parameters**,
 and a type may be **applied** to type arguments. There is one kind — *type* — and nothing
@@ -923,6 +934,7 @@ declared by the core prelude — the next section — and nothing about generics
 admit them.
 
 ### Typed error values — `Result`, `Option`, and `?`
+<!-- id: errors -->
 
 *Settled by N12, 2026-09-24.* **A typed failure is a value, and propagation is structured
 control flow over that value.** There is no exception, no `throw` or `catch`, no unwinding,
@@ -1054,6 +1066,7 @@ would need a propagation protocol, and traits do not exist.
 `match` and decides what they mean; nothing maps an `Err` to an exit status.
 
 ### Equality is derived — `==` on the value types that can have it
+<!-- id: equality -->
 
 Settled by N13, 2026-09-25. Built-in `==` and `!=` apply to two operands of **one** type,
 and only when the language defines equality for that type. For a user-defined type it is
@@ -1118,6 +1131,7 @@ defined on sequences, vectors or channels, deliberately, by the rule that stops 
 containing one from comparing.
 
 ### A type parameter may require equality
+<!-- id: equality-requirement -->
 
 Settled by N14, 2026-09-25. A generic function may state that one of its type parameters
 ranges only over types that have equality:
@@ -1156,8 +1170,10 @@ valid. Not a second equality: a bound proves that an operand's type is in `==`'s
 says nothing about what `==` does there.
 
 ## Settled for v0.2 — mutation and iteration
+<!-- id: v0-2 -->
 
 ### Mutation is opt-in and visible at the binding
+<!-- id: mutation -->
 
 ```nazm
 let x = 1;        // immutable
@@ -1182,6 +1198,7 @@ ambiguity.
 Assignment does not change a binding's type: `n` declared from an `Int` stays `Int`.
 
 ### `while` is a statement, and there is no loop value
+<!-- id: while -->
 
 ```nazm
 fn sum_to(n: Int) -> Int {
@@ -1203,6 +1220,7 @@ followed by a tail expression*, and `while` is a statement. The tail is still re
 The condition must be `Bool`. There is still no truthiness.
 
 ### One block, and completion decided by checking
+<!-- id: blocks -->
 
 A block is **statements followed by an optional tail expression**. There is one `Block`
 and one `if`; whether either produces a value is determined when checking, not by which
@@ -1240,6 +1258,7 @@ where a value is wanted must have both branches, and they must agree — unless 
 in which case the other decides. Unreachable code is a statement after one that diverges.
 
 ### `break` and `continue`, and the `if` they force
+<!-- id: break-continue -->
 
 ```nazm
 while i < n {
@@ -1283,6 +1302,7 @@ completes by diverging, which is not the same as completing with no value, and n
 an error unless something wanted a value from it.
 
 ### `return`
+<!-- id: return -->
 
 ```nazm
 fn classify(n: Int) -> Str {
@@ -1326,6 +1346,7 @@ the other branch's type, which is what makes these programs well-typed in the fi
 An evaluator that refused them would be rejecting programs the type system accepts.
 
 ### Code after `break`, `continue` or `return` is an error
+<!-- id: unreachable-code -->
 
 ```nazm
 while c {
@@ -1340,6 +1361,7 @@ error to a warning later is a compatible change; tightening a warning to an erro
 so the strict choice is the reversible one.
 
 ### The iteration and depth limits are the interpreter's, not the language's
+<!-- id: limits -->
 
 With no `break` and no I/O, a non-terminating program produces nothing at all. A tool that
 hangs is worse than one that reports, so `nazm run` stops and says so — after a
@@ -1365,6 +1387,7 @@ test recurses to the bound and requires a diagnostic, so a construct that made f
 enough to close the gap fails the suite rather than surfacing as an abort in a terminal.
 
 ### Nesting is bounded at parse time, which bounds every pass after it
+<!-- id: nesting -->
 
 Call depth is not the only way to run out of stack. `((((1))))`, `- - - - 1` and
 `{ { { 1 } } }` recurse through the parser, the checker, the evaluator **and the destructor
@@ -1438,6 +1461,7 @@ it is a refusal rather than a counter is below, under *Why native recursion is r
 rather than counted*.
 
 ### Strings are bytes, and what that commits to
+<!-- id: strings -->
 
 `Str` is an **immutable sequence of bytes**. Not of characters, and not of Unicode scalar
 values. The decision is forced rather than chosen: Nazm has no character type, and
@@ -1494,6 +1518,7 @@ because a call whose meaning depends on what happens to be in scope is exactly w
 language is trying not to have.
 
 ### Sequences are shared, mutable, and never freed
+<!-- id: sequences -->
 
 `Ints` and `Strs` are growable sequences of `Int` and of `Str`. They are the first
 **reference** types in the language, and every consequence of that is stated here rather
@@ -1556,6 +1581,7 @@ it is newly *useful*: without it, a language with no unit type would force
 type rather than a rule worth having.
 
 ### The memory constitution: four kinds of value, and when storage is reclaimed
+<!-- id: memory -->
 
 Settled by N7, 2026-09-22, from an audit of what the two implementations actually do
 rather than from what a memory model is usually shaped like. `docs/architecture.md` §7.7
@@ -1755,6 +1781,7 @@ the six built-in types. What would end it is unchanged and still absent.
   here claims it is free. `docs/performance.md` carries the numbers.
 
 ### What the outside-world built-ins do and do not promise
+<!-- id: outside-world -->
 
 A program can read its arguments, read and write files, write to standard output and
 standard error, and end the process. That is enough for a compiler, and it is all.
@@ -1812,6 +1839,7 @@ and never becomes an `Err` — so the race is still open, and a `read_file` retu
 `Result` is a separate decision about the outside-world built-ins.
 
 ### A file is a module, and `use` names one by path
+<!-- id: modules -->
 
 ```nazm
 use "util.nz";
@@ -1964,6 +1992,7 @@ compilation were a duplicate definition, so imported files had to rename theirs.
 requiring the keyword would suggest the runtime resolves it by name from outside.
 
 ### Durable identity: what makes this the same module, or the same definition
+<!-- id: durable-identity -->
 
 *Added by N3, 2026-09-22.* Everything above is about one compilation. This is about two.
 
@@ -2087,6 +2116,7 @@ Nothing about a module's exported interface mentions them, because a call to `st
 inside a body is not part of what that module offers.
 
 ### Structured concurrency: scopes, tasks and channels
+<!-- id: concurrency -->
 
 This is the **initial** model. It is deliberately small, and what it does not claim is as
 much a part of the specification as what it does — see *What this model does not promise*
@@ -2282,6 +2312,7 @@ channel operations say nothing about threads, so a different runtime strategy co
 replace this one without changing what a program means.
 
 ### The integer boundaries, stated rather than inherited
+<!-- id: integer-boundaries -->
 
 Two's complement is asymmetric — there is one more negative `Int` than positive — and
 every language that leaves the consequences to the hardware gets a rule with an exception
@@ -2299,6 +2330,7 @@ The through-line: `%` has exactly one failure case, a zero divisor. Overflow tra
 wherever the result genuinely cannot be represented, and nowhere else.
 
 ### One mistake, one error
+<!-- id: one-error -->
 
 A parse error inside a function body does not delete the function. Its signature is kept,
 so calls to it still check against real parameter and return types instead of reporting
@@ -2311,6 +2343,7 @@ error in the same body is reported too; what follows from the first — a stray 
 behind by a missing brace — is not reported again. The body is still withheld from checking.
 
 ### Not in v0.3, and unsupported rather than half-present
+<!-- id: not-in-v0-3 -->
 
 Valueless `return`, labelled break, `for`, `loop`, mutable parameters, effects, floating
 point. A program using any of them is rejected by name rather than misparsed into something
@@ -2343,8 +2376,10 @@ The original paragraph, unedited:
 > effect system before it exists would be the wrong shape to unpick later.
 
 ## Open — later phases must settle these
+<!-- id: open -->
 
 ### Source identity and definition identity
+<!-- id: open-identity -->
 
 *Added 2026-09-21. These are the questions the next milestone — `roadmap.md` N1 — has to
 answer, and they are semantic rather than merely structural, which is why they are here.*
@@ -2381,6 +2416,7 @@ It was given deliberately: see **Visibility: private by default, `pub` exports**
 What is left in this section changes no current program's meaning.
 
 ### Memory and values
+<!-- id: open-memory -->
 
 *Copy semantics, aliasing, parameter and return conventions, reclamation, cross-task
 transfer and cycles were settled by N7 — see **The memory constitution** above. What
@@ -2402,6 +2438,7 @@ remains open is what the four kinds do not yet cover.*
   check when they are (by design) the same solve.
 
 ### Effects
+<!-- id: open-effects -->
 
 - **Is divergence an effect?** The `forever()` counterexample in `architecture.md` §5 shows
   that without an answer, "drop an unused pure call" is unsound. Options: treat divergence
@@ -2414,6 +2451,7 @@ remains open is what the four kinds do not yet cover.*
 - Which handlers lower statically, and which require one-shot continuation capture?
 
 ### Provenance and information flow
+<!-- id: open-provenance -->
 
 - Implicit flows: is branching on a `Secret` a leak? Full non-interference is usually
   unusable in practice; what is the chosen approximation, and what does it miss?
@@ -2423,6 +2461,7 @@ remains open is what the four kinds do not yet cover.*
 - The FFI boundary: what label does a value returned from C carry?
 
 ### Concurrency
+<!-- id: open-concurrency -->
 
 - Captured variables, globals/statics, and foreign pointers are **not** covered by channel
   ownership transfer. Each needs a rule.
@@ -2430,12 +2469,14 @@ remains open is what the four kinds do not yet cover.*
 - What exactly does cancellation cancel, and what cleanup is guaranteed to run?
 
 ### Layout selection
+<!-- id: open-layout -->
 
 - The eligibility predicate: which types may the compiler re-lay-out?
 - Behaviour under address identity, escaping references, FFI, serialization, atomics, and
   separate compilation (`architecture.md` §4).
 
 ### Backend semantics
+<!-- id: open-backend -->
 
 Required before `nazm test --backend=all` means anything:
 
@@ -2445,6 +2486,7 @@ Required before `nazm test --backend=all` means anything:
 - what counts as an observable output
 
 ### Syntax
+<!-- id: open-syntax -->
 
 - The surface syntax itself, which is the **largest lever against the training-data risk**
   and is nearly free to change now and effectively unchangeable later. Novelty is a budget:
@@ -2457,6 +2499,7 @@ Required before `nazm test --backend=all` means anything:
 - A cheatsheet under ~3k tokens, to be injected by `nazm init`.
 
 ## Non-goals for the current interpreter milestone
+<!-- id: non-goals -->
 
 Deliberately out of scope:
 
