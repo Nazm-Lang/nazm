@@ -112,7 +112,7 @@ pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool, summary: 
         print_summary(status, code, !interpret_only, results, without);
         ExitCode::from(code)
     };
-    let nazm = match std::env::current_exe() {
+    let nazm = match driver() {
         Ok(p) => p,
         Err(e) => {
             if summary {
@@ -197,6 +197,20 @@ pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool, summary: 
         ExitCode::from(exit::OK)
     } else {
         ExitCode::from(exit::CHECK_FAILED)
+    }
+}
+
+/// The variable naming another `nazm` for each case's legs to start. A test seam, not an
+/// interface: it lets a test reach the runner's own could-not-start branches — a build or a
+/// program that cannot be started — through a driver of its choosing, without touching the
+/// machine's toolchain.
+const DRIVER: &str = "NAZM_TEST_DRIVER";
+
+/// The `nazm` each case's legs start: this executable, unless [`DRIVER`] names another.
+fn driver() -> std::io::Result<PathBuf> {
+    match std::env::var_os(DRIVER) {
+        Some(p) => Ok(PathBuf::from(p)),
+        None => std::env::current_exe(),
     }
 }
 

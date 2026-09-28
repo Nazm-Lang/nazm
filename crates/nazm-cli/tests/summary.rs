@@ -495,3 +495,288 @@ fn the_check_summary_the_mcp_server_gives_is_nazm_check_s_with_or_without_its_ca
         assert_eq!(uncached, service, "{text}");
     }
 }
+
+// --- The outcomes a broken process produces (N31 closure). Each reaches the production
+// branch through the real binary: the test runner through its driver seam, `nazm build`
+// through a `clang` on a PATH of the test's own, set for that one process only.
+
+/// `nazm` in `dir`, with `vars` set for that process alone.
+fn nazm_with(dir: &Path, args: &[&str], vars: &[(&str, &std::ffi::OsStr)]) -> Run {
+    let mut c = Command::new(NAZM);
+    c.args(args).current_dir(dir);
+    for (k, v) in vars {
+        c.env(k, v);
+    }
+    let out = c.output().expect("run nazm");
+    Run {
+        code: out.status.code(),
+        stdout: String::from_utf8(out.stdout).unwrap(),
+        stderr: String::from_utf8(out.stderr).unwrap(),
+    }
+}
+
+/// The one summary line on stdout. Stderr is not asserted: a toolchain's own complaint
+/// still goes there.
+fn summary_line(r: &Run) -> Value {
+    assert_eq!(r.stdout.lines().count(), 1, "one line: {:?}", r.stdout);
+    serde_json::from_str(&r.stdout).unwrap()
+}
+
+/// An executable shell script at `path`.
+#[cfg(unix)]
+fn script(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// The one `nazm.test/1` object of a single-case run.
+fn only_case(r: &Run) -> Value {
+    let cases: Vec<Value> = r
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(cases.len(), 1, "{}", r.stdout);
+    cases.into_iter().next().unwrap()
+}
+
+/// A summary of one failing case, `t/x.nz`, with these legs.
+fn one_failure(native: bool, interpreted: &str, native_leg: &str) -> Value {
+    serde_json::json!({
+        "schema": "nazm.test-summary/1",
+        "status": "failed",
+        "exit_code": 1,
+        "native": native,
+        "counts": {"cases": 1, "passed": 0, "failed": 1, "without_expectation": 0},
+        "failures": [{"name": "x", "file": "t/x.nz", "interpreted": interpreted, "native": native_leg}],
+    })
+}
+
+const PASSES: &[(&str, &str, Option<&str>)] = &[("x", "fn main() -> Int { 1 }\n", Some("1\n"))];
+
+#[test]
+fn a_driver_that_cannot_be_started_is_could_not_run_and_could_not_build() {
+    let dir = corpus(PASSES);
+    // The case passes with this nazm: whatever fails below is the driver alone.
+    let (fine, code) = summary(dir.path(), &["test", "--summary-json", "t"]);
+    assert_eq!(code, Some(0), "{fine}");
+    assert_eq!(fine["counts"]["passed"], 1);
+
+    let absent = dir.path().join("absent");
+    let vars = [("NAZM_TEST_DRIVER", absent.as_os_str())];
+    let plain = nazm_with(dir.path(), &["test", "--json", "t"], &vars);
+    let s = nazm_with(dir.path(), &["test", "--summary-json", "t"], &vars);
+    assert_eq!(s.code, Some(1));
+    assert_eq!(s.code, plain.code);
+    assert_eq!(s.stderr, "");
+    assert_eq!(
+        summary_line(&s),
+        one_failure(true, "could_not_run", "could_not_build")
+    );
+    // The detailed record of the same run: neither leg matched, and the case failed.
+    let case = only_case(&plain);
+    assert_eq!(case["passed"], false);
+    assert_eq!(case["interpreted"]["matched"], false);
+    assert!(case["interpreted"]["output"]
+        .as_str()
+        .unwrap()
+        .starts_with("could not run: "));
+    assert_eq!(case["native"]["matched"], false);
+    assert!(case["native"]["output"]
+        .as_str()
+        .unwrap()
+        .starts_with("could not build: "));
+
+    // Interpreted only: the program could not be started, and the native leg never ran.
+    let plain = nazm_with(dir.path(), &["test", "--interpret-only", "t"], &vars);
+    let s = nazm_with(
+        dir.path(),
+        &["test", "--summary-json", "--interpret-only", "t"],
+        &vars,
+    );
+    assert_eq!(s.code, Some(1));
+    assert_eq!(s.code, plain.code);
+    assert_eq!(
+        summary_line(&s),
+        one_failure(false, "could_not_run", "not_run")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_build_that_cannot_be_started_is_could_not_build_not_build_failed() {
+    let dir = corpus(PASSES);
+    let driver = dir.path().join("driver");
+    // Runs the case under the real nazm, then removes itself: the build that follows
+    // cannot be started.
+    let body = format!("'{NAZM}' \"$@\"; s=$?; rm -f \"$0\"; exit $s");
+    let vars = [("NAZM_TEST_DRIVER", driver.as_os_str())];
+
+    script(&driver, &body);
+    let plain = nazm_with(dir.path(), &["test", "--json", "t"], &vars);
+    assert!(!driver.exists());
+    script(&driver, &body);
+    let s = nazm_with(dir.path(), &["test", "--summary-json", "t"], &vars);
+    assert!(!driver.exists());
+
+    assert_eq!(s.code, Some(1));
+    assert_eq!(s.code, plain.code);
+    assert_eq!(s.stderr, "");
+    assert_eq!(
+        summary_line(&s),
+        one_failure(true, "matched", "could_not_build")
+    );
+    let case = only_case(&plain);
+    assert_eq!(case["passed"], false);
+    assert_eq!(case["interpreted"]["matched"], true);
+    assert_eq!(case["native"]["matched"], false);
+    assert!(case["native"]["output"]
+        .as_str()
+        .unwrap()
+        .starts_with("could not build: "));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_built_program_that_cannot_be_started_is_could_not_run_not_mismatched() {
+    let dir = corpus(PASSES);
+    let driver = dir.path().join("driver");
+    // A build that says it succeeded and wrote nothing: there is no program to start.
+    script(
+        &driver,
+        &format!("if [ \"$1\" = build ]; then exit 0; fi\nexec '{NAZM}' \"$@\""),
+    );
+    let vars = [("NAZM_TEST_DRIVER", driver.as_os_str())];
+    let plain = nazm_with(dir.path(), &["test", "--json", "t"], &vars);
+    let s = nazm_with(dir.path(), &["test", "--summary-json", "t"], &vars);
+    assert_eq!(s.code, Some(1));
+    assert_eq!(s.code, plain.code);
+    assert_eq!(s.stderr, "");
+    assert_eq!(
+        summary_line(&s),
+        one_failure(true, "matched", "could_not_run")
+    );
+    let case = only_case(&plain);
+    assert_eq!(case["passed"], false);
+    assert_eq!(case["interpreted"]["matched"], true);
+    assert_eq!(case["native"]["matched"], false);
+    assert!(case["native"]["output"]
+        .as_str()
+        .unwrap()
+        .starts_with("could not run: "));
+}
+
+#[test]
+fn a_test_run_with_nowhere_to_build_is_toolchain_failed() {
+    let dir = corpus(PASSES);
+    // Scratch space under a regular file cannot be created.
+    std::fs::write(dir.path().join("file"), "").unwrap();
+    let tmp = dir.path().join("file").join("tmp");
+    let vars = [("TMPDIR", tmp.as_os_str())];
+    let plain = nazm_with(dir.path(), &["test", "t"], &vars);
+    let s = nazm_with(dir.path(), &["test", "--summary-json", "t"], &vars);
+    assert_eq!(s.code, Some(4));
+    assert_eq!(s.code, plain.code);
+    assert_eq!(s.stderr, "");
+    assert_eq!(
+        summary_line(&s),
+        serde_json::json!({
+            "schema": "nazm.test-summary/1",
+            "status": "toolchain_failed",
+            "exit_code": 4,
+            "native": true,
+            "counts": {"cases": 0, "passed": 0, "failed": 0, "without_expectation": 0},
+            "failures": [],
+        })
+    );
+}
+
+/// A build summary that is `toolchain_failed` with no diagnostic, beside the same build
+/// without one.
+fn assert_toolchain_failed(dir: &Path, args: &[&str], vars: &[(&str, &std::ffi::OsStr)]) {
+    let plain_args: Vec<&str> = args
+        .iter()
+        .copied()
+        .filter(|a| *a != "--summary-json")
+        .collect();
+    let plain = nazm_with(dir, &plain_args, vars);
+    let r = nazm_with(dir, args, vars);
+    assert_eq!(r.code, Some(4), "{}", r.stderr);
+    assert_eq!(r.code, plain.code);
+    assert_eq!(plain.stdout, "", "a failed build names no executable");
+    let s = summary_line(&r);
+    assert_eq!(s["schema"], "nazm.command-summary/1");
+    assert_eq!(s["command"], "build");
+    assert_eq!(s["status"], "toolchain_failed");
+    assert_eq!(s["exit_code"], 4);
+    // Zero diagnostics, and not a success.
+    assert_eq!(s["diagnostics"], serde_json::json!([]));
+    assert_eq!(s["counts"]["diagnostics"], 0);
+    assert_eq!(s["counts"]["error"], 0);
+    assert_eq!(s["artifact"], Value::Null);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_build_whose_toolchain_fails_is_toolchain_failed_with_no_diagnostic() {
+    let dir = project(&[("main.nz", OK)]);
+    let cache = dir.path().join("cache");
+
+    // A `clang` that refuses everything.
+    let refusing = dir.path().join("refusing");
+    std::fs::create_dir_all(&refusing).unwrap();
+    script(&refusing.join("clang"), "echo 'clang: refused' >&2\nexit 1");
+    let vars = [
+        ("PATH", refusing.as_os_str()),
+        ("NAZM_CACHE_DIR", cache.as_os_str()),
+    ];
+    assert_toolchain_failed(
+        dir.path(),
+        &["build", "--summary-json", "main.nz", "-o", "prog"],
+        &vars,
+    );
+    assert!(!dir.path().join("prog").exists());
+
+    // A `clang` that compiles and will not link.
+    let linkless = dir.path().join("linkless");
+    std::fs::create_dir_all(&linkless).unwrap();
+    script(
+        &linkless.join("clang"),
+        "case \" $* \" in *' -c '*) exit 0;; esac\necho 'ld: refused' >&2\nexit 1",
+    );
+    let vars = [
+        ("PATH", linkless.as_os_str()),
+        ("NAZM_CACHE_DIR", cache.as_os_str()),
+    ];
+    assert_toolchain_failed(
+        dir.path(),
+        &["build", "--summary-json", "main.nz", "-o", "prog"],
+        &vars,
+    );
+    assert!(!dir.path().join("prog").exists());
+
+    // No `clang` at all.
+    let empty = dir.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let vars = [
+        ("PATH", empty.as_os_str()),
+        ("NAZM_CACHE_DIR", cache.as_os_str()),
+    ];
+    assert_toolchain_failed(
+        dir.path(),
+        &["build", "--summary-json", "main.nz", "-o", "prog"],
+        &vars,
+    );
+    assert!(!dir.path().join("prog").exists());
+}
+
+#[test]
+fn a_build_with_nowhere_to_write_is_toolchain_failed_with_no_diagnostic() {
+    let dir = project(&[("main.nz", OK), ("file", "")]);
+    assert_toolchain_failed(
+        dir.path(),
+        &["build", "--summary-json", "main.nz", "-o", "file/prog"],
+        &[],
+    );
+}
