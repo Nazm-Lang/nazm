@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,669 passed, 0 failed, 13 ignored, across 91 suites**, run contained at
-N31's closure correction (2026-09-28), at P4T4; the thirteen ignored are the xtask lifecycle tests,
-run on their own (13 of 13 passed, contained). N31 ended at 1,663 across 91 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,706 passed, 0 failed, 15 ignored, across 95 suites**, run contained at
+N32 (2026-09-29), at P4T4; the fifteen ignored are the xtask lifecycle tests,
+run on their own (15 of 15 passed, contained). N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1643,6 +1643,44 @@ operation or argument and a client-written replacement protocol errors, a disk e
 broken edit and a vanished target refused, and 1,000 plans with flat resident memory.
 Sixteen N29 mutations (area 30).
 
+*N32, 2026-09-28: Machine-addressable documentation index v1, `nazm.docs-index/1` — VERIFIED;
+Selective documentation retrieval v1, `nazm.docs-section/1` — VERIFIED; G78 — PARTIAL; G79 —
+PARTIAL.* `nazm docs` and `nazm-mcp`'s `nazm.docs_index` and `nazm.docs_section`
+(`crates/nazm-docs/`, `architecture.md` §7.34) section Nazm's own fourteen canonical documents,
+each with the authority `master-architecture.md` §5 gives it, and return one section's own text
+byte for byte by exact id, bound to a corpus state. The index is not a second source of
+documentation truth; retrieval never paraphrases; a goal is never evidence and a plan never a
+rule. G78 is partial: no semantic search, no documentation history, no rule ids below sections,
+no documentation outside a source checkout. G79 is partial: one mechanical audit — no id, and so
+no anchored rule, defined twice — and no whole-spec deduplication, rule graph or contradiction
+detection. Evidence: `crates/nazm-docs/tests/corpus.rs` — ids from anchors, labels and heading
+paths in that order, with two `Child` sections under two parents distinct; a parent's body its own
+text and its children listed, a document equal to its sections concatenated; an anchored section
+keeping its id reworded and moved, an unanchored one's old id not found; a removed section not
+found and an added one moving no other id; a `#` line in a fence not a section and a Unicode
+heading's id deterministic, stable under an ASCII anchor; every structural defect — a duplicate id,
+anchor or label, a malformed or misplaced anchor, a setext or HTML heading, an unclosed fence, no
+title, an empty identity, a broken link, a missing document — refused as unavailable; links
+resolved to section ids, outside and external links kept as written, and a link to a reworded
+heading refused; a grammar sectioned by production with exact text, examples and references, and
+a broken one refused; the corpus state moving with one byte and with the manifest, only the edited
+section's digest moving, a stale state refused, unknown ids and paths not found; the same state
+and bytes from two directories, naming neither; and on the real corpus, every Markdown document
+equal to its sections, `spec:generics` direct, the one fragment link resolved, each document's
+authority, and every generated guide rule `generated_from` its production.
+`crates/nazm-docs/src/markdown.rs` and `grammar.rs` — fences, anchors, setext and HTML refusal,
+links outside code, locale-free slugs; production blocks. `crates/nazm-cli/tests/documentation.rs`
+— one object on stdout and nothing on stderr for every answer and refusal, exit 0 and 1; a section
+for a person exactly its body; one document's index equal to its part of the whole; two copies of
+the repository giving the default's bytes; a rewording stale by state and still found by anchor; a
+broken link and an empty root unavailable; every ambiguous flag set refused. `crates/nazm-cli/tests/schemas.rs`
+— every status valid against both schemas. `crates/nazm-mcp/tests/protocol.rs` — nine tools, the
+documentation tools taking ids and a state and never a path, file or root; answers equal to the
+library's and carried once; `../README.md` and `/etc/passwd` not found, a path, a root, a query
+and a missing state refused; a disk edit stale by state and read at the next call; a broken corpus
+unavailable; and 1,001 calls through edits and repairs with flat resident memory. Seventeen N32
+mutations (area 30).
+
 **Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
 help, symbols, full-document semantic tokens, quick fixes and call hierarchy only: no
 formatting, refactors, source actions or inlay hints, no cancellation and no watched files.
@@ -1682,10 +1720,11 @@ another syntax error, and nothing when any other file, or the document's top lev
 `.` is the only trigger character; `(` is not one. A hole's completion costs a second parse and
 check of the compilation per request (`performance.md`).
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
-are published for open documents only. **MCP is seven read-only tools** (N27–N31): the semantic
+are published for open documents only. **MCP is nine read-only tools** (N27–N32): the semantic
 context packet, the semantic snapshot, the delta against a client-kept snapshot, a planned rename
-or fix, the current diagnostics compactly or one in full, and a compact summary of the root's
-check — no build and no test run, which write files, over stdio, from disk, for one fixed root — no resources, prompts,
+or fix, the current diagnostics compactly or one in full, a compact summary of the root's
+check — no build and no test run, which write files, over stdio, from disk, for one fixed root —
+and Nazm's own documentation by section, by id, over one fixed repository — no resources, prompts,
 completions, sampling or edits, no tool that applies a patch, no HTTP, no server-side history, and
 no view of an editor's unsaved buffers. A patch covers rename and compiler-owned fixes only — no
 exported rename, no multi-file edit, and no fix of a syntax diagnostic, whose compilation has no
@@ -1700,7 +1739,7 @@ contract; incremental reparse needs latency evidence, which N16's measurements d
 
 **Accepted when** · Met for the LSP, 2026-09-25 (N16): an adapter shares the compiler's
 semantic engine rather than re-implementing it. MCP: partial since N27 (2026-09-27) — read-only
-tools over the same service, three since N28, four since N29, six since N30, seven since N31; not accepted, since they answer a
+tools over the same service, three since N28, four since N29, six since N30, seven since N31, nine since N32; not accepted, since they answer a
 few of the questions the service can, and none edits.
 
 ### 26. Package and build tooling — PARTIAL
@@ -1827,9 +1866,9 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **549** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction), **361** of them with a verified killer and all
-of them owned by one of nine focused profiles;
+**Evidence** · `xtask/mutations/mutations.toml` holds **568** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it), **380** of them with a verified killer and all
+of them owned by one of eleven focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -2429,6 +2468,24 @@ contained at P1, one at a time, with no host build running: **24 of 24** (two en
 killers each). **Campaign `d56b0589bbcf96b2`, targeted, P1, one session, 984 s:** the seven, the six
 earlier entries in the test runner the seam touched, and no-diagnostics-is-success. **14 of 14
 caught at tier 1**; no survivor, crash, timeout, unusable or uninjected entry, no runner error.
+
+*N32 (2026-09-29) added seventeen, and N32-H two for the harness,* on the frozen final source;
+one N27 entry was re-pointed at the line its rule moved to. The seventeen attack N32's laws: an
+anchor ignored, a line number as an id, a duplicate id accepted, an unknown id answered with the
+nearest, fences never opened, a parent carrying its children, the goals classified as evidence
+and the roadmap as normative, a production's text normalised, a broken link ignored, a corpus
+state without the text or with the checkout's absolute path, a section digest without the body,
+a stale state answered, the MCP section tool taking any argument, sending a section twice, or
+keeping the first. The two guard the warm session: a killer that passed on its mutant counted
+verified, and a live supervisor's container reaped. **One warm session, campaign
+`81c571e1e7d95767`, targeted, P1, 1,469 s:** those nineteen and the twelve MCP entries of
+N27–N31 in the server N32 extended — **31 of 31 caught at tier 1**; no survivor, crash, timeout,
+unusable or uninjected entry, no runner error — and, around each mutant's one injection, **every
+declared killer verified, 34 of 34**: pristine passes, mutant fails, restored passes. The
+verifications an earlier harness had finished for N32 before it was replaced are not counted.
+A `docs` profile and a `harness` profile joined the nine, and the `documentation` suite the `cli`
+profile. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run
+and are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

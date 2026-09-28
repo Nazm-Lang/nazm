@@ -370,9 +370,57 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N32, in dependency order
+
+No item is chosen here; N32 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Semantic or full-text documentation search (the rest of G78) | stable sections ✓ | ids are exact by design; a search is its own contract |
+| Fine-grained normative rule ids and a rule graph (G79) | section anchors ✓ | ids stop at sections; rule-level identity is a spec-wide decision |
+| Whole-spec deduplication, contradiction detection (G79) | a rule graph | no rule graph exists |
+| Documentation history and version-change retrieval | a retention contract | nothing is kept between requests, and nothing reads Git |
+| Documentation outside a source checkout | a packaging decision | the corpus is read from a repository's `docs/` |
+| Progressive test-detail retrieval | test summaries ✓ | unchanged since N31 |
+| Typed diagnostic facts (expected, actual, entity) | the checker recording them | unchanged since N30 |
+| Patch application, a transactional write | patch plans ✓ | its own safety milestone |
+| Rename of exported definitions | rename ✓, a project/importer boundary | unchanged since N18 |
+| Effect and capability context | the language owning effects and capabilities | both are MISSING as language features |
+| Incremental reparse | a lossless CST ✓ | still no evidence that forces it |
+
+### N32 — Machine-addressable documentation and selective retrieval v1 — **complete, 2026-09-28**
+
+The first executable step toward G78, and a narrow one toward G79. `nazm docs --index` lists Nazm's
+own documentation — fourteen canonical documents, each with its authority — as sections with
+stable ids, titles, parents and digests and no body; `nazm docs --section ID` returns one
+section's own text byte for byte. Ids come from an explicit anchor, the document's own numbering,
+or the heading path, never from a line or a hash; a state binds a request to the corpus an index
+described. A goal is never evidence and a plan never a rule: each section carries its document's
+authority. `nazm-mcp` adds `nazm.docs_index` and `nazm.docs_section`, by id and never by path.
+Compiler semantics and every existing schema are unchanged: `SEMANTIC_EPOCH` 7,
+`nazm.interface/5`; two new machine schemas; `spec.md` gained forty-three anchor comments and no
+other change.
+
+| Settled | Where |
+| --- | --- |
+| the corpus, its sections, ids, authorities and digests | `crates/nazm-docs/`, `architecture.md` §7.34 |
+| `nazm docs` | `crates/nazm-cli/src/docs.rs`, `schema/nazm.docs-index-1.json`, `schema/nazm.docs-section-1.json` |
+| `nazm-mcp`: `nazm.docs_index`, `nazm.docs_section` | `crates/nazm-mcp/src/main.rs`, `docs/mcp.md` |
+| the corpus gate | `cargo xtask check-corpus` |
+| what it costs | `performance.md` |
+
+Mutation evidence: 17 new mutations and one re-pointed; the harness that verifies them was
+rebuilt first (N32-H: one warm session per gate, `runbook.md`, *The warm-worker law*) and gained
+two of its own. One session verified all 34 declared killers of the 19 new entries and of the 12
+MCP entries N32's server changes touch, around the one injection each verdict came from, and
+decided all 31 — caught at tier 1 (`capability-matrix.md` §30). The whole MILESTONE gate took
+40.1 minutes (`performance.md`).
+
+**N33 has not started.**
+
 ### After N31, in dependency order
 
-No item is chosen here; N31 left these standing.
+No item is chosen here; N31 left these standing. *Superseded by "After N32" above.*
 
 | | Depends on | Why not before |
 | --- | --- | --- |
@@ -422,8 +470,6 @@ Closure correction: every public N31 outcome variant — `could_not_build`, `cou
 `toolchain_failed` among them — has at least one regression test that executes its production
 branch; the test runner's driver is a test seam, `NAZM_TEST_DRIVER`; seven more mutations.
 24 killers verified on the final source; a targeted campaign of 14, all caught at tier 1.
-
-**N32 has not started.**
 
 ### After N30, in dependency order
 
