@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.test-summary-1.json",
+  "title": "nazm.test-summary/1",
+  "description": "One `nazm test` run, compactly, from `nazm test --summary-json`: its outcome and exit status, counts from each case's own verdict, and every case that did not pass with how each leg ended — no passed names, no program output. An additive view, not a replacement: `nazm test --json` still gives every case in full as `nazm.test/1`. No timing, timestamp or host path beyond each case's file as named is included.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "exit_code", "native", "counts", "failures"],
+  "properties": {
+    "schema": { "const": "nazm.test-summary/1" },
+    "status": {
+      "enum": ["passed", "failed", "no_cases", "unreadable", "toolchain_failed"],
+      "description": "`passed`: every case passed. `failed`: at least one did not. `no_cases`: no `.nz` beside a `.expected` was found — refused, as the command refuses it. `unreadable`: a named path is not a file or a directory. `toolchain_failed`: the runner could not find itself or make its working directory."
+    },
+    "exit_code": { "type": "integer", "minimum": 0, "description": "The process exit status, exactly as without `--summary-json`." },
+    "native": { "type": "boolean", "description": "Whether each case also ran as a compiled executable; false with `--interpret-only`." },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cases", "passed", "failed", "without_expectation"],
+      "properties": {
+        "cases": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0, "description": "Cases whose own verdict is passed — counted, never `cases` minus `failed`." },
+        "failed": { "type": "integer", "minimum": 0 },
+        "without_expectation": { "type": "integer", "minimum": 0, "description": "`.nz` files with no `.expected` beside them: not cases, counted rather than listed." }
+      }
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "file", "interpreted", "native"],
+        "properties": {
+          "name": { "type": "string", "description": "As `nazm.test/1` names the case: the file's stem, which two directories may share." },
+          "file": { "type": "string", "description": "As `nazm.test/1` gives it: the path as named on the command line or found in a directory. The case's identity." },
+          "interpreted": { "$ref": "#/$defs/leg" },
+          "native": { "$ref": "#/$defs/leg" }
+        }
+      },
+      "description": "Every case that did not pass, in the order the cases ran — the order named and, within a directory, sorted — never completion order. Not truncated."
+    }
+  },
+  "$defs": {
+    "leg": {
+      "enum": ["matched", "mismatched", "not_run", "build_failed", "could_not_build", "could_not_run"],
+      "description": "How one leg ended, from what the runner did — never from output text. `mismatched`: it ran and its output was not the recorded one, which includes a runtime error or a diagnostic in that output; no diagnostic is inferred from it. `not_run`: `--interpret-only`. `build_failed`: `nazm build` ran and did not succeed. `could_not_build`, `could_not_run`: the process could not be started."
+    }
+  }
+}
