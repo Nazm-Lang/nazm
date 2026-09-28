@@ -1,8 +1,8 @@
-//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27, N28, N29.
+//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27–N30.
 //!
 //! # What it is
 //!
-//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves four tools,
+//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves six tools,
 //! each result exactly the object the matching command prints with `--json`:
 //!
 //! | Tool | Result | Command |
@@ -11,6 +11,8 @@
 //! | `nazm.semantic_snapshot` | `nazm.snapshot/1` of the root's compilation (N28) | `nazm snapshot` |
 //! | `nazm.semantic_delta` | `nazm.delta/1` against a baseline snapshot the client supplies (N28) | `nazm delta` |
 //! | `nazm.semantic_patch` | `nazm.patch/1`, a planned rename or fix (N29) | `nazm patch` |
+//! | `nazm.diagnostics` | `nazm.diagnostic-index/1`, every current diagnostic compactly (N30) | `nazm diagnostics` |
+//! | `nazm.diagnostic_detail` | `nazm.diagnostic-detail/1`, one of them in full (N30) | `nazm diagnostics --detail` |
 //!
 //! Each is carried once, as the result's structured content, with no second copy as text.
 //! It creates no semantic fact of its own: every answer is the compiler's, derived for the
@@ -51,7 +53,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use nazm_service::{ContextResult, DeltaResult, LanguageService, PatchResult, SnapshotResult};
+use nazm_service::{
+    ContextResult, DeltaResult, DetailResult, IndexResult, LanguageService, PatchResult,
+    SnapshotResult,
+};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, JsonObject,
     ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -83,6 +88,30 @@ const PATCH: &str = "nazm.semantic_patch";
 
 /// `nazm.patch/1`, exactly as the repository publishes it.
 const PATCH_SCHEMA: &str = include_str!("../../../schema/nazm.patch-1.json");
+
+/// The diagnostic index tool (N30).
+const DIAGNOSTICS: &str = "nazm.diagnostics";
+
+/// `nazm.diagnostic-index/1`, exactly as the repository publishes it.
+const INDEX_SCHEMA: &str = include_str!("../../../schema/nazm.diagnostic-index-1.json");
+
+/// The diagnostic detail tool (N30).
+const DETAIL: &str = "nazm.diagnostic_detail";
+
+/// `nazm.diagnostic-detail/1`, exactly as the repository publishes it.
+const DETAIL_SCHEMA: &str = include_str!("../../../schema/nazm.diagnostic-detail-1.json");
+
+/// What `nazm.diagnostic_detail` is asked: one diagnostic, by the id and the state an index
+/// gave it. Typed, so its input schema is the SDK's derivation of it.
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct DetailRequest {
+    /// A diagnostic's `id`, from `nazm.diagnostics`.
+    id: String,
+    /// That index's `state.source`: the sources the id is of.
+    state: String,
+}
 
 /// What `nazm.semantic_patch` is asked, tagged by `operation`: typed, so its input schema is
 /// the SDK's derivation of it and an argument it does not define is refused.
@@ -184,6 +213,8 @@ impl Server {
             Self::snapshot_tool(),
             Self::delta_tool(),
             Self::patch_tool(),
+            Self::diagnostics_tool(),
+            Self::detail_tool(),
         ]
     }
 
@@ -277,6 +308,37 @@ impl Server {
         )
     }
 
+    /// The index tool: no arguments, `nazm.diagnostic-index/1` as its output schema.
+    fn diagnostics_tool() -> Tool {
+        let input: JsonObject = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .unwrap_or_default();
+        Self::read_only(
+            DIAGNOSTICS,
+            "Every current diagnostic of the server's root compilation, from disk now, compactly (nazm.diagnostic-index/1): each one's id, code, severity, file and byte range, owning definition and fix counts — no message or help text. Ask nazm.diagnostic_detail for one in full. Syntax errors included.",
+            input,
+            INDEX_SCHEMA,
+        )
+    }
+
+    /// The detail tool: an id and a state in, `nazm.diagnostic-detail/1` as its output schema.
+    fn detail_tool() -> Tool {
+        let mut input =
+            (*rmcp::handler::server::common::schema_for_type::<DetailRequest>()).clone();
+        input
+            .entry("type")
+            .or_insert_with(|| serde_json::Value::from("object"));
+        Self::read_only(
+            DETAIL,
+            "One current diagnostic in full (nazm.diagnostic-detail/1), by the id and state.source a nazm.diagnostics index gave it: the compiler's diagnostic exactly as nazm.diagnostic/1 publishes it, its places in their files, its owner, and for each fix the nazm.semantic_patch request that plans it where one exists. Refused as stale_state if the sources have changed since the index.",
+            input,
+            DETAIL_SCHEMA,
+        )
+    }
+
     fn read_only(
         name: &'static str,
         description: &'static str,
@@ -357,8 +419,9 @@ impl ServerHandler for Server {
                  per recorded section; keep it. nazm.semantic_delta: pass a kept snapshot as \
                  baseline to learn what was added, removed or changed since. \
                  nazm.semantic_patch: plan a rename or a diagnostic fix as exact edits bound to \
-                 the current source; it never applies one. The server keeps nothing between \
-                 calls.",
+                 the current source; it never applies one. nazm.diagnostics: every current \
+                 diagnostic compactly; nazm.diagnostic_detail: one in full, by its id and the \
+                 index's state. The server keeps nothing between calls.",
             )
     }
 
@@ -430,6 +493,8 @@ impl ServerHandler for Server {
             SNAPSHOT => return self.snapshot(&args).await,
             DELTA => return self.delta(args).await,
             PATCH => return self.patch(args).await,
+            DIAGNOSTICS => return self.diagnostics(&args).await,
+            DETAIL => return self.detail(args).await,
             _ => return Err(ErrorData::invalid_params("tool not found", None)),
         }
         let file = args
@@ -480,6 +545,44 @@ impl Server {
         let value = serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(once(value, matches!(result, SnapshotResult::Available(_))))
+    }
+
+    /// `nazm.diagnostics`: no arguments.
+    async fn diagnostics(&self, args: &JsonObject) -> Result<CallToolResponse, ErrorData> {
+        if let Some(extra) = args.keys().next() {
+            return Err(ErrorData::invalid_params(
+                format!("unexpected argument `{extra}`"),
+                None,
+            ));
+        }
+        let server = self.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            server.analysed(|service, root| service.diagnostic_index(root, 0))
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
+        .map_err(|e| ErrorData::internal_error(e, None))?;
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(once(value, matches!(result, IndexResult::Available(_))))
+    }
+
+    /// `nazm.diagnostic_detail`: an id and the state it is of.
+    async fn detail(&self, args: JsonObject) -> Result<CallToolResponse, ErrorData> {
+        let request: DetailRequest = serde_json::from_value(serde_json::Value::Object(args))
+            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        let server = self.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            server.analysed(move |service, root| {
+                service.diagnostic_detail(root, 0, &request.id, &request.state)
+            })
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
+        .map_err(|e| ErrorData::internal_error(e, None))?;
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(once(value, matches!(result, DetailResult::Available(_))))
     }
 
     /// `nazm.semantic_patch`: a tagged operation, planned against the disk as it is now.
@@ -590,6 +693,8 @@ mod tests {
             (super::SNAPSHOT, super::SNAPSHOT_SCHEMA),
             (super::DELTA, super::DELTA_SCHEMA),
             (super::PATCH, super::PATCH_SCHEMA),
+            (super::DIAGNOSTICS, super::INDEX_SCHEMA),
+            (super::DETAIL, super::DETAIL_SCHEMA),
         ]) {
             let published: serde_json::Value = serde_json::from_str(schema).unwrap();
             assert_eq!(
