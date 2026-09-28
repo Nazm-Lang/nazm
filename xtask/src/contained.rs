@@ -239,6 +239,65 @@ fn drain<R: Read + Send + 'static>(mut r: R, cap: usize) -> mpsc::Receiver<(Vec<
     rx
 }
 
+/// Containers a supervisor named for itself and then left behind by dying: `nazm-<name>-<pid>`
+/// whose `pid` is no longer a process. Exactly those — a name of any other shape, and one
+/// whose supervisor is alive, is not this runner's to remove. N32-H.
+///
+/// Every contained run starts by removing them. The mounted checkout is read-only, so a
+/// stranded container never holds the host's tree mutated; what it holds is a disposable
+/// copy, a CPU and memory reservation, and a deadline still running.
+pub(crate) fn stale(names: &[String], alive: impl Fn(u32) -> bool) -> Vec<String> {
+    names
+        .iter()
+        .filter(|n| {
+            let Some(rest) = n.strip_prefix("nazm-") else {
+                return false;
+            };
+            let Some((workload, pid)) = rest.rsplit_once('-') else {
+                return false;
+            };
+            let named = !workload.is_empty()
+                && workload.chars().all(|c| c.is_ascii_lowercase() || c == '-');
+            let pid = pid.parse::<u32>().ok().filter(|p| pid == p.to_string());
+            named && pid.is_some_and(|p| p != std::process::id() && !alive(p))
+        })
+        .cloned()
+        .collect()
+}
+
+/// Remove the containers [`stale`] names, by exact name.
+fn reap_stale() -> Vec<String> {
+    let names: Vec<String> = Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            "name=^nazm-",
+            "--format",
+            "{{.Names}}",
+        ])
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let alive = |pid: u32| {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    let gone = stale(&names, alive);
+    for n in &gone {
+        let _ = Command::new("docker").args(["rm", "-f", n]).output();
+    }
+    gone
+}
+
 /// Runs `argv` inside the bounded environment with `repo` mounted read-only at `/src`.
 pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report {
     let empty = Report {
@@ -255,6 +314,9 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
             outcome: Outcome::Unavailable(why),
             ..empty
         };
+    }
+    for n in reap_stale() {
+        eprintln!("contained: removed {n}, left behind by a supervisor that is no longer running");
     }
     if !image_present() {
         return Report {
@@ -738,6 +800,30 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+
+    #[test]
+    fn only_a_dead_supervisors_own_containers_are_stale() {
+        let names: Vec<String> = [
+            "nazm-mutate-100",
+            "nazm-tests-200",
+            "nazm-mutate-300",
+            "nazm-run-0100",
+            "nazm-mutate-",
+            "nazm--400",
+            "nazm-Mutate-500",
+            "other-mutate-600",
+            "nazm-mutate-700x",
+            "postgres",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        // 100 and 200 are dead; 300 is alive; the rest are not this runner's shape.
+        let alive = |p: u32| p == 300;
+        assert_eq!(stale(&names, alive), ["nazm-mutate-100", "nazm-tests-200"]);
+        // This supervisor's own container is never stale, whatever liveness says.
+        let own = vec![format!("nazm-mutate-{}", std::process::id())];
+        assert!(stale(&own, |_| false).is_empty());
+    }
     use std::path::PathBuf;
 
     /// Small fixture image: anything with a shell. The export path never runs a workload,
