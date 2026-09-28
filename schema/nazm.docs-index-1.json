@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.docs-index-1.json",
+  "title": "nazm.docs-index/1",
+  "description": "The compact index of Nazm's own documentation, from `nazm docs --index --json` and the `nazm-mcp` tool `nazm.docs_index`: every document of the corpus with its authority, and every section's stable id, title, parent and digest — no body. The index is not a second source of documentation truth: the documents are, and `nazm.docs-section/1` returns a section's exact text. `unavailable` when the corpus cannot be sectioned, with every problem; `not_found` when a named document is not in the corpus.",
+  "type": "object",
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": { "const": "nazm.docs-index/1" }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/available" },
+    { "$ref": "#/$defs/not_found" },
+    { "$ref": "#/$defs/unavailable" }
+  ],
+  "$defs": {
+    "available": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "status", "state", "corpus", "documents"],
+      "properties": {
+        "schema": { "const": "nazm.docs-index/1" },
+        "status": { "const": "available" },
+        "state": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "BLAKE3 over a domain tag and, in corpus order, each document's id, repository-relative path and exact bytes. Pass it with a section request to bind it to this corpus." },
+        "corpus": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["documents", "sections", "bytes"],
+          "properties": {
+            "documents": { "type": "integer", "minimum": 0 },
+            "sections": { "type": "integer", "minimum": 0 },
+            "bytes": { "type": "integer", "minimum": 0 }
+          },
+          "description": "The whole corpus, whichever documents are listed."
+        },
+        "documents": { "type": "array", "items": { "$ref": "#/$defs/document" }, "description": "In corpus order." }
+      }
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "authority", "format", "bytes", "digest", "sections"],
+      "properties": {
+        "id": { "type": "string" },
+        "path": { "type": "string", "description": "From the repository root." },
+        "authority": { "$ref": "#/$defs/authority" },
+        "format": { "enum": ["markdown", "ebnf"] },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "sections": { "type": "array", "items": { "$ref": "#/$defs/section" }, "description": "In source order." }
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "title", "level", "parent", "digest"],
+      "properties": {
+        "id": { "type": "string", "description": "`document` for a document's root section, `document:local` otherwise: an explicit anchor, the heading's own label, or its text under its parent's id. Never a line, offset, ordinal or hash." },
+        "kind": { "enum": ["document", "heading", "production"] },
+        "title": { "type": ["string", "null"], "description": "The heading's text exactly, or a production's name; null for the grammar's header." },
+        "level": { "type": "integer", "minimum": 1 },
+        "parent": { "type": ["string", "null"] },
+        "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "BLAKE3 over a domain tag, the document, the id and the section's exact body." }
+      }
+    },
+    "authority": {
+      "enum": ["goal", "law", "architecture", "normative", "grammar", "guide", "interface", "evidence", "planning", "research", "operational"],
+      "description": "What the document is an authority for, as `docs/master-architecture.md` §5 assigns it. A `goal` is aspiration and never evidence of what exists; `planning` is never a rule of the language; only `normative` and `grammar` say what a program means."
+    },
+    "not_found": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "status", "state", "document"],
+      "properties": {
+        "schema": { "const": "nazm.docs-index/1" },
+        "status": { "const": "not_found" },
+        "state": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "document": { "type": "string" }
+      }
+    },
+    "unavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "status", "problems"],
+      "properties": {
+        "schema": { "const": "nazm.docs-index/1" },
+        "status": { "const": "unavailable" },
+        "problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } }
+      }
+    },
+    "problem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "document", "line", "value"],
+      "properties": {
+        "kind": {
+          "enum": ["missing_document", "unreadable_document", "no_title", "malformed_anchor", "misplaced_anchor", "unsupported_heading", "unclosed_fence", "unclosed_comment", "empty_identity", "duplicate_id", "broken_link", "generated_region", "broken_generated_from", "grammar_syntax", "detached_comment", "undefined_reference"]
+        },
+        "document": { "type": "string" },
+        "line": { "type": ["integer", "null"], "minimum": 1 },
+        "value": { "type": ["string", "null"], "description": "The offending anchor, id, link or name." }
+      }
+    }
+  }
+}
