@@ -812,3 +812,52 @@ fn a_diagnostic_index_and_detail_are_their_schemas_and_detail_is_nazm_check_s_di
     check_against("nazm.diagnostic-detail-1.json", &details);
     check_against("nazm.diagnostic-1.json", &published);
 }
+
+#[test]
+fn command_and_test_summaries_are_their_schemas() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let d = dir.path();
+    std::fs::write(d.join("ok.nz"), "fn main() -> Int { 1 }\n").unwrap();
+    std::fs::write(d.join("typed.nz"), "fn helper() -> Int { 1 + true }\n").unwrap();
+    std::fs::write(d.join("syntax.nz"), "fn main() -> Int { 1 +  }\n").unwrap();
+    std::fs::create_dir_all(d.join("t")).unwrap();
+    std::fs::write(d.join("t/a.nz"), "fn main() -> Int { 1 }\n").unwrap();
+    std::fs::write(d.join("t/a.expected"), "1\n").unwrap();
+    std::fs::write(d.join("t/b.nz"), "fn main() -> Int { 2 }\n").unwrap();
+    std::fs::write(d.join("t/b.expected"), "1\n").unwrap();
+    std::fs::create_dir_all(d.join("none")).unwrap();
+    let run = |args: &[&str]| -> Value {
+        let out = Command::new(NAZM)
+            .args(args)
+            .current_dir(d)
+            .output()
+            .expect("run nazm");
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(stdout.lines().count(), 1, "one line: {stdout}");
+        serde_json::from_str(&stdout).unwrap()
+    };
+    let commands = vec![
+        run(&["check", "--summary-json", "ok.nz"]),
+        run(&["check", "--summary-json", "typed.nz"]),
+        run(&["check", "--summary-json", "syntax.nz"]),
+        run(&["check", "--summary-json", "missing.nz"]),
+        run(&["build", "--summary-json", "ok.nz", "-o", "ok"]),
+        run(&["build", "--summary-json", "typed.nz", "-o", "typed"]),
+        run(&["build", "--summary-json", "ok.nz", "-o", "ok.nz"]),
+    ];
+    let statuses: Vec<&str> = commands
+        .iter()
+        .map(|c| c["status"].as_str().unwrap())
+        .collect();
+    for s in ["success", "rejected", "unreadable", "refused"] {
+        assert!(statuses.contains(&s), "{s} in {statuses:?}");
+    }
+    check_against("nazm.command-summary-1.json", &commands);
+    let tests = vec![
+        run(&["test", "--summary-json", "t"]),
+        run(&["test", "--summary-json", "--interpret-only", "t"]),
+        run(&["test", "--summary-json", "none"]),
+        run(&["test", "--summary-json", "nowhere"]),
+    ];
+    check_against("nazm.test-summary-1.json", &tests);
+}

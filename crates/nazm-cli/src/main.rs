@@ -45,6 +45,7 @@ mod interface;
 mod lsp;
 mod patch;
 mod snapshot;
+mod summary;
 // Moved to `nazm-service` in N16, so `nazm lsp` loads exactly as every command does.
 use nazm_service::{load, root};
 mod test;
@@ -204,6 +205,11 @@ enum Command {
         /// is a compiler whose output has to be filtered.
         #[arg(long)]
         cache_report: bool,
+        /// One `nazm.command-summary/1` object on stdout, and nothing else on either stream:
+        /// the outcome, and a reference to each diagnostic — no prose. The exit status is
+        /// unchanged. `--json` still gives every diagnostic in full.
+        #[arg(long, conflicts_with_all = ["json", "cache_report"])]
+        summary_json: bool,
     },
     /// Apply the repairs the compiler already knows about.
     ///
@@ -365,6 +371,11 @@ enum Command {
         /// Skip the native leg. For a machine with no `clang`.
         #[arg(long)]
         interpret_only: bool,
+        /// One `nazm.test-summary/1` object on stdout, and nothing else on either stream:
+        /// counts, and every case that did not pass — no passed names, no output. The exit
+        /// status is unchanged. `--json` still gives every case in full.
+        #[arg(long, conflicts_with = "json")]
+        summary_json: bool,
     },
     /// Write a module's published interface: what it offers, durably.
     ///
@@ -426,6 +437,11 @@ enum Command {
         /// reused.
         #[arg(long)]
         build_report: bool,
+        /// One `nazm.command-summary/1` object on stdout, and nothing else on either stream:
+        /// the outcome, and a reference to each diagnostic — no prose. The exit status is
+        /// unchanged. `--json` still gives every diagnostic in full.
+        #[arg(long, conflicts_with_all = ["json", "build_report"])]
+        summary_json: bool,
     },
 }
 
@@ -463,6 +479,7 @@ fn main() -> ExitCode {
         opt_level,
         no_cache,
         build_report,
+        summary_json,
     } = cli.command
     {
         return build::run(
@@ -473,6 +490,7 @@ fn main() -> ExitCode {
             opt_level,
             !no_cache,
             build_report,
+            summary_json,
         );
     }
     match cli.command {
@@ -482,7 +500,17 @@ fn main() -> ExitCode {
             source_root,
             no_cache,
             cache_report,
-        } => return checking::run(&file, json, source_root.as_deref(), !no_cache, cache_report),
+            summary_json,
+        } => {
+            return checking::run(
+                &file,
+                json,
+                source_root.as_deref(),
+                !no_cache,
+                cache_report,
+                summary_json,
+            )
+        }
         Command::Fix { file, apply, json } => return fix::run(&file, apply, json),
         Command::Interface {
             file,
@@ -562,7 +590,8 @@ fn main() -> ExitCode {
             paths,
             json,
             interpret_only,
-        } => return test::run(&paths, json, interpret_only),
+            summary_json,
+        } => return test::run(&paths, json, interpret_only, summary_json),
         _ => {}
     }
     let (path, json, limits) = match cli.command {
