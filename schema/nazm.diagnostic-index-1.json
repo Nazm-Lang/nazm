@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.diagnostic-index-1.json",
+  "title": "nazm.diagnostic-index/1",
+  "description": "Every current diagnostic of one root compilation, compactly, from `nazm diagnostics --json` and the `nazm-mcp` tool `nazm.diagnostics`: each diagnostic's id, code, severity, place, owning definition and fix counts, read from structured fields the compiler set. No message, help, label text, fix description or precondition is included, and nothing is inferred from them: `nazm diagnostics --detail` returns one diagnostic in full. `nazm.diagnostic/1` is unchanged. Paths are relative to the source root and offsets are UTF-8 bytes into the named file; nothing session-local is included, so the same sources give the same bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": { "const": "nazm.diagnostic-index/1" },
+    "status": { "enum": ["available", "unavailable"] },
+    "reason": {
+      "enum": ["not_current", "no_durable_root", "stale_state", "no_such_diagnostic"],
+      "description": "Why there is no index. Present only when `status` is `unavailable`."
+    },
+    "root": { "$ref": "#/$defs/root" },
+    "state": { "$ref": "#/$defs/state" },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "error", "with_fixes", "automatic_fixes", "needs_review_fixes"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0, "description": "Diagnostics of severity `error`, the one severity the compiler has." },
+        "with_fixes": { "type": "integer", "minimum": 0, "description": "Diagnostics carrying at least one compiler fix." },
+        "automatic_fixes": { "type": "integer", "minimum": 0 },
+        "needs_review_fixes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/summary" },
+      "description": "Ordered by primary file, start, end and code, then by secondary and fix places, then by the compiler's own order. Each id once."
+    }
+  },
+  "$defs": {
+    "root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "compiler"],
+      "properties": {
+        "module": { "type": "string", "description": "The root module's durable key." },
+        "compiler": { "type": "string" }
+      }
+    },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "snapshot"],
+      "properties": {
+        "source": { "$ref": "#/$defs/digest", "description": "BLAKE3 over the root's identity and every loaded source file's root-relative path and exact bytes, in load order. Always present; a detail request names it." },
+        "snapshot": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "BLAKE3 of the root's `nazm.snapshot/1` (N28); null where the compilation has none — after syntax recovery or a missing module." }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "start", "end"],
+      "properties": {
+        "file": { "type": "string" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "kind", "name"],
+      "properties": {
+        "identity": { "type": "string", "description": "The durable definition key, `module::kind name`." },
+        "kind": { "enum": ["function", "record", "enum"] },
+        "name": { "type": "string" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "code", "severity", "primary", "owner", "fixes"],
+      "properties": {
+        "id": { "type": "string", "description": "`code@file:start-end#n`: `n` counts earlier entries with the same code and primary place. Meaningful only within `state.source`." },
+        "code": { "type": "string", "pattern": "^N[0-9]{4}$" },
+        "severity": { "enum": ["error"] },
+        "primary": { "type": ["object", "null"], "$ref": "#/$defs/span", "description": "Null for a diagnostic with no place." },
+        "owner": { "type": ["object", "null"], "$ref": "#/$defs/owner", "description": "The durable function, record or enum whose declaration contains the primary span, in a compilation that needed no syntax recovery; null otherwise." },
+        "fixes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["total", "automatic", "needs_review"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "automatic": { "type": "integer", "minimum": 0 },
+            "needs_review": { "type": "integer", "minimum": 0 }
+          },
+          "description": "The compiler fixes it carries, by applicability. Not semantic patches: detail says which N29 can plan."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.diagnostic-detail-1.json",
+  "title": "nazm.diagnostic-detail/1",
+  "description": "One current diagnostic in full, from `nazm diagnostics --detail ID --state DIGEST --json` and the `nazm-mcp` tool `nazm.diagnostic_detail`: the diagnostic exactly as `nazm.diagnostic/1` publishes it — the compiler's prose, unchanged — with its places in their own files, its owning definition, and for each compiler fix the `nazm.semantic_patch` request that plans it where N29 can. Refused as `stale_state` unless the sources are exactly the index's state, so an id never selects another diagnostic.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": { "const": "nazm.diagnostic-detail/1" },
+    "status": { "enum": ["available", "unavailable"] },
+    "reason": {
+      "enum": ["not_current", "no_durable_root", "stale_state", "no_such_diagnostic"],
+      "description": "`stale_state`: the sources are not the state the id came from. `no_such_diagnostic`: no current diagnostic has that id. Present only when `status` is `unavailable`."
+    },
+    "root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "compiler"],
+      "properties": {
+        "module": { "type": "string" },
+        "compiler": { "type": "string" }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "snapshot"],
+      "properties": {
+        "source": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "snapshot": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "id": { "type": "string" },
+    "diagnostic": {
+      "type": "object",
+      "description": "The diagnostic as `nazm.diagnostic/1` publishes it, less its `schema` field: that schema defines every field, and its spans are offsets into the concatenation of the compilation's files."
+    },
+    "locations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary", "secondary", "fixes"],
+      "properties": {
+        "primary": { "type": ["object", "null"], "$ref": "#/$defs/span" },
+        "secondary": { "type": "array", "items": { "type": ["object", "null"], "$ref": "#/$defs/span" } },
+        "fixes": { "type": "array", "items": { "type": ["object", "null"], "$ref": "#/$defs/span" } }
+      },
+      "description": "`diagnostic`'s spans, each in its own root-relative file with UTF-8 byte offsets, in the same order; null for a span with no place."
+    },
+    "owner": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["identity", "kind", "name"],
+      "properties": {
+        "identity": { "type": "string" },
+        "kind": { "enum": ["function", "record", "enum"] },
+        "name": { "type": "string" }
+      }
+    },
+    "facts": { "const": "unavailable", "description": "Typed expected/actual facts: the compiler records none for any diagnostic, and none is read from prose." },
+    "compiler_fixes": { "type": "integer", "minimum": 0, "description": "How many fixes the compiler attached." },
+    "semantic_patches": { "type": "integer", "minimum": 0, "description": "How many of them N29 can plan — never more than `compiler_fixes`, and none for a compilation without a snapshot, such as any with a syntax error." },
+    "fixes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fix", "applicability", "semantic_patch"],
+        "properties": {
+          "fix": { "type": "integer", "minimum": 0 },
+          "applicability": { "enum": ["automatic", "needs_review"] },
+          "semantic_patch": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["file", "byte_offset", "fix"],
+            "properties": {
+              "file": { "type": "string" },
+              "byte_offset": { "type": "integer", "minimum": 0 },
+              "fix": { "type": "integer", "minimum": 0 }
+            },
+            "description": "The `diagnostic_fix` request that plans this fix with `nazm.semantic_patch` / `nazm patch fix` — a selector, not a plan. Null where N29 cannot plan it."
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "start", "end"],
+      "properties": {
+        "file": { "type": "string" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
