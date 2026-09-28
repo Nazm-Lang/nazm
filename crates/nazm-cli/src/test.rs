@@ -38,6 +38,10 @@ struct Case {
     /// What the compiled executable produced. `None` when the native leg was not run.
     native: Option<Outcome>,
     passed: bool,
+    /// How each leg ended, as the runner observed it — structure `--summary-json` reports
+    /// (N31) and `nazm.test/1` does not carry.
+    #[serde(skip)]
+    legs: (Leg, Leg),
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -46,10 +50,74 @@ struct Outcome {
     matched: bool,
 }
 
-pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool) -> ExitCode {
+/// How one leg of a case ended: read from what the runner did — which process it started,
+/// whether it could, and whether that process succeeded — never from any output's text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Leg {
+    /// Its output was the recorded output.
+    Matched,
+    /// It ran, and its output was not the recorded output.
+    Mismatched,
+    /// Not asked for: `--interpret-only`.
+    NotRun,
+    /// `nazm build` ran and did not succeed, so there was no executable to run.
+    BuildFailed,
+    /// `nazm build` could not be started.
+    CouldNotBuild,
+    /// The program could not be started.
+    CouldNotRun,
+}
+
+/// The version `nazm test --summary-json` carries (N31).
+const SUMMARY_SCHEMA: &str = "nazm.test-summary/1";
+
+/// One run, compactly: counts, and every case that did not pass.
+#[derive(Debug, serde::Serialize)]
+struct Summary<'a> {
+    schema: &'static str,
+    /// `passed`, `failed`, `no_cases`, `unreadable` or `toolchain_failed`.
+    status: &'static str,
+    exit_code: u8,
+    /// Whether each case also ran as a compiled executable.
+    native: bool,
+    counts: Counts,
+    /// In the order the cases ran, which is the order they were named and, within a
+    /// directory, sorted: never completion order.
+    failures: Vec<Failure<'a>>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct Counts {
+    cases: usize,
+    passed: usize,
+    failed: usize,
+    /// `.nz` files with no `.expected` beside them: not cases, and counted.
+    without_expectation: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct Failure<'a> {
+    /// As `nazm.test/1` names the case.
+    name: &'a str,
+    file: &'a str,
+    interpreted: Leg,
+    native: Leg,
+}
+
+pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool, summary: bool) -> ExitCode {
+    // `--summary-json` (N31): at every exit below, the outcome as one `nazm.test-summary/1`
+    // on stdout, and nothing on stderr. The exit status is the same.
+    let summarized = |status, code: u8, results: &[Case], without: usize| {
+        print_summary(status, code, !interpret_only, results, without);
+        ExitCode::from(code)
+    };
     let nazm = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
+            if summary {
+                return summarized("toolchain_failed", exit::TOOLCHAIN_FAILED, &[], 0);
+            }
             eprintln!("nazm: cannot find this executable: {e}");
             return ExitCode::from(exit::TOOLCHAIN_FAILED);
         }
@@ -59,11 +127,27 @@ pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool) -> ExitCo
     let mut without_expectation = Vec::new();
     for path in paths {
         if let Err(e) = gather(path, &mut cases, &mut without_expectation) {
+            if summary {
+                return summarized(
+                    "unreadable",
+                    exit::NO_SUCH_FILE,
+                    &[],
+                    without_expectation.len(),
+                );
+            }
             eprintln!("nazm: {e}");
             return ExitCode::from(exit::NO_SUCH_FILE);
         }
     }
     if cases.is_empty() {
+        if summary {
+            return summarized(
+                "no_cases",
+                exit::NO_SUCH_FILE,
+                &[],
+                without_expectation.len(),
+            );
+        }
         eprintln!("nazm: no test cases. A case is `NAME.nz` beside `NAME.expected`.");
         return ExitCode::from(exit::NO_SUCH_FILE);
     }
@@ -71,6 +155,14 @@ pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool) -> ExitCo
     let dir = match tempdir() {
         Ok(d) => d,
         Err(e) => {
+            if summary {
+                return summarized(
+                    "toolchain_failed",
+                    exit::TOOLCHAIN_FAILED,
+                    &[],
+                    without_expectation.len(),
+                );
+            }
             eprintln!("nazm: {e}");
             return ExitCode::from(exit::TOOLCHAIN_FAILED);
         }
@@ -88,11 +180,60 @@ pub(crate) fn run(paths: &[PathBuf], json: bool, interpret_only: bool) -> ExitCo
     drop(std::fs::remove_dir_all(&dir));
 
     let failed = results.iter().filter(|c| !c.passed).count();
+    if summary {
+        return if failed == 0 {
+            summarized("passed", exit::OK, &results, without_expectation.len())
+        } else {
+            summarized(
+                "failed",
+                exit::CHECK_FAILED,
+                &results,
+                without_expectation.len(),
+            )
+        };
+    }
     report(&results, &without_expectation, failed, json);
     if failed == 0 {
         ExitCode::from(exit::OK)
     } else {
         ExitCode::from(exit::CHECK_FAILED)
+    }
+}
+
+/// One `nazm.test-summary/1`: counts from each case's own verdict, and every case that did
+/// not pass with how each of its legs ended. No passed name and no output.
+fn print_summary(
+    status: &'static str,
+    exit_code: u8,
+    native: bool,
+    results: &[Case],
+    without: usize,
+) {
+    let summary = Summary {
+        schema: SUMMARY_SCHEMA,
+        status,
+        exit_code,
+        native,
+        counts: Counts {
+            cases: results.len(),
+            passed: results.iter().filter(|c| c.passed).count(),
+            failed: results.iter().filter(|c| !c.passed).count(),
+            without_expectation: without,
+        },
+        failures: results
+            .iter()
+            .filter(|c| !c.passed)
+            .map(|c| Failure {
+                name: &c.name,
+                file: &c.file,
+                interpreted: c.legs.0,
+                native: c.legs.1,
+            })
+            .collect(),
+    };
+    match serde_json::to_string(&summary) {
+        Ok(line) => println!("{line}"),
+        Err(_) => println!("{{\"schema\":\"{SUMMARY_SCHEMA}\",\"error\":\"unserialisable\"}}"),
     }
 }
 
@@ -146,14 +287,23 @@ fn tempdir() -> Result<PathBuf, String> {
 /// Combined because a program's diagnostic goes to stderr and is as much of its
 /// behaviour as its value; trimmed because a trailing newline is a property of
 /// `printf`, not of the program.
-fn output_of(cmd: &mut Command) -> String {
+fn output_of(cmd: &mut Command) -> (String, bool) {
     match cmd.output() {
         Ok(out) => {
             let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
             text.push_str(&String::from_utf8_lossy(&out.stderr));
-            text.trim().to_owned()
+            (text.trim().to_owned(), true)
         }
-        Err(e) => format!("could not run: {e}"),
+        Err(e) => (format!("could not run: {e}"), false),
+    }
+}
+
+/// A leg's ending, from whether its process started and whether its output matched.
+const fn leg(ran: bool, matched: bool) -> Leg {
+    match (ran, matched) {
+        (false, _) => Leg::CouldNotRun,
+        (true, true) => Leg::Matched,
+        (true, false) => Leg::Mismatched,
     }
 }
 
@@ -167,11 +317,13 @@ fn one(
 ) -> Case {
     let want = expected.trim().to_owned();
 
-    let got = output_of(Command::new(nazm).arg("run").arg(file));
+    let (got, ran) = output_of(Command::new(nazm).arg("run").arg(file));
     let interpreted = Outcome {
         matched: got == want,
         output: got,
     };
+    let interpreted_leg = leg(ran, interpreted.matched);
+    let mut native_leg = Leg::NotRun;
 
     let native = if interpret_only {
         None
@@ -185,23 +337,31 @@ fn one(
             .output();
         match built {
             Ok(out) if out.status.success() => {
-                let got = output_of(&mut Command::new(&exe));
+                let (got, ran) = output_of(&mut Command::new(&exe));
+                let matched = got == want;
+                native_leg = leg(ran, matched);
                 Some(Outcome {
-                    matched: got == want,
+                    matched,
                     output: got,
                 })
             }
-            Ok(out) => Some(Outcome {
-                matched: false,
-                output: format!(
-                    "`nazm build` refused it: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ),
-            }),
-            Err(e) => Some(Outcome {
-                matched: false,
-                output: format!("could not build: {e}"),
-            }),
+            Ok(out) => {
+                native_leg = Leg::BuildFailed;
+                Some(Outcome {
+                    matched: false,
+                    output: format!(
+                        "`nazm build` refused it: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ),
+                })
+            }
+            Err(e) => {
+                native_leg = Leg::CouldNotBuild;
+                Some(Outcome {
+                    matched: false,
+                    output: format!("could not build: {e}"),
+                })
+            }
         }
     };
 
@@ -214,6 +374,7 @@ fn one(
         interpreted,
         native,
         passed,
+        legs: (interpreted_leg, native_leg),
     }
 }
 

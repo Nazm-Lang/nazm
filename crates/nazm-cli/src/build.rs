@@ -35,6 +35,7 @@
 //! still checks, still plans, still lowers and still refuses. That is not a rule this file
 //! follows; it is the shape of the pipeline.
 
+use nazm_service::summary::Status;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -65,6 +66,7 @@ pub(crate) struct Native {
 }
 
 /// Compile, or explain what stopped it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     input: &Path,
     out: Option<&Path>,
@@ -73,7 +75,23 @@ pub(crate) fn run(
     opt_level: u8,
     cache: bool,
     with_report: bool,
+    summary: bool,
 ) -> ExitCode {
+    // `--summary-json` (N31): at every exit below, the outcome reported as one
+    // `nazm.command-summary/1` on stdout in place of the rendering and the path. The exit
+    // status is the same, and so is everything the build writes.
+    let summarized = |status, code, diagnostics: &[nazm_diag::Diagnostic], map, artifact| {
+        crate::summary::finish(
+            nazm_service::summary::Command::Build,
+            status,
+            code,
+            diagnostics,
+            map,
+            artifact,
+            input,
+            None,
+        )
+    };
     // Discovered, never given: `nazm build` takes no `--source-root`, and the marker is
     // how a project declares one. It decides every module's durable identity, which is
     // the name the generated code carries and therefore part of what an object is keyed
@@ -81,6 +99,9 @@ pub(crate) fn run(
     let source_root = match crate::root::decide(input, None) {
         Ok(r) => r,
         Err(e) => {
+            if summary {
+                return summarized(Status::Unreadable, exit::NO_SUCH_FILE, &[], None, None);
+            }
             eprintln!("nazm: {e}");
             return ExitCode::from(exit::NO_SUCH_FILE);
         }
@@ -88,6 +109,15 @@ pub(crate) fn run(
     let loaded = match crate::load::load(input, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
+            if summary {
+                return summarized(
+                    Status::Unreadable,
+                    exit::NO_SUCH_FILE,
+                    &diagnostics,
+                    Some(&partial.map),
+                    None,
+                );
+            }
             emit(&diagnostics, &partial.map, json);
             return ExitCode::from(exit::NO_SUCH_FILE);
         }
@@ -102,6 +132,15 @@ pub(crate) fn run(
     };
 
     if same_file(input, &output) {
+        if summary {
+            return summarized(
+                Status::Refused,
+                exit::TOOLCHAIN_FAILED,
+                &[],
+                Some(map),
+                None,
+            );
+        }
         eprintln!(
             "nazm: refusing to write the executable over its own source ({}). \
              Pass -o with a different path.",
@@ -131,6 +170,15 @@ pub(crate) fn run(
             // `N0101` is this backend's "not yet", and it reads differently from a
             // program being wrong. Distinguished for the summary line only; both are a
             // check failure and neither produces output.
+            if summary {
+                return summarized(
+                    Status::Rejected,
+                    exit::CHECK_FAILED,
+                    &diagnostics,
+                    Some(map),
+                    None,
+                );
+            }
             let unsupported = diagnostics
                 .iter()
                 .any(|d| d.code == nazm_diag::codes::UNSUPPORTED_CONSTRUCT);
@@ -158,6 +206,15 @@ pub(crate) fn run(
     let tmp_exe = sibling(&output, &format!(".nazm-{stamp}.out"));
     if let Err(e) = std::fs::create_dir_all(&work) {
         eprintln!("nazm: cannot create {}: {e}", work.display());
+        if summary {
+            return summarized(
+                Status::ToolchainFailed,
+                exit::TOOLCHAIN_FAILED,
+                &[],
+                Some(map),
+                None,
+            );
+        }
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
     }
 
@@ -223,6 +280,15 @@ pub(crate) fn run(
         if let Err(e) = std::fs::write(&ll, &artefact.ir) {
             cleanup(false);
             eprintln!("nazm: cannot write {}: {e}", ll.display());
+            if summary {
+                return summarized(
+                    Status::ToolchainFailed,
+                    exit::TOOLCHAIN_FAILED,
+                    &[],
+                    Some(map),
+                    None,
+                );
+            }
             return ExitCode::from(exit::TOOLCHAIN_FAILED);
         }
         match backend.compile(&ll, &obj) {
@@ -232,7 +298,19 @@ pub(crate) fn run(
                     tally.instances_compiled += 1;
                 }
             }
-            other => return report_clang(other, &ll, cleanup),
+            other => {
+                let code = report_clang(other, &ll, cleanup);
+                if summary {
+                    return summarized(
+                        Status::ToolchainFailed,
+                        exit::TOOLCHAIN_FAILED,
+                        &[],
+                        Some(map),
+                        None,
+                    );
+                }
+                return code;
+            }
         }
 
         // Published after it exists and from the bytes that were produced, so what is
@@ -259,7 +337,19 @@ pub(crate) fn run(
     // command line does not depend on anything the filesystem decided.
     match backend.link(&tmp_exe, &objects) {
         Outcome::Ran(o) if o.status.success() => {}
-        other => return report_clang(other, &work, cleanup),
+        other => {
+            let code = report_clang(other, &work, cleanup);
+            if summary {
+                return summarized(
+                    Status::ToolchainFailed,
+                    exit::TOOLCHAIN_FAILED,
+                    &[],
+                    Some(map),
+                    None,
+                );
+            }
+            return code;
+        }
     }
 
     if emit_ir {
@@ -278,7 +368,25 @@ pub(crate) fn run(
     if let Err(e) = std::fs::rename(&tmp_exe, &output) {
         let _ = std::fs::remove_file(&tmp_exe);
         eprintln!("nazm: cannot write {}: {e}", output.display());
+        if summary {
+            return summarized(
+                Status::ToolchainFailed,
+                exit::TOOLCHAIN_FAILED,
+                &[],
+                Some(map),
+                None,
+            );
+        }
         return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
+    if summary {
+        return summarized(
+            Status::Success,
+            exit::OK,
+            &[],
+            Some(map),
+            Some(output.display().to_string()),
+        );
     }
     if with_report {
         println!("{}", report(source_root.how(), map.len(), tally));

@@ -46,6 +46,7 @@ use nazm_span::SourceMap;
 
 use crate::root::How;
 use crate::{exit, load, root};
+use nazm_service::summary::Status;
 
 /// What the run did, if anyone asked.
 #[derive(Debug, Default, Clone, Copy)]
@@ -248,10 +249,28 @@ pub(crate) fn run(
     declared: Option<&Path>,
     cache: bool,
     with_report: bool,
+    summary: bool,
 ) -> ExitCode {
+    // `--summary-json` (N31): the same outcome at every exit below, reported as one
+    // `nazm.command-summary/1` in place of the rendering. The exit status is the same.
+    let summarized = |status, code, diagnostics: &[nazm_diag::Diagnostic], map| {
+        crate::summary::finish(
+            nazm_service::summary::Command::Check,
+            status,
+            code,
+            diagnostics,
+            map,
+            None,
+            path,
+            declared,
+        )
+    };
     let source_root = match root::decide(path, declared) {
         Ok(r) => r,
         Err(e) => {
+            if summary {
+                return summarized(Status::Unreadable, exit::NO_SUCH_FILE, &[], None);
+            }
             eprintln!("nazm: {e}");
             return ExitCode::from(exit::NO_SUCH_FILE);
         }
@@ -260,6 +279,14 @@ pub(crate) fn run(
     let loaded = match load::load(path, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
+            if summary {
+                return summarized(
+                    Status::Unreadable,
+                    exit::NO_SUCH_FILE,
+                    &diagnostics,
+                    Some(&partial.map),
+                );
+            }
             crate::emit(&diagnostics, &partial.map, json);
             return ExitCode::from(exit::NO_SUCH_FILE);
         }
@@ -283,6 +310,15 @@ pub(crate) fn run(
             },
         )
     };
+
+    if summary {
+        let (status, code) = if diagnostics.is_empty() {
+            (Status::Success, exit::OK)
+        } else {
+            (Status::Rejected, exit::CHECK_FAILED)
+        };
+        return summarized(status, code, &diagnostics, Some(map));
+    }
 
     if with_report {
         println!("{}", report(source_root.how(), tally));
