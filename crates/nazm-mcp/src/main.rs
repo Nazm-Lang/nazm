@@ -1,8 +1,8 @@
-//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27–N31.
+//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27–N32.
 //!
 //! # What it is
 //!
-//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves seven tools,
+//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves nine tools,
 //! each result exactly the object the matching command prints with `--json`:
 //!
 //! | Tool | Result | Command |
@@ -14,6 +14,8 @@
 //! | `nazm.diagnostics` | `nazm.diagnostic-index/1`, every current diagnostic compactly (N30) | `nazm diagnostics` |
 //! | `nazm.diagnostic_detail` | `nazm.diagnostic-detail/1`, one of them in full (N30) | `nazm diagnostics --detail` |
 //! | `nazm.command_summary` | `nazm.command-summary/1` of a check (N31) | `nazm check --summary-json --no-cache` |
+//! | `nazm.docs_index` | `nazm.docs-index/1`, Nazm's own documentation by section (N32) | `nazm docs --index` |
+//! | `nazm.docs_section` | `nazm.docs-section/1`, one section's exact text (N32) | `nazm docs --section ID --state S` |
 //!
 //! `nazm.command_summary` checks and does not build: a build writes an executable, and
 //! running a program's tests runs programs, which may write files — neither is read-only,
@@ -37,6 +39,14 @@
 //! state — the root's snapshot, each file's digest, each edit's expected bytes — not
 //! permission to change a file. No plan is kept: the same request later is planned again
 //! from the disk as it is then.
+//!
+//! # Documentation is asked for by id
+//!
+//! The two documentation tools read Nazm's own documentation corpus — the fixed list of
+//! documents `nazm-docs` names, under the repository given as `--docs` at startup or the
+//! one this binary was built from — never a user project's files and never a path a client
+//! names: a section is asked for by its exact id, and the request carries the index's
+//! `state`, so a section of a corpus that has changed since is refused as `stale_state`.
 //!
 //! # Which program, and which text
 //!
@@ -112,6 +122,40 @@ const SUMMARY: &str = "nazm.command_summary";
 /// `nazm.command-summary/1`, exactly as the repository publishes it.
 const SUMMARY_SCHEMA: &str = include_str!("../../../schema/nazm.command-summary-1.json");
 
+/// The documentation index tool (N32).
+const DOCS_INDEX: &str = "nazm.docs_index";
+
+/// `nazm.docs-index/1`, exactly as the repository publishes it.
+const DOCS_INDEX_SCHEMA: &str = include_str!("../../../schema/nazm.docs-index-1.json");
+
+/// The documentation section tool (N32).
+const DOCS_SECTION: &str = "nazm.docs_section";
+
+/// `nazm.docs-section/1`, exactly as the repository publishes it.
+const DOCS_SECTION_SCHEMA: &str = include_str!("../../../schema/nazm.docs-section-1.json");
+
+/// What `nazm.docs_index` is asked: the whole corpus, or one document of it by id.
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct DocsIndexRequest {
+    /// A document's id, from an index: only its sections.
+    #[serde(default)]
+    document: Option<String>,
+}
+
+/// What `nazm.docs_section` is asked: one section by its exact id, bound to the state of
+/// the index it came from. Never a path.
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct DocsSectionRequest {
+    /// A section's `id`, from `nazm.docs_index`.
+    id: String,
+    /// That index's `state`: the corpus the id is of.
+    state: String,
+}
+
 /// What `nazm.command_summary` is asked: one operation, from a finite set that is read-only
 /// — only `check`. Typed, so its input schema is the SDK's derivation of it.
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -163,10 +207,12 @@ enum PatchRequest {
 }
 
 fn main() -> ExitCode {
-    let (root, source_root) = match arguments(std::env::args().skip(1)) {
+    let (root, source_root, docs) = match arguments(std::env::args().skip(1)) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("nazm-mcp: {e}\nusage: nazm-mcp --root <file.nz> [--source-root <dir>]");
+            eprintln!(
+                "nazm-mcp: {e}\nusage: nazm-mcp --root <file.nz> [--source-root <dir>] [--docs <repository>]"
+            );
             return ExitCode::from(2);
         }
     };
@@ -186,7 +232,11 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let server = Server { root, source_root };
+    let server = Server {
+        root,
+        source_root,
+        docs: docs.unwrap_or_else(nazm_docs::default_root),
+    };
     let served = runtime.block_on(async move {
         let running = server.serve(rmcp::transport::stdio()).await?;
         running.waiting().await?;
@@ -201,9 +251,13 @@ fn main() -> ExitCode {
     }
 }
 
-/// `--root <file>` and an optional `--source-root <dir>`, and nothing else.
-fn arguments(mut args: impl Iterator<Item = String>) -> Result<(PathBuf, Option<PathBuf>), String> {
-    let (mut root, mut source_root) = (None, None);
+/// Where the documentation tools read, fixed at startup.
+type Arguments = (PathBuf, Option<PathBuf>, Option<PathBuf>);
+
+/// `--root <file>`, an optional `--source-root <dir>` and an optional `--docs <repository>`,
+/// and nothing else.
+fn arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, String> {
+    let (mut root, mut source_root, mut docs) = (None, None, None);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--root" => root = Some(PathBuf::from(args.next().ok_or("--root needs a file")?)),
@@ -212,18 +266,25 @@ fn arguments(mut args: impl Iterator<Item = String>) -> Result<(PathBuf, Option<
                     args.next().ok_or("--source-root needs a directory")?,
                 ));
             }
+            "--docs" => {
+                docs = Some(PathBuf::from(
+                    args.next().ok_or("--docs needs a repository directory")?,
+                ));
+            }
             other => return Err(format!("unexpected argument `{other}`")),
         }
     }
-    Ok((root.ok_or("--root is required")?, source_root))
+    Ok((root.ok_or("--root is required")?, source_root, docs))
 }
 
-/// The server: a root, fixed for its lifetime, and nothing else — no analysis, no packet,
-/// no snapshot and no history is kept between calls.
+/// The server: a root and a documentation repository, fixed for its lifetime, and nothing
+/// else — no analysis, no packet, no snapshot, no index and no history is kept between
+/// calls.
 #[derive(Debug, Clone)]
 struct Server {
     root: PathBuf,
     source_root: Option<PathBuf>,
+    docs: PathBuf,
 }
 
 impl Server {
@@ -237,7 +298,39 @@ impl Server {
             Self::diagnostics_tool(),
             Self::detail_tool(),
             Self::summary_tool(),
+            Self::docs_index_tool(),
+            Self::docs_section_tool(),
         ]
+    }
+
+    /// The documentation index tool: an optional document, `nazm.docs-index/1` out.
+    fn docs_index_tool() -> Tool {
+        let mut input =
+            (*rmcp::handler::server::common::schema_for_type::<DocsIndexRequest>()).clone();
+        input
+            .entry("type")
+            .or_insert_with(|| serde_json::Value::from("object"));
+        Self::read_only(
+            DOCS_INDEX,
+            "The index of Nazm's own documentation (nazm.docs-index/1), read from disk now: every document with its authority — normative (the spec), grammar, architecture, law, interface, evidence (what exists), planning (the roadmap), goal (aspiration, never evidence), research, operational, guide — and every section's stable id, title, parent and digest, with no body. Optionally one document's sections. Keep `state` and ask nazm.docs_section for a section's exact text. No search: ids are exact.",
+            input,
+            DOCS_INDEX_SCHEMA,
+        )
+    }
+
+    /// The documentation section tool: an id and a state in, `nazm.docs-section/1` out.
+    fn docs_section_tool() -> Tool {
+        let mut input =
+            (*rmcp::handler::server::common::schema_for_type::<DocsSectionRequest>()).clone();
+        input
+            .entry("type")
+            .or_insert_with(|| serde_json::Value::from("object"));
+        Self::read_only(
+            DOCS_SECTION,
+            "One section of Nazm's own documentation (nazm.docs-section/1) by its exact id and the state a nazm.docs_index gave it: its document's authority, its parent and children, and its own canonical text byte for byte — never its subsections' and never a paraphrase. Refused as stale_state if the documentation changed since the index, and not_found for an id no section has. Ids only; no path is ever read.",
+            input,
+            DOCS_SECTION_SCHEMA,
+        )
     }
 
     /// The context tool, with `nazm.context/1` as its output schema.
@@ -459,6 +552,8 @@ impl ServerHandler for Server {
                  the current source; it never applies one. nazm.diagnostics: every current \
                  diagnostic compactly; nazm.diagnostic_detail: one in full, by its id and the \
                  index's state. nazm.command_summary: what `nazm check` concludes, compactly. \
+                 nazm.docs_index: Nazm's own documentation by section, with each document's \
+                 authority; nazm.docs_section: one section's exact text, by id and state. \
                  The server keeps nothing between calls.",
             )
     }
@@ -534,6 +629,8 @@ impl ServerHandler for Server {
             DIAGNOSTICS => return self.diagnostics(&args).await,
             DETAIL => return self.detail(args).await,
             SUMMARY => return self.summary(args).await,
+            DOCS_INDEX => return self.docs_index(args).await,
+            DOCS_SECTION => return self.docs_section(args).await,
             _ => return Err(ErrorData::invalid_params("tool not found", None)),
         }
         let file = args
@@ -631,6 +728,43 @@ impl Server {
         // The summary is the answer whatever the check concluded: a rejected program is a
         // result reported, not a tool error. Its `status` says how the check ended.
         Ok(once(value, true))
+    }
+
+    /// `nazm.docs_index`: the documentation corpus as it is on disk now.
+    async fn docs_index(&self, args: JsonObject) -> Result<CallToolResponse, ErrorData> {
+        let request: DocsIndexRequest = serde_json::from_value(serde_json::Value::Object(args))
+            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        let docs = self.docs.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            nazm_docs::index(&docs, request.document.as_deref())
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(once(
+            value,
+            matches!(result, nazm_docs::IndexResult::Available(_)),
+        ))
+    }
+
+    /// `nazm.docs_section`: one section by id, bound to the state it came from.
+    async fn docs_section(&self, args: JsonObject) -> Result<CallToolResponse, ErrorData> {
+        let request: DocsSectionRequest =
+            serde_json::from_value(serde_json::Value::Object(args))
+                .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        let docs = self.docs.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            nazm_docs::section(&docs, &request.id, Some(&request.state))
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(once(
+            value,
+            matches!(result, nazm_docs::SectionResult::Available(_)),
+        ))
     }
 
     /// `nazm.diagnostic_detail`: an id and the state it is of.
@@ -762,6 +896,8 @@ mod tests {
             (super::DIAGNOSTICS, super::INDEX_SCHEMA),
             (super::DETAIL, super::DETAIL_SCHEMA),
             (super::SUMMARY, super::SUMMARY_SCHEMA),
+            (super::DOCS_INDEX, super::DOCS_INDEX_SCHEMA),
+            (super::DOCS_SECTION, super::DOCS_SECTION_SCHEMA),
         ]) {
             let published: serde_json::Value = serde_json::from_str(schema).unwrap();
             assert_eq!(
