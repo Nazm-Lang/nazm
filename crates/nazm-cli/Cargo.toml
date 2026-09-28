@@ -34,6 +34,8 @@ serde_json = { workspace = true }
 # `nazm lsp`: the protocol shell over `nazm-service`. Framing and message types only.
 lsp-server = { workspace = true }
 lsp-types = { workspace = true }
+# `nazm docs`: Nazm's own documentation by section (N32). Reads files; no compiler.
+nazm-docs = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

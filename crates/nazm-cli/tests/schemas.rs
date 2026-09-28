@@ -861,3 +861,70 @@ fn command_and_test_summaries_are_their_schemas() {
     ];
     check_against("nazm.test-summary-1.json", &tests);
 }
+
+#[test]
+fn a_docs_index_and_section_are_their_schemas_in_every_status() {
+    let run = |args: &[&str]| -> Value {
+        let out = Command::new(NAZM).args(args).output().expect("run nazm");
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(stdout.lines().count(), 1, "one line: {args:?}");
+        serde_json::from_str(&stdout).unwrap()
+    };
+    let empty = tempfile::tempdir().expect("tempdir");
+    let nowhere = empty.path().to_str().unwrap();
+    let index = run(&["docs", "--index", "--json"]);
+    let state = index["state"].as_str().unwrap().to_owned();
+    let indexes = vec![
+        index.clone(),
+        run(&["docs", "--index", "--document", "grammar", "--json"]),
+        run(&["docs", "--index", "--document", "nowhere", "--json"]),
+        run(&["docs", "--index", "--json", "--root", nowhere]),
+    ];
+    let statuses: Vec<&str> = indexes
+        .iter()
+        .map(|i| i["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        statuses,
+        ["available", "available", "not_found", "unavailable"]
+    );
+    check_against("nazm.docs-index-1.json", &indexes);
+
+    // Every section of the corpus, and every refusal.
+    let mut sections: Vec<Value> = index["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|d| d["sections"].as_array().unwrap().iter().take(3))
+        .map(|s| run(&["docs", "--section", s["id"].as_str().unwrap(), "--json"]))
+        .collect();
+    sections.push(run(&[
+        "docs",
+        "--section",
+        "grammar:expression",
+        "--state",
+        &state,
+        "--json",
+    ]));
+    sections.push(run(&["docs", "--section", "spec:nowhere", "--json"]));
+    sections.push(run(&[
+        "docs",
+        "--section",
+        "spec",
+        "--state",
+        &"0".repeat(64),
+        "--json",
+    ]));
+    sections.push(run(&[
+        "docs",
+        "--section",
+        "spec",
+        "--json",
+        "--root",
+        nowhere,
+    ]));
+    for status in ["available", "not_found", "stale_state", "unavailable"] {
+        assert!(sections.iter().any(|s| s["status"] == status), "{status}");
+    }
+    check_against("nazm.docs-section-1.json", &sections);
+}
