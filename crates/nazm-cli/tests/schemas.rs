@@ -717,3 +717,98 @@ fn a_patch_is_nazm_patch_1_available_or_not() {
         ],
     );
 }
+
+#[test]
+fn a_diagnostic_index_and_detail_are_their_schemas_and_detail_is_nazm_check_s_diagnostic() {
+    // Type errors, one with an automatic fix; a syntax error with a compiler fix; and the
+    // refusals.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let typed = dir.path().join("typed.nz");
+    std::fs::write(
+        &typed,
+        "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x + true\n}\n",
+    )
+    .unwrap();
+    let syntax = dir.path().join("syntax.nz");
+    std::fs::write(&syntax, "fn main() -> Str {\n    \"open\n}\n").unwrap();
+    let run = |args: &[&std::ffi::OsStr]| -> (Value, Option<i32>) {
+        let out = Command::new(NAZM).args(args).output().expect("run nazm");
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(stdout.lines().count(), 1, "one compact line: {stdout}");
+        (serde_json::from_str(&stdout).unwrap(), out.status.code())
+    };
+    let index = |root: &Path| {
+        run(&[
+            "diagnostics".as_ref(),
+            "--json".as_ref(),
+            "--root".as_ref(),
+            root.as_os_str(),
+        ])
+    };
+    let detail = |root: &Path, id: &str, state: &str| {
+        run(&[
+            "diagnostics".as_ref(),
+            "--json".as_ref(),
+            "--root".as_ref(),
+            root.as_os_str(),
+            "--detail".as_ref(),
+            id.as_ref(),
+            "--state".as_ref(),
+            state.as_ref(),
+        ])
+    };
+    let mut indexes = Vec::new();
+    let mut details = Vec::new();
+    let mut published = Vec::new();
+    for root in [&typed, &syntax] {
+        let (i, code) = index(root);
+        assert_eq!(code, Some(0));
+        let state = i["state"]["source"].as_str().unwrap().to_owned();
+        // `nazm check --json`, as it always was: one nazm.diagnostic/1 per line on stderr.
+        let check = Command::new(NAZM)
+            .args(["check", "--json"])
+            .arg(root)
+            .output()
+            .unwrap();
+        let stream: Vec<Value> = String::from_utf8(check.stderr)
+            .unwrap()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .filter(|v: &Value| v["schema"] == "nazm.diagnostic/1")
+            .collect();
+        for d in i["diagnostics"].as_array().unwrap() {
+            let (v, code) = detail(root, d["id"].as_str().unwrap(), &state);
+            assert_eq!(code, Some(0), "{v}");
+            let mut diagnostic = v["diagnostic"].clone();
+            diagnostic
+                .as_object_mut()
+                .unwrap()
+                .insert("schema".into(), Value::from("nazm.diagnostic/1"));
+            assert!(
+                stream.contains(&diagnostic),
+                "{diagnostic} not in {stream:?}"
+            );
+            published.push(diagnostic);
+            details.push(v);
+        }
+        let (stale, code) = detail(
+            root,
+            i["diagnostics"][0]["id"].as_str().unwrap(),
+            &"0".repeat(64),
+        );
+        assert_eq!(code, Some(1));
+        assert_eq!(stale["reason"], "stale_state");
+        details.push(stale);
+        indexes.push(i);
+    }
+    assert!(
+        details.iter().any(|d| d["semantic_patches"] == 1),
+        "an automatic fix planned"
+    );
+    assert!(details
+        .iter()
+        .any(|d| d["compiler_fixes"] == 1 && d["semantic_patches"] == 0));
+    check_against("nazm.diagnostic-index-1.json", &indexes);
+    check_against("nazm.diagnostic-detail-1.json", &details);
+    check_against("nazm.diagnostic-1.json", &published);
+}

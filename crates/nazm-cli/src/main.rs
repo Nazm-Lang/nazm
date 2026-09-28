@@ -38,6 +38,7 @@ mod capabilities;
 mod checking;
 mod context;
 mod derived;
+mod diagnostics;
 mod fix;
 mod fmt;
 mod interface;
@@ -283,6 +284,33 @@ enum Command {
         #[arg(long)]
         source_root: Option<PathBuf>,
     },
+    /// Print the root's current diagnostics compactly, `nazm.diagnostic-index/1`, or one
+    /// of them in full, `nazm.diagnostic-detail/1`.
+    ///
+    /// Without `--detail`: every diagnostic's id, code, severity, place, owning definition
+    /// and fix counts — no message, help or label text. With `--detail ID --state DIGEST`:
+    /// that diagnostic exactly as `nazm.diagnostic/1` publishes it, with its places in their
+    /// files and, for each fix, the `nazm patch fix` selector where one exists — refused if
+    /// the sources are no longer the index's state. From the disk as it is now; `nazm check
+    /// --json` is unchanged. `docs/architecture.md` §7.32.
+    Diagnostics {
+        /// The compilation's root module.
+        #[arg(long)]
+        root: PathBuf,
+        /// A diagnostic's id, from an index.
+        #[arg(long, requires = "state")]
+        detail: Option<String>,
+        /// The index's `state.source`: the sources the id is of.
+        #[arg(long, requires = "detail")]
+        state: Option<String>,
+        /// The one canonical compact serialisation. Without it, the same object indented.
+        #[arg(long)]
+        json: bool,
+        /// Measure every module's durable identity from this directory, as
+        /// `nazm check --source-root` does.
+        #[arg(long)]
+        source_root: Option<PathBuf>,
+    },
     /// Print a semantic patch plan, `nazm.patch/1`. Plans; never applies.
     ///
     /// A validated rename (`rename`) or a compiler-owned fix (`fix`), as minimal exact-byte
@@ -481,6 +509,20 @@ fn main() -> ExitCode {
             json,
             source_root,
         } => return snapshot::delta(&root, &baseline, json, source_root.as_deref()),
+        Command::Diagnostics {
+            root,
+            detail,
+            state,
+            json,
+            source_root,
+        } => {
+            return diagnostics::run(
+                &root,
+                detail.zip(state).as_ref(),
+                json,
+                source_root.as_deref(),
+            )
+        }
         Command::Patch { operation } => {
             return match operation {
                 PatchOperation::Rename {
@@ -550,6 +592,7 @@ fn main() -> ExitCode {
         | Command::Snapshot { .. }
         | Command::Delta { .. }
         | Command::Patch { .. }
+        | Command::Diagnostics { .. }
         | Command::Fmt { .. }
         | Command::Test { .. }
         | Command::Interface { .. }
