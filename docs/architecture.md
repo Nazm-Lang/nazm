@@ -3770,6 +3770,76 @@ argument is accepted — and whose result is the patch once, as structured conte
 project-wide importer discovery, multi-file renames (N18's scope rule keeps a private entity's
 occurrences in its declaring file), fix-all, refactors, git.
 
+## 7.32 Compact diagnostics and progressive disclosure — settled by N30, 2026-09-28
+
+> **Compact diagnostics never infer structured semantics from diagnostic prose.** A compiler
+> `Fix` and an N29 semantic patch are distinct capabilities.
+
+```text
+compiler Diagnostic                                         (nazm-diag)
+        ↓
+nazm.diagnostic/1, unchanged                                (Diagnostic::published)
+        ↓
+compact summary index, nazm.diagnostic-index/1              (nazm-service/src/diagnostics.rs)
+        ↓
+one selected detail, nazm.diagnostic-detail/1
+        ↓
+optional N29 patch planning                                 (a nazm.semantic_patch selector)
+```
+
+**What is indexed.** Every diagnostic of the root's compilation as the service analyses it —
+the analysis N27–N29 read, from disk, the root and what it imports and no other file. It is a
+module's analysis, as the language server's is, so a missing `main` (`N0204`) is not among them.
+Syntax diagnostics are: the index needs no semantic snapshot.
+
+**The compact entry.** `id`, `code`, `severity`, `primary` (root-relative file and UTF-8 byte
+range, translated from the compiler's span by the same source map every answer uses — never the
+published concatenation offset), `owner`, and `fixes` counted by applicability. No message, help,
+label text, fix description or precondition. The index adds counts — total, `error` (the one
+severity the compiler has), diagnostics with fixes, automatic and needs-review fixes — and builds
+no patch.
+
+**Facts.** The compiler's `Diagnostic` carries no typed expected/actual/entity facts today, so
+none are exposed: detail says `facts: "unavailable"`, and no field is reconstructed from a
+sentence. A structural test keeps the module from reading a diagnostic's message, help,
+description or precondition.
+
+**Identity.** Entries are ordered by primary file, start, end and code, then by their secondary
+and fix places, then by the compiler's own deterministic order. An id is `code@file:start-end#n`,
+`n` counting earlier entries with the same code and primary place; two diagnostics the compiler's
+structure cannot tell apart are told apart by that ordinal and nothing else. Message and help
+never reach an id.
+
+**State.** Two fields, each with one meaning. `state.source`, always present: BLAKE3 over the
+root's identity (module key and compiler) and every loaded source file's root-relative path and
+exact bytes, in load order, length-prefixed — no absolute path, generation or time. `state.snapshot`:
+BLAKE3 of the root's `nazm.snapshot/1` (N28), or null where the compilation has none — after
+syntax recovery or a missing module; N28's completeness rule is not weakened. A detail request
+names the index's `state.source`; any other value is `stale_state`, and an id is resolved only
+within the state it came from, so an old id never selects another diagnostic now at its place.
+
+**Owners.** The durable function, record or enum whose declaration, by N22's outline, contains the
+primary span — only in a compilation that needed no syntax recovery and loaded every module.
+Otherwise, and for anything outside every declaration (a refused duplicate, an import), none.
+
+**Detail.** The diagnostic exactly as `nazm.diagnostic/1` publishes it — canonical prose,
+unchanged, spans as that schema defines them — with the same spans in their own files, the owner,
+`facts`, `compiler_fixes`, `semantic_patches`, and for each fix its applicability and the
+`diagnostic_fix` selector (`file`, `byte_offset`, `fix`) N29 plans it from, or null. A fix is a
+semantic patch only where N29 would plan it: a compilation with a snapshot, and N24 planning the
+edit. The check reads N24's plans for that one diagnostic and builds no patch; a syntax
+diagnostic's fix is a compiler fix and no patch.
+
+**The CLI and the MCP server.** `nazm diagnostics --root FILE --json` prints the index; `--detail ID
+--state DIGEST` one detail. `nazm-mcp` adds `nazm.diagnostics` (no arguments) and
+`nazm.diagnostic_detail` (`id`, `state`, typed). Each result once, as structured content. Every call
+reads the disk; nothing — index, detail, history — is kept. They are disk tools: an editor's
+unsaved buffers are the language server's, whose diagnostics are unchanged. `nazm check --json`
+is unchanged.
+
+**Deliberately not here.** Typed facts for any diagnostic, other verbosity levels, diagnostic
+history, AI-written explanations, message parsing, patch application, and build or test output.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
