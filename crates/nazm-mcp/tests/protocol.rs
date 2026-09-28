@@ -28,6 +28,8 @@ const TOOL: &str = "nazm.semantic_context";
 const SNAPSHOT: &str = "nazm.semantic_snapshot";
 const DELTA: &str = "nazm.semantic_delta";
 const PATCH: &str = "nazm.semantic_patch";
+const DIAGNOSTICS: &str = "nazm.diagnostics";
+const DETAIL: &str = "nazm.diagnostic_detail";
 
 const LIB: &str = "pub fn far() -> Int { 1 }\n";
 const MAIN: &str = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nenum S {\n    A,\n    B(v: Int),\n}\nfn f(p: P) -> Int { far() + p.x }\nfn g() -> Int { f(P(x: 1)) }\n";
@@ -139,12 +141,14 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
         assert_eq!(info.server_info.as_ref().unwrap().name, "nazm-mcp");
         let tools = client.list_all_tools().await.unwrap();
         let names: Vec<&str> = tools.iter().map(|t| &*t.name).collect();
-        assert_eq!(names, [TOOL, SNAPSHOT, DELTA, PATCH]);
+        assert_eq!(names, [TOOL, SNAPSHOT, DELTA, PATCH, DIAGNOSTICS, DETAIL]);
         for (tool, schema) in tools.iter().zip([
             "nazm.context-1.json",
             "nazm.snapshot-1.json",
             "nazm.delta-1.json",
             "nazm.patch-1.json",
+            "nazm.diagnostic-index-1.json",
+            "nazm.diagnostic-detail-1.json",
         ]) {
             let annotations = tool.annotations.as_ref().unwrap();
             assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
@@ -190,6 +194,19 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
             assert!(text.contains(word), "{word}: {text}");
         }
         assert!(!text.contains("\"root\""), "{text}");
+        // The index takes nothing; the detail takes an id and a state, and no root or file.
+        let index = Value::Object((*tools[4].input_schema).clone());
+        assert_eq!(index["properties"], json!({}));
+        let detail = Value::Object((*tools[5].input_schema).clone());
+        assert_eq!(detail["type"], "object");
+        let mut required: Vec<&str> = detail["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        required.sort_unstable();
+        assert_eq!(required, ["id", "state"]);
         let tool = &tools[0];
         let input = Value::Object((*tool.input_schema).clone());
         assert_eq!(input["required"], json!(["file", "byte_offset"]));
@@ -853,6 +870,183 @@ fn a_thousand_plans_keep_nothing() {
         let after = rss_kb(pid);
         assert!(after <= settled + 1024, "{settled} kB -> {after} kB");
         eprintln!("nazm-mcp RSS: settled {settled} kB, after 1,000 patch calls {after} kB");
+        client.cancel().await.unwrap();
+    });
+}
+
+/// The index and a detail the language service gives for the same root, directly.
+fn direct_diagnostics(root: &Path, id: Option<(&str, &str)>) -> Value {
+    let (root, id) = (
+        root.to_path_buf(),
+        id.map(|(a, b)| (a.to_owned(), b.to_owned())),
+    );
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(nazm_core::__syntax::PARSE_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                let mut s = nazm_service::LanguageService::new();
+                s.open_from_disk(&root).unwrap();
+                match id {
+                    None => serde_json::to_value(s.diagnostic_index(&root, 0)).unwrap(),
+                    Some((id, state)) => {
+                        serde_json::to_value(s.diagnostic_detail(&root, 0, &id, &state)).unwrap()
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    })
+}
+
+const WRONG: &str = "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x + true\n}\n";
+
+#[test]
+fn diagnostics_cross_the_protocol_compactly_and_a_detail_on_request() {
+    let dir = project(&[("main.nz", WRONG)]);
+    let root = dir.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, _) = connect(&root).await;
+        let (index, error) = call_with(&client, DIAGNOSTICS, json!({})).await;
+        assert!(!error, "{index}");
+        assert_eq!(index, direct_diagnostics(&root, None));
+        assert_eq!(index["counts"]["total"], 2);
+        assert!(!index.to_string().contains("message"));
+        let state = index["state"]["source"].as_str().unwrap().to_owned();
+        for d in index["diagnostics"].as_array().unwrap() {
+            let id = d["id"].as_str().unwrap();
+            let (detail, error) =
+                call_with(&client, DETAIL, json!({"id": id, "state": state})).await;
+            assert!(!error, "{detail}");
+            assert_eq!(detail, direct_diagnostics(&root, Some((id, &state))));
+            assert!(detail["diagnostic"]["message"].as_str().is_some());
+        }
+        // A detail names only an id and a state: no root, no file, nothing else.
+        for arguments in [
+            json!({"id": "x"}),
+            json!({"id": "x", "state": state, "root": "/"}),
+            json!({"id": "x", "state": state, "file": "/etc/passwd"}),
+        ] {
+            let request = CallToolRequestParams::new(DETAIL)
+                .with_arguments(serde_json::from_value(arguments.clone()).unwrap());
+            assert!(client.call_tool(request).await.is_err(), "{arguments}");
+        }
+        let request = CallToolRequestParams::new(DIAGNOSTICS)
+            .with_arguments(serde_json::from_value(json!({"root": "/"})).unwrap());
+        assert!(client.call_tool(request).await.is_err());
+        // The files are exactly as they were: nothing was fixed.
+        assert_eq!(std::fs::read_to_string(&root).unwrap(), WRONG);
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_diagnostic_id_is_of_its_state_and_a_later_edit_makes_it_stale() {
+    let dir = project(&[("main.nz", WRONG)]);
+    let root = dir.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, _) = connect(&root).await;
+        let (a, _) = call_with(&client, DIAGNOSTICS, json!({})).await;
+        let id = a["diagnostics"][0]["id"].as_str().unwrap().to_owned();
+        let state = a["state"]["source"].as_str().unwrap().to_owned();
+        std::fs::write(&root, format!("// moved\n{WRONG}")).unwrap();
+        let (stale, error) = call_with(&client, DETAIL, json!({"id": id, "state": state})).await;
+        assert!(error);
+        assert_eq!(stale["reason"], "stale_state");
+        let (b, _) = call_with(&client, DIAGNOSTICS, json!({})).await;
+        assert_ne!(b["state"], a["state"]);
+        // Broken: syntax diagnostics are indexed too, with no snapshot.
+        std::fs::write(&root, "fn main() -> Int { 1 +  }\n").unwrap();
+        let (c, error) = call_with(&client, DIAGNOSTICS, json!({})).await;
+        assert!(!error);
+        assert_eq!(c["state"]["snapshot"], Value::Null);
+        assert!(c["counts"]["total"].as_u64().unwrap() >= 1);
+        // Repaired: nothing to report, and the old id stays stale.
+        std::fs::write(&root, "fn main() -> Int { 1 }\n").unwrap();
+        let (d, _) = call_with(&client, DIAGNOSTICS, json!({})).await;
+        assert_eq!(d["counts"]["total"], 0);
+        let (gone, _) = call_with(&client, DETAIL, json!({"id": id, "state": state})).await;
+        assert_eq!(gone["reason"], "stale_state");
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn an_index_travels_once() {
+    let dir = project(&[("main.nz", WRONG)]);
+    let root = dir.path().join("main.nz");
+    let expected = direct_diagnostics(&root, None);
+    let mut child = Command::new(SERVER)
+        .arg("--root")
+        .arg(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for m in [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "raw", "version": "0"}}}),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": DIAGNOSTICS, "arguments": {}}}),
+    ] {
+        writeln!(stdin, "{m}").unwrap();
+    }
+    stdin.flush().unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut wire = String::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        let v: Value = serde_json::from_str(&line).unwrap();
+        if v["id"] == 2 {
+            wire = line;
+            break;
+        }
+    }
+    drop(stdin);
+    let _ = child.wait();
+    let v: Value = serde_json::from_str(&wire).unwrap();
+    assert_eq!(v["result"]["content"], json!([]));
+    assert_eq!(v["result"]["structuredContent"], expected);
+    assert_eq!(wire.matches("nazm.diagnostic-index/1").count(), 1, "{wire}");
+    assert_eq!(wire.matches("\"counts\"").count(), 1, "{wire}");
+}
+
+#[test]
+fn a_thousand_diagnostic_calls_are_each_of_the_disk_and_keep_nothing() {
+    let dir = project(&[("main.nz", WRONG)]);
+    let root = dir.path().join("main.nz");
+    let fixed = "fn main() -> Int {\n    let mut x = 1;\n    x = 2;\n    x\n}\n";
+    runtime().block_on(async {
+        let (client, pid) = connect(&root).await;
+        let (wrong, _) = call_with(&client, DIAGNOSTICS, json!({})).await;
+        let id = wrong["diagnostics"][0]["id"].as_str().unwrap().to_owned();
+        let state = wrong["state"]["source"].as_str().unwrap().to_owned();
+        let (first_detail, _) = call_with(&client, DETAIL, json!({"id": id, "state": state})).await;
+        for _ in 0..10 {
+            call_with(&client, DIAGNOSTICS, json!({})).await;
+        }
+        let settled = rss_kb(pid);
+        for i in 0..250 {
+            // index, detail, an edit that repairs it, a fresh index, the old detail refused,
+            // and back.
+            let (a, _) = call_with(&client, DIAGNOSTICS, json!({})).await;
+            assert_eq!(a, wrong, "{i}");
+            let (d, _) = call_with(&client, DETAIL, json!({"id": id, "state": state})).await;
+            assert_eq!(d, first_detail, "{i}");
+            std::fs::write(&root, fixed).unwrap();
+            let (b, _) = call_with(&client, DIAGNOSTICS, json!({})).await;
+            assert_eq!(b["counts"]["total"], 0, "{i}");
+            let (stale, _) = call_with(&client, DETAIL, json!({"id": id, "state": state})).await;
+            assert_eq!(stale["reason"], "stale_state", "{i}");
+            std::fs::write(&root, WRONG).unwrap();
+        }
+        let after = rss_kb(pid);
+        assert!(after <= settled + 1024, "{settled} kB -> {after} kB");
+        eprintln!("nazm-mcp RSS: settled {settled} kB, after 1,000 diagnostic calls {after} kB");
         client.cancel().await.unwrap();
     });
 }
