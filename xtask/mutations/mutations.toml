@@ -3261,6 +3261,7 @@ targets = [
     { package = "nazm-service", test = "snapshot" },
     { package = "nazm-service", test = "patch" },
     { package = "nazm-service", test = "diagnostics" },
+    { package = "nazm-service", test = "summary" },
     { package = "nazm-service", test = "incomplete" },
 ]
 
@@ -3311,6 +3312,7 @@ targets = [
     { package = "nazm-service", test = "snapshot" },
     { package = "nazm-service", test = "patch" },
     { package = "nazm-service", test = "diagnostics" },
+    { package = "nazm-service", test = "summary" },
     { package = "nazm-service", test = "incomplete" },
 ]
 
@@ -3367,7 +3369,9 @@ targets = [
     { package = "nazm-service", test = "snapshot" },
     { package = "nazm-service", test = "patch" },
     { package = "nazm-service", test = "diagnostics" },
+    { package = "nazm-service", test = "summary" },
     { package = "nazm-service", test = "incomplete" },
+    { package = "nazm-cli", test = "summary" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-mcp", bin = "nazm-mcp" },
     { package = "nazm-mcp", test = "protocol" },
@@ -6340,3 +6344,147 @@ replace = """        static KEPT: std::sync::OnceLock<(serde_json::Value, bool)>
             .clone();
         Ok(once(value, available))"""
 killers = [{ package = "nazm-mcp", test = "protocol", name = "a_diagnostic_id_is_of_its_state_and_a_later_edit_makes_it_stale" }]
+
+# ---------------------------------------------------------------------------------------
+# N31 — command and test summaries, and the check summary over MCP.
+# ---------------------------------------------------------------------------------------
+
+[[mutation]]
+name = "n31-every-case-is-counted-passed"
+why = "a test summary counts every case as passed, whatever its verdict"
+file = "crates/nazm-cli/src/test.rs"
+find = "            passed: results.iter().filter(|c| c.passed).count(),"
+replace = "            passed: results.len(),"
+killers = [{ package = "nazm-cli", test = "summary", name = "a_test_summary_counts_every_verdict_and_names_only_the_cases_that_did_not_pass" }]
+
+[[mutation]]
+name = "n31-files-without-an-expectation-are-dropped"
+why = "a test summary stops counting the `.nz` files with no `.expected`, so a renamed test vanishes silently"
+file = "crates/nazm-cli/src/test.rs"
+find = "            without_expectation: without,"
+replace = "            without_expectation: 0,"
+killers = [{ package = "nazm-cli", test = "summary", name = "a_test_summary_counts_every_verdict_and_names_only_the_cases_that_did_not_pass" }]
+
+[[mutation]]
+name = "n31-passed-cases-are-listed"
+why = "a test summary lists every case, passed ones included, so a large passing run floods it"
+file = "crates/nazm-cli/src/test.rs"
+find = """        failures: results
+            .iter()
+            .filter(|c| !c.passed)"""
+replace = """        failures: results
+            .iter()"""
+killers = [{ package = "nazm-cli", test = "summary", name = "a_test_summary_counts_every_verdict_and_names_only_the_cases_that_did_not_pass" }]
+
+[[mutation]]
+name = "n31-only-the-first-failure-is-listed"
+why = "a test summary lists the first failed case and silently drops the rest"
+file = "crates/nazm-cli/src/test.rs"
+find = """        failures: results
+            .iter()
+            .filter(|c| !c.passed)"""
+replace = """        failures: results
+            .iter()
+            .filter(|c| !c.passed)
+            .take(1)"""
+killers = [{ package = "nazm-cli", test = "summary", name = "a_test_summary_counts_every_verdict_and_names_only_the_cases_that_did_not_pass" }]
+
+[[mutation]]
+name = "n31-a-build-failure-is-a-mismatch"
+why = "a native leg whose build failed is reported as a program whose output did not match"
+file = "crates/nazm-cli/src/test.rs"
+find = "                native_leg = Leg::BuildFailed;"
+replace = "                native_leg = Leg::Mismatched;"
+killers = [{ package = "nazm-cli", test = "summary", name = "a_test_summary_counts_every_verdict_and_names_only_the_cases_that_did_not_pass" }]
+
+[[mutation]]
+name = "n31-a-leg-not-run-is-matched"
+why = "a native leg `--interpret-only` never ran is reported as matched"
+file = "crates/nazm-cli/src/test.rs"
+find = "    let mut native_leg = Leg::NotRun;"
+replace = "    let mut native_leg = Leg::Matched;"
+killers = [{ package = "nazm-cli", test = "summary", name = "a_test_summary_counts_every_verdict_and_names_only_the_cases_that_did_not_pass" }]
+
+[[mutation]]
+name = "n31-no-diagnostics-is-success"
+why = "a command with no diagnostics is summarized as a success, so a refused or failed build reads as one"
+file = "crates/nazm-service/src/summary.rs"
+find = "        status: outcome.status,"
+replace = """        status: if outcome.diagnostics.is_empty() {
+            Status::Success
+        } else {
+            outcome.status
+        },"""
+killers = [{ package = "nazm-cli", test = "summary", name = "a_build_summary_is_the_builds_outcome_and_absence_of_diagnostics_is_not_success" }]
+
+[[mutation]]
+name = "n31-a-command-only-diagnostic-is-dropped"
+why = "diagnostics N30 does not index — a program's missing `main` — are left out of the summary"
+file = "crates/nazm-service/src/summary.rs"
+find = "    let diagnostics: Vec<DiagnosticRef> = refs.into_iter().map(|(_, _, r)| r).collect();"
+replace = """    let diagnostics: Vec<DiagnosticRef> = refs
+        .into_iter()
+        .filter(|(_, _, r)| r.scope == "index")
+        .map(|(_, _, r)| r)
+        .collect();"""
+killers = [{ package = "nazm-cli", test = "summary", name = "a_diagnostic_n30_indexes_carries_its_id_and_one_only_the_command_reports_does_not" }]
+
+[[mutation]]
+name = "n31-a-command-diagnostic-is-given-an-id"
+why = "a diagnostic N30 does not index is given an id of the index's shape, which no detail can answer"
+file = "crates/nazm-service/src/summary.rs"
+find = "                id: None,"
+replace = "                id: Some(format!(\"{}@-#{k}\", d.code)),"
+killers = [{ package = "nazm-cli", test = "summary", name = "a_diagnostic_n30_indexes_carries_its_id_and_one_only_the_command_reports_does_not" }]
+
+[[mutation]]
+name = "n31-references-keep-the-compilers-order"
+why = "references follow the order the compiler emitted them rather than N30's canonical order"
+file = "crates/nazm-service/src/summary.rs"
+find = "    refs.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));"
+replace = "    let _ = &refs;"
+killers = [{ package = "nazm-cli", test = "summary", name = "a_diagnostic_n30_indexes_carries_its_id_and_one_only_the_command_reports_does_not" }]
+
+[[mutation]]
+name = "n31-references-link-to-other-sources"
+why = "references are given N30 ids even when the files changed after the command read them"
+file = "crates/nazm-service/src/summary.rs"
+find = "        (Some(c), Some(map)) => same_sources(c, map).then_some(c),"
+replace = """        (Some(c), Some(map)) => {
+            let _ = same_sources(c, map);
+            Some(c)
+        }"""
+killers = [{ package = "nazm-service", test = "summary", name = "a_reference_is_linked_only_to_the_sources_the_command_read" }]
+
+[[mutation]]
+name = "n31-the-summary-carries-the-message"
+why = "a reference carries the diagnostic's message beside its code"
+file = "crates/nazm-service/src/summary.rs"
+find = "                code: d.code.to_string(),"
+replace = "                code: format!(\"{} {}\", d.code, d.message),"
+killers = [{ package = "nazm-cli", test = "summary", name = "a_check_summary_is_the_checks_outcome_and_its_diagnostics_by_reference" }]
+
+[[mutation]]
+name = "n31-a-summary-exits-zero"
+why = "asking for a summary changes the exit status to success, so a failing check passes CI"
+file = "crates/nazm-cli/src/summary.rs"
+find = "    ExitCode::from(exit_code)"
+replace = "    ExitCode::from(0)"
+killers = [{ package = "nazm-cli", test = "summary", name = "a_check_summary_is_the_checks_outcome_and_its_diagnostics_by_reference" }]
+
+[[mutation]]
+name = "n31-a-check-summary-is-sent-twice"
+why = "the summary tool's result carries the summary again as text beside its structured content"
+file = "crates/nazm-mcp/src/main.rs"
+find = "        Ok(once(value, true))"
+replace = "        Ok(CallToolResult::structured(value).into())"
+killers = [{ package = "nazm-mcp", test = "protocol", name = "a_check_summary_crosses_the_protocol_and_is_nazm_check_s" }]
+
+[[mutation]]
+name = "n31-the-mcp-server-keeps-a-summary"
+why = "the MCP summary tool answers every call with the first summary it derived, so an edit on disk is never seen"
+file = "crates/nazm-mcp/src/main.rs"
+find = "        Ok(once(value, true))"
+replace = """        static KEPT: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+        Ok(once(KEPT.get_or_init(|| value).clone(), true))"""
+killers = [{ package = "nazm-mcp", test = "protocol", name = "a_thousand_check_summaries_are_each_of_the_disk_and_keep_nothing" }]
