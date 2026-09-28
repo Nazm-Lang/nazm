@@ -284,9 +284,9 @@ business raising the floor for the crates that ship.
 | | |
 | --- | --- |
 | `nazm run FILE` | Check and evaluate, printing the value of `main` |
-| `nazm check FILE` | Check without evaluating. Reuses the result of checking a module whose source and dependencies' interfaces are unchanged; `--no-cache` checks everything, `--cache-report` says what it did |
-| `nazm build FILE` | Compile to a native executable. Each module becomes its own object, and an object whose exact LLVM input, backend and codegen configuration were compiled before is reused instead; `--no-cache` compiles everything, `--build-report` says what it did. The link runs every time |
-| `nazm test PATH…` | Run every `NAME.nz` with a `NAME.expected` beside it, interpreted **and** compiled |
+| `nazm check FILE` | Check without evaluating. Reuses the result of checking a module whose source and dependencies' interfaces are unchanged; `--no-cache` checks everything, `--cache-report` says what it did, `--summary-json` prints one compact `nazm.command-summary/1` — status, exit status and a reference to each diagnostic, no prose |
+| `nazm build FILE` | Compile to a native executable. Each module becomes its own object, and an object whose exact LLVM input, backend and codegen configuration were compiled before is reused instead; `--no-cache` compiles everything, `--build-report` says what it did, `--summary-json` prints one `nazm.command-summary/1` with the artifact written. The link runs every time |
+| `nazm test PATH…` | Run every `NAME.nz` with a `NAME.expected` beside it, interpreted **and** compiled. `--summary-json` prints one `nazm.test-summary/1`: counts, and only the cases that did not pass, with how each leg ended |
 | `nazm fmt FILE…` | Lay files out canonically. `--check` writes nothing and fails if any would change |
 | `nazm fix FILE` | Apply the repairs the compiler already knows about. Nothing is written without `--apply`, and only fixes marked `automatic` are ever applied |
 | `nazm capabilities` | What this build supports, read from the compiler's own tables |
@@ -313,14 +313,16 @@ result out, and report what is left as JSON.
 
 ### An MCP server, read-only
 
-`nazm-mcp` (a separate binary: `cargo build --release -p nazm-mcp`) serves six Model Context
+`nazm-mcp` (a separate binary: `cargo build --release -p nazm-mcp`) serves seven Model Context
 Protocol tools over stdio, each answering from the compilation of the root it was started with,
 read from disk at every call: `nazm.semantic_context`, the same `nazm.context/1` packet as
 `nazm context` for a file and byte offset; `nazm.semantic_snapshot`, the same `nazm.snapshot/1` as
 `nazm snapshot`; and `nazm.semantic_delta`, the `nazm.delta/1` against a snapshot the client kept
 and passes back as data — the server keeps none; and `nazm.semantic_patch`, the same
 `nazm.patch/1` as `nazm patch`, a planned rename or fix it never applies; and `nazm.diagnostics`
-and `nazm.diagnostic_detail`, the same index and detail as `nazm diagnostics`. It writes nothing and reads no file that
+and `nazm.diagnostic_detail`, the same index and detail as `nazm diagnostics`; and
+`nazm.command_summary`, the `nazm check --summary-json` of its root (it neither builds nor runs
+tests). It writes nothing and reads no file that
 compilation does not load. An MCP client starts it as a stdio command:
 
 ```json

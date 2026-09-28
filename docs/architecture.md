@@ -3840,6 +3840,62 @@ is unchanged.
 **Deliberately not here.** Typed facts for any diagnostic, other verbosity levels, diagnostic
 history, AI-written explanations, message parsing, patch application, and build or test output.
 
+## 7.33 Token-efficient command and test summaries — settled by N31, 2026-09-28
+
+> **Summary is an additive view, not a replacement for existing detailed machine output.**
+> **Absence of diagnostics does not imply command success.**
+
+```text
+nazm check / build / test, as they run today               (nazm-cli)
+        ↓  the command's own outcome, and its diagnostics or case verdicts
+compact summary                                             (nazm-service/src/summary.rs, nazm-cli/src/test.rs)
+        ↓  counts, and only the diagnostics and cases that matter
+nazm.command-summary/1 · nazm.test-summary/1
+        ↓  on demand
+existing detail: --json, nazm.test/1, nazm diagnostics --detail
+```
+
+**What a command summary is.** `--summary-json` on `nazm check` and `nazm build` prints one
+`nazm.command-summary/1` object on stdout and no diagnostic on stderr. It carries the command's
+status — `success`, `rejected`, `unreadable`, `refused`, `toolchain_failed`, one per exit path the
+command has, set where the command returns — and its exit status, unchanged; counts; and a
+reference to every diagnostic the command reported: code, severity, place, fix counts, no prose.
+A build adds the artifact path as it prints it. No timing is included, so the same sources give the
+same summary.
+
+**References and N30.** The command's diagnostics are its own — `nazm check`'s program check,
+`nazm build`'s check and lowering — not N30's module analysis, so a missing `main` (`N0204`) and a
+backend's refusal of a construct (`N0101`) are kept. Each is matched to N30's index by structure
+alone (code, primary, secondary and fix places, the n-th of equals to the n-th): a match carries
+N30's `id` with `scope: "index"`, and the summary carries N30's `state.source`, so `nazm diagnostics
+--detail` answers it; anything else is `scope: "command"` with no id — never a fake one. N30's
+shared structure orders them. If a file changed between the command's read and the summary's, no
+reference is linked and `state` is null. No N28 snapshot is needed, so syntax diagnostics are
+references like any other.
+
+**What a test summary is.** `nazm test --summary-json` runs the cases exactly as `nazm test` does
+and prints one `nazm.test-summary/1`: its status (`passed`, `failed`, `no_cases`, `unreadable`,
+`toolchain_failed`, one per exit path), exit status, whether the native leg ran, counts — cases,
+passed and failed each counted from the case's own verdict, and files without an expectation —
+and every case that did not pass, by `nazm.test/1`'s name and file, with how each leg ended:
+`matched`, `mismatched`, `not_run`, `build_failed`, `could_not_build`, `could_not_run`. Each is read
+from what the runner did — which process it started, whether it could, whether it succeeded —
+never from output text, so a runtime error or a compile error in a case is a `mismatched` leg and no
+diagnostic is made of it. No passed name, no output, no truncation; cases in the order they ran.
+
+**Flags and channels.** `--summary-json` conflicts with `--json`, and with `--cache-report` and
+`--build-report`: an ambiguous combination is refused by the argument parser (exit 2). Human output,
+`--json`, `nazm.test/1`, `nazm.check-report/1` and `nazm.build-report/1` are unchanged. A build's
+toolchain failure may still write its own message to stderr.
+
+**MCP.** One tool, `nazm.command_summary`, with a typed `operation` whose only value is `check`:
+the root's check from the disk as it is now, run without the check cache, so nothing is written.
+Building writes an executable and testing runs programs, which may write files; neither is
+read-only, so neither is offered.
+
+**Deliberately not here.** Test-detail retrieval, test impact, failure explanations, a build-log
+store, timing, remote CI, and any MCP tool that builds, tests or runs a command.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

@@ -1667,6 +1667,62 @@ and **3,675,040** at N30, **+65,536 bytes (+1.8 %)**, one 64 KiB step, for the d
 and the `diagnostics` command; `nazm-mcp` is 3,020,512 and **3,151,584**, +131,072 bytes, for the
 two tools. No crate and no dependency edge was added: `Cargo.lock` is unchanged.
 
+### Command and test summaries — measured 2026-09-28
+
+N31 keeps nothing: a summary is derived from the command's own outcome, printed and dropped.
+**Persistent N31 state: zero entries**; no timing is recorded, so none is reported. Without
+`--summary-json`, `nazm check`, `nazm build` and `nazm test` do no N31 work.
+
+Contained, P1 (`target/n31/bench`, not committed), medians of the real `nazm` process. `--json` is
+what the same command prints with it (stdout and stderr); a summary is its one stdout line:
+
+| Command | diagnostics | `--json` | summary | summary + one detail | time: `--json` → summary |
+| --- | ---: | ---: | ---: | ---: | --- |
+| check, clean | 0 | 3 B | 305 B | — | 1.0 → 1.2 ms |
+| check, a syntax error | 1 | 250 B | 494 B | 1,137 B | 1.0 → 1.2 ms |
+| check, no `main` | 1 | 311 B | 439 B | — (a command reference has no detail) | 1.0 → 1.2 ms |
+| check, 40 diagnostics | 40 | 18,814 B | 7,723 B | 8,986 B | 1.4 → 2.5 ms |
+| check, the compiler plus 40 | 40 | 19,516 B | 8,110 B | 9,438 B | 72 → 175 ms |
+| build, success | 0 | 6 B | 317 B | — | 36.8 → 37.5 ms |
+| build, 40 diagnostics | 40 | 18,814 B | 7,723 B | 8,986 B | 1.4 → 2.5 ms |
+
+A summary costs one more analysis of the root: linking references to N30's ids analyses it as N30
+does, in process 1.0 ms after a 0.3 ms check at 40 diagnostics and **98 ms after a 38 ms check on
+the compiler** — the summary's dominant cost at scale, paid only when it is asked for. Serialising
+is under 0.03 ms.
+
+**What the bytes say.** A summary is about 300 bytes of fixed structure — command, status, exit
+status, root, state digest, counts — plus about 185 bytes per diagnostic reference. So **for a clean
+or single-diagnostic run it is larger than what the command prints**: 305 bytes against a
+three-byte `ok`, 494 against a 250-byte syntax error. With forty diagnostics it is **41–42 % of the
+`--json` stream**, and reading the summary and then one diagnostic in full is 48 %. These are
+bytes, not tokens: no tokenizer was measured, and no token saving is claimed.
+
+Tests, `--interpret-only`, the same run three ways:
+
+| Run | `nazm.test/1` stream | summary | share | run time |
+| --- | ---: | ---: | ---: | --- |
+| 1 case, passing | 158 B | 161 B | 102 % | 1.8 ms |
+| 10 cases, all passing | 1,590 B | 163 B | 10 % | 9.8 ms |
+| 100 cases, 10 failing | 16,301 B | 1,134 B | 7.0 % | 91 ms |
+| 1,000 cases, 5 failing | 164,790 B | 650 B | 0.39 % | 919 ms |
+
+A test summary lists no passed case, so its size is about 150 bytes plus about 100 per failure,
+whatever the run's size: **a one-case run is not smaller** (161 against 158 bytes), and a thousand
+cases with five failures is 0.39 % of the stream. The run time is the tests', unchanged by asking
+for a summary.
+
+Over `stdio`, the real `nazm-mcp` process, medians of `nazm.command_summary`: 1.88 ms and a 7,808-byte
+frame at 40 diagnostics; 167.5 ms and 8,195 bytes on the compiler, where resident memory rises from
+3.3 to 37.4 MB (peak 54.8 MB: the check's analysis and N30's, one after the other). 1,000 calls through
+edits, breaks and repairs in `crates/nazm-mcp/tests/protocol.rs` stay within a megabyte, which the
+test asserts.
+
+**What it added to the binaries.** Built in the same container: `nazm` is **3,675,040 bytes at N30
+and at N31 — no change**, the additions inside the file's existing 64 KiB layout step; `nazm-mcp`
+is 3,151,584 and **3,217,120**, +65,536 bytes, for the summary tool. No crate and no dependency edge
+was added: `Cargo.lock` is unchanged.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
