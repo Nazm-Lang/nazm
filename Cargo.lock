@@ -677,6 +677,7 @@ dependencies = [
  "nazm-cache",
  "nazm-core",
  "nazm-diag",
+ "nazm-docs",
  "nazm-iface",
  "nazm-lir",
  "nazm-service",
@@ -706,6 +707,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nazm-docs"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "nazm-iface"
 version = "0.0.1"
 dependencies = [
@@ -731,6 +742,7 @@ name = "nazm-mcp"
 version = "0.0.1"
 dependencies = [
  "nazm-core",
+ "nazm-docs",
  "nazm-service",
  "rmcp",
  "serde",
@@ -1604,6 +1616,7 @@ name = "xtask"
 version = "0.0.1"
 dependencies = [
  "blake3",
+ "nazm-docs",
  "serde",
  "serde_json",
  "tempfile",

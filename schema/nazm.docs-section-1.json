@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.docs-section-1.json",
+  "title": "nazm.docs-section/1",
+  "description": "One section of Nazm's own documentation by its exact id, from `nazm docs --section ID --json` and the `nazm-mcp` tool `nazm.docs_section`: its document's authority, its place in the hierarchy, and its body — the canonical text byte for byte, its own and not its subsections', never paraphrased. `stale_state` when a state was given and the corpus is no longer it; `not_found` for an id no section has — never the nearest one; `unavailable` when the corpus cannot be sectioned.",
+  "type": "object",
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": { "const": "nazm.docs-section/1" }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/available" },
+    { "$ref": "#/$defs/refused" },
+    { "$ref": "#/$defs/unavailable" }
+  ],
+  "$defs": {
+    "available": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "status", "state", "id", "document", "authority", "format", "kind", "title", "level", "parent", "children", "source", "body", "digest", "links", "production"],
+      "properties": {
+        "schema": { "const": "nazm.docs-section/1" },
+        "status": { "const": "available" },
+        "state": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "id": { "type": "string" },
+        "document": { "type": "string" },
+        "authority": {
+          "enum": ["goal", "law", "architecture", "normative", "grammar", "guide", "interface", "evidence", "planning", "research", "operational"],
+          "description": "The section's document's authority, as `nazm.docs-index/1` defines it. A `goal` section is aspiration, never evidence of what exists."
+        },
+        "format": { "enum": ["markdown", "ebnf"] },
+        "kind": { "enum": ["document", "heading", "production"] },
+        "title": { "type": ["string", "null"] },
+        "level": { "type": "integer", "minimum": 1 },
+        "parent": { "type": ["string", "null"] },
+        "children": { "type": "array", "items": { "type": "string" }, "description": "Direct subsections, in source order. Their text is not in `body`." },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "lines"],
+          "properties": {
+            "path": { "type": "string", "description": "From the repository root." },
+            "lines": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": "The first and last line, from one. Location, never identity." }
+          }
+        },
+        "body": { "type": "string", "description": "A heading's line through the byte before the next heading of any level, or a production's attached comments through its `;`: exact bytes of the file." },
+        "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["relation", "href", "target", "scope"],
+            "properties": {
+              "relation": { "enum": ["link", "generated_from", "references"], "description": "`link`: written in the text. `generated_from`: a guide section generated from a production. `references`: a nonterminal a production names — a grammar reference, not a semantic dependency." },
+              "href": { "type": ["string", "null"] },
+              "target": { "type": ["string", "null"], "description": "The section it resolves to, inside the corpus." },
+              "scope": { "enum": ["corpus", "outside", "external"] }
+            }
+          }
+        },
+        "production": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["text", "examples"],
+          "properties": {
+            "text": { "type": "string", "description": "`name = … ;`, exactly." },
+            "examples": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "refused": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "status", "state", "id"],
+      "properties": {
+        "schema": { "const": "nazm.docs-section/1" },
+        "status": { "enum": ["not_found", "stale_state"] },
+        "state": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "The current corpus state." },
+        "id": { "type": "string" }
+      }
+    },
+    "problem": {"type": "object", "additionalProperties": false, "required": ["kind", "document", "line", "value"], "properties": {"kind": {"enum": ["missing_document", "unreadable_document", "no_title", "malformed_anchor", "misplaced_anchor", "unsupported_heading", "unclosed_fence", "unclosed_comment", "empty_identity", "duplicate_id", "broken_link", "generated_region", "broken_generated_from", "grammar_syntax", "detached_comment", "undefined_reference"]}, "document": {"type": "string"}, "line": {"type": ["integer", "null"], "minimum": 1}, "value": {"type": ["string", "null"], "description": "The offending anchor, id, link or name."}}},
+    "unavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "status", "problems"],
+      "properties": {
+        "schema": { "const": "nazm.docs-section/1" },
+        "status": { "const": "unavailable" },
+        "problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } }
+      }
+    }
+  }
+}

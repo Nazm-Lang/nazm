@@ -48,6 +48,10 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // to it computing its own. Not `nazm-cache` either: an unsaved buffer is not state
         // the cache may record.
         "nazm-service" => &["nazm-span", "nazm-diag", "nazm-core"],
+        // Nazm's own documentation as sections, N32. It reads the corpus's files and nothing
+        // of the compiler: answering a documentation query must not need a parse, a check
+        // or a backend.
+        "nazm-docs" => &[],
         // The CLI deliberately does NOT depend on nazm-syntax: it goes through nazm-core,
         // so there is one entry point into the front end rather than two that can drift.
         "nazm-cli" => &[
@@ -58,17 +62,20 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
             "nazm-iface",
             "nazm-cache",
             "nazm-service",
+            "nazm-docs",
         ],
 
         // A read-only Model Context Protocol server, N27. It serialises what the language
         // service answers and nothing else: no parser, no checker of its own, no cache.
-        "nazm-mcp" => &["nazm-core", "nazm-service"],
+        "nazm-mcp" => &["nazm-core", "nazm-service", "nazm-docs"],
         // The measurement instrument answers to nothing. It must stay usable — and
         // auditable — with no compiler present, because it has to run against arms A1 and
         // A2 before Nazm exists, and its results have to be defensible independently of it.
         "nazm-bench" => &[],
         // Automation is allowed to know about everything, and nothing may depend on it.
-        "xtask" => &[],
+        // The one exception is the corpus gate, which validates the documentation with the
+        // reader every other consumer uses rather than a second one.
+        "xtask" => &["nazm-docs"],
         _ => return None,
     };
     Some(deps)
