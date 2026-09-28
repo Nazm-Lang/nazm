@@ -370,9 +370,58 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N30, in dependency order
+
+No item is chosen here; N30 left these standing.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Typed diagnostic facts (expected, actual, entity) | diagnostics ✓, the checker recording them | no diagnostic carries them today; reading them from prose is refused |
+| Further verbosity levels (explain, and the rest of G75) | compact and detail ✓ | not asked for; each is its own contract |
+| Diagnostic history | a retention contract | unchanged: nothing is kept between requests |
+| Build and test output redesign (G76) | diagnostics ✓ | independent |
+| Patch application, a transactional write | patch plans ✓ | its own safety milestone |
+| Rename of exported definitions | rename ✓, a project/importer boundary | unchanged since N18 |
+| A project or importer boundary | a manifest, or a declared universe of roots | nothing says which files may import a module |
+| Fixes of syntax diagnostics as patches | a binding for a recovered compilation | N28 has no snapshot where syntax needed recovery |
+| Semantic history, or a persistent snapshot store | snapshots ✓ | unchanged since N28 |
+| Effect and capability context | the language owning effects and capabilities | both are MISSING as language features |
+| Test-to-definition mapping | a relation the compiler owns | unchanged since N27 |
+| `semanticTokens/range` and `/full/delta` | semantic tokens ✓ | no evidence justifies them |
+| Refactors, source actions, fix-all | quick fixes ✓, patch plans ✓ | each is its own contract |
+| Incremental reparse | a lossless CST ✓ | still no evidence that forces it |
+| `nazm explain-cost` | nothing above | independent |
+| User-defined traits, or any capability beyond equality | generics ✓, a requirement ✓ | unchanged since N14 |
+
+### N30 — Compact machine diagnostics and progressive disclosure v1 — **complete, 2026-09-28**
+
+The first executable step toward G74, G75 and G77. `nazm.diagnostic-index/1` is every current
+diagnostic of a root compilation as compiler-owned facts — id, code, severity, file and byte range,
+owning definition, fix counts — with no prose; `nazm.diagnostic-detail/1` is one of them in full on
+request, the diagnostic exactly as `nazm.diagnostic/1` publishes it, with its places in their files
+and, for each fix, the N29 selector where a semantic patch is plannable. Compact diagnostics never
+infer structured semantics from diagnostic prose, and a compiler fix and an N29 semantic patch are
+distinct capabilities. Syntax diagnostics are indexed, bound to a digest of the loaded sources where
+N28 has no snapshot. `nazm diagnostics` prints both; `nazm-mcp` adds `nazm.diagnostics` and
+`nazm.diagnostic_detail`. `nazm.diagnostic/1`, `nazm check --json`, the language server and every
+existing schema are unchanged: `SEMANTIC_EPOCH` 7, `nazm.interface/5`; two new machine schemas.
+
+| Settled | Where |
+| --- | --- |
+| the index and detail, from `nazm-diag`, N22, N24, N28, N29 | `crates/nazm-service/src/diagnostics.rs`, `schema/nazm.diagnostic-index-1.json`, `schema/nazm.diagnostic-detail-1.json`, `architecture.md` §7.32 |
+| `nazm diagnostics [--detail ID --state DIGEST]` | `crates/nazm-cli/src/diagnostics.rs` |
+| `nazm-mcp`: `nazm.diagnostics`, `nazm.diagnostic_detail` | `crates/nazm-mcp/src/main.rs`, `docs/mcp.md` |
+| what it costs | `performance.md` |
+
+Mutation evidence: 18 new mutations; 26 killers verified on the final source — the eighteen and
+the eight MCP entries of N27–N29; one targeted campaign of 25, all caught at tier 1
+(`capability-matrix.md` §30).
+
+**N31 has not started.**
+
 ### After N29, in dependency order
 
-No item is chosen here; N29 left these standing.
+No item is chosen here; N29 left these standing. *Superseded by "After N30" above.*
 
 | | Depends on | Why not before |
 | --- | --- | --- |
@@ -383,7 +432,7 @@ No item is chosen here; N29 left these standing.
 | Semantic history, or a persistent snapshot store | snapshots ✓ | unchanged since N28 |
 | Effect and capability context | the language owning effects and capabilities | both are MISSING as language features |
 | Test-to-definition mapping | a relation the compiler owns | unchanged since N27 |
-| Machine-readable diagnostics beyond `nazm.diagnostic/1` | diagnostics ✓ | not asked for yet |
+| Machine-readable diagnostics beyond `nazm.diagnostic/1` | diagnostics ✓ | done in part by N30: a compact index and detail |
 | `semanticTokens/range` and `/full/delta` | semantic tokens ✓ | no evidence justifies them |
 | Refactors, source actions, fix-all | quick fixes ✓, patch plans ✓ | each is its own contract |
 | Incremental reparse | a lossless CST ✓ | still no evidence that forces it |
@@ -413,8 +462,6 @@ unchanged; one new machine schema.
 Mutation evidence: 16 new mutations; 30 killers verified on the final source — the sixteen, the
 nine N18 entries in `rename.rs` and the five MCP entries of N27 and N28; one targeted campaign of
 27, all caught at tier 1 (`capability-matrix.md` §30).
-
-**N30 has not started.**
 
 ### After N28, in dependency order
 

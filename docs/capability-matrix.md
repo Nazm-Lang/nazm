@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,629 passed, 0 failed, 13 ignored, across 88 suites**, run contained at
-N29 (2026-09-28), at P4T4; the thirteen ignored are the xtask lifecycle tests,
-run on their own (13 of 13 passed, contained). N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,647 passed, 0 failed, 13 ignored, across 89 suites**, run contained at
+N30 (2026-09-28), at P4T4; the thirteen ignored are the xtask lifecycle tests,
+run on their own (13 of 13 passed, contained). N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1129,8 +1129,42 @@ listed as unprovokable with a written reason. The capability inventory
 (`crates/nazm-cli/src/capabilities.rs`) is read from the compiler's own tables, and
 `docs/diagnostics.md` states the compatibility contract.
 
+*N30, 2026-09-28: Compact Diagnostic Index v1, `nazm.diagnostic-index/1` — VERIFIED; Diagnostic
+Detail v1, `nazm.diagnostic-detail/1` — VERIFIED; G74, G75, G77 — PARTIAL.* An index
+(`crates/nazm-service/src/diagnostics.rs`, `architecture.md` §7.32) is every current diagnostic
+of a root compilation as compiler-owned facts — `code@file:start-end#n` id, code, severity, file
+and UTF-8 byte range, owning durable definition, fix counts by applicability — with no prose,
+bound to a digest of the loaded sources and, where N28 has one, the snapshot; detail is one
+diagnostic exactly as `nazm.diagnostic/1` publishes it, its places in their files, and for each
+fix the N29 selector where a semantic patch is plannable. Compact diagnostics never infer
+structured semantics from diagnostic prose; a compiler fix and an N29 semantic patch are distinct
+capabilities. The goals are partial because no diagnostic carries typed expected/actual/entity
+facts (`facts: "unavailable"`), only the compact and detail levels exist, and there is no
+diagnostic history. Evidence: `crates/nazm-service/tests/diagnostics.rs` — an index with no
+sentence the compiler wrote in it, ordered by place, owned by `main`; each detail the canonical
+diagnostic with the index's code, place and owner; lexer and parser errors, a missing `;`, an
+unterminated string and a mutable parameter indexed with no snapshot and no owner, their compiler
+fixes no semantic patches; an automatic and a needs-review fix counted by applicability, each
+detail's selector planning exactly that patch through N29; one code twice in one file and across
+files as distinct ids, `lib.nz`'s places its own and its published offsets the concatenation's; a
+`+` after `é😀` at its byte offset, not its character index; a fake id refused, and after a move, a
+repair or another state every old id `stale_state`; byte-identical indexes from another directory,
+an edit in an imported file a new state, a broken file nothing imports absent, and two roots over
+one file each their own; unknown name, type mismatch, arity, visibility, a refused duplicate
+(no owner), a generic mismatch, an unsatisfied requirement and a task capture each indexed with
+its owner and detail; and 500 index and detail pairs leaving retained state unchanged. The unit
+tests tell two structurally identical diagnostics apart by ordinal alone and show rewording a
+diagnostic changes no index byte. `crates/nazm-cli/tests/schemas.rs` the real command's indexes
+and details valid against their schemas, every detail's diagnostic equal to a line of `nazm check
+--json` and valid as `nazm.diagnostic/1`. `crates/nazm-mcp/tests/protocol.rs` the real server:
+six read-only tools, index and detail equal to the service's, the index carried once, no root or
+file argument accepted, a stale id after an edit, syntax errors indexed, and 1,000 calls through
+edits and repairs with flat resident memory. Eighteen N30 mutations (area 30).
+
 **Limitation** · Two codes are unprovokable by construction. Spans are offsets into a
-merged buffer, so file identity is recovered rather than carried (area 2).
+merged buffer, so file identity is recovered rather than carried (area 2); the N30 index and
+detail recover it, by the same source map. No diagnostic carries typed facts, and the index is a
+module's analysis — a missing `main` (`N0204`) is `nazm check`'s, not the index's.
 
 **Next dependency** · None.
 
@@ -1648,9 +1682,9 @@ another syntax error, and nothing when any other file, or the document's top lev
 `.` is the only trigger character; `(` is not one. A hole's completion costs a second parse and
 check of the compilation per request (`performance.md`).
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
-are published for open documents only. **MCP is four read-only tools** (N27, N28, N29): the
-semantic context packet, the semantic snapshot, the delta against a client-kept snapshot, and a
-planned rename or fix, over stdio, from disk, for one fixed root — no resources, prompts,
+are published for open documents only. **MCP is six read-only tools** (N27–N30): the semantic
+context packet, the semantic snapshot, the delta against a client-kept snapshot, a planned rename
+or fix, and the current diagnostics compactly or one in full, over stdio, from disk, for one fixed root — no resources, prompts,
 completions, sampling or edits, no tool that applies a patch, no HTTP, no server-side history, and
 no view of an editor's unsaved buffers. A patch covers rename and compiler-owned fixes only — no
 exported rename, no multi-file edit, and no fix of a syntax diagnostic, whose compilation has no
@@ -1665,7 +1699,7 @@ contract; incremental reparse needs latency evidence, which N16's measurements d
 
 **Accepted when** · Met for the LSP, 2026-09-25 (N16): an adapter shares the compiler's
 semantic engine rather than re-implementing it. MCP: partial since N27 (2026-09-27) — read-only
-tools over the same service, three since N28, four since N29; not accepted, since they answer a
+tools over the same service, three since N28, four since N29, six since N30; not accepted, since they answer a
 few of the questions the service can, and none edits.
 
 ### 26. Package and build tooling — PARTIAL
@@ -1753,8 +1787,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **509** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28), **321** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **527** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29), **339** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -2309,6 +2343,23 @@ snapshot a patch binds to (an absolute path, the service generation, a recovered
 uninjected entry, no runner error. The `patch` suite joined the `cli`, `semantics` and `checker`
 profiles. N13's use-after-free survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and
 are as they were.
+
+*N30 (2026-09-28) added eighteen,* on the frozen final source. Every killer of the eighteen, and
+of the eight N27, N28 and N29 entries in the MCP server N30 extended, was verified by
+`--verify-killer`, contained at P1, one at a time, with no host build running: **26 of 26**. The
+eighteen attack N30's invariants: the index carrying the message, an id hashing it, an id of
+only its code or only an ordinal, a stale state answered, a state of the root file only or over
+absolute paths, concatenation offsets given as file offsets, an owner taken from a recovery or
+from the nearest declaration, syntax errors given no index, compiler fixes counted as patches, a
+syntax fix offered as a patch, needs-review counted automatic, a detail dropping the help, the
+directory scanned, and the MCP server sending an index twice or keeping the first. **Campaign
+`b488c311e0ac14ee`, targeted, P1, one session, 1,794 s:** those eighteen, two N24 entries (the
+requested range ignored, the diagnostic's span edited), three N29 diagnostic-fix entries (a fix
+taken from anywhere, an index that wraps, needs-review planned automatic) and two N28 entries (a
+recovered compilation snapshotted, an absolute path). **25 of 25 caught at tier 1**; nothing at
+tier 2 or 3, no survivor, crash, timeout, unusable or uninjected entry, no runner error. The
+`diagnostics` suite joined the `cli`, `semantics` and `checker` profiles. N13's use-after-free
+survivor and the `nesting-unbounded` MUTANT CRASH were not re-run and are as they were.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

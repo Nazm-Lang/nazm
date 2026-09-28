@@ -1,10 +1,11 @@
 # `nazm-mcp`
 
 A read-only [Model Context Protocol](https://modelcontextprotocol.io) server over stdio, built on
-the official Rust SDK. It offers four tools: the compiler's semantic context packet for a
+the official Rust SDK. It offers six tools: the compiler's semantic context packet for a
 definition (N27), a semantic snapshot of the root's compilation and the delta against one kept
-earlier (N28), and a planned rename or diagnostic fix (N29). It is local compiler tooling — it
-answers questions about one program, and changes nothing.
+earlier (N28), a planned rename or diagnostic fix (N29), and the current diagnostics compactly or
+one in full (N30). It is local compiler tooling — it answers questions about one program, and
+changes nothing.
 
 ## Running it
 
@@ -35,6 +36,8 @@ claims to know every caller or importer in a project.
 | `nazm.semantic_snapshot` | none | `nazm.snapshot/1` |
 | `nazm.semantic_delta` | `baseline`, a `nazm.snapshot/1` object | `nazm.delta/1` |
 | `nazm.semantic_patch` | `operation` (`rename` or `diagnostic_fix`) and its fields | `nazm.patch/1` |
+| `nazm.diagnostics` | none | `nazm.diagnostic-index/1` |
+| `nazm.diagnostic_detail` | `id`, `state` | `nazm.diagnostic-detail/1` |
 
 Each result is carried **once**, in the tool result's structured content, with an empty `content`,
 and each tool's output schema is the published one in `schema/`.
@@ -104,6 +107,18 @@ definition's rename is refused, because one root compilation is not every module
 it; so is a fix at a position with no current diagnostic, whatever code a client expects there,
 and any fix of a syntax diagnostic, whose compilation has no snapshot to bind to. The input is
 typed: no root, no unknown argument, and no client-written replacement is accepted.
+
+### `nazm.diagnostics` and `nazm.diagnostic_detail`
+
+Progressive disclosure. `nazm.diagnostics` lists every current diagnostic of the root's
+compilation compactly (`schema/nazm.diagnostic-index-1.json`, `docs/architecture.md` §7.32): each
+one's `id`, code, severity, file and byte range, owning definition and fix counts — none of its
+message, help or label text. Syntax errors are included. `nazm.diagnostic_detail`, with an `id`
+and the index's `state.source`, returns that one diagnostic exactly as `nazm.diagnostic/1`
+publishes it, with its places in their files, and for each fix the `nazm.semantic_patch` request
+that plans it where N29 can — a compiler fix of a syntax diagnostic has none. If the sources have
+changed since the index, the detail is refused as `stale_state`; ask for a fresh index. No fact is
+read from prose, and `facts` is `unavailable`: the compiler records none.
 
 ## What it reads, and when
 
