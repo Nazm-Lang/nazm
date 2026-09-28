@@ -439,6 +439,11 @@ pub(crate) struct Options {
     /// Each step's internal parallelism. N14.1; serial unless a profile says otherwise,
     /// and part of the campaign's identity either way.
     pub(crate) parallelism: plan::Parallelism,
+    /// Verify every decided mutant's declared killers in the same session, around the one
+    /// injection the verdict is taken from: each passes pristine, fails on the mutant and
+    /// passes restored. Not part of the campaign's identity: it changes no verdict and is
+    /// not journaled. N32-H.
+    pub(crate) verify_killers: bool,
 }
 
 impl Options {
@@ -457,6 +462,7 @@ impl Options {
             source_commit: None,
             export_journal: false,
             parallelism: plan::Parallelism::SERIAL,
+            verify_killers: false,
         }
     }
 
@@ -789,6 +795,11 @@ pub(crate) fn run_all(o: &Options) -> End {
     let mut finalized = BTreeSet::new();
     let mut not_reached = Vec::new();
     let mut stopped = false;
+    // Killer verification in this session (verified, checked), the mutants whose verdict
+    // was reused and so were not verified here, and each decided mutant's seconds.
+    let mut killer_checks = (0usize, 0usize);
+    let mut unverified: Vec<String> = Vec::new();
+    let mut mutant_secs: Vec<f64> = Vec::new();
     for p in &plans {
         if let Some(r) = reuse(&p.name) {
             println!(
@@ -797,6 +808,9 @@ pub(crate) fn run_all(o: &Options) -> End {
                 p.name,
                 r.detail
             );
+            if o.verify_killers && !p.killers.is_empty() {
+                unverified.push(p.name.clone());
+            }
             summary.add(r, true);
             finalized.insert(p.name.clone());
             if let Some(m) = cat.mutation.get(p.index) {
@@ -820,8 +834,23 @@ pub(crate) fn run_all(o: &Options) -> End {
                 .join("logs")
                 .join(format!("{:03}-{}", p.index + 1, p.name));
         match run_one(o, p, m, baseline_results, Some(logs)) {
-            Ok(r) => {
+            Ok((r, checks)) => {
                 println!("  {} {}  ({})", word(&r.verdict), p.name, r.detail);
+                for c in &checks {
+                    println!("{}", c.line());
+                    killer_checks.1 += 1;
+                    if c.verified() {
+                        killer_checks.0 += 1;
+                    } else {
+                        problems.push(format!(
+                            "{}: {} is not a killer ({})",
+                            p.name,
+                            c.label,
+                            c.states()
+                        ));
+                    }
+                }
+                mutant_secs.push(r.secs.total);
                 if let Err(e) = journal.append(&r) {
                     problems.push(format!(
                         "{}: the verdict could not be journaled ({e})",
@@ -855,6 +884,34 @@ pub(crate) fn run_all(o: &Options) -> End {
     summary.not_reached = not_reached.clone();
     summary.wall = started.elapsed().as_secs_f64();
     print!("{}", summary.render(&key, o.strategy));
+    println!(
+        "{}",
+        session_timing(summary.setup_secs, &mutant_secs, summary.wall)
+    );
+    if o.verify_killers {
+        println!(
+            "  killer verification  {} of {} verified in this session{}",
+            killer_checks.0,
+            killer_checks.1,
+            if unverified.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; {} reused, not verified here: {}",
+                    unverified.len(),
+                    unverified.join(", ")
+                )
+            }
+        );
+        if !unverified.is_empty() {
+            problems.push(format!(
+                "{} mutation(s) had their verdict reused from the journal, so their killers were \
+                 not verified in this session: {}",
+                unverified.len(),
+                unverified.join(", ")
+            ));
+        }
+    }
     let names: Vec<String> = plans.iter().map(|p| p.name.clone()).collect();
     if !campaign::accounted(&names, &finalized, &not_reached) {
         problems.push(
@@ -864,7 +921,7 @@ pub(crate) fn run_all(o: &Options) -> End {
 
     if stopped {
         End::Refused(problems)
-    } else if !not_reached.is_empty() {
+    } else if !not_reached.is_empty() || !unverified.is_empty() {
         problems.push(format!(
             "{} of {} selected mutations were not reached this session: {}. Resume with \
              `--resume`; nothing about them has been established.",
@@ -933,7 +990,7 @@ fn run_one(
     m: &Mutation,
     baseline_results: usize,
     logs: Option<PathBuf>,
-) -> Result<Record, String> {
+) -> Result<(Record, Vec<KillerCheck>), String> {
     let t0 = Instant::now();
     let path: PathBuf = o.root.join(&m.file);
     let timing =
@@ -945,29 +1002,33 @@ fn run_one(
             restore,
             total: t0.elapsed().as_secs_f64(),
         };
-    let not_injected = |why: String, original: Option<&str>| -> Result<Record, String> {
-        let v = Verdict::NotInjected(why);
-        let (proof, digest) = match original {
-            Some(orig) => (
-                campaign::untouched(&path, orig)?,
-                campaign::blake(orig.as_bytes()),
-            ),
-            // Nothing could be read, so nothing was written. The proof is vacuous and
-            // says so: the digests are of the empty input.
-            None => (campaign::untouched_absent(), campaign::blake(b"")),
+    let not_injected =
+        |why: String, original: Option<&str>| -> Result<(Record, Vec<KillerCheck>), String> {
+            let v = Verdict::NotInjected(why);
+            let (proof, digest) = match original {
+                Some(orig) => (
+                    campaign::untouched(&path, orig)?,
+                    campaign::blake(orig.as_bytes()),
+                ),
+                // Nothing could be read, so nothing was written. The proof is vacuous and
+                // says so: the digests are of the empty input.
+                None => (campaign::untouched_absent(), campaign::blake(b"")),
+            };
+            Ok((
+                Record::finalize(
+                    p,
+                    o.strategy,
+                    &v,
+                    Vec::new(),
+                    digest,
+                    None,
+                    proof,
+                    timing(0.0, 0.0, &[], 0.0),
+                    Vec::new(),
+                ),
+                Vec::new(),
+            ))
         };
-        Ok(Record::finalize(
-            p,
-            o.strategy,
-            &v,
-            Vec::new(),
-            digest,
-            None,
-            proof,
-            timing(0.0, 0.0, &[], 0.0),
-            Vec::new(),
-        ))
-    };
 
     let Ok(original) = fs::read_to_string(&path) else {
         return not_injected(format!("cannot read {}", m.file), None);
@@ -992,6 +1053,24 @@ fn run_one(
             Some(&original),
         );
     }
+
+    let mut ex = campaign::Real {
+        root: &o.root,
+        deadlines: o.deadlines,
+        parallelism: o.parallelism,
+        reset_derived: o.reset_derived,
+        logs,
+        failing: Vec::new(),
+    };
+    // The pristine half of killer verification: before anything is written. `cargo test`
+    // rebuilds whatever the previous mutant's restoration touched.
+    let verify = o.verify_killers && !p.killers.is_empty();
+    let pristine = if verify {
+        killer_words(&mut ex, &p.killers)
+    } else {
+        Vec::new()
+    };
+    ex.failing.clear();
 
     // Write-ahead: the original goes to disk before the file is touched, so a killed
     // process leaves a recoverable record rather than a silently mutated tree. The
@@ -1019,15 +1098,17 @@ fn run_one(
     }
     let apply = t0.elapsed().as_secs_f64();
 
-    let mut ex = campaign::Real {
-        root: &o.root,
-        deadlines: o.deadlines,
-        parallelism: o.parallelism,
-        reset_derived: o.reset_derived,
-        logs,
-        failing: Vec::new(),
-    };
     let prov = campaign::decide(p, o.strategy, &mut ex, baseline_results);
+    // The mutant half, on the build the verdict was just taken from: every killer, each
+    // run exactly, whether or not the verdict stopped at the first.
+    let mutant = if verify {
+        let failing = std::mem::take(&mut ex.failing);
+        let w = killer_words(&mut ex, &p.killers);
+        ex.failing = failing;
+        w
+    } else {
+        Vec::new()
+    };
 
     let r0 = Instant::now();
     let proof =
@@ -1041,20 +1122,131 @@ fn run_one(
             )
         })?;
     let restore_secs = r0.elapsed().as_secs_f64();
-    let secs = timing(apply, prov.build_secs, &prov.steps, restore_secs);
-    let mut candidates = ex.failing;
+    let mut candidates = std::mem::take(&mut ex.failing);
     candidates.dedup();
-    Ok(Record::finalize(
-        p,
-        o.strategy,
-        &prov.verdict,
-        prov.steps,
-        campaign::blake(original.as_bytes()),
-        Some(campaign::blake(mutated.as_bytes())),
-        proof,
-        secs,
-        candidates,
+    // The restored half: the file is its original bytes again, digest-checked above, and
+    // `cargo test` rebuilds from them.
+    let checks = if verify {
+        let restored = killer_words(&mut ex, &p.killers);
+        p.killers
+            .iter()
+            .enumerate()
+            .map(|(i, k)| KillerCheck {
+                label: k.label(),
+                pristine: pristine.get(i).copied().unwrap_or("unclear"),
+                mutant: mutant.get(i).copied().unwrap_or("unclear"),
+                restored: restored.get(i).copied().unwrap_or("unclear"),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let secs = timing(apply, prov.build_secs, &prov.steps, restore_secs);
+    Ok((
+        Record::finalize(
+            p,
+            o.strategy,
+            &prov.verdict,
+            prov.steps,
+            campaign::blake(original.as_bytes()),
+            Some(campaign::blake(mutated.as_bytes())),
+            proof,
+            secs,
+            candidates,
+        ),
+        checks,
     ))
+}
+
+/// One declared killer's three observations around one injection. Verified only as
+/// `passes`, `fails`, `passes` — the law `verify_killer` applies, unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KillerCheck {
+    pub(crate) label: String,
+    pub(crate) pristine: &'static str,
+    pub(crate) mutant: &'static str,
+    pub(crate) restored: &'static str,
+}
+
+impl KillerCheck {
+    pub(crate) fn verified(&self) -> bool {
+        self.pristine == "passes" && self.mutant == "fails" && self.restored == "passes"
+    }
+
+    fn states(&self) -> String {
+        format!(
+            "pristine {}, mutant {}, restored {}",
+            self.pristine, self.mutant, self.restored
+        )
+    }
+
+    fn line(&self) -> String {
+        format!(
+            "    {} {}: {}",
+            if self.verified() {
+                "VERIFIED    "
+            } else {
+                "NOT A KILLER"
+            },
+            self.label,
+            self.states()
+        )
+    }
+}
+
+/// What one exact killer run says: `passes`, `fails`, or `unclear` for anything that is
+/// not exactly one test reported once.
+fn killer_word(obs: &Observation) -> &'static str {
+    match obs {
+        Observation::Completed {
+            passed: 1,
+            failing: 0,
+            result_lines: 1,
+            ..
+        } => "passes",
+        Observation::Completed {
+            passed: 0,
+            failing: 1,
+            result_lines: 1,
+            ..
+        } => "fails",
+        _ => "unclear",
+    }
+}
+
+/// Run each killer exactly, as a Tier-1 step is run, and read each.
+fn killer_words(ex: &mut campaign::Real<'_>, killers: &[plan::TestSelector]) -> Vec<&'static str> {
+    killers
+        .iter()
+        .map(|k| {
+            let step = campaign::Step {
+                tier: campaign::Tier::Direct,
+                selector: Some(k.clone()),
+            };
+            killer_word(&ex.test(&step, 1).0)
+        })
+        .collect()
+}
+
+/// The session's timing: setup — tree digest, pristine build, baseline suite, killer
+/// listing — once, then each decided mutant. N32-H.
+fn session_timing(setup: f64, mutants: &[f64], wall: f64) -> String {
+    let mut sorted = mutants.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    // Nearest rank, in whole percent: no float index.
+    let pick = |percent: usize| {
+        let rank = (sorted.len().saturating_sub(1) * percent + 50)
+            .checked_div(100)
+            .unwrap_or(0);
+        sorted.get(rank).copied().unwrap_or(0.0)
+    };
+    format!(
+        "  session timing       setup {setup:.0}s once; {} mutant(s) decided, {:.0}s, median {:.1}s, p95 {:.1}s; wall {wall:.0}s",
+        mutants.len(),
+        mutants.iter().sum::<f64>(),
+        pick(50),
+        pick(95)
+    )
 }
 
 /// A killer candidate named on the command line: `package:lib:name`,
@@ -1154,29 +1346,24 @@ pub(crate) fn verify_killer(
                     selector: Some(k.clone()),
                 };
                 let (obs, _, _) = ex.test(&step, 1);
-                let w = match obs {
-                    Observation::Completed {
-                        passed: 1,
-                        failing: 0,
-                        result_lines: 1,
-                        ..
-                    } => "passes",
-                    Observation::Completed {
-                        passed: 0,
-                        failing: 1,
-                        result_lines: 1,
-                        ..
-                    } => "fails",
-                    _ => "unclear",
-                };
-                (k.label(), w)
+                (k.label(), killer_word(&obs))
             })
             .collect()
     };
 
+    let clock = Instant::now();
+    let mut phases: Vec<(&str, f64)> = Vec::new();
+    let mark = |phases: &mut Vec<(&'static str, f64)>, what: &'static str, since: &mut Instant| {
+        phases.push((what, since.elapsed().as_secs_f64()));
+        *since = Instant::now();
+    };
+    let mut since = Instant::now();
     build(&mut ex, "pristine").map_err(|e| vec![e])?;
+    mark(&mut phases, "pristine build", &mut since);
     verify_listed(o, &plans)?;
+    mark(&mut phases, "killer listing", &mut since);
     let before = run_all_killers(&mut ex);
+    mark(&mut phases, "pristine killers", &mut since);
 
     let path = o.root.join(&m.file);
     let original = fs::read_to_string(&path).map_err(|e| vec![format!("{}: {e}", m.file)])?;
@@ -1199,8 +1386,14 @@ pub(crate) fn verify_killer(
         let _ = fs::remove_file(&backup);
         return Err(vec![format!("cannot write {}: {e}", m.file)]);
     }
+    mark(&mut phases, "inject", &mut since);
     let under = match build(&mut ex, "mutant") {
-        Ok(()) => Ok(run_all_killers(&mut ex)),
+        Ok(()) => {
+            mark(&mut phases, "mutant build", &mut since);
+            let r = run_all_killers(&mut ex);
+            mark(&mut phases, "mutant killers", &mut since);
+            Ok(r)
+        }
         Err(e) => Err(e),
     };
     campaign::restore(&path, &original, &backup, |p, c| fs::write(p, c)).map_err(|e| {
@@ -1210,9 +1403,18 @@ pub(crate) fn verify_killer(
             backup.display()
         )]
     })?;
+    mark(&mut phases, "restore", &mut since);
     build(&mut ex, "restored").map_err(|e| vec![e])?;
+    mark(&mut phases, "restored build", &mut since);
     let after = run_all_killers(&mut ex);
+    mark(&mut phases, "restored killers", &mut since);
     drop(lock);
+    let timing: Vec<String> = phases.iter().map(|(w, t)| format!("{w} {t:.1}s")).collect();
+    println!(
+        "timing {name}: {} — total {:.1}s",
+        timing.join(", "),
+        clock.elapsed().as_secs_f64()
+    );
     let under = under.map_err(|e| {
         vec![format!(
             "{e}: a mutant that does not build cannot verify a killer"
@@ -1438,6 +1640,29 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::process::Command;
+
+    /// The verification law a warm session applies is `verify_killer`'s, and only its
+    /// exact shape verifies: passes, fails, passes. N32-H.
+    #[test]
+    fn a_killer_is_verified_only_by_passes_fails_passes() {
+        let check = |pristine, mutant, restored| super::KillerCheck {
+            label: "k".to_owned(),
+            pristine,
+            mutant,
+            restored,
+        };
+        assert!(check("passes", "fails", "passes").verified());
+        for (p, m, r) in [
+            ("passes", "passes", "passes"),
+            ("passes", "unclear", "passes"),
+            ("fails", "fails", "passes"),
+            ("unclear", "fails", "passes"),
+            ("passes", "fails", "fails"),
+            ("passes", "fails", "unclear"),
+        ] {
+            assert!(!check(p, m, r).verified(), "{p} {m} {r}");
+        }
+    }
 
     /// A root with one source file, mutated, and the write-ahead record describing it —
     /// the state a run that was killed mid-mutation leaves behind.

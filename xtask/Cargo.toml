@@ -20,6 +20,9 @@ toml = { workspace = true }
 # accidental collision would reuse a verdict for a tree it was never measured against.
 # Already in the lockfile through `nazm-cache`, with the same pure-Rust feature set.
 blake3 = { workspace = true }
+# The documentation corpus gate (N32) reads the corpus with the reader `nazm docs` uses, so
+# the two cannot disagree. It depends on no compiler crate.
+nazm-docs = { workspace = true }
 
 # Only for tests: the restoration and lifecycle tests build throwaway trees to
 # interrupt and repair, and they must never touch the real checkout.

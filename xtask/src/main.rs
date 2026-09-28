@@ -39,6 +39,7 @@ fn main() -> ExitCode {
         Some("check-runtime") => report(&[("runtime parity", check_runtime_parity())]),
         Some("check-mutations") => report(&[("mutations apply", check_mutations_apply())]),
         Some("check-guide") => report(&[("guide from grammar", guide::check())]),
+        Some("check-corpus") => report(&[("docs corpus", check_docs_corpus())]),
         Some("bench") => {
             let rest: Vec<String> = args.collect();
             let mode = if rest.iter().any(|a| a == "--save") {
@@ -115,6 +116,8 @@ fn help() {
            check-cache     a check key still covers everything checking reads\n  \
            check-symbols   a native symbol comes from identity, not from position\n  \
            check-guide     docs/guide.md is what docs/grammar.ebnf produces\n  \
+           check-corpus    the documentation corpus sections: every document there, every\n  \
+                           id unique, every link resolved, the grammar parsed\n  \
            guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
            bench           measure; --save records a baseline, --check compares to one,\n  \
                            --runs N sets the repetitions (default 5)\n  \
@@ -129,6 +132,9 @@ fn help() {
                            --verify-killer M  prove candidate killers for mutation M:\n  \
                                               pass pristine, fail mutated, pass restored\n  \
                            --killer P:T:NAME  a candidate, T = lib | test=X | bin=X\n  \
+                           --verify-killers   also verify every decided mutant's catalogued\n  \
+                                              killers in the same session, around the\n  \
+                                              one injection its verdict is taken from\n  \
            mutate-recover  repair a tree an interrupted mutation run left mutated;\n  \
                            needs --confirm-no-writers, and read what it prints first\n  \
            help            this message\n"
@@ -152,7 +158,36 @@ fn run_checks() -> ExitCode {
         ("runtime parity", check_runtime_parity()),
         ("mutations apply", check_mutations_apply()),
         ("guide from grammar", guide::check()),
+        ("docs corpus", check_docs_corpus()),
     ])
+}
+
+/// The documentation corpus `nazm docs` and `nazm-mcp` answer from sections cleanly: every
+/// allowlisted document exists and is UTF-8, every section id is unique — so no anchor, and
+/// no rule id an anchor carries, is defined twice — every in-corpus link and every generated
+/// guide rule resolves, and the grammar parses into productions whose references are all
+/// defined. Read with `nazm-docs` itself, so the gate and the tools cannot disagree about
+/// what the corpus is. N32.
+fn check_docs_corpus() -> Result<(), Vec<String>> {
+    let Some(root) = workspace_root() else {
+        return Err(vec!["could not locate workspace root".to_owned()]);
+    };
+    nazm_docs::Corpus::load(&root, nazm_docs::CORPUS)
+        .map(|_| ())
+        .map_err(|problems| {
+            problems
+                .into_iter()
+                .map(|p| {
+                    format!(
+                        "{}{}: {}{}",
+                        p.document,
+                        p.line.map(|l| format!(":{l}")).unwrap_or_default(),
+                        p.kind,
+                        p.value.map(|v| format!(" `{v}`")).unwrap_or_default()
+                    )
+                })
+                .collect()
+        })
 }
 
 fn report(results: &[(&str, Result<(), Vec<String>>)]) -> ExitCode {
@@ -303,8 +338,9 @@ fn collect_rs(dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>>
 ///
 /// The language's documented claims are checked by `crates/nazm-cli/tests/docs.rs`,
 /// which can run the binary and read the emitter's own constants — neither of which
-/// `xtask` may do, since it depends on no internal crate. It is a test rather than a
-/// gate for that reason, and `cargo test --workspace` runs it.
+/// `xtask` may do, since it depends on no compiler crate (its one internal dependency is
+/// `nazm-docs`, for the corpus gate). It is a test rather than a gate for that reason, and
+/// `cargo test --workspace` runs it.
 /// The workspace root: this crate's manifest directory, one level up.
 fn workspace_root() -> Option<std::path::PathBuf> {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1773,6 +1809,7 @@ fn mutate_run(args: &mut impl Iterator<Item = String>) -> ExitCode {
     if let Some(n) = f.get("test-threads").and_then(|n| n.parse().ok()) {
         o.parallelism.test_threads = n;
     }
+    o.verify_killers = f.contains_key("verify-killers");
     finish_campaign(mutate::run_all(&o))
 }
 
@@ -1854,6 +1891,11 @@ fn mutate_cli(rest: &[String]) -> ExitCode {
             }
             "--export-journal" => {
                 o.export_journal = true;
+                1
+            }
+            // N32-H: verify each decided mutant's killers in the same warm session.
+            "--verify-killers" => {
+                o.verify_killers = true;
                 1
             }
             // N14.1: each step's internal parallelism. Never more mutants at once.
@@ -2226,9 +2268,19 @@ fn run_contained(args: &[String]) -> ExitCode {
             // says why: a check entry is keyed by the checker's declared identity, which
             // a mutant shares with the pristine checker).
             //
-            // One container is one campaign session: one cold build, one baseline, then
-            // every mutant against the same target directory. A session that runs out of
-            // budget ends *incomplete* and `--resume` continues it from the journal.
+            // One container is one campaign session: one warm worker. One copy, one
+            // pristine build, one baseline, then every mutant in turn against the same
+            // target directory — at most one mutant injected at a time, each restored and
+            // digest-checked before the next. A session that runs out of budget ends
+            // *incomplete* and `--resume` continues it from the journal in a new one.
+            //
+            // The target is `/work/target`, which the image warms with the workspace's
+            // registry dependencies: the container's own writable layer, discarded with
+            // it, so nothing is shared with the host or with another session. Workspace
+            // crates live at `/work/mut`, a path the image's artefacts were never built
+            // for, so every one of them is compiled from the copy; only dependencies whose
+            // package, version and features are unchanged are reused, which is what
+            // Cargo's fingerprints key them on. N32-H: this halved the cold build.
             bounds.deadline = Duration::from_secs(3000);
             let passed = match mutate_passthrough(args.get(1..).unwrap_or_default()) {
                 Ok(a) => a,
@@ -2277,9 +2329,9 @@ fn run_contained(args: &[String]) -> ExitCode {
                 shell(&format!(
                     "rm -rf /work/mut && mkdir -p /work/mut /work/campaigns \
                      && tar -C /src -cf - --exclude=./target --exclude=./.git --exclude=.nazm . | tar -C /work/mut -xf - \
-                     && cd /work/mut && export CARGO_TARGET_DIR=/work/mut/target \
+                     && cd /work/mut && export CARGO_TARGET_DIR=/work/target \
                      && cargo build -q -p xtask --jobs {j} \
-                     && exec timeout -s TERM -k 15 {deadline} /work/mut/target/debug/xtask mutate \
+                     && exec timeout -s TERM -k 15 {deadline} /work/target/debug/xtask mutate \
                         --reset-derived-caches --export-journal --campaign-dir /work/campaigns \
                         --resume-from /src/target/mutation-campaigns {par}{commit}{budget}{passed}"
                 )),
@@ -2460,7 +2512,7 @@ fn mutate_passthrough(args: &[String]) -> Result<String, String> {
         "--verify-killer",
         "--killer",
     ];
-    const SWITCHES: &[&str] = &["--plan", "--resume"];
+    const SWITCHES: &[&str] = &["--plan", "--resume", "--verify-killers"];
     let safe = |v: &str| {
         !v.is_empty()
             && v.chars()
