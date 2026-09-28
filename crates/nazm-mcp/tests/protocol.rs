@@ -31,6 +31,8 @@ const PATCH: &str = "nazm.semantic_patch";
 const DIAGNOSTICS: &str = "nazm.diagnostics";
 const DETAIL: &str = "nazm.diagnostic_detail";
 const SUMMARY: &str = "nazm.command_summary";
+const DOCS_INDEX: &str = "nazm.docs_index";
+const DOCS_SECTION: &str = "nazm.docs_section";
 
 const LIB: &str = "pub fn far() -> Int { 1 }\n";
 const MAIN: &str = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nenum S {\n    A,\n    B(v: Int),\n}\nfn f(p: P) -> Int { far() + p.x }\nfn g() -> Int { f(P(x: 1)) }\n";
@@ -144,7 +146,17 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
         let names: Vec<&str> = tools.iter().map(|t| &*t.name).collect();
         assert_eq!(
             names,
-            [TOOL, SNAPSHOT, DELTA, PATCH, DIAGNOSTICS, DETAIL, SUMMARY]
+            [
+                TOOL,
+                SNAPSHOT,
+                DELTA,
+                PATCH,
+                DIAGNOSTICS,
+                DETAIL,
+                SUMMARY,
+                DOCS_INDEX,
+                DOCS_SECTION
+            ]
         );
         for (tool, schema) in tools.iter().zip([
             "nazm.context-1.json",
@@ -154,6 +166,8 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
             "nazm.diagnostic-index-1.json",
             "nazm.diagnostic-detail-1.json",
             "nazm.command-summary-1.json",
+            "nazm.docs-index-1.json",
+            "nazm.docs-section-1.json",
         ]) {
             let annotations = tool.annotations.as_ref().unwrap();
             assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
@@ -218,6 +232,30 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
         assert!(summary.contains("\"check\""), "{summary}");
         for word in ["build", "\"test\"", "shell", "command\"", "\"root\""] {
             assert!(!summary.contains(word), "{word}: {summary}");
+        }
+        // The documentation tools take an id and a state, or an optional document — never a
+        // path, a file or a root.
+        let docs_index = Value::Object((*tools[7].input_schema).clone());
+        let keys: Vec<&String> = docs_index["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect();
+        assert_eq!(keys, ["document"]);
+        let docs_section = Value::Object((*tools[8].input_schema).clone());
+        let mut required: Vec<&str> = docs_section["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        required.sort_unstable();
+        assert_eq!(required, ["id", "state"]);
+        for schema in [&docs_index, &docs_section] {
+            let text = schema.to_string();
+            for word in ["\"path\"", "\"file\"", "\"root\"", "\"query\""] {
+                assert!(!text.contains(word), "{word}: {text}");
+            }
         }
         let tool = &tools[0];
         let input = Value::Object((*tool.input_schema).clone());
@@ -1154,6 +1192,230 @@ fn a_thousand_check_summaries_are_each_of_the_disk_and_keep_nothing() {
         let after = rss_kb(pid);
         assert!(after <= settled + 1024, "{settled} kB -> {after} kB");
         eprintln!("nazm-mcp RSS: settled {settled} kB, after 1,000 summary calls {after} kB");
+        client.cancel().await.unwrap();
+    });
+}
+
+// --- Nazm's own documentation (N32). ---
+
+/// A server whose documentation tools read `docs`.
+async fn connect_docs(root: &Path, docs: &Path) -> (RunningService<RoleClient, ()>, u32) {
+    let transport = TokioChildProcess::new(tokio::process::Command::new(SERVER).configure(|c| {
+        c.arg("--root").arg(root).arg("--docs").arg(docs);
+    }))
+    .unwrap();
+    let pid = transport.id().unwrap();
+    (().serve(transport).await.unwrap(), pid)
+}
+
+/// The smallest corpus the manifest accepts: every document, a title and one anchored
+/// section each; the guide's generated region naming the one production.
+fn tiny_corpus() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for d in nazm_docs::CORPUS {
+        let text = match (d.format, d.authority) {
+            (nazm_docs::Format::Ebnf, _) => "(* header *)\n\na = \"x\" ;\n".to_owned(),
+            (_, nazm_docs::Authority::Guide) => format!(
+                "# guide\n\n{}\n### `a`\n\n{}\n",
+                nazm_docs::GUIDE_BEGIN,
+                nazm_docs::GUIDE_END
+            ),
+            _ => format!(
+                "# {id}\n\n## One\n<!-- id: one -->\ntext of {id}\n",
+                id = d.id
+            ),
+        };
+        let p = dir.path().join(d.path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+    dir
+}
+
+#[test]
+fn documentation_crosses_the_protocol_unchanged_by_id_and_never_by_path() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    let docs = nazm_docs::default_root();
+    runtime().block_on(async {
+        // No `--docs`: the repository this server was built from.
+        let (client, _) = connect(&root).await;
+        let (index, error) = call_with(&client, DOCS_INDEX, json!({})).await;
+        assert!(!error);
+        assert_eq!(
+            index,
+            serde_json::to_value(nazm_docs::index(&docs, None)).unwrap()
+        );
+        let state = index["state"].as_str().unwrap().to_owned();
+        let (one, _) = call_with(&client, DOCS_INDEX, json!({"document": "goals"})).await;
+        assert_eq!(one["documents"].as_array().unwrap().len(), 1);
+        let (g78, error) = call_with(
+            &client,
+            DOCS_SECTION,
+            json!({"id": "goals:G78", "state": state}),
+        )
+        .await;
+        assert!(!error);
+        assert_eq!(
+            g78,
+            serde_json::to_value(nazm_docs::section(&docs, "goals:G78", Some(&state))).unwrap()
+        );
+        assert_eq!(g78["authority"], "goal");
+        // An id that names no section is not found — a path is only an id no section has,
+        // and it is never opened.
+        for id in [
+            "../README.md",
+            "/etc/passwd",
+            "docs/spec.md",
+            "target/debug/nazm",
+            "spec:gener",
+        ] {
+            let (v, error) =
+                call_with(&client, DOCS_SECTION, json!({"id": id, "state": state})).await;
+            assert_eq!(v["status"], "not_found", "{id}");
+            assert!(error, "{id}");
+        }
+        let (v, _) = call_with(&client, DOCS_INDEX, json!({"document": "../README.md"})).await;
+        assert_eq!(v["status"], "not_found");
+        // A path, a root or a missing state is not an argument these tools have.
+        for (tool, arguments) in [
+            (
+                DOCS_SECTION,
+                json!({"id": "spec", "state": state, "path": "/etc/passwd"}),
+            ),
+            (DOCS_SECTION, json!({"path": "docs/spec.md"})),
+            (DOCS_SECTION, json!({"id": "spec"})),
+            (DOCS_INDEX, json!({"root": "/"})),
+            (DOCS_INDEX, json!({"query": "generics"})),
+        ] {
+            let r = client
+                .call_tool(
+                    CallToolRequestParams::new(tool)
+                        .with_arguments(serde_json::from_value(arguments.clone()).unwrap()),
+                )
+                .await;
+            assert!(r.is_err(), "{tool} {arguments}");
+        }
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_documentation_section_is_of_the_disk_at_that_call_and_an_old_state_is_stale() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    let docs = tiny_corpus();
+    let spec = docs.path().join("docs/spec.md");
+    runtime().block_on(async {
+        let (client, _) = connect_docs(&root, docs.path()).await;
+        let (index, _) = call_with(&client, DOCS_INDEX, json!({})).await;
+        let old = index["state"].as_str().unwrap().to_owned();
+        let (s, _) = call_with(
+            &client,
+            DOCS_SECTION,
+            json!({"id": "spec:one", "state": old}),
+        )
+        .await;
+        assert_eq!(s["body"], "## One\n<!-- id: one -->\ntext of spec\n");
+        std::fs::write(
+            &spec,
+            "# spec\n\n## One, reworded\n<!-- id: one -->\nedited\n",
+        )
+        .unwrap();
+        let (s, error) = call_with(
+            &client,
+            DOCS_SECTION,
+            json!({"id": "spec:one", "state": old}),
+        )
+        .await;
+        assert_eq!(s["status"], "stale_state");
+        assert!(error);
+        let (index, _) = call_with(&client, DOCS_INDEX, json!({})).await;
+        let new = index["state"].as_str().unwrap().to_owned();
+        assert_ne!(new, old);
+        let (s, _) = call_with(
+            &client,
+            DOCS_SECTION,
+            json!({"id": "spec:one", "state": new}),
+        )
+        .await;
+        assert_eq!(s["body"], "## One, reworded\n<!-- id: one -->\nedited\n");
+        // A corpus that stops sectioning is unavailable, never its last good index.
+        std::fs::write(&spec, "no title\n").unwrap();
+        let (i, error) = call_with(&client, DOCS_INDEX, json!({})).await;
+        assert_eq!(i["status"], "unavailable");
+        assert!(error);
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_thousand_documentation_calls_are_each_of_the_disk_and_keep_nothing() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    let docs = tiny_corpus();
+    let goals = docs.path().join("docs/NAZM_LANGUAGE_GOALS.md");
+    let original = std::fs::read_to_string(&goals).unwrap();
+    runtime().block_on(async {
+        let (client, pid) = connect_docs(&root, docs.path()).await;
+        let (first, _) = call_with(&client, DOCS_INDEX, json!({})).await;
+        let state = first["state"].as_str().unwrap().to_owned();
+        for _ in 0..10 {
+            call_with(&client, DOCS_INDEX, json!({})).await;
+        }
+        let settled = rss_kb(pid);
+        let mut calls = 0;
+        for i in 0..143 {
+            let (a, _) = call_with(&client, DOCS_INDEX, json!({})).await;
+            assert_eq!(a, first, "{i}");
+            let (s, _) = call_with(
+                &client,
+                DOCS_SECTION,
+                json!({"id": "goals:one", "state": state}),
+            )
+            .await;
+            assert_eq!(
+                s["body"], "## One\n<!-- id: one -->\ntext of goals\n",
+                "{i}"
+            );
+            let (s, _) = call_with(
+                &client,
+                DOCS_SECTION,
+                json!({"id": "grammar:a", "state": state}),
+            )
+            .await;
+            assert_eq!(s["production"]["text"], "a = \"x\" ;", "{i}");
+            std::fs::write(&goals, format!("{original}edit {i}\n")).unwrap();
+            let (b, _) = call_with(&client, DOCS_INDEX, json!({})).await;
+            let edited = b["state"].as_str().unwrap().to_owned();
+            assert_ne!(edited, state, "{i}");
+            let (s, _) = call_with(
+                &client,
+                DOCS_SECTION,
+                json!({"id": "goals:one", "state": state}),
+            )
+            .await;
+            assert_eq!(s["status"], "stale_state", "{i}");
+            let (s, _) = call_with(
+                &client,
+                DOCS_SECTION,
+                json!({"id": "goals:one", "state": edited}),
+            )
+            .await;
+            assert!(
+                s["body"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with(&format!("edit {i}\n")),
+                "{i}"
+            );
+            std::fs::write(&goals, &original).unwrap();
+            calls += 7;
+        }
+        assert_eq!(calls, 1001);
+        let after = rss_kb(pid);
+        assert!(after <= settled + 1024, "{settled} kB -> {after} kB");
+        eprintln!("nazm-mcp RSS: settled {settled} kB, after 1,001 documentation calls {after} kB");
         client.cancel().await.unwrap();
     });
 }
