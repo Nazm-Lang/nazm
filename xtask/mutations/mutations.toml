@@ -6488,3 +6488,85 @@ find = "        Ok(once(value, true))"
 replace = """        static KEPT: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
         Ok(once(KEPT.get_or_init(|| value).clone(), true))"""
 killers = [{ package = "nazm-mcp", test = "protocol", name = "a_thousand_check_summaries_are_each_of_the_disk_and_keep_nothing" }]
+
+[[mutation]]
+name = "n31-a-build-that-cannot-start-is-build-failed"
+why = "a native leg whose `nazm build` could not be started is reported as a build that ran and failed"
+file = "crates/nazm-cli/src/test.rs"
+find = "                native_leg = Leg::CouldNotBuild;"
+replace = "                native_leg = Leg::BuildFailed;"
+killers = [{ package = "nazm-cli", test = "summary", name = "a_build_that_cannot_be_started_is_could_not_build_not_build_failed" }, { package = "nazm-cli", test = "summary", name = "a_driver_that_cannot_be_started_is_could_not_run_and_could_not_build" }]
+
+[[mutation]]
+name = "n31-a-program-that-cannot-start-is-mismatched"
+why = "a leg whose program could not be started is reported as a program that ran and printed the wrong thing"
+file = "crates/nazm-cli/src/test.rs"
+find = "        (false, _) => Leg::CouldNotRun,"
+replace = "        (false, _) => Leg::Mismatched,"
+killers = [{ package = "nazm-cli", test = "summary", name = "a_built_program_that_cannot_be_started_is_could_not_run_not_mismatched" }, { package = "nazm-cli", test = "summary", name = "a_driver_that_cannot_be_started_is_could_not_run_and_could_not_build" }]
+
+[[mutation]]
+name = "n31-the-test-driver-is-ignored"
+why = "the runner's driver seam is ignored, so no test can reach its could-not-start branches and they go unexercised"
+file = "crates/nazm-cli/src/test.rs"
+find = "        Some(p) => Ok(PathBuf::from(p)),"
+replace = "        Some(_) => std::env::current_exe(),"
+killers = [{ package = "nazm-cli", test = "summary", name = "a_driver_that_cannot_be_started_is_could_not_run_and_could_not_build" }]
+
+[[mutation]]
+name = "n31-nowhere-to-build-is-a-failed-run"
+why = "a test run with nowhere to build its executables is summarized as cases that failed rather than as the toolchain"
+file = "crates/nazm-cli/src/test.rs"
+find = """                return summarized(
+                    "toolchain_failed",
+                    exit::TOOLCHAIN_FAILED,
+                    &[],
+                    without_expectation.len(),"""
+replace = """                return summarized(
+                    "failed",
+                    exit::TOOLCHAIN_FAILED,
+                    &[],
+                    without_expectation.len(),"""
+killers = [{ package = "nazm-cli", test = "summary", name = "a_test_run_with_nowhere_to_build_is_toolchain_failed" }]
+
+[[mutation]]
+name = "n31-a-failed-link-is-a-success"
+why = "a build whose link failed, which has no diagnostic, is summarized as a success"
+file = "crates/nazm-cli/src/build.rs"
+find = """            let code = report_clang(other, &work, cleanup);
+            if summary {
+                return summarized(
+                    Status::ToolchainFailed,"""
+replace = """            let code = report_clang(other, &work, cleanup);
+            if summary {
+                return summarized(
+                    Status::Success,"""
+killers = [{ package = "nazm-cli", test = "summary", name = "a_build_whose_toolchain_fails_is_toolchain_failed_with_no_diagnostic" }]
+
+[[mutation]]
+name = "n31-a-refused-compile-is-a-rejection"
+why = "a build whose clang refused the IR is summarized as the program rejected, as if a diagnostic said why"
+file = "crates/nazm-cli/src/build.rs"
+find = """                let code = report_clang(other, &ll, cleanup);
+                if summary {
+                    return summarized(
+                        Status::ToolchainFailed,"""
+replace = """                let code = report_clang(other, &ll, cleanup);
+                if summary {
+                    return summarized(
+                        Status::Rejected,"""
+killers = [{ package = "nazm-cli", test = "summary", name = "a_build_whose_toolchain_fails_is_toolchain_failed_with_no_diagnostic" }]
+
+[[mutation]]
+name = "n31-an-unwritable-output-is-a-success"
+why = "a build that could not create its working directory is summarized as a success"
+file = "crates/nazm-cli/src/build.rs"
+find = """        eprintln!("nazm: cannot create {}: {e}", work.display());
+        if summary {
+            return summarized(
+                Status::ToolchainFailed,"""
+replace = """        eprintln!("nazm: cannot create {}: {e}", work.display());
+        if summary {
+            return summarized(
+                Status::Success,"""
+killers = [{ package = "nazm-cli", test = "summary", name = "a_build_with_nowhere_to_write_is_toolchain_failed_with_no_diagnostic" }]
