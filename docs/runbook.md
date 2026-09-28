@@ -221,7 +221,7 @@ load-bearing for Stage 7 even though nothing depends on Cranelift yet.
 ### The one command
 
 ```sh
-cargo xtask contained mutate [--only NAME]… [--strategy targeted|full] [--resume]
+cargo xtask contained mutate [--only NAME]… [--strategy targeted|full] [--resume] [--verify-killers]
 ```
 
 Always contained. One container is one **session** of a campaign: the tree is copied to a
@@ -229,6 +229,49 @@ disposable directory on the container's capped writable layer (`.git`, `target/`
 derived `.nazm/` cache excluded), built once, the workspace suite run once as the
 **baseline**, and then every selected mutant is injected, judged, restored, verified and
 journaled in catalogue order. `/src` stays read-only and the checkout is never mutated.
+
+### The warm-worker law — N32-H, 2026-09-29
+
+**A session is one warm worker, never one container per mutant.** One copy, one pristine
+build, one baseline, one killer listing; then each mutant in turn — at most one injected at
+a time, restored to its original bytes and digest-checked before the next is touched —
+against the same target directory. The target is the container's own `/work/target`, which
+the image warms with the workspace's registry dependencies: it lives on the capped writable
+layer, dies with the container, and is shared with nothing. Workspace crates are compiled from
+the copy at `/work/mut`, a path no image artefact was built for; only dependencies Cargo's
+fingerprints say are unchanged are reused. Nothing is `cargo clean`ed between mutants: Cargo
+rebuilds from the bytes on disk, and `xtask/tests/lifecycle.rs` holds that to account — A,
+then B, then A again in one target, every killer run observed against its own bytes.
+
+**`--verify-killers` verifies in the same session.** Around the one injection a verdict is
+taken from, each declared killer is run on the pristine tree, on the mutant, and on the
+restored tree, and is verified only as passes, fails, passes — `--verify-killer`'s law,
+unchanged. It changes no verdict and is not journaled, so a resumed session that reuses a
+verdict says those killers were not verified here and ends incomplete. `--verify-killer M
+--killer K` remains, for proving a new candidate.
+
+**P1 means one active mutation worker**, with one CPU, one job and one thread — not one fresh
+container per mutation. No second worker was needed (`performance.md`, *The warm mutation
+session*); every parallel profile for this workload crossed the total-memory gate in N14.1.
+
+**Stranded containers.** A supervisor killed by a signal leaves its container running until
+its own `timeout`; the checkout is read-only, so the container holds a disposable copy and
+nothing of the host's. Every contained run starts by removing, by exact name, any
+`nazm-<workload>-<pid>` container whose supervisor pid is no longer a process — and nothing
+else. To stop a run at once, signal its whole process group (Ctrl-C does), so the Docker client
+forwards the signal and the container ends with it.
+
+### Verification gates
+
+| Gate | What | Target on the M1 Pro | When |
+| --- | --- | --- | --- |
+| **DEV** | focused tests, host probes of new mutations, `fmt`, `clippy`, `cargo xtask check` | < 15 min | while iterating |
+| **MILESTONE** | every affected killer verified and one targeted campaign, in one warm session; the contained workspace suite; the lifecycle suite; selfhost; bootstrap; the milestone's own benchmark; the gates | < 60 min | to close a milestone |
+| **RELEASE** | broader and full campaigns, fuzzing, platforms | as long as it takes | a release, not every milestone |
+
+MILESTONE is not DEV with a new name: its speed comes from not repeating setup, never from
+dropping a killer, the campaign, the suite, selfhost or bootstrap. N32's gate measured 40 min
+(`performance.md`).
 
 ### Evidence tiers — escalate only while a mutant is still alive
 

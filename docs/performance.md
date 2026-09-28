@@ -1723,6 +1723,47 @@ and at N31 — no change**, the additions inside the file's existing 64 KiB layo
 is 3,151,584 and **3,217,120**, +65,536 bytes, for the summary tool. No crate and no dependency edge
 was added: `Cargo.lock` is unchanged.
 
+### Documentation index and sections — measured 2026-09-29
+
+`nazm docs` and `nazm-mcp`'s two documentation tools (N32, `architecture.md` §7.34), contained at
+P1 on the M1 Pro, release builds, over the corpus as it stood when the gate ran: **14 documents,
+1,042 sections, 48 of them grammar productions, 1,157,667 bytes**. Bytes, lines and Unicode scalars
+only — no tokenizer was run, and no token claim is made.
+
+| Retrieval | Whole document | Section body | `nazm.docs-section/1` | Document index + section |
+| --- | ---: | ---: | ---: | ---: |
+| A generic-semantics rule, `spec:generics/generic-definitions-are-checked-once-parametrically` | 142,128 B | 1,005 B (0.71%) | 1,577 B (1.11%) | 28,174 B (19.8%) |
+| The diagnostic compatibility law, `diagnostics:what-compatibility-means` | 12,326 B | 1,363 B (11.1%) | 1,903 B (15.4%) | 3,923 B (31.8%) |
+| An architecture invariant, `architecture:3/cache-key-correctness` | 259,005 B | 603 B (0.23%) | 1,135 B (0.44%) | 40,311 B (15.6%) |
+| G78, `goals:G78` | 130,787 B | 409 B (0.31%) | 924 B (0.71%) | 75,055 B (57.4%) |
+| One production, `grammar:function` | 16,667 B | 429 B (2.57%) | 1,732 B (10.4%) | 10,643 B (63.9%) |
+| One capability row, `capabilities:25` | 192,375 B | 47,474 B (24.7%) | 48,528 B (25.2%) | 58,450 B (30.4%) |
+
+Three things the table does not hide. **The whole-corpus index is 225,915 bytes**, 19.5% of the
+corpus — larger than every document but `architecture.md` — because it lists 1,042 sections with a
+64-hex digest each; asking for one document's index (`--document`) is what makes index-then-section
+smaller than reading the document, and for the goals, whose 394 sections are short, it is still 57%.
+**A tiny section is larger as JSON than as text**: the smallest, `capabilities:tooling`, is 12 bytes
+of body and 610 of detail. And a long section is long: capability row 25 is a quarter of its
+document. What selective retrieval avoids is the unrelated text, not the metadata.
+
+| Cost | Median |
+| --- | ---: |
+| read the 14 files | 1.89 ms |
+| load: read, section, resolve links, digest | 19.65 ms |
+| build the index / serialise it | 0.110 ms / 0.179 ms |
+| look up and extract one section / serialise it | 0.0013 ms / 0.0017 ms |
+| `nazm docs --index --json`, `--section ID --json`, `--section ID` (process) | 22.3 / 22.0 / 21.9 ms |
+| `nazm.docs_index` / `nazm.docs_section` over MCP | 23.7 ms (226,001-byte frame) / 21.2 ms (1,010-byte frame) |
+
+Parsing dominates, and it is paid at every request because nothing is kept. The MCP server's
+resident memory was 3.5 MB at start, 10.9 MB after 60 calls and 13.6 MB after 1,000 more over
+the full corpus, peak equal to the last — the growth of an allocator's arenas under a 226 KB frame,
+not a cache, of which there is none; over a small corpus `crates/nazm-mcp/tests/protocol.rs` holds
+1,001 calls through edits within a megabyte. `nazm` grew from 3,675,040 to 3,806,112 bytes
+(+131,072) and `nazm-mcp` from 3,217,120 to 3,413,728 (+196,608); one new crate, no new external
+dependency.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
@@ -1796,6 +1837,36 @@ no session could hold it.
 time, and the 51 without a killer each pay most of the selfhost binary (≈ 80–100 s) at tier 2.
 A killer takes such an entry to a few seconds. Compilation is the second cost (24 %), and it
 is the build UNUSABLE depends on.
+
+## The warm mutation session — N32-H, measured 2026-09-28/29
+
+N32's killer verification was running at **246–291 s per killer** (18 finished, median 266 s) — 32
+of them would have taken about 2 h 20 min before its campaign had started. One of them,
+profiled phase by phase at P1: container start 1.4 s; copy and `xtask` build about 16 s; **the
+pristine `cargo build --workspace --tests`, cold, 190.3 s — 68%**; killer listing 5.3 s; the
+mutant build 31.8 s; the restored build 31.5 s; the killer itself, three runs, about 2 s. Every
+killer paid a fresh container and a cold target.
+
+A session is now one warm worker (`runbook.md`, *The warm-worker law*): one pristine build on the
+image's warmed dependency cache — 92 s instead of 190 s — one baseline, and killer verification
+inside the campaign's loop, around each mutant's one injection. Still P1: one CPU, one job, one
+thread, one mutant at a time.
+
+| N32 MILESTONE gate, 2026-09-28/29, M1 Pro | Seconds |
+| --- | ---: |
+| warm session: 31 mutations, 34 killers verified, targeted campaign — setup 806 s once (pristine build, baseline suite, listing), 31 mutants 662 s, median 21.0 s, p95 40.1 s | 1,478 |
+| contained workspace suite, P4T4 | 439 |
+| lifecycle suite, P1 | 171 |
+| selfhost, P4T4 | 57 |
+| bootstrap, P1 | 62 |
+| N32 benchmark and binary sizes, P1 | 196 |
+| `cargo xtask check` and the doc-claim tests | 3 |
+| **the gate, wall clock** | **2,406 — 40.1 min** |
+
+The five-mutant checkpoint before it: setup 793 s, first mutant 13.1 s, then 27.8, 27.1, 32.6 and
+53.2 s. No second worker was built: the gate was under an hour without one. The setup is now
+dominated by the baseline workspace suite at one CPU, which the campaign needs to be green before
+any mutant is judged; it is the next stage to look at, and it was not weakened to get here.
 
 ## Development and evidence pipeline parallelism — N14.1, measured 2026-09-25
 

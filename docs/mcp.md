@@ -1,17 +1,18 @@
 # `nazm-mcp`
 
 A read-only [Model Context Protocol](https://modelcontextprotocol.io) server over stdio, built on
-the official Rust SDK. It offers seven tools: the compiler's semantic context packet for a
+the official Rust SDK. It offers nine tools: the compiler's semantic context packet for a
 definition (N27), a semantic snapshot of the root's compilation and the delta against one kept
 earlier (N28), a planned rename or diagnostic fix (N29), the current diagnostics compactly or
-one in full (N30), and a compact summary of the root's check (N31). It is local compiler tooling — it answers questions about one program, and
-changes nothing.
+one in full (N30), a compact summary of the root's check (N31), and Nazm's own documentation by
+section (N32). It is local compiler tooling — it answers questions about one program and about
+the language, and changes nothing.
 
 ## Running it
 
 ```sh
 cargo build --release -p nazm-mcp
-nazm-mcp --root path/to/root.nz            # optionally --source-root DIR
+nazm-mcp --root path/to/root.nz            # optionally --source-root DIR, --docs REPOSITORY
 ```
 
 An MCP client starts it as a stdio server. A client configuration is usually a command and its
@@ -39,6 +40,8 @@ claims to know every caller or importer in a project.
 | `nazm.diagnostics` | none | `nazm.diagnostic-index/1` |
 | `nazm.diagnostic_detail` | `id`, `state` | `nazm.diagnostic-detail/1` |
 | `nazm.command_summary` | `operation`: `check` | `nazm.command-summary/1` |
+| `nazm.docs_index` | optionally `document` | `nazm.docs-index/1` |
+| `nazm.docs_section` | `id`, `state` | `nazm.docs-section/1` |
 
 Each result is carried **once**, in the tool result's structured content, with an empty `content`,
 and each tool's output schema is the published one in `schema/`.
@@ -131,18 +134,38 @@ an `id`. The only `operation` is `check`, and it runs without the check cache, s
 written. Building writes an executable and testing runs programs that may write files, so neither
 is offered here; `nazm build --summary-json` and `nazm test --summary-json` are the command line's.
 
+### `nazm.docs_index` and `nazm.docs_section`
+
+Nazm's own documentation by section, exactly as `nazm docs` gives it (`schema/nazm.docs-index-1.json`,
+`schema/nazm.docs-section-1.json`, `docs/architecture.md` §7.34). The corpus is a fixed list of the
+repository's documents — the specification, the grammar, the architecture, the capability matrix,
+the roadmap, the goals and the rest — under the repository given as `--docs` at startup, or the one
+the server was built from. It is not the root's project and not a directory scan.
+
+`nazm.docs_index` takes an optional `document` id and returns every document with its authority
+and every section's stable id, title, parent and digest, with no body, and the corpus `state`.
+`nazm.docs_section` takes a section's exact `id` and that `state`, and returns the section's own
+canonical text byte for byte — not its subsections', and never a paraphrase — with its document's
+authority: a `goal` section is aspiration and never evidence of what exists, a `planning` section
+is never a rule of the language. A `state` the documentation no longer has is `stale_state`; an id
+no section has is `not_found`, never the nearest one. There is no path argument: `../README.md` or
+`/etc/passwd` is only an id no section has, and no file is opened for it.
+
 ## What it reads, and when
 
 Every call opens the root **from disk as it is then**, derives its answer and drops the analysis.
 An edit written between two calls is seen by the second; a broken file gives no packet, snapshot or
-delta, never a previous one. No snapshot, history or index is kept between calls. It does not see an editor's unsaved buffers — for those, use `nazm lsp`.
+delta, never a previous one. The documentation tools read the corpus at each call in the same way.
+No snapshot, history or index is kept between calls. It does not see an editor's unsaved buffers — for those, use `nazm lsp`.
 
 ## What it does not do
 
 - Write, rename or delete anything, or run a command. `nazm.semantic_patch` describes an edit
   and applies nothing; there is no tool that applies one, and no plan is kept to apply later.
-- Read a file its root's compilation did not load: `file` is matched against the compilation's
-  own files and is otherwise refused unopened, and a baseline is an object, never a path.
+- Read a file its root's compilation did not load, other than the fixed documentation corpus:
+  `file` is matched against the compilation's own files and is otherwise refused unopened, a
+  baseline is an object, never a path, and a documentation section is asked for by id.
+- Search documentation: ids are exact, with no fuzzy, full-text or semantic matching.
 - Keep a previous snapshot, watch the disk, or infer a rename.
 - Serve resources, prompts, completions or sampling; only stdio — no HTTP, no authentication.
 - Report effects, capabilities, tests, semantic history or behavioural equivalence: the compiler
