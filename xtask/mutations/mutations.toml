@@ -3372,6 +3372,7 @@ targets = [
     { package = "nazm-service", test = "summary" },
     { package = "nazm-service", test = "incomplete" },
     { package = "nazm-cli", test = "summary" },
+    { package = "nazm-cli", test = "documentation" },
     { package = "nazm-cli", test = "lsp" },
     { package = "nazm-mcp", bin = "nazm-mcp" },
     { package = "nazm-mcp", test = "protocol" },
@@ -3383,6 +3384,24 @@ targets = [
     { package = "nazm-cli", test = "schemas" },
     { package = "nazm-cli", test = "workflow" },
 ]
+
+[[profile]]
+name = "docs"
+why = "the documentation corpus is observed by nazm-docs's own suites, the CLI's docs and schema tests, and the MCP protocol tests of its two tools"
+owns = ["crates/nazm-docs/"]
+targets = [
+    { package = "nazm-docs", lib = true },
+    { package = "nazm-docs", test = "corpus" },
+    { package = "nazm-cli", test = "documentation" },
+    { package = "nazm-cli", test = "schemas" },
+    { package = "nazm-mcp", test = "protocol" },
+]
+
+[[profile]]
+name = "harness"
+why = "the mutation harness and the contained runner are observed by xtask's own unit tests; its process lifecycle by the ignored lifecycle suite, run on its own"
+owns = ["xtask/src/"]
+targets = [{ package = "xtask", bin = "xtask" }]
 
 [[profile]]
 name = "bench"
@@ -5722,9 +5741,9 @@ killers = [{ package = "nazm-service", test = "context", name = "diagnostics_are
 name = "n27-the-server-prints-to-stdout"
 why = "the MCP server writes a line of its own to standard output, which is the protocol"
 file = "crates/nazm-mcp/src/main.rs"
-find = "    let server = Server { root, source_root };"
+find = "    let server = Server {"
 replace = """    println!("nazm-mcp: serving");
-    let server = Server { root, source_root };"""
+    let server = Server {"""
 killers = [{ package = "nazm-mcp", test = "protocol", name = "standard_output_is_the_protocol_and_nothing_else" }]
 
 [[mutation]]
@@ -6570,3 +6589,185 @@ replace = """        eprintln!("nazm: cannot create {}: {e}", work.display());
             return summarized(
                 Status::Success,"""
 killers = [{ package = "nazm-cli", test = "summary", name = "a_build_with_nowhere_to_write_is_toolchain_failed_with_no_diagnostic" }]
+
+# --- N32: machine-addressable documentation ----------------------------------------------
+
+[[mutation]]
+name = "n32-an-anchor-is-ignored"
+why = "an explicit anchor is ignored and the id comes from the heading's text, so rewording a heading moves its id"
+file = "crates/nazm-docs/src/lib.rs"
+find = "        let local = if let Some(anchor) = &h.anchor {"
+replace = "        let local = if let Some(anchor) = None::<&String> {"
+killers = [{ package = "nazm-docs", test = "corpus", name = "an_anchored_section_keeps_its_id_when_reworded_or_moved_and_a_path_does_not" }]
+
+[[mutation]]
+name = "n32-a-line-number-is-the-id"
+why = "a heading with no anchor or label is identified by its line number"
+file = "crates/nazm-docs/src/lib.rs"
+find = "            let segment = markdown::slug(&h.title);"
+replace = "            let segment = h.line.to_string();"
+killers = [{ package = "nazm-docs", test = "corpus", name = "ids_come_from_anchors_labels_and_heading_paths_in_that_order" }]
+
+[[mutation]]
+name = "n32-a-duplicate-id-is-accepted"
+why = "two sections with one id are both kept, so an id selects whichever comes first"
+file = "crates/nazm-docs/src/lib.rs"
+find = "        if seen.insert(id.clone(), h.line).is_some() {"
+replace = "        if seen.insert(id.clone(), h.line).is_some() && id.is_empty() {"
+killers = [{ package = "nazm-docs", test = "corpus", name = "every_structural_defect_is_refused_and_named" }]
+
+[[mutation]]
+name = "n32-an-unknown-id-is-the-nearest"
+why = "an id no section has answers with a section whose id it prefixes"
+file = "crates/nazm-docs/src/lib.rs"
+find = "            .find_map(|d| d.sections.iter().find(|s| s.id == id).map(|s| (d, s)));"
+replace = "            .find_map(|d| d.sections.iter().find(|s| s.id.starts_with(id)).map(|s| (d, s)));"
+killers = [{ package = "nazm-docs", test = "corpus", name = "freshness_tracks_the_text_and_a_stale_state_is_refused" }]
+
+[[mutation]]
+name = "n32-a-fence-never-opens"
+why = "fenced code is not recognised, so a `#` line inside it becomes a section"
+file = "crates/nazm-docs/src/markdown.rs"
+find = "    (n >= 3).then_some((c, n))"
+replace = "    (n >= 30).then_some((c, n))"
+killers = [{ package = "nazm-docs", lib = true, name = "markdown::tests::a_heading_in_a_fence_is_code_and_not_a_section" }, { package = "nazm-docs", test = "corpus", name = "a_heading_in_code_is_not_a_section_and_unicode_headings_are_deterministic" }]
+
+[[mutation]]
+name = "n32-a-parent-carries-its-children"
+why = "a section's body runs to the next heading at its own level, so a parent carries its subsections"
+file = "crates/nazm-docs/src/lib.rs"
+find = "    let end_of = |i: usize| headings.get(i + 1).map_or(text.len(), |h| h.start);"
+replace = """    let end_of = |i: usize| {
+        let level = headings.get(i).map_or(0, |h| h.level);
+        headings
+            .iter()
+            .skip(i + 1)
+            .find(|h| h.level <= level)
+            .map_or(text.len(), |h| h.start)
+    };"""
+killers = [{ package = "nazm-docs", test = "corpus", name = "a_parents_body_is_its_own_text_and_its_children_are_listed" }]
+
+[[mutation]]
+name = "n32-goals-are-evidence"
+why = "the goals document is classified as evidence of what exists"
+file = "crates/nazm-docs/src/manifest.rs"
+find = """        "docs/NAZM_LANGUAGE_GOALS.md",
+        Authority::Goal,"""
+replace = """        "docs/NAZM_LANGUAGE_GOALS.md",
+        Authority::Evidence,"""
+killers = [{ package = "nazm-docs", test = "corpus", name = "the_real_corpus_is_sectioned_and_every_document_keeps_its_authority" }]
+
+[[mutation]]
+name = "n32-the-roadmap-is-normative"
+why = "the roadmap is classified as normative, a plan read as a rule of the language"
+file = "crates/nazm-docs/src/manifest.rs"
+find = """        "docs/roadmap.md",
+        Authority::Planning,"""
+replace = """        "docs/roadmap.md",
+        Authority::Normative,"""
+killers = [{ package = "nazm-docs", test = "corpus", name = "the_real_corpus_is_sectioned_and_every_document_keeps_its_authority" }]
+
+[[mutation]]
+name = "n32-grammar-text-is-normalised"
+why = "a production's text has its whitespace normalised instead of being returned exactly"
+file = "crates/nazm-docs/src/lib.rs"
+find = """                    .get(r.production.0..r.production.1)
+                    .unwrap_or_default()
+                    .to_owned(),"""
+replace = """                    .get(r.production.0..r.production.1)
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),"""
+killers = [{ package = "nazm-docs", test = "corpus", name = "a_grammar_is_one_section_per_production_with_exact_text" }]
+
+[[mutation]]
+name = "n32-a-broken-link-is-ignored"
+why = "a link into the corpus that names no section is kept silently instead of refusing the corpus"
+file = "crates/nazm-docs/src/lib.rs"
+find = """                        problems.push(Problem::at("broken_link", d.spec.id, s.lines.0 - 1, &href))"""
+replace = "                        let _ = &href;"
+killers = [{ package = "nazm-docs", test = "corpus", name = "a_link_to_a_reworded_heading_is_broken_and_refused" }]
+
+[[mutation]]
+name = "n32-the-corpus-state-skips-the-text"
+why = "the corpus state covers each document's id and path but not its bytes"
+file = "crates/nazm-docs/src/lib.rs"
+find = "            for part in [spec.id.as_bytes(), spec.path.as_bytes(), text.as_bytes()] {"
+replace = "            for part in [spec.id.as_bytes(), spec.path.as_bytes()] {"
+killers = [{ package = "nazm-docs", test = "corpus", name = "freshness_tracks_the_text_and_a_stale_state_is_refused" }]
+
+[[mutation]]
+name = "n32-the-corpus-state-takes-the-absolute-root"
+why = "the corpus state covers the checkout's absolute path, so two copies of one corpus differ"
+file = "crates/nazm-docs/src/lib.rs"
+find = "        framed(&mut state, CORPUS_TAG);"
+replace = "        framed(&mut state, root.to_string_lossy().as_bytes());"
+killers = [{ package = "nazm-docs", test = "corpus", name = "the_state_is_the_same_from_any_directory_and_names_none" }, { package = "nazm-cli", test = "documentation", name = "any_copy_of_the_same_documents_gives_the_same_bytes" }]
+
+[[mutation]]
+name = "n32-a-section-digest-ignores-the-body"
+why = "a section's digest covers its document and id but not its text"
+file = "crates/nazm-docs/src/lib.rs"
+find = """        id.as_bytes(),
+        body.as_bytes(),
+    ] {"""
+replace = """        id.as_bytes(),
+    ] {"""
+killers = [{ package = "nazm-docs", test = "corpus", name = "freshness_tracks_the_text_and_a_stale_state_is_refused" }]
+
+[[mutation]]
+name = "n32-a-stale-state-is-answered"
+why = "a section asked for with a state the corpus no longer has is answered from the current corpus"
+file = "crates/nazm-docs/src/lib.rs"
+find = "        if state.is_some_and(|s| s != self.state) {"
+replace = "        if state.is_some_and(|s| s != self.state && s.is_empty()) {"
+killers = [{ package = "nazm-docs", test = "corpus", name = "freshness_tracks_the_text_and_a_stale_state_is_refused" }, { package = "nazm-mcp", test = "protocol", name = "a_documentation_section_is_of_the_disk_at_that_call_and_an_old_state_is_stale" }]
+
+[[mutation]]
+name = "n32-a-docs-section-request-takes-any-argument"
+why = "the MCP section tool accepts arguments it does not define, such as a path, and ignores them"
+file = "crates/nazm-mcp/src/main.rs"
+find = """#[serde(deny_unknown_fields)]
+struct DocsSectionRequest {"""
+replace = "struct DocsSectionRequest {"
+killers = [{ package = "nazm-mcp", test = "protocol", name = "documentation_crosses_the_protocol_unchanged_by_id_and_never_by_path" }]
+
+[[mutation]]
+name = "n32-a-docs-section-is-sent-twice"
+why = "the section tool's result carries the section again as text beside its structured content"
+file = "crates/nazm-mcp/src/main.rs"
+find = """        Ok(once(
+            value,
+            matches!(result, nazm_docs::SectionResult::Available(_)),
+        ))"""
+replace = "        Ok(CallToolResult::structured(value).into())"
+killers = [{ package = "nazm-mcp", test = "protocol", name = "documentation_crosses_the_protocol_unchanged_by_id_and_never_by_path" }]
+
+[[mutation]]
+name = "n32-the-mcp-server-keeps-a-section"
+why = "the MCP section tool answers every call with the first section it read, so an edit on disk is never seen"
+file = "crates/nazm-mcp/src/main.rs"
+find = "            nazm_docs::section(&docs, &request.id, Some(&request.state))"
+replace = """            static KEPT: std::sync::OnceLock<nazm_docs::SectionResult> = std::sync::OnceLock::new();
+            KEPT.get_or_init(|| nazm_docs::section(&docs, &request.id, Some(&request.state)))
+                .clone()"""
+killers = [{ package = "nazm-mcp", test = "protocol", name = "a_documentation_section_is_of_the_disk_at_that_call_and_an_old_state_is_stale" }]
+
+# --- N32-H: the warm verification session --------------------------------------------------
+
+[[mutation]]
+name = "n32h-a-killer-that-passes-on-the-mutant-is-verified"
+why = "a warm session counts a killer as verified although it did not fail on the mutant"
+file = "xtask/src/mutate.rs"
+find = """        self.pristine == "passes" && self.mutant == "fails" && self.restored == "passes""""
+replace = """        self.pristine == "passes" && self.mutant != "unclear" && self.restored == "passes""""
+killers = [{ package = "xtask", bin = "xtask", name = "mutate::tests::a_killer_is_verified_only_by_passes_fails_passes" }]
+
+[[mutation]]
+name = "n32h-a-live-supervisors-container-is-reaped"
+why = "the stale-container reaper removes a container whose supervisor is still running"
+file = "xtask/src/contained.rs"
+find = "            named && pid.is_some_and(|p| p != std::process::id() && !alive(p))"
+replace = "            named && pid.is_some_and(|p| p != std::process::id() && (alive(p) || !alive(p)))"
+killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::only_a_dead_supervisors_own_containers_are_stale" }]
