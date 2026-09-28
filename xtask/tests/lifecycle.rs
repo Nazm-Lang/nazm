@@ -1700,3 +1700,128 @@ fn a_sigint_during_a_mutant_leaves_it_unfinalized_and_recoverable() {
     );
     assert_clean(root);
 }
+
+// ---------------------------------------------------------------------------
+// N32-H. One warm session verifies every killer around its mutant's one injection.
+// ---------------------------------------------------------------------------
+
+/// Mutant A, then B, then A again, in one session and one target directory, with no
+/// `cargo clean` between them: each killer passes pristine, fails on its mutant and passes
+/// restored, and every build the killer ran was of the bytes it was run for. A stale
+/// artefact — a mutant's executable reused after restoration, or the pristine one reused
+/// under a mutant — would show here as a missing or out-of-order observation.
+#[test]
+#[ignore = "drives nested cargo builds; run with --ignored"]
+fn a_warm_session_verifies_every_killer_against_each_mutants_own_bytes() {
+    let project = disposable_project();
+    let root = project.path();
+    with_integration_test(root);
+    let campaigns = tempfile::tempdir().expect("campaigns");
+    let scratch = tempfile::tempdir().expect("scratch");
+    let observed = scratch.path().join("observed");
+    let cat = root.join("warm.toml");
+    fs::write(
+        &cat,
+        format!(
+            "[[mutation]]\nname = \"a\"\nwhy = \"f\"\nfile = \"{SRC_REL}\"\nfind = \"u64 {{ 42 }}\"\nreplace = \"u64 {{ 43 }}\"\nkillers = [{LIB_KILLER}]\n\n\
+             [[mutation]]\nname = \"b\"\nwhy = \"f\"\nfile = \"{SRC_REL}\"\nfind = \"u64 {{ 7 }}\"\nreplace = \"u64 {{ 8 }}\"\nkillers = [{{ package = \"fixture\", test = \"it\", name = \"unchecked_is_seven\" }}]\n\n\
+             [[mutation]]\nname = \"a-again\"\nwhy = \"f\"\nfile = \"{SRC_REL}\"\nfind = \"u64 {{ 42 }}\"\nreplace = \"u64 {{ 44 }}\"\nkillers = [{LIB_KILLER}]\n"
+        ),
+    )
+    .expect("catalogue");
+    let out = Command::new(XTASK)
+        .args([
+            "mutate-run",
+            "--root",
+            &root.display().to_string(),
+            "--catalogue",
+            &cat.display().to_string(),
+            "--campaign-dir",
+            &campaigns.path().display().to_string(),
+            "--strategy",
+            "targeted",
+            "--verify-killers",
+        ])
+        .env("NAZM_FIXTURE_OBSERVE", &observed)
+        .output()
+        .expect("run");
+    let said = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    for name in ["a", "b", "a-again"] {
+        assert!(
+            said.contains(&format!("caught       {name}  ")),
+            "{name}: {said}"
+        );
+    }
+    assert!(
+        said.contains("killer verification  3 of 3 verified in this session"),
+        "{said}"
+    );
+    assert_eq!(said.matches("VERIFIED").count(), 3, "{said}");
+    // One setup for the session, whatever the number of mutants.
+    assert_eq!(
+        said.matches("session timing       setup").count(),
+        1,
+        "{said}"
+    );
+    assert!(said.contains("3 mutant(s) decided"), "{said}");
+    // Every lib-test run, in order: the baseline suite, then for `a` pristine, its verdict
+    // and its verification on the mutant, restored; `b` runs another target; then the
+    // same for `a-again`, whose mutant must be 44 — not a leftover 43 — and whose
+    // pristine run must be 42 again.
+    let seen: Vec<String> = fs::read_to_string(&observed)
+        .expect("observations")
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        seen,
+        ["42", "42", "43", "43", "42", "42", "44", "44", "42"],
+        "a build was reused across a mutant or its restoration: {said}"
+    );
+    let records = journal(campaigns.path());
+    assert_eq!(records.len(), 3);
+    for r in &records {
+        assert_eq!(r["verdict"], "caught");
+        assert_eq!(r["restored_digest"], r["original_digest"]);
+    }
+    assert_clean(root);
+}
+
+/// A resumed session reuses journaled verdicts but cannot have verified their killers,
+/// so it says so and is incomplete rather than clean.
+#[test]
+#[ignore = "drives nested cargo builds; run with --ignored"]
+fn a_resumed_session_does_not_claim_killers_it_did_not_verify() {
+    let project = disposable_project();
+    let root = project.path();
+    let campaigns = tempfile::tempdir().expect("campaigns");
+    let cat = tiered(
+        root,
+        "direct",
+        "u64 { 42 }",
+        "u64 { 43 }",
+        &[LIB_KILLER],
+        false,
+    );
+    let first = run_campaign(root, &cat, campaigns.path(), &["--strategy", "targeted"]);
+    assert_eq!(first.status, Some(0), "{}", first.stdout);
+    let again = run_campaign(
+        root,
+        &cat,
+        campaigns.path(),
+        &["--strategy", "targeted", "--resume", "--verify-killers"],
+    );
+    assert_eq!(again.status, Some(3), "{}", again.stdout);
+    assert!(
+        again.says("reused, not verified here: direct"),
+        "{}",
+        again.stdout
+    );
+    assert!(
+        again.says("0 of 0 verified in this session"),
+        "{}",
+        again.stdout
+    );
+    assert_clean(root);
+}
