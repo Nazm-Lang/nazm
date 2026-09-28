@@ -28,7 +28,10 @@
 //!   added, removed, or changed in which recorded section, as `nazm.delta/1` (N28);
 //! - [`patch`] — a validated rename or a compiler-owned fix as minimal exact-byte edits,
 //!   bound to the root's snapshot, each file's digest and each edit's expected bytes, as
-//!   `nazm.patch/1`; planned, never applied (N29).
+//!   `nazm.patch/1`; planned, never applied (N29);
+//! - [`diagnostics`] — every current diagnostic as a compact, prose-free index, and one
+//!   selected diagnostic in full on request, as `nazm.diagnostic-index/1` and
+//!   `nazm.diagnostic-detail/1` (N30).
 //!
 //! The first two were `nazm-cli`'s until N16 and moved here unchanged in what they decide,
 //! so the command line and the language service cannot disagree about a module graph.
@@ -38,6 +41,7 @@
 pub mod completion;
 pub mod context;
 pub mod delta;
+pub mod diagnostics;
 pub mod fixes;
 pub mod hierarchy;
 mod incomplete;
@@ -55,6 +59,9 @@ pub mod symbols;
 pub use completion::{Completion, CompletionCandidate, Context, NoCompletion};
 pub use context::{ContextPacket, ContextResult, NoContext};
 pub use delta::{DeltaResult, NoDelta, SemanticDelta};
+pub use diagnostics::{
+    DetailResult, DiagnosticDetail, DiagnosticIndex, IndexResult, NoDiagnostics,
+};
 pub use fixes::{FixPlan, NoFixes};
 pub use hierarchy::{HierarchyFunction, IncomingCall, Locator, NoHierarchy, OutgoingCall};
 pub use patch::{NoPatch, PatchResult, SemanticPatch};
