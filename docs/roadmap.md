@@ -418,6 +418,10 @@ two new machine schemas.
 Mutation evidence: 15 new mutations; 41 killers verified on the final source — the fifteen, the
 sixteen N30 entries whose order N31 shares, and the ten MCP entries of N27–N30; one targeted
 campaign of 23, all caught — 21 at tier 1, one each at tiers 2 and 3 (`capability-matrix.md` §30).
+Closure correction: every public N31 outcome variant — `could_not_build`, `could_not_run` and
+`toolchain_failed` among them — has at least one regression test that executes its production
+branch; the test runner's driver is a test seam, `NAZM_TEST_DRIVER`; seven more mutations.
+24 killers verified on the final source; a targeted campaign of 14, all caught at tier 1.
 
 **N32 has not started.**
 

@@ -39,9 +39,9 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,663 passed, 0 failed, 13 ignored, across 91 suites**, run contained at
-N31 (2026-09-28), at P4T4; the thirteen ignored are the xtask lifecycle tests,
-run on their own (13 of 13 passed, contained). N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,669 passed, 0 failed, 13 ignored, across 91 suites**, run contained at
+N31's closure correction (2026-09-28), at P4T4; the thirteen ignored are the xtask lifecycle tests,
+run on their own (13 of 13 passed, contained). N31 ended at 1,663 across 91 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1731,12 +1731,21 @@ run counting each verdict, listing only the four cases that failed — output mi
 error, a type error, a build the compiler refused — with each leg, and `not_run` when interpreted
 only; no cases and an unreadable path refused as the command refuses them; 201 cases summarized by
 counts and one failure, no passed name; and the MCP server's check summary equal to `nazm check
---summary-json` with and without its cache. `crates/nazm-service/tests/summary.rs` — a reference
+--summary-json` with and without its cache. *N31 closure:* every public N31 outcome variant has at
+least one regression test that executes its production branch — a test driver that cannot be
+started (`could_not_run`, and `could_not_build` beside it), a build that cannot be started after the
+program ran (`could_not_build`, not `build_failed`), a build that reports success and writes no
+program (`could_not_run`, not `mismatched`), a test run with nowhere to build (`toolchain_failed`),
+and `nazm build` with a `clang` that refuses to compile, one that compiles and will not link, no
+`clang` on PATH, and nowhere to write (`toolchain_failed`, no diagnostic, exit 4, not a success);
+each beside the same run without `--summary-json`, with the same exit status. The runner's driver
+is chosen through `NAZM_TEST_DRIVER`, a test seam; `clang` through the process's own PATH. Not
+every way a process can fail to start is tested — one per branch. `crates/nazm-service/tests/summary.rs` — a reference
 linked only while the file is exactly what the command read. `crates/nazm-cli/tests/schemas.rs`
 every status valid against both schemas. `crates/nazm-mcp/tests/protocol.rs` — seven tools, the
 summary tool accepting only `check` (not `build`, `test`, a root, arguments or a command), nothing
 written, and 1,000 calls through edits, breaks and repairs with flat resident memory.
-Fifteen N31 mutations (area 30).
+Fifteen N31 mutations, and seven in its closure (area 30).
 
 **Limitation** · There is no project manifest, no dependency resolution, no lockfile and no
 registry. `nazm build` takes one root file, and since N3 the **source root is derived from
@@ -1818,8 +1827,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **542** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30), **354** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **549** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction), **361** of them with a verified killer and all
 of them owned by one of nine focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -2410,6 +2419,16 @@ unusable or uninjected entry, no runner error. The first session reached its dea
 tier-3 entry and the campaign was resumed from its journal, which reran nothing already decided.
 The `summary` suites joined the profiles. N13's use-after-free survivor and the `nesting-unbounded`
 MUTANT CRASH were not re-run and are as they were.
+
+*N31's closure correction (2026-09-28) added seven,* one for each outcome it newly exercises: a build
+that could not be started called `build_failed`, a program that could not be started called
+`mismatched`, the test driver seam ignored, a test run with nowhere to build called `failed`, and a
+failed link, a refused compile and an unwritable output summarized as a success or a rejection.
+On the final source every killer of the twenty-two N31 entries was verified by `--verify-killer`,
+contained at P1, one at a time, with no host build running: **24 of 24** (two entries have two
+killers each). **Campaign `d56b0589bbcf96b2`, targeted, P1, one session, 984 s:** the seven, the six
+earlier entries in the test runner the seam touched, and no-diagnostics-is-success. **14 of 14
+caught at tier 1**; no survivor, crash, timeout, unusable or uninjected entry, no runner error.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

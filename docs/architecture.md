@@ -3883,6 +3883,13 @@ from what the runner did — which process it started, whether it could, whether
 never from output text, so a runtime error or a compile error in a case is a `mismatched` leg and no
 diagnostic is made of it. No passed name, no output, no truncation; cases in the order they ran.
 
+**Every outcome is exercised.** Each status and each leg has a regression test that reaches its
+production branch through the real binary. The runner starts each leg with this executable, or with
+the one `NAZM_TEST_DRIVER` names — a test seam, not an interface — so a test can hand it a driver
+that does not exist, one that removes itself after the program has run, or one whose build succeeds
+and writes nothing; `nazm build` finds `clang` on the process's own PATH, so a test gives that one
+process a `clang` that refuses, one that will not link, or none. Nothing machine-wide is changed.
+
 **Flags and channels.** `--summary-json` conflicts with `--json`, and with `--cache-report` and
 `--build-report`: an ambiguous combination is refused by the argument parser (exit 2). Human output,
 `--json`, `nazm.test/1`, `nazm.check-report/1` and `nazm.build-report/1` are unchanged. A build's
