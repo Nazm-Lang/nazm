@@ -1764,6 +1764,73 @@ not a cache, of which there is none; over a small corpus `crates/nazm-mcp/tests/
 (+131,072) and `nazm-mcp` from 3,217,120 to 3,413,728 (+196,608); one new crate, no new external
 dependency.
 
+### Repository map and task contexts — measured 2026-09-29
+
+`nazm repo` and `nazm-mcp`'s two repository tools (N33, `architecture.md` §7.35), contained at P1
+on the M1 Pro, release builds, over this repository at `16b5b27`. **Bytes, never tokens**: no
+tokenizer was run, and no model.
+
+**The map is 111,263 bytes — 4.1 % of what it indexes**: 1,192,961 bytes of the fourteen canonical
+documents, 1,024,292 of Nazm source in the three source roots, and 472,905 of Cargo manifests, the
+mutation catalogue and the published schemas (2,690,158 in all). It lists 15 packages, 84 targets,
+3 source roots, 30 compilation roots (7 incomplete — they needed syntax recovery), 34 modules, 477
+durable definitions, 14 documents, 16 schemas and 12 profiles, and delegates 1,038 sections, 601
+mutations, 256 catalogue tests and 16 diagnostics to the answers that enumerate them.
+
+**Seven representative tasks** (`crates/nazm-repo/tests/benchmark.rs`). The naive baseline is what
+an agent without the planner reads: the whole files the facts are in, the whole documents the
+sections are in, and — for tests — the catalogue entries a search for the file's path returns. Every
+row's mechanical checks pass against the authorities themselves (N27's packet, N32's section, the
+catalogue parsed independently): the exact signature and source, each direct dependency and
+signature type, each direct caller in both compilations, each killer of a mutation inside the seed,
+the diagnostic's code, message and owner's source, each linked or generating section's exact text.
+
+| Task | Naive bytes | Context bytes (JSON) | Reduction | Source + text included | Items | Checks |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| A understand `analyse.nz::fn check_program` | 356,043 | 20,059 | 94.4 % | 6,642 | 20 | 22 |
+| B edit `module.nz::fn attach_core` | 348,233 | 7,844 | 97.7 % | 3,242 | 10 | 7 |
+| C diagnose `N0300` in `return_type_mismatch.nz` | 123 | 1,925 | **−1,465 %** | 84 | 2 | 3 |
+| D understand `spec:returns` | 142,128 | 3,769 | 97.3 % | 2,540 | 2 | 3 |
+| D understand `guide:the-syntax/record` | 53,386 | 2,768 | 94.8 % | 1,561 | 2 | 3 |
+| E tests of `package:nazm-docs` | 26,649 | 5,577 | 79.1 % | 0 | 19 | 19 |
+| E tests of `module.nz::fn core_module` | 18,223 | 1,911 | 89.5 % | 186 | 4 | 2 |
+
+Row C is recorded as measured: the whole program is 123 bytes, and a structured context with its
+diagnostic, owner, retrieval and state is larger than the program. The reduction appears at the
+scale of a real module, not of a one-function example.
+
+**Latency**, in-process, three runs each after the first: a map **433 ms the first time in the
+process, then 372–380 ms**, serialising 0.16 ms. A task whose seed needs no compilation — a section,
+a package's tests, a diagnostic of a small example — **50–54 ms**, almost all of it reading and
+digesting the repository's inputs for the state; `lex.nz::fn is_alnum` 170 ms, `attach_core`
+(edit: four compilations) 240–244 ms, `check_program` (twenty packets from the largest
+compilation) 479–605 ms. Serialising a context: 0.01–0.08 ms. The command line, one process each:
+the map 352 ms; tasks 46 ms (`package:nazm-docs`), 50 ms (`spec:returns`), 237 ms
+(`attach_core`), 579 ms (`check_program`).
+
+**Memory.** `nazm-mcp` over this repository, five mixed seeds in rotation: **1,000 task contexts at
+100.5 ms each on average, resident memory 73,224 kB settled and 73,224 kB after them.** Flat
+across those calls — which is what was measured, not a claim that nothing can ever leak. The
+protocol suite also runs 1,000 task contexts over a small repository on every workspace run, and
+asserts they stay within 1 MB.
+
+**What it added to the binaries.** `nazm` is **4,527,008 bytes, from 3,806,112 at N32-H3:
++720,896 (+19 %)**, for `nazm-repo` and the TOML reader it brings into the binary (`toml` was
+already in the lockfile, for `xtask`). The compiler's own speed is unchanged: `cargo xtask contained
+bench`, back to back at `75a2859` and at `16b5b27`, has a median ratio of **1.02** over 38
+measurements, the largest 1.26 on a 1.9 → 2.4 ms check, under the 5 ms reporting floor. Both are
+about twice the 2026-09-21 baseline for the `nazm` process's own stages — compiled programs and
+the C reference are unchanged — a drift that predates N33 and is not attributed to it here.
+
+**The MILESTONE gate** (`gate-plan`: full lifecycle, the MCP entries, every benchmark family —
+the root manifest and `xtask/` changed), every cache empty after a disk-full Docker failure was
+cleaned up: mutation 1,076 s, workspace 319 s (1,757 passed across 99 suites; the container's
+memory peak read 4 GiB, its limit, with no OOM kill — a cold build's page cache counts toward
+it), lifecycle 188 s, selfhost 57 s, bootstrap 37 s, release benchmarks 535 s (re-run: the first
+attempt's script used a shell form the container's `sh` refused, and failed in 10 s before
+measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
+benchmark stage's release builds and the mutation stage's pristine build started from nothing.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
