@@ -9,7 +9,7 @@
 )]
 
 use nazm_core::__syntax::PARSE_STACK_BYTES;
-use nazm_service::{Context, LanguageService};
+use nazm_service::{Context, LanguageService, SemanticClass, SemanticTarget};
 
 fn on_the_service_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
     std::thread::scope(|scope| {
@@ -48,6 +48,17 @@ fn a_capability_is_a_built_in_type_to_every_tool_and_never_a_constructor() {
         assert_eq!(h.text, "fn keep(io: IoCap) -> IoCap ! {}");
         let h = s.hover(&main, 1, at(MAIN, "io), 1", 0)).unwrap();
         assert_eq!(h.text, "io: IoCap");
+
+        // Semantic tokens class a capability type as the built-in type it is.
+        let ids = s.semantic_identifiers(&main, 1).unwrap();
+        let cap = at(MAIN, "IoCap, n", 0);
+        let token = ids
+            .identifiers
+            .iter()
+            .find(|i| i.start == cap)
+            .expect("a token over `IoCap`");
+        assert_eq!(token.class, SemanticClass::BuiltinType);
+        assert!(matches!(token.target, SemanticTarget::BuiltinType(t) if t.is_capability()));
 
         // In a type position both capabilities are offered, as built-in types.
         let c = s.completion(&main, 1, at(MAIN, "IoCap, n", 3)).unwrap();

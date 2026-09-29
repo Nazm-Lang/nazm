@@ -56,7 +56,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 3 | Type system | PARTIAL |
 | 4 | Memory model and reclamation | VERIFIED for the current type universe |
 | 5 | Effects | PARTIAL |
-| 6 | Capabilities (language) | MISSING |
+| 6 | Capabilities (language) | PARTIAL |
 | 7 | Provenance and information flow (language) | MISSING |
 | 8 | Core IR | MISSING |
 | 9 | MIR | MISSING |
@@ -87,7 +87,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
 
-Nine VERIFIED, fourteen PARTIAL, three DESIGNED, two RESEARCH, seven MISSING. The shape is
+Nine VERIFIED, fifteen PARTIAL, three DESIGNED, two RESEARCH, six MISSING. The shape is
 worth reading directly: **everything verified is either a front-end capability, a tooling
 interface, or an evidence mechanism.** Nothing in the semantic core — ownership, effects,
 capabilities, provenance — exists at all, and that is the accurate summary of where the
@@ -674,10 +674,10 @@ every effect — so in the multi-module compiler sources 152 of 1,044 function c
 Pure means *no effect*, not *referentially transparent*: a function may write into a sequence it
 was handed. No effect polymorphism and no function values to need it; no handlers; allocation,
 channels, traps and divergence are not effects. The Nazm-written compiler does not read effect
-sets. Effects are not authority (area 6). Typed diagnostic facts (`nazm.diagnostic-detail/1`)
+sets. Effects are not authority: since N37 that is area 6, checked apart. Typed diagnostic facts (`nazm.diagnostic-detail/1`)
 stay unavailable; the effect facts are in the packet.
 
-**Next dependency** · For polymorphism and handlers, function values; for authority, area 6.
+**Next dependency** · For polymorphism and handlers, function values. Authority is area 6.
 
 *Before N36 this row was MISSING. N12 did not change it.* A function's error type is visible because it is inside its
 return type, `Result[T, E]`; a caller may store, pass or ignore that value, and nothing about
@@ -698,26 +698,64 @@ failure and panic are effects.
 **Accepted when** · A function's row is inferred, checked, and a compile-fail test shows an
 effectful call refused where a pure one is accepted.
 
-### 6. Capabilities, as a language feature — MISSING
+### 6. Capabilities, as a language feature — PARTIAL
 
-**Evidence of absence** · Authority is **ambient and labelled as such** in the source:
-`crates/nazm-sema/src/intrinsic.rs` — *"These are callable from anywhere, and nothing in
-the language restricts which functions may reach the file system or the process arguments.
-That is a real limitation, not a design."*
+*N37, 2026-09-30: Compiler-owned capability kinds v1 — VERIFIED; Explicit authority passing v1 —
+VERIFIED; Effect-capability checking v1 — VERIFIED; Cross-module authority contracts v1 —
+VERIFIED; Capability unforgeability v1 — VERIFIED. Attenuation, resource-specific authority,
+revocation, linearity and runtime enforcement are not here.* Two compiler-owned kinds with stable
+ids, `IoCap` and `SpawnCap`, as built-in types (`crates/nazm-sema/src/capability.rs`); each
+built-in's required authority is an exhaustive table on its identity. A function that declares an
+effect set holds exactly the capability values its scope reaches — lexically, recorded per call
+site by the checker — and every built-in, `spawn` and call of an undeclared function needs the
+authority for what it does, or it is `N0369`, reported apart from and before an effect's `N0366`
+(`crates/nazm-core/src/effects.rs`). Nothing constructs a capability (`N0370`); `main` is the root
+and takes only capabilities (`N0371`), which the interpreter and the native entry hand it. Authority
+crosses a module as ordinary parameter types in `nazm.interface/6` (`architecture.md` §7.39,
+`spec.md` *Capabilities*). Evidence: `crates/nazm-core/tests/capabilities.rs` — passing through
+helpers, recursion and mutual recursion, storage in a record, a `Vec` and a variant, a pure function
+carrying one; every outside-world built-in refused without authority and accepted with it; effect
+versus authority errors apart and in order; spawn needing a `SpawnCap`, and a task's authority only
+what it is handed; the witness through undeclared functions; shadowing, records, type parameters,
+block scope, the wrong kind and a missing argument; construction and redefinition refused, no
+equality; `main`'s roots. `crates/nazm-core/tests/effects.rs` — N36's laws unchanged with
+capabilities held. `crates/nazm-cli/tests/incremental.rs` — a capability-only change, including a
+kind swap under one name, rechecking the importer; an undeclared import needing every authority;
+the cached interface carrying `IoCap`. `crates/nazm-cli/tests/capabilities.rs` — a capability
+parameter lowering to exactly an `Int` one's IR, the entry passing one word per root, a non-capability
+`main` refused before building, and `examples/capabilities/` agreeing interpreted and compiled.
+`crates/nazm-service/tests/capabilities.rs` and `snapshot.rs` — hover, completion (a type, never a
+constructor), semantic tokens, and a capability-only change as a `shape` change under the same
+identity. Twenty N37 mutations (area 30).
+
+**Limitation** · **Static only**: a capability erases to a word nothing reads, and nothing at runtime
+enforces authority — there is no sandbox, broker or operating-system boundary, and a Nazm program can
+affect its machine as much as the process running it. **Coarse**: one `IoCap` authorises every file,
+both standard streams, the arguments and exit; nothing is least-privilege, and there is no
+attenuation because there is no narrower kind to derive. **Shareable**: capabilities copy freely,
+with no linearity and no revocation. **The ambient bridge**: a function with no declared set — every
+function in the repository written before N37, 1,034 of the 1,054 function checks across the tree's
+roots — exercises its caller's authority, rooted at a `main` with no set; the bound is that code with a
+contract may call it only while holding what it needs. Possession is lexical, not use: the built-ins
+do not take the capability as an argument. The Nazm-written compiler does not read capabilities.
 
 **Do not confuse this with `nazm capabilities`.** `schema/nazm.capabilities-1.json` is a
 *toolchain descriptor* — what one build of the compiler supports. It is unrelated to
 object capabilities or capability-safety, and it is VERIFIED under area 22.
 
-**Limitation** · `fn main(io: IO)` was written down as the plan of record and then **not**
-adopted: I/O shipped as ambient authority, labelled as a limitation in `docs/spec.md`. It
-remains the most likely growth path, and it remains unchosen.
+**Next dependency** · For attenuation, a resource-parametrised kind; for linearity, move semantics;
+for enforcement beyond the checker, a runtime or operating-system boundary; for foreign code, FFI.
 
-**Next dependency** · Effects, or an independent capability-parameter design — the two are
-separable and `architecture.md` §5 insists they stay separate concerns.
+*Before N37 this row was MISSING.* **Evidence of absence, then** · Authority was **ambient and
+labelled as such**: `crates/nazm-sema/src/intrinsic.rs` said *"These are callable from anywhere, and
+nothing in the language restricts which functions may reach the file system or the process
+arguments. That is a real limitation, not a design."* `fn main(io: IO)` had been written down as the
+plan of record and then not adopted. N37 adopted a capability parameter on `main`, for the reason
+`spec.md` now states: it is the only place a value can come from that no expression produced.
 
-**Accepted when** · A function without the authority cannot reach the filesystem, and the
-refusal is a compile error with a span.
+**Accepted when** · A function without the authority cannot reach the filesystem, and the refusal is
+a compile error with a span — met for every function that declares its effects, and not for an
+ambient one, which is the bridge above.
 
 ### 7. Provenance and information flow, as a language feature — MISSING
 
