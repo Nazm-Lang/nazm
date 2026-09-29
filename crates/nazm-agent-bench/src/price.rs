@@ -86,11 +86,12 @@ pub fn cost(usage: &Usage, price: &Price) -> Option<Cost> {
     })
 }
 
-/// The most a request can cost: every input token uncached, and the whole output budget used.
+/// The most a request can cost: every input token at the dearest input rate — a cache write
+/// costs more than uncached input — and the whole output budget used.
 #[must_use]
 pub fn worst_case(input_tokens: u64, max_output_tokens: u64, price: &Price) -> Option<u64> {
     input_tokens
-        .checked_mul(price.input)?
+        .checked_mul(price.input.max(price.cache_write_input))?
         .checked_add(max_output_tokens.checked_mul(price.output)?)
 }
 

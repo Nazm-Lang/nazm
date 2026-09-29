@@ -435,7 +435,8 @@ fn cost_arithmetic_is_exact_and_prices_each_category_at_its_own_rate() {
     assert_eq!(u.total_tokens(), 2000);
     assert_eq!(
         price::worst_case(1000, 1024, &p),
-        Some(1_000_000_000 + 1024 * 5_000_000)
+        // Input at the dearest input rate: here a cache write's.
+        Some(1_250_000_000 + 1024 * 5_000_000)
     );
     assert_eq!(price::micros("0.40"), Ok(400_000));
     assert_eq!(price::micros("1"), Ok(1_000_000));
@@ -1367,6 +1368,15 @@ fn the_claude_code_client_runs_one_bare_turn_and_its_usage_is_normalised() {
     ));
     let p = ClaudeCode {
         exec: client(1, json!({"api_error_status": 400, "result": "bad"})),
+        ..p
+    };
+    assert!(matches!(p.complete(&r), Err(CallError::Fatal { .. })));
+    // The client's spend limit withheld an answer: not the model's reply, and not transient.
+    let cut_off = json!({"subtype": "error_max_budget_usd", "is_error": true,
+        "errors": ["Reached maximum budget ($0.015004)"],
+        "modelUsage": {"claude-haiku-4-5-20251001": {"inputTokens": 3, "outputTokens": 683}}});
+    let p = ClaudeCode {
+        exec: client(1, cut_off),
         ..p
     };
     assert!(matches!(p.complete(&r), Err(CallError::Fatal { .. })));
