@@ -68,6 +68,24 @@ pub trait Provider {
     /// The factor, as a fraction, that bounds this provider's input tokens above the local
     /// `o200k_base` count, for the worst-case cost a request is admitted under.
     fn input_bound(&self) -> (u64, u64);
+    /// Tokens the provider adds around the messages, which no local count includes.
+    fn framing(&self) -> u64 {
+        64
+    }
+    /// How many model calls one request can become: 1 for an API, more for a client that
+    /// continues a truncated answer on its own. The worst case is multiplied by it.
+    fn calls_per_request(&self) -> u64 {
+        1
+    }
+    /// One request, told the most one of its calls may cost (pico-USD). Only a provider that
+    /// can enforce a spend limit itself uses it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Provider::complete`].
+    fn complete_within(&self, request: &Request, _call_worst: u64) -> Result<Reply, CallError> {
+        self.complete(request)
+    }
 }
 
 /// An HTTP response.
@@ -576,5 +594,286 @@ impl Provider for Fake {
 
     fn input_bound(&self) -> (u64, u64) {
         (2, 1)
+    }
+}
+
+/// How the Claude Code adapter runs its client: arguments, environment and standard input in;
+/// exit status, standard output and standard error out.
+pub trait Exec {
+    /// Runs the client once.
+    ///
+    /// # Errors
+    ///
+    /// When it could not be run or did not finish in time.
+    fn exec(
+        &self,
+        args: &[String],
+        env: &[(&str, String)],
+        stdin: &str,
+    ) -> Result<(Option<i32>, String, String), String>;
+}
+
+/// A program, run in an empty temporary directory — so no project file, `CLAUDE.md` or
+/// setting is near it — and killed after `timeout_seconds`.
+#[derive(Debug, Clone)]
+pub struct Process {
+    pub program: String,
+    pub timeout_seconds: u64,
+}
+
+impl Exec for Process {
+    fn exec(
+        &self,
+        args: &[String],
+        env: &[(&str, String)],
+        stdin: &str,
+    ) -> Result<(Option<i32>, String, String), String> {
+        let dir = tempfile::tempdir().map_err(|e| format!("a working directory: {e}"))?;
+        let mut child = Command::new(&self.program)
+            .args(args)
+            .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
+            .current_dir(dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("{} could not be started: {e}", self.program))?;
+        let input = stdin.to_owned();
+        let mut pipe = child.stdin.take();
+        let writer = std::thread::spawn(move || {
+            if let Some(p) = pipe.as_mut() {
+                let _ = p.write_all(input.as_bytes());
+            }
+        });
+        let out = child.stdout.take();
+        let err = child.stderr.take();
+        let read = |r: Option<std::process::ChildStdout>| {
+            std::thread::spawn(move || {
+                let mut s = String::new();
+                if let Some(mut r) = r {
+                    let _ = std::io::Read::read_to_string(&mut r, &mut s);
+                }
+                s
+            })
+        };
+        let out = read(out);
+        let err = std::thread::spawn(move || {
+            let mut s = String::new();
+            if let Some(mut r) = err {
+                let _ = std::io::Read::read_to_string(&mut r, &mut s);
+            }
+            s
+        });
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(self.timeout_seconds);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "{} did not finish in {} s",
+                        self.program, self.timeout_seconds
+                    ));
+                }
+                Err(e) => return Err(format!("{}: {e}", self.program)),
+            }
+        };
+        let _ = writer.join();
+        let stdout = out.join().unwrap_or_default();
+        let stderr = err.join().unwrap_or_default();
+        Ok((status.code(), stdout, stderr))
+    }
+}
+
+/// Anthropic's models through the Claude Code client in print mode, on the session's own
+/// credentials: one turn, no tools, no MCP server, no setting source, no thinking, the
+/// benchmark's system text in place of the client's, and the prompt on standard input. The
+/// client adds a small fixed framing of its own, the same for both arms. It sets no
+/// temperature — the model's default applies — and continues an answer that reaches the output
+/// limit by itself, so a request is bounded by `--max-budget-usd` and counted as up to two
+/// calls in the worst case.
+#[derive(Debug)]
+pub struct ClaudeCode<E> {
+    pub exec: E,
+    pub model: String,
+    /// `claude --version`, part of every request's identity.
+    pub version: String,
+    pub max_output_tokens: u64,
+}
+
+impl<E: Exec> ClaudeCode<E> {
+    // The budget is the call's worst case in dollars, rounded up to the micro-dollar: integer
+    // division by intent.
+    #[allow(clippy::integer_division)]
+    fn args(&self, system: &str, call_worst: u64) -> Vec<String> {
+        let micro = call_worst / 1_000_000 + u64::from(!call_worst.is_multiple_of(1_000_000));
+        let budget = format!("{}.{:06}", micro / 1_000_000, micro % 1_000_000);
+        [
+            "--print",
+            "--output-format",
+            "json",
+            "--model",
+            &self.model,
+            "--system-prompt",
+            system,
+            "--tools",
+            "",
+            "--strict-mcp-config",
+            "--setting-sources",
+            "",
+            "--no-session-persistence",
+            "--max-budget-usd",
+            &budget,
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect()
+    }
+
+    /// A `claude --print --output-format json` result, normalised.
+    ///
+    /// # Errors
+    ///
+    /// When the result is an API error (retryable or not) or not a result at all.
+    pub fn parse(stdout: &str) -> Result<Reply, CallError> {
+        let v: Value = serde_json::from_str(stdout.trim()).map_err(|e| CallError::Retryable {
+            reason: format!("the client's output is not JSON: {e}"),
+            billed: true,
+        })?;
+        if let Some(status) = at(&v, "/api_error_status").as_u64() {
+            let reason = format!(
+                "API error {status}: {}",
+                clip(at(&v, "/result").as_str().unwrap_or_default())
+            );
+            return Err(match status {
+                408 | 409 | 429 | 500 | 502 | 503 | 504 | 529 => CallError::Retryable {
+                    reason,
+                    billed: false,
+                },
+                _ => CallError::Fatal { reason },
+            });
+        }
+        let models = at(&v, "/modelUsage")
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        let (model, m) = models
+            .iter()
+            .max_by_key(|(_, m)| n(at(m, "/outputTokens")))
+            .map(|(k, m)| (k.clone(), m.clone()))
+            .ok_or_else(|| CallError::Retryable {
+                reason: "the client reported no model usage".to_owned(),
+                billed: true,
+            })?;
+        // `modelUsage` sums every call the client made for the request; `usage` may not.
+        let uncached = n(at(&m, "/inputTokens"));
+        let read = n(at(&m, "/cacheReadInputTokens"));
+        let write = n(at(&m, "/cacheCreationInputTokens"));
+        Ok(Reply {
+            text: at(&v, "/result").as_str().unwrap_or_default().to_owned(),
+            model,
+            stop_reason: at(&v, "/stop_reason").as_str().map(str::to_owned),
+            usage: Usage {
+                input_tokens: uncached + read + write,
+                uncached_input_tokens: uncached,
+                cached_input_tokens: read,
+                cache_write_input_tokens: write,
+                output_tokens: n(at(&m, "/outputTokens")),
+                reasoning_tokens: at(&m, "/thinkingTokens").as_u64(),
+            },
+            raw_usage: json!({
+                "usage": at(&v, "/usage"),
+                "modelUsage": at(&v, "/modelUsage"),
+                "total_cost_usd": at(&v, "/total_cost_usd"),
+                "num_turns": at(&v, "/num_turns"),
+                "is_error": at(&v, "/is_error"),
+                "subtype": at(&v, "/subtype"),
+            }),
+            fingerprint: None,
+            raw: stdout.to_owned(),
+        })
+    }
+}
+
+impl<E: Exec> Provider for ClaudeCode<E> {
+    fn name(&self) -> &str {
+        "claude-code"
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "client": "claude --print",
+            "client_version": self.version,
+            "max_output_tokens": self.max_output_tokens,
+            "thinking_tokens": 0,
+            "temperature": "model default (the client sets none)",
+            "tools": [],
+            "mcp_servers": [],
+            "setting_sources": [],
+        })
+    }
+
+    fn max_output_tokens(&self) -> u64 {
+        self.max_output_tokens
+    }
+
+    fn complete(&self, request: &Request) -> Result<Reply, CallError> {
+        self.complete_within(request, 1_000_000_000_000)
+    }
+
+    fn complete_within(&self, request: &Request, call_worst: u64) -> Result<Reply, CallError> {
+        let env = [
+            ("MAX_THINKING_TOKENS", "0".to_owned()),
+            (
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+                self.max_output_tokens.to_string(),
+            ),
+        ];
+        let (status, stdout, stderr) = self
+            .exec
+            .exec(&self.args(&request.system, call_worst), &env, &request.user)
+            .map_err(|reason| CallError::Retryable {
+                reason,
+                billed: true,
+            })?;
+        match Self::parse(&stdout) {
+            Ok(reply) => Ok(reply),
+            // The API's own error, as the client reported it, or a clean exit's.
+            Err(e @ (CallError::Fatal { .. } | CallError::Retryable { billed: false, .. })) => {
+                Err(e)
+            }
+            Err(e) if status == Some(0) => Err(e),
+            Err(_) => Err(CallError::Retryable {
+                reason: format!("the client exited with {status:?}: {}", clip(stderr.trim())),
+                billed: true,
+            }),
+        }
+    }
+
+    fn count(&self, _: &Request) -> Result<Option<u64>, CallError> {
+        // The client has no way to count without generating.
+        Ok(None)
+    }
+
+    fn input_bound(&self) -> (u64, u64) {
+        (8, 5)
+    }
+
+    fn framing(&self) -> u64 {
+        // The client's own framing: about 430 tokens in a probe with a one-line prompt.
+        1024
+    }
+
+    fn calls_per_request(&self) -> u64 {
+        2
     }
 }

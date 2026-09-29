@@ -418,6 +418,7 @@ fn check_emission_reach() -> Result<(), Vec<String>> {
 fn check_network_reach() -> Result<(), Vec<String>> {
     const MARKS: &[&str] = &[
         "\"curl\"",
+        "\"claude\"",
         "api.openai.com",
         "api.anthropic.com",
         "TcpStream",
