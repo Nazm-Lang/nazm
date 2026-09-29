@@ -6771,3 +6771,62 @@ file = "xtask/src/contained.rs"
 find = "            named && pid.is_some_and(|p| p != std::process::id() && !alive(p))"
 replace = "            named && pid.is_some_and(|p| p != std::process::id() && (alive(p) || !alive(p)))"
 killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::only_a_dead_supervisors_own_containers_are_stale" }]
+
+# --- N32-H2: the mutation baseline, shared observations, the persistent target ---------
+
+[[mutation]]
+name = "n32h2-the-pristine-cache-ignores-the-tree"
+why = "a session's pristine killer result is found for a tree it was never taken on"
+file = "xtask/src/mutate.rs"
+find = "            tree.to_owned(),"
+replace = "            String::new(),"
+killers = [{ package = "xtask", bin = "xtask", name = "mutate::tests::a_pristine_result_is_of_its_tree_and_nothing_else" }]
+
+[[mutation]]
+name = "n32h2-another-killers-run-is-the-verified-one"
+why = "a mutant's verification reads the first killer the verdict ran rather than this killer's own run"
+file = "xtask/src/mutate.rs"
+find = "        .find(|(s, _)| s.as_ref() == Some(k))"
+replace = "        .find(|(s, _)| s.is_some() || s.as_ref() == Some(k))"
+killers = [{ package = "xtask", bin = "xtask", name = "mutate::tests::a_killers_mutant_observation_is_its_own_run" }]
+
+[[mutation]]
+name = "n32h2-tier-one-alone-accepts-an-inexact-killer"
+why = "deciding at Tier 1 alone accepts a killer run that selected other than one test"
+file = "xtask/src/campaign.rs"
+find = "        let (outcome, verdict) = judge(&step, &obs, 1, exact);"
+replace = "        let (outcome, verdict) = judge(&step, &obs, 1, false);"
+killers = [{ package = "xtask", bin = "xtask", name = "campaign::tests::tier_one_alone_decides_exactly_what_the_full_law_decides_at_tier_one" }]
+
+[[mutation]]
+name = "n32h2-the-cache-key-ignores-the-lockfile"
+why = "the verification cache's compatibility key leaves out Cargo.lock, so new dependencies reuse old artefacts' namespace"
+file = "xtask/src/contained.rs"
+find = """        &f.lockfile,
+"""
+replace = ""
+killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::every_compatibility_field_changes_the_cache_key" }]
+
+[[mutation]]
+name = "n32h2-a-harness-change-gets-the-invariant-lifecycle"
+why = "a change to the harness is given only the invariant lifecycle tests"
+file = "xtask/src/gate.rs"
+find = "            Reach::Harness => lifecycle = Lifecycle::Full,"
+replace = "            Reach::Harness => {}"
+killers = [{ package = "xtask", bin = "xtask", name = "gate::tests::the_harness_calls_for_the_whole_lifecycle_and_the_product_for_its_invariants" }]
+
+[[mutation]]
+name = "n32h2-an-unknown-path-narrows-the-gate"
+why = "a path outside the table is given the narrow gate instead of the whole lifecycle"
+file = "xtask/src/gate.rs"
+find = "            Reach::Unknown => lifecycle = Lifecycle::Full,"
+replace = "            Reach::Unknown => {}"
+killers = [{ package = "xtask", bin = "xtask", name = "gate::tests::an_unknown_path_or_no_path_widens_the_gate" }]
+
+[[mutation]]
+name = "n32h2-a-mutation-session-shares-the-checkouts-target"
+why = "a mutation session builds in the checkout workloads' cache, so a binary a mutation copy built can answer the workspace suite"
+file = "xtask/src/contained.rs"
+find = """        "mutate" => Some("mutate"),"""
+replace = """        "mutate" => Some("src"),"""
+killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::a_mutation_session_and_the_checkouts_workloads_never_share_a_target" }]
