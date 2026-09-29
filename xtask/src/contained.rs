@@ -111,6 +111,10 @@ pub(crate) struct Bounds {
     /// the workload and is therefore **data, not instruction**: it can say anything, and
     /// the supervisor decides what is permitted.
     pub(crate) export: Option<ExportPolicy>,
+    /// The persistent verification target to mount at `/work/target`, by volume name
+    /// (N32-H2). `None` for a workload that must not share build state — a benchmark, a
+    /// release, an arbitrary `run` — which then builds on the image's own layer.
+    pub(crate) cache: Option<String>,
 }
 
 impl Default for Bounds {
@@ -126,8 +130,242 @@ impl Default for Bounds {
             deadline: Duration::from_secs(3600),
             output_cap: 4 * 1024 * 1024,
             export: None,
+            cache: None,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The persistent verification target (N32-H2)
+// ---------------------------------------------------------------------------
+
+/// The label every harness-owned cache volume carries. Only a volume with it is ever
+/// listed, pruned or removed; anything else on the machine is not this runner's.
+pub(crate) const CACHE_OWNER: &str = "nazm.owner=nazm-verification-harness";
+/// Bumped when what a cache volume holds, or how it is laid out, changes.
+const CACHE_VERSION: &str = "1";
+/// How many compatibility generations are kept. A new key beyond this removes the oldest.
+const CACHE_GENERATIONS: usize = 2;
+/// A volume over this many MiB is emptied at the start of the next workload that mounts
+/// it. A cache is disposable; a disk filled over months is not.
+pub(crate) const CACHE_MAX_MIB: u64 = 16 * 1024;
+
+/// Everything a build artefact in the target could depend on that Cargo's own fingerprints
+/// do not already cover — the toolchain and base image, the lockfile, the toolchain pin,
+/// the flags and the profile. Source is not here: Cargo rebuilds from source bytes on disk,
+/// and a mutation session extracts its copy with fresh modification times (`tar -m`), so
+/// no workspace artefact of an earlier session is ever taken for current.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CacheFields {
+    pub(crate) image: String,
+    pub(crate) lockfile: String,
+    pub(crate) toolchain: String,
+    pub(crate) rustflags: String,
+    pub(crate) profile: String,
+}
+
+/// The compatibility key: BLAKE3 over a domain tag, the cache version and every field,
+/// length-prefixed. Any change is a new key and a new volume — never a partial reuse.
+pub(crate) fn cache_key(f: &CacheFields) -> String {
+    let mut h = blake3::Hasher::new();
+    for part in [
+        "nazm.verification-cache",
+        CACHE_VERSION,
+        &f.image,
+        &f.lockfile,
+        &f.toolchain,
+        &f.rustflags,
+        &f.profile,
+    ] {
+        h.update(&(part.len() as u64).to_le_bytes());
+        h.update(part.as_bytes());
+    }
+    h.finalize().to_hex().to_string()
+}
+
+/// Which cache a workload builds in, if any.
+///
+/// Two, never one: a mutation session's copy lives at `/work/mut` and every other build is
+/// of the read-only checkout at `/src`. Cargo keeps the two apart for everything it hashes,
+/// but a binary is also copied to `target/debug/<name>` under its bare name, and a unit it
+/// finds fresh is not copied there again — so in one shared target a checkout's test could
+/// run the binary a mutation session's copy last built, a mutant's included. N32-H2 found
+/// exactly this: `nazm docs` built from `/work/mut` answering the workspace suite.
+pub(crate) fn cache_namespace(workload: &str) -> Option<&'static str> {
+    match workload {
+        "mutate" => Some("mutate"),
+        "tests" | "selfhost" | "bootstrap" => Some("src"),
+        _ => None,
+    }
+}
+
+/// The volume a namespace and key name.
+pub(crate) fn cache_volume(namespace: &str, key: &str) -> String {
+    format!("nazm-verify-{namespace}-{}", key.get(..16).unwrap_or(key))
+}
+
+/// This repository's fields, read now. The container sets no `RUSTFLAGS` and the host's is
+/// not passed in, so the flags are the image's; they are recorded rather than assumed.
+pub(crate) fn cache_fields(repo: &Path) -> Result<CacheFields, String> {
+    let image = Command::new("docker")
+        .args([
+            "image",
+            "inspect",
+            IMAGE,
+            "--format",
+            "{{.Id}} {{json .Config.Env}}",
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .ok_or_else(|| format!("cannot inspect the image `{IMAGE}`"))?;
+    let digest = |name: &str| -> Result<String, String> {
+        std::fs::read(repo.join(name))
+            .map(|b| blake3::hash(&b).to_hex().to_string())
+            .map_err(|e| format!("{name}: {e}"))
+    };
+    let rustflags = image
+        .split_whitespace()
+        .skip(1)
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(CacheFields {
+        image: image
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_owned(),
+        lockfile: digest("Cargo.lock")?,
+        toolchain: digest("rust-toolchain.toml")?,
+        rustflags: format!("image env {rustflags}; no RUSTFLAGS passed"),
+        profile: "dev and test, as Cargo.toml declares them".to_owned(),
+    })
+}
+
+/// A harness-owned volume, as listed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CacheVolume {
+    pub(crate) name: String,
+    pub(crate) namespace: String,
+    pub(crate) key: String,
+    pub(crate) created: u64,
+}
+
+/// Which of `owned` to remove so that at most [`CACHE_GENERATIONS`] of `current`'s
+/// namespace remain, `current` always among them: the oldest others first. Another
+/// namespace's volumes are never counted or removed here. Only harness-owned volumes are
+/// ever passed.
+pub(crate) fn cache_prunable(owned: &[CacheVolume], current: &str, namespace: &str) -> Vec<String> {
+    let mut others: Vec<&CacheVolume> = owned
+        .iter()
+        .filter(|v| v.name != current && v.namespace == namespace)
+        .collect();
+    others.sort_by(|a, b| b.created.cmp(&a.created).then_with(|| a.name.cmp(&b.name)));
+    others
+        .into_iter()
+        .skip(CACHE_GENERATIONS.saturating_sub(1))
+        .map(|v| v.name.clone())
+        .collect()
+}
+
+/// Every harness-owned cache volume. A volume without the owner label is never listed.
+pub(crate) fn cache_list() -> Vec<CacheVolume> {
+    let names: Vec<String> = Command::new("docker")
+        .args([
+            "volume",
+            "ls",
+            "-q",
+            "--filter",
+            &format!("label={CACHE_OWNER}"),
+        ])
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let o = Command::new("docker")
+                .args([
+                    "volume",
+                    "inspect",
+                    &name,
+                    "--format",
+                    "{{index .Labels \"nazm.compat\"}} {{index .Labels \"nazm.created\"}} {{index .Labels \"nazm.owner\"}} {{index .Labels \"nazm.namespace\"}}",
+                ])
+                .output()
+                .ok()?;
+            let text = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+            let mut f = text.split_whitespace();
+            let key = f.next()?.to_owned();
+            let created = f.next()?.parse().ok()?;
+            let owned = f.next()? == "nazm-verification-harness";
+            let namespace = f.next().unwrap_or_default().to_owned();
+            owned.then_some(CacheVolume {
+                name,
+                namespace,
+                key,
+                created,
+            })
+        })
+        .collect()
+}
+
+/// The volume for this repository's key, created with its labels if it does not exist, and
+/// older generations beyond the bound removed. The first mount of a new volume copies in
+/// the image's warmed `/work/target`, so a cold key starts from the image, not from nothing.
+pub(crate) fn cache_ensure(repo: &Path, namespace: &str) -> Result<String, String> {
+    let fields = cache_fields(repo)?;
+    let key = cache_key(&fields);
+    let name = cache_volume(namespace, &key);
+    let exists = Command::new("docker")
+        .args(["volume", "inspect", &name])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !exists {
+        let created = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let made = Command::new("docker")
+            .args(["volume", "create"])
+            .args(["--label", CACHE_OWNER])
+            .args(["--label", &format!("nazm.compat={key}")])
+            .args(["--label", &format!("nazm.created={created}")])
+            .args(["--label", &format!("nazm.cache-version={CACHE_VERSION}")])
+            .args(["--label", &format!("nazm.namespace={namespace}")])
+            .arg(&name)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !made.status.success() {
+            return Err(String::from_utf8_lossy(&made.stderr).trim().to_owned());
+        }
+        eprintln!("contained: new verification cache {name} for compatibility key {key}");
+    }
+    for old in cache_prunable(&cache_list(), &name, namespace) {
+        let _ = Command::new("docker").args(["volume", "rm", &old]).output();
+        eprintln!("contained: removed the older verification cache {old}");
+    }
+    Ok(name)
+}
+
+/// Remove every harness-owned cache volume. The next workload is slower; nothing else
+/// changes.
+pub(crate) fn cache_clear() -> Vec<String> {
+    let mut gone = Vec::new();
+    for v in cache_list() {
+        let o = Command::new("docker")
+            .args(["volume", "rm", &v.name])
+            .output();
+        if o.is_ok_and(|o| o.status.success()) {
+            gone.push(v.name);
+        }
+    }
+    gone
 }
 
 /// Distinct outcomes. Collapsing these into "failed" is what lets a resource problem be
@@ -298,6 +536,29 @@ fn reap_stale() -> Vec<String> {
     gone
 }
 
+/// `argv`, with the cache's size bound checked first when a cache is mounted: over
+/// [`CACHE_MAX_MIB`], the volume is emptied before the workload starts.
+fn guarded(argv: &[&str], cached: bool) -> Vec<String> {
+    let mut out: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
+    if cached {
+        if let (Some("sh"), Some("-c"), Some(script)) = (
+            argv.first().copied(),
+            argv.get(1).copied(),
+            argv.get(2).copied(),
+        ) {
+            if let Some(last) = out.get_mut(2) {
+                *last = format!(
+                    "s=$(du -sm /work/target 2>/dev/null | cut -f1); \
+                     if [ \"${{s:-0}}\" -gt {CACHE_MAX_MIB} ]; then \
+                     echo \"contained: the verification cache is ${{s}} MiB, over {CACHE_MAX_MIB}; emptied\" >&2; \
+                     find /work/target -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +; fi; {script}"
+                );
+            }
+        }
+    }
+    out
+}
+
 /// Runs `argv` inside the bounded environment with `repo` mounted read-only at `/src`.
 pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report {
     let empty = Report {
@@ -358,6 +619,12 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
             "type=bind,source={},target=/src,readonly",
             repo.display()
         ))
+        .args(b.cache.iter().flat_map(|v| {
+            [
+                "--mount".to_owned(),
+                format!("type=volume,source={v},target=/work/target"),
+            ]
+        }))
         // The only place a real ceiling applies, so the only place this is set.
         .args(["--env", "NAZM_CONTAINED=1"])
         .args(["--env", &format!("NAZM_PROFILE={}", b.profile.name)])
@@ -371,7 +638,7 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
         ])
         .args(["--env", "CARGO_TARGET_DIR=/work/target"])
         .arg(IMAGE)
-        .args(argv)
+        .args(guarded(argv, b.cache.is_some()))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -800,6 +1067,89 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+
+    fn fields() -> CacheFields {
+        CacheFields {
+            image: "sha256:image".to_owned(),
+            lockfile: "lock".to_owned(),
+            toolchain: "1.98.1".to_owned(),
+            rustflags: "none".to_owned(),
+            profile: "dev".to_owned(),
+        }
+    }
+
+    /// Every compatibility field is in the key: a changed lockfile, toolchain, image,
+    /// flags or profile is a new key and so a new volume, never a partial reuse. N32-H2.
+    #[test]
+    fn every_compatibility_field_changes_the_cache_key() {
+        let base = cache_key(&fields());
+        assert_eq!(base, cache_key(&fields()));
+        let changed: [fn(&mut CacheFields); 5] = [
+            |f| f.lockfile = "lock2".to_owned(),
+            |f| f.toolchain = "1.99.0".to_owned(),
+            |f| f.image = "sha256:other".to_owned(),
+            |f| f.rustflags = "-C target-cpu=native".to_owned(),
+            |f| f.profile = "release".to_owned(),
+        ];
+        for change in changed {
+            let mut f = fields();
+            change(&mut f);
+            assert_ne!(cache_key(&f), base);
+            assert_ne!(
+                cache_volume("src", &cache_key(&f)),
+                cache_volume("src", &base)
+            );
+        }
+        assert!(cache_volume("src", &base).starts_with("nazm-verify-src-"));
+    }
+
+    /// Pruning keeps the current volume and the newest other, and is only ever handed
+    /// harness-owned volumes: `cache_list` filters on the owner label.
+    #[test]
+    fn pruning_keeps_the_current_generation_and_the_newest_other() {
+        let v = |name: &str, created| CacheVolume {
+            name: name.to_owned(),
+            namespace: "src".to_owned(),
+            key: name.to_owned(),
+            created,
+        };
+        let owned = [v("a", 1), v("b", 3), v("c", 2), v("current", 0)];
+        assert_eq!(cache_prunable(&owned, "current", "src"), ["c", "a"]);
+        assert!(cache_prunable(&[v("current", 0)], "current", "src").is_empty());
+        assert!(cache_prunable(&[v("b", 3), v("current", 0)], "current", "src").is_empty());
+        // Another namespace's generations are its own.
+        let mut m = v("m", 9);
+        m.namespace = "mutate".to_owned();
+        assert!(cache_prunable(&[m, v("current", 0)], "current", "src").is_empty());
+    }
+
+    /// A mutation session never builds in the target the checkout's workloads build in: a
+    /// binary Cargo copies out under its bare name would otherwise cross from a mutation
+    /// copy — a mutant's included — into the workspace suite. N32-H2.
+    #[test]
+    fn a_mutation_session_and_the_checkouts_workloads_never_share_a_target() {
+        let mutate = cache_namespace("mutate");
+        assert!(mutate.is_some());
+        for w in ["tests", "selfhost", "bootstrap"] {
+            assert_eq!(cache_namespace(w), Some("src"), "{w}");
+            assert_ne!(cache_namespace(w), mutate, "{w}");
+        }
+        for w in ["bench", "release", "run", "probe"] {
+            assert_eq!(cache_namespace(w), None, "{w}");
+        }
+    }
+
+    /// The size bound runs before the workload's own script, and only where a cache is
+    /// mounted.
+    #[test]
+    fn the_size_bound_guards_a_mounted_cache_only() {
+        let argv = ["sh", "-c", "cd /src && cargo test"];
+        let guarded_argv = guarded(&argv, true);
+        let script = guarded_argv.get(2).unwrap();
+        assert!(script.contains("du -sm /work/target"));
+        assert!(script.ends_with("cd /src && cargo test"));
+        assert_eq!(guarded(&argv, false), argv.map(str::to_owned).to_vec());
+    }
 
     #[test]
     fn only_a_dead_supervisors_own_containers_are_stale() {

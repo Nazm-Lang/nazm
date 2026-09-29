@@ -7,6 +7,7 @@
 mod bench;
 mod campaign;
 mod contained;
+mod gate;
 mod guide;
 mod metadata;
 mod mutate;
@@ -40,6 +41,24 @@ fn main() -> ExitCode {
         Some("check-mutations") => report(&[("mutations apply", check_mutations_apply())]),
         Some("check-guide") => report(&[("guide from grammar", guide::check())]),
         Some("check-corpus") => report(&[("docs corpus", check_docs_corpus())]),
+        // N32-H2: which MILESTONE evidence the named changed paths call for.
+        Some("gate-plan") => {
+            let paths: Vec<String> = args.collect();
+            let p = gate::plan(&paths);
+            for r in &p.reasons {
+                println!("  {r}");
+            }
+            println!(
+                "lifecycle {}",
+                match p.lifecycle {
+                    gate::Lifecycle::Full => "full",
+                    gate::Lifecycle::Invariant => "invariant",
+                }
+            );
+            println!("mcp shared mutations {}", if p.mcp { "yes" } else { "no" });
+            println!("lifecycle command: cargo {}", p.lifecycle_args().join(" "));
+            ExitCode::SUCCESS
+        }
         Some("bench") => {
             let rest: Vec<String> = args.collect();
             let mode = if rest.iter().any(|a| a == "--save") {
@@ -116,6 +135,8 @@ fn help() {
            check-cache     a check key still covers everything checking reads\n  \
            check-symbols   a native symbol comes from identity, not from position\n  \
            check-guide     docs/guide.md is what docs/grammar.ebnf produces\n  \
+           gate-plan PATHS which MILESTONE lifecycle evidence the changed paths call for;\n  \
+                           an unknown path, or none, calls for all of it\n  \
            check-corpus    the documentation corpus sections: every document there, every\n  \
                            id unique, every link resolved, the grammar parsed\n  \
            guide           rewrite docs/guide.md from docs/grammar.ebnf\n  \
@@ -1810,6 +1831,7 @@ fn mutate_run(args: &mut impl Iterator<Item = String>) -> ExitCode {
         o.parallelism.test_threads = n;
     }
     o.verify_killers = f.contains_key("verify-killers");
+    o.disposable_target = f.contains_key("disposable-target");
     finish_campaign(mutate::run_all(&o))
 }
 
@@ -1896,6 +1918,11 @@ fn mutate_cli(rest: &[String]) -> ExitCode {
             // N32-H: verify each decided mutant's killers in the same warm session.
             "--verify-killers" => {
                 o.verify_killers = true;
+                1
+            }
+            // N32-H2: the target is the harness's cache and may be cleaned.
+            "--disposable-target" => {
+                o.disposable_target = true;
                 1
             }
             // N14.1: each step's internal parallelism. Never more mutants at once.
@@ -2153,6 +2180,7 @@ fn run_contained(args: &[String]) -> ExitCode {
 
     let (name, argv): (&str, Vec<String>) = match args.first().map(String::as_str) {
         Some("probe") => return contained_probe(&repo),
+        Some("cache") => return contained_cache(args.get(1).map(String::as_str)),
         Some("selfhost") => (
             "selfhost",
             shell(&cargo_test("-p nazm-cli --test selfhost", profile)),
@@ -2328,11 +2356,11 @@ fn run_contained(args: &[String]) -> ExitCode {
                 "mutate",
                 shell(&format!(
                     "rm -rf /work/mut && mkdir -p /work/mut /work/campaigns \
-                     && tar -C /src -cf - --exclude=./target --exclude=./.git --exclude=.nazm . | tar -C /work/mut -xf - \
+                     && tar -C /src -cf - --exclude=./target --exclude=./.git --exclude=.nazm . | tar -C /work/mut -xmf - \
                      && cd /work/mut && export CARGO_TARGET_DIR=/work/target \
                      && cargo build -q -p xtask --jobs {j} \
                      && exec timeout -s TERM -k 15 {deadline} /work/target/debug/xtask mutate \
-                        --reset-derived-caches --export-journal --campaign-dir /work/campaigns \
+                        --reset-derived-caches --disposable-target --export-journal --campaign-dir /work/campaigns \
                         --resume-from /src/target/mutation-campaigns {par}{commit}{budget}{passed}"
                 )),
             )
@@ -2412,6 +2440,18 @@ fn run_contained(args: &[String]) -> ExitCode {
         }
     };
 
+    // The persistent verification target, for the workloads that build the workspace and
+    // are judged on it (N32-H2). A benchmark, a release and an arbitrary `run` never share
+    // it: their numbers and artefacts must not depend on what an earlier session left.
+    if let Some(namespace) = contained::cache_namespace(name) {
+        match contained::cache_ensure(&repo, namespace) {
+            Ok(v) => bounds.cache = Some(v),
+            Err(e) => {
+                eprintln!("contained: cannot prepare the verification cache: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     let borrowed: Vec<&str> = argv.iter().map(String::as_str).collect();
     eprintln!(
         "contained: {name} — {} MiB memory (swap equal), {:.1} CPU, {} pids, {} GiB disk, {} s deadline",
@@ -2605,6 +2645,36 @@ fn shell(cmd: &str) -> Vec<String> {
     ]
 }
 
+/// `contained cache` lists the harness-owned verification caches; `contained cache clear`
+/// removes them. Nothing that is not labelled as the harness's is touched. N32-H2.
+fn contained_cache(what: Option<&str>) -> ExitCode {
+    match what {
+        None | Some("list") => {
+            let owned = contained::cache_list();
+            if owned.is_empty() {
+                println!("no verification cache");
+            }
+            for v in owned {
+                println!(
+                    "{}  namespace {}  key {}  created {}",
+                    v.name, v.namespace, v.key, v.created
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Some("clear") => {
+            for n in contained::cache_clear() {
+                println!("removed {n}");
+            }
+            ExitCode::SUCCESS
+        }
+        Some(other) => {
+            eprintln!("contained cache: `list` or `clear`, not `{other}`");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Verifies that each limit is real on this daemon before anything depends on it. Every
 /// probe's own maximum is small, so it stays safe even if enforcement silently fails.
 fn contained_probe(repo: &std::path::Path) -> ExitCode {
@@ -2622,6 +2692,7 @@ fn contained_probe(repo: &std::path::Path) -> ExitCode {
         deadline: Duration::from_secs(20),
         output_cap: 256 * 1024,
         export: None,
+        cache: None,
     };
 
     // (name, argv, expected outcome, what it proves)

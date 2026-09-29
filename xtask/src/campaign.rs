@@ -300,6 +300,78 @@ pub(crate) fn decide(
     }
 }
 
+/// Tier 1 alone: the first half of [`decide`], taken unchanged. N32-H2.
+///
+/// `Some` when it decides the mutant — the mutant did not build, or a declared killer
+/// failed, crashed, timed out or selected other than one test — with exactly the verdict
+/// `decide` reaches at that point, because it is the same build and the same steps judged
+/// by the same rule. `None` when every killer passed: only a profile target or the
+/// workspace suite can decide it, and a session that defers it runs the full law for it
+/// later, baseline included. Tier 1 needs no baseline suite: `judge` expects one binary
+/// from an exact killer, and that the killer passed without the mutant is observed
+/// directly, once per session.
+pub(crate) fn decide_direct(p: &MutationPlan, ex: &mut dyn Executor) -> Option<Provisional> {
+    let (build, build_secs) = ex.build();
+    let stop = |verdict, runs| Provisional {
+        verdict,
+        build_secs,
+        steps: runs,
+    };
+    match build {
+        Build::Built => {}
+        Build::Refused => return Some(stop(Verdict::DidNotBuild, Vec::new())),
+        Build::TimedOut(why) => {
+            return Some(stop(Verdict::TimedOut(format!("build: {why}")), Vec::new()))
+        }
+        Build::Failed(why) => {
+            return Some(stop(
+                Verdict::RunnerFailed(format!("build: {why}")),
+                Vec::new(),
+            ))
+        }
+    }
+    let mut runs = Vec::new();
+    for step in steps(p, Strategy::Targeted)
+        .into_iter()
+        .filter(|s| s.tier == Tier::Direct)
+    {
+        let (obs, secs, compile_secs) = ex.test(&step, 1);
+        let exact = step.selector.as_ref().is_some_and(|s| s.exact.is_some());
+        let (outcome, verdict) = judge(&step, &obs, 1, exact);
+        runs.push(StepRun {
+            tier: step.tier,
+            selector: step.label(),
+            outcome: outcome.to_owned(),
+            secs,
+            compile_secs,
+        });
+        if let Some(v) = verdict {
+            return Some(stop(v, runs));
+        }
+    }
+    None
+}
+
+/// An executor that remembers what every test step it ran observed, so the killer
+/// verification of a mutant reads the very run its verdict came from rather than a second
+/// one. N32-H2.
+pub(crate) struct Recording<'e> {
+    pub(crate) inner: &'e mut dyn Executor,
+    pub(crate) seen: Vec<(Option<TestSelector>, Observation)>,
+}
+
+impl Executor for Recording<'_> {
+    fn build(&mut self) -> (Build, f64) {
+        self.inner.build()
+    }
+
+    fn test(&mut self, step: &Step, expected: usize) -> (Observation, f64, f64) {
+        let r = self.inner.test(step, expected);
+        self.seen.push((step.selector.clone(), r.0.clone()));
+        r
+    }
+}
+
 /// One observation, read under the rules of the step it came from. `None` means pass.
 fn judge(
     step: &Step,
@@ -1329,6 +1401,71 @@ mod tests {
             result_lines: 10,
             crash: None,
         }
+    }
+
+    /// Tier 1 alone reaches exactly the verdict and steps the full law reaches whenever
+    /// Tier 1 decides, and defers — having run only the killers — whenever it does not.
+    /// N32-H2: no verdict is weakened by deciding at Tier 1 first.
+    #[test]
+    fn tier_one_alone_decides_exactly_what_the_full_law_decides_at_tier_one() {
+        let timed = || Observation::TimedOut("deadline".to_owned());
+        let crashed = || Observation::Completed {
+            passed: 0,
+            failing: 0,
+            result_lines: 0,
+            crash: Some("SIGSEGV".to_owned()),
+        };
+        let two = || Observation::Completed {
+            passed: 2,
+            failing: 0,
+            result_lines: 1,
+            crash: None,
+        };
+        let decided: Vec<(usize, Vec<Observation>)> = vec![
+            (1, vec![fail()]),
+            (2, vec![pass(), fail()]),
+            (1, vec![timed()]),
+            (1, vec![crashed()]),
+            (1, vec![two()]),
+        ];
+        for (killers, answers) in decided {
+            let plan = a_plan(killers, 2);
+            let mut direct = script(answers.clone());
+            let d = decide_direct(&plan, &mut direct).expect("decided at tier 1");
+            let mut full = script(answers.clone());
+            let f = decide(&plan, Strategy::Targeted, &mut full, 10);
+            assert_eq!(
+                format!("{:?}", d.verdict),
+                format!("{:?}", f.verdict),
+                "{answers:?}"
+            );
+            assert_eq!(d.steps.len(), f.steps.len());
+            assert_eq!(direct.asked, full.asked);
+        }
+        // Every killer passed: deferred, and nothing but the killers ran.
+        let mut ex = script(vec![pass(), pass()]);
+        assert!(decide_direct(&a_plan(2, 2), &mut ex).is_none());
+        assert_eq!(ex.asked, vec![Tier::Direct, Tier::Direct]);
+        // A mutant that does not build is decided without a test.
+        let mut ex = script(vec![]);
+        ex.build = Build::Refused;
+        let d = decide_direct(&a_plan(1, 0), &mut ex).expect("decided");
+        assert!(matches!(d.verdict, Verdict::DidNotBuild));
+        assert!(ex.asked.is_empty());
+    }
+
+    /// The recording executor hands the verification the very observation the verdict was
+    /// read from.
+    #[test]
+    fn the_verdicts_own_observation_is_what_verification_reads() {
+        let mut inner = script(vec![fail()]);
+        let mut rec = Recording {
+            inner: &mut inner,
+            seen: Vec::new(),
+        };
+        let d = decide_direct(&a_plan(1, 0), &mut rec).expect("decided");
+        assert!(matches!(d.verdict, Verdict::Caught { .. }));
+        assert_eq!(rec.seen, vec![(Some(sel(Some("k"))), fail())]);
     }
 
     #[test]
