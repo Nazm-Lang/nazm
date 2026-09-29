@@ -439,3 +439,67 @@ fn the_map_is_a_small_fraction_of_what_it_indexes() {
     );
     assert!(map.len() * 10 < whole);
 }
+
+/// What a map and a task cost here: the first map of the process, repeats of it, its
+/// serialisation apart, and tasks of each intent. Printed, not asserted: a build's speed is
+/// the machine's. Run by hand, in a release build:
+/// `cargo test --release -p nazm-repo --test benchmark -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, printed and not asserted"]
+fn what_a_map_and_a_task_cost() {
+    let time = |f: &mut dyn FnMut()| {
+        let start = Instant::now();
+        f();
+        start.elapsed().as_secs_f64() * 1000.0
+    };
+    let mut map = None;
+    let cold = time(&mut || map = Some(nazm_repo::map(&root())));
+    let repeat: Vec<f64> = (0..3)
+        .map(|_| time(&mut || map = Some(nazm_repo::map(&root()))))
+        .collect();
+    let map = map.unwrap();
+    let mut json = String::new();
+    let serialise = time(&mut || json = map.to_json());
+    println!(
+        "\nmap: first {cold:.0} ms, then {:.0} / {:.0} / {:.0} ms; serialising {serialise:.2} ms, {} bytes",
+        repeat[0],
+        repeat[1],
+        repeat[2],
+        json.len()
+    );
+    for (intent, seed) in [
+        (Intent::Understand, "doc:spec:returns"),
+        (Intent::Test, "package:nazm-docs"),
+        (
+            Intent::Diagnose,
+            "diagnostic:examples-bad:return_type_mismatch.nz:N0300@return_type_mismatch.nz:59-69#0",
+        ),
+        (Intent::Understand, "def:compiler:lex.nz::fn is_alnum"),
+        (Intent::Edit, "def:compiler:module.nz::fn attach_core"),
+        (
+            Intent::Understand,
+            "def:compiler:analyse.nz::fn check_program",
+        ),
+    ] {
+        let runs: Vec<f64> = (0..3).map(|_| task(intent, seed).2).collect();
+        let (v, size, _) = task(intent, seed);
+        let mut serialise = 0.0;
+        let r = nazm_repo::task(
+            &root(),
+            &TaskRequest {
+                intent: Some(intent),
+                seeds: vec![seed.to_owned()],
+                state: None,
+                budget: Budget::default(),
+            },
+        );
+        serialise += time(&mut || drop(r.to_json()));
+        println!(
+            "task {intent:?} {seed}: {:.0} / {:.0} / {:.0} ms, serialising {serialise:.2} ms, {size} bytes, {} items",
+            runs[0],
+            runs[1],
+            runs[2],
+            v["items"].as_array().unwrap().len()
+        );
+    }
+}
