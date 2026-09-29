@@ -926,6 +926,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nazm-agent-bench"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "nazm-core",
+ "nazm-docs",
+ "nazm-repo",
+ "nazm-service",
+ "nazm-tokens",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "nazm-bench"
 version = "0.0.1"
 dependencies = [

@@ -34,6 +34,7 @@ members = [
     "crates/nazm-docs",
     "crates/nazm-repo",
     "crates/nazm-tokens",
+    "crates/nazm-agent-bench",
     "crates/nazm-cli",
     "crates/nazm-mcp",
     "crates/nazm-bench",
