@@ -128,8 +128,11 @@ pub struct ArmRow {
     /// The context payload by the provider's own count, where it has one.
     pub provider_context_tokens: Option<u64>,
     pub provider_fixed_tokens: Option<u64>,
-    /// pico-USD.
+    /// pico-USD, as billed: every usage category at its own rate.
     pub cost: Stat,
+    /// pico-USD, as if nothing were cached: every input token at the uncached rate. The
+    /// comparison a provider's caching choices cannot tilt.
+    pub cost_uncached: Stat,
     pub latency_ms: Stat,
     pub retries: u64,
     pub retry_latency_ms: u64,
@@ -170,6 +173,7 @@ pub struct TaskRow {
     pub input_reduction_bp: Option<i64>,
     pub total_reduction_bp: Option<i64>,
     pub cost_reduction_bp: Option<i64>,
+    pub uncached_cost_reduction_bp: Option<i64>,
     pub local_context_reduction_bp: Option<i64>,
 }
 
@@ -192,6 +196,7 @@ pub struct Totals {
     pub cached_input_tokens: u64,
     pub local_context_tokens: u64,
     pub cost: u64,
+    pub cost_uncached: u64,
     pub tokens_per_solved_task: Option<String>,
     /// pico-USD.
     pub cost_per_solved_task: Option<u64>,
@@ -218,6 +223,7 @@ fn totals<'a>(rows: impl Iterator<Item = &'a ArmRow>) -> Totals {
         t.cached_input_tokens += r.cached_input_tokens;
         t.local_context_tokens += r.local_context_tokens;
         t.cost += r.cost.sum;
+        t.cost_uncached += r.cost_uncached.sum;
     }
     let solved = t.solved as u64;
     t.tokens_per_solved_task = ratio(t.total_tokens, solved);
@@ -248,6 +254,7 @@ pub struct Group {
     pub input_reduction_bp: Option<i64>,
     pub total_reduction_bp: Option<i64>,
     pub cost_reduction_bp: Option<i64>,
+    pub uncached_cost_reduction_bp: Option<i64>,
     pub local_context_reduction_bp: Option<i64>,
     pub median_task_input_reduction_bp: Option<i64>,
 }
@@ -286,6 +293,7 @@ fn group(name: &str, rows: &[&TaskRow]) -> Group {
         input_reduction_bp: reduction_bp(baseline.input_tokens, n33.input_tokens),
         total_reduction_bp: reduction_bp(baseline.total_tokens, n33.total_tokens),
         cost_reduction_bp: reduction_bp(baseline.cost, n33.cost),
+        uncached_cost_reduction_bp: reduction_bp(baseline.cost_uncached, n33.cost_uncached),
         local_context_reduction_bp: reduction_bp(
             baseline.local_context_tokens,
             n33.local_context_tokens,
@@ -341,13 +349,14 @@ pub struct Report {
     pub providers: Vec<ProviderReport>,
 }
 
-fn arm_row(records: &[&Record], required: usize) -> ArmRow {
+fn arm_row(records: &[&Record], required: usize, price: Option<&Price>) -> ArmRow {
     let mut r = ArmRow {
         trials: records.len(),
         ..ArmRow::default()
     };
     let (mut input, mut output, mut total, mut cost, mut latency) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut uncached = Vec::new();
     for x in records {
         r.local_context_tokens = x.local.context_tokens;
         r.local_fixed_tokens = x.local.fixed_tokens;
@@ -393,6 +402,17 @@ fn arm_row(records: &[&Record], required: usize) -> ArmRow {
             r.cached_input_tokens += u.cached_input_tokens;
             r.cache_write_input_tokens += u.cache_write_input_tokens;
             r.reasoning_tokens += u.reasoning_tokens.unwrap_or(0);
+            if let Some(p) = price {
+                let flat = crate::price::Usage {
+                    uncached_input_tokens: u.input_tokens,
+                    cached_input_tokens: 0,
+                    cache_write_input_tokens: 0,
+                    ..u
+                };
+                if let Some(c) = crate::price::cost(&flat, p) {
+                    uncached.push(c.total);
+                }
+            }
         }
         if let Some(c) = x.cost {
             cost.push(c.total);
@@ -405,6 +425,7 @@ fn arm_row(records: &[&Record], required: usize) -> ArmRow {
     r.output_tokens = stat(output);
     r.total_tokens = stat(total);
     r.cost = stat(cost);
+    r.cost_uncached = stat(uncached);
     r.latency_ms = stat(latency);
     r
 }
@@ -450,6 +471,11 @@ pub fn build(suite: &Suite, records: &[Record], prices: &[Price]) -> Report {
     let mut providers = Vec::new();
     for (provider, recs) in by_provider {
         let trials = recs.iter().map(|r| r.trial as usize).max().unwrap_or(0);
+        let model = recs
+            .first()
+            .map(|r| r.model_requested.clone())
+            .unwrap_or_default();
+        let price = crate::price::find(prices, &provider, &model);
         let mut rows = Vec::new();
         for task in &suite.tasks {
             let of = |arm: Arm| -> Vec<&Record> {
@@ -465,8 +491,8 @@ pub fn build(suite: &Suite, records: &[Record], prices: &[Price]) -> Report {
             if b.is_empty() && n.is_empty() {
                 continue;
             }
-            let baseline = arm_row(&b, task.required());
-            let n33 = arm_row(&n, task.required());
+            let baseline = arm_row(&b, task.required(), price);
+            let n33 = arm_row(&n, task.required(), price);
             let conclusion = conclude(&baseline, &n33, trials);
             rows.push(TaskRow {
                 task: task.id.to_owned(),
@@ -484,6 +510,10 @@ pub fn build(suite: &Suite, records: &[Record], prices: &[Price]) -> Report {
                     n33.total_tokens.median.unwrap_or(0),
                 ),
                 cost_reduction_bp: reduction_bp(baseline.cost.sum, n33.cost.sum),
+                uncached_cost_reduction_bp: reduction_bp(
+                    baseline.cost_uncached.sum,
+                    n33.cost_uncached.sum,
+                ),
                 local_context_reduction_bp: reduction_bp(
                     baseline.local_context_tokens,
                     n33.local_context_tokens,
@@ -610,17 +640,17 @@ pub fn markdown(r: &Report) -> String {
         );
         let _ = writeln!(
             s,
-            "| Task | Category | Solved (base / N33) | Facts (base / N33) | False claims (base / N33) | Hallucinated (base / N33) | Input tokens, median (base → N33) | Output tokens, median | Total tokens, median | Cost (base → N33) | Verdict |"
+            "| Task | Category | Solved (base / N33) | Solved if prose around a JSON block is ignored | Facts (base / N33) | False claims (base / N33) | Hallucinated (base / N33) | Input tokens, median (base → N33) | Output tokens, median | Total tokens, median | Cost (base → N33) | Cost uncached (base → N33) | Verdict |"
         );
         let _ = writeln!(
             s,
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
         );
         for t in &p.tasks {
             let (b, n) = (&t.baseline, &t.n33);
             let _ = writeln!(
                 s,
-                "| {} {} | {} | {}/{} / {}/{} | {}/{} / {}/{} | {}/{} / {}/{} | {} / {} | {} / {} | {} → {} ({}) | {} / {} | {} → {} ({}) | {} → {} | {} |",
+                "| {} {} | {} | {}/{} / {}/{} | {}/{} / {}/{} | {}/{} / {}/{} | {} / {} | {} / {} | {} → {} ({}) | {} / {} | {} → {} ({}) | {} → {} | {} → {} | {} |",
                 t.task,
                 t.scenario,
                 t.category.name(),
@@ -650,22 +680,24 @@ pub fn markdown(r: &Report) -> String {
                 pct(t.total_reduction_bp),
                 dollars(b.cost.sum),
                 dollars(n.cost.sum),
+                dollars(b.cost_uncached.sum),
+                dollars(n.cost_uncached.sum),
                 conclusion_name(t.conclusion),
             );
         }
         let _ = writeln!(s);
         let _ = writeln!(
             s,
-            "| Group | Tasks | Correctness preserved | Solved (base / N33) | Facts (base / N33) | Input reduction | Total-token reduction | Cost reduction | Context-only reduction (o200k) | Tokens per solved task (base / N33) | Cost per solved task (base / N33) |"
+            "| Group | Tasks | Correctness preserved | Solved (base / N33) | Facts (base / N33) | Input reduction | Total-token reduction | Cost reduction | Cost reduction, uncached | Context-only reduction (o200k) | Tokens per solved task (base / N33) | Cost per solved task (base / N33) |"
         );
         let _ = writeln!(
             s,
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
         );
         for g in p.categories.iter().chain(std::iter::once(&p.all)) {
             let _ = writeln!(
                 s,
-                "| {} | {} | {}/{} | {}/{} / {}/{} | {}/{} / {}/{} | {} | {} | {} | {} | {} / {} | {} / {} |",
+                "| {} | {} | {}/{} | {}/{} / {}/{} | {}/{} / {}/{} | {} | {} | {} | {} | {} | {} / {} | {} / {} |",
                 g.name,
                 g.tasks,
                 g.correctness_preserved,
@@ -681,6 +713,7 @@ pub fn markdown(r: &Report) -> String {
                 pct(g.input_reduction_bp),
                 pct(g.total_reduction_bp),
                 pct(g.cost_reduction_bp),
+                pct(g.uncached_cost_reduction_bp),
                 pct(g.local_context_reduction_bp),
                 g.baseline.tokens_per_solved_task.as_deref().unwrap_or("—"),
                 g.n33.tokens_per_solved_task.as_deref().unwrap_or("—"),
