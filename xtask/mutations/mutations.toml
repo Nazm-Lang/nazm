@@ -6830,3 +6830,72 @@ file = "xtask/src/contained.rs"
 find = """        "mutate" => Some("mutate"),"""
 replace = """        "mutate" => Some("src"),"""
 killers = [{ package = "xtask", bin = "xtask", name = "contained::tests::a_mutation_session_and_the_checkouts_workloads_never_share_a_target" }]
+
+# --- N32-H3: bucketed execution, the scheduled suite, the gate map ---------------------
+
+[[mutation]]
+name = "n32h3-a-failure-cancels-the-remaining-binaries"
+why = "the scheduled workspace suite stops starting binaries once one fails, so later failures go unseen"
+file = "xtask/src/suite.rs"
+find = "                let r = run(b);"
+replace = """                let r = run(b);
+                if !r.passed() {
+                    if let Ok(mut q) = queue.lock() {
+                        q.clear();
+                    }
+                }"""
+killers = [{ package = "xtask", bin = "xtask", name = "suite::tests::every_binary_runs_once_and_a_failure_cancels_nothing" }]
+
+[[mutation]]
+name = "n32h3-the-report-follows-completion-order"
+why = "a scheduled binary's result is recorded in the first free slot, so the report follows completion order"
+file = "xtask/src/suite.rs"
+find = "                    if let Some(slot) = all.get_mut(i) {"
+replace = "                    if let Some(slot) = all.iter_mut().find(|s| s.is_none()) {"
+killers = [{ package = "xtask", bin = "xtask", name = "suite::tests::a_result_is_its_binarys_not_the_next_to_finish" }]
+
+[[mutation]]
+name = "n32h3-the-shortest-start-first"
+why = "the scheduler starts the shortest known binary first, leaving the longest for the tail"
+file = "xtask/src/suite.rs"
+find = "            (Some(x), Some(y)) => y.total_cmp(&x).then(a.cmp(&b)),"
+replace = "            (Some(x), Some(y)) => x.total_cmp(&y).then(a.cmp(&b)),"
+killers = [{ package = "xtask", bin = "xtask", name = "suite::tests::the_longest_start_first_and_the_unknown_before_the_known" }]
+
+[[mutation]]
+name = "n32h3-execution-ignores-the-owning-package"
+why = "mutants are ordered without their owning package, so one package's are not run together"
+file = "xtask/src/mutate.rs"
+find = """        let owner = crate::metadata::owner(&p.file, packages)
+            .unwrap_or("")
+            .to_owned();"""
+replace = "        let owner = String::new();"
+killers = [{ package = "xtask", bin = "xtask", name = "mutate::tests::mutants_run_grouped_by_package_then_killer_and_every_one_once" }]
+
+[[mutation]]
+name = "n32h3-an-unknown-path-brings-no-benchmark"
+why = "a path the benchmark table does not name brings no benchmark instead of every one"
+file = "xtask/src/gate.rs"
+find = "            None => benches.extend(BENCHES.iter().copied()),"
+replace = "            None => {}"
+killers = [{ package = "xtask", bin = "xtask", name = "gate::tests::benchmarks_follow_the_paths_and_an_unknown_path_brings_them_all" }]
+
+[[mutation]]
+name = "n32h3-the-whole-lifecycle-does-not-cover-its-tests"
+why = "the whole lifecycle suite is not counted as covering its invariant tests, so a normal gate is not bounded by the harness gate"
+file = "xtask/src/gate.rs"
+find = """            mine.contains(s) || (s.starts_with("lifecycle:") && mine.contains("lifecycle:*"))"""
+replace = "            mine.contains(s)"
+killers = [{ package = "xtask", bin = "xtask", name = "gate::tests::a_normal_milestone_plan_is_covered_by_the_harness_changing_plan_over_the_same_paths" }]
+
+[[mutation]]
+name = "n32h3-a-path-package-id-loses-its-name"
+why = "a package id that omits its name is read as the version, so a scheduled binary runs with the wrong package"
+file = "xtask/src/campaign.rs"
+find = """            url.trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("?")
+                .to_owned(),"""
+replace = "            fragment.to_owned(),"
+killers = [{ package = "xtask", bin = "xtask", name = "campaign::tests::a_package_id_names_its_package_with_or_without_the_name_fragment" }]
