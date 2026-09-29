@@ -4182,6 +4182,90 @@ that answers from the disk has no text of its own to measure, and would have to 
 tokenizer-driven identity changes, chat-template accounting, model calls, and a persistent count
 cache.
 
+## 7.37 Agent task token, cost and correctness benchmark — settled by N35, 2026-09-29
+
+```text
+suite::build()        the N33 scenarios' baselines and `nazm repo --task` contexts, digested;
+        │             truths read from the authorities; witnesses in both contexts
+        ▼
+run::plan()           task × arm × trial, arms alternating by trial, one independent request each
+        │  budget check before every attempt, ≤ 2 retries of transport failures only
+        ▼
+Provider              openai (Chat Completions) · anthropic (Messages) · fake (tests)
+        │  curl, credential on standard input — the only network access in the workspace
+        ▼
+journal.jsonl         nazm.agent-benchmark/1 records, raw usage beside normalised usage
+        │  oracle::score() offline, fact by fact; price list applied, never in identity
+        ▼
+report::build()       per task, category and provider: correctness first, then tokens and cost
+```
+
+**The evaluation boundary.** `nazm-agent-bench` is evaluation tooling. No crate depends on it —
+the layering table lists it nowhere — and it is the only crate allowed to depend on
+`nazm-tokens`; the `tokenizer reach` gate refuses any other. It reads the planner and the
+authorities through `nazm-repo`, `nazm-service` and `nazm-docs`; nothing it learns flows back. A
+model's answer is never compiler truth: it enters no specification, no semantic database and no
+capability evidence other than this benchmark's own results.
+
+**The context-arm law.** Each task has two contexts and the requests differ only in them. The
+baseline is the N33 scenario's naive texts — the whole files the facts are in, the whole
+documents, the catalogue entries a search would show — each under a `==> label <==` line naming
+what it is. The N33 context is `nazm repo --task`'s output for the scenario's request, byte for
+byte, never trimmed. The system text, the layout, the task's wording, the answer contract, the
+model, its parameters and the output budget are one value for both arms. Every context is
+addressed by the BLAKE3 of its bytes, and a task whose two contexts have one digest is refused.
+
+**The oracle law.** Every truth is read from an authority — the service's packets, a
+documentation section, the mutation catalogue parsed independently — never from either context,
+and a truth that rests on a section's statement is checked against the section's text, so a
+reworded section stops the suite. Answers are JSON; each field is scored by an explicit,
+mechanical normalisation: a definition as `file::name`, a test by its function name, a target by
+its name, a citation as `document:id`, a scalar against a listed set of spellings. A fact is
+correct or missing. A claim the truths do not contain is *hallucinated* when the supplied context
+does not support it either, and a *wrong repository fact* when it does; a real section cited
+beyond the required ones is recorded and neither credited nor counted. Solved is every fact
+correct, no false claim, a valid object and no refusal. Every task's witnesses occur in both
+contexts, so a refusal is always a failure here. No reasoning is requested or scored.
+
+**The usage and cost law.** Usage is the provider's report, kept raw and normalised into total
+input (cached parts included), uncached input, cache reads, cache writes, output and, where
+reported, the reasoning part of output; `total_tokens` is input plus output and nothing else.
+Prices are dated entries of `tools/agent-bench/pricing.toml`, with their source, applied to
+usage and never part of an identity: a result can be priced again. Money is integer pico-USD — a
+price in micro-USD per million tokens is pico-USD per token — so every cost is an exact product.
+Local `o200k_base` counts of the context and of the fixed rest are recorded beside the
+provider's; where the provider can count without generating, its counts of the request with and
+without the context are recorded too, so the fixed prompt is never credited to a context.
+
+**Benchmark identity.** A request's identity is its task, arm, trial, provider, requested model,
+every request parameter, the prompt version and template digest, the suite version and the
+context digest. A benchmark's identity is the suite digest, the prompt, the mode, the trial
+count, the provider, the model and the parameters. A reply from a model other than the one
+requested is recorded as `model_drift` and stops the run; it is never compared.
+
+**The budget and retry law.** A run needs an explicit cap. Before every attempt, retries
+included, the attempt's worst case — every input token uncached at the provider's bound over the
+local count, and the whole output budget — is added to everything the evidence directory's
+ledger has charged, and the attempt is refused if the sum passes the cap. A transport failure is
+retried at most twice; a reply never is. A request with no reply is a `runner_error`: not scored,
+never incorrect. A dry run computes the plan, the context sizes and the worst case with no
+provider, credential or network.
+
+**The resume law.** The journal is appended and synced one record at a time. A resumed run skips
+every request whose identity has a record, and repeats a runner error only when asked to. A pilot
+is its own benchmark identity and never evidence; the report reads authoritative records only.
+
+**The network boundary.** Only `nazm-agent-bench run` reaches a network, through `curl`, with the
+headers — the credential among them — on `curl`'s standard input and the body in a temporary
+file, never on a command line. The credential comes from the environment or an owner-only file,
+is never serialised, and is removed from any error text kept. Every contained workload, and so
+every test and mutation killer, still runs with no network; the tests drive the runner with a
+fake provider and the adapters with recorded responses.
+
+**Deliberately not here.** Tool-using agents, multi-turn repair, automatic routing between raw
+source and structured context, prompt tuning per arm, and any provider framework beyond the two
+adapters the benchmark uses.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
