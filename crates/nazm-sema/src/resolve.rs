@@ -161,6 +161,11 @@ pub struct CallSite {
     pub type_args: Vec<Type>,
     /// Whether this is a `spawn` rather than a call. Both are edges of the call graph.
     pub spawned: bool,
+    /// The authority in scope at the call (N37): the kind of every capability-typed
+    /// binding — parameter or `let` — a name at this point reaches. Lexical, read from the
+    /// bindings a reader can see, and nothing else: no function carries authority that is
+    /// not a value it holds.
+    pub held: crate::CapabilitySet,
 }
 
 /// One call as the checker checked it (N20): what it resolved to, where its arguments
