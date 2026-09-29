@@ -61,6 +61,17 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // metadata lists with the rest. No crate may depend on it — it is in no list here —
         // so no tokenizer can reach parsing, checking, identity or selection.
         "nazm-tokens" => &["nazm-core", "nazm-service", "nazm-docs", "nazm-repo"],
+        // The agent task benchmark, N35: evaluation tooling. It reads the planner's answer and
+        // the authorities its oracles score against, and counts locally through
+        // `nazm-tokens` — the one crate allowed to (`TOKEN_EVALUATORS`). No crate may depend on
+        // it, so no provider, price or model answer can reach the language.
+        "nazm-agent-bench" => &[
+            "nazm-core",
+            "nazm-service",
+            "nazm-docs",
+            "nazm-repo",
+            "nazm-tokens",
+        ],
         // The CLI deliberately does NOT depend on nazm-syntax: it goes through nazm-core,
         // so there is one entry point into the front end rather than two that can drift.
         "nazm-cli" => &[
@@ -98,6 +109,9 @@ pub(crate) const TOKENIZER_CRATES: &[&str] = &["tiktoken-rs", "tokenizers"];
 
 /// The only crate that may depend on a tokenizer library.
 pub(crate) const TOKENIZER_OWNER: &str = "nazm-tokens";
+
+/// The evaluators that may depend on [`TOKENIZER_OWNER`] (N35). Nothing may depend on them.
+pub(crate) const TOKEN_EVALUATORS: &[&str] = &["nazm-agent-bench"];
 
 /// Crates permitted to contain `unsafe`, with the justification.
 ///
@@ -210,6 +224,37 @@ mod tests {
             "the emitter should produce text, not run tools"
         );
         assert!(find("crates/nazm-cli").contains(&"invokes the native toolchain"));
+    }
+
+    #[test]
+    fn only_an_evaluator_reaches_token_measurement_and_nothing_reaches_an_evaluator() {
+        for c in [
+            "nazm-span",
+            "nazm-diag",
+            "nazm-syntax",
+            "nazm-sema",
+            "nazm-iface",
+            "nazm-cache",
+            "nazm-core",
+            "nazm-lir",
+            "nazm-service",
+            "nazm-docs",
+            "nazm-repo",
+            "nazm-cli",
+            "nazm-mcp",
+            "nazm-bench",
+            "xtask",
+            "nazm-tokens",
+            "nazm-agent-bench",
+        ] {
+            let deps = allowed_internal_deps(c).expect("every crate is placed");
+            assert!(!deps.contains(&"nazm-agent-bench"), "{c}");
+            assert_eq!(
+                deps.contains(&TOKENIZER_OWNER),
+                TOKEN_EVALUATORS.contains(&c),
+                "{c}"
+            );
+        }
     }
 
     #[test]

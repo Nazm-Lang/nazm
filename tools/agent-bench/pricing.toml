@@ -1,0 +1,40 @@
+# The price list N35's agent benchmark applies to recorded usage (docs/architecture.md §7.37).
+#
+# Dated, with the page each rate was read from; rates are US dollars per million tokens,
+# standard tier, as written there. A result's identity never includes a price, so a later
+# entry re-prices old usage without re-running anything. Add an entry when a price changes;
+# do not edit an old one — `effective` is when the rates were read, and the newest entry for a
+# provider and model is the one a run applies.
+
+[[price]]
+provider = "openai"
+model = "gpt-4.1-mini-2025-04-14"
+effective = "2026-09-29"
+source = "https://developers.openai.com/api/docs/pricing (standard tier; also the gpt-4.1-mini model page)"
+input_usd_per_mtok = "0.40"
+cached_input_usd_per_mtok = "0.10"
+# OpenAI's caching is automatic and writing to it is not charged.
+cache_write_input_usd_per_mtok = "0"
+output_usd_per_mtok = "1.60"
+
+[[price]]
+provider = "anthropic"
+model = "claude-haiku-4-5-20251001"
+effective = "2026-09-29"
+source = "https://platform.claude.com/docs/en/about-claude/pricing (model pricing table; also the Haiku 4.5 model page)"
+input_usd_per_mtok = "1"
+# A cache hit. The benchmark sets no cache_control, so neither this nor a write is expected.
+cached_input_usd_per_mtok = "0.10"
+# A five-minute cache write.
+cache_write_input_usd_per_mtok = "1.25"
+output_usd_per_mtok = "5"
+
+[[price]]
+provider = "fake"
+model = "fake-1"
+effective = "2026-09-29"
+source = "the tests' deterministic provider; not a real price"
+input_usd_per_mtok = "1"
+cached_input_usd_per_mtok = "0.10"
+cache_write_input_usd_per_mtok = "1.25"
+output_usd_per_mtok = "5"

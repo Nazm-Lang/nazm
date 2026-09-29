@@ -195,6 +195,7 @@ fn run_checks() -> ExitCode {
     report(&[
         ("layering", check_layering()),
         ("tokenizer reach", check_tokenizer_reach()),
+        ("network reach", check_network_reach()),
         ("codegen reach", check_codegen_reach()),
         ("emission reach", check_emission_reach()),
         ("unsafe policy", check_unsafe_policy()),
@@ -297,9 +298,10 @@ fn check_layering() -> Result<(), Vec<String>> {
     }
 }
 
-/// Only `nazm-tokens` depends on a tokenizer library, and nothing depends on `nazm-tokens`
-/// (N34). The second half is also the layering's — no crate lists it — and is checked here
-/// by name so the reason is in the message.
+/// Only `nazm-tokens` depends on a tokenizer library; only the evaluators depend on
+/// `nazm-tokens` (N34, N35); and nothing depends on an evaluator. The last two are also the
+/// layering's — no other crate lists them — and are checked here by name so the reason is in
+/// the message.
 fn check_tokenizer_reach() -> Result<(), Vec<String>> {
     let meta = match metadata::workspace() {
         Ok(m) => m,
@@ -319,7 +321,16 @@ fn check_tokenizer_reach() -> Result<(), Vec<String>> {
                     rules::TOKENIZER_OWNER
                 ));
             }
-            if dep == rules::TOKENIZER_OWNER {
+            if rules::TOKEN_EVALUATORS.contains(&dep.as_str()) {
+                problems.push(format!(
+                    "{} depends on {dep}: an evaluator reaches a model provider, and nothing \
+                     may depend on it",
+                    member.name
+                ));
+            }
+            if dep == rules::TOKENIZER_OWNER
+                && !rules::TOKEN_EVALUATORS.contains(&member.name.as_str())
+            {
                 problems.push(format!(
                     "{} depends on {}: token measurement must not reach the compiler, the \
                      service, the planner or a server",
@@ -394,6 +405,54 @@ fn check_emission_reach() -> Result<(), Vec<String>> {
         }
     }
 
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
+/// Only the agent benchmark reaches a network (N35): no other crate's source mentions the
+/// transport it uses or a model provider's API. A source-level check, like emission reach: it
+/// catches the realistic regression — a request added somewhere convenient — not a call graph.
+fn check_network_reach() -> Result<(), Vec<String>> {
+    const MARKS: &[&str] = &[
+        "\"curl\"",
+        "api.openai.com",
+        "api.anthropic.com",
+        "TcpStream",
+    ];
+    let Some(root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() else {
+        return Err(vec!["could not locate workspace root".to_owned()]);
+    };
+    let Ok(crates) = std::fs::read_dir(root.join("crates")) else {
+        return Err(vec!["could not read crates/".to_owned()]);
+    };
+    let mut problems = Vec::new();
+    for c in crates.filter_map(Result::ok) {
+        if rules::TOKEN_EVALUATORS
+            .iter()
+            .any(|e| c.file_name().to_str() == Some(e))
+        {
+            continue;
+        }
+        let Ok(files) = collect_rs(&c.path().join("src")) else {
+            continue;
+        };
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            for mark in MARKS {
+                if text.contains(mark) {
+                    problems.push(format!(
+                        "{} mentions `{mark}`: only an evaluator may reach a network",
+                        file.strip_prefix(root).unwrap_or(&file).display()
+                    ));
+                }
+            }
+        }
+    }
     if problems.is_empty() {
         Ok(())
     } else {

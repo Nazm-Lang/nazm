@@ -23,6 +23,9 @@ pub(crate) struct Scenario {
     pub(crate) name: &'static str,
     /// The naive baseline, one text per file or catalogue entry.
     pub(crate) naive: Vec<String>,
+    /// Where each baseline text comes from, one per text: a file's path, or a catalogue
+    /// entry's name. N35 prints them above the texts; nothing here counts them.
+    pub(crate) labels: Vec<String>,
     pub(crate) context: Value,
     /// The context exactly as `nazm repo --task --json` prints it, without the newline.
     pub(crate) json: String,
@@ -38,7 +41,7 @@ impl Scenario {
 
 fn scenario(
     name: &'static str,
-    naive: Vec<String>,
+    naive: Vec<(String, String)>,
     context: Value,
     size: usize,
     ms: f64,
@@ -60,9 +63,11 @@ fn scenario(
     )
     .to_json();
     assert_eq!(json.len(), size, "{name}: the same request, the same bytes");
+    let (labels, naive) = naive.into_iter().unzip();
     Scenario {
         name,
         naive,
+        labels,
         context,
         json,
         ms,
@@ -78,9 +83,22 @@ pub(crate) fn read(path: &str) -> String {
     std::fs::read_to_string(root().join(path)).unwrap_or_else(|e| panic!("{path}: {e}"))
 }
 
+/// One whole file, with its path.
+pub(crate) fn file(path: &str) -> (String, String) {
+    (path.to_owned(), read(path))
+}
+
 /// The whole files, as the agent without the planner reads them.
-pub(crate) fn texts(paths: &BTreeSet<String>) -> Vec<String> {
-    paths.iter().map(|p| read(p)).collect()
+pub(crate) fn texts(paths: &BTreeSet<String>) -> Vec<(String, String)> {
+    paths.iter().map(|p| file(p)).collect()
+}
+
+/// A catalogue entry, with the name a search for it would show.
+fn entry(name: &str, block: &str) -> (String, String) {
+    (
+        format!("xtask/mutations/mutations.toml [[mutation]] {name}"),
+        block.to_owned(),
+    )
 }
 
 /// A task, timed.
@@ -279,11 +297,11 @@ pub(crate) fn all() -> Vec<Scenario> {
         .target
         .source;
     let mut entries = Vec::new();
-    for (name, file, find, block, killers) in &catalogue {
-        if file != "compiler/module.nz" {
+    for (name, path, find, block, killers) in &catalogue {
+        if path != "compiler/module.nz" {
             continue;
         }
-        entries.push(block.clone());
+        entries.push(entry(name, block));
         let at = text.find(find.as_str()).unwrap() as u32;
         if at >= decl.start && at + find.len() as u32 <= decl.end {
             for k in killers {
@@ -317,7 +335,7 @@ pub(crate) fn all() -> Vec<Scenario> {
         "return_type_mismatch.nz::fn describe",
     );
     assert_eq!(owner["content"]["source"], p.target.source.text.as_str());
-    let naive = vec![read("examples/bad/return_type_mismatch.nz")];
+    let naive = vec![file("examples/bad/return_type_mismatch.nz")];
     rows.push(scenario("C diagnose N0300", naive, v, size, ms, 3));
 
     // D — understand one specification concept, and one generated guide rule.
@@ -332,7 +350,7 @@ pub(crate) fn all() -> Vec<Scenario> {
         section("spec:return").body.as_str()
     );
     assert_eq!(item(&v, "doc:spec:return")["reason"], "linked_section");
-    let naive = vec![read("docs/spec.md")];
+    let naive = vec![file("docs/spec.md")];
     rows.push(scenario("D understand spec:returns", naive, v, size, ms, 3));
 
     let seed = "doc:guide:the-syntax/record";
@@ -344,7 +362,7 @@ pub(crate) fn all() -> Vec<Scenario> {
         section("grammar:record").body.as_str()
     );
     assert_eq!(g["authority"], "grammar");
-    let naive = vec![read("docs/guide.md"), read("docs/grammar.ebnf")];
+    let naive = vec![file("docs/guide.md"), file("docs/grammar.ebnf")];
     rows.push(scenario("D understand guide record", naive, v, size, ms, 3));
 
     // E — the tests relevant to a changed area: a package, and one definition.
@@ -352,9 +370,9 @@ pub(crate) fn all() -> Vec<Scenario> {
     let (v, size, ms) = task(Intent::Test, seed);
     let mut checks = 0;
     let mut entries = Vec::new();
-    for (_, file, _, block, killers) in &catalogue {
-        if file.starts_with("crates/nazm-docs/") {
-            entries.push(block.clone());
+    for (name, path, _, block, killers) in &catalogue {
+        if path.starts_with("crates/nazm-docs/") {
+            entries.push(entry(name, block));
             for k in killers {
                 assert_eq!(item(&v, k)["reason"], "killer_test");
                 checks += 1;
@@ -369,8 +387,8 @@ pub(crate) fn all() -> Vec<Scenario> {
         checks += 1;
     }
     let mut naive = vec![
-        read("crates/nazm-docs/Cargo.toml"),
-        read("crates/nazm-docs/tests/corpus.rs"),
+        file("crates/nazm-docs/Cargo.toml"),
+        file("crates/nazm-docs/tests/corpus.rs"),
     ];
     naive.extend(entries);
     rows.push(scenario("E tests of nazm-docs", naive, v, size, ms, checks));
@@ -382,11 +400,11 @@ pub(crate) fn all() -> Vec<Scenario> {
         .source;
     let mut checks = 0;
     let mut entries = Vec::new();
-    for (_, file, find, block, killers) in &catalogue {
-        if file != "compiler/module.nz" {
+    for (name, path, find, block, killers) in &catalogue {
+        if path != "compiler/module.nz" {
             continue;
         }
-        entries.push(block.clone());
+        entries.push(entry(name, block));
         let at = text.find(find.as_str()).unwrap() as u32;
         let inside = at >= decl.start && at + find.len() as u32 <= decl.end;
         for k in killers {
@@ -403,7 +421,7 @@ pub(crate) fn all() -> Vec<Scenario> {
     }
     assert!(checks > 0);
     let mut naive = entries;
-    naive.push(read("compiler/module.nz"));
+    naive.push(file("compiler/module.nz"));
     rows.push(scenario(
         "E tests of core_module",
         naive,

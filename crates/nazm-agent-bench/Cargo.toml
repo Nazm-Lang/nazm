@@ -1,0 +1,37 @@
+[package]
+name = "nazm-agent-bench"
+description = "The agent task benchmark (N35): the N33 tasks put to real models with a naive and an N33 context, scored by mechanical oracles, with provider usage and dated prices kept apart. Evaluation tooling; nothing that ships depends on it."
+version.workspace = true
+edition.workspace = true
+rust-version = "1.88"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["architecture:7.37", "performance"]
+
+[[bin]]
+name = "nazm-agent-bench"
+path = "src/main.rs"
+
+[dependencies]
+# The tasks and their contexts: the planner's own answer, and the authorities the oracles
+# read — the service's packets, the documentation's sections, the mutation catalogue.
+nazm-repo = { workspace = true }
+nazm-service = { workspace = true }
+nazm-docs = { workspace = true }
+nazm-core = { workspace = true }
+# Local counts beside the provider's (N34). A path dependency, not a workspace one: the
+# workspace table is what crates reach for, and only evaluators may reach this.
+nazm-tokens = { path = "../nazm-tokens" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+toml = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
