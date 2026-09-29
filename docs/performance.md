@@ -1868,6 +1868,52 @@ The five-mutant checkpoint before it: setup 793 s, first mutant 13.1 s, then 27.
 dominated by the baseline workspace suite at one CPU, which the campaign needs to be green before
 any mutant is judged; it is the next stage to look at, and it was not weakened to get here.
 
+## The mutation baseline and the persistent cache — N32-H2, measured 2026-09-29
+
+V1's session paid 806 s of setup before its first mutant. V1 did not record its parts; V2's cold
+gate did, for everything V1 also did: the pristine build 125.7 s and the killer listing 58.0 s.
+The remaining ~620 s of V1's setup was the workspace suite run as the baseline at one CPU — work
+no Tier-1 verdict needs, and which the MILESTONE gate's own P4T4 workspace stage repeats anyway.
+V2 runs each unique declared killer once on the pristine tree instead (35 of them, 10.9 s), runs
+the whole suite only when a mutant needs a later tier (none did), reads each mutant's
+verification from the very run its verdict came from, and keeps build state between sessions in
+two harness-owned volumes.
+
+| Stage, seconds | V1 (N32 gate) | V2 cold (cache cleared) | V2 warm |
+| --- | ---: | ---: | ---: |
+| mutation setup | 806 | 195 | **86** |
+| — pristine build / listing / pristine killers / baseline suite | not recorded | 125.7 / 58.0 / 10.9 / — | 62.5 / 12.3 / 10.9 / — |
+| mutants decided (median, p95) | 662 (21.0, 40.1) | 684 (13.6, 36.1) | 679 (13.4, 35.3) |
+| mutation session, contained | 1,478 | 896 | **770** |
+| workspace suite, P4T4 | 439 | 452 | 418 |
+| lifecycle suite, full | 171 | 183 | 183 |
+| selfhost | 57 | 57 | 46 |
+| bootstrap | 62 | 38 | 37 |
+| N32 benchmark | 196 | 206 | 199 |
+| gates | 3 | 8 | 2 |
+| **the gate** | **2,406** | **1,841** | **1,655 — 27.6 min** |
+
+V2 decided 38 mutations and verified 41 killers where V1 decided 31 and verified 34: the seven
+harness mutations N32-H2 added are in both V2 columns. The warm gate is **31% faster than V1**
+(−751 s) and passes the ≤ 30-minute MILESTONE target; the 25-minute stretch was not reached.
+The cold gate, 30.7 min, missed the target by 41 s, which is why the warm one was run; its
+lifecycle stage also failed, on a test that had assumed macOS's recovery route (below), so it is
+a timing and not an acceptance. What is left is the workspace suite — 418 s, of which about 410 s
+is test execution, led by five binaries of 20–76 s each — the mutants' own builds (497 s of the
+770), and the full lifecycle suite this harness-changing round needs; a milestone that does not
+change the harness runs only the lifecycle suite's invariants (`runbook.md`).
+
+One CPU, one job and one thread throughout the mutation session: no memory kill in any stage, and
+the benchmark's MCP server settled at 10.9 MB and held 11.1 MB after 1,000 more calls.
+
+Two findings, both kept as tests. **A mutation copy and the checkout must not share a target**:
+the first cold gate's workspace suite ran a `nazm` a mutation session had built, because Cargo
+copies a binary out under its bare name and does not copy a fresh unit again — the two now have
+separate volumes, and a mutation guards it. **A damaged target is recovered, not trusted**: on
+macOS rustc's incremental cache reuses damaged object files whose source is unchanged and the
+build fails, so a harness-owned target is cleaned and rebuilt once; on Linux Cargo rebuilds them
+itself. Neither route ever produced a verdict.
+
 ## Development and evidence pipeline parallelism — N14.1, measured 2026-09-25
 
 Tooling, not language performance. The question: how much of the machine may **one**
