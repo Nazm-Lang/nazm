@@ -7213,3 +7213,152 @@ file = "crates/nazm-tokens/tests/benchmark.rs"
 find = "            let worst = v.iter().min().unwrap();"
 replace = "            let worst = v.iter().max().unwrap();"
 killers = [{ package = "nazm-tokens", test = "benchmark", name = "every_n33_task_is_cheaper_in_tokens_under_every_tokenizer" }]
+
+# --- N35: the agent task benchmark ------------------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.37: two arms carry two contexts and one
+# prompt, each answer is scored by its own task's oracle, a claim the truths lack is never
+# credit and a hallucination is not a misreading, input is not output, each usage category has
+# its own price and output is billed, a zero denominator is absent, an identity has the prompt
+# in it, a runner error is not an answer, the stress case stays, a transport failure is retried
+# twice and no more, the cap covers the attempt about to be made, and a credential never
+# survives into kept text.
+
+[[profile]]
+name = "agent"
+why = "the agent benchmark is observed by its own suite: the fake provider, recorded responses, the oracle's exactness and the report's determinism"
+owns = ["crates/nazm-agent-bench/"]
+targets = [
+    { package = "nazm-agent-bench", lib = true },
+    { package = "nazm-agent-bench", test = "agent" },
+]
+
+[[mutation]]
+name = "n35-both-arms-carry-one-context"
+why = "the N33 arm is given the baseline's bytes, so the comparison compares a context with itself"
+file = "crates/nazm-agent-bench/src/suite.rs"
+find = "        Context::new(Arm::N33, s.json.clone())?,"
+replace = "        Context::new(Arm::Baseline, baseline(s))?,"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "the_suite_has_every_category_keeps_scenario_c_and_gives_each_arm_its_own_context" }]
+
+[[mutation]]
+name = "n35-another-tasks-oracle"
+why = "every answer is scored against the first task's truths, so a correct answer to any other task fails"
+file = "crates/nazm-agent-bench/src/run.rs"
+find = "                let score = oracle::score(p.task, p.arm, &reply.text);"
+replace = "                let score = oracle::score(suite.tasks.first().unwrap_or(p.task), p.arm, &reply.text);"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "a_transport_failure_is_retried_twice_and_is_never_an_incorrect_answer" }]
+
+[[mutation]]
+name = "n35-an-unmatched-name-is-a-truth"
+why = "a test the truths do not have is taken as one of them, so a wrong answer carries no false claim"
+file = "crates/nazm-agent-bench/src/oracle.rs"
+find = "            if truths.contains(&n) {"
+replace = "            if truths.contains(&n) || !n.is_empty() {"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "the_oracle_counts_missing_wrong_and_hallucinated_claims_separately" }]
+
+[[mutation]]
+name = "n35-a-hallucination-is-a-misreading"
+why = "a claim nothing in the context supports is counted as a misread fact, so hallucinations are never reported"
+file = "crates/nazm-agent-bench/src/oracle.rs"
+find = """            ClaimKind::Hallucinated
+        };
+        self.claim(field, value, kind);"""
+replace = """            ClaimKind::Wrong
+        };
+        self.claim(field, value, kind);"""
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "the_oracle_counts_missing_wrong_and_hallucinated_claims_separately" }]
+
+[[mutation]]
+name = "n35-input-is-output"
+why = "OpenAI's completion tokens are recorded as input, so the arms' input comparison measures their answers"
+file = "crates/nazm-agent-bench/src/provider.rs"
+find = "                input_tokens: input,"
+replace = "                input_tokens: n(at(u, \"/completion_tokens\")),"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "openai_usage_is_normalised_and_the_key_never_leaks" }]
+
+[[mutation]]
+name = "n35-cached-input-at-full-price"
+why = "cache reads are priced as uncached input, so an arm the provider cached is overcharged"
+file = "crates/nazm-agent-bench/src/price.rs"
+find = "    let cached_input = usage.cached_input_tokens.checked_mul(price.cached_input)?;"
+replace = "    let cached_input = usage.cached_input_tokens.checked_mul(price.input)?;"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "cost_arithmetic_is_exact_and_prices_each_category_at_its_own_rate" }]
+
+[[mutation]]
+name = "n35-output-is-free"
+why = "a request's total leaves out its output, so an arm that answers at length looks as cheap as one that does not"
+file = "crates/nazm-agent-bench/src/price.rs"
+find = "        .checked_add(output)?;"
+replace = "        .checked_add(0)?;"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "cost_arithmetic_is_exact_and_prices_each_category_at_its_own_rate" }]
+
+[[mutation]]
+name = "n35-a-zero-denominator-divides"
+why = "a ratio over nothing solved or nothing spent is computed, so the report divides by zero"
+file = "crates/nazm-agent-bench/src/report.rs"
+find = "    if den == 0 {"
+replace = "    if den == u64::MAX {"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "a_zero_denominator_is_an_absent_ratio_never_an_infinity" }]
+
+[[mutation]]
+name = "n35-an-identity-without-its-prompt"
+why = "a request's identity leaves out the prompt, so a resumed run counts an answer to another prompt as this one's"
+file = "crates/nazm-agent-bench/src/run.rs"
+find = """        "parameters": spec.parameters,
+        "prompt_version": crate::PROMPT_VERSION,
+        "prompt": prompt::digest(),
+        "suite": crate::SUITE_VERSION,"""
+replace = """        "parameters": spec.parameters,
+        "suite": crate::SUITE_VERSION,"""
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "an_identity_is_everything_that_decides_a_result_and_nothing_else" }]
+
+[[mutation]]
+name = "n35-a-runner-error-is-an-answer"
+why = "a request with no reply is counted as answered, so an API failure reads as an incorrect answer"
+file = "crates/nazm-agent-bench/src/report.rs"
+find = "                r.runner_errors += 1;"
+replace = "                r.answered += 1;"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "a_transport_failure_is_retried_twice_and_is_never_an_incorrect_answer" }]
+
+[[mutation]]
+name = "n35-the-stress-case-is-left-out"
+why = "the authoritative run skips the diagnose task, so the case the structured context loses is never measured"
+file = "crates/nazm-agent-bench/src/run.rs"
+find = "        Mode::Authoritative => suite.tasks.iter().collect(),"
+replace = "        Mode::Authoritative => suite.tasks.iter().filter(|t| t.category != Category::Diagnose).collect(),"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "the_plan_is_every_task_arm_and_trial_with_the_arms_alternating" }]
+
+[[mutation]]
+name = "n35-one-arm-another-prompt"
+why = "the N33 arm's system text says more than the baseline's, so the arms differ in more than their context"
+file = "crates/nazm-agent-bench/src/prompt.rs"
+find = """        system: SYSTEM.to_owned(),
+        user: user(task, &task.context(arm).text),"""
+replace = """        system: if arm == Arm::N33 { format!("{SYSTEM} The context is Nazm's own task context.") } else { SYSTEM.to_owned() },
+        user: user(task, &task.context(arm).text),"""
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "both_arms_get_one_prompt_and_only_the_context_differs" }]
+
+[[mutation]]
+name = "n35-a-third-retry"
+why = "a transient failure is retried three times, not two, so the retry bound in the record and the budget is wrong"
+file = "crates/nazm-agent-bench/src/run.rs"
+find = "        while attempts <= cfg.max_retries {"
+replace = "        while attempts <= cfg.max_retries + 1 {"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "a_transport_failure_is_retried_twice_and_is_never_an_incorrect_answer" }]
+
+[[mutation]]
+name = "n35-the-cap-ignores-the-next-attempt"
+why = "the cap is checked against what was spent, not what the next attempt could add, so one request can pass it"
+file = "crates/nazm-agent-bench/src/run.rs"
+find = "            if spent.saturating_add(worst) > cfg.cap {"
+replace = "            if spent > cfg.cap {"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "the_cap_is_never_passed_before_or_during_a_run" }]
+
+[[mutation]]
+name = "n35-the-credential-survives"
+why = "an error body that echoes the credential is kept as it came, so the key reaches the journal"
+file = "crates/nazm-agent-bench/src/provider.rs"
+find = "            text.replace(&self.0, \"[redacted]\")"
+replace = "            text.to_owned()"
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "openai_usage_is_normalised_and_the_key_never_leaks" }]
