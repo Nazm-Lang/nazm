@@ -9,6 +9,10 @@ repository.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["architecture:7.4"]
+
 [dependencies]
 # Durable identity, and the semantic vocabulary a check key has to cover.
 nazm-sema = { workspace = true }

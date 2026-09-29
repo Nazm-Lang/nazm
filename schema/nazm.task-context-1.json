@@ -1,0 +1,484 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.task-context-1.json",
+  "title": "nazm.task-context/1",
+  "description": "The minimum context for a task, from `nazm repo --task --json` and the `nazm-mcp` tool `nazm.task_context`: for structured seeds (repository entity ids, never paths) and an intent (`understand`, `edit` — the default, `diagnose`, `test`), the smallest set of repository entities this repository can justify, one relationship step from each seed and cut at sixteen members per relationship. Every item says why it is there, which seed it was reached from, its priority class, its authority and how to retrieve it again; a definition seed carries its exact source, other definitions their shape, and a section its exact text. A structural budget — entities, bytes of definition source, bytes of section text; not tokens — takes items in priority order: seeds whole or `insufficient_budget`, then until one does not fit, which and everything after it are listed in `omitted`, and the context is `partial`. A relationship cut at its bound is in `bounded` and also makes it `partial`. `stale_state` when the repository is no longer the state named; `not_found` for an id no entity has; `incomplete_compilation` for a definition only compilations that needed syntax recovery load; `invalid_request` for a malformed seed or request; `unavailable` when the repository cannot be read.",
+  "type": "object",
+  "required": [
+    "schema",
+    "status"
+  ],
+  "properties": {
+    "schema": {
+      "const": "nazm.task-context/1"
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/available"
+    },
+    {
+      "$ref": "#/$defs/refused"
+    }
+  ],
+  "$defs": {
+    "available": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "status",
+        "state",
+        "intent",
+        "seeds",
+        "budget",
+        "used",
+        "items",
+        "omitted",
+        "bounded",
+        "excluded"
+      ],
+      "properties": {
+        "schema": {
+          "const": "nazm.task-context/1"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "partial"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The repository state, as `nazm.repository-map/1` defines it."
+        },
+        "intent": {
+          "enum": [
+            "understand",
+            "edit",
+            "diagnose",
+            "test"
+          ]
+        },
+        "seeds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "budget": {
+          "$ref": "#/$defs/budget"
+        },
+        "used": {
+          "$ref": "#/$defs/used"
+        },
+        "items": {
+          "type": "array",
+          "description": "The seeds in request order, then every other item once, by priority class, then documentation authority, then id.",
+          "items": {
+            "$ref": "#/$defs/item"
+          }
+        },
+        "omitted": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "reason",
+              "via",
+              "class",
+              "dimension"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "reason": {
+                "const": "budget_exhausted"
+              },
+              "via": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "class": {
+                "$ref": "#/$defs/class"
+              },
+              "dimension": {
+                "enum": [
+                  "entities",
+                  "source_bytes",
+                  "doc_bytes",
+                  "priority"
+                ],
+                "description": "What it did not fit; `priority` when it would fit but an item before it did not."
+              }
+            }
+          }
+        },
+        "bounded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "via",
+              "reason",
+              "known",
+              "included"
+            ],
+            "properties": {
+              "via": {
+                "type": "string"
+              },
+              "reason": {
+                "$ref": "#/$defs/reason"
+              },
+              "known": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "included": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "excluded": {
+          "type": "array",
+          "description": "Relationships known and deliberately not selected, by count.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "via",
+              "relation",
+              "count",
+              "reason"
+            ],
+            "properties": {
+              "via": {
+                "type": "string"
+              },
+              "relation": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reason": {
+                "enum": [
+                  "not_selected_for_intent",
+                  "no_durable_identity",
+                  "no_durable_owner"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_entities",
+        "max_source_bytes",
+        "max_doc_bytes"
+      ],
+      "properties": {
+        "max_entities": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "max_source_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "max_doc_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "used": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entities",
+        "source_bytes",
+        "doc_bytes"
+      ],
+      "properties": {
+        "entities": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "doc_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "class": {
+      "enum": [
+        "seed",
+        "correctness",
+        "authority",
+        "edit_safety",
+        "test",
+        "supporting",
+        "context"
+      ],
+      "description": "The priority classes, in order. `authority`: normative, grammar, law, interface, architecture and evidence sections. `supporting`: guide and operational sections, and a section's children. `context`: planning, research and goal sections — never evidence of what exists."
+    },
+    "reason": {
+      "enum": [
+        "seed",
+        "direct_dependency",
+        "signature_type",
+        "diagnostic_owner",
+        "diagnostic_in_seed",
+        "mutated_definition",
+        "contained_definition",
+        "included_module",
+        "contained_root",
+        "owner_package",
+        "owner_target",
+        "authoritative_doc",
+        "linked_section",
+        "generated_from",
+        "grammar_reference",
+        "child_section",
+        "direct_caller",
+        "direct_reference",
+        "direct_dependent",
+        "linking_section",
+        "killer_test",
+        "profile_target",
+        "owned_target",
+        "observed_target",
+        "contained_test",
+        "killed_mutation"
+      ]
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "reason",
+        "class",
+        "authority"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "A repository entity id, as `nazm.repository-map/1` defines it, or `doc:` an N32 section id, `test:` a catalogue killer, `mutation:` a catalogue entry, or `diagnostic:source-root:root:` an N30 id within that compilation."
+        },
+        "kind": {
+          "enum": [
+            "package",
+            "target",
+            "sources",
+            "root",
+            "module",
+            "definition",
+            "document",
+            "section",
+            "schema",
+            "profile",
+            "mutation",
+            "test",
+            "diagnostic"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "via": {
+          "type": "string",
+          "description": "The seed it was reached from."
+        },
+        "class": {
+          "$ref": "#/$defs/class"
+        },
+        "authority": {
+          "enum": [
+            "compiler",
+            "cargo",
+            "repository_manifest",
+            "mutation_catalogue",
+            "interface",
+            "goal",
+            "law",
+            "architecture",
+            "normative",
+            "grammar",
+            "guide",
+            "evidence",
+            "planning",
+            "research",
+            "operational"
+          ]
+        },
+        "compilation": {
+          "type": "string",
+          "description": "The compilation root a semantic fact was read from."
+        },
+        "retrieval": {
+          "$ref": "#/$defs/retrieval"
+        },
+        "content": {
+          "type": "object",
+          "description": "What is included: a definition's kind, name, declaration and signature, fields or variants, and — for a seed, a diagnostic's owner or a mutated definition — its exact `source`; a caller's or user's `uses`; a section's title, location and — unless it is only pointed at — its exact `body`; a diagnostic's code, message, primary place and owner; a test's target and the mutations it kills."
+        },
+        "source_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "doc_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "refused": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "status",
+        "state"
+      ],
+      "properties": {
+        "schema": {
+          "const": "nazm.task-context/1"
+        },
+        "status": {
+          "enum": [
+            "invalid_request",
+            "unavailable",
+            "stale_state",
+            "not_found",
+            "incomplete_compilation",
+            "insufficient_budget"
+          ]
+        },
+        "state": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The current repository state, where it could be read."
+        },
+        "seeds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "For `not_found` and `incomplete_compilation`: which seeds."
+        },
+        "problems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "value"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "required": {
+          "$ref": "#/$defs/used"
+        }
+      }
+    },
+    "retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "args"
+      ],
+      "description": "The existing answer that holds more, and the arguments of the command or tool that gives it.",
+      "properties": {
+        "schema": {
+          "enum": [
+            "nazm.context/1",
+            "nazm.diagnostic-detail/1",
+            "nazm.diagnostic-index/1",
+            "nazm.docs-index/1",
+            "nazm.docs-section/1",
+            "nazm.snapshot/1",
+            "nazm.task-context/1"
+          ]
+        },
+        "args": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "root": {
+              "type": "string",
+              "description": "A compilation root, from the repository root."
+            },
+            "file": {
+              "type": "string",
+              "description": "Relative to the compilation's source root."
+            },
+            "byte": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "id": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "document": {
+              "type": "string"
+            },
+            "catalogue": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

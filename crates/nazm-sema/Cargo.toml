@@ -9,6 +9,10 @@ repository.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["architecture:7.2"]
+
 [dependencies]
 # Spans, and nothing else. This crate says what a program *means*; how it was written is
 # `nazm-syntax`, and the dependency deliberately does not exist in either direction.

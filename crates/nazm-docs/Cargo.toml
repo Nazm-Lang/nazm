@@ -9,6 +9,10 @@ repository.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["architecture:7.34"]
+
 [dependencies]
 # `nazm.docs-index/1` and `nazm.docs-section/1`, the two objects this crate answers with.
 serde = { workspace = true }

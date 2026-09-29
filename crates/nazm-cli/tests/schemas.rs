@@ -928,3 +928,90 @@ fn a_docs_index_and_section_are_their_schemas_in_every_status() {
     }
     check_against("nazm.docs-section-1.json", &sections);
 }
+
+#[test]
+fn a_repository_map_and_a_task_context_are_their_schemas_in_every_status() {
+    let run = |args: &[&str]| -> Value {
+        let out = Command::new(NAZM).args(args).output().expect("run nazm");
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(stdout.lines().count(), 1, "one line: {args:?}");
+        serde_json::from_str(&stdout).unwrap()
+    };
+    let empty = tempfile::tempdir().expect("tempdir");
+    let nowhere = empty.path().to_str().unwrap();
+    let map = run(&["repo", "--map", "--json"]);
+    let maps = vec![
+        map.clone(),
+        run(&["repo", "--map", "--json", "--root", nowhere]),
+    ];
+    let statuses: Vec<&str> = maps.iter().map(|m| m["status"].as_str().unwrap()).collect();
+    assert_eq!(statuses, ["available", "unavailable"]);
+    check_against("nazm.repository-map-1.json", &maps);
+
+    let state = map["state"].as_str().unwrap().to_owned();
+    let task = |seed: &str, intent: &str, extra: &[&str]| -> Value {
+        let mut args = vec![
+            "repo", "--task", "--json", "--seed", seed, "--intent", intent,
+        ];
+        args.extend(extra);
+        run(&args)
+    };
+    let tasks = vec![
+        task(
+            "def:compiler:module.nz::fn attach_core",
+            "edit",
+            &["--state", &state],
+        ),
+        task(
+            "def:compiler:analyse.nz::fn check_program",
+            "understand",
+            &["--max-doc-bytes", "400"],
+        ),
+        task(
+            "def:examples-bad:return_type_mismatch.nz::fn describe",
+            "diagnose",
+            &[],
+        ),
+        task(
+            "diagnostic:examples-bad:return_type_mismatch.nz:N0300@return_type_mismatch.nz:59-69#0",
+            "diagnose",
+            &[],
+        ),
+        task("doc:spec:returns", "understand", &[]),
+        task("doc:guide:the-syntax/record", "edit", &[]),
+        task("package:nazm-docs", "test", &[]),
+        task("package:nazm-repo", "edit", &[]),
+        task("target:nazm-docs:test:corpus", "test", &[]),
+        task("mutation:selfhost-the-core-is-the-last-module", "edit", &[]),
+        task("profile:docs", "test", &[]),
+        task("module:compiler:lex.nz", "understand", &[]),
+        task("root:examples-bad:bare_return.nz", "understand", &[]),
+        task("sources:examples", "edit", &[]),
+        task("schema:nazm.context/1", "understand", &[]),
+        task(
+            "def:compiler:module.nz::fn attach_core",
+            "edit",
+            &["--state", &"0".repeat(64)],
+        ),
+        task("def:compiler:module.nz::fn nowhere", "edit", &[]),
+        task("/etc/passwd", "edit", &[]),
+        task(
+            "def:compiler:module.nz::fn attach_core",
+            "edit",
+            &["--max-entities", "0"],
+        ),
+        task("package:nazm-docs", "edit", &["--root", nowhere]),
+    ];
+    for status in [
+        "complete",
+        "partial",
+        "stale_state",
+        "not_found",
+        "invalid_request",
+        "insufficient_budget",
+        "unavailable",
+    ] {
+        assert!(tasks.iter().any(|t| t["status"] == status), "{status}");
+    }
+    check_against("nazm.task-context-1.json", &tasks);
+}
