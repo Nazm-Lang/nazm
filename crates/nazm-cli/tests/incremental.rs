@@ -347,18 +347,18 @@ fn a_body_change_within_its_declared_contract_leaves_the_importer_alone() {
     write(
         dir.path(),
         "a.nz",
-        "use \"b.nz\";\nfn main() -> Int ! { io } { twice(21) }\n",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { twice(io, 21) }\n",
     );
     write(
         dir.path(),
         "b.nz",
-        "pub fn twice(n: Int) -> Int ! { io } { n * 2 }\n",
+        "pub fn twice(io: IoCap, n: Int) -> Int ! { io } { n * 2 }\n",
     );
     assert!(check(dir.path(), "a.nz").accepted);
     write(
         dir.path(),
         "b.nz",
-        "pub fn twice(n: Int) -> Int ! { io } { print(\"x\") + n * 2 }\n",
+        "pub fn twice(io: IoCap, n: Int) -> Int ! { io } { print(\"x\") + n * 2 }\n",
     );
     let after = check(dir.path(), "a.nz");
     assert!(after.accepted, "{after:?}");
@@ -367,7 +367,7 @@ fn a_body_change_within_its_declared_contract_leaves_the_importer_alone() {
     write(
         dir.path(),
         "b.nz",
-        "pub fn twice(n: Int) -> Int ! {} { print(\"x\") + n * 2 }\n",
+        "pub fn twice(io: IoCap, n: Int) -> Int ! {} { print(\"x\") + n * 2 }\n",
     );
     let broken = check(dir.path(), "a.nz");
     assert!(!broken.accepted);
@@ -377,13 +377,15 @@ fn a_body_change_within_its_declared_contract_leaves_the_importer_alone() {
 #[test]
 fn an_import_that_declares_nothing_is_every_effect_to_a_pure_caller() {
     // A caller may not read another module's body, so an undeclared export promises
-    // nothing — however pure its body is. Declaring it is the migration.
+    // nothing — however pure its body is. Declaring it is the migration. Since N37 it is
+    // also every **authority** to a caller with a contract, which holds none: the two
+    // `N0369`s first, then the effect.
     let dir = tempfile::tempdir().expect("tempdir");
     pure_importer(dir.path(), "pub fn twice(n: Int) -> Int { n * 2 }\n");
     let refused = cold(dir.path(), "a.nz");
     assert!(!refused.accepted);
-    assert_eq!(refused.diagnostics.len(), 1, "{refused:?}");
-    assert!(refused.diagnostics[0].starts_with("N0366"), "{refused:?}");
+    let codes: Vec<&str> = refused.diagnostics.iter().map(|d| &d[..5]).collect();
+    assert_eq!(codes, ["N0369", "N0369", "N0366"], "{refused:?}");
     write(
         dir.path(),
         "b.nz",
@@ -399,12 +401,12 @@ fn the_interface_a_cache_keeps_carries_the_declared_set_and_not_the_inferred_one
     write(
         dir.path(),
         "a.nz",
-        "use \"b.nz\";\nfn main() -> Int { loud() + quiet() + plain() }\n",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int { loud(io) + quiet() + plain() }\n",
     );
     write(
         dir.path(),
         "b.nz",
-        "pub fn loud() -> Int ! { io } { print(\"x\") }\npub fn quiet() -> Int ! {} { 1 }\npub fn plain() -> Int { print(\"y\") }\n",
+        "pub fn loud(io: IoCap) -> Int ! { io } { print(\"x\") }\npub fn quiet() -> Int ! {} { 1 }\npub fn plain() -> Int { print(\"y\") }\n",
     );
     assert!(check(dir.path(), "a.nz").accepted);
     let b = check_entries(dir.path())
@@ -415,7 +417,7 @@ fn the_interface_a_cache_keeps_carries_the_declared_set_and_not_the_inferred_one
     let text = b.interface.to_json().expect("json");
     assert!(
         text.contains(
-            r#""name":"loud","kind":"fn","generics":0,"params":[],"ret":"Int","effects":["io"]"#
+            r#""name":"loud","kind":"fn","generics":0,"params":["IoCap"],"ret":"Int","effects":["io"]"#
         ),
         "{text}"
     );
@@ -429,6 +431,92 @@ fn the_interface_a_cache_keeps_carries_the_declared_set_and_not_the_inferred_one
         text.contains(r#""name":"plain","kind":"fn","generics":0,"params":[],"ret":"Int"}"#),
         "{text}"
     );
+}
+
+// --- N37: authority crosses the boundary in signatures ------------------------------------
+
+#[test]
+fn a_capability_only_change_rechecks_the_importer_and_finds_what_it_breaks() {
+    // The body and the declared set are the same bytes; only the authority `save` requires
+    // moves. It is a parameter, so it is in B's interface and in A's key: A is checked, and
+    // its call no longer supplies what `save` needs.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { save(io, 1) }\n",
+    );
+    let body = "! { io } { print(int_to_str(n)) }\n";
+    write(
+        dir.path(),
+        "b.nz",
+        &format!("pub fn save(io: IoCap, n: Int) -> Int {body}"),
+    );
+    assert!(check(dir.path(), "a.nz").accepted);
+    write(
+        dir.path(),
+        "b.nz",
+        &format!("pub fn save(io: IoCap, tasks: SpawnCap, n: Int) -> Int {body}"),
+    );
+    let after = check(dir.path(), "a.nz");
+    assert_eq!((after.checked, after.reused), (2, PRELUDE));
+    assert!(!after.accepted);
+    assert_eq!(meaning(&after), meaning(&cold(dir.path(), "a.nz")));
+    // A different kind in the same position, under the same name, is a different contract
+    // too: from the accepted program, only `IoCap` becomes `SpawnCap`.
+    write(
+        dir.path(),
+        "b.nz",
+        &format!("pub fn save(io: IoCap, n: Int) -> Int {body}"),
+    );
+    assert!(check(dir.path(), "a.nz").accepted);
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn save(io: SpawnCap, n: Int) -> Int ! { io } { n }\n",
+    );
+    let kind = check(dir.path(), "a.nz");
+    assert_eq!((kind.checked, kind.reused), (2, PRELUDE), "{kind:?}");
+    assert!(
+        !kind.diagnostics.is_empty() && kind.diagnostics.iter().all(|d| d.starts_with("N0300")),
+        "{kind:?}"
+    );
+}
+
+#[test]
+fn an_undeclared_import_needs_every_authority_from_a_caller_with_a_contract() {
+    // The compatibility bridge is not a backdoor: an export that declares nothing may
+    // exercise any effect with its caller's authority, so a caller that states a contract
+    // must hold all of it — whatever the import's body does.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn old(n: Int) -> Int { print(int_to_str(n)) }\n",
+    );
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io, spawn } { old(1) }\n",
+    );
+    let refused = cold(dir.path(), "a.nz");
+    assert_eq!(refused.diagnostics.len(), 1, "{refused:?}");
+    assert!(refused.diagnostics[0].starts_with("N0369"), "{refused:?}");
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn } { old(1) }\n",
+    );
+    assert!(cold(dir.path(), "a.nz").accepted);
+    // And a caller that states no contract is the bridge: `main` is the root.
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main() -> Int { old(1) }\n",
+    );
+    assert!(cold(dir.path(), "a.nz").accepted);
 }
 
 // --- §35: A → B → C, and where propagation stops -----------------------------------------
@@ -1098,9 +1186,9 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        8,
-        "N9, N10, N11, N12, N13, N14 and N36 each changed what the checker accepts, so the \
-         epoch moved seven times"
+        9,
+        "N9, N10, N11, N12, N13, N14, N36 and N37 each changed what the checker accepts, so \
+         the epoch moved eight times"
     );
     assert_eq!(nazm_iface::SCHEMA, "nazm.interface/6");
 }
@@ -1480,6 +1568,7 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     let again = check(dir.path(), "a.nz");
     assert!(again.accepted, "{again:?}");
     assert_eq!(again.reused, 0, "an epoch-6 entry was read: {again:?}");
-    // N36 moved it again, for effects: `an_entry_from_the_checker_before_effects_is_never_read`.
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 8);
+    // N36 moved it again, for effects: `an_entry_from_the_checker_before_effects_is_never_read`,
+    // and N37 for authority.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 9);
 }

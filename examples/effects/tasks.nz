@@ -1,5 +1,6 @@
 // Starting a task is the `spawn` effect, and a task's own effects are its spawner's too.
-// `run` declares both; `worker` declares only what it does. Prints 30.
+// `run` declares both; `worker` declares only what it does. Prints 30. `run` holds the
+// authority for both, handed down from `main` (N37); its tasks are handed none, and need none.
 
 fn worker(jobs: Chan, results: Chan) -> Int ! {} {
     let buf = ints_new();
@@ -19,7 +20,7 @@ fn feeder(jobs: Chan) -> Int ! {} {
     0
 }
 
-fn run() -> Int ! { io, spawn } {
+fn run(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn } {
     let jobs = chan_new(2);
     let results = chan_new(2);
     let buf = ints_new();
@@ -39,7 +40,7 @@ fn run() -> Int ! { io, spawn } {
     print(str_from_byte(10))
 }
 
-fn main() -> Int {
-    run();
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+    run(io, tasks);
     0
 }

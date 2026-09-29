@@ -697,6 +697,41 @@ fn a_snapshot_is_the_same_at_any_generation_of_the_service() {
 }
 
 // ---------------------------------------------------------------------------------------
+// N37: the authority a function requires is its signature.
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_capability_only_change_is_a_change_of_shape_under_the_same_identity() {
+    let body =
+        "-> Int ! { io } { print(int_to_str(n)) }\nfn main(io: IoCap) -> Int { save(io, 1) }\n";
+    let p = Project::new(&[("main.nz", &format!("fn save(io: IoCap, n: Int) {body}"))]);
+    let before = snapshot(&p.root());
+    // The same body and the same declared set: only the authority `save` requires moved.
+    p.write(
+        "main.nz",
+        &format!("fn save(io: IoCap, t: SpawnCap, n: Int) {body}"),
+    );
+    let d = delta(&p.root(), &before);
+    let save = changed(&d, "main.nz::fn save");
+    assert!(save.contains(&"shape".to_owned()), "{d}");
+    assert!(!save.contains(&"effects".to_owned()), "{d}");
+    // A contract change, not a new definition: the identity holds.
+    assert_eq!(d["added"], json!([]), "{d}");
+    assert_eq!(d["removed"], json!([]), "{d}");
+    // And a different kind in the same position is a different shape again.
+    let middle = snapshot(&p.root());
+    p.write(
+        "main.nz",
+        &format!("fn save(io: IoCap, t: IoCap, n: Int) {body}"),
+    );
+    let d = delta(&p.root(), &middle);
+    assert!(
+        changed(&d, "main.nz::fn save").contains(&"shape".to_owned()),
+        "{d}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
 // N36: effects are a recorded section.
 // ---------------------------------------------------------------------------------------
 

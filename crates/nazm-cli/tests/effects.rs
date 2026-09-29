@@ -95,10 +95,11 @@ fn ir_of(files: &[(&str, &str)]) -> String {
 
 // Each signature on a line of its own, so every body is at the same line and column in
 // both: a runtime error message carries its position, and an annotation on the body's line
-// would move it.
-const PLAIN: &str = "fn worker(c: Chan) -> Int\n{ chan_send(c, 7); 0 }\nfn say(n: Int) -> Int\n{ print(int_to_str(n)) }\nfn sum(n: Int) -> Int\n{ let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\nfn run() -> Int\n{ let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(ints_pop(buf) + sum(3)) }\nfn main() -> Int\n{ run(); 0 }\n";
+// would move it. Both hold the same capabilities (N37), so the effect sets are the only
+// difference; what capabilities cost is `tests/capabilities.rs`'s.
+const PLAIN: &str = "fn worker(c: Chan) -> Int\n{ chan_send(c, 7); 0 }\nfn say(io: IoCap, n: Int) -> Int\n{ print(int_to_str(n)) }\nfn sum(n: Int) -> Int\n{ let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\nfn run(io: IoCap, tasks: SpawnCap) -> Int\n{ let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(io, ints_pop(buf) + sum(3)) }\nfn main(io: IoCap, tasks: SpawnCap) -> Int\n{ run(io, tasks); 0 }\n";
 
-const TYPED: &str = "fn worker(c: Chan) -> Int ! {}\n{ chan_send(c, 7); 0 }\nfn say(n: Int) -> Int ! { io }\n{ print(int_to_str(n)) }\nfn sum(n: Int) -> Int ! {}\n{ let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\nfn run() -> Int ! { spawn, io }\n{ let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(ints_pop(buf) + sum(3)) }\nfn main() -> Int ! { io, spawn }\n{ run(); 0 }\n";
+const TYPED: &str = "fn worker(c: Chan) -> Int ! {}\n{ chan_send(c, 7); 0 }\nfn say(io: IoCap, n: Int) -> Int ! { io }\n{ print(int_to_str(n)) }\nfn sum(n: Int) -> Int ! {}\n{ let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\nfn run(io: IoCap, tasks: SpawnCap) -> Int ! { spawn, io }\n{ let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(io, ints_pop(buf) + sum(3)) }\nfn main(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn }\n{ run(io, tasks); 0 }\n";
 
 #[test]
 fn a_declared_effect_set_leaves_no_trace_in_the_native_program() {

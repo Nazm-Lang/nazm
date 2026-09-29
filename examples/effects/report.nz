@@ -1,5 +1,6 @@
 // Across modules, only a declared set travels: `lib.nz`'s `total` is pure by contract, so
-// `summary` may be pure too without reading its body. Prints 10.
+// `summary` may be pure too without reading its body. Prints 10. `main` declares `io`, so it
+// holds only the authority it is handed: the `IoCap` the runtime gives it (N37).
 
 use "lib.nz";
 
@@ -7,7 +8,7 @@ fn summary(n: Int) -> Int ! {} {
     total(n)
 }
 
-fn main() -> Int ! { io } {
+fn main(io: IoCap) -> Int ! { io } {
     print(int_to_str(summary(4)));
     print(str_from_byte(10));
     0

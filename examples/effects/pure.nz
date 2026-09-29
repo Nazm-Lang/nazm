@@ -3,6 +3,9 @@
 // `! {}` asserts a function is pure — it neither reaches the outside world nor starts a
 // task, and calls nothing that does. `! { io }` allows the outside world. A function that
 // declares nothing has what its body needs, inferred. Run with `nazm run`; it prints 1275.
+//
+// Since N37 an effect says what a function does, not what allows it: `show` declares
+// `io` and holds an `IoCap`, which only `main` receives and passes on.
 
 struct Range { from: Int, to: Int, }
 
@@ -30,16 +33,16 @@ fn tens(s: Str) -> Result[Int, Str] ! {} {
     Result[Int, Str].Ok(value: d * 10)
 }
 
-fn show(n: Int) -> Int ! { io } {
+fn show(io: IoCap, n: Int) -> Int ! { io } {
     print(int_to_str(n));
     print(str_from_byte(10))
 }
 
-fn main() -> Int {
+fn main(io: IoCap) -> Int {
     let t = match tens("5") {
         Result.Ok(value: v) => v,
         Result.Err(error: e) => 0,
     };
-    show(sum(Range(from: 1, to: t)));
+    show(io, sum(Range(from: 1, to: t)));
     0
 }
