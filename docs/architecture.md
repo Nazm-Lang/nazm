@@ -3986,6 +3986,128 @@ that loads the corpus with the same reader.
 documentation history, Git, fine-grained normative rule ids below section level, an installed
 copy of the documentation, and any user project's documents.
 
+## 7.35 Repository context map and minimum task context — settled by N33, 2026-09-29
+
+```text
+nazm-cli (nazm repo)  ·  nazm-mcp (nazm.repository_map, nazm.task_context)
+        ↓
+nazm-repo — the repository map and the task planner          nazm.repository-map/1 · nazm.task-context/1
+        ↓                  ↓                     ↓                          ↓
+nazm-service           nazm-docs            Cargo manifests          the mutation catalogue
+(N17 · N22 · N25 ·     (N32 ids, authority,  (packages, targets,      (profiles, killers,
+ N27 · N28 · N30)       sections, links)      dependencies, docs)      where a mutant lands)
+        ↓
+nazm-core
+```
+
+**Not another source of truth: an index and a planner over the ones that exist.** `nazm-repo`
+decides no meaning, reads no Markdown and scans no import: every entity and relationship is read
+from the authority that owns it — Cargo manifests for packages, targets and their dependencies;
+the compiler, through the language service, for which files a compilation loads, its durable
+definitions (N28's, with N22's name ranges, a new service accessor and no new checker state),
+their links, callers and diagnostics (N17, N25, N27, N30); `nazm-docs` for documents, sections,
+authority and links (N32); the mutation catalogue for which tests observe which paths and which
+test kills which mutant. The layering is the diagram: nothing below `nazm-repo` knows it exists.
+
+**Repository entity law.** An entity is something with a durable identity in one of those
+authorities, named `kind:authority-id`: `package:nazm-docs`, `target:nazm-docs:test:corpus`,
+`sources:compiler`, `root:compiler:emit.nz`, `module:compiler:analyse.nz`,
+`def:compiler:analyse.nz::fn check_program` (N3's durable key under a source root),
+`doc:spec:generics` (N32's id), `schema:nazm.context/1` (the constant the file declares),
+`profile:checker`, and — in a task context — `mutation:NAME`, `test:PKG:KIND:TARGET::PATH` (a
+catalogue killer) and `diagnostic:SOURCES:ROOT:ID` (N30's id within its compilation). Never an
+absolute path, a line, an offset, a random value, a time or a commit; a path appears only as a
+location. What has no durable identity is named as omitted, not invented: Rust items (the
+compiler owns no Rust semantics — packages and targets are what is mapped), locals, the core
+prelude's definitions, untracked definitions, the definitions of a compilation that needed syntax
+recovery, and tests the catalogue does not name. The one place the Nazm side is written down is
+`nazm-repo`'s manifest: three source roots, `compiler` (its four drivers are roots, its other
+files modules), `examples` and `examples-bad`, each with the sections that are its authority. A
+package declares its own, as `[package.metadata.nazm] docs = [...]` in its manifest.
+
+**The map** (`nazm.repository-map/1`) says what exists and how it relates, never what it says:
+each entity's kind, parent, location, a compilation's completeness and diagnostic count,
+structural relationships — `depends_on` and `dev_depends_on` (Cargo), `documented_by` (a
+package's metadata or a source root's row), `includes` (a module a compilation loaded),
+`observed_by` and `covers` (a profile's targets and owned package or source root) — and where to
+retrieve more, as the schema and arguments of an existing answer: `nazm.snapshot/1` and
+`nazm.diagnostic-index/1` of a root, `nazm.docs-index/1` of a document. Sections, mutations,
+catalogue tests and diagnostics are counted as delegated to the answer that enumerates them. A
+class table gives each kind's authority; a document carries its own. Canonical order is kind,
+then id in byte order; relationships by kind and target.
+
+**Validation.** A map is published only if every id is unique and well-formed, every parent and
+relationship target exists (an N32 section by the corpus), every kind, relationship, retrieval
+and authority is known, and the order is canonical — `nazm_repo::validate`, run on every map
+built. Anything else, or any unreadable input, broken documentation link, unresolved catalogue
+target, duplicate package or schema, missing root, or compilation that loads a file outside its
+source root, is `unavailable` with every problem: never a partial map.
+
+**Minimum-context closure.** A task (`nazm.task-context/1`) takes one to eight seeds — entity
+ids, never paths or queries — and an intent. One relationship step from each seed, never more:
+nothing is followed from an item that is not a seed, so a cycle is one visit, and each
+relationship is cut at sixteen members, counted in `bounded`. From a definition: `understand` —
+its exact source and shape, the records and enums it names (`signature_type`), every other
+durable definition it uses by shape (`direct_dependency`), its source root's sections; `edit`,
+the default because it is the widest — that, plus what uses it in **every** compilation of the
+manifest that loads its module (`direct_caller` for a function, from N25; `direct_reference` for
+a type, each use placed in its durable owner), and its tests; `diagnose` — the seed, the
+diagnostics it owns, what it names; `test` — the seed and its tests. Tests are related only by
+the catalogue: the verified killers of each mutation whose `find` lands inside the seed's
+declaration (`killer_test`), and the targets of the profile owning its file (`profile_target`) —
+never by a name that looks related, and a killed mutant is evidence the test observes that
+defect, not that the code is right. A section brings the sections its text links to, the
+production a guide rule is generated from and the productions a production names; an edit adds
+the sections that link to it, pointed at without their text. A diagnostic brings its owner with
+its exact source. A package brings its declared sections and dependencies, and for an edit its
+dependents, owned targets, killers and profile targets.
+
+**Why each item is there.** Every item carries its `reason`, the seed it came `via`, its priority
+`class`, its `authority` and a `retrieval` — the arguments of `nazm context`, `nazm docs
+--section` or `nazm diagnostics --detail` that give it again. What was known and not selected is
+counted in `excluded` (callers for an `understand`, dependencies with no durable key). No score:
+the classes are `seed`, `correctness`, `authority` (normative, grammar, law, interface,
+architecture, evidence sections, in that order), `edit_safety`, `test`, `supporting` (guide and
+operational sections, children), `context` (planning, research, goal) — a goal or a plan never
+outranks the specification or the evidence. Within a class, by that authority order and then id.
+
+**Budget.** `max_entities`, `max_source_bytes` (definition source included) and `max_doc_bytes`
+(section text included) — structural, not tokens. The seeds are mandatory: a budget they do not
+fit is `insufficient_budget` with what they need, never a context without its seed. Then items in
+priority order until one does not fit: it (with the dimension it exceeded) and everything after
+it (`priority`) are listed in `omitted`, and the answer is `partial`. A fan-out cut also makes it
+`partial`. The same request and state give the same bytes, so the same budget chooses the same
+items.
+
+**Source and documentation inclusion.** Source only as a definition's exact declaration (N27's
+range) — for a seed, a diagnostic's owner and a mutated definition; every other definition by its
+shape, and never a whole file. Documentation only as N32 sections, never a whole document.
+
+**Freshness and partial compilation.** The repository `state` is BLAKE3 over a tag, the compiler,
+the manifest, N32's corpus state, every Cargo manifest and the targets Cargo would find, the
+catalogue, every schema and every `.nz` file directly in a source root — paths and bytes; a task
+with another state is `stale_state`. A compilation that needed syntax recovery keeps its modules
+and loses its definitions: a definition only such a compilation loads is `incomplete_compilation`,
+never last-clean facts.
+
+**Security boundary.** A seed is compared with the repository's own identities and never opened:
+`/etc/passwd`, `../x.nz` and a part with a `/` are `invalid_request`; an unknown well-formed id is
+`not_found`, never the nearest. There is no listing, globbing, search or read of a caller-named
+path. The CLI takes `--root`; the MCP tools read the repository fixed at startup (`--docs`).
+
+**Surfaces.** `nazm repo --map` and `nazm repo --task [--intent I] --seed ID… [--state S]
+[--max-entities N] [--max-source-bytes N] [--max-doc-bytes N]`; with `--json`, one object on
+stdout, nothing on stderr, exit 0 with a map or a context and 1 with a refusal; conflicting modes
+refused by the parser. `nazm-mcp` adds `nazm.repository_map` and `nazm.task_context`, whose
+`state` is required. Both derive every answer from the disk at the call and keep nothing.
+
+**Deliberately not here.** Rust semantics, search of any kind, embeddings, relevance scores,
+transitive closure, Git, history, a persistent index, a daemon, network access, package
+resolution, tokens, snapshot or delta machinery of its own (N28's), a second documentation
+reader (N32's), a second context packet (N27's) — and any claim of project-wide completeness:
+callers are those of the manifest's compilations, and an exported definition's users elsewhere
+are not known.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

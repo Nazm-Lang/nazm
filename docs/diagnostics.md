@@ -23,6 +23,8 @@ against them — so these documents are tested rather than described.
 | `nazm.test-summary/1` | `nazm test --summary-json` | stdout | one object |
 | `nazm.docs-index/1` | `nazm docs --index --json`, and the `nazm-mcp` tool `nazm.docs_index` | stdout; the tool result's structured content | one object |
 | `nazm.docs-section/1` | `nazm docs --section ID --json`, and the `nazm-mcp` tool `nazm.docs_section` | stdout; the tool result's structured content | one object |
+| `nazm.repository-map/1` | `nazm repo --map --json`, and the `nazm-mcp` tool `nazm.repository_map` | stdout; the tool result's structured content | one object |
+| `nazm.task-context/1` | `nazm repo --task --seed ID --json`, and the `nazm-mcp` tool `nazm.task_context` | stdout; the tool result's structured content | one object |
 
 Every object carries its own `schema` field. Not a header: the output is a stream of
 lines and a consumer may read, log or replay any single one of them, and a version that
