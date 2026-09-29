@@ -39,10 +39,11 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,795 passed, 0 failed, 22 ignored, across 108 suites**, run contained and
-offline at N35 (2026-09-29), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle
-tests, run on their own (19 of 19 passed, contained), and three are N33's and N34's release-build
-measurements, run by hand (`performance.md`). N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 across 99 with 21 ignored; N32-H3 ended at 1,728 across 95 with 19 ignored; N32-H2 ended at 1,718 across 95; N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,825 passed, 0 failed, 23 ignored, across 111 suites**, run contained and
+offline at N36 (2026-09-30), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle
+tests, run on their own (19 of 19 passed, contained), and four are N33's, N34's and N36's
+release-build measurements, run by hand (`performance.md`). N35 ended at 1,795 across 108 with 22
+ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 across 99 with 21 ignored; N32-H3 ended at 1,728 across 95 with 19 ignored; N32-H2 ended at 1,718 across 95; N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -54,7 +55,7 @@ measurements, run by hand (`performance.md`). N34 ended at 1,773 across 104 with
 | 2a | Incremental semantic checking | VERIFIED |
 | 3 | Type system | PARTIAL |
 | 4 | Memory model and reclamation | VERIFIED for the current type universe |
-| 5 | Effects | MISSING |
+| 5 | Effects | PARTIAL |
 | 6 | Capabilities (language) | MISSING |
 | 7 | Provenance and information flow (language) | MISSING |
 | 8 | Core IR | MISSING |
@@ -86,7 +87,7 @@ measurements, run by hand (`performance.md`). N34 ended at 1,773 across 104 with
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
 
-Nine VERIFIED, thirteen PARTIAL, three DESIGNED, two RESEARCH, eight MISSING. The shape is
+Nine VERIFIED, fourteen PARTIAL, three DESIGNED, two RESEARCH, seven MISSING. The shape is
 worth reading directly: **everything verified is either a front-end capability, a tooling
 interface, or an evidence mechanism.** Nothing in the semantic core — ownership, effects,
 capabilities, provenance — exists at all, and that is the accurate summary of where the
@@ -635,9 +636,50 @@ N8**, and unmoved by N9: contained on Linux aarch64, the compiler written in Naz
 `compiler/emit.nz` peaks at 32.75 MiB against a 3,756-line input, and 80,000 short-lived
 records with heap fields peak at the empty-program floor.
 
-### 5. Effects — MISSING
+### 5. Effects — PARTIAL
 
-*N12 did not change this row.* A function's error type is visible because it is inside its
+*N36, 2026-09-30: Typed Effects v1 — VERIFIED; Effect propagation v1 — VERIFIED; Effect-bearing
+interfaces v1 — VERIFIED; Purity checking v1 — VERIFIED. The row is PARTIAL: handlers, effect
+polymorphism, user-defined effects and divergence are not here.* Two compiler-owned effects,
+`io` (the eight outside-world built-ins) and `spawn` (a `spawn` statement), each with a stable id
+and classified by the built-in's identity in an exhaustive `match` (`crates/nazm-sema/src/
+effect.rs`); sets are a bit per id, canonical by construction. A function may declare `! { … }`;
+every function's effects are inferred from its resolved calls to the least fixed point over the
+module, cycles included, with a shortest witness (`crates/nazm-core/src/effects.rs`); a declared
+set is a contract (`N0366`), and unknown or repeated names are `N0367` and `N0368`. Across modules
+only the declared set travels, in `nazm.interface/6`; an undeclared import is every effect to its
+importer. `SEMANTIC_EPOCH` 8. Tools: signatures, hover, `nazm.context/2`, `nazm.snapshot/2`,
+`nazm.delta/2` (`architecture.md` §7.38, `spec.md` *Effects*). Evidence: `crates/nazm-core/tests/
+effects.rs` — ordinary computation (records, enums, generics, equality, sequences, channels,
+loops, `Result` and `?`) pure and assertable; each of the eight built-ins refused in a pure
+function; a `spawn` and its task's effects; order and repetition changing nothing, a wider
+contract allowed and read by callers; a purity assertion failing through four calls with the
+shortest witness; direct, mutual and generic recursion at the least fixed point, in any order;
+unknown and repeated names refused once with no cascade and an exact fix; the effect namespace;
+a broken body adding nothing; determinism and the recorded witness; a 2,000-long chain, a
+300-wide fan-out and a 500-long cycle settled in one test; nothing changing what runs.
+`crates/nazm-iface/tests/persistence.rs` — a declared set published by name in id order, absent
+for none, read back exactly, malformed ones refused, `/5` refused. `crates/nazm-cli/tests/
+incremental.rs` — an effect-only change rechecking the importer and finding what it breaks, a
+body change within its contract reaching nobody, an undeclared import every effect to a pure
+caller, the cached interface carrying the declared set. `crates/nazm-cli/tests/effects.rs` — the
+same IR with and without declarations, and every `examples/effects/` program agreeing interpreted
+and compiled. `crates/nazm-service/tests/context.rs`, `snapshot.rs` and `effects.rs` — packet
+effects with reasons, an effect-only change as its own snapshot section, and every program of the
+tree still checking. Seventeen N36 mutations (area 30).
+
+**Limitation** · Two effects only, and a function that declares nothing is, to another module,
+every effect — so in the multi-module compiler sources 152 of 1,044 function checks come out
+`{ io, spawn }`, most because they call an undeclared import, not because they print or spawn.
+Pure means *no effect*, not *referentially transparent*: a function may write into a sequence it
+was handed. No effect polymorphism and no function values to need it; no handlers; allocation,
+channels, traps and divergence are not effects. The Nazm-written compiler does not read effect
+sets. Effects are not authority (area 6). Typed diagnostic facts (`nazm.diagnostic-detail/1`)
+stay unavailable; the effect facts are in the packet.
+
+**Next dependency** · For polymorphism and handlers, function values; for authority, area 6.
+
+*Before N36 this row was MISSING. N12 did not change it.* A function's error type is visible because it is inside its
 return type, `Result[T, E]`; a caller may store, pass or ignore that value, and nothing about
 it is tracked as an effect.
 
@@ -1970,8 +2012,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **628** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2, 582 at N32-H3, 601 at N33, 612 at N34), **440** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **643** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2, 582 at N32-H3, 601 at N33, 612 at N34, 628 at N35), **455** of them with a verified killer and all
 of them owned by one of fourteen focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -2648,6 +2690,23 @@ about to be made, a credential kept in error text, and the Claude Code client ru
 caught at tier 1** — no survivor, crash, timeout, unusable or uninjected entry — and **every
 declared killer verified, 16 of 16**. A first campaign on the fifteen before the Claude Code
 provider existed, `7b5dc0b2ba230b56`, caught all fifteen too.
+
+*N36 (2026-09-30) added seventeen mutations and retired two,* on the frozen final source: a union
+dropping an effect, a set iterated against id order, `print` classified as pure, a free `spawn`,
+a callee's effects kept from its caller, one round taken as the fixed point, a contract not held,
+an unknown effect read as `io`, a repeated effect accepted, an undeclared import taken as pure, the
+witness pointing at the function rather than the call, the interface omitting and the reader
+dropping a declared set, an effect change invisible to a snapshot, a packet without effects, the
+interface schema staying `/5` and the epoch staying 7. N14's two pins on `/5` and epoch 7 are
+retired in favour of the last two; N27's and N28's entries on effects being unsupported now guard
+capabilities, the section that still is. **Campaign `39b5858f7f2e7ab7`, targeted, P1, offline:
+all 85 selected caught** — the seventeen, the two repointed, the sixteen MCP-shared entries and
+every existing entry in the interface writer, the packet, the snapshot, the delta and the
+signature renderer — **78 at tier 1 with every killer verified in the session that caught it, and
+7 of the interface writer's killerless entries at tier 2**; no survivor, crash, timeout, unusable
+or uninjected entry. It took two sessions (5,862 s of the gate, three further resumes finding
+nothing left), and the harness's one-session coverage check reads *incomplete* because the 78
+verifications are split across them, not because any is missing.
 
 **Limitation** · Two catalogued defects are MUTANT CRASH, not caught (above), and one N13
 defect is a known survivor (above): the suite cannot observe a read of freed storage nothing
