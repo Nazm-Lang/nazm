@@ -1230,10 +1230,15 @@ fn check_cache_soundness() -> Result<(), Vec<String>> {
     let read = |rel: &str| std::fs::read_to_string(root.join(rel)).ok();
 
     // 1. The codes the checker can raise, against the list the identity is built from.
-    match (
+    // The checker is `check.rs` and, since N36, the effect checker beside it.
+    let checker = match (
         read("crates/nazm-core/src/check.rs"),
-        read("crates/nazm-cache/src/identity.rs"),
+        read("crates/nazm-core/src/effects.rs"),
     ) {
+        (Some(check), Some(effects)) => Some(format!("{check}\n{effects}")),
+        _ => None,
+    };
+    match (checker, read("crates/nazm-cache/src/identity.rs")) {
         (Some(checker), Some(identity)) => {
             let mut raised: Vec<String> = checker
                 .match_indices("codes::")

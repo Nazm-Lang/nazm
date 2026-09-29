@@ -115,7 +115,14 @@ use crate::digest::{self, Framed};
 /// interface schema moved too (`/5`), which reaches every dependent's key through its
 /// dependencies' fingerprints; the counter is what covers a module's *own* body, which the
 /// schema does not.
-pub const SEMANTIC_EPOCH: u32 = 7;
+///
+/// `8` — N36, 2026-09-29. Typed effects. A function may declare the effects it exercises
+/// (`! { io }`), and one whose body needs an effect its declaration lacks moved from
+/// accepted to refused (`N0366`); so did a set naming an unknown effect or one twice
+/// (`N0367`, `N0368`). The code set moved for those three, and the interface schema moved
+/// too (`/6`, a declared set is part of what a module publishes). The counter covers the
+/// part neither shows: a module's own bodies are now checked against its own declarations.
+pub const SEMANTIC_EPOCH: u32 = 8;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -133,6 +140,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "CANNOT_INFER_TYPE_ARGUMENT",
     "CONDITION_NOT_BOOL",
     "CONFLICTING_TYPE_ARGUMENTS",
+    "DUPLICATE_EFFECT",
     "DUPLICATE_FIELD",
     "DUPLICATE_FUNCTION",
     "DUPLICATE_MATCH_ARM",
@@ -163,8 +171,10 @@ pub const CHECKER_CODES: &[&str] = &[
     "TYPE_ARGUMENTS_ON_NON_GENERIC",
     "TYPE_MISMATCH",
     "TYPE_NESTING_TOO_DEEP",
+    "UNDECLARED_EFFECT",
     "UNDEFINED_FUNCTION",
     "UNDEFINED_VARIABLE",
+    "UNKNOWN_EFFECT",
     "UNKNOWN_FIELD",
     "UNKNOWN_REQUIREMENT",
     "UNKNOWN_TYPE",

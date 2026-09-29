@@ -5,6 +5,7 @@
 //! so a program with three mistakes reports three.
 
 pub mod check;
+mod effects;
 pub mod eval;
 
 pub use check::{

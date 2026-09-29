@@ -36,7 +36,7 @@ fn key(p: &str) -> ModuleKey {
 /// that these tests depend on the format rather than on a second construction of it.
 fn interface(module: &str, exports: &str) -> PersistentUnitInterface {
     let text = format!(
-        r#"{{"schema":"nazm.interface/5","module":"{module}","dependencies":[],"records":[],"enums":[],"exports":[{exports}]}}"#
+        r#"{{"schema":"nazm.interface/6","module":"{module}","dependencies":[],"records":[],"enums":[],"exports":[{exports}]}}"#
     );
     PersistentUnitInterface::from_json(&text).expect("a valid interface")
 }

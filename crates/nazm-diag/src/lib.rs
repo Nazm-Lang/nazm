@@ -253,6 +253,15 @@ pub mod codes {
     /// A requirement naming something that is not a capability: `T: Ord`. `Equality` is
     /// the only one.
     pub const UNKNOWN_REQUIREMENT: Code = Code::new("N0365");
+
+    // N36: effects. A malformed effect set — no `{`, a word that is not a name — is the
+    // parser's `N0100`.
+    /// A function whose declared effect set lacks an effect its body requires.
+    pub const UNDECLARED_EFFECT: Code = Code::new("N0366");
+    /// A name in an effect set that is not an effect: `! { network }`.
+    pub const UNKNOWN_EFFECT: Code = Code::new("N0367");
+    /// An effect written twice in one set: `! { io, io }`.
+    pub const DUPLICATE_EFFECT: Code = Code::new("N0368");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

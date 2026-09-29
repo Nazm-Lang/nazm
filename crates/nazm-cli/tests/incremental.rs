@@ -296,6 +296,141 @@ fn every_kind_of_exported_change_rechecks_the_importer() {
     }
 }
 
+// --- N36: effect contracts cross the boundary, bodies do not ----------------------------
+
+fn pure_importer(dir: &Path, b: &str) {
+    project(dir);
+    write(
+        dir,
+        "a.nz",
+        "use \"b.nz\";\nfn pure() -> Int ! {} { twice(21) }\nfn main() -> Int { pure() }\n",
+    );
+    write(dir, "b.nz", b);
+}
+
+#[test]
+fn an_effect_only_change_rechecks_the_importer_and_finds_what_it_breaks() {
+    // The body is the same bytes; only the contract moves. It is in B's interface, so it
+    // is in A's key, so A is checked — and A's purity assertion now fails.
+    let dir = tempfile::tempdir().expect("tempdir");
+    pure_importer(dir.path(), "pub fn twice(n: Int) -> Int ! {} { n * 2 }\n");
+    assert!(check(dir.path(), "a.nz").accepted);
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn twice(n: Int) -> Int ! { io } { n * 2 }\n",
+    );
+    let after = check(dir.path(), "a.nz");
+    assert_eq!((after.checked, after.reused), (2, PRELUDE));
+    assert!(!after.accepted);
+    assert!(
+        after.diagnostics.iter().all(|d| d.starts_with("N0366")),
+        "{after:?}"
+    );
+    assert_eq!(meaning(&after), meaning(&cold(dir.path(), "a.nz")));
+    // And back: the contract is pure again, and so is the answer.
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn twice(n: Int) -> Int ! {} { n * 2 }\n",
+    );
+    let back = check(dir.path(), "a.nz");
+    assert!(back.accepted, "{back:?}");
+}
+
+#[test]
+fn a_body_change_within_its_declared_contract_leaves_the_importer_alone() {
+    // What another module sees is the contract, so a body that stays inside it reaches
+    // nobody: B is checked again, and A is not.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main() -> Int ! { io } { twice(21) }\n",
+    );
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn twice(n: Int) -> Int ! { io } { n * 2 }\n",
+    );
+    assert!(check(dir.path(), "a.nz").accepted);
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn twice(n: Int) -> Int ! { io } { print(\"x\") + n * 2 }\n",
+    );
+    let after = check(dir.path(), "a.nz");
+    assert!(after.accepted, "{after:?}");
+    assert_eq!((after.checked, after.reused), (1, 1 + PRELUDE));
+    // A body that leaves its contract is refused in the module that wrote it.
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn twice(n: Int) -> Int ! {} { print(\"x\") + n * 2 }\n",
+    );
+    let broken = check(dir.path(), "a.nz");
+    assert!(!broken.accepted);
+    assert_eq!(meaning(&broken), meaning(&cold(dir.path(), "a.nz")));
+}
+
+#[test]
+fn an_import_that_declares_nothing_is_every_effect_to_a_pure_caller() {
+    // A caller may not read another module's body, so an undeclared export promises
+    // nothing — however pure its body is. Declaring it is the migration.
+    let dir = tempfile::tempdir().expect("tempdir");
+    pure_importer(dir.path(), "pub fn twice(n: Int) -> Int { n * 2 }\n");
+    let refused = cold(dir.path(), "a.nz");
+    assert!(!refused.accepted);
+    assert_eq!(refused.diagnostics.len(), 1, "{refused:?}");
+    assert!(refused.diagnostics[0].starts_with("N0366"), "{refused:?}");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn twice(n: Int) -> Int ! {} { n * 2 }\n",
+    );
+    assert!(cold(dir.path(), "a.nz").accepted);
+}
+
+#[test]
+fn the_interface_a_cache_keeps_carries_the_declared_set_and_not_the_inferred_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main() -> Int { loud() + quiet() + plain() }\n",
+    );
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn loud() -> Int ! { io } { print(\"x\") }\npub fn quiet() -> Int ! {} { 1 }\npub fn plain() -> Int { print(\"y\") }\n",
+    );
+    assert!(check(dir.path(), "a.nz").accepted);
+    let b = check_entries(dir.path())
+        .into_iter()
+        .map(|(_, a)| a)
+        .find(|a| a.module == "b.nz")
+        .expect("b's entry");
+    let text = b.interface.to_json().expect("json");
+    assert!(
+        text.contains(
+            r#""name":"loud","kind":"fn","generics":0,"params":[],"ret":"Int","effects":["io"]"#
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            r#""name":"quiet","kind":"fn","generics":0,"params":[],"ret":"Int","effects":[]"#
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#""name":"plain","kind":"fn","generics":0,"params":[],"ret":"Int"}"#),
+        "{text}"
+    );
+}
+
 // --- §35: A → B → C, and where propagation stops -----------------------------------------
 
 fn three_modules(dir: &Path, c: &str) {
@@ -963,11 +1098,11 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        7,
-        "N9, N10, N11, N12, N13 and N14 each changed what the checker accepts, so the epoch \
-         moved six times"
+        8,
+        "N9, N10, N11, N12, N13, N14 and N36 each changed what the checker accepts, so the \
+         epoch moved seven times"
     );
-    assert_eq!(nazm_iface::SCHEMA, "nazm.interface/5");
+    assert_eq!(nazm_iface::SCHEMA, "nazm.interface/6");
 }
 
 /// Every check entry under `dir`'s derived store, with the directory its store is at.
@@ -1345,5 +1480,6 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     let again = check(dir.path(), "a.nz");
     assert!(again.accepted, "{again:?}");
     assert_eq!(again.reused, 0, "an epoch-6 entry was read: {again:?}");
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 7);
+    // N36 moved it again, for effects: `an_entry_from_the_checker_before_effects_is_never_read`.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 8);
 }

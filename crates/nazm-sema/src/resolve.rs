@@ -132,6 +132,17 @@ pub struct FnDef {
     /// the tree nor re-decides a single call. For a generic body the arguments may mention
     /// its own parameters, which is exactly what substitution then replaces.
     pub call_sites: Vec<CallSite>,
+    /// The effect set its declaration writes (`! { … }`, N36), or `None` where none is
+    /// written — or where one names an effect that does not exist, which is reported once
+    /// and then treated as unwritten. A declared set is the function's contract: callers
+    /// read it, and its body is checked against it.
+    pub declared_effects: Option<crate::EffectSet>,
+    /// What its body requires, the least fixed point over the module's calls: `None` until
+    /// the body is checked, and for a body that did not parse.
+    pub inferred_effects: Option<crate::EffectSet>,
+    /// For each inferred effect, the first thing in the body that requires it — in effect
+    /// id order, one each. A diagnostic's witness is a chain of these.
+    pub effect_reasons: Vec<crate::EffectReason>,
     /// Every type a **generic** body's resolution mentions — its locals, what it constructs
     /// and the type arguments of what it calls — so that an instance can have each of them
     /// interned under its substitution before any native code is written. Empty for a
@@ -742,6 +753,20 @@ impl Resolution {
     }
 
     /// Record a call a function's body makes.
+    /// Record what a function's body requires, once its module's effects are settled
+    /// (N36): the set and, per effect, the first thing that requires it.
+    pub fn record_effects(
+        &mut self,
+        id: FnId,
+        inferred: crate::EffectSet,
+        reasons: Vec<crate::EffectReason>,
+    ) {
+        if let Some(f) = self.functions.get_mut(id.index()) {
+            f.inferred_effects = Some(inferred);
+            f.effect_reasons = reasons;
+        }
+    }
+
     pub fn record_call_site(&mut self, id: FnId, site: CallSite) {
         if let Some(f) = self.functions.get_mut(id.index()) {
             f.call_sites.push(site);

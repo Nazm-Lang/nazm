@@ -81,9 +81,19 @@ use nazm_span::Span;
 /// `/5` file could not honour the field, so the major moves rather than the field being
 /// added silently.
 ///
-/// Unknown majors remain refused rather than reinterpreted — including a future `/6`, and
-/// including `/1` to `/4`, which this build no longer reads.
-pub const SCHEMA: &str = "nazm.interface/5";
+/// # Why N36 versioned it a fifth time
+///
+/// A function may declare the effects it exercises (`! { io }`), and what a dependent may
+/// do with it depends on that: a function of its own declaring `! {}` may call an import
+/// only if the import's declared set is empty. `/5` had nowhere to say so, and what a `/5`
+/// file's silence meant was "no effects were modelled" — while in `/6` an export with no
+/// `effects` field is one that **declares none**, which its importers must read as every
+/// effect. The same bytes would mean two things, so the major moves: `/6` writes each
+/// export's declared set as names in effect-id order, and absent only when none is declared.
+///
+/// Unknown majors remain refused rather than reinterpreted — including a future `/7`, and
+/// including `/1` to `/5`, which this build no longer reads.
+pub const SCHEMA: &str = "nazm.interface/6";
 
 /// A type as persisted.
 ///
@@ -221,6 +231,12 @@ pub struct PersistentExport {
     pub params: Vec<PersistentType>,
     /// The return type, in the same encoding.
     pub ret: PersistentType,
+    /// The declared effect set (N36), each effect by name, in effect-id order: `[]` for a
+    /// function declaring `! {}`. **Absent** for one that declares none, which an importer
+    /// reads as every effect — so absence and emptiness are different contracts, and are
+    /// written differently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<Vec<String>>,
 }
 
 /// How a type is written in a persisted interface.
@@ -367,6 +383,8 @@ pub enum ReadError {
     BadParameter(String),
     /// A definition applied to a number of arguments it does not declare. `/4`.
     WrongArity(String),
+    /// A name in an export's effect set that is not an effect. `/6`.
+    UnknownEffect(String),
 }
 
 impl std::fmt::Display for ReadError {
@@ -392,6 +410,7 @@ impl std::fmt::Display for ReadError {
                     "`{d}` is applied to a number of arguments it does not declare"
                 )
             }
+            Self::UnknownEffect(w) => write!(f, "{w} is not an effect"),
         }
     }
 }
@@ -543,6 +562,9 @@ impl PersistentUnitInterface {
                 params,
                 ret: persist(e.ret, types, graph)
                     .ok_or_else(|| PublishError::NoModuleKey(interface.module()))?,
+                effects: e
+                    .effects
+                    .map(|s| s.names().into_iter().map(str::to_owned).collect()),
             });
         }
         // By name: the order a module declares its functions in is not part of what it
@@ -725,6 +747,22 @@ impl PersistentUnitInterface {
                     "the requirements of `{}`",
                     e.def
                 )));
+            }
+            // Each name an effect, once, in id order: the one canonical spelling of a set.
+            if let Some(names) = &e.effects {
+                let mut last: Option<u8> = None;
+                for n in names {
+                    let effect = nazm_sema::Effect::by_name(n).ok_or_else(|| {
+                        ReadError::UnknownEffect(format!("`{n}` in the effects of `{}`", e.def))
+                    })?;
+                    if last.is_some_and(|l| l >= effect.id()) {
+                        return Err(ReadError::NotCanonical(format!(
+                            "the effects of `{}`",
+                            e.def
+                        )));
+                    }
+                    last = Some(effect.id());
+                }
             }
             // The identity must be this module's, and must be the one the name and kind
             // beside it describe. Either mismatch means the file disagrees with itself.
@@ -938,6 +976,13 @@ impl PersistentUnitInterface {
                 name_span: Span::synthetic(),
                 def,
                 type_params: placeholder(e.generics),
+                // Validated on read: every name is an effect.
+                effects: e.effects.as_ref().map(|names| {
+                    names
+                        .iter()
+                        .filter_map(|n| nazm_sema::Effect::by_name(n))
+                        .collect()
+                }),
             });
             for &index in &e.requires_equality {
                 types.require_equality(TypeParam { owner, index });
