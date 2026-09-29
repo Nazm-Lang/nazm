@@ -56,6 +56,9 @@ pub(crate) struct ExecutionProfile {
     pub(crate) milli_cpus: u32,
     pub(crate) cargo_jobs: u32,
     pub(crate) test_threads: u32,
+    /// Test binaries run at once by the scheduled suite (`xtask workspace-tests`); 1 is
+    /// `cargo test`'s own one-after-another. Only `tests` reads it. N32-H3.
+    pub(crate) test_workers: u32,
 }
 
 impl ExecutionProfile {
@@ -67,6 +70,7 @@ impl ExecutionProfile {
         milli_cpus: 1000,
         cargo_jobs: 1,
         test_threads: 1,
+        test_workers: 1,
     };
     /// Four CPUs, four jobs, four test threads: the fastest profile that stayed inside the
     /// frozen memory gates on the workloads it is the default for. P2, P4 with one and two
@@ -76,10 +80,36 @@ impl ExecutionProfile {
         milli_cpus: 4000,
         cargo_jobs: 4,
         test_threads: 4,
+        test_workers: 1,
     };
+    /// The scheduled suite's calibration candidates (N32-H3): the same four CPUs and four
+    /// build jobs as P4T4, with test binaries run at once. Opt-in by name; no workload
+    /// defaults to one, so a machine that has not measured them keeps P4T4.
+    const fn scheduled(name: &'static str, workers: u32, threads: u32) -> Self {
+        Self {
+            name,
+            milli_cpus: 4000,
+            cargo_jobs: 4,
+            test_threads: threads,
+            test_workers: workers,
+        }
+    }
+    pub(crate) const P4W2T2: Self = Self::scheduled("p4w2t2", 2, 2);
+    pub(crate) const P4W3T2: Self = Self::scheduled("p4w3t2", 3, 2);
+    pub(crate) const P4W4T1: Self = Self::scheduled("p4w4t1", 4, 1);
+    pub(crate) const P4W2T4: Self = Self::scheduled("p4w2t4", 2, 4);
+    pub(crate) const P4W1T4: Self = Self::scheduled("p4w1t4", 1, 4);
 
     /// Every profile a workload may be run under, by name.
-    pub(crate) const ALL: &'static [Self] = &[Self::P1, Self::P4T4];
+    pub(crate) const ALL: &'static [Self] = &[
+        Self::P1,
+        Self::P4T4,
+        Self::P4W1T4,
+        Self::P4W2T2,
+        Self::P4W3T2,
+        Self::P4W4T1,
+        Self::P4W2T4,
+    ];
 
     pub(crate) fn by_name(name: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|p| p.name == name)
@@ -1137,6 +1167,9 @@ mod tests {
         for w in ["bench", "release", "run", "probe"] {
             assert_eq!(cache_namespace(w), None, "{w}");
         }
+        // The benchmark namespace is asked for by name, and is neither of these.
+        assert_ne!(Some("bench"), mutate);
+        assert_ne!(Some("bench"), cache_namespace("tests"));
     }
 
     /// The size bound runs before the workload's own script, and only where a cache is

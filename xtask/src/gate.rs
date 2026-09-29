@@ -30,6 +30,10 @@ pub(crate) struct Plan {
     pub(crate) lifecycle: Lifecycle,
     /// The MCP server changed: its shared mutations belong in the campaign.
     pub(crate) mcp: bool,
+    /// The benchmark families the paths can move (N32-H3): `compiler` (`cargo xtask
+    /// bench`), `docs` (documentation retrieval), `mcp` (the server's frames and memory),
+    /// `harness` (the gate's own timing). An unknown path, or none, brings every family.
+    pub(crate) benches: std::collections::BTreeSet<&'static str>,
     /// Why, one line per path.
     pub(crate) reasons: Vec<String>,
 }
@@ -78,15 +82,53 @@ fn reach(path: &str) -> Reach {
     }
 }
 
+/// Every benchmark family.
+pub(crate) const BENCHES: &[&str] = &["compiler", "docs", "harness", "mcp"];
+
+/// The benchmark families one path can move. Explicit: a path the table does not name is
+/// given every family by the caller.
+fn benches_of(path: &str) -> Option<&'static [&'static str]> {
+    const TABLE: &[(&str, &[&str])] = &[
+        ("crates/nazm-docs/", &["docs", "mcp"]),
+        ("crates/nazm-mcp/", &["mcp"]),
+        ("docs/", &["docs"]),
+        ("README.md", &[]),
+        ("schema/", &[]),
+        ("xtask/", &["harness"]),
+        ("docker/", &["harness"]),
+        ("crates/nazm-service/", &["compiler", "mcp"]),
+        ("crates/", &["compiler"]),
+        ("compiler/", &["compiler"]),
+        ("library/", &["compiler"]),
+        ("examples/", &["compiler"]),
+        ("corpus/", &["compiler"]),
+    ];
+    let path = path.strip_prefix("./").unwrap_or(path);
+    TABLE
+        .iter()
+        .find(|(prefix, _)| path == *prefix || path.starts_with(prefix))
+        .map(|(_, b)| *b)
+}
+
 /// The gate `paths` call for. No paths is not "nothing changed": it is an unknown change,
-/// and gets the full lifecycle.
+/// and gets the full lifecycle and every benchmark.
 pub(crate) fn plan(paths: &[String]) -> Plan {
     let mut lifecycle = Lifecycle::Invariant;
     let mut mcp = false;
     let mut reasons = Vec::new();
+    let mut benches = std::collections::BTreeSet::new();
     if paths.is_empty() {
         lifecycle = Lifecycle::Full;
-        reasons.push("no changed paths were given: the full lifecycle suite".to_owned());
+        benches.extend(BENCHES.iter().copied());
+        reasons.push(
+            "no changed paths were given: the full lifecycle suite and every benchmark".to_owned(),
+        );
+    }
+    for p in paths {
+        match benches_of(p) {
+            Some(b) => benches.extend(b.iter().copied()),
+            None => benches.extend(BENCHES.iter().copied()),
+        }
     }
     for p in paths {
         let r = reach(p);
@@ -109,11 +151,45 @@ pub(crate) fn plan(paths: &[String]) -> Plan {
     Plan {
         lifecycle,
         mcp,
+        benches,
         reasons,
     }
 }
 
+/// The stages every MILESTONE gate runs, whatever changed.
+pub(crate) const CORE: &[&str] = &["mutation", "workspace", "selfhost", "bootstrap", "gates"];
+
 impl Plan {
+    /// Every stage and responsibility this plan runs: the core stages, the lifecycle tests
+    /// (`lifecycle:*` for the whole suite), the MCP shared mutations and each benchmark.
+    pub(crate) fn stages(&self) -> std::collections::BTreeSet<String> {
+        let mut out: std::collections::BTreeSet<String> =
+            CORE.iter().map(|s| (*s).to_owned()).collect();
+        match self.lifecycle {
+            Lifecycle::Full => {
+                out.insert("lifecycle:*".to_owned());
+            }
+            Lifecycle::Invariant => {
+                out.extend(INVARIANT.iter().map(|t| format!("lifecycle:{t}")));
+            }
+        }
+        if self.mcp {
+            out.insert("mutations:mcp".to_owned());
+        }
+        out.extend(self.benches.iter().map(|b| format!("bench:{b}")));
+        out
+    }
+
+    /// Whether this plan runs every stage `other` runs: the whole lifecycle suite covers
+    /// each of its tests. A gate run under this plan is then an upper bound on `other`'s
+    /// work and evidence, and `other` need not be run separately to bound its time.
+    pub(crate) fn covers(&self, other: &Plan) -> bool {
+        let mine = self.stages();
+        other.stages().iter().all(|s| {
+            mine.contains(s) || (s.starts_with("lifecycle:") && mine.contains("lifecycle:*"))
+        })
+    }
+
     /// The `cargo test` arguments for the lifecycle suite this plan asks for.
     pub(crate) fn lifecycle_args(&self) -> Vec<String> {
         let mut v: Vec<String> = ["test", "-p", "xtask", "--test", "lifecycle"]
@@ -179,6 +255,51 @@ mod tests {
         assert!(p.mcp);
         assert_eq!(p.lifecycle, Lifecycle::Invariant);
         assert!(!of(&["crates/nazm-docs/src/lib.rs"]).mcp);
+    }
+
+    #[test]
+    fn benchmarks_follow_the_paths_and_an_unknown_path_brings_them_all() {
+        let set = |p: &[&str]| of(p).benches.into_iter().collect::<Vec<_>>();
+        assert_eq!(set(&["docs/spec.md"]), ["docs"]);
+        assert_eq!(set(&["crates/nazm-docs/src/lib.rs"]), ["docs", "mcp"]);
+        assert_eq!(set(&["crates/nazm-core/src/lib.rs"]), ["compiler"]);
+        assert_eq!(set(&["xtask/src/suite.rs"]), ["harness"]);
+        assert!(set(&["README.md"]).is_empty());
+        assert_eq!(set(&["somewhere/new.rs"]), BENCHES);
+        assert_eq!(set(&[]), BENCHES);
+    }
+
+    /// N32-H3's acceptance rests on this: a gate for a product or docs change runs a subset
+    /// of the gate for the same change plus a harness change — the invariant lifecycle
+    /// tests inside the whole suite, its benchmarks among the larger set, the same core
+    /// stages — so measuring the larger gate bounds the smaller one.
+    #[test]
+    fn a_normal_milestone_plan_is_covered_by_the_harness_changing_plan_over_the_same_paths() {
+        let normals: [&[&str]; 5] = [
+            &["docs/spec.md"],
+            &["crates/nazm-docs/src/lib.rs", "docs/spec.md"],
+            &["crates/nazm-mcp/src/main.rs"],
+            &["crates/nazm-core/src/lib.rs", "compiler/emit.nz"],
+            &["README.md"],
+        ];
+        for normal in normals {
+            let small = of(normal);
+            let mut both: Vec<&str> = normal.to_vec();
+            both.extend(["xtask/src/mutate.rs", "xtask/src/suite.rs"]);
+            let large = of(&both);
+            assert!(
+                large.covers(&small),
+                "{normal:?}: {:?} vs {:?}",
+                small.stages(),
+                large.stages()
+            );
+            assert_eq!(large.lifecycle, Lifecycle::Full);
+            // And the relation is not vacuous: the harness plan runs strictly more.
+            assert!(!small.covers(&large), "{normal:?}");
+            for core in CORE {
+                assert!(small.stages().contains(*core), "{normal:?} lacks {core}");
+            }
+        }
     }
 
     #[test]

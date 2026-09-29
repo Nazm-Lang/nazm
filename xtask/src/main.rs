@@ -14,6 +14,7 @@ mod mutate;
 mod plan;
 mod procs;
 mod rules;
+mod suite;
 
 use std::process::{Command, ExitCode};
 
@@ -41,6 +42,11 @@ fn main() -> ExitCode {
         Some("check-mutations") => report(&[("mutations apply", check_mutations_apply())]),
         Some("check-guide") => report(&[("guide from grammar", guide::check())]),
         Some("check-corpus") => report(&[("docs corpus", check_docs_corpus())]),
+        // N32-H3: the workspace suite, built by Cargo and scheduled longest first.
+        Some("workspace-tests") => {
+            let rest: Vec<String> = args.collect();
+            workspace_tests(&rest)
+        }
         // N32-H2: which MILESTONE evidence the named changed paths call for.
         Some("gate-plan") => {
             let paths: Vec<String> = args.collect();
@@ -56,7 +62,30 @@ fn main() -> ExitCode {
                 }
             );
             println!("mcp shared mutations {}", if p.mcp { "yes" } else { "no" });
+            println!(
+                "benchmarks {}",
+                if p.benches.is_empty() {
+                    "none".to_owned()
+                } else {
+                    p.benches.iter().copied().collect::<Vec<_>>().join(" ")
+                }
+            );
             println!("lifecycle command: cargo {}", p.lifecycle_args().join(" "));
+            println!(
+                "stages {}",
+                p.stages().into_iter().collect::<Vec<_>>().join(" ")
+            );
+            // A gate over these paths plus the harness bounds this one (N32-H3).
+            let mut widened = paths.clone();
+            widened.push("xtask/src/mutate.rs".to_owned());
+            println!(
+                "covered by the harness-changing plan over the same paths {}",
+                if gate::plan(&widened).covers(&p) {
+                    "yes"
+                } else {
+                    "no"
+                }
+            );
             ExitCode::SUCCESS
         }
         Some("bench") => {
@@ -2172,6 +2201,21 @@ fn run_contained(args: &[String]) -> ExitCode {
         }
         _ => (None, args),
     };
+    // `--cache bench` (N32-H3): a benchmark workload's release builds kept in their own
+    // harness-owned namespace. What a benchmark measures is the binary it runs, which is
+    // the same bytes wherever it was compiled; only the compile is saved.
+    let (explicit_cache, args) = match args.first().map(String::as_str) {
+        Some("--cache") => {
+            match args.get(1).map(String::as_str) {
+                Some("bench") => (Some("bench"), args.get(2..).unwrap_or_default()),
+                _ => {
+                    eprintln!("contained: --cache takes `bench`; the other namespaces are the workloads' own");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        _ => (None, args),
+    };
     let workload = args.first().map(String::as_str).unwrap_or_default();
     let profile = chosen.unwrap_or_else(|| default_profile(workload));
     bounds.profile = profile;
@@ -2204,7 +2248,26 @@ fn run_contained(args: &[String]) -> ExitCode {
                 )),
             )
         }
-        Some("tests") => ("tests", shell(&cargo_test("--workspace", profile))),
+        // A scheduled profile runs the same binaries through `xtask workspace-tests`, built
+        // here in the same target; any other runs `cargo test --workspace` as it always did.
+        // Either way the container's memory peak is reported after the suite (N32-H3).
+        Some("tests") => {
+            let suite = if profile.test_workers > 1 || profile.name == "p4w1t4" {
+                format!(
+                    "cargo build --locked -q -p xtask --jobs {j} && /work/target/debug/xtask workspace-tests \
+                     --jobs {j} --workers {} --test-threads {} --shape {}",
+                    profile.test_workers, profile.test_threads, profile.name
+                )
+            } else {
+                cargo_test("--workspace", profile)
+            };
+            (
+                "tests",
+                shell(&format!(
+                    "{suite}; s=$?; echo \"contained: memory peak $(cat /sys/fs/cgroup/memory.peak 2>/dev/null) bytes\" >&2; exit $s"
+                )),
+            )
+        }
         // The release candidate: every gate, then the candidate archived and handed out.
         //
         // It has to be exported, because `/work` is the container's writable layer and
@@ -2443,7 +2506,7 @@ fn run_contained(args: &[String]) -> ExitCode {
     // The persistent verification target, for the workloads that build the workspace and
     // are judged on it (N32-H2). A benchmark, a release and an arbitrary `run` never share
     // it: their numbers and artefacts must not depend on what an earlier session left.
-    if let Some(namespace) = contained::cache_namespace(name) {
+    if let Some(namespace) = contained::cache_namespace(name).or(explicit_cache) {
         match contained::cache_ensure(&repo, namespace) {
             Ok(v) => bounds.cache = Some(v),
             Err(e) => {
@@ -2643,6 +2706,132 @@ fn shell(cmd: &str) -> Vec<String> {
         "-c".to_owned(),
         format!("cd /src && {cmd}"),
     ]
+}
+
+/// `xtask workspace-tests --jobs J --workers W --test-threads T --shape NAME`: every test
+/// binary `cargo test --workspace` would run, built by Cargo and named by its JSON messages,
+/// each run once over W workers, longest first by the timing history for NAME; then the
+/// doc-tests. The report is in canonical order and a failure cancels nothing. N32-H3.
+fn workspace_tests(rest: &[String]) -> ExitCode {
+    let value = |flag: &str, default: &str| -> String {
+        rest.iter()
+            .position(|a| a == flag)
+            .and_then(|i| rest.get(i + 1))
+            .cloned()
+            .unwrap_or_else(|| default.to_owned())
+    };
+    let num = |flag: &str, default: u32| {
+        value(flag, &default.to_string())
+            .parse::<u32>()
+            .unwrap_or(default)
+    };
+    let (jobs, workers, threads) = (
+        num("--jobs", 1),
+        num("--workers", 1),
+        num("--test-threads", 1),
+    );
+    let shape = value("--shape", "default");
+    let Some(root) = workspace_root() else {
+        eprintln!("workspace-tests: could not locate the workspace root");
+        return ExitCode::FAILURE;
+    };
+    let started = std::time::Instant::now();
+    let build = procs::run(&procs::Invocation {
+        program: campaign::cargo(),
+        args: [
+            "test",
+            "--locked",
+            "--workspace",
+            "--no-run",
+            "--message-format=json",
+            "--jobs",
+            &jobs.to_string(),
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        cwd: root.clone(),
+        env: Vec::new(),
+        deadline: std::time::Duration::from_secs(2400),
+    });
+    if !matches!(&build.ended, procs::Ended::Exited(s) if s.success()) {
+        eprint!("{}", build.stderr);
+        eprintln!(
+            "workspace-tests: the suite did not build ({:?})",
+            build.ended
+        );
+        return ExitCode::FAILURE;
+    }
+    let built = started.elapsed().as_secs_f64();
+    let bins = suite::binaries(&build.stdout);
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| root.join("target"), std::path::PathBuf::from);
+    let history_file = suite::history_path(&target);
+    let history = suite::read_history(&history_file, &shape);
+    let order = suite::schedule(&bins, &history);
+    let t0 = std::time::Instant::now();
+    let results = suite::execute(&bins, &order, workers as usize, |b| {
+        suite::run_binary(b, threads, std::time::Duration::from_secs(1800))
+    });
+    let ran = t0.elapsed().as_secs_f64();
+
+    let mut failed = Vec::new();
+    let mut now = std::collections::BTreeMap::new();
+    for (b, r) in bins.iter().zip(&results) {
+        eprintln!("     Running {} ({})", b.id(), b.executable.display());
+        match r {
+            Some(r) => {
+                print!("{}", r.stdout);
+                eprint!("{}", r.stderr);
+                now.insert(b.id(), r.secs);
+                if !r.passed() {
+                    failed.push(format!("{} ({:?})", b.id(), r.ended));
+                }
+            }
+            None => failed.push(format!("{} (did not run)", b.id())),
+        }
+    }
+    suite::write_history(&history_file, &shape, &now);
+    let doc = procs::run(&procs::Invocation {
+        program: campaign::cargo(),
+        args: vec![
+            "test".to_owned(),
+            "--locked".to_owned(),
+            "--workspace".to_owned(),
+            "--doc".to_owned(),
+            "--jobs".to_owned(),
+            jobs.to_string(),
+            "--".to_owned(),
+            "--test-threads".to_owned(),
+            threads.to_string(),
+        ],
+        cwd: root,
+        env: Vec::new(),
+        deadline: std::time::Duration::from_secs(1200),
+    });
+    print!("{}", doc.stdout);
+    eprint!("{}", doc.stderr);
+    if !matches!(&doc.ended, procs::Ended::Exited(s) if s.success()) {
+        failed.push(format!("doc-tests ({:?})", doc.ended));
+    }
+    let mut slowest: Vec<(&String, &f64)> = now.iter().collect();
+    slowest.sort_by(|a, b| b.1.total_cmp(a.1).then(a.0.cmp(b.0)));
+    eprintln!(
+        "workspace-tests: {} binaries over {workers} worker(s) × {threads} thread(s): build {built:.1}s, run {ran:.1}s, doc-tests {:.1}s; history {}",
+        bins.len(),
+        doc.elapsed.as_secs_f64(),
+        if history.is_empty() { "none (canonical order)" } else { "used" }
+    );
+    for (id, secs) in slowest.iter().take(10) {
+        eprintln!("workspace-tests: slowest {secs:7.2}s {id}");
+    }
+    if failed.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        for f in &failed {
+            eprintln!("workspace-tests: FAILED {f}");
+        }
+        ExitCode::FAILURE
+    }
 }
 
 /// `contained cache` lists the harness-owned verification caches; `contained cache clear`

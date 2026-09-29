@@ -252,9 +252,17 @@ pub(crate) fn broad_suite(par: Parallelism) -> Vec<String> {
 /// Does the tree build, tests included? The legacy runner's check, unchanged, and still
 /// the thing that separates UNUSABLE from CAUGHT.
 pub(crate) fn workspace_build(par: Parallelism) -> Vec<String> {
-    let mut v: Vec<String> = ["build", "--workspace", "--tests", "--quiet"]
-        .map(str::to_owned)
-        .to_vec();
+    // `--message-format=json` makes Cargo say, per unit, whether it compiled it or found it
+    // fresh (N32-H3); it changes nothing Cargo decides.
+    let mut v: Vec<String> = [
+        "build",
+        "--workspace",
+        "--tests",
+        "--quiet",
+        "--message-format=json",
+    ]
+    .map(str::to_owned)
+    .to_vec();
     v.extend(["--jobs".to_owned(), par.cargo_jobs.to_string()]);
     v
 }

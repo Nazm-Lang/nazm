@@ -633,6 +633,58 @@ pub(crate) struct Real<'a> {
     pub(crate) logs: Option<PathBuf>,
     /// Failing test names seen at any step. Advisory.
     pub(crate) failing: Vec<String>,
+    /// The units the last workspace build compiled rather than found fresh, as
+    /// `package kind:target`, read from Cargo's JSON messages. Advisory: it explains a
+    /// mutant's build time and decides nothing. N32-H3.
+    pub(crate) rebuilt: Vec<String>,
+}
+
+/// A Cargo package id's name and version. `path+file:///x/crates/nazm-docs#0.0.1` omits
+/// the name when it is the directory's, which is then the name; `…#name@1.2.3` carries it.
+pub(crate) fn package_of(id: &str) -> (String, String) {
+    let (url, fragment) = id.rsplit_once('#').unwrap_or((id, ""));
+    match fragment.split_once('@') {
+        Some((name, version)) => (name.to_owned(), version.to_owned()),
+        None => (
+            url.trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("?")
+                .to_owned(),
+            fragment.to_owned(),
+        ),
+    }
+}
+
+/// The units a `cargo build --message-format=json` compiled rather than found fresh.
+pub(crate) fn rebuilt_units(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| {
+            v.pointer("/reason").and_then(serde_json::Value::as_str) == Some("compiler-artifact")
+                && v.pointer("/fresh").and_then(serde_json::Value::as_bool) == Some(false)
+        })
+        .map(|v| {
+            let text = |p: &str| {
+                v.pointer(p)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("?")
+                    .to_owned()
+            };
+            let package = package_of(&text("/package_id")).0;
+            let test = v
+                .pointer("/profile/test")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+            format!(
+                "{package} {}:{}{}",
+                text("/target/kind/0"),
+                text("/target/name"),
+                if test { " (test)" } else { "" }
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn cargo() -> String {
@@ -676,6 +728,7 @@ impl Executor for Real<'_> {
             self.deadlines.build_secs,
         );
         let secs = f.elapsed.as_secs_f64();
+        self.rebuilt = rebuilt_units(&f.stdout);
         let b = match &f.ended {
             Ended::Exited(s) if s.success() => Build::Built,
             Ended::Exited(s) => {
@@ -1406,6 +1459,22 @@ mod tests {
     /// Tier 1 alone reaches exactly the verdict and steps the full law reaches whenever
     /// Tier 1 decides, and defers — having run only the killers — whenever it does not.
     /// N32-H2: no verdict is weakened by deciding at Tier 1 first.
+    #[test]
+    fn a_package_id_names_its_package_with_or_without_the_name_fragment() {
+        assert_eq!(
+            package_of("path+file:///src/crates/nazm-docs#0.0.1"),
+            ("nazm-docs".to_owned(), "0.0.1".to_owned())
+        );
+        assert_eq!(
+            package_of("path+file:///tmp/copy/a#b@0.2.0"),
+            ("b".to_owned(), "0.2.0".to_owned())
+        );
+        assert_eq!(
+            package_of("registry+https://github.com/rust-lang/crates.io-index#serde@1.0.1"),
+            ("serde".to_owned(), "1.0.1".to_owned())
+        );
+    }
+
     #[test]
     fn tier_one_alone_decides_exactly_what_the_full_law_decides_at_tier_one() {
         let timed = || Observation::TimedOut("deadline".to_owned());
