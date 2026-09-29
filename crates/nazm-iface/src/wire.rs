@@ -91,6 +91,18 @@ use nazm_span::Span;
 /// effect. The same bytes would mean two things, so the major moves: `/6` writes each
 /// export's declared set as names in effect-id order, and absent only when none is declared.
 ///
+/// # Why N37 did not version it
+///
+/// A capability parameter — `fn save(io: IoCap, …)` — is an ordinary parameter of a
+/// built-in type, and `/6` already writes a built-in type as its name: the authority an
+/// export requires is in its signature, in the form every signature has. No field was
+/// added and none changed meaning. An export with no `effects` field still declares none,
+/// and is still every effect to its importers; that an importer with a declared set must
+/// then *hold* the authority those effects need is a checker rule, which
+/// `SEMANTIC_EPOCH` 9 covers, not a reading of these bytes. The one thing an older reader
+/// cannot do is know `IoCap` and `SpawnCap`, and it refuses them as unknown types rather
+/// than misreading them.
+///
 /// Unknown majors remain refused rather than reinterpreted — including a future `/7`, and
 /// including `/1` to `/5`, which this build no longer reads.
 pub const SCHEMA: &str = "nazm.interface/6";

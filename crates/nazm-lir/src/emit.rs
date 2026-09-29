@@ -4481,14 +4481,19 @@ pub fn emit_runtime(needs: Needs) -> String {
 /// what makes that separation visible rather than implied — and it is what stops an
 /// imported module's function named `main` from ever being a process entry, because the
 /// symbol this calls is the **root** module's, decided by [`crate::lower::plan`].
+///
+/// `roots` is how many capability parameters `main` takes (N37). Each is handed a `0`:
+/// authority was checked when the program was, and the word is all that is left of it.
 #[must_use]
-pub fn emit_entry(entry: &NativeSymbol, needs: Needs) -> String {
+pub fn emit_entry(entry: &NativeSymbol, roots: usize, needs: Needs) -> String {
     let needs = needs.settled();
     let mut out = String::new();
     preamble(&mut out, "<nazm entry>");
     declarations(&mut out);
     runtime_declarations(&mut out);
-    let _ = writeln!(out, "declare i64 {entry}()");
+    let root_types = vec!["i64"; roots].join(", ");
+    let root_args = vec!["i64 0"; roots].join(", ");
+    let _ = writeln!(out, "declare i64 {entry}({root_types})");
     out.push('\n');
     // `%lld\n`: the full signed 64-bit value in decimal. Encoding the result in the exit
     // status instead would truncate it to 8 bits, which for a language whose `Int` is
@@ -4530,7 +4535,7 @@ pub fn emit_entry(entry: &NativeSymbol, needs: Needs) -> String {
         let _ = writeln!(out, "  store i64 %nargs, ptr @nz.argc");
         let _ = writeln!(out, "  store ptr %argv, ptr @nz.argv");
     }
-    let _ = writeln!(out, "  %result = call i64 {entry}()");
+    let _ = writeln!(out, "  %result = call i64 {entry}({root_args})");
     {
         // Before the failure is reported, not after: `@nz.report` ends the process and
         // never returns, so a report emitted on the success path alone would say nothing
@@ -5676,7 +5681,7 @@ mod tests {
     fn ir_of(u: &Unit) -> String {
         let map = SourceMap::single("t.nz", "a source line\nand another\n");
         let (text, needs) = emit_unit(u, &SourceNames::only(&map));
-        text + &emit_runtime(needs) + &emit_entry(&sym("main"), needs)
+        text + &emit_runtime(needs) + &emit_entry(&sym("main"), 0, needs)
     }
 
     #[test]

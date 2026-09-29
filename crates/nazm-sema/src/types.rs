@@ -9,6 +9,7 @@
 //! with. Concrete names commit to nothing about how generics will eventually look, which
 //! a half-built `[T]` syntax very much would.
 
+use crate::capability::CapabilityKind;
 use crate::enums::EnumId;
 use crate::intrinsic::Intrinsic;
 use crate::record::RecordId;
@@ -109,6 +110,10 @@ pub enum Type {
     Vec(VecId),
     /// A type parameter, inside the declaration that owns it.
     Param(TypeParam),
+    /// A capability: authority of one compiler-owned kind (N37). A value, freely copied,
+    /// with no equality, that no expression can construct — the runtime hands the only
+    /// ones to `main`. See [`crate::capability`].
+    Cap(CapabilityKind),
 }
 
 impl Type {
@@ -128,6 +133,8 @@ impl Type {
         Self::Ints,
         Self::Strs,
         Self::Chan,
+        Self::Cap(CapabilityKind::Io),
+        Self::Cap(CapabilityKind::Spawn),
     ];
 
     /// The written name of a **built-in** type, which is also how it is spelled in
@@ -146,6 +153,7 @@ impl Type {
             Self::Ints => Some("Ints"),
             Self::Strs => Some("Strs"),
             Self::Chan => Some("Chan"),
+            Self::Cap(k) => Some(k.type_name()),
             Self::Record(_) | Self::Enum(_) | Self::Vec(_) | Self::Param(_) => None,
         }
     }
@@ -183,6 +191,12 @@ impl Type {
         matches!(self, Self::Ints | Self::Strs | Self::Vec(_))
     }
 
+    /// Whether this is a capability type (N37).
+    #[must_use]
+    pub const fn is_capability(self) -> bool {
+        matches!(self, Self::Cap(_))
+    }
+
     /// Whether this is a type parameter, which supports only what every type supports.
     #[must_use]
     pub const fn is_param(self) -> bool {
@@ -216,13 +230,13 @@ impl Type {
             "Ints" => Some(Self::Ints),
             "Strs" => Some(Self::Strs),
             "Chan" => Some(Self::Chan),
-            _ => None,
+            other => CapabilityKind::by_type_name(other).map(Self::Cap),
         }
     }
 
     #[must_use]
     pub fn all_names() -> &'static str {
-        "`Int`, `Bool`, `Str`, `Ints`, `Strs`, `Chan`"
+        "`Int`, `Bool`, `Str`, `Ints`, `Strs`, `Chan`, `IoCap`, `SpawnCap`"
     }
 }
 

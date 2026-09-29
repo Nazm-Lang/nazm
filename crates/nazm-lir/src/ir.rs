@@ -445,6 +445,12 @@ impl Ty {
             nazm_sema::Type::Ints => Self::Ints,
             nazm_sema::Type::Strs => Self::Strs,
             nazm_sema::Type::Chan => Self::Chan,
+            // A capability is authority the checker has already verified, and nothing at
+            // runtime consults it (N37): what is left of one is a machine word that is
+            // always 0. A word rather than a zero-sized `{}`, so every path that stores,
+            // copies or holds a value in a sequence keeps the representation it already
+            // has — a zero-byte element would reach an allocation of zero bytes.
+            nazm_sema::Type::Cap(_) => Self::Int,
             // The id carries across unchanged: both sides index the same session's
             // records, and the backend's table is built from the checker's rather than
             // being a second one. `docs/architecture.md`'s single-resolution rule.
@@ -529,6 +535,9 @@ pub struct Native {
     /// language's entry point and the operating system's apart, so that `main` is special
     /// only at the boundary where a process starts.
     pub entry: NativeSymbol,
+    /// How many capability parameters `main` takes (N37): the root authority the entry
+    /// wrapper hands it, one erased word each.
+    pub entry_roots: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

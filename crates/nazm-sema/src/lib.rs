@@ -38,6 +38,7 @@
 //! a build system as a key. What durable identity would have to be is
 //! `docs/research-register.md` R2 and R3, and it is deliberately not this.
 
+pub mod capability;
 pub mod effect;
 pub mod enums;
 pub mod generic;
@@ -53,6 +54,7 @@ pub mod scope;
 pub mod types;
 pub mod udt;
 
+pub use capability::{CapabilityKind, CapabilitySet};
 pub use effect::{Effect, EffectReason, EffectSet, EffectSource};
 pub use enums::{EnumDef, EnumId, Enums, VariantDef};
 pub use interface::{reachable_types, EnumExport, Export, RecordExport, UnitInterface, Visibility};
