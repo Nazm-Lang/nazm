@@ -370,9 +370,53 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N33, in dependency order
+
+No item is chosen here; N33 left these standing, beside N32's below.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| An agent task benchmark with a real model: tokens, cost, success (G83–G85) | task contexts ✓, their byte measurements ✓ | nothing has been run against a model; bytes are not tokens |
+| Multi-tokenizer measurement of contexts (G81, G82) | task contexts ✓ | tokenizer claims need several tokenizers |
+| Rust semantic entities in the map | a compiler-owned Rust fact source | the compiler has no Rust semantics; packages and targets are all the map can own |
+| Project-wide callers and importers of exported definitions | a project/importer boundary | callers are the manifest's compilations only, as rename's refusal already records |
+| Transitive or ranked context | a justified bound | one step and sixteen members per relationship are the v1 law |
+| A persistent or incremental repository index | measurement that forces one | a map takes about 0.4 s and a task 0.05–0.6 s in a release build |
+| Documentation links from definitions and diagnostics | an authority that states them | no document names a definition or a code structurally today |
+
+### N33 — Repository context map and minimum task context v1 — **complete, 2026-09-29**
+
+`nazm repo --map` lists every entity of the repository with a durable identity — packages and
+targets, source roots, compilation roots, modules and durable definitions, documents, schemas and
+mutation profiles — with its authority, its structural relationships and where to retrieve more,
+and never a body. `nazm repo --task` answers, for seed ids and an intent, the smallest context the
+repository can justify: one step from each seed, each item with its reason, class, authority and
+retrieval, the seed's exact source and the selected sections' exact text, under a structural budget
+whose cut is `partial`. A goal or a plan never outranks the specification or the evidence; a stale
+state is refused; a seed is an id and never a path. `nazm-mcp` adds `nazm.repository_map` and
+`nazm.task_context`. It composes N27, N28, N30 and N32: no grammar, semantics, `SEMANTIC_EPOCH` (7),
+`nazm.interface/5` or existing schema changed; two new machine schemas.
+
+| Settled | Where |
+| --- | --- |
+| the map, the planner, the manifest, the Cargo and catalogue readers | `crates/nazm-repo/`, `architecture.md` §7.35 |
+| a durable definition's name range, for asking its packet | `crates/nazm-service/src/durable.rs` |
+| `nazm repo` | `crates/nazm-cli/src/repo.rs`, `schema/nazm.repository-map-1.json`, `schema/nazm.task-context-1.json` |
+| `nazm-mcp`: `nazm.repository_map`, `nazm.task_context` | `crates/nazm-mcp/src/main.rs`, `docs/mcp.md` |
+| each package's documentation | `[package.metadata.nazm] docs` in its `Cargo.toml` |
+| what it costs and saves | `performance.md` |
+
+Mutation evidence: nineteen new mutations and a `repo` profile; one session verified all 36 declared
+killers of those nineteen and of the fifteen MCP entries N33's server change touches, and decided
+all 34 — caught at tier 1 (`capability-matrix.md` §30). The MILESTONE gate took 40.5 minutes from
+empty caches (`performance.md`).
+
+**N34 has not started.**
+
 ### After N32, in dependency order
 
-No item is chosen here; N32 left these standing.
+No item is chosen here; N32 left these standing. *Superseded by "After N33" above, except where
+this table is the only record of an item.*
 
 | | Depends on | Why not before |
 | --- | --- | --- |
@@ -416,7 +460,6 @@ MCP entries N32's server changes touch, around the one injection each verdict ca
 decided all 31 — caught at tier 1 (`capability-matrix.md` §30). The whole MILESTONE gate took
 40.1 minutes (`performance.md`).
 
-**N33 has not started.**
 
 ### After N31, in dependency order
 
