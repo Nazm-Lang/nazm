@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.repository-map-1.json",
+  "title": "nazm.repository-map/1",
+  "description": "The repository context map, from `nazm repo --map --json` and the `nazm-mcp` tool `nazm.repository_map`: every entity of the repository that has a durable identity — Cargo packages and targets, Nazm source roots, compilation roots, modules and durable definitions, documents, published schemas and mutation profiles — with its authority, its parent, its structural relationships and how to retrieve more, and never a source body or a section's text. Each relationship is read from a named authority: Cargo manifests, the compiler, the documentation corpus (N32) or the mutation catalogue. Entities another subsystem enumerates (documentation sections, mutations, catalogue tests, diagnostics) are counted in `delegated` with the answer that lists them; what has no durable identity is named in `omitted`. `unavailable` when an input cannot be read or the map does not validate — never a map with a broken or duplicate entity.",
+  "type": "object",
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": { "const": "nazm.repository-map/1" }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/available" },
+    { "$ref": "#/$defs/unavailable" }
+  ],
+  "$defs": {
+    "available": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "status", "state", "compiler", "classes", "entities", "delegated", "omitted"],
+      "properties": {
+        "schema": { "const": "nazm.repository-map/1" },
+        "status": { "const": "available" },
+        "state": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "BLAKE3 over every input the map is built from, each by its repository-relative path and exact bytes: the documentation corpus's state, every Cargo manifest and the targets Cargo would find, the mutation catalogue, every published schema and every `.nz` file directly in a source root. No absolute path, time, process or commit." },
+        "compiler": { "type": "string" },
+        "classes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "authority", "identity", "count"],
+            "properties": {
+              "kind": { "$ref": "#/$defs/kind" },
+              "authority": { "type": "string", "description": "The authority every entity of the kind is read from; a document carries its own." },
+              "identity": { "type": "string", "description": "What the kind's ids are made of." },
+              "count": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "entities": {
+          "type": "array",
+          "description": "In canonical order: by kind, in `classes` order, then by id in byte order. Each id once.",
+          "items": { "$ref": "#/$defs/entity" }
+        },
+        "delegated": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "authority", "count", "retrieval"],
+            "properties": {
+              "kind": { "enum": ["section", "mutation", "test", "diagnostic"] },
+              "authority": { "type": "string" },
+              "count": { "type": "integer", "minimum": 0 },
+              "retrieval": { "$ref": "#/$defs/retrieval" }
+            }
+          }
+        },
+        "omitted": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "reason"],
+            "properties": {
+              "kind": { "type": "string" },
+              "count": { "type": "integer", "minimum": 0 },
+              "reason": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "kind": { "enum": ["package", "target", "sources", "root", "module", "definition", "document", "schema", "profile"] },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "description": "`kind:authority-id` — `package:nazm-docs`, `target:nazm-docs:test:corpus`, `sources:compiler`, `root:compiler:emit.nz`, `module:compiler:analyse.nz`, `def:compiler:analyse.nz::fn check` (a durable definition key under a source root), `doc:spec` (N32's document id), `schema:nazm.context/1`, `profile:checker`. Never a path, line, offset, time or commit." },
+        "kind": { "$ref": "#/$defs/kind" },
+        "detail": { "type": "string", "description": "A target's Cargo kind (`lib`, `bin`, `test`, `bench`, `example`), a definition's kind (`function`, `record`, `enum`), or whether a compilation is `complete` or `incomplete` — needed syntax recovery or lacks a module, so its definitions are not mapped." },
+        "authority": { "enum": ["goal", "law", "architecture", "normative", "grammar", "guide", "interface", "evidence", "planning", "research", "operational"], "description": "A document's N32 authority. A `goal` is aspiration and `planning` a plan: never evidence of what exists." },
+        "parent": { "type": "string" },
+        "source": { "type": "string", "description": "Where it is, from the repository root. A location, never its identity." },
+        "diagnostics": { "type": "integer", "minimum": 0, "description": "A compilation's current diagnostics." },
+        "relations": {
+          "type": "array",
+          "description": "By kind, then target; each once.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "target"],
+            "properties": {
+              "kind": { "enum": ["covers", "depends_on", "dev_depends_on", "documented_by", "includes", "observed_by"], "description": "`depends_on`, `dev_depends_on`: a Cargo dependency on another member. `documented_by`: a section the package's `[package.metadata.nazm] docs` or the source root's manifest row names. `includes`: a module the compilation loaded. `observed_by`, `covers`: a profile's targets and the package or source root its `owns` names, from the mutation catalogue." },
+              "target": { "type": "string", "description": "An entity of this map, or for `documented_by` an N32 section id prefixed `doc:`." }
+            }
+          }
+        },
+        "retrieval": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/retrieval" }
+        }
+      }
+    },
+    "retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "args"],
+      "description": "The existing answer that holds more, and the arguments of the command or tool that gives it.",
+      "properties": {
+        "schema": { "enum": ["nazm.context/1", "nazm.diagnostic-detail/1", "nazm.diagnostic-index/1", "nazm.docs-index/1", "nazm.docs-section/1", "nazm.snapshot/1", "nazm.task-context/1"] },
+        "args": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "root": { "type": "string", "description": "A compilation root, from the repository root." },
+            "file": { "type": "string", "description": "Relative to the compilation's source root." },
+            "byte": { "type": "integer", "minimum": 0 },
+            "id": { "type": "string" },
+            "state": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "document": { "type": "string" },
+            "catalogue": { "type": "string" }
+          }
+        }
+      }
+    },
+    "unavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "status", "problems"],
+      "properties": {
+        "schema": { "const": "nazm.repository-map/1" },
+        "status": { "const": "unavailable" },
+        "problems": { "$ref": "#/$defs/problems" }
+      }
+    },
+    "problems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "value"],
+        "properties": {
+          "kind": { "type": "string" },
+          "value": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}
