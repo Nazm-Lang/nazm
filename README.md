@@ -95,8 +95,9 @@ and `continue`, `return`, `if`/`else`, arithmetic and comparison over `Int`, `Bo
 `Str`, the `Ints` and `Strs` sequences, file and output built-ins, modules, and structured
 concurrency — lexed, parsed, type-checked and evaluated. **Recursion runs here and is
 refused by `nazm build`**; that asymmetry is the one place the two paths disagree, and it
-is reported by name. Still absent: user-defined types, pattern matching, generics, effects
-and floats. A program using one of those is **refused by name** rather than misparsed into
+is reported by name. Still absent: user-defined types, pattern matching, generics and
+floats. (Effects were in this list until N36: a function may now declare `! { io }` or
+`! {}` — see [`docs/spec.md`](docs/spec.md), *Effects*.) A program using one of those is **refused by name** rather than misparsed into
 something else.
 
 The semantics it commits to are in [`docs/spec.md`](docs/spec.md): overflow traps

@@ -370,6 +370,49 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N36, in dependency order
+
+No item is chosen here; N36 left these standing, beside N35's and N34's below.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Capabilities: who may exercise an effect | the effect sets N36 settled | an effect says what kind of power, not who granted it |
+| Profiles that forbid effects (critical: no `io`, no `spawn`; embedded) | effect sets ✓, a profile mechanism | nothing selects a profile yet |
+| The Nazm-written compiler reading effect sets | a lexer token and a parser rule in `compiler/*.nz`, and a bootstrap | N36 avoided migrating the compiler's sources; none of them declares a set |
+| Declared sets on the compiler's own exports | the item above | an undeclared import is every effect to its importer, so 152 of 1,044 function checks in the tree read `{ io, spawn }` |
+| Effect polymorphism and handlers | function values | nothing a type argument brings can call anything yet |
+| Divergence, panic and allocation as effects | answers to `spec.md` *Open — Effects* | each is a design question, not an omission |
+| Completion of effect names | a completion site inside an effect set | two names; not worth a new site kind in N36 |
+
+### N36 — Typed effects and the effect system constitution v1 — **complete, 2026-09-30**
+
+A function may declare the effects it exercises — `fn show(n: Int) -> Int ! { io }`, `! {}` for
+pure — and every function's effects are inferred from its resolved calls to the least fixed point
+over its module. Two effects, both the compiler's: `io`, the eight outside-world built-ins, and
+`spawn`, a `spawn` statement and everything its task does. A declared set is a contract the body
+is checked against (`N0366`, with a shortest witness); unknown and repeated names are refused
+(`N0367`, `N0368`). Across modules only a declared set travels, persisted in `nazm.interface/6`, so
+a caller never reads another module's body and an undeclared import is every effect. Tools show
+it: signatures and hover, a packet's `effects` (`nazm.context/2`), an `effects` snapshot section
+(`nazm.snapshot/2`, `nazm.delta/2`). Nothing reaches what runs: the IR is byte-identical with and
+without declarations. `SEMANTIC_EPOCH` 7 → 8. Every one of the 116 existing sources checks exactly
+as before; none needed a change.
+
+| Settled | Where |
+| --- | --- |
+| the syntax, CST node and formatting | `crates/nazm-syntax/`, `grammar.ebnf`, `guide.md` |
+| effect identity and sets | `crates/nazm-sema/src/effect.rs` |
+| inference, the contract and the witness | `crates/nazm-core/src/effects.rs` |
+| the interface, `/6` | `crates/nazm-iface/src/wire.rs` |
+| signatures, hover, packets, snapshots, deltas | `crates/nazm-service/`, `schema/nazm.{context,snapshot,delta}-2.json` |
+| the law | `spec.md` *Effects: what a function may do*, `architecture.md` §7.38 |
+
+Mutation evidence: seventeen new mutations, two retired, two repointed; 85 selected, all caught,
+78 at tier 1 with their killers verified and 7 at tier 2 (`capability-matrix.md` §30). The
+MILESTONE gate ran offline: 7,242 s of wall time across its stages (`performance.md`).
+
+**N37 has not started.**
+
 ### After N35, in dependency order
 
 No item is chosen here; N35 left these standing, beside N34's and N33's below.
@@ -413,7 +456,6 @@ sixteen killers verified (`capability-matrix.md` §30). The MILESTONE gate ran o
 paid run, at `0419b25`: 2,977 s of wall time (`performance.md`). The benchmark spent $1.78 of a $2
 cap, pilots included.
 
-**N36 has not started.**
 
 ### After N34, in dependency order
 

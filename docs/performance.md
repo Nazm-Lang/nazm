@@ -1831,6 +1831,54 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### Typed effects — N36, measured 2026-09-30
+
+Effects are a checker fact (`architecture.md` §7.38), so what is measured is what they cost the
+compiler and what they leave in the program.
+
+- **Nothing in the program.** A program with every function's effects declared and the same
+  program without them emit byte-identical IR at `-O0`, one module and two
+  (`crates/nazm-cli/tests/effects.rs`), with each body at the same line and column in both — a
+  runtime error message carries its position, and an annotation on a body's own line moves it.
+  The interpreter never reads a set.
+- **Compatibility.** Every one of the 116 `.nz` sources the tree had before N36 — the compiler,
+  the conformance corpus, `examples/` including `examples/bad/`, `corpus/`, `bench/programs/` —
+  gives byte-identical `nazm check` output and exit status under the N35 and the N36 release
+  builds (host, `--no-cache`). None needed a change; none declares a set.
+- **What the checker infers** over the tree's 34 compilation roots (1,044 function checks, 11
+  declared, all in `examples/effects/`): 867 `{}`, 22 `{ io }`, 3 `{ spawn }`, 152 `{ io, spawn }`
+  — the last almost all in the multi-module compiler sources, whose calls to undeclared imports
+  must assume every effect (`crates/nazm-service/tests/effects.rs`, the ignored census).
+- **Checking time.** `nazm check --no-cache`, release, host, median of eight after a warm-up:
+  `compiler/emit.nz` 52.9 ms under N35 and 51.9 ms under N36; `compiler/check.nz` 33.9 and 31.5 ms
+  — the same within noise. In the container, `analyse` of `compiler/emit.nz` (432 functions)
+  takes 40.6 ms in all, effects included. The compiler benchmark's `compiler/check` is 83.0 ms
+  against N35's 81.1, inside the drift every measurement shows (below). The synthetic graph — a
+  2,000-long chain, a 300-wide fan-out and a 500-long cycle in one module — settles in one test
+  in debug, well under its 60 s bound.
+- **Memory.** Peak RSS of `nazm check compiler/emit.nz`, host: 27.4 MB under N35, 28.7 MB under
+  N36 (+4.5 %): one reason per effect per function, and the declared and inferred sets, are kept;
+  no provenance graph is.
+- **Size.** `nazm` 4,527,008 B at N35, 4,592,544 B at N36 (+65,536, +1.45 %); `nazm-mcp`
+  4,134,624 B, unchanged. Linux release, contained.
+- **The planner and servers** over this repository, contained, against N33's run of the same
+  harness: `repo --map` 360–367 ms (350–356), the four task contexts 50–594 ms (46–579), 1,000 MCP
+  task contexts 107.0 ms each (100.5), RSS settled 73,256 kB (73,224); the docs index 24.7 ms
+  (23.1). A few per cent slower over a corpus that has grown since (the docs index frame is
+  234,410 B, was 228,934), and nothing on those paths reads an effect beyond the one set a packet
+  carries.
+
+**The gate**, offline, at `973ae9f`: mutation 5,862 s (85 of 85 caught: 78 at tier 1 with killers
+verified, 7 at tier 2), workspace 360 s (1,825 passed, 0 failed, 23 ignored, 111 suites, peak
+1.96 GB), lifecycle 185 s (19 of 19), selfhost 47 s (38 of 38), bootstrap 38 s (C2 = C3, IR
+identical, executables identical once the linker UUID is removed), release benchmarks 537 s (run
+again on its own: the gate script's form of the stage used a `bash`-only `time ( … )` that the
+container's `sh` refused before anything ran), compiler benchmark 200 s (the same 21 pre-N33 drifts
+as N34's and N35's, each within about 2 % of them), checks 12 s (18 of 18) — 7,242 s of wall time.
+Two earlier runs of the gate were not evidence: the first stopped at its disk guard before the
+lifecycle with four failures of new tests in the workspace, the second with two; each was fixed and
+the gate run again whole. The container had no network (`NETWORK-ABSENT`).
+
 ### Agent task tokens, cost and correctness — N35, measured 2026-09-29
 
 `nazm-agent-bench` (N35, `architecture.md` §7.37). **One model configuration, recorded here and
