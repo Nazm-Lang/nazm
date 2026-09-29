@@ -1803,8 +1803,14 @@ exactly.
 #### Authority is ambient, and that is a limitation
 
 **Nothing in the language restricts which functions may reach the file system.** Any
-function can call `read_file`. There is no capability parameter, no effect annotation,
-and no enforcement of any kind.
+function can call `read_file`. There is no capability parameter and no enforcement of
+authority of any kind.
+
+*Corrected 2026-09-29, N36.* This said there was no effect annotation. There is one now
+(*Effects: what a function may do*): a function may declare `! { io }`, and one declaring
+`! {}` may not reach these built-ins, directly or through anything it calls. That restricts
+**what a function does**, not **who may do it**: any function may still declare `io` and
+call `read_file`, so authority remains ambient, and this section's limitation stands.
 
 This is stated rather than implied because the alternative — shipping the built-ins and
 describing the design as capability-based because a capability design exists in
@@ -2311,6 +2317,109 @@ The interface is deliberately separable from the runtime: `scope`, `spawn` and t
 channel operations say nothing about threads, so a different runtime strategy could
 replace this one without changing what a program means.
 
+### Effects: what a function may do
+<!-- id: effects -->
+
+An **effect** is an externally observable power a function exercises beyond computing its
+result from its arguments — one a caller could observe, and one someone may later want to
+forbid. The checker computes every function's effects from its resolved calls and holds each
+declared set to its body. Effects restrict which programs are accepted; they change nothing
+about what an accepted program does, and add nothing to what runs.
+
+```nazm
+fn area(w: Int, h: Int) -> Int ! {} { w * h }
+
+fn show(n: Int) -> Int ! { io } { print(int_to_str(n)) }
+
+fn worker(c: Chan) -> Int ! {} { chan_send(c, 1); 0 }
+
+fn run() -> Int ! { io, spawn } {
+    let c = chan_new(1);
+    scope { spawn worker(c); }
+    show(area(2, 3))
+}
+```
+
+#### The effects
+
+There are exactly two, and they are the compiler's. An effect is identified by the compiler,
+never by where or how it is written, and there are **no user-defined effects**.
+
+| Effect | Exercised by |
+| --- | --- |
+| `io` | the eight built-ins that reach the outside world — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` — and nothing else |
+| `spawn` | a `spawn` statement: starting a task |
+
+**Not effects**, and why:
+
+- **Allocation.** Every string operation and every sequence allocates, and nothing the
+  language can express restricts it; an `alloc` effect would be on nearly every function and
+  forbid nothing anyone could act on. It is not tracked, rather than tracked unsoundly.
+- **Mutation.** A `let mut` is local state and is nobody else's business. Writing into a
+  sequence or a vector a caller handed over is visible to that caller — sequences are shared
+  handles — but it is a property of the value passed, not a power exercised on the world, and
+  an empty effect set does **not** promise it does not happen: pure here means *no effect*,
+  not *referentially transparent*.
+- **Channels.** A channel is a value too; sending, receiving and closing act on it. The power
+  to run anything alongside is `spawn`'s, and a receive that blocks forever is divergence,
+  which this model does not track (below).
+- **Traps.** Overflow, division by zero, an index out of range and a failed read end the
+  program; so can almost any arithmetic, so marking them would mark everything.
+- **`Result` and `?`.** A failure written in the return type is a value, and `?` is a
+  `return`. Neither is an effect, and an `! {}` function may propagate one freely.
+
+#### A function's effect set
+
+After the return type, a function may declare the effects it exercises: `! {}`, `! { io }`,
+`! { io, spawn }`. The names live in their **own namespace** — `io` is not a variable, a type
+or a function, and a function or parameter named `io` is no conflict. A set means the same in
+any order and the formatter writes it in the canonical one; a name that is not an effect is
+`N0367`, and one written twice is `N0368`, with a fix that removes the repetition.
+
+**Pure is the empty set**: `! {}` asserts that the function exercises no effect and calls
+nothing that does, directly or through any number of calls. There is no separate `pure`
+word.
+
+#### Declared and inferred
+
+- **Every function's effects are inferred**: the effects of what its body calls — a
+  built-in's own effect, a `spawn`'s `spawn` and everything its task does, and each callee's
+  effects — through any number of calls. For recursion and mutual recursion the answer is the
+  **least fixed point**: a cycle of functions none of which reaches `io` does not require
+  `io`, and one `print` anywhere on it reaches every function of the cycle. Recursion adds no
+  effect of its own, and declaration order changes nothing.
+- **A declared set is a contract.** The body may require no effect outside it: requiring
+  more is `N0366`, at the first call or `spawn` that needs the missing effect, with one
+  shortest chain of calls from there to the built-in or `spawn` that exercises it. Declaring
+  **more** than the body needs is allowed: the contract is wider than the implementation, and
+  a caller reads the contract.
+- **A caller reads a callee's contract when it has one**, and what its body requires when it
+  has none — but only within the callee's own module.
+
+#### Across modules
+
+**A caller never needs another module's body to know its effects.** What crosses a module
+boundary is the declared set, which is part of the module's published interface. An exported
+function that declares **no** set promises nothing, so a caller in another module must
+assume it may exercise **every** effect: a pure function may call an import only if the import
+declares `! {}`. Declaring is how an exported function becomes callable from pure code; a
+program that declares nothing anywhere is accepted exactly as before N36.
+
+Changing a declared set changes the interface, so every importer is checked again. Changing a
+body within its declared set changes nothing an importer sees.
+
+#### Generics, and what is not here
+
+A generic function's effects are its body's, whatever its type arguments: there are no
+function values and no methods, so nothing a type argument brings can call anything. For
+the same reason there is no effect polymorphism — no effect variables, no handler, nothing
+that removes an effect once it is required. Those are later work, and a later milestone
+adds them rather than N36 pretending concrete sets cover them.
+
+**Effects are not authority.** A function declaring `! { io }` may reach the file system;
+that says what kind of power it uses, not that anything granted it. Who may exercise a power
+is the capability question, and it is still open (*What the outside-world built-ins do*).
+
 ### The integer boundaries, stated rather than inherited
 <!-- id: integer-boundaries -->
 
@@ -2345,9 +2454,13 @@ behind by a missing brace — is not reported again. The body is still withheld 
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
-Valueless `return`, labelled break, `for`, `loop`, mutable parameters, effects, floating
-point. A program using any of them is rejected by name rather than misparsed into something
-else.
+Valueless `return`, labelled break, `for`, `loop`, mutable parameters, floating point. A
+program using any of them is rejected by name rather than misparsed into something else.
+
+**Corrected 2026-09-29, N36.** This list named **effects**, which N36 added: a function may
+declare the effects it exercises and the checker infers and holds them — *Effects: what a
+function may do*, above, is the law. Handlers, effect variables and user-defined effects
+remain absent.
 
 Exceptions, `throw`, `catch` and unwinding are not in the language and are not planned:
 N12's typed error values are values, and `?` is a `return` (*Typed error values*, above).
@@ -2439,6 +2552,10 @@ remains open is what the four kinds do not yet cover.*
 
 ### Effects
 <!-- id: open-effects -->
+
+*Settled by N36*: what an effect is, the two built-in effects, declared and inferred sets,
+purity as the empty set, and what crosses a module (*Effects: what a function may do*). Still
+open:
 
 - **Is divergence an effect?** The `forever()` counterexample in `architecture.md` §5 shows
   that without an answer, "drop an unused pure call" is unsound. Options: treat divergence
