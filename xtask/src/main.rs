@@ -194,6 +194,7 @@ fn help() {
 fn run_checks() -> ExitCode {
     report(&[
         ("layering", check_layering()),
+        ("tokenizer reach", check_tokenizer_reach()),
         ("codegen reach", check_codegen_reach()),
         ("emission reach", check_emission_reach()),
         ("unsafe policy", check_unsafe_policy()),
@@ -289,6 +290,45 @@ fn check_layering() -> Result<(), Vec<String>> {
         }
     }
 
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
+/// Only `nazm-tokens` depends on a tokenizer library, and nothing depends on `nazm-tokens`
+/// (N34). The second half is also the layering's — no crate lists it — and is checked here
+/// by name so the reason is in the message.
+fn check_tokenizer_reach() -> Result<(), Vec<String>> {
+    let meta = match metadata::workspace() {
+        Ok(m) => m,
+        Err(e) => return Err(vec![format!("could not read cargo metadata: {e}")]),
+    };
+    let mut problems = Vec::new();
+    for member in &meta.members {
+        if member.name == rules::TOKENIZER_OWNER {
+            continue;
+        }
+        for dep in &member.all_deps {
+            if rules::TOKENIZER_CRATES.contains(&dep.as_str()) {
+                problems.push(format!(
+                    "{} depends on {dep}: a tokenizer may only be reached through {}, which \
+                     nothing that ships depends on",
+                    member.name,
+                    rules::TOKENIZER_OWNER
+                ));
+            }
+            if dep == rules::TOKENIZER_OWNER {
+                problems.push(format!(
+                    "{} depends on {}: token measurement must not reach the compiler, the \
+                     service, the planner or a server",
+                    member.name,
+                    rules::TOKENIZER_OWNER
+                ));
+            }
+        }
+    }
     if problems.is_empty() {
         Ok(())
     } else {
