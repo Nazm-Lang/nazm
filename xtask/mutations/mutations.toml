@@ -7099,3 +7099,117 @@ find = """#[serde(deny_unknown_fields)]
 struct TaskRequest {"""
 replace = """struct TaskRequest {"""
 killers = [{ package = "nazm-mcp", test = "protocol", name = "the_repository_crosses_the_protocol_unchanged_by_id_and_never_by_path" }]
+
+# --- N34: tokenizer-independent measurement -------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.36: every tokenizer counts with its own
+# implementation, an unknown one is never another, a count is tokens and not bytes, framing is
+# not content, an altered asset is refused, an identity is its vocabulary, the exact bytes are
+# counted, the tiny case stays visible, a reduction's sign and a tokenizer's worst case are
+# what they are, and unknown pieces are reported.
+
+[[profile]]
+name = "tokens"
+why = "token measurement is observed by nazm-tokens's own suites: the golden ids against independent implementations, the refusals, the schema, and the benchmark over the N33 tasks"
+owns = ["crates/nazm-tokens/"]
+targets = [
+    { package = "nazm-tokens", lib = true },
+    { package = "nazm-tokens", test = "tokens" },
+    { package = "nazm-tokens", test = "benchmark" },
+]
+
+[[mutation]]
+name = "n34-one-tokenizer-counts-for-all"
+why = "every row of a measurement is the first tokenizer's count, so three families report one family's numbers"
+file = "crates/nazm-tokens/src/lib.rs"
+find = "            match t.count(text) {"
+replace = "            match self.tokenizers.first().map_or(t, |f| f).count(text) {"
+killers = [{ package = "nazm-tokens", test = "tokens", name = "every_tokenizer_gives_the_reference_implementations_exact_ids" }]
+
+[[mutation]]
+name = "n34-an-unknown-tokenizer-is-ignored"
+why = "an id no tokenizer has is not refused, so a request for one tokenizer is silently answered by none or by others"
+file = "crates/nazm-tokens/src/lib.rs"
+find = "            .filter(|w| self.get(w).is_none())"
+replace = "            .filter(|w| w.is_empty())"
+killers = [{ package = "nazm-tokens", test = "tokens", name = "an_unknown_tokenizer_is_unsupported_and_never_another_one" }]
+
+[[mutation]]
+name = "n34-bytes-are-reported-as-tokens"
+why = "the OpenAI count is the text's byte length, the approximation the milestone forbids"
+file = "crates/nazm-tokens/src/lib.rs"
+find = "                tokens: bpe.encode_ordinary(text).len(),"
+replace = "                tokens: text.len(),"
+killers = [{ package = "nazm-tokens", test = "tokens", name = "every_tokenizer_gives_the_reference_implementations_exact_ids" }]
+
+[[mutation]]
+name = "n34-framing-is-counted-as-content"
+why = "the SentencePiece template's <s> or </s> is added to every count, so framing is reported as content"
+file = "crates/nazm-tokens/src/lib.rs"
+find = """                let e = tokenizer
+                    .encode(text, false)"""
+replace = """                let e = tokenizer
+                    .encode(text, true)"""
+killers = [
+    { package = "nazm-tokens", test = "tokens", name = "every_tokenizer_gives_the_reference_implementations_exact_ids" },
+    { package = "nazm-tokens", test = "tokens", name = "content_is_counted_and_framing_is_reported_beside_it" },
+]
+
+[[mutation]]
+name = "n34-an-altered-asset-is-loaded"
+why = "a tokenizer file is not checked against its pinned digest, so a changed vocabulary counts under the old identity"
+file = "crates/nazm-tokens/src/lib.rs"
+find = """    let digest = blake3::hash(&bytes).to_hex().to_string();
+    if digest != identity.asset_digest {"""
+replace = """    let digest = blake3::hash(&bytes).to_hex().to_string();
+    if digest.is_empty() {"""
+killers = [{ package = "nazm-tokens", test = "tokens", name = "a_missing_or_altered_asset_is_refused_by_name" }]
+
+[[mutation]]
+name = "n34-the-vocabulary-digest-ignores-the-vocabulary"
+why = "the OpenAI identity digests only how many ranks there are, so another vocabulary of the same size keeps the identity"
+file = "crates/nazm-tokens/src/lib.rs"
+find = "        h.update(&bytes);"
+replace = ""
+killers = [{ package = "nazm-tokens", test = "tokens", name = "every_tokenizer_gives_the_reference_implementations_exact_ids" }]
+
+[[mutation]]
+name = "n34-text-is-normalised-before-counting"
+why = "a decomposed accent is composed before the tokenizer sees it, so what is counted is not what would be sent"
+file = "crates/nazm-tokens/src/lib.rs"
+find = "            match t.count(text) {"
+replace = """            match t.count(&text.replace("e\\u{301}", "\\u{e9}")) {"""
+killers = [{ package = "nazm-tokens", test = "tokens", name = "the_exact_bytes_are_measured_and_nothing_is_normalised_first" }]
+
+[[mutation]]
+name = "n34-unknown-pieces-are-not-reported"
+why = "a Unigram model's unknown pieces are reported as none, hiding that a smaller count lost the text"
+file = "crates/nazm-tokens/src/lib.rs"
+find = """                    unknown_tokens: unknown
+                        .map_or(0, |u| e.get_ids().iter().filter(|i| **i == u).count()),"""
+replace = """                    unknown_tokens: unknown.map_or(0, |_| 0),"""
+killers = [{ package = "nazm-tokens", test = "tokens", name = "content_is_counted_and_framing_is_reported_beside_it" }]
+
+[[mutation]]
+name = "n34-the-stress-case-is-dropped"
+why = "the task whose context is larger than its program is left out of the report because it regresses"
+file = "crates/nazm-tokens/tests/benchmark.rs"
+find = "    for s in scenarios::all() {"
+replace = """    for s in scenarios::all().into_iter().filter(|s| !s.name.starts_with('C')) {"""
+killers = [{ package = "nazm-tokens", test = "benchmark", name = "every_n33_task_is_cheaper_in_tokens_under_every_tokenizer" }]
+
+[[mutation]]
+name = "n34-a-reduction-has-the-wrong-sign"
+why = "a reduction is computed the wrong way round, so a smaller context reads as a larger one"
+file = "crates/nazm-tokens/tests/benchmark.rs"
+find = "    let num = 10_000 * (b - a);"
+replace = "    let num = 10_000 * (a - b);"
+killers = [{ package = "nazm-tokens", test = "benchmark", name = "every_n33_task_is_cheaper_in_tokens_under_every_tokenizer" }]
+
+[[mutation]]
+name = "n34-the-worst-tokenizer-result-is-its-best"
+why = "a tokenizer's worst scenario is reported as its best, so a tokenizer-specific regression disappears from the aggregate"
+file = "crates/nazm-tokens/tests/benchmark.rs"
+find = "            let worst = v.iter().min().unwrap();"
+replace = "            let worst = v.iter().max().unwrap();"
+killers = [{ package = "nazm-tokens", test = "benchmark", name = "every_n33_task_is_cheaper_in_tokens_under_every_tokenizer" }]
