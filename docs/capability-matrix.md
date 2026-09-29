@@ -39,10 +39,10 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,728 passed, 0 failed, 19 ignored, across 95 suites**, run contained at
-N32-H3 (2026-09-29), scheduled at P4W2T4 and identical binary by binary to a P4T4 run; the
-nineteen ignored are the xtask lifecycle tests, run on their own (19 of 19 passed, contained).
-N32-H2 ended at 1,718 across 95; N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,757 passed, 0 failed, 21 ignored, across 99 suites**, run contained at
+N33 (2026-09-29), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle tests, run on
+their own (19 of 19 passed, contained), and two are N33's release-build measurements, run by hand
+(`performance.md`). N32-H3 ended at 1,728 across 95 with 19 ignored; N32-H2 ended at 1,718 across 95; N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1682,6 +1682,41 @@ and a missing state refused; a disk edit stale by state and read at the next cal
 unavailable; and 1,001 calls through edits and repairs with flat resident memory. Seventeen N32
 mutations (area 30).
 
+*N33, 2026-09-29: Repository Context Map v1, `nazm.repository-map/1` — VERIFIED; Minimum Task
+Context Planner v1, `nazm.task-context/1` — VERIFIED; G80 — PARTIAL; G69 — PARTIAL; G68 — PARTIAL,
+strengthened; G70 — PARTIAL, unchanged; G83, G84, G85 — RESEARCH, with a byte-level foundation
+only.* `nazm repo` and `nazm-mcp`'s `nazm.repository_map` and `nazm.task_context`
+(`crates/nazm-repo/`, `architecture.md` §7.35) map this repository's entities that have durable
+identity — Cargo packages and targets, three Nazm source roots and their thirty compilation roots,
+modules, 477 durable definitions, fourteen documents, sixteen schemas, twelve mutation profiles —
+each with its authority and only structural, authority-named relationships, validated before
+publication; and plan, for seed ids and an intent, the smallest context the repository can
+justify, one step from each seed, every item with its reason, class, authority and retrieval,
+under a structural budget whose cut is always `partial`. It composes N27, N28, N30 and N32 and adds
+one service accessor; no grammar, semantics, `SEMANTIC_EPOCH` (7), `nazm.interface/5` or existing
+schema changed. G80 and G69 are partial: one repository, the manifest's compilations only, no Rust
+semantics, no transitive or project-wide closure, and sufficiency shown for seven representative
+tasks by mechanical checks, not for every task. G83–G85 have measurements a later agent benchmark
+can use — context bytes, entity counts, latency, check success — and no model, token or cost
+result. Evidence: `crates/nazm-repo/tests/repository.rs` — ids from each authority, a directory
+without `main.rs` not a target, a recovered compilation's modules mapped and its definitions not;
+the same bytes twice and from two directories; the state moving with every input class and a stale
+one refused; understand, edit and test closures, callers from two compilations, a type's users, a
+test related only where its mutation lands; a section's own text and never its document's; a goal
+and a plan ranked below the specification and the evidence, and cut first; a budget at, below and
+above an exact fit, the seeds refused rather than cut; a cycle visited once and a fan-out of twenty
+cut at sixteen and counted; paths, `..`, absolute and glob seeds refused and never read, unknown ids
+not found; a definition only a recovered compilation loads `incomplete_compilation`; a broken link,
+killer, manifest or root and a compilation reading outside its root unavailable; the validator
+refusing duplicate, dangling, unknown and unordered maps; and the workspace equal to `cargo
+metadata`'s. `crates/nazm-repo/tests/benchmark.rs` — seven real tasks, each checked against N27,
+N32 and the catalogue parsed independently (`performance.md`). `crates/nazm-cli/tests/repository.rs`
+and `tests/schemas.rs` — one object and an empty stderr for every answer, exit 0 and 1, the
+library's bytes, ambiguous flags refused, every status valid against both schemas.
+`crates/nazm-mcp/tests/protocol.rs` — eleven tools, the repository tools taking ids and a state and
+never a path, answers equal to the library's and carried once, a disk edit stale by state, and
+1,000 task contexts with flat resident memory. Nineteen N33 mutations (area 30).
+
 **Limitation** · Diagnostics, definition, hover, references, rename, completion, signature
 help, symbols, full-document semantic tokens, quick fixes and call hierarchy only: no
 formatting, refactors, source actions or inlay hints, no cancellation and no watched files.
@@ -1721,11 +1756,12 @@ another syntax error, and nothing when any other file, or the document's top lev
 `.` is the only trigger character; `(` is not one. A hole's completion costs a second parse and
 check of the compilation per request (`performance.md`).
 `N0204` (no `main`) is not reported, because an open file is analysed as a module. Diagnostics
-are published for open documents only. **MCP is nine read-only tools** (N27–N32): the semantic
+are published for open documents only. **MCP is eleven read-only tools** (N27–N33): the semantic
 context packet, the semantic snapshot, the delta against a client-kept snapshot, a planned rename
 or fix, the current diagnostics compactly or one in full, a compact summary of the root's
 check — no build and no test run, which write files, over stdio, from disk, for one fixed root —
-and Nazm's own documentation by section, by id, over one fixed repository — no resources, prompts,
+and Nazm's own documentation and the repository's context map and task contexts, by id, over one
+fixed repository — no resources, prompts,
 completions, sampling or edits, no tool that applies a patch, no HTTP, no server-side history, and
 no view of an editor's unsaved buffers. A patch covers rename and compiler-owned fixes only — no
 exported rename, no multi-file edit, and no fix of a syntax diagnostic, whose compilation has no
@@ -1740,7 +1776,7 @@ contract; incremental reparse needs latency evidence, which N16's measurements d
 
 **Accepted when** · Met for the LSP, 2026-09-25 (N16): an adapter shares the compiler's
 semantic engine rather than re-implementing it. MCP: partial since N27 (2026-09-27) — read-only
-tools over the same service, three since N28, four since N29, six since N30, seven since N31, nine since N32; not accepted, since they answer a
+tools over the same service, three since N28, four since N29, six since N30, seven since N31, nine since N32, eleven since N33; not accepted, since they answer a
 few of the questions the service can, and none edits.
 
 ### 26. Package and build tooling — PARTIAL
@@ -1867,9 +1903,9 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **582** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2), **394** of them with a verified killer and all
-of them owned by one of eleven focused profiles;
+**Evidence** · `xtask/mutations/mutations.toml` holds **601** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2, 582 at N32-H3), **413** of them with a verified killer and all
+of them owned by one of twelve focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -2511,6 +2547,18 @@ The run also found three harness defects, all repaired before the counted run:
 verdict it could not get); N12.1's process-group kills used `kill -KILL -<pgid>`, which
 procps rejects, so inside the container they signalled nothing; and a session killed at its
 deadline was reported as a memory limit.
+
+*N33 (2026-09-29) added nineteen mutations and a twelfth profile, `repo`,* on the frozen final
+source: the seed left out, a direct dependency dropped, goals outranking the specification, a
+budget cut reported complete, a lower-priority item jumping the cut, the seeds cut by the budget, a
+stale state answered, the state skipping the text, a path taken as an id, the map not canonical, a
+broken relationship published, a killer of another definition related, a fan-out cut silent, a
+linking section sent whole, callers from one compilation, a compilation outside its root
+answered, a Cargo target found twice, a definition asked for at its declaration, and the MCP task
+taking any argument. **One warm session, campaign `82a3ad10e55b2183`, targeted, P1, 1,057 s wall
+from empty caches:** those nineteen and the fifteen MCP entries N33's server change touches —
+**34 of 34 caught at tier 1**, no survivor, crash, timeout, unusable or uninjected entry — and
+**every declared killer verified, 36 of 36**.
 
 **Limitation** · Two catalogued defects are MUTANT CRASH, not caught (above), and one N13
 defect is a known survivor (above): the suite cannot observe a read of freed storage nothing
