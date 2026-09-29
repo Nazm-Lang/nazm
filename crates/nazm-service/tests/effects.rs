@@ -70,6 +70,8 @@ struct Census {
     functions: usize,
     by_set: BTreeMap<String, usize>,
     declared: usize,
+    /// Functions with a capability parameter (N37).
+    holding: usize,
     effect_diagnostics: usize,
     micros: u128,
 }
@@ -84,12 +86,14 @@ fn census(path: &Path) -> Option<Census> {
     let mut by_set = BTreeMap::new();
     let mut functions = 0;
     let mut declared = 0;
+    let mut holding = 0;
     for f in a.resolution.functions() {
         if Some(f.module) == prelude {
             continue;
         }
         functions += 1;
         declared += usize::from(f.declared_effects.is_some());
+        holding += usize::from(f.params.iter().any(|t| t.is_capability()));
         let set = f
             .inferred_effects
             .map_or_else(|| "unchecked".to_owned(), |s: EffectSet| s.to_string());
@@ -98,12 +102,15 @@ fn census(path: &Path) -> Option<Census> {
     let effect_diagnostics = a
         .diagnostics
         .iter()
-        .filter(|d| ["N0366", "N0367", "N0368"].contains(&d.code.as_str()))
+        .filter(|d| {
+            ["N0366", "N0367", "N0368", "N0369", "N0370", "N0371"].contains(&d.code.as_str())
+        })
         .count();
     Some(Census {
         functions,
         by_set,
         declared,
+        holding,
         effect_diagnostics,
         micros,
     })
@@ -128,7 +135,8 @@ fn no_program_the_tree_has_is_refused_for_its_effects_and_undeclared_ones_are_in
             let Some(c) = census(&path) else { continue };
             checked += 1;
             // Nothing that existed before N36 declares a set, so nothing may be refused for
-            // one; `examples/effects/` declares sets that hold.
+            // one or for the authority it then needs (N37); `examples/effects/` and
+            // `examples/capabilities/` declare sets that hold, and hold the authority for them.
             assert_eq!(c.effect_diagnostics, 0, "{}", path.display());
             assert!(c.by_set.get("unchecked").is_none_or(|n| *n <= c.functions));
         }
@@ -142,23 +150,28 @@ fn census_of_the_effects_the_checker_infers_across_the_tree() {
     on_the_service_stack(|| {
         let root = workspace();
         let mut total: BTreeMap<String, usize> = BTreeMap::new();
-        let (mut functions, mut declared) = (0, 0);
+        let (mut functions, mut declared, mut holding) = (0, 0, 0);
         for path in roots() {
             let Some(c) = census(&path) else { continue };
             let rel = path.strip_prefix(&root).unwrap().display().to_string();
             println!(
-                "{rel}: {} functions, {} declared, {:?}, analyse {} ms",
+                "{rel}: {} functions, {} declared, {} holding a capability, {:?}, analyse {} ms",
                 c.functions,
                 c.declared,
+                c.holding,
                 c.by_set,
                 c.micros as f64 / 1000.0
             );
             functions += c.functions;
             declared += c.declared;
+            holding += c.holding;
             for (k, v) in c.by_set {
                 *total.entry(k).or_insert(0) += v;
             }
         }
-        println!("ALL: {functions} function checks, {declared} declared, {total:?}");
+        println!(
+            "ALL: {functions} function checks, {declared} declared, {holding} holding a \
+             capability, {total:?}"
+        );
     });
 }

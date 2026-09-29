@@ -10,6 +10,11 @@
 //! * the empty set is purity, and a purity assertion fails transitively;
 //! * a name that is not an effect, or one written twice, is refused once, with no cascade;
 //! * order, repetition and source order change nothing, and nothing changes what runs.
+//!
+//! Since N37 a function that declares a set holds only the authority of the capabilities
+//! in its scope, so every function here that declares one and reaches `io` or `spawn` is
+//! handed the capability for it: these are effect laws, and each test's only diagnostic is
+//! the effect one. The authority laws are `tests/capabilities.rs`.
 
 #![allow(
     clippy::unwrap_used,
@@ -137,7 +142,9 @@ fn every_outside_world_built_in_requires_io_and_a_pure_function_may_call_none_of
         ("if file_exists(\"f\") { 1 } else { 0 }", "file_exists"),
         ("exit_with(0)", "exit_with"),
     ] {
-        let src = format!("fn f() -> Int ! {{}} {{ {call} }}\nfn main() -> Int {{ f() }}\n");
+        let src = format!(
+            "fn f(io: IoCap) -> Int ! {{}} {{ {call} }}\nfn main(io: IoCap) -> Int {{ f(io) }}\n"
+        );
         refused_at(&src, codes::UNDECLARED_EFFECT, at(&src, needle));
         let src = src.replace("! {}", "! { io }");
         accepted(&src);
@@ -149,16 +156,19 @@ fn every_outside_world_built_in_requires_io_and_a_pure_function_may_call_none_of
 fn a_spawn_requires_spawn_and_every_effect_of_the_task_it_starts() {
     let src = "fn quiet(c: Chan) -> Int { 0 }\n\
         fn loud(c: Chan) -> Int { print(\"t\") }\n\
-        fn a() -> Int { let c = chan_new(1); scope { spawn quiet(c); } 0 }\n\
+        fn a(s: SpawnCap) -> Int { let c = chan_new(1); scope { spawn quiet(c); } 0 }\n\
         fn b() -> Int { let c = chan_new(1); scope { spawn loud(c); } 0 }\n\
         fn through() -> Int { b() }\n\
-        fn main() -> Int { a() + through() }\n";
+        fn main(s: SpawnCap) -> Int { a(s) + through() }\n";
     accepted(src);
     assert_eq!(inferred(src, "quiet"), EffectSet::EMPTY);
     assert_eq!(inferred(src, "a"), SPAWN);
     assert_eq!(inferred(src, "b"), IO.union(SPAWN));
     assert_eq!(inferred(src, "through"), IO.union(SPAWN));
-    let narrow = src.replace("fn a() -> Int {", "fn a() -> Int ! { io } {");
+    let narrow = src.replace(
+        "fn a(s: SpawnCap) -> Int {",
+        "fn a(s: SpawnCap) -> Int ! { io } {",
+    );
     refused_at(
         &narrow,
         codes::UNDECLARED_EFFECT,
@@ -168,8 +178,8 @@ fn a_spawn_requires_spawn_and_every_effect_of_the_task_it_starts() {
 
 #[test]
 fn a_set_is_the_same_in_any_order_and_a_wider_contract_is_allowed() {
-    let a = "fn f() -> Int ! { io, spawn } { print(\"x\") }\nfn main() -> Int { f() }\n";
-    let b = "fn f() -> Int ! { spawn, io } { print(\"x\") }\nfn main() -> Int { f() }\n";
+    let a = "fn f(io: IoCap) -> Int ! { io, spawn } { print(\"x\") }\nfn main(io: IoCap) -> Int { f(io) }\n";
+    let b = "fn f(io: IoCap) -> Int ! { spawn, io } { print(\"x\") }\nfn main(io: IoCap) -> Int { f(io) }\n";
     accepted(a);
     accepted(b);
     assert_eq!(effects(a), effects(b));
@@ -181,8 +191,8 @@ fn a_set_is_the_same_in_any_order_and_a_wider_contract_is_allowed() {
         "a wider contract does not widen what the body needs"
     );
     // Callers read the contract, not the body: `g` needs `spawn` because `f` may.
-    let src = "fn f() -> Int ! { io, spawn } { print(\"x\") }\nfn g() -> Int ! { io } { f() }\nfn main() -> Int { g() }\n";
-    refused_at(src, codes::UNDECLARED_EFFECT, name(src, "f() }", "f"));
+    let src = "fn f(io: IoCap) -> Int ! { io, spawn } { print(\"x\") }\nfn g(io: IoCap) -> Int ! { io } { f(io) }\nfn main(io: IoCap) -> Int { g(io) }\n";
+    refused_at(src, codes::UNDECLARED_EFFECT, name(src, "f(io) }", "f"));
 }
 
 #[test]
@@ -191,8 +201,8 @@ fn a_purity_assertion_fails_through_every_level_and_names_a_shortest_witness() {
         fn mid() -> Int { leaf() }\n\
         fn top() -> Int { mid() }\n\
         fn detour() -> Int { top() }\n\
-        fn pure() -> Int ! {} { if true { detour() } else { mid() } }\n\
-        fn main() -> Int { pure() }\n";
+        fn pure(io: IoCap) -> Int ! {} { if true { detour() } else { mid() } }\n\
+        fn main(io: IoCap) -> Int { pure(io) }\n";
     let d = check_source(src);
     assert_eq!(d.len(), 1, "{d:#?}");
     let d = &d[0];
@@ -239,8 +249,8 @@ fn recursion_reaches_the_least_fixed_point_and_injects_nothing() {
         fn c(n: Int) -> Int { if n == 7 { print(\"x\") } else { a(n - 1) } }\n\
         fn self_(n: Int) -> Int { if n == 0 { eprint(\"x\") } else { self_(n - 1) } }\n\
         fn gen[T](x: T, n: Int) -> Int { if n == 0 { print(\"g\") } else { gen(x, n - 1) } }\n\
-        fn pure(n: Int) -> Int ! {} { a(n) }\n\
-        fn main() -> Int { pure(3) + self_(2) + gen(1, 2) }\n";
+        fn pure(io: IoCap, n: Int) -> Int ! {} { a(n) }\n\
+        fn main(io: IoCap) -> Int { pure(io, 3) + self_(2) + gen(1, 2) }\n";
     for f in ["a", "b", "c", "self_", "gen"] {
         assert_eq!(inferred(src, f), IO, "{f}");
     }
@@ -254,7 +264,7 @@ fn recursion_reaches_the_least_fixed_point_and_injects_nothing() {
 
 #[test]
 fn an_unknown_or_repeated_effect_is_refused_once_and_does_not_cascade() {
-    let src = "fn f() -> Int ! { io, network } { print(\"x\") }\nfn g() -> Int ! {} { f() }\nfn main() -> Int { g() }\n";
+    let src = "fn f() -> Int ! { io, network } { print(\"x\") }\nfn g(io: IoCap) -> Int ! {} { f() }\nfn main(io: IoCap) -> Int { g(io) }\n";
     // `network` is refused, and `f`'s set is then unwritten: its body is not checked
     // against a contract nobody can read, and `g` sees what `f` actually needs.
     let d = diagnostics(src);
@@ -273,12 +283,12 @@ fn an_unknown_or_repeated_effect_is_refused_once_and_does_not_cascade() {
             ),
         ]
     );
-    let src = "fn f() -> Int ! { io, io } { print(\"x\") }\nfn main() -> Int { f() }\n";
+    let src = "fn f(io: IoCap) -> Int ! { io, io } { print(\"x\") }\nfn main(io: IoCap) -> Int { f(io) }\n";
     let d = check_source(src);
     assert_eq!(d.len(), 1, "{d:#?}");
     assert_eq!(d[0].code, codes::DUPLICATE_EFFECT);
     // At the second `io`, the last in the source.
-    let s = u32::try_from(src.rfind("io").unwrap()).unwrap();
+    let s = u32::try_from(src.find("io } {").unwrap()).unwrap();
     assert_eq!((d[0].primary.span.start, d[0].primary.span.end), (s, s + 2));
     // The fix removes the repetition exactly, and what is left checks.
     let fix = &d[0].fixes[0];
@@ -291,7 +301,7 @@ fn an_unknown_or_repeated_effect_is_refused_once_and_does_not_cascade() {
     );
     assert_eq!(
         fixed,
-        "fn f() -> Int ! { io } { print(\"x\") }\nfn main() -> Int { f() }\n"
+        "fn f(io: IoCap) -> Int ! { io } { print(\"x\") }\nfn main(io: IoCap) -> Int { f(io) }\n"
     );
     accepted(&fixed);
 }
@@ -300,7 +310,7 @@ fn an_unknown_or_repeated_effect_is_refused_once_and_does_not_cascade() {
 fn effect_names_are_their_own_namespace_and_a_call_is_decided_by_what_it_resolved_to() {
     // A function named `io`, and a local named `spawn` is impossible (a keyword), so a
     // parameter named `io`: neither is the effect, and the effect is not either.
-    let src = "fn io(io: Int) -> Int ! {} { io + 1 }\nfn main() -> Int ! { io } { io(1) + print(\"x\") }\n";
+    let src = "fn io(io: Int) -> Int ! {} { io + 1 }\nfn main(cap: IoCap) -> Int ! { io } { io(1) + print(\"x\") }\n";
     accepted(src);
     assert_eq!(inferred(src, "io"), EffectSet::EMPTY);
     // A function whose name is a built-in's cannot exist, so a call spelled `print` is the
@@ -389,7 +399,7 @@ fn a_large_call_graph_settles_without_recursion_or_explosion() {
         };
         src.push_str(&format!("fn r{i}() -> Int {{ {body} }}\n"));
     }
-    src.push_str("fn main() -> Int ! { io } { c0() + wide() + r0() }\n");
+    src.push_str("fn main(io: IoCap) -> Int ! { io } { c0() + wide() + r0() }\n");
     let start = std::time::Instant::now();
     let all = effects(&src);
     assert!(start.elapsed().as_secs() < 60, "{:?}", start.elapsed());
@@ -407,8 +417,8 @@ fn a_large_call_graph_settles_without_recursion_or_explosion() {
 
 #[test]
 fn effects_change_nothing_that_runs() {
-    let plain = "fn say(n: Int) -> Int { print(int_to_str(n)) }\nfn sum(n: Int) -> Int { if n == 0 { 0 } else { n + sum(n - 1) } }\nfn main() -> Int { say(sum(4)); sum(3) }\n";
-    let typed = "fn say(n: Int) -> Int ! { io } { print(int_to_str(n)) }\nfn sum(n: Int) -> Int ! {} { if n == 0 { 0 } else { n + sum(n - 1) } }\nfn main() -> Int ! { io } { say(sum(4)); sum(3) }\n";
+    let plain = "fn say(io: IoCap, n: Int) -> Int { print(int_to_str(n)) }\nfn sum(n: Int) -> Int { if n == 0 { 0 } else { n + sum(n - 1) } }\nfn main(io: IoCap) -> Int { say(io, sum(4)); sum(3) }\n";
+    let typed = "fn say(io: IoCap, n: Int) -> Int ! { io } { print(int_to_str(n)) }\nfn sum(n: Int) -> Int ! {} { if n == 0 { 0 } else { n + sum(n - 1) } }\nfn main(io: IoCap) -> Int ! { io } { say(io, sum(4)); sum(3) }\n";
     let value = |src: &str| match run(src) {
         Outcome::Value(Value::Int(n)) => n,
         other => panic!("{other:?}"),

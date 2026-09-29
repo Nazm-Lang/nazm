@@ -847,10 +847,10 @@ fn a_functions_packet_carries_its_effects_and_why_from_the_checker() {
         fn leaf() -> Int { print(\"x\") }\n\
         fn mid() -> Int { leaf() }\n\
         fn pure() -> Int ! {} { 1 }\n\
-        fn both() -> Int ! { io, spawn } { mid() }\n\
+        fn both(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { mid() }\n\
         fn far() -> Int { helper() }\n\
         struct P { x: Int, }\n\
-        fn main() -> Int { both() + pure() + far() + P(x: 1).x }\n";
+        fn main(io: IoCap, t: SpawnCap) -> Int { both(io, t) + pure() + far() + P(x: 1).x }\n";
     let p = Project::new(&[
         ("main.nz", FX),
         ("lib.nz", "pub fn helper() -> Int { 2 }\n"),
@@ -901,6 +901,6 @@ fn a_functions_packet_carries_its_effects_and_why_from_the_checker() {
     let both_packet = packet(&main, &main, at(FX, "fn both(", 0) + 3);
     assert_eq!(
         both_packet["target"]["signature"],
-        "fn both() -> Int ! { io, spawn }"
+        "fn both(io: IoCap, t: SpawnCap) -> Int ! { io, spawn }"
     );
 }
