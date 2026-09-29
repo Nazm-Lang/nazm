@@ -152,6 +152,10 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 T::LBracket => 52,
                 T::RBracket => 53,
                 T::Question => 54,
+                // An effect set's `!` (N36). The Nazm-written lexer has no such token yet,
+                // and no source this test reads writes one: `examples/effects/` is not in
+                // its folders, so a disagreement here would be a new file's, and loud.
+                T::Bang => 55,
                 // The Rust lexer emits a final `Eof`; the Nazm one prints `EOF` and
                 // stops, so there is nothing to compare.
                 T::Eof => return None,

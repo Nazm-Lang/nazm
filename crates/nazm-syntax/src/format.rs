@@ -77,11 +77,17 @@ pub fn format(text: &str) -> Result<String, Vec<Diagnostic>> {
 struct Layout {
     /// For the piece index of each `{`: whether its block stays on one line.
     inline: Vec<bool>,
+    /// For the piece index of each brace: whether it opens or closes an effect set, the
+    /// `{ io }` after a `!` (N36). A set is a list, not a block: it is always on one line,
+    /// and its `}` never ends one, because the function's body follows it.
+    set: Vec<bool>,
 }
 
 impl Layout {
     fn of(text: &str, pieces: &[Piece<'_>]) -> Self {
         let mut inline = vec![false; pieces.len()];
+        let mut set = vec![false; pieces.len()];
+        let mut previous: Option<&TokenKind> = None;
 
         // Open-brace positions, each with the number of comments seen before it. A
         // block written on one line stays on one line; the only thing that can stop it
@@ -101,21 +107,34 @@ impl Layout {
                 continue;
             };
             match kind {
-                TokenKind::LBrace => open.push((i, comments)),
+                TokenKind::LBrace => {
+                    if previous == Some(&TokenKind::Bang) {
+                        if let Some(slot) = set.get_mut(i) {
+                            *slot = true;
+                        }
+                    }
+                    open.push((i, comments));
+                }
                 TokenKind::RBrace => {
                     if let Some((j, seen)) = open.pop() {
+                        let is_set = set.get(j).copied().unwrap_or(false);
                         let same_line = pieces
                             .get(j)
                             .is_some_and(|b| breaks(text, b.end, piece.start) == 0);
                         if let Some(slot) = inline.get_mut(j) {
-                            *slot = same_line && seen == comments;
+                            // A comment inside still forces lines: `//` would swallow the rest.
+                            *slot = (same_line || is_set) && seen == comments;
+                        }
+                        if let Some(slot) = set.get_mut(i) {
+                            *slot = is_set;
                         }
                     }
                 }
                 _ => {}
             }
+            previous = Some(kind);
         }
-        Self { inline }
+        Self { inline, set }
     }
 }
 
@@ -325,6 +344,8 @@ impl<'a> Printer<'a> {
         // and a formatter has no way to know whether it was right.
         if !self.fresh_line
             && !self.in_inline()
+            // An effect set's own braces are its line, not a place to break it.
+            && !self.layout.set.get(at).copied().unwrap_or(false)
             && breaks(self.text, self.previous_end, piece.start) >= 1
         {
             self.break_line();
@@ -336,7 +357,12 @@ impl<'a> Printer<'a> {
                 self.blank_if_there_was_one(piece.start);
             }
             self.pad();
-        } else if self.space_before(kind) {
+        } else if self.space_before(kind)
+            // The empty effect set is `{}`: nothing to pad.
+            && !(*kind == TokenKind::RBrace
+                && self.previous == Some(&TokenKind::LBrace)
+                && self.layout.set.get(at).copied().unwrap_or(false))
+        {
             self.out.push(' ');
         }
 
@@ -379,7 +405,11 @@ impl<'a> Printer<'a> {
             // put punctuation on a line of its own. It did that for `let x = if c { 1 }
             // else { 2 };` too, which was a defect nobody had met because an `if`
             // initialiser written on one line is rare and a `match` one is not.
-            TokenKind::RBrace if !continues_the_line(next) && !self.in_inline() => {
+            TokenKind::RBrace
+                if !continues_the_line(next)
+                    && !self.in_inline()
+                    && !self.layout.set.get(at).copied().unwrap_or(false) =>
+            {
                 self.continuing = false;
                 self.break_line();
             }
