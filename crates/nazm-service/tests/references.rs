@@ -1034,6 +1034,9 @@ fn every_name_token_of_the_corpus_is_indexed_or_is_not_an_entity() {
                                     || leaf.text == "Vec"
                                     || a_type_parameter(span, leaf.text)))
                             || (node.kind() == K::PatternField && leaf.text == "_")
+                            // An effect name is the compiler's, never a program's entity (N36).
+                            || (node.kind() == K::EffectSet
+                                && nazm_core::sema::Effect::by_name(leaf.text).is_some())
                             || matches!(a.resolution.callee(span), Some(Callee::Builtin(_)));
                         if !explained {
                             unexplained.push(format!(
