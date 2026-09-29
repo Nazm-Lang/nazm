@@ -723,8 +723,8 @@ language, interface, cache-key or bootstrap change: `SEMANTIC_EPOCH` 7, `nazm.in
 
 | Settled | Where |
 | --- | --- |
-| the snapshot, `nazm.snapshot/1`, from N17/N18/N20/N21/N22/N25/N27 | `crates/nazm-service/src/snapshot.rs`, `schema/nazm.snapshot-1.json`, `architecture.md` §7.30 |
-| the delta, `nazm.delta/1`, and baseline validation | `crates/nazm-service/src/delta.rs`, `schema/nazm.delta-1.json` |
+| the snapshot, `nazm.snapshot/1`, from N17/N18/N20/N21/N22/N25/N27 | `crates/nazm-service/src/snapshot.rs`, `schema/nazm.snapshot-2.json`, `architecture.md` §7.30 |
+| the delta, `nazm.delta/1`, and baseline validation | `crates/nazm-service/src/delta.rs`, `schema/nazm.delta-2.json` |
 | `nazm snapshot --root --json`, `nazm delta --root --baseline --json` | `crates/nazm-cli/src/snapshot.rs` |
 | `nazm-mcp`: `nazm.semantic_snapshot`, `nazm.semantic_delta`, stateless | `crates/nazm-mcp/src/main.rs`, `docs/mcp.md` |
 | what it costs | `performance.md` |
@@ -764,7 +764,7 @@ reads the disk at every call. No language, interface, cache-key or bootstrap cha
 
 | Settled | Where |
 | --- | --- |
-| the packet, `nazm.context/1`, from N17/N18/N20/N21/N22/N25 | `crates/nazm-service/src/context.rs`, `schema/nazm.context-1.json`, `architecture.md` §7.29 |
+| the packet, `nazm.context/1`, from N17/N18/N20/N21/N22/N25 | `crates/nazm-service/src/context.rs`, `schema/nazm.context-2.json`, `architecture.md` §7.29 |
 | `nazm context --root --file --byte --json` | `crates/nazm-cli/src/context.rs` |
 | `nazm-mcp`: one read-only stdio tool, disk per call, no other file readable | `crates/nazm-mcp/src/main.rs`, `docs/mcp.md` |
 | what it costs | `performance.md` |

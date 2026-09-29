@@ -3592,7 +3592,7 @@ serialisation. The same sources and question give the same bytes, from any check
 **The CLI and the MCP server.** `nazm context` and `nazm-mcp` each open the root from disk, build
 the packet and drop everything: no packet, analysis or graph outlives a request. `nazm-mcp` is its
 own crate and binary on the official Rust SDK (`rmcp`), stdio only, with one tool,
-`nazm.semantic_context` (`file`, `byte_offset`), whose output schema is `schema/nazm.context-1.json`
+`nazm.semantic_context` (`file`, `byte_offset`), whose output schema is `schema/nazm.context-2.json`
 and whose result carries the packet once, as structured content, with an empty `content`;
 it advertises tools and nothing else, and answers resources, prompts and completions as methods it
 does not have. The root is fixed at startup; each call reads the disk as it is then, so an agent's
@@ -4265,6 +4265,84 @@ fake provider and the adapters with recorded responses.
 **Deliberately not here.** Tool-using agents, multi-turn repair, automatic routing between raw
 source and structured context, prompt tuning per arm, and any provider framework beyond the two
 adapters the benchmark uses.
+
+## 7.38 Typed effects — settled by N36, 2026-09-29
+
+```text
+parse        fn f() -> Int ! { io } { … }        EffectDecl: names and spans, as written
+  │
+declare      crate::effects::declared            N0367 unknown · N0368 duplicate (fix) → FnDef.declared_effects
+  │                                               Export.effects → nazm.interface/6 (by name, id order; absent = undeclared)
+check        record_site per call and spawn      Callee::Builtin | Callee::Function, spawned
+  │
+settle       crate::effects::analyse             direct effects + callees', Jacobi rounds to the least fixed point
+  │                                               FnDef.inferred_effects, FnDef.effect_reasons
+contract     inferred ⊆ declared?                N0366 at the first missing effect's site, shortest witness, fix for review
+  │
+tools        signature · hover · nazm.context/2 · nazm.snapshot/2 · nazm.delta/2
+```
+
+**Effect authority.** `nazm_sema::Effect` is the compiler's: two variants, each with a stable
+`id` that is never reused or reordered, a name, and nothing else. A built-in's effect is
+`Effect::of_intrinsic`, an exhaustive `match` on the built-in's identity, so a built-in added
+without being classified does not compile; the call graph the checker already records — each
+call site's resolved callee, and whether it is a `spawn` — is the only input. Nothing reads a
+spelling: a name resolves to an effect only inside an effect set, in a namespace of its own.
+
+**Canonical sets.** `EffectSet` is a bit per id: order-free and duplicate-free by construction,
+iterated, printed (`{ io, spawn }`, the formatter's spelling) and persisted in id order, so no
+map iteration can reach a set, a diagnostic or a digest. Purity is the empty set; no other flag
+exists. The only relation between sets is `is_within`; there is no effect subtyping beyond it.
+
+**Propagation.** After `check_unit` has checked every body of a module, `effects::analyse` builds,
+per function, its direct effects — each built-in's, each `spawn`'s — and its edges to the module's
+undeclared functions. A declared callee contributes its set, a constant; an imported callee
+contributes the importer's view of its export — the declared set, or **every** effect when it
+declares none; a callee whose body did not parse contributes nothing, since it is already an
+error. Then rounds: each reads only the previous round's sets, so visiting order cannot change a
+result, and the lattice is finite, so at most functions × effects rounds settle it — cycles
+included. The first reason each effect was added is kept; the callee had it a round earlier, so a
+chain of reasons is acyclic, and rounds being breadth-first it is a shortest one. No provenance
+graph is kept: one reason per effect per function.
+
+**The contract and its witness.** A declared set whose body requires more is `N0366`: one
+diagnostic per function, at the first site requiring the first missing effect in id order, with a
+secondary label per hop of the witness through the module's inferred functions to the built-in, the
+`spawn`, the contract or the undeclared import where it ends, and a fix for review that declares
+the union. A declaration naming an unknown effect is treated as unwritten after its `N0367`, so a
+single mistake is a single error.
+
+**The module boundary.** `Export.effects` is the declared set, and only it is persisted:
+`nazm.interface/6` writes it by name in id order, `[]` for `! {}`, absent for no declaration, and
+reads it back validated — an unknown name or a non-canonical order is refused. This is forced by
+the cache design and is the right rule anyway: a module's interface hash is taken over its
+**declarations** before any body is checked (N4), so a body-inferred set could not be in it
+without a body change reaching importers unnoticed. A contract in the interface means an effect
+change is an interface change, so every importer's key moves; a body change within its contract
+moves nothing an importer depends on. `SEMANTIC_EPOCH` is 8: the checker refuses what it accepted
+before.
+
+**Tooling.** The signature renderer appends a declared set (and a built-in's own effect), so hover,
+completion, signature help and packets show `fn f() -> Int ! { io }`; hover adds an undeclared
+function's inferred set on a line of its own, since it is not a declaration. `nazm.context/2`
+gives a function's `effects` — declared, required, published and one reason per effect, with the
+call's range and the built-in or callee's identity — where `/1` had the section `unsupported`.
+`nazm.snapshot/2` digests an `effects` section per function (declared or not, and required), and
+`nazm.delta/2` reports it, so an effect-only change is never reported as unchanged. `DefKey` is
+untouched: an effect change changes a definition's shape, not which definition it is, so rename,
+references, call hierarchy and semantic tokens are unaffected. `nazm.diagnostic-detail/1`'s typed
+facts stay `unavailable`: the effect facts are in the packet.
+
+**No runtime.** Nothing reaches lowering. `nazm build` emits the same IR for a program with its
+effects declared and without them; the interpreter never reads a set. When Core IR and MIR exist,
+a function's checked set is on its `FnDef` for lowering to carry, which is where a later profile
+(no `io`, no `spawn`) or an optimisation that needs to know a call is effect-free would read it.
+
+**Deliberately not here.** Handlers, effect variables and polymorphism, user-defined effects,
+`alloc`, `native`/`unsafe`/`foreign` (no FFI exists to exercise them), divergence and panic as
+effects, capabilities and authority, profiles that forbid effects, completion of effect names,
+and the Nazm-written compiler reading effect sets — its lexer and parser do not, and no source it
+reads writes one (`examples/effects/` is outside the folders its agreement tests read).
 
 ## 8. Toolchain, and one real incompatibility
 
