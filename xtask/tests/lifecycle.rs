@@ -1774,11 +1774,19 @@ fn a_warm_session_verifies_every_killer_against_each_mutants_own_bytes() {
         .lines()
         .map(str::to_owned)
         .collect();
+    // N32-H2: the library killer runs once on the pristine tree for both mutants that
+    // declare it, and each mutant's verdict run is the verification's mutant run.
     assert_eq!(
         seen,
-        ["42", "42", "43", "43", "42", "42", "44", "44", "42"],
+        ["42", "43", "42", "44", "42"],
         "a build was reused across a mutant or its restoration: {said}"
     );
+    assert!(
+        said.contains("mutation baseline    2 unique killer(s)"),
+        "{said}"
+    );
+    // Nothing was deferred, so the workspace suite never ran.
+    assert!(!said.contains("baseline suite"), "{said}");
     let records = journal(campaigns.path());
     assert_eq!(records.len(), 3);
     for r in &records {
@@ -1823,5 +1831,281 @@ fn a_resumed_session_does_not_claim_killers_it_did_not_verify() {
         "{}",
         again.stdout
     );
+    assert_clean(root);
+}
+
+// ---------------------------------------------------------------------------
+// N32-H2. The mutation baseline, and a persistent target across sessions.
+// ---------------------------------------------------------------------------
+
+/// A session in `root` with `target` as its Cargo target, observing every library-test run.
+fn session(
+    root: &Path,
+    cat: &Path,
+    campaigns: &Path,
+    target: &Path,
+    observed: &Path,
+    extra: &[&str],
+) -> Run {
+    let mut args = vec![
+        "mutate-run".to_owned(),
+        "--root".to_owned(),
+        root.display().to_string(),
+        "--catalogue".to_owned(),
+        cat.display().to_string(),
+        "--campaign-dir".to_owned(),
+        campaigns.display().to_string(),
+        "--strategy".to_owned(),
+        "targeted".to_owned(),
+        "--verify-killers".to_owned(),
+    ];
+    args.extend(extra.iter().map(|s| (*s).to_owned()));
+    let out = Command::new(XTASK)
+        .args(&args)
+        .env("CARGO_TARGET_DIR", target)
+        .env("NAZM_FIXTURE_OBSERVE", observed)
+        .output()
+        .expect("run");
+    Run {
+        status: out.status.code(),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr),
+    }
+}
+
+/// The project, written afresh at `root` — every file new, as a contained session's copy
+/// is extracted with fresh modification times — whatever was there before.
+fn fresh_copy(template: &Path, root: &Path) {
+    let _ = fs::remove_dir_all(root);
+    for rel in ["Cargo.toml", "Cargo.lock", SRC_REL, "tests/it.rs"] {
+        let to = root.join(rel);
+        fs::create_dir_all(to.parent().expect("parent")).expect("dirs");
+        fs::write(&to, fs::read(template.join(rel)).expect("template")).expect("copy");
+    }
+}
+
+fn one_mutation(root: &Path, name: &str, replace: &str) -> PathBuf {
+    let cat = root.join(format!("{name}.toml"));
+    fs::write(
+        &cat,
+        format!(
+            "[[mutation]]\nname = \"{name}\"\nwhy = \"f\"\nfile = \"{SRC_REL}\"\nfind = \"u64 {{ 42 }}\"\nreplace = \"u64 {{ {replace} }}\"\nkillers = [{LIB_KILLER}]\n"
+        ),
+    )
+    .expect("catalogue");
+    cat
+}
+
+fn verdicts(dir: &Path) -> Vec<(String, String, String)> {
+    journal(dir)
+        .iter()
+        .map(|r| {
+            (
+                r["verdict"].as_str().unwrap_or("?").to_owned(),
+                r["tier"].as_str().unwrap_or("?").to_owned(),
+                format!("{:?}", tiers_run(r)),
+            )
+        })
+        .collect()
+}
+
+/// Two sessions, each a fresh copy at the same path, one persistent target between them:
+/// the bytes every run executed are exactly each session's own — 42, 43, 42, then 42, 44,
+/// 42 — and never a mutant or a pristine build left by the other. A poisoned target is
+/// rebuilt, a warm target decides exactly what a cold one does, and deleting the target
+/// changes no verdict a resume reuses.
+#[test]
+#[ignore = "drives nested cargo builds; run with --ignored"]
+fn a_fresh_copy_against_a_persistent_target_measures_only_its_own_bytes() {
+    let template = disposable_project();
+    with_integration_test(template.path());
+    let work = tempfile::tempdir().expect("work");
+    let root = work.path().join("copy");
+    let target = work.path().join("persistent-target");
+    let observed = work.path().join("observed");
+    let cats = tempfile::tempdir().expect("catalogues");
+    let to43 = one_mutation(cats.path(), "to-43", "43");
+    let to44 = one_mutation(cats.path(), "to-44", "44");
+
+    fresh_copy(template.path(), &root);
+    let one = session(
+        &root,
+        &to43,
+        &work.path().join("c1"),
+        &target,
+        &observed,
+        &[],
+    );
+    assert_eq!(one.status, Some(0), "{}", one.stdout);
+    assert_clean(&root);
+    fresh_copy(template.path(), &root);
+    let two = session(
+        &root,
+        &to44,
+        &work.path().join("c2"),
+        &target,
+        &observed,
+        &[],
+    );
+    assert_eq!(two.status, Some(0), "{}", two.stdout);
+    assert_clean(&root);
+    let seen: Vec<String> = fs::read_to_string(&observed)
+        .expect("observations")
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        seen,
+        ["42", "43", "42", "42", "44", "42"],
+        "a stale build crossed sessions"
+    );
+
+    // A poisoned target: every fixture artefact overwritten. Where rustc's incremental
+    // cache would reuse the damaged object files — the source it hashed is unchanged — the
+    // pristine build fails and a session whose target is the harness's own cleans it and
+    // builds once more; where Cargo rebuilds them itself, nothing more is needed. Either
+    // way the verdict is the verdict.
+    for dir in [target.join("debug/deps"), target.join("debug")] {
+        for e in fs::read_dir(&dir).expect("target").flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            let fixture =
+                n.starts_with("libfixture") || n.starts_with("fixture-") || n.starts_with("it-");
+            if fixture && e.path().is_file() {
+                fs::write(e.path(), b"poison").expect("poison");
+            }
+        }
+    }
+    let _ = fs::remove_file(&observed);
+    fresh_copy(template.path(), &root);
+    let poisoned = session(
+        &root,
+        &to43,
+        &work.path().join("c3"),
+        &target,
+        &observed,
+        &["--disposable-target"],
+    );
+    // Either route is correct, and which one a platform takes is Cargo's and rustc's:
+    // on macOS rustc's incremental cache reuses the damaged objects and the build fails, so
+    // the harness cleans the target and builds once more; on Linux Cargo rebuilds them by
+    // itself. What must hold on both is the verdict and the bytes each run executed.
+    assert_eq!(poisoned.status, Some(0), "{}", poisoned.stdout);
+    assert!(poisoned.says("caught       to-43"), "{}", poisoned.stdout);
+    assert_eq!(
+        fs::read_to_string(&observed).expect("observations"),
+        "42\n43\n42\n",
+        "a poisoned target decided a verdict"
+    );
+    // Warm and cold decide identically: the same campaign against the warm target, and
+    // against a target that has never been built.
+    assert_eq!(
+        verdicts(&work.path().join("c3")),
+        verdicts(&work.path().join("c1"))
+    );
+    let cold = work.path().join("cold-target");
+    fresh_copy(template.path(), &root);
+    let c = session(&root, &to43, &work.path().join("c4"), &cold, &observed, &[]);
+    assert_eq!(c.status, Some(0), "{}", c.stdout);
+    assert_eq!(
+        verdicts(&work.path().join("c4")),
+        verdicts(&work.path().join("c1"))
+    );
+    // Deleting the cache changes nothing a resume reuses.
+    fs::remove_dir_all(&target).expect("delete the target");
+    fresh_copy(template.path(), &root);
+    let resumed = session(
+        &root,
+        &to43,
+        &work.path().join("c1"),
+        &target,
+        &observed,
+        &["--resume"],
+    );
+    assert!(resumed.says("reused from journal"), "{}", resumed.stdout);
+    assert_eq!(verdicts(&work.path().join("c1")).len(), 1);
+    assert_clean(&root);
+}
+
+/// Case A: a test nobody declared fails on the pristine tree. Tier-1 verdicts need only
+/// their own killers to pass without the mutant, so the session decides and says nothing
+/// about the workspace — whose health is the MILESTONE gate's workspace suite to establish,
+/// and which that suite would refuse.
+#[test]
+#[ignore = "drives nested cargo builds; run with --ignored"]
+fn an_unrelated_failing_test_is_not_the_mutation_baselines_to_judge() {
+    let project = disposable_project();
+    let root = project.path();
+    fs::create_dir_all(root.join("tests")).expect("tests dir");
+    fs::write(
+        root.join("tests/it.rs"),
+        "#[test]\nfn unchecked_is_seven() {\n    assert_eq!(fixture::unchecked(), 7);\n}\n\n\
+         #[test]\nfn unrelated_is_broken() {\n    panic!(\"broken on purpose\");\n}\n",
+    )
+    .expect("integration test");
+    let campaigns = tempfile::tempdir().expect("campaigns");
+    let cat = tiered(
+        root,
+        "direct",
+        "u64 { 42 }",
+        "u64 { 43 }",
+        &[LIB_KILLER],
+        false,
+    );
+    let run = run_campaign(
+        root,
+        &cat,
+        campaigns.path(),
+        &["--strategy", "targeted", "--verify-killers"],
+    );
+    assert_eq!(run.status, Some(0), "{}", run.stdout);
+    assert!(run.says("caught       direct"), "{}", run.stdout);
+    assert!(run.says("1 of 1 verified"), "{}", run.stdout);
+    assert!(!run.says("baseline suite"), "{}", run.stdout);
+    assert!(!run.says("workspace is"), "{}", run.stdout);
+    // The workspace suite itself is red, as the MILESTONE gate's own run would find.
+    let suite = Command::new("cargo")
+        .args(["test", "--quiet"])
+        .current_dir(root)
+        .output()
+        .expect("cargo test");
+    assert!(!suite.status.success());
+    assert_clean(root);
+}
+
+/// Case B: a declared killer that fails without any mutant cannot catch one. The session
+/// refuses before injecting anything.
+#[test]
+#[ignore = "drives nested cargo builds; run with --ignored"]
+fn a_killer_that_fails_on_the_pristine_tree_refuses_the_session() {
+    let project = disposable_project();
+    let root = project.path();
+    fs::create_dir_all(root.join("tests")).expect("tests dir");
+    fs::write(
+        root.join("tests/it.rs"),
+        "#[test]\nfn already_failing() {\n    panic!(\"fails without a mutant\");\n}\n",
+    )
+    .expect("integration test");
+    let campaigns = tempfile::tempdir().expect("campaigns");
+    let cat = tiered(
+        root,
+        "red",
+        "u64 { 42 }",
+        "u64 { 43 }",
+        &[r#"{ package = "fixture", test = "it", name = "already_failing" }"#],
+        false,
+    );
+    let run = run_campaign(
+        root,
+        &cat,
+        campaigns.path(),
+        &["--strategy", "targeted", "--verify-killers"],
+    );
+    assert_eq!(run.status, Some(1), "{}", run.stdout);
+    assert!(
+        run.says("do not pass on the pristine tree"),
+        "{}",
+        run.stdout
+    );
+    assert!(!run.says("caught       red"), "{}", run.stdout);
     assert_clean(root);
 }
