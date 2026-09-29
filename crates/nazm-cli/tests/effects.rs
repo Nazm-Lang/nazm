@@ -93,30 +93,25 @@ fn ir_of(files: &[(&str, &str)]) -> String {
         .collect()
 }
 
-const PLAIN: &str = "fn worker(c: Chan) -> Int { chan_send(c, 7); 0 }\n\
-    fn say(n: Int) -> Int { print(int_to_str(n)) }\n\
-    fn sum(n: Int) -> Int { let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\n\
-    fn run() -> Int { let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(ints_pop(buf) + sum(3)) }\n\
-    fn main() -> Int { run(); 0 }\n";
+// Each signature on a line of its own, so every body is at the same line and column in
+// both: a runtime error message carries its position, and an annotation on the body's line
+// would move it.
+const PLAIN: &str = "fn worker(c: Chan) -> Int\n{ chan_send(c, 7); 0 }\nfn say(n: Int) -> Int\n{ print(int_to_str(n)) }\nfn sum(n: Int) -> Int\n{ let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\nfn run() -> Int\n{ let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(ints_pop(buf) + sum(3)) }\nfn main() -> Int\n{ run(); 0 }\n";
 
-const TYPED: &str = "fn worker(c: Chan) -> Int ! {} { chan_send(c, 7); 0 }\n\
-    fn say(n: Int) -> Int ! { io } { print(int_to_str(n)) }\n\
-    fn sum(n: Int) -> Int ! {} { let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\n\
-    fn run() -> Int ! { spawn, io } { let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(ints_pop(buf) + sum(3)) }\n\
-    fn main() -> Int ! { io, spawn } { run(); 0 }\n";
+const TYPED: &str = "fn worker(c: Chan) -> Int ! {}\n{ chan_send(c, 7); 0 }\nfn say(n: Int) -> Int ! { io }\n{ print(int_to_str(n)) }\nfn sum(n: Int) -> Int ! {}\n{ let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\nfn run() -> Int ! { spawn, io }\n{ let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(ints_pop(buf) + sum(3)) }\nfn main() -> Int ! { io, spawn }\n{ run(); 0 }\n";
 
 #[test]
 fn a_declared_effect_set_leaves_no_trace_in_the_native_program() {
     assert_eq!(ir_of(&[("m.nz", PLAIN)]), ir_of(&[("m.nz", TYPED)]));
     // Across modules too: a contract in an interface is not in the object either.
-    let lib_plain = "pub fn total(n: Int) -> Int { let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\n";
-    let lib_typed =
-        "pub fn total(n: Int) -> Int ! {} { let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\n";
-    let main_plain = "use \"lib.nz\";\nfn main() -> Int { total(4) }\n";
-    let main_typed = "use \"lib.nz\";\nfn main() -> Int ! {} { total(4) }\n";
+    let body = "{ let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }";
+    let lib_plain = format!("pub fn total(n: Int) -> Int\n{body}\n");
+    let lib_typed = format!("pub fn total(n: Int) -> Int ! {{}}\n{body}\n");
+    let main_plain = "use \"lib.nz\";\nfn main() -> Int\n{ total(4) }\n";
+    let main_typed = "use \"lib.nz\";\nfn main() -> Int ! {}\n{ total(4) }\n";
     assert_eq!(
-        ir_of(&[("main.nz", main_plain), ("lib.nz", lib_plain)]),
-        ir_of(&[("main.nz", main_typed), ("lib.nz", lib_typed)])
+        ir_of(&[("main.nz", main_plain), ("lib.nz", &lib_plain)]),
+        ir_of(&[("main.nz", main_typed), ("lib.nz", &lib_typed)])
     );
 }
 
@@ -134,11 +129,6 @@ fn agree(dir: &Path, root: &str) -> String {
         String::from_utf8_lossy(&interpreted.stderr)
     );
     let stdout = String::from_utf8_lossy(&interpreted.stdout).into_owned();
-    // `nazm run` prints the program's output, then `main`'s value on a line of its own.
-    let output = stdout
-        .strip_suffix("0\n")
-        .unwrap_or_else(|| panic!("{root}: {stdout:?}"))
-        .to_owned();
     for level in ["0", "2"] {
         let built = Command::new(NAZM)
             .args([
@@ -160,9 +150,13 @@ fn agree(dir: &Path, root: &str) -> String {
         );
         let (status, native) = run_native(dir);
         assert_eq!(status, Some(0), "{root} at -O{level}");
-        assert_eq!(native, output, "{root} at -O{level}");
+        assert_eq!(native, stdout, "{root} at -O{level}");
     }
-    output
+    // The program's own output, then `main`'s value on a line of its own — from both.
+    stdout
+        .strip_suffix("0\n")
+        .unwrap_or_else(|| panic!("{root}: {stdout:?}"))
+        .to_owned()
 }
 
 #[test]
