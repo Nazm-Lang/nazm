@@ -25,6 +25,7 @@ against them — so these documents are tested rather than described.
 | `nazm.docs-section/1` | `nazm docs --section ID --json`, and the `nazm-mcp` tool `nazm.docs_section` | stdout; the tool result's structured content | one object |
 | `nazm.repository-map/1` | `nazm repo --map --json`, and the `nazm-mcp` tool `nazm.repository_map` | stdout; the tool result's structured content | one object |
 | `nazm.task-context/1` | `nazm repo --task --seed ID --json`, and the `nazm-mcp` tool `nazm.task_context` | stdout; the tool result's structured content | one object |
+| `nazm.token-cost/1` | `nazm-tokens measure` (the text on standard input) and `nazm-tokens list`, a separate tool beside the compiler | stdout | one object |
 
 Every object carries its own `schema` field. Not a header: the output is a stream of
 lines and a consumer may read, log or replay any single one of them, and a version that
