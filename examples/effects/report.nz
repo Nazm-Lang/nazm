@@ -1,0 +1,14 @@
+// Across modules, only a declared set travels: `lib.nz`'s `total` is pure by contract, so
+// `summary` may be pure too without reading its body. Prints 10.
+
+use "lib.nz";
+
+fn summary(n: Int) -> Int ! {} {
+    total(n)
+}
+
+fn main() -> Int ! { io } {
+    print(int_to_str(summary(4)));
+    print(str_from_byte(10));
+    0
+}

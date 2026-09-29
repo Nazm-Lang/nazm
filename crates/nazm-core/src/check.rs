@@ -1641,6 +1641,10 @@ pub fn declare_unit(
             .map(|p| resolve_written(&types, res, &p.ty, &scope, errors))
             .collect();
         let ret = resolve_written(&types, res, &f.return_type, &scope, errors);
+        let declared_effects = f
+            .effects
+            .as_ref()
+            .and_then(|d| crate::effects::declared(d, errors));
 
         // A built-in has no source span to point at, so "first defined here" would aim
         // at byte zero. Said plainly instead. Built-ins are not a module's definitions,
@@ -1694,6 +1698,9 @@ pub fn declare_unit(
             locals: Vec::new(),
             type_params: generics.clone(),
             call_sites: Vec::new(),
+            declared_effects,
+            inferred_effects: None,
+            effect_reasons: Vec::new(),
             mentions: Vec::new(),
         });
         debug_assert_eq!(declared, id);
@@ -1723,6 +1730,7 @@ pub fn declare_unit(
                 name_span: f.name_span,
                 def: id,
                 type_params: generics,
+                effects: declared_effects,
             });
         }
     }
@@ -1916,6 +1924,9 @@ pub fn check_unit(
     for (_, f) in &unit.functions {
         c.check_function(f);
     }
+    // Effects are a fact about the module's resolved calls, so they are settled once every
+    // body has been checked and every call resolved (N36).
+    crate::effects::analyse(&unit.functions, unit.module, deps, c.res, &mut c.errors);
     errors.append(&mut c.errors);
 }
 

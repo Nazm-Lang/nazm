@@ -58,6 +58,7 @@ fn interface_of_b(module: nazm_core::sema::ModuleId) -> UnitInterface {
             name_span: Span::new(FileId::from_index(1), 7, 12),
             def: FnId::from_index(4096),
             type_params: Vec::new(),
+            effects: None,
         }],
         Vec::new(),
         Vec::new(),
