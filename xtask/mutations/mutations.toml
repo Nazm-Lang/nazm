@@ -6899,3 +6899,203 @@ find = """            url.trim_end_matches('/')
                 .to_owned(),"""
 replace = "            fragment.to_owned(),"
 killers = [{ package = "xtask", bin = "xtask", name = "campaign::tests::a_package_id_names_its_package_with_or_without_the_name_fragment" }]
+
+# --- N33: the repository context map and the minimum task context -----------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.35: the seed is always there, a
+# direct dependency is selected, a goal never outranks the specification, a budget's cut is
+# never a complete answer, a stale state is refused, a path is never an id, the map is in
+# canonical order and validated, a test is related only where a mutation lands, a fan-out
+# cut is counted, a section that only links is pointed at and not sent, and a definition is
+# asked for at its name.
+
+[[profile]]
+name = "repo"
+why = "the repository map and the task planner are observed by nazm-repo's own suites, the CLI's repository and schema tests, and the MCP protocol tests of the two repository tools"
+owns = ["crates/nazm-repo/"]
+targets = [
+    { package = "nazm-repo", lib = true },
+    { package = "nazm-repo", test = "repository" },
+    { package = "nazm-repo", test = "benchmark" },
+    { package = "nazm-cli", test = "repository" },
+    { package = "nazm-cli", test = "schemas" },
+    { package = "nazm-mcp", test = "protocol" },
+]
+
+[[mutation]]
+name = "n33-the-seed-is-left-out"
+why = "a context is assembled without its seeds, so the definition a task is about is not in it"
+file = "crates/nazm-repo/src/task.rs"
+find = "    let mut items = mandatory;"
+replace = "    let mut items: Vec<Item> = Vec::new();"
+killers = [{ package = "nazm-repo", test = "repository", name = "an_understand_context_is_the_seed_its_direct_links_and_its_authority" }]
+
+[[mutation]]
+name = "n33-a-direct-dependency-is-dropped"
+why = "the definitions the seed uses are not selected, so its body cannot be understood from the context"
+file = "crates/nazm-repo/src/task.rs"
+find = """            self.linked(id, l.compilation, &k, "direct_dependency", "correctness");"""
+replace = "            let _ = &k;"
+killers = [{ package = "nazm-repo", test = "repository", name = "an_understand_context_is_the_seed_its_direct_links_and_its_authority" }]
+
+[[mutation]]
+name = "n33-goals-outrank-the-specification"
+why = "a goal section is ranked first, so under a budget aspiration displaces the normative rule and the evidence"
+file = "crates/nazm-repo/src/task.rs"
+find = """    ("normative", "authority"),"""
+replace = """    ("goal", "authority"),
+    ("normative", "authority"),"""
+killers = [{ package = "nazm-repo", test = "repository", name = "goals_and_plans_never_outrank_the_specification_or_the_evidence" }]
+
+[[mutation]]
+name = "n33-a-budget-cut-is-complete"
+why = "a context the budget cut says it is complete, so an agent takes a truncated context for the whole one"
+file = "crates/nazm-repo/src/task.rs"
+find = "    let partial = !omitted.is_empty() || !planner.bounded.is_empty();"
+replace = "    let partial = !planner.bounded.is_empty();"
+killers = [{ package = "nazm-repo", test = "repository", name = "a_budget_is_filled_in_priority_order_and_what_it_cuts_is_named" }]
+
+[[mutation]]
+name = "n33-a-lower-priority-item-jumps-the-cut"
+why = "an item after one the budget cut is still taken when it fits, so a plan outranks the evidence it displaced"
+file = "crates/nazm-repo/src/task.rs"
+find = """        if let Some(_dim) = stopped {
+            omitted.push(omission(&c.item, "priority"));
+            continue;
+        }"""
+replace = "        let _ = stopped;"
+killers = [{ package = "nazm-repo", test = "repository", name = "a_budget_is_filled_in_priority_order_and_what_it_cuts_is_named" }]
+
+[[mutation]]
+name = "n33-the-seed-is-cut-by-the-budget"
+why = "a budget the seeds do not fit is not refused, so a context without its own seed is returned"
+file = "crates/nazm-repo/src/task.rs"
+find = "    if exceeds(&need, &request.budget).is_some() {"
+replace = "    if exceeds(&need, &request.budget).is_some() && false {"
+killers = [{ package = "nazm-repo", test = "repository", name = "a_budget_is_filled_in_priority_order_and_what_it_cuts_is_named" }]
+
+[[mutation]]
+name = "n33-a-stale-state-is-answered"
+why = "a request bound to another repository state is answered from the current one, mixing old ids with new sources"
+file = "crates/nazm-repo/src/task.rs"
+find = "    if request.state.as_ref().is_some_and(|s| *s != repo.state) {"
+replace = "    if request.state.as_ref().is_some_and(|s| s.is_empty()) {"
+killers = [{ package = "nazm-repo", test = "repository", name = "the_state_moves_with_every_input_and_a_stale_one_is_refused" }]
+
+[[mutation]]
+name = "n33-the-state-skips-the-text"
+why = "an input's bytes are not digested, so an edited source, document or manifest keeps the old state"
+file = "crates/nazm-repo/src/repository.rs"
+find = """                self.part(b"+");
+                self.part(text.as_bytes());"""
+replace = """                self.part(b"+");"""
+killers = [{ package = "nazm-repo", test = "repository", name = "the_state_moves_with_every_input_and_a_stale_one_is_refused" }]
+
+[[mutation]]
+name = "n33-a-path-is-an-id"
+why = "a seed part that climbs out of its source root is accepted as a module name"
+file = "crates/nazm-repo/src/task.rs"
+find = """        && !part.contains('/')
+        && !part.contains('\\\\')"""
+replace = ""
+killers = [
+    { package = "nazm-repo", test = "repository", name = "a_seed_is_an_id_and_never_a_path" },
+    { package = "nazm-repo", lib = true, name = "task::tests::a_path_is_never_a_seed" },
+]
+
+[[mutation]]
+name = "n33-the-map-is-not-canonical"
+why = "entities are published in the order they were read, not by kind and id"
+file = "crates/nazm-repo/src/map.rs"
+find = "    canonical(&mut entities);"
+replace = ""
+killers = [{ package = "nazm-repo", test = "repository", name = "every_entity_has_its_authoritys_identity_and_nothing_else_is_an_entity" }]
+
+[[mutation]]
+name = "n33-a-broken-relationship-is-published"
+why = "the validator accepts a relationship to an entity the map does not have"
+file = "crates/nazm-repo/src/map.rs"
+find = """            let found = ids.contains(r.target.as_str())
+                || (r.kind == "documented_by" && section(&r.target));"""
+replace = "            let found = true;"
+killers = [{ package = "nazm-repo", test = "repository", name = "the_validator_refuses_every_broken_map" }]
+
+[[mutation]]
+name = "n33-a-killer-of-another-definition-is-related"
+why = "a test is related to a definition because a mutation of its file names it, wherever in the file that mutation lands"
+file = "crates/nazm-repo/src/task.rs"
+find = """                    m.file == path
+                        && source.is_some_and(|t| {
+                            located(t, &m.find).is_some_and(|(a, b)| a >= start && b <= end)
+                        })"""
+replace = """                    m.file == path && source.is_some() && start <= end"""
+killers = [{ package = "nazm-repo", test = "repository", name = "an_edit_context_adds_what_uses_it_in_every_compilation_and_its_catalogue_tests" }]
+
+[[mutation]]
+name = "n33-a-fan-out-cut-is-silent"
+why = "a relationship cut at its bound is not counted, so sixteen callers of twenty read as all of them"
+file = "crates/nazm-repo/src/task.rs"
+find = """        if known > FAN_OUT {
+            self.bounded.push(Bound {"""
+replace = """        if known > usize::MAX {
+            self.bounded.push(Bound {"""
+killers = [{ package = "nazm-repo", test = "repository", name = "a_cycle_is_one_visit_and_a_wide_relationship_is_cut_and_counted" }]
+
+[[mutation]]
+name = "n33-a-linking-section-is-sent-whole"
+why = "a section that only links to the seed is sent with its text, so an edit's context carries documents it only points at"
+file = "crates/nazm-repo/src/task.rs"
+find = """self.section(&t, "linking_section", Some(id), false)"""
+replace = """self.section(&t, "linking_section", Some(id), true)"""
+killers = [{ package = "nazm-repo", test = "repository", name = "documentation_is_the_selected_section_never_the_whole_document" }]
+
+[[mutation]]
+name = "n33-callers-come-from-one-compilation"
+why = "what uses a definition is read from the first compilation that loads it, so a caller in another root is missed"
+file = "crates/nazm-repo/src/task.rs"
+find = """        let function = l.definition.kind == "function";
+        for r in source.roots {"""
+replace = """        let function = l.definition.kind == "function";
+        for r in source.roots.iter().take(1) {"""
+killers = [{ package = "nazm-repo", test = "repository", name = "an_edit_context_adds_what_uses_it_in_every_compilation_and_its_catalogue_tests" }]
+
+[[mutation]]
+name = "n33-a-compilation-outside-its-root-is-answered"
+why = "a compilation that loads a file outside its source root, which the repository state does not cover, is mapped"
+file = "crates/nazm-repo/src/sources.rs"
+find = """                .filter(|k| !k.contains('/') && !k.contains('\\\\'))
+                .filter(|k| repo.sources.contains_key(&(source.id, k.clone())))"""
+replace = ""
+killers = [{ package = "nazm-repo", test = "repository", name = "a_broken_repository_is_unavailable_never_partially_mapped" }]
+
+[[mutation]]
+name = "n33-a-cargo-target-is-found-twice"
+why = "an auto-discovered target an explicit one already names is added again, so the workspace has a target Cargo does not"
+file = "crates/nazm-repo/src/cargo.rs"
+find = """                .any(|e| e.name == f.name || e.path == f.path)"""
+replace = """                .any(|e| e.name == f.name && e.path == f.path)"""
+killers = [
+    { package = "nazm-repo", test = "repository", name = "every_entity_has_its_authoritys_identity_and_nothing_else_is_an_entity" },
+    { package = "nazm-repo", test = "repository", name = "the_workspace_is_what_cargo_metadata_says" },
+]
+
+[[mutation]]
+name = "n33-a-definition-is-asked-at-its-declaration"
+why = "a durable definition's name range is its declaration's start, so its context packet is asked for at `fn` and is not found"
+file = "crates/nazm-service/src/durable.rs"
+find = """                    name_start,
+                    name_end,
+                }),"""
+replace = """                    name_start: d.declaration.start,
+                    name_end,
+                }),"""
+killers = [{ package = "nazm-repo", test = "repository", name = "an_understand_context_is_the_seed_its_direct_links_and_its_authority" }]
+
+[[mutation]]
+name = "n33-the-mcp-task-takes-any-argument"
+why = "the task context tool accepts arguments it does not define, so a path or a root is silently ignored rather than refused"
+file = "crates/nazm-mcp/src/main.rs"
+find = """#[serde(deny_unknown_fields)]
+struct TaskRequest {"""
+replace = """struct TaskRequest {"""
+killers = [{ package = "nazm-mcp", test = "protocol", name = "the_repository_crosses_the_protocol_unchanged_by_id_and_never_by_path" }]
