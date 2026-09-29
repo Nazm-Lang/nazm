@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nazm.context-1.json",
-  "title": "nazm.context/1",
-  "description": "One source definition's semantic context, from `nazm context --json` and the `nazm-mcp` tool `semantic_context`: its exact source and compact links to what the compiler knows it is connected to, in the compilation of one root. `status` is `available` with every section, or `unavailable` with a `reason` and no other section. Paths are relative to the compilation's source root; byte offsets are into the named file. Nothing session-local is included, so the same sources and query give the same bytes.",
+  "$id": "nazm.context-2.json",
+  "title": "nazm.context/2",
+  "description": "One source definition's semantic context, from `nazm context --json` and the `nazm-mcp` tool `semantic_context`: its exact source and compact links to what the compiler knows it is connected to, in the compilation of one root. `status` is `available` with every section, or `unavailable` with a `reason` and no other section. Paths are relative to the compilation's source root; byte offsets are into the named file. Nothing session-local is included, so the same sources and query give the same bytes. `/2` (N36): a function's `effects` are the compiler's, where `/1` reported them unsupported.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "status"],
   "properties": {
-    "schema": { "const": "nazm.context/1" },
+    "schema": { "const": "nazm.context/2" },
     "status": { "enum": ["available", "unavailable"] },
     "reason": {
       "enum": ["not_current", "not_in_compilation", "out_of_range", "not_a_name", "not_a_target", "incomplete_compilation"],
@@ -36,6 +36,10 @@
       "type": "array",
       "items": { "$ref": "#/$defs/diagnostic" },
       "description": "The compiler's diagnostics whose primary span is inside the declaration."
+    },
+    "effects": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/effects" }],
+      "description": "A function's effects, from the effect checker (N36); null for a record or an enum, and for a function whose body this compilation did not check."
     },
     "availability": { "$ref": "#/$defs/availability" }
   },
@@ -156,13 +160,43 @@
         "fixes": { "type": "integer", "minimum": 0, "description": "How many fixes the compiler attached." }
       }
     },
+    "effect_names": {
+      "type": "array",
+      "items": { "enum": ["io", "spawn"] },
+      "description": "A set of effects, each once, in effect-id order: `io`, then `spawn`."
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["declared", "required", "published", "reasons"],
+      "properties": {
+        "declared": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/effect_names" }], "description": "Its written `! { … }`; null where it declares none. `[]` is `! {}`: pure." },
+        "required": { "$ref": "#/$defs/effect_names", "description": "What its body requires: the least fixed point over the compilation's resolved calls." },
+        "published": { "$ref": "#/$defs/effect_names", "description": "What a caller in another module must assume: the declared set, or every effect where none is declared." },
+        "reasons": {
+          "type": "array",
+          "description": "One per required effect, in effect-id order: the first call or `spawn` in the body that requires it.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["effect", "at", "source", "builtin", "callee"],
+            "properties": {
+              "effect": { "enum": ["io", "spawn"] },
+              "at": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/span" }] },
+              "source": { "enum": ["builtin", "spawn", "inferred", "declared", "undeclared"], "description": "A built-in that exercises it; a `spawn`; a function of this module whose inferred set has it; a function whose declared set has it; or a function of another module that declares no set." },
+              "builtin": { "type": ["string", "null"], "description": "The built-in's name, for `builtin`: compiler-owned, with no source." },
+              "callee": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/identity" }] }
+            }
+          }
+        }
+      }
+    },
     "availability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["effects", "capabilities", "tests", "semantic_changes", "semantic_delta"],
+      "required": ["capabilities", "tests", "semantic_changes", "semantic_delta"],
       "description": "Sections the compiler has no facts for. `unsupported` means not known — never that none exist.",
       "properties": {
-        "effects": { "const": "unsupported" },
         "capabilities": { "const": "unsupported" },
         "tests": { "const": "unsupported" },
         "semantic_changes": { "const": "unsupported" },

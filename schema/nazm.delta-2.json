@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nazm.delta-1.json",
-  "title": "nazm.delta/1",
-  "description": "What changed between a baseline `nazm.snapshot/1` and the current compilation of the same root, from `nazm delta --json` and the `nazm-mcp` tool `nazm.semantic_delta`. Definitions are matched by durable key only: a rename is a removal and an addition. A changed definition names exactly which recorded sections changed; `source` alone is a change in text the other recorded sections do not see. Nothing here claims behaviour is unchanged: `unsupported` lists what is not recorded. `status` is `available` with every section, or `unavailable` with a `reason` and no other section.",
+  "$id": "nazm.delta-2.json",
+  "title": "nazm.delta/2",
+  "description": "What changed between a baseline `nazm.snapshot/2` and the current compilation of the same root, from `nazm delta --json` and the `nazm-mcp` tool `nazm.semantic_delta`. Definitions are matched by durable key only: a rename is a removal and an addition. A changed definition names exactly which recorded sections changed; `source` alone is a change in text the other recorded sections do not see. Nothing here claims behaviour is unchanged: `unsupported` lists what is not recorded. `status` is `available` with every section, or `unavailable` with a `reason` and no other section.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "status"],
   "properties": {
-    "schema": { "const": "nazm.delta/1" },
+    "schema": { "const": "nazm.delta/2" },
     "status": { "enum": ["available", "unavailable"] },
     "reason": {
       "enum": [
@@ -23,7 +23,7 @@
         "baseline_wrong_root",
         "baseline_wrong_compiler"
       ],
-      "description": "Why there is no delta: the current compilation has no snapshot, or the baseline is not exactly a `nazm.snapshot/1` of this root by this compiler. A baseline is refused, never compared as well as it can be. Present only when `status` is `unavailable`."
+      "description": "Why there is no delta: the current compilation has no snapshot, or the baseline is not exactly a `nazm.snapshot/2` of this root by this compiler. A baseline is refused, never compared as well as it can be. Present only when `status` is `unavailable`."
     },
     "root": { "$ref": "#/$defs/root" },
     "baseline": { "$ref": "#/$defs/counts" },
@@ -45,7 +45,7 @@
     },
     "unchanged": { "type": "integer", "minimum": 0, "description": "In both, with every recorded section's digest equal." },
     "unsupported": {
-      "const": ["effects", "capabilities", "tests", "semantic_history", "behavioural_equivalence"],
+      "const": ["capabilities", "tests", "semantic_history", "behavioural_equivalence"],
       "description": "Not recorded, so never reported as changed or unchanged."
     }
   },
@@ -99,8 +99,8 @@
         "sections": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["source", "shape", "dependencies", "related_types", "references", "callers", "callees", "diagnostics"],
-          "description": "Whether each recorded section's digest differs. `callers` and `callees` are null for a record or an enum: not applicable.",
+          "required": ["source", "shape", "dependencies", "related_types", "references", "callers", "callees", "diagnostics", "effects"],
+          "description": "Whether each recorded section's digest differs. `callers`, `callees` and `effects` are null for a record or an enum: not applicable.",
           "properties": {
             "source": { "type": "boolean" },
             "shape": { "type": "boolean" },
@@ -109,6 +109,7 @@
             "references": { "type": "boolean" },
             "callers": { "type": ["boolean", "null"] },
             "callees": { "type": ["boolean", "null"] },
+            "effects": { "type": ["boolean", "null"], "description": "Whether a function's declared or required effects differ (N36)." },
             "diagnostics": { "type": "boolean" }
           }
         }

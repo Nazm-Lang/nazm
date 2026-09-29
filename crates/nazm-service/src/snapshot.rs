@@ -1,6 +1,6 @@
 //! Semantic snapshots: one root compilation as a compact manifest of its durable
-//! definitions, each with a digest per semantic section Nazm records. `nazm.snapshot/1`.
-//! N28.
+//! definitions, each with a digest per semantic section Nazm records. `nazm.snapshot/2`
+//! (N28; the `effects` section since N36).
 //!
 //! # The contract
 //!
@@ -9,8 +9,10 @@
 //! what a program does. Two snapshots whose digests are equal agree on the canonical bytes
 //! those digests were taken over, and on nothing else: `fn answer() -> Int { 1 }` and
 //! `… { 2 }` have the same shape, dependencies, references, callers and callees, and differ
-//! only in `source`. Behavioural equivalence, effects, capabilities, tests and history are
-//! not recorded, and a snapshot lists them as **unsupported** — never as unchanged.
+//! only in `source`. Behavioural equivalence, capabilities, tests and history are not
+//! recorded, and a snapshot lists them as **unsupported** — never as unchanged. `/1` listed
+//! effects there too; N36 records them, which changes what a `/1` reader was told it could
+//! never learn, so the snapshot that does is `/2`.
 //!
 //! # Which definitions
 //!
@@ -36,6 +38,7 @@
 //! | `references` | every use of it (N17), by the identity of the definition the use is in, with how many |
 //! | `callers`, `callees` | a function's direct checked calls in and out (N25's edge rule), by the identity of the function at the other end, with how many; absent for a record or an enum |
 //! | `diagnostics` | code, severity, fix count and range relative to the declaration of every diagnostic whose primary span is inside it — never its message |
+//! | `effects` | a function's declared effect set, or that it declares none, and the set its body requires (N36), by name in effect-id order; absent for a record or an enum |
 //!
 //! Identities, never byte offsets, are what relationship digests are taken over, so a line
 //! added above a definition changes no digest of anything below it: the declaration's own
@@ -62,11 +65,10 @@ use crate::service::{FileKey, LanguageService, Snapshot};
 use crate::symbols::{declared_in, SymbolKind};
 
 /// The schema every snapshot declares.
-pub const SCHEMA: &str = "nazm.snapshot/1";
+pub const SCHEMA: &str = "nazm.snapshot/2";
 
 /// What a snapshot and a delta cannot know, and say so rather than report as unchanged.
-pub const UNSUPPORTED: [&str; 5] = [
-    "effects",
+pub const UNSUPPORTED: [&str; 4] = [
     "capabilities",
     "tests",
     "semantic_history",
@@ -77,7 +79,7 @@ pub const UNSUPPORTED: [&str; 5] = [
 /// build is not comparable, since what a renderer writes may differ.
 pub(crate) const COMPILER: &str = concat!("nazm ", env!("CARGO_PKG_VERSION"));
 
-/// A snapshot, or why there is none, exactly as `nazm.snapshot/1` serialises it.
+/// A snapshot, or why there is none, exactly as `nazm.snapshot/2` serialises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum SnapshotResult {
@@ -96,7 +98,7 @@ pub struct SemanticSnapshot {
     pub definitions: Vec<SnapshotDefinition>,
     /// Definitions of the compilation with no durable identity, left out.
     pub untracked: usize,
-    pub unsupported: [&'static str; 5],
+    pub unsupported: [&'static str; 4],
 }
 
 /// Which compilation a snapshot is of: its root module's durable key, and the compiler.
@@ -131,9 +133,11 @@ pub struct Digests {
     pub callers: Option<String>,
     pub callees: Option<String>,
     pub diagnostics: String,
+    /// A function's effects (N36); `None` for a record or an enum.
+    pub effects: Option<String>,
 }
 
-/// Why there is no snapshot, as `nazm.snapshot/1` serialises it.
+/// Why there is no snapshot, as `nazm.snapshot/2` serialises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NoSnapshotResult {
     pub schema: &'static str,
@@ -433,6 +437,7 @@ impl Manifest {
                 callers: function.then(|| counts("callers", &d.callers)),
                 callees: function.then(|| counts("callees", &d.callees)),
                 diagnostics: diagnostics_digest(&d.diagnostics),
+                effects: function.then(|| effects_digest(res, &d)),
             };
             by_identity
                 .entry(identity.clone())
@@ -474,6 +479,38 @@ fn entity_key(s: &Snapshot, paths: &Paths, t: ReferenceTarget) -> EntityKey {
         None
     };
     (rank, identity, file)
+}
+
+/// A function's declared set — or that it declares none — and what its body requires.
+fn effects_digest(res: &nazm_core::Resolution, d: &Decl) -> String {
+    let mut h = Digest::new("effects");
+    let f = match d.entity {
+        ReferenceTarget::Function(id) => res.function(id),
+        _ => None,
+    };
+    match f.and_then(|f| f.declared_effects) {
+        Some(set) => {
+            h.field("declared").number(set.names().len());
+            for n in set.names() {
+                h.field(n);
+            }
+        }
+        None => {
+            h.field("undeclared");
+        }
+    }
+    match f.and_then(|f| f.inferred_effects) {
+        Some(set) => {
+            h.field("required").number(set.names().len());
+            for n in set.names() {
+                h.field(n);
+            }
+        }
+        None => {
+            h.field("unchecked");
+        }
+    }
+    h.hex()
 }
 
 fn shape_digest(res: &nazm_core::Resolution, d: &Decl) -> String {
