@@ -296,6 +296,7 @@ business raising the floor for the crates that ship.
 | `nazm delta --root FILE --baseline FILE` | What changed since a kept snapshot, `nazm.delta/1`: definitions added, removed, and changed, naming which recorded sections changed — a comment or a literal is `source` alone, a rename is a removal and an addition. A baseline of another root or compiler, or not exactly `nazm.snapshot/1`, is refused. `--json` prints the canonical compact form |
 | `nazm diagnostics --root FILE` | The root's current diagnostics compactly, `nazm.diagnostic-index/1`: each one's id, code, severity, file and byte range, owning definition and fix counts — no message or help text. `--detail ID --state DIGEST` prints one of them in full, `nazm.diagnostic-detail/1`: the diagnostic exactly as `nazm.diagnostic/1` has it, its places in their files, and each fix's `nazm patch fix` selector where one exists. `nazm check --json` is unchanged |
 | `nazm docs --index` | Nazm's own documentation as stable sections, `nazm.docs-index/1`: every document with its authority — normative spec, grammar, architecture, evidence, planning, goal, and the rest — and every section's id, title, parent and digest, no body. `--section ID` prints that section's own canonical text byte for byte (`nazm.docs-section/1` with `--json`); `--state` refuses it if the documentation changed since the index. Ids are exact; there is no search. Reads the repository's `docs/`, not a project's |
+| `nazm repo --map` | The repository's context map, `nazm.repository-map/1`: every package and target, source root, compilation root, module and durable definition, document, schema and mutation profile, with its authority, its structural relationships and where to retrieve more — no body. `--task --seed ID [--intent understand\|edit\|diagnose\|test]` prints the minimum context for a task, `nazm.task-context/1`: each item with why it is there, the seed's exact source and the selected sections' exact text, within `--max-entities`/`--max-source-bytes`/`--max-doc-bytes`; a cut makes it `partial`, and `--state` refuses a repository that changed since the map. Seeds are ids, never paths |
 | `nazm patch rename --root FILE --file FILE --byte N --new-name NAME` | A planned rename, `nazm.patch/1`: the compiler's validated rename of the local or private definition at that byte — never an exported one — as minimal exact-byte edits bound to the root's snapshot, each file's digest and each edit's expected bytes. Plans; never applies. `--json` prints the canonical compact form |
 | `nazm patch fix --root FILE --file FILE --byte N --fix I` | A planned fix, `nazm.patch/1`: fix `I` of those the current diagnostics at that byte carry, with its applicability and precondition, bound the same way. Plans; never applies |
 | `nazm lsp` | Serve the Language Server Protocol to an editor over stdin and stdout: diagnostics, definition, hover, references, safe rename of locals and private definitions, completion of values, call heads and types (invoked on an identifier), completion of a field after `.`, a variant after `E.` and a construction's or pattern's label — also with nothing written yet, right after the `.` or `(`, where the compiler can tell what it belongs to, and triggered by `.`, signature help for calls of functions and built-ins and for record and variant constructions, document symbols (one file's declarations, nested, in source order) workspace symbols (the declarations of every file the open documents' programs load — not a directory scan) full-document semantic tokens (every identifier the checker resolved, by kind and whether it declares; not keywords, comments or literals) quick fixes (the fixes the compiler attaches to current diagnostics, as versioned edits the editor applies) and call hierarchy (a function's direct callers and callees, from the calls the checker recorded in the program the request came from — not every caller in a project), over unsaved buffers, from the same loader and checker as every other command. Nothing else is offered |
@@ -314,7 +315,7 @@ result out, and report what is left as JSON.
 
 ### An MCP server, read-only
 
-`nazm-mcp` (a separate binary: `cargo build --release -p nazm-mcp`) serves nine Model Context
+`nazm-mcp` (a separate binary: `cargo build --release -p nazm-mcp`) serves eleven Model Context
 Protocol tools over stdio, each answering from the compilation of the root it was started with,
 read from disk at every call: `nazm.semantic_context`, the same `nazm.context/1` packet as
 `nazm context` for a file and byte offset; `nazm.semantic_snapshot`, the same `nazm.snapshot/1` as
@@ -324,8 +325,10 @@ and passes back as data — the server keeps none; and `nazm.semantic_patch`, th
 and `nazm.diagnostic_detail`, the same index and detail as `nazm diagnostics`; and
 `nazm.command_summary`, the `nazm check --summary-json` of its root (it neither builds nor runs
 tests); and `nazm.docs_index` and `nazm.docs_section`, Nazm's own documentation by section, as
-`nazm docs` gives it — by id, never by path. It writes nothing and reads no file that
-compilation does not load, beyond that fixed documentation corpus. An MCP client starts it as a stdio command:
+`nazm docs` gives it — by id, never by path; and `nazm.repository_map` and `nazm.task_context`,
+the repository's entities and the minimum context for a task, as `nazm repo` gives them — seeds
+are ids, never paths. It writes nothing and reads no file that compilation does not load, beyond
+the fixed documentation corpus and the repository's fixed inputs. An MCP client starts it as a stdio command:
 
 ```json
 { "command": "nazm-mcp", "args": ["--root", "/absolute/path/to/root.nz"] }
