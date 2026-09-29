@@ -52,6 +52,10 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // of the compiler: answering a documentation query must not need a parse, a check
         // or a backend.
         "nazm-docs" => &[],
+        // The repository map and the task planner, N33: an index over the authorities that
+        // exist. It reads the compiler's facts through the service, and the documentation
+        // through `nazm-docs` — never a parser, a checker or a reader of its own.
+        "nazm-repo" => &["nazm-core", "nazm-service", "nazm-docs"],
         // The CLI deliberately does NOT depend on nazm-syntax: it goes through nazm-core,
         // so there is one entry point into the front end rather than two that can drift.
         "nazm-cli" => &[
@@ -63,11 +67,12 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
             "nazm-cache",
             "nazm-service",
             "nazm-docs",
+            "nazm-repo",
         ],
 
         // A read-only Model Context Protocol server, N27. It serialises what the language
         // service answers and nothing else: no parser, no checker of its own, no cache.
-        "nazm-mcp" => &["nazm-core", "nazm-service", "nazm-docs"],
+        "nazm-mcp" => &["nazm-core", "nazm-service", "nazm-docs", "nazm-repo"],
         // The measurement instrument answers to nothing. It must stay usable — and
         // auditable — with no compiler present, because it has to run against arms A1 and
         // A2 before Nazm exists, and its results have to be defensible independently of it.
@@ -119,6 +124,8 @@ pub(crate) fn emission_allowlist() -> &'static [(&'static str, &'static [&'stati
         ("crates/nazm-lir", &["emits LLVM IR"]),
         // The language service answers questions; it never emits or runs anything.
         ("crates/nazm-service", &[]),
+        // Nor does the repository planner, which only composes the service's answers.
+        ("crates/nazm-repo", &[]),
         (
             "crates/nazm-cli",
             &["emits LLVM IR", "invokes the native toolchain"],

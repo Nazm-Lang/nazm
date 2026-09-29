@@ -32,6 +32,7 @@ members = [
     "crates/nazm-lir",
     "crates/nazm-service",
     "crates/nazm-docs",
+    "crates/nazm-repo",
     "crates/nazm-cli",
     "crates/nazm-mcp",
     "crates/nazm-bench",
@@ -80,6 +81,7 @@ nazm-core = { path = "crates/nazm-core" }
 nazm-lir = { path = "crates/nazm-lir" }
 nazm-service = { path = "crates/nazm-service" }
 nazm-docs = { path = "crates/nazm-docs" }
+nazm-repo = { path = "crates/nazm-repo" }
 nazm-bench = { path = "crates/nazm-bench" }
 
 # --- cli / config ---

@@ -45,6 +45,7 @@ mod fmt;
 mod interface;
 mod lsp;
 mod patch;
+mod repo;
 mod snapshot;
 mod summary;
 // Moved to `nazm-service` in N16, so `nazm lsp` loads exactly as every command does.
@@ -350,6 +351,51 @@ enum Command {
         #[arg(long)]
         root: Option<PathBuf>,
     },
+    /// Print the repository context map, `nazm.repository-map/1`, or the minimum context
+    /// for a task, `nazm.task-context/1`.
+    ///
+    /// `--map`: every package, target, source root, compilation root, module, durable
+    /// definition, document, schema and mutation profile, with its authority, its structural
+    /// relationships and where to retrieve more — never a body. `--task`: for the seeds (map
+    /// ids) and the intent, the smallest context the repository can justify — each item with
+    /// its reason, authority and retrieval, the seed's exact source and the selected
+    /// sections' exact text — within a structural budget; a budget the seeds do not fit is
+    /// refused, and anything else it cuts is listed and makes the answer `partial`. `--state`
+    /// refuses a repository that has changed since. Ids only; no path is read.
+    /// `docs/architecture.md` §7.35.
+    #[command(group(clap::ArgGroup::new("repo_ask").required(true).args(["map", "task"])))]
+    Repo {
+        /// Print the map.
+        #[arg(long)]
+        map: bool,
+        /// Print the context for a task.
+        #[arg(long)]
+        task: bool,
+        /// `understand`, `edit`, `diagnose` or `test`. Without it, `edit`, the widest.
+        #[arg(long, conflicts_with = "map", value_parser = ["understand", "edit", "diagnose", "test"])]
+        intent: Option<String>,
+        /// A repository entity id, from a map or an earlier context. Repeatable.
+        #[arg(long, conflicts_with = "map")]
+        seed: Vec<String>,
+        /// A map's `state`: refuse the task if the repository has changed since.
+        #[arg(long, conflicts_with = "map")]
+        state: Option<String>,
+        /// At most this many items.
+        #[arg(long, conflicts_with = "map")]
+        max_entities: Option<usize>,
+        /// At most this many bytes of definition source.
+        #[arg(long, conflicts_with = "map")]
+        max_source_bytes: Option<usize>,
+        /// At most this many bytes of section text.
+        #[arg(long, conflicts_with = "map")]
+        max_doc_bytes: Option<usize>,
+        /// The one canonical compact serialisation. Without it, the same object indented.
+        #[arg(long)]
+        json: bool,
+        /// The repository. Without it, the one this binary was built from.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
     /// Print a semantic patch plan, `nazm.patch/1`. Plans; never applies.
     ///
     /// A validated rename (`rename`) or a compiler-owned fix (`fix`), as minimal exact-byte
@@ -634,6 +680,36 @@ fn main() -> ExitCode {
                 (false, None) => unreachable!("clap requires one"),
             };
         }
+        Command::Repo {
+            map,
+            task: _,
+            intent,
+            seed,
+            state,
+            max_entities,
+            max_source_bytes,
+            max_doc_bytes,
+            json,
+            root,
+        } => {
+            let root = root.unwrap_or_else(nazm_docs::default_root);
+            if map {
+                return repo::map(&root, json);
+            }
+            // Clap has already refused any other word.
+            let intent = intent.as_deref().and_then(nazm_repo::Intent::parse);
+            let request = nazm_repo::TaskRequest {
+                intent,
+                seeds: seed,
+                state,
+                budget: nazm_repo::Budget {
+                    max_entities,
+                    max_source_bytes,
+                    max_doc_bytes,
+                },
+            };
+            return repo::task(&root, &request, json);
+        }
         Command::Test {
             paths,
             json,
@@ -671,6 +747,7 @@ fn main() -> ExitCode {
         | Command::Patch { .. }
         | Command::Diagnostics { .. }
         | Command::Docs { .. }
+        | Command::Repo { .. }
         | Command::Fmt { .. }
         | Command::Test { .. }
         | Command::Interface { .. }

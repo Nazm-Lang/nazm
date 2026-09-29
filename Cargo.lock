@@ -680,6 +680,7 @@ dependencies = [
  "nazm-docs",
  "nazm-iface",
  "nazm-lir",
+ "nazm-repo",
  "nazm-service",
  "nazm-span",
  "serde",
@@ -743,12 +744,27 @@ version = "0.0.1"
 dependencies = [
  "nazm-core",
  "nazm-docs",
+ "nazm-repo",
  "nazm-service",
  "rmcp",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "nazm-repo"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "nazm-core",
+ "nazm-docs",
+ "nazm-service",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]

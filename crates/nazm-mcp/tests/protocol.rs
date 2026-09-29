@@ -33,6 +33,8 @@ const DETAIL: &str = "nazm.diagnostic_detail";
 const SUMMARY: &str = "nazm.command_summary";
 const DOCS_INDEX: &str = "nazm.docs_index";
 const DOCS_SECTION: &str = "nazm.docs_section";
+const REPOSITORY_MAP: &str = "nazm.repository_map";
+const TASK_CONTEXT: &str = "nazm.task_context";
 
 const LIB: &str = "pub fn far() -> Int { 1 }\n";
 const MAIN: &str = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nenum S {\n    A,\n    B(v: Int),\n}\nfn f(p: P) -> Int { far() + p.x }\nfn g() -> Int { f(P(x: 1)) }\n";
@@ -155,7 +157,9 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
                 DETAIL,
                 SUMMARY,
                 DOCS_INDEX,
-                DOCS_SECTION
+                DOCS_SECTION,
+                REPOSITORY_MAP,
+                TASK_CONTEXT
             ]
         );
         for (tool, schema) in tools.iter().zip([
@@ -168,6 +172,8 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
             "nazm.command-summary-1.json",
             "nazm.docs-index-1.json",
             "nazm.docs-section-1.json",
+            "nazm.repository-map-1.json",
+            "nazm.task-context-1.json",
         ]) {
             let annotations = tool.annotations.as_ref().unwrap();
             assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
@@ -256,6 +262,41 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
             for word in ["\"path\"", "\"file\"", "\"root\"", "\"query\""] {
                 assert!(!text.contains(word), "{word}: {text}");
             }
+        }
+        // The repository map takes nothing; a task takes seeds and a state, and optionally an
+        // intent and a budget — never a path, a file or a root.
+        let map = Value::Object((*tools[9].input_schema).clone());
+        assert!(
+            map["properties"]
+                .as_object()
+                .is_none_or(serde_json::Map::is_empty),
+            "{map}"
+        );
+        assert_eq!(map["additionalProperties"], false);
+        let task = Value::Object((*tools[10].input_schema).clone());
+        let mut required: Vec<&str> = task["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        required.sort_unstable();
+        assert_eq!(required, ["seeds", "state"]);
+        let mut keys: Vec<&String> = task["properties"].as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "intent",
+                "max_doc_bytes",
+                "max_entities",
+                "max_source_bytes",
+                "seeds",
+                "state"
+            ]
+        );
+        for word in ["\"path\"", "\"file\"", "\"root\"", "\"query\""] {
+            assert!(!task.to_string().contains(word), "{word}");
         }
         let tool = &tools[0];
         let input = Value::Object((*tool.input_schema).clone());
@@ -1416,6 +1457,314 @@ fn a_thousand_documentation_calls_are_each_of_the_disk_and_keep_nothing() {
         let after = rss_kb(pid);
         assert!(after <= settled + 1024, "{settled} kB -> {after} kB");
         eprintln!("nazm-mcp RSS: settled {settled} kB, after 1,001 documentation calls {after} kB");
+        client.cancel().await.unwrap();
+    });
+}
+
+/// The smallest repository the manifest accepts: the tiny corpus, one small compilation for
+/// every root the manifest names, and a catalogue with one profile.
+fn tiny_repository() -> tempfile::TempDir {
+    let dir = tiny_corpus();
+    // The sections the manifest's source roots name.
+    std::fs::write(
+        dir.path().join("docs/bootstrap.md"),
+        "# bootstrap\n\n## 2. What the chain does\n\nstages\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("docs/guide.md"),
+        format!(
+            "# guide\n\n## A whole program\n\nexample\n\n{}\n### `a`\n\n{}\n",
+            nazm_docs::GUIDE_BEGIN,
+            nazm_docs::GUIDE_END
+        ),
+    )
+    .unwrap();
+    for s in nazm_repo::SOURCES {
+        for r in s.roots {
+            let p = dir.path().join(s.dir).join(r);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(
+                p,
+                "fn helper() -> Int { 1 }\n\nfn main() -> Int { helper() }\n",
+            )
+            .unwrap();
+        }
+    }
+    let catalogue = dir.path().join("xtask/mutations/mutations.toml");
+    std::fs::create_dir_all(catalogue.parent().unwrap()).unwrap();
+    std::fs::write(
+        &catalogue,
+        "[[profile]]\nname = \"selfhost\"\nwhy = \"x\"\nowns = [\"compiler/\"]\ntargets = []\n",
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn the_repository_crosses_the_protocol_unchanged_by_id_and_never_by_path() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    let repo = nazm_docs::default_root();
+    runtime().block_on(async {
+        // No `--docs`: the repository this server was built from.
+        let (client, _) = connect(&root).await;
+        let (map, error) = call_with(&client, REPOSITORY_MAP, json!({})).await;
+        assert!(!error);
+        assert_eq!(
+            map,
+            serde_json::from_str::<Value>(&nazm_repo::map(&repo).to_json()).unwrap()
+        );
+        let state = map["state"].as_str().unwrap().to_owned();
+        let seed = "def:compiler:module.nz::fn core_module";
+        let (task, error) = call_with(
+            &client,
+            TASK_CONTEXT,
+            json!({"seeds": [seed], "state": state, "intent": "test"}),
+        )
+        .await;
+        assert!(!error, "{task}");
+        let direct = nazm_repo::task(
+            &repo,
+            &nazm_repo::TaskRequest {
+                intent: Some(nazm_repo::Intent::Test),
+                seeds: vec![seed.to_owned()],
+                state: Some(state.clone()),
+                budget: nazm_repo::Budget::default(),
+            },
+        );
+        assert_eq!(
+            task,
+            serde_json::from_str::<Value>(&direct.to_json()).unwrap()
+        );
+        assert_eq!(task["items"][0]["id"], seed);
+        // A budget travels, and what it cuts is named.
+        let (partial, error) = call_with(
+            &client,
+            TASK_CONTEXT,
+            json!({"seeds": [seed], "state": state, "intent": "edit", "max_entities": 1}),
+        )
+        .await;
+        assert!(!error);
+        assert_eq!(partial["status"], "partial");
+        // A path is not a seed: refused, and never opened.
+        for id in [
+            "/etc/passwd",
+            "../README.md",
+            "module:compiler:../README.md",
+            "docs/spec.md",
+        ] {
+            let (v, error) = call_with(
+                &client,
+                TASK_CONTEXT,
+                json!({"seeds": [id], "state": state}),
+            )
+            .await;
+            assert_eq!(v["status"], "invalid_request", "{id}: {v}");
+            assert!(error, "{id}");
+        }
+        let (v, error) = call_with(
+            &client,
+            TASK_CONTEXT,
+            json!({"seeds": [seed], "state": "0".repeat(64)}),
+        )
+        .await;
+        assert_eq!(v["status"], "stale_state");
+        assert!(error);
+        // A missing state, a path, a root or an unknown intent is not an argument.
+        for (tool, arguments) in [
+            (TASK_CONTEXT, json!({"seeds": [seed]})),
+            (
+                TASK_CONTEXT,
+                json!({"seeds": [seed], "state": state, "path": "/etc/passwd"}),
+            ),
+            (
+                TASK_CONTEXT,
+                json!({"seeds": [seed], "state": state, "root": "/"}),
+            ),
+            (
+                TASK_CONTEXT,
+                json!({"seeds": [seed], "state": state, "intent": "guess"}),
+            ),
+            (REPOSITORY_MAP, json!({"root": "/"})),
+        ] {
+            let r = client
+                .call_tool(
+                    CallToolRequestParams::new(tool)
+                        .with_arguments(serde_json::from_value(arguments.clone()).unwrap()),
+                )
+                .await;
+            assert!(r.is_err(), "{tool} {arguments}");
+        }
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_repository_answer_is_of_the_disk_at_that_call_and_an_old_state_is_stale() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    let repo = tiny_repository();
+    let emit = repo.path().join("compiler/emit.nz");
+    runtime().block_on(async {
+        let (client, _) = connect_docs(&root, repo.path()).await;
+        let (map, error) = call_with(&client, REPOSITORY_MAP, json!({})).await;
+        assert!(!error, "{map}");
+        let old = map["state"].as_str().unwrap().to_owned();
+        let seed = "def:compiler:emit.nz::fn helper";
+        let (t, _) = call_with(
+            &client,
+            TASK_CONTEXT,
+            json!({"seeds": [seed], "state": old}),
+        )
+        .await;
+        assert_eq!(
+            t["items"][0]["content"]["source"],
+            "fn helper() -> Int { 1 }"
+        );
+        std::fs::write(
+            &emit,
+            "fn helper() -> Int { 2 }\n\nfn main() -> Int { helper() }\n",
+        )
+        .unwrap();
+        let (t, error) = call_with(
+            &client,
+            TASK_CONTEXT,
+            json!({"seeds": [seed], "state": old}),
+        )
+        .await;
+        assert_eq!(t["status"], "stale_state");
+        assert!(error);
+        let (map, _) = call_with(&client, REPOSITORY_MAP, json!({})).await;
+        let new = map["state"].as_str().unwrap().to_owned();
+        assert_ne!(new, old);
+        let (t, _) = call_with(
+            &client,
+            TASK_CONTEXT,
+            json!({"seeds": [seed], "state": new}),
+        )
+        .await;
+        assert_eq!(
+            t["items"][0]["content"]["source"],
+            "fn helper() -> Int { 2 }"
+        );
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_repository_answer_travels_once() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    let repo = tiny_repository();
+    runtime().block_on(async {
+        let (client, _) = connect_docs(&root, repo.path()).await;
+        let (map, _) = call_with(&client, REPOSITORY_MAP, json!({})).await;
+        let state = map["state"].as_str().unwrap().to_owned();
+        for (tool, arguments) in [
+            (REPOSITORY_MAP, json!({})),
+            (
+                TASK_CONTEXT,
+                json!({"seeds": ["def:compiler:emit.nz::fn helper"], "state": state}),
+            ),
+            (
+                TASK_CONTEXT,
+                json!({"seeds": ["/etc/passwd"], "state": state}),
+            ),
+        ] {
+            let r = client
+                .call_tool(
+                    CallToolRequestParams::new(tool)
+                        .with_arguments(serde_json::from_value(arguments).unwrap()),
+                )
+                .await
+                .unwrap();
+            assert!(r.content.is_empty(), "{tool}: {:?}", r.content);
+            assert!(r.structured_content.is_some(), "{tool}");
+        }
+        client.cancel().await.unwrap();
+    });
+}
+
+#[test]
+fn a_thousand_repository_calls_are_each_of_the_disk_and_keep_nothing() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    let repo = tiny_repository();
+    runtime().block_on(async {
+        let (client, pid) = connect_docs(&root, repo.path()).await;
+        let (map, _) = call_with(&client, REPOSITORY_MAP, json!({})).await;
+        let state = map["state"].as_str().unwrap().to_owned();
+        let asks = [
+            json!({"seeds": ["def:compiler:emit.nz::fn helper"], "state": state}),
+            json!({"seeds": ["doc:spec:one"], "state": state, "intent": "understand"}),
+            json!({"seeds": ["root:examples:sum.nz"], "state": state, "intent": "understand"}),
+            json!({"seeds": ["def:examples-bad:bare_return.nz::fn main"], "state": state, "intent": "test", "max_entities": 1}),
+        ];
+        let mut first = Vec::new();
+        for a in &asks {
+            first.push(call_with(&client, TASK_CONTEXT, a.clone()).await.0);
+        }
+        for _ in 0..10 {
+            for a in &asks {
+                call_with(&client, TASK_CONTEXT, a.clone()).await;
+            }
+        }
+        let settled = rss_kb(pid);
+        for i in 0..1000 {
+            let k = i % asks.len();
+            let (v, _) = call_with(&client, TASK_CONTEXT, asks[k].clone()).await;
+            assert_eq!(v, first[k], "call {i}");
+        }
+        let after = rss_kb(pid);
+        assert!(after <= settled + 1024, "{settled} kB -> {after} kB");
+        eprintln!("nazm-mcp RSS: settled {settled} kB, after 1,000 task contexts {after} kB");
+        client.cancel().await.unwrap();
+    });
+}
+
+/// The 1,000-call measurement over this repository itself, for `performance.md`: a release
+/// build, run by hand (`cargo test --release -p nazm-mcp --test protocol -- --ignored`).
+#[test]
+#[ignore = "a measurement over the real repository; minutes in a debug build"]
+fn a_thousand_task_contexts_over_this_repository() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, pid) = connect(&root).await;
+        let start = std::time::Instant::now();
+        let (map, _) = call_with(&client, REPOSITORY_MAP, json!({})).await;
+        let map_ms = start.elapsed().as_millis();
+        let state = map["state"].as_str().unwrap().to_owned();
+        let asks = [
+            json!({"seeds": ["def:compiler:module.nz::fn attach_core"], "state": state, "intent": "edit"}),
+            json!({"seeds": ["doc:spec:returns"], "state": state, "intent": "understand"}),
+            json!({"seeds": ["package:nazm-docs"], "state": state, "intent": "test"}),
+            json!({"seeds": ["diagnostic:examples-bad:return_type_mismatch.nz:N0300@return_type_mismatch.nz:59-69#0"], "state": state, "intent": "diagnose"}),
+            json!({"seeds": ["def:compiler:lex.nz::fn is_alnum"], "state": state, "intent": "understand"}),
+        ];
+        let mut first = Vec::new();
+        for a in &asks {
+            first.push(call_with(&client, TASK_CONTEXT, a.clone()).await.0);
+        }
+        for _ in 0..4 {
+            for a in &asks {
+                call_with(&client, TASK_CONTEXT, a.clone()).await;
+            }
+        }
+        let settled = rss_kb(pid);
+        let start = std::time::Instant::now();
+        for i in 0..1000 {
+            let k = i % asks.len();
+            let (v, _) = call_with(&client, TASK_CONTEXT, asks[k].clone()).await;
+            assert_eq!(v, first[k], "call {i}");
+        }
+        let per = start.elapsed().as_secs_f64();
+        let after = rss_kb(pid);
+        eprintln!(
+            "nazm-mcp over this repository: map {map_ms} ms; 1,000 task contexts, {per:.3} ms each on average; RSS settled {settled} kB, after {after} kB"
+        );
+        assert!(after <= settled + 4096, "{settled} kB -> {after} kB");
         client.cancel().await.unwrap();
     });
 }

@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["architecture:2", "architecture:7.5"]
+
 [dependencies]
 nazm-span = { workspace = true }
 nazm-diag = { workspace = true }

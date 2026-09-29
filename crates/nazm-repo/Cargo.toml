@@ -1,0 +1,35 @@
+[package]
+name = "nazm-repo"
+description = "The repository context map and the minimum task context planner: which entities exist, how they relate, and the smallest justified context for a task (N33)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["architecture:7.35", "mcp"]
+
+[dependencies]
+# Stack size for an analysis, and nothing else of the compiler directly.
+nazm-core = { workspace = true }
+# Every semantic fact: durable definitions, context packets, diagnostics (N27–N30).
+nazm-service = { workspace = true }
+# Documentation sections, their authority and the corpus state (N32).
+nazm-docs = { workspace = true }
+# `nazm.repository-map/1` and `nazm.task-context/1`.
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The repository state: the workspace's one hash.
+blake3 = { workspace = true }
+# Cargo manifests and the mutation catalogue, read as the data they are.
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

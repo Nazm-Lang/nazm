@@ -9,6 +9,10 @@ repository.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["grammar", "architecture:7.17"]
+
 [dependencies]
 nazm-span = { workspace = true }
 nazm-diag = { workspace = true }

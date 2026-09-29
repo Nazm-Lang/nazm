@@ -12,6 +12,10 @@ repository.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["mcp", "architecture:7.29"]
+
 [[bin]]
 name = "nazm-mcp"
 path = "src/main.rs"
@@ -21,6 +25,8 @@ nazm-core = { workspace = true }
 nazm-service = { workspace = true }
 # `nazm.docs_index` and `nazm.docs_section` (N32): Nazm's own documentation by section.
 nazm-docs = { workspace = true }
+# `nazm.repository_map` and `nazm.task_context` (N33): the repository map and the planner.
+nazm-repo = { workspace = true }
 # `nazm.semantic_patch`'s typed request (N29); already in the tree through `rmcp`.
 serde = { workspace = true }
 serde_json = { workspace = true }

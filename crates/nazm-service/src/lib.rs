@@ -33,7 +33,9 @@
 //!   selected diagnostic in full on request, as `nazm.diagnostic-index/1` and
 //!   `nazm.diagnostic-detail/1` (N30);
 //! - [`summary`] — what a `check` or a `build` concluded, with a reference to each diagnostic
-//!   it reported — N30's id where N30 indexes it — as `nazm.command-summary/1` (N31).
+//!   it reported — N30's id where N30 indexes it — as `nazm.command-summary/1` (N31);
+//! - [`durable`] — the snapshot's durable definitions with each one's name range, and the
+//!   files a compilation loaded, for the repository planner (N33).
 //!
 //! The first two were `nazm-cli`'s until N16 and moved here unchanged in what they decide,
 //! so the command line and the language service cannot disagree about a module graph.
@@ -44,6 +46,7 @@ pub mod completion;
 pub mod context;
 pub mod delta;
 pub mod diagnostics;
+pub mod durable;
 pub mod fixes;
 pub mod hierarchy;
 mod incomplete;
@@ -65,6 +68,7 @@ pub use delta::{DeltaResult, NoDelta, SemanticDelta};
 pub use diagnostics::{
     DetailResult, DiagnosticDetail, DiagnosticIndex, IndexResult, NoDiagnostics,
 };
+pub use durable::{DurableDefinition, DurableDefinitions};
 pub use fixes::{FixPlan, NoFixes};
 pub use hierarchy::{HierarchyFunction, IncomingCall, Locator, NoHierarchy, OutgoingCall};
 pub use patch::{NoPatch, PatchResult, SemanticPatch};

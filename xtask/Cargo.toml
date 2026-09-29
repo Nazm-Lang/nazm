@@ -11,6 +11,10 @@ rust-version = "1.89"
 license.workspace = true
 publish = false
 
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["runbook"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

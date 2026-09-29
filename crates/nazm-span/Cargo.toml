@@ -13,5 +13,9 @@ publish.workspace = true
 # file it names, so publishing one is a decision a wire format's owner makes explicitly
 # rather than something a derive does on its way past. See the crate documentation.
 
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["architecture:7.1"]
+
 [lints]
 workspace = true

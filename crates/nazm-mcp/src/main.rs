@@ -1,8 +1,8 @@
-//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27–N32.
+//! `nazm-mcp` — a read-only Model Context Protocol server over stdio. N27–N33.
 //!
 //! # What it is
 //!
-//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves nine tools,
+//! An adapter. It speaks MCP through the official Rust SDK (`rmcp`) and serves eleven tools,
 //! each result exactly the object the matching command prints with `--json`:
 //!
 //! | Tool | Result | Command |
@@ -16,6 +16,8 @@
 //! | `nazm.command_summary` | `nazm.command-summary/1` of a check (N31) | `nazm check --summary-json --no-cache` |
 //! | `nazm.docs_index` | `nazm.docs-index/1`, Nazm's own documentation by section (N32) | `nazm docs --index` |
 //! | `nazm.docs_section` | `nazm.docs-section/1`, one section's exact text (N32) | `nazm docs --section ID --state S` |
+//! | `nazm.repository_map` | `nazm.repository-map/1`, the repository's entities and structure (N33) | `nazm repo --map` |
+//! | `nazm.task_context` | `nazm.task-context/1`, the minimum context for seeds and an intent (N33) | `nazm repo --task --seed ID --state S` |
 //!
 //! `nazm.command_summary` checks and does not build: a build writes an executable, and
 //! running a program's tests runs programs, which may write files — neither is read-only,
@@ -47,6 +49,14 @@
 //! one this binary was built from — never a user project's files and never a path a client
 //! names: a section is asked for by its exact id, and the request carries the index's
 //! `state`, so a section of a corpus that has changed since is refused as `stale_state`.
+//!
+//! # The repository is asked for by id
+//!
+//! The two repository tools read the same repository as the documentation tools — the one
+//! given as `--docs`, fixed at startup. `nazm.task_context` takes seeds that are repository
+//! entity ids and the state a map gave; a seed is compared with the repository's own
+//! identities and never opened, so `/etc/passwd` or `../x.nz` is an invalid request, not a
+//! read, and a repository that changed since is `stale_state`.
 //!
 //! # Which program, and which text
 //!
@@ -133,6 +143,60 @@ const DOCS_SECTION: &str = "nazm.docs_section";
 
 /// `nazm.docs-section/1`, exactly as the repository publishes it.
 const DOCS_SECTION_SCHEMA: &str = include_str!("../../../schema/nazm.docs-section-1.json");
+
+/// The repository map tool (N33).
+const REPOSITORY_MAP: &str = "nazm.repository_map";
+
+/// `nazm.repository-map/1`, exactly as the repository publishes it.
+const REPOSITORY_MAP_SCHEMA: &str = include_str!("../../../schema/nazm.repository-map-1.json");
+
+/// The task context tool (N33).
+const TASK_CONTEXT: &str = "nazm.task_context";
+
+/// `nazm.task-context/1`, exactly as the repository publishes it.
+const TASK_CONTEXT_SCHEMA: &str = include_str!("../../../schema/nazm.task-context-1.json");
+
+/// What `nazm.repository_map` is asked: nothing.
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct MapRequest {}
+
+/// What `nazm.task_context` is asked: seeds, an intent, the state they are of, and a
+/// structural budget. Never a path.
+#[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct TaskRequest {
+    /// Repository entity ids, from `nazm.repository_map` or an earlier context: at most
+    /// eight.
+    seeds: Vec<String>,
+    /// That map's `state`: the repository the ids are of.
+    state: String,
+    /// `understand`, `edit`, `diagnose` or `test`; without it, `edit`, the widest.
+    #[serde(default)]
+    intent: Option<TaskIntent>,
+    /// At most this many items.
+    #[serde(default)]
+    max_entities: Option<usize>,
+    /// At most this many bytes of definition source.
+    #[serde(default)]
+    max_source_bytes: Option<usize>,
+    /// At most this many bytes of section text.
+    #[serde(default)]
+    max_doc_bytes: Option<usize>,
+}
+
+/// What a task context is for.
+#[derive(Debug, Clone, Copy, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(rename_all = "snake_case")]
+enum TaskIntent {
+    Understand,
+    Edit,
+    Diagnose,
+    Test,
+}
 
 /// What `nazm.docs_index` is asked: the whole corpus, or one document of it by id.
 #[derive(Debug, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -300,7 +364,38 @@ impl Server {
             Self::summary_tool(),
             Self::docs_index_tool(),
             Self::docs_section_tool(),
+            Self::repository_map_tool(),
+            Self::task_context_tool(),
         ]
+    }
+
+    /// The repository map tool: no arguments, `nazm.repository-map/1` out.
+    fn repository_map_tool() -> Tool {
+        let mut input = (*rmcp::handler::server::common::schema_for_type::<MapRequest>()).clone();
+        input
+            .entry("type")
+            .or_insert_with(|| serde_json::Value::from("object"));
+        Self::read_only(
+            REPOSITORY_MAP,
+            "The repository context map (nazm.repository-map/1), read from disk now: every entity with a durable identity — Cargo packages and targets, Nazm source roots, compilation roots, modules and durable definitions, documents, published schemas, mutation profiles — with its authority, parent, structural relationships (Cargo dependencies, documentation a package declares, modules a compilation loads, the targets a profile says observe it) and how to retrieve more. No source body and no section text. Keep `state` and ask nazm.task_context for the context a task needs.",
+            input,
+            REPOSITORY_MAP_SCHEMA,
+        )
+    }
+
+    /// The task context tool: seeds, a state, an intent and a budget in,
+    /// `nazm.task-context/1` out.
+    fn task_context_tool() -> Tool {
+        let mut input = (*rmcp::handler::server::common::schema_for_type::<TaskRequest>()).clone();
+        input
+            .entry("type")
+            .or_insert_with(|| serde_json::Value::from("object"));
+        Self::read_only(
+            TASK_CONTEXT,
+            "The minimum context for a task (nazm.task-context/1): for seeds — repository entity ids from nazm.repository_map, never paths — and an intent (understand, edit, diagnose, test; default edit), the smallest set of entities the repository can justify, one relationship step from each seed: a definition's exact source and what it uses by shape, for an edit its callers or users and its catalogue tests, a section's exact text and what it links. Every item says why it is there, its priority class, its authority and how to retrieve it. A budget in entities and bytes (not tokens) is filled in priority order; what it cuts is listed and the answer is partial, and a budget the seeds do not fit is refused. Refused as stale_state if the repository changed since the map.",
+            input,
+            TASK_CONTEXT_SCHEMA,
+        )
     }
 
     /// The documentation index tool: an optional document, `nazm.docs-index/1` out.
@@ -554,6 +649,8 @@ impl ServerHandler for Server {
                  index's state. nazm.command_summary: what `nazm check` concludes, compactly. \
                  nazm.docs_index: Nazm's own documentation by section, with each document's \
                  authority; nazm.docs_section: one section's exact text, by id and state. \
+                 nazm.repository_map: the repository's entities, authorities and structure; \
+                 nazm.task_context: the minimum context for seed ids and an intent, by state. \
                  The server keeps nothing between calls.",
             )
     }
@@ -631,6 +728,8 @@ impl ServerHandler for Server {
             SUMMARY => return self.summary(args).await,
             DOCS_INDEX => return self.docs_index(args).await,
             DOCS_SECTION => return self.docs_section(args).await,
+            REPOSITORY_MAP => return self.repository_map(args).await,
+            TASK_CONTEXT => return self.task_context(args).await,
             _ => return Err(ErrorData::invalid_params("tool not found", None)),
         }
         let file = args
@@ -767,6 +866,54 @@ impl Server {
         ))
     }
 
+    /// `nazm.repository_map`: the repository as it is on disk now.
+    async fn repository_map(&self, args: JsonObject) -> Result<CallToolResponse, ErrorData> {
+        let MapRequest {} = serde_json::from_value(serde_json::Value::Object(args))
+            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        let repository = self.docs.clone();
+        let result = tokio::task::spawn_blocking(move || nazm_repo::map(&repository))
+            .await
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(once(
+            value,
+            matches!(result, nazm_repo::MapResult::Available(_)),
+        ))
+    }
+
+    /// `nazm.task_context`: seeds and the state they are of.
+    async fn task_context(&self, args: JsonObject) -> Result<CallToolResponse, ErrorData> {
+        let request: TaskRequest = serde_json::from_value(serde_json::Value::Object(args))
+            .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        let intent = request.intent.map(|i| match i {
+            TaskIntent::Understand => nazm_repo::Intent::Understand,
+            TaskIntent::Edit => nazm_repo::Intent::Edit,
+            TaskIntent::Diagnose => nazm_repo::Intent::Diagnose,
+            TaskIntent::Test => nazm_repo::Intent::Test,
+        });
+        let task = nazm_repo::TaskRequest {
+            intent,
+            seeds: request.seeds,
+            state: Some(request.state),
+            budget: nazm_repo::Budget {
+                max_entities: request.max_entities,
+                max_source_bytes: request.max_source_bytes,
+                max_doc_bytes: request.max_doc_bytes,
+            },
+        };
+        let repository = self.docs.clone();
+        let result = tokio::task::spawn_blocking(move || nazm_repo::task(&repository, &task))
+            .await
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(once(
+            value,
+            matches!(result, nazm_repo::TaskResult::Available(_)),
+        ))
+    }
+
     /// `nazm.diagnostic_detail`: an id and the state it is of.
     async fn detail(&self, args: JsonObject) -> Result<CallToolResponse, ErrorData> {
         let request: DetailRequest = serde_json::from_value(serde_json::Value::Object(args))
@@ -898,6 +1045,8 @@ mod tests {
             (super::SUMMARY, super::SUMMARY_SCHEMA),
             (super::DOCS_INDEX, super::DOCS_INDEX_SCHEMA),
             (super::DOCS_SECTION, super::DOCS_SECTION_SCHEMA),
+            (super::REPOSITORY_MAP, super::REPOSITORY_MAP_SCHEMA),
+            (super::TASK_CONTEXT, super::TASK_CONTEXT_SCHEMA),
         ]) {
             let published: serde_json::Value = serde_json::from_str(schema).unwrap();
             assert_eq!(
