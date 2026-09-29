@@ -488,12 +488,15 @@ effect_set = "!" , "{" , [ effect_name , { "," , effect_name } ] , "}" ;
 The effects a function declares it may exercise: after the return type, a `!` and a
 set in braces. `! {}` is the empty set — the function is pure, and its body may call
 nothing that is not. With no set written the checker infers one from the body, and
-another module calling the function must assume every effect. The names live in their
+another module calling the function must assume every effect — so `fn f() -> Int` and
+`fn f() -> Int ! {}` are not the same: only the second promises purity. A declared set
+says what a function does, not what allows it: its body holds only the authority of
+the capability values in its scope (`IoCap`, `SpawnCap`). The names live in their
 own namespace: `io` and `spawn` are the only effects, a name that is not one is refused,
 and so is one written twice. Order means nothing. See `docs/spec.md`, *Effects*.
 
 ```nazm
-fn show(s: Str) -> Int ! { io } { print(s) } fn main() -> Int { show("hi") }
+fn show(io: IoCap, s: Str) -> Int ! { io } { print(s) } fn main(io: IoCap) -> Int { show(io, "hi") }
 ```
 
 ```nazm
@@ -501,7 +504,7 @@ fn add(a: Int, b: Int) -> Int ! {} { a + b } fn main() -> Int { add(1, 2) }
 ```
 
 ```nazm
-fn w(c: Chan) -> Int { 0 } fn run() -> Int ! { spawn } { let c = chan_new(1); scope { spawn w(c); } 0 } fn main() -> Int { run() }
+fn w(c: Chan) -> Int { 0 } fn run(t: SpawnCap) -> Int ! { spawn } { let c = chan_new(1); scope { spawn w(c); } 0 } fn main(t: SpawnCap) -> Int { run(t) }
 ```
 
 ### `effect_name`
@@ -513,7 +516,7 @@ effect_name = IDENT | "spawn" ;
 `spawn` is a keyword, and the effect of starting a task is named by it.
 
 ```nazm
-fn w(c: Chan) -> Int { 0 } fn run() -> Int ! { io, spawn } { let c = chan_new(1); scope { spawn w(c); } print("done") } fn main() -> Int { run() }
+fn w(c: Chan) -> Int { 0 } fn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { let c = chan_new(1); scope { spawn w(c); } print("done") } fn main(io: IoCap, t: SpawnCap) -> Int { run(io, t) }
 ```
 
 ### `type_parameters`
@@ -701,8 +704,8 @@ type = IDENT , [ type_arguments ] ;
 ```
 
 A name, applied to type arguments or not. Which names are types — `Int`, `Bool`,
-`Str`, `Ints`, `Strs`, `Chan`, `Vec`, a declared record or enum, a type parameter in
-scope — is a *checking* question, not a grammatical one: the parser accepts any
+`Str`, `Ints`, `Strs`, `Chan`, the capabilities `IoCap` and `SpawnCap`, `Vec`, a
+declared record or enum, a type parameter in scope — is a *checking* question, not a grammatical one: the parser accepts any
 identifier here and the checker reports `N0305` for one that is not a type. A grammar
 that listed them would be claiming the parser rejects `fn f(x: Widget)`, which it does
 not — it parses it and then says what is wrong with it, which is how one mistake stays
@@ -714,6 +717,10 @@ fn f(c: Chan) -> Int { 0 } fn main() -> Int { f(chan_new(1)) }
 
 ```nazm
 fn f(xs: Vec[Vec[Int]]) -> Int { vec_len(xs) } fn main() -> Int { f(vec_new[Vec[Int]]()) }
+```
+
+```nazm
+fn say(io: IoCap, s: Str) -> Int ! { io } { print(s) } fn main(io: IoCap) -> Int { say(io, "hi") }
 ```
 
 ### `type_arguments`
