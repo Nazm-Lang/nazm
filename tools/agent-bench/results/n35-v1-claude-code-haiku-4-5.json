@@ -1,0 +1,1662 @@
+{
+  "kind": "report",
+  "prompt_digest": "de954887863a515ba6352d0fb0bc32ecde39bb6a5c7d87a32bdf11524f174bb3",
+  "prompt_version": "nazm.agent-bench-prompt/1",
+  "providers": [
+    {
+      "all": {
+        "baseline": {
+          "answered": 16,
+          "cached_input_tokens": 10367,
+          "correct_facts": 95,
+          "correct_facts_per_1k_input_tokens": "0.11",
+          "correct_facts_per_dollar": "56.93",
+          "cost": 1668736700000,
+          "cost_per_solved_task": 278122783333,
+          "cost_uncached": 860179000000,
+          "hallucinations": 0,
+          "input_tokens": 829789,
+          "invalid_outputs": 4,
+          "local_context_tokens": 329146,
+          "output_tokens": 6078,
+          "refusals": 0,
+          "requests": 16,
+          "required_facts": 116,
+          "runner_errors": 0,
+          "solved": 6,
+          "tokens_per_solved_task": "139311.17",
+          "total_tokens": 835867,
+          "wrong_claims": 4
+        },
+        "conclusions": {
+          "baseline_better": 2,
+          "n33_better": 6
+        },
+        "correctness_preserved": 7,
+        "cost_reduction_bp": 9539,
+        "input_reduction_bp": 9436,
+        "local_context_reduction_bp": 9543,
+        "median_task_input_reduction_bp": 9203,
+        "n33": {
+          "answered": 16,
+          "cached_input_tokens": 0,
+          "correct_facts": 112,
+          "correct_facts_per_1k_input_tokens": "2.39",
+          "correct_facts_per_dollar": "1455.32",
+          "cost": 76959000000,
+          "cost_per_solved_task": 6413250000,
+          "cost_uncached": 61382000000,
+          "hallucinations": 0,
+          "input_tokens": 46772,
+          "invalid_outputs": 0,
+          "local_context_tokens": 15033,
+          "output_tokens": 2922,
+          "refusals": 0,
+          "requests": 16,
+          "required_facts": 116,
+          "runner_errors": 0,
+          "solved": 12,
+          "tokens_per_solved_task": "4141.17",
+          "total_tokens": 49694,
+          "wrong_claims": 32
+        },
+        "name": "all",
+        "tasks": 8,
+        "total_reduction_bp": 9405,
+        "uncached_cost_reduction_bp": 9286
+      },
+      "benchmarks": [
+        "ce659979f4f695b8"
+      ],
+      "categories": [
+        {
+          "baseline": {
+            "answered": 4,
+            "cached_input_tokens": 0,
+            "correct_facts": 35,
+            "correct_facts_per_1k_input_tokens": "0.08",
+            "correct_facts_per_dollar": "38.82",
+            "cost": 901518000000,
+            "cost_per_solved_task": 901518000000,
+            "cost_uncached": 455790000000,
+            "hallucinations": 0,
+            "input_tokens": 445740,
+            "invalid_outputs": 2,
+            "local_context_tokens": 177789,
+            "output_tokens": 2010,
+            "refusals": 0,
+            "requests": 4,
+            "required_facts": 44,
+            "runner_errors": 0,
+            "solved": 1,
+            "tokens_per_solved_task": "447750.00",
+            "total_tokens": 447750,
+            "wrong_claims": 1
+          },
+          "conclusions": {
+            "baseline_better": 1,
+            "n33_better": 1
+          },
+          "correctness_preserved": 1,
+          "cost_reduction_bp": 9511,
+          "input_reduction_bp": 9500,
+          "local_context_reduction_bp": 9540,
+          "median_task_input_reduction_bp": 9500,
+          "n33": {
+            "answered": 4,
+            "cached_input_tokens": 0,
+            "correct_facts": 44,
+            "correct_facts_per_1k_input_tokens": "1.97",
+            "correct_facts_per_dollar": "997.96",
+            "cost": 44090000000,
+            "cost_per_solved_task": 22045000000,
+            "cost_uncached": 28513000000,
+            "hallucinations": 0,
+            "input_tokens": 22303,
+            "invalid_outputs": 0,
+            "local_context_tokens": 8187,
+            "output_tokens": 1242,
+            "refusals": 0,
+            "requests": 4,
+            "required_facts": 44,
+            "runner_errors": 0,
+            "solved": 2,
+            "tokens_per_solved_task": "11772.50",
+            "total_tokens": 23545,
+            "wrong_claims": 32
+          },
+          "name": "understand",
+          "tasks": 2,
+          "total_reduction_bp": 9474,
+          "uncached_cost_reduction_bp": 9374
+        },
+        {
+          "baseline": {
+            "answered": 2,
+            "cached_input_tokens": 0,
+            "correct_facts": 10,
+            "correct_facts_per_1k_input_tokens": "0.04",
+            "correct_facts_per_dollar": "22.33",
+            "cost": 447848000000,
+            "cost_per_solved_task": null,
+            "cost_uncached": 224717000000,
+            "hallucinations": 0,
+            "input_tokens": 223137,
+            "invalid_outputs": 0,
+            "local_context_tokens": 88491,
+            "output_tokens": 316,
+            "refusals": 0,
+            "requests": 2,
+            "required_facts": 12,
+            "runner_errors": 0,
+            "solved": 0,
+            "tokens_per_solved_task": null,
+            "total_tokens": 223453,
+            "wrong_claims": 3
+          },
+          "conclusions": {
+            "n33_better": 1
+          },
+          "correctness_preserved": 1,
+          "cost_reduction_bp": 9812,
+          "input_reduction_bp": 9690,
+          "local_context_reduction_bp": 9746,
+          "median_task_input_reduction_bp": 9690,
+          "n33": {
+            "answered": 2,
+            "cached_input_tokens": 0,
+            "correct_facts": 12,
+            "correct_facts_per_1k_input_tokens": "1.74",
+            "correct_facts_per_dollar": "1423.66",
+            "cost": 8429000000,
+            "cost_per_solved_task": 4214500000,
+            "cost_uncached": 8429000000,
+            "hallucinations": 0,
+            "input_tokens": 6909,
+            "invalid_outputs": 0,
+            "local_context_tokens": 2248,
+            "output_tokens": 304,
+            "refusals": 0,
+            "requests": 2,
+            "required_facts": 12,
+            "runner_errors": 0,
+            "solved": 2,
+            "tokens_per_solved_task": "3606.50",
+            "total_tokens": 7213,
+            "wrong_claims": 0
+          },
+          "name": "edit",
+          "tasks": 1,
+          "total_reduction_bp": 9677,
+          "uncached_cost_reduction_bp": 9625
+        },
+        {
+          "baseline": {
+            "answered": 2,
+            "cached_input_tokens": 0,
+            "correct_facts": 6,
+            "correct_facts_per_1k_input_tokens": "4.03",
+            "correct_facts_per_dollar": "2716.16",
+            "cost": 2209000000,
+            "cost_per_solved_task": 1104500000,
+            "cost_uncached": 2209000000,
+            "hallucinations": 0,
+            "input_tokens": 1489,
+            "invalid_outputs": 0,
+            "local_context_tokens": 53,
+            "output_tokens": 144,
+            "refusals": 0,
+            "requests": 2,
+            "required_facts": 6,
+            "runner_errors": 0,
+            "solved": 2,
+            "tokens_per_solved_task": "816.50",
+            "total_tokens": 1633,
+            "wrong_claims": 0
+          },
+          "conclusions": {
+            "baseline_better": 1
+          },
+          "correctness_preserved": 1,
+          "cost_reduction_bp": -5641,
+          "input_reduction_bp": -8368,
+          "local_context_reduction_bp": -96038,
+          "median_task_input_reduction_bp": -8374,
+          "n33": {
+            "answered": 2,
+            "cached_input_tokens": 0,
+            "correct_facts": 6,
+            "correct_facts_per_1k_input_tokens": "2.19",
+            "correct_facts_per_dollar": "1736.61",
+            "cost": 3455000000,
+            "cost_per_solved_task": 1727500000,
+            "cost_uncached": 3455000000,
+            "hallucinations": 0,
+            "input_tokens": 2735,
+            "invalid_outputs": 0,
+            "local_context_tokens": 562,
+            "output_tokens": 144,
+            "refusals": 0,
+            "requests": 2,
+            "required_facts": 6,
+            "runner_errors": 0,
+            "solved": 2,
+            "tokens_per_solved_task": "1439.50",
+            "total_tokens": 2879,
+            "wrong_claims": 0
+          },
+          "name": "diagnose",
+          "tasks": 1,
+          "total_reduction_bp": -7630,
+          "uncached_cost_reduction_bp": -5641
+        },
+        {
+          "baseline": {
+            "answered": 4,
+            "cached_input_tokens": 0,
+            "correct_facts": 23,
+            "correct_facts_per_1k_input_tokens": "0.20",
+            "correct_facts_per_dollar": "100.05",
+            "cost": 229879000000,
+            "cost_per_solved_task": 76626333333,
+            "cost_uncached": 116088000000,
+            "hallucinations": 0,
+            "input_tokens": 113803,
+            "invalid_outputs": 0,
+            "local_context_tokens": 50219,
+            "output_tokens": 457,
+            "refusals": 0,
+            "requests": 4,
+            "required_facts": 24,
+            "runner_errors": 0,
+            "solved": 3,
+            "tokens_per_solved_task": "38086.67",
+            "total_tokens": 114260,
+            "wrong_claims": 0
+          },
+          "conclusions": {
+            "n33_better": 2
+          },
+          "correctness_preserved": 2,
+          "cost_reduction_bp": 9598,
+          "input_reduction_bp": 9365,
+          "local_context_reduction_bp": 9618,
+          "median_task_input_reduction_bp": 9300,
+          "n33": {
+            "answered": 4,
+            "cached_input_tokens": 0,
+            "correct_facts": 24,
+            "correct_facts_per_1k_input_tokens": "3.32",
+            "correct_facts_per_dollar": "2594.31",
+            "cost": 9251000000,
+            "cost_per_solved_task": 2312750000,
+            "cost_uncached": 9251000000,
+            "hallucinations": 0,
+            "input_tokens": 7231,
+            "invalid_outputs": 0,
+            "local_context_tokens": 1920,
+            "output_tokens": 404,
+            "refusals": 0,
+            "requests": 4,
+            "required_facts": 24,
+            "runner_errors": 0,
+            "solved": 4,
+            "tokens_per_solved_task": "1908.75",
+            "total_tokens": 7635,
+            "wrong_claims": 0
+          },
+          "name": "docs",
+          "tasks": 2,
+          "total_reduction_bp": 9332,
+          "uncached_cost_reduction_bp": 9203
+        },
+        {
+          "baseline": {
+            "answered": 4,
+            "cached_input_tokens": 10367,
+            "correct_facts": 21,
+            "correct_facts_per_1k_input_tokens": "0.46",
+            "correct_facts_per_dollar": "240.60",
+            "cost": 87282700000,
+            "cost_per_solved_task": null,
+            "cost_uncached": 61375000000,
+            "hallucinations": 0,
+            "input_tokens": 45620,
+            "invalid_outputs": 2,
+            "local_context_tokens": 12594,
+            "output_tokens": 3151,
+            "refusals": 0,
+            "requests": 4,
+            "required_facts": 30,
+            "runner_errors": 0,
+            "solved": 0,
+            "tokens_per_solved_task": null,
+            "total_tokens": 48771,
+            "wrong_claims": 0
+          },
+          "conclusions": {
+            "n33_better": 2
+          },
+          "correctness_preserved": 2,
+          "cost_reduction_bp": 8656,
+          "input_reduction_bp": 8335,
+          "local_context_reduction_bp": 8320,
+          "median_task_input_reduction_bp": 8253,
+          "n33": {
+            "answered": 4,
+            "cached_input_tokens": 0,
+            "correct_facts": 26,
+            "correct_facts_per_1k_input_tokens": "3.42",
+            "correct_facts_per_dollar": "2215.78",
+            "cost": 11734000000,
+            "cost_per_solved_task": 5867000000,
+            "cost_uncached": 11734000000,
+            "hallucinations": 0,
+            "input_tokens": 7594,
+            "invalid_outputs": 0,
+            "local_context_tokens": 2116,
+            "output_tokens": 828,
+            "refusals": 0,
+            "requests": 4,
+            "required_facts": 30,
+            "runner_errors": 0,
+            "solved": 2,
+            "tokens_per_solved_task": "4211.00",
+            "total_tokens": 8422,
+            "wrong_claims": 0
+          },
+          "name": "tests",
+          "tasks": 2,
+          "total_reduction_bp": 8273,
+          "uncached_cost_reduction_bp": 8088
+        }
+      ],
+      "crossover": {
+        "between": [
+          744,
+          6720
+        ],
+        "n33_cheaper": [
+          [
+            "T1",
+            111398,
+            7791
+          ],
+          [
+            "T2",
+            111471,
+            3360
+          ],
+          [
+            "T3",
+            111568,
+            3454
+          ],
+          [
+            "T5",
+            37914,
+            1916
+          ],
+          [
+            "T6",
+            18987,
+            1699
+          ],
+          [
+            "T7",
+            16090,
+            2486
+          ],
+          [
+            "T8",
+            6720,
+            1310
+          ]
+        ],
+        "n33_dearer": [
+          [
+            "T4",
+            744,
+            1367
+          ]
+        ]
+      },
+      "latency_ms": {
+        "baseline": {
+          "max": 14038,
+          "median": 5879,
+          "min": 3240,
+          "n": 16,
+          "sum": 104845
+        },
+        "n33": {
+          "max": 5553,
+          "median": 3857,
+          "min": 3153,
+          "n": 16,
+          "sum": 67857
+        }
+      },
+      "model_requested": "claude-haiku-4-5-20251001",
+      "models_returned": [
+        "claude-haiku-4-5-20251001"
+      ],
+      "parameters": {
+        "client": "claude --print",
+        "client_version": "2.1.283 (Claude Code)",
+        "max_output_tokens": 1024,
+        "mcp_servers": [],
+        "setting_sources": [],
+        "temperature": "model default (the client sets none)",
+        "thinking_tokens": 0,
+        "tools": []
+      },
+      "price": {
+        "cache_write_input": 2000000,
+        "cached_input": 100000,
+        "effective": "2026-09-29",
+        "id": "claude-code/claude-haiku-4-5-20251001@2026-09-29",
+        "input": 1000000,
+        "model": "claude-haiku-4-5-20251001",
+        "output": 5000000,
+        "provider": "claude-code",
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing (the Anthropic API's list price; the client reaches the same model, and reports its own list-price estimate beside the usage)"
+      },
+      "provider": "claude-code",
+      "retries": 0,
+      "retry_latency_ms": 0,
+      "tasks": [
+        {
+          "baseline": {
+            "answered": 2,
+            "cache_write_input_tokens": 222791,
+            "cached_input_tokens": 0,
+            "correct_facts": 35,
+            "cost": {
+              "max": 224440000000,
+              "median": 224439000000,
+              "min": 224438000000,
+              "n": 2,
+              "sum": 448878000000
+            },
+            "cost_uncached": {
+              "max": 113044000000,
+              "median": 113043500000,
+              "min": 113043000000,
+              "n": 2,
+              "sum": 226087000000
+            },
+            "extra_citations": 0,
+            "failures": {
+              "wrong_repository_fact": 1
+            },
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 111399,
+              "median": 111398,
+              "min": 111398,
+              "n": 2,
+              "sum": 222797
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 7198,
+              "median": 6722,
+              "min": 6246,
+              "n": 2,
+              "sum": 13444
+            },
+            "local_context_tokens": 89298,
+            "local_fixed_tokens": 292,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 329,
+              "median": 329,
+              "min": 329,
+              "n": 2,
+              "sum": 658
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 36,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 1,
+            "solved_lenient": 1,
+            "total_tokens": {
+              "max": 111728,
+              "median": 111727,
+              "min": 111727,
+              "n": 2,
+              "sum": 223455
+            },
+            "trials": 2,
+            "wrong_claims": 1
+          },
+          "category": "understand",
+          "conclusion": "n33_better",
+          "correctness_preserved": true,
+          "cost_reduction_bp": 9233,
+          "input_reduction_bp": 9301,
+          "local_context_reduction_bp": 9335,
+          "n33": {
+            "answered": 2,
+            "cache_write_input_tokens": 15577,
+            "cached_input_tokens": 0,
+            "correct_facts": 36,
+            "cost": {
+              "max": 17221000000,
+              "median": 17220000000,
+              "min": 17219000000,
+              "n": 2,
+              "sum": 34440000000
+            },
+            "cost_uncached": {
+              "max": 9432000000,
+              "median": 9431500000,
+              "min": 9431000000,
+              "n": 2,
+              "sum": 18863000000
+            },
+            "extra_citations": 0,
+            "failures": {},
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 7792,
+              "median": 7791,
+              "min": 7791,
+              "n": 2,
+              "sum": 15583
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 5436,
+              "median": 5359,
+              "min": 5283,
+              "n": 2,
+              "sum": 10719
+            },
+            "local_context_tokens": 5939,
+            "local_fixed_tokens": 292,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 328,
+              "median": 328,
+              "min": 328,
+              "n": 2,
+              "sum": 656
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 36,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 2,
+            "solved_lenient": 2,
+            "total_tokens": {
+              "max": 8120,
+              "median": 8119,
+              "min": 8119,
+              "n": 2,
+              "sum": 16239
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "scenario": "A understand check_program",
+          "task": "T1",
+          "total_reduction_bp": 9273,
+          "uncached_cost_reduction_bp": 9166
+        },
+        {
+          "baseline": {
+            "answered": 2,
+            "cache_write_input_tokens": 222937,
+            "cached_input_tokens": 0,
+            "correct_facts": 0,
+            "cost": {
+              "max": 226371000000,
+              "median": 226320000000,
+              "min": 226269000000,
+              "n": 2,
+              "sum": 452640000000
+            },
+            "cost_uncached": {
+              "max": 114902000000,
+              "median": 114851500000,
+              "min": 114801000000,
+              "n": 2,
+              "sum": 229703000000
+            },
+            "extra_citations": 0,
+            "failures": {
+              "invalid_structured_output": 2
+            },
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 111472,
+              "median": 111471,
+              "min": 111471,
+              "n": 2,
+              "sum": 222943
+            },
+            "invalid_outputs": 2,
+            "latency_ms": {
+              "max": 10040,
+              "median": 9345,
+              "min": 8650,
+              "n": 2,
+              "sum": 18690
+            },
+            "local_context_tokens": 88491,
+            "local_fixed_tokens": 262,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 686,
+              "median": 676,
+              "min": 666,
+              "n": 2,
+              "sum": 1352
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 8,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 0,
+            "solved_lenient": 0,
+            "total_tokens": {
+              "max": 112158,
+              "median": 112147,
+              "min": 112137,
+              "n": 2,
+              "sum": 224295
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "category": "understand",
+          "conclusion": "baseline_better",
+          "correctness_preserved": false,
+          "cost_reduction_bp": 9787,
+          "input_reduction_bp": 9699,
+          "local_context_reduction_bp": 9746,
+          "n33": {
+            "answered": 2,
+            "cache_write_input_tokens": 0,
+            "cached_input_tokens": 0,
+            "correct_facts": 8,
+            "cost": {
+              "max": 4825000000,
+              "median": 4825000000,
+              "min": 4825000000,
+              "n": 2,
+              "sum": 9650000000
+            },
+            "cost_uncached": {
+              "max": 4825000000,
+              "median": 4825000000,
+              "min": 4825000000,
+              "n": 2,
+              "sum": 9650000000
+            },
+            "extra_citations": 0,
+            "failures": {
+              "wrong_repository_fact": 2
+            },
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 3360,
+              "median": 3360,
+              "min": 3360,
+              "n": 2,
+              "sum": 6720
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 5553,
+              "median": 5181,
+              "min": 4809,
+              "n": 2,
+              "sum": 10362
+            },
+            "local_context_tokens": 2248,
+            "local_fixed_tokens": 262,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 293,
+              "median": 293,
+              "min": 293,
+              "n": 2,
+              "sum": 586
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 8,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 0,
+            "solved_lenient": 0,
+            "total_tokens": {
+              "max": 3653,
+              "median": 3653,
+              "min": 3653,
+              "n": 2,
+              "sum": 7306
+            },
+            "trials": 2,
+            "wrong_claims": 32
+          },
+          "scenario": "B edit attach_core",
+          "task": "T2",
+          "total_reduction_bp": 9674,
+          "uncached_cost_reduction_bp": 9580
+        },
+        {
+          "baseline": {
+            "answered": 2,
+            "cache_write_input_tokens": 223131,
+            "cached_input_tokens": 0,
+            "correct_facts": 10,
+            "cost": {
+              "max": 223935000000,
+              "median": 223924000000,
+              "min": 223913000000,
+              "n": 2,
+              "sum": 447848000000
+            },
+            "cost_uncached": {
+              "max": 112369000000,
+              "median": 112358500000,
+              "min": 112348000000,
+              "n": 2,
+              "sum": 224717000000
+            },
+            "extra_citations": 0,
+            "failures": {
+              "wrong_repository_fact": 2
+            },
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 111569,
+              "median": 111568,
+              "min": 111568,
+              "n": 2,
+              "sum": 223137
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 5956,
+              "median": 5399,
+              "min": 4843,
+              "n": 2,
+              "sum": 10799
+            },
+            "local_context_tokens": 88491,
+            "local_fixed_tokens": 346,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 160,
+              "median": 158,
+              "min": 156,
+              "n": 2,
+              "sum": 316
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 12,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 0,
+            "solved_lenient": 0,
+            "total_tokens": {
+              "max": 111729,
+              "median": 111726,
+              "min": 111724,
+              "n": 2,
+              "sum": 223453
+            },
+            "trials": 2,
+            "wrong_claims": 3
+          },
+          "category": "edit",
+          "conclusion": "n33_better",
+          "correctness_preserved": true,
+          "cost_reduction_bp": 9812,
+          "input_reduction_bp": 9690,
+          "local_context_reduction_bp": 9746,
+          "n33": {
+            "answered": 2,
+            "cache_write_input_tokens": 0,
+            "cached_input_tokens": 0,
+            "correct_facts": 12,
+            "cost": {
+              "max": 4215000000,
+              "median": 4214500000,
+              "min": 4214000000,
+              "n": 2,
+              "sum": 8429000000
+            },
+            "cost_uncached": {
+              "max": 4215000000,
+              "median": 4214500000,
+              "min": 4214000000,
+              "n": 2,
+              "sum": 8429000000
+            },
+            "extra_citations": 0,
+            "failures": {},
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 3455,
+              "median": 3454,
+              "min": 3454,
+              "n": 2,
+              "sum": 6909
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 4553,
+              "median": 4248,
+              "min": 3944,
+              "n": 2,
+              "sum": 8497
+            },
+            "local_context_tokens": 2248,
+            "local_fixed_tokens": 346,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 152,
+              "median": 152,
+              "min": 152,
+              "n": 2,
+              "sum": 304
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 12,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 2,
+            "solved_lenient": 2,
+            "total_tokens": {
+              "max": 3607,
+              "median": 3606,
+              "min": 3606,
+              "n": 2,
+              "sum": 7213
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "scenario": "B edit attach_core",
+          "task": "T3",
+          "total_reduction_bp": 9677,
+          "uncached_cost_reduction_bp": 9625
+        },
+        {
+          "baseline": {
+            "answered": 2,
+            "cache_write_input_tokens": 0,
+            "cached_input_tokens": 0,
+            "correct_facts": 6,
+            "cost": {
+              "max": 1105000000,
+              "median": 1104500000,
+              "min": 1104000000,
+              "n": 2,
+              "sum": 2209000000
+            },
+            "cost_uncached": {
+              "max": 1105000000,
+              "median": 1104500000,
+              "min": 1104000000,
+              "n": 2,
+              "sum": 2209000000
+            },
+            "extra_citations": 0,
+            "failures": {},
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 745,
+              "median": 744,
+              "min": 744,
+              "n": 2,
+              "sum": 1489
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 3293,
+              "median": 3266,
+              "min": 3240,
+              "n": 2,
+              "sum": 6533
+            },
+            "local_context_tokens": 53,
+            "local_fixed_tokens": 257,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 72,
+              "median": 72,
+              "min": 72,
+              "n": 2,
+              "sum": 144
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 6,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 2,
+            "solved_lenient": 2,
+            "total_tokens": {
+              "max": 817,
+              "median": 816,
+              "min": 816,
+              "n": 2,
+              "sum": 1633
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "category": "diagnose",
+          "conclusion": "baseline_better",
+          "correctness_preserved": true,
+          "cost_reduction_bp": -5641,
+          "input_reduction_bp": -8374,
+          "local_context_reduction_bp": -96038,
+          "n33": {
+            "answered": 2,
+            "cache_write_input_tokens": 0,
+            "cached_input_tokens": 0,
+            "correct_facts": 6,
+            "cost": {
+              "max": 1728000000,
+              "median": 1727500000,
+              "min": 1727000000,
+              "n": 2,
+              "sum": 3455000000
+            },
+            "cost_uncached": {
+              "max": 1728000000,
+              "median": 1727500000,
+              "min": 1727000000,
+              "n": 2,
+              "sum": 3455000000
+            },
+            "extra_citations": 0,
+            "failures": {},
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 1368,
+              "median": 1367,
+              "min": 1367,
+              "n": 2,
+              "sum": 2735
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 3461,
+              "median": 3307,
+              "min": 3153,
+              "n": 2,
+              "sum": 6614
+            },
+            "local_context_tokens": 562,
+            "local_fixed_tokens": 257,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 72,
+              "median": 72,
+              "min": 72,
+              "n": 2,
+              "sum": 144
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 6,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 2,
+            "solved_lenient": 2,
+            "total_tokens": {
+              "max": 1440,
+              "median": 1439,
+              "min": 1439,
+              "n": 2,
+              "sum": 2879
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "scenario": "C diagnose N0300",
+          "task": "T4",
+          "total_reduction_bp": -7635,
+          "uncached_cost_reduction_bp": -5641
+        },
+        {
+          "baseline": {
+            "answered": 2,
+            "cache_write_input_tokens": 75823,
+            "cached_input_tokens": 0,
+            "correct_facts": 11,
+            "cost": {
+              "max": 76457000000,
+              "median": 76438500000,
+              "min": 76420000000,
+              "n": 2,
+              "sum": 152877000000
+            },
+            "cost_uncached": {
+              "max": 38545000000,
+              "median": 38527000000,
+              "min": 38509000000,
+              "n": 2,
+              "sum": 77054000000
+            },
+            "extra_citations": 4,
+            "failures": {
+              "missing_required_fact": 1
+            },
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 37915,
+              "median": 37914,
+              "min": 37914,
+              "n": 2,
+              "sum": 75829
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 4825,
+              "median": 4538,
+              "min": 4252,
+              "n": 2,
+              "sum": 9077
+            },
+            "local_context_tokens": 34345,
+            "local_fixed_tokens": 309,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 126,
+              "median": 122,
+              "min": 119,
+              "n": 2,
+              "sum": 245
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 12,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 1,
+            "solved_lenient": 1,
+            "total_tokens": {
+              "max": 38041,
+              "median": 38037,
+              "min": 38033,
+              "n": 2,
+              "sum": 76074
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "category": "docs",
+          "conclusion": "n33_better",
+          "correctness_preserved": true,
+          "cost_reduction_bp": 9683,
+          "input_reduction_bp": 9495,
+          "local_context_reduction_bp": 9690,
+          "n33": {
+            "answered": 2,
+            "cache_write_input_tokens": 0,
+            "cached_input_tokens": 0,
+            "correct_facts": 12,
+            "cost": {
+              "max": 2426000000,
+              "median": 2426000000,
+              "min": 2426000000,
+              "n": 2,
+              "sum": 4852000000
+            },
+            "cost_uncached": {
+              "max": 2426000000,
+              "median": 2426000000,
+              "min": 2426000000,
+              "n": 2,
+              "sum": 4852000000
+            },
+            "extra_citations": 0,
+            "failures": {},
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 1916,
+              "median": 1916,
+              "min": 1916,
+              "n": 2,
+              "sum": 3832
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 3520,
+              "median": 3432,
+              "min": 3345,
+              "n": 2,
+              "sum": 6865
+            },
+            "local_context_tokens": 1063,
+            "local_fixed_tokens": 309,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 102,
+              "median": 102,
+              "min": 102,
+              "n": 2,
+              "sum": 204
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 12,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 2,
+            "solved_lenient": 2,
+            "total_tokens": {
+              "max": 2018,
+              "median": 2018,
+              "min": 2018,
+              "n": 2,
+              "sum": 4036
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "scenario": "D understand spec:returns",
+          "task": "T5",
+          "total_reduction_bp": 9469,
+          "uncached_cost_reduction_bp": 9370
+        },
+        {
+          "baseline": {
+            "answered": 2,
+            "cache_write_input_tokens": 37968,
+            "cached_input_tokens": 0,
+            "correct_facts": 12,
+            "cost": {
+              "max": 38501000000,
+              "median": 38501000000,
+              "min": 38501000000,
+              "n": 2,
+              "sum": 77002000000
+            },
+            "cost_uncached": {
+              "max": 19517000000,
+              "median": 19517000000,
+              "min": 19517000000,
+              "n": 2,
+              "sum": 39034000000
+            },
+            "extra_citations": 0,
+            "failures": {},
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 18987,
+              "median": 18987,
+              "min": 18987,
+              "n": 2,
+              "sum": 37974
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 3728,
+              "median": 3698,
+              "min": 3668,
+              "n": 2,
+              "sum": 7396
+            },
+            "local_context_tokens": 15874,
+            "local_fixed_tokens": 302,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 106,
+              "median": 106,
+              "min": 106,
+              "n": 2,
+              "sum": 212
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 12,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 2,
+            "solved_lenient": 2,
+            "total_tokens": {
+              "max": 19093,
+              "median": 19093,
+              "min": 19093,
+              "n": 2,
+              "sum": 38186
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "category": "docs",
+          "conclusion": "n33_better",
+          "correctness_preserved": true,
+          "cost_reduction_bp": 9429,
+          "input_reduction_bp": 9105,
+          "local_context_reduction_bp": 9460,
+          "n33": {
+            "answered": 2,
+            "cache_write_input_tokens": 0,
+            "cached_input_tokens": 0,
+            "correct_facts": 12,
+            "cost": {
+              "max": 2200000000,
+              "median": 2199500000,
+              "min": 2199000000,
+              "n": 2,
+              "sum": 4399000000
+            },
+            "cost_uncached": {
+              "max": 2200000000,
+              "median": 2199500000,
+              "min": 2199000000,
+              "n": 2,
+              "sum": 4399000000
+            },
+            "extra_citations": 0,
+            "failures": {},
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 1700,
+              "median": 1699,
+              "min": 1699,
+              "n": 2,
+              "sum": 3399
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 3771,
+              "median": 3696,
+              "min": 3621,
+              "n": 2,
+              "sum": 7392
+            },
+            "local_context_tokens": 857,
+            "local_fixed_tokens": 302,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 100,
+              "median": 100,
+              "min": 100,
+              "n": 2,
+              "sum": 200
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 12,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 2,
+            "solved_lenient": 2,
+            "total_tokens": {
+              "max": 1800,
+              "median": 1799,
+              "min": 1799,
+              "n": 2,
+              "sum": 3599
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "scenario": "D understand guide record",
+          "task": "T6",
+          "total_reduction_bp": 9058,
+          "uncached_cost_reduction_bp": 8873
+        },
+        {
+          "baseline": {
+            "answered": 2,
+            "cache_write_input_tokens": 21804,
+            "cached_input_tokens": 10367,
+            "correct_facts": 21,
+            "cost": {
+              "max": 30654700000,
+              "median": 26444350000,
+              "min": 22234000000,
+              "n": 2,
+              "sum": 52888700000
+            },
+            "cost_uncached": {
+              "max": 28549000000,
+              "median": 20207500000,
+              "min": 11866000000,
+              "n": 2,
+              "sum": 40415000000
+            },
+            "extra_citations": 0,
+            "failures": {
+              "missing_required_fact": 2
+            },
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 21809,
+              "median": 16090,
+              "min": 10371,
+              "n": 2,
+              "sum": 32180
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 14038,
+              "median": 9920,
+              "min": 5802,
+              "n": 2,
+              "sum": 19840
+            },
+            "local_context_tokens": 7674,
+            "local_fixed_tokens": 241,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 1348,
+              "median": 823,
+              "min": 299,
+              "n": 2,
+              "sum": 1647
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 26,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 0,
+            "solved_lenient": 0,
+            "total_tokens": {
+              "max": 23157,
+              "median": 16913,
+              "min": 10670,
+              "n": 2,
+              "sum": 33827
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "category": "tests",
+          "conclusion": "n33_better",
+          "correctness_preserved": true,
+          "cost_reduction_bp": 8447,
+          "input_reduction_bp": 8455,
+          "local_context_reduction_bp": 7949,
+          "n33": {
+            "answered": 2,
+            "cache_write_input_tokens": 0,
+            "cached_input_tokens": 0,
+            "correct_facts": 22,
+            "cost": {
+              "max": 4107000000,
+              "median": 4106500000,
+              "min": 4106000000,
+              "n": 2,
+              "sum": 8213000000
+            },
+            "cost_uncached": {
+              "max": 4107000000,
+              "median": 4106500000,
+              "min": 4106000000,
+              "n": 2,
+              "sum": 8213000000
+            },
+            "extra_citations": 0,
+            "failures": {
+              "missing_required_fact": 2
+            },
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 2487,
+              "median": 2486,
+              "min": 2486,
+              "n": 2,
+              "sum": 4973
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 5278,
+              "median": 5177,
+              "min": 5076,
+              "n": 2,
+              "sum": 10354
+            },
+            "local_context_tokens": 1574,
+            "local_fixed_tokens": 241,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 324,
+              "median": 324,
+              "min": 324,
+              "n": 2,
+              "sum": 648
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 26,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 0,
+            "solved_lenient": 0,
+            "total_tokens": {
+              "max": 2811,
+              "median": 2810,
+              "min": 2810,
+              "n": 2,
+              "sum": 5621
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "scenario": "E tests of nazm-docs",
+          "task": "T7",
+          "total_reduction_bp": 8339,
+          "uncached_cost_reduction_bp": 7968
+        },
+        {
+          "baseline": {
+            "answered": 2,
+            "cache_write_input_tokens": 13434,
+            "cached_input_tokens": 0,
+            "correct_facts": 0,
+            "cost": {
+              "max": 17312000000,
+              "median": 17197000000,
+              "min": 17082000000,
+              "n": 2,
+              "sum": 34394000000
+            },
+            "cost_uncached": {
+              "max": 10595000000,
+              "median": 10480000000,
+              "min": 10365000000,
+              "n": 2,
+              "sum": 20960000000
+            },
+            "extra_citations": 0,
+            "failures": {
+              "invalid_structured_output": 2
+            },
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 6720,
+              "median": 6720,
+              "min": 6720,
+              "n": 2,
+              "sum": 13440
+            },
+            "invalid_outputs": 2,
+            "latency_ms": {
+              "max": 9793,
+              "median": 9533,
+              "min": 9273,
+              "n": 2,
+              "sum": 19066
+            },
+            "local_context_tokens": 4920,
+            "local_fixed_tokens": 233,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 775,
+              "median": 752,
+              "min": 729,
+              "n": 2,
+              "sum": 1504
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 4,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 0,
+            "solved_lenient": 2,
+            "total_tokens": {
+              "max": 7495,
+              "median": 7472,
+              "min": 7449,
+              "n": 2,
+              "sum": 14944
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "category": "tests",
+          "conclusion": "n33_better",
+          "correctness_preserved": true,
+          "cost_reduction_bp": 8976,
+          "input_reduction_bp": 8051,
+          "local_context_reduction_bp": 8898,
+          "n33": {
+            "answered": 2,
+            "cache_write_input_tokens": 0,
+            "cached_input_tokens": 0,
+            "correct_facts": 4,
+            "cost": {
+              "max": 1761000000,
+              "median": 1760500000,
+              "min": 1760000000,
+              "n": 2,
+              "sum": 3521000000
+            },
+            "cost_uncached": {
+              "max": 1761000000,
+              "median": 1760500000,
+              "min": 1760000000,
+              "n": 2,
+              "sum": 3521000000
+            },
+            "extra_citations": 0,
+            "failures": {},
+            "hallucinations": 0,
+            "input_tokens": {
+              "max": 1311,
+              "median": 1310,
+              "min": 1310,
+              "n": 2,
+              "sum": 2621
+            },
+            "invalid_outputs": 0,
+            "latency_ms": {
+              "max": 3536,
+              "median": 3527,
+              "min": 3518,
+              "n": 2,
+              "sum": 7054
+            },
+            "local_context_tokens": 542,
+            "local_fixed_tokens": 233,
+            "model_drift": 0,
+            "output_tokens": {
+              "max": 90,
+              "median": 90,
+              "min": 90,
+              "n": 2,
+              "sum": 180
+            },
+            "provider_context_tokens": null,
+            "provider_fixed_tokens": null,
+            "reasoning_tokens": 0,
+            "refusals": 0,
+            "required_facts": 4,
+            "retries": 0,
+            "retry_latency_ms": 0,
+            "runner_errors": 0,
+            "solved": 2,
+            "solved_lenient": 2,
+            "total_tokens": {
+              "max": 1401,
+              "median": 1400,
+              "min": 1400,
+              "n": 2,
+              "sum": 2801
+            },
+            "trials": 2,
+            "wrong_claims": 0
+          },
+          "scenario": "E tests of core_module",
+          "task": "T8",
+          "total_reduction_bp": 8126,
+          "uncached_cost_reduction_bp": 8320
+        }
+      ],
+      "trials": 2
+    }
+  ],
+  "schema": "nazm.agent-benchmark/1",
+  "suite_version": "nazm.agent-bench-suite/1",
+  "suites": [
+    "b7db4ccca511626aaed3b71d23412eaee5e511dfd6d32f443166c2f29f4d183a"
+  ]
+}
