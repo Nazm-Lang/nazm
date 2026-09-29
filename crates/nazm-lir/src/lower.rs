@@ -130,7 +130,8 @@ pub struct Plan {
     /// signature this backend gives each.
     instances: Instances,
     instance_sigs: Vec<Sig>,
-    entry: NativeSymbol,
+    /// `main`'s symbol, and how many root capabilities it takes.
+    entry: (NativeSymbol, usize),
 }
 
 struct Ctx<'a> {
@@ -607,7 +608,7 @@ pub fn plan(
         .and_then(|id| sig.get(id.index()))
         .and_then(Option::as_ref)
     {
-        Some(s) => s.symbol.clone(),
+        Some(s) => (s.symbol.clone(), s.params.len()),
         // `main` has no signature here for one of two reasons, and they are different
         // facts. Either the program genuinely has none — unreachable after a successful
         // check, which reports `N0204` itself — or this backend *refused* `main`'s
@@ -904,7 +905,8 @@ pub fn lower(
         Ok(Native {
             units,
             instances,
-            entry: settled.entry,
+            entry: settled.entry.0,
+            entry_roots: settled.entry.1,
         })
     } else {
         Err(LowerError {
@@ -937,7 +939,10 @@ fn signature(
     // shape rules below are asked of the entry and not of every function spelled `main`,
     // which is `docs/spec.md`'s rule expressed where the backend can act on it.
     if res.entry() == Some(id) {
-        if !f.params.is_empty() {
+        // A capability parameter is the root of authority, which the entry wrapper hands
+        // over (N37); any other is a value nothing could supply, and the checker has
+        // already refused it.
+        if !def.params.iter().all(|t| t.is_capability()) {
             errors.push(unsupported_at(f.span, "a `main` with parameters"));
             ok = false;
         }

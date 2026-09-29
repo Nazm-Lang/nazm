@@ -107,6 +107,10 @@ pub enum Value {
     /// an element owns is what its own [`Value`] owns, so copying one in and out by
     /// `clone` applies `T`'s law without this code knowing what `T` is.
     Vec(Arc<Seq<Vec<Value>>>),
+    /// A capability (N37): authority the checker has already verified. Nothing reads it —
+    /// no built-in takes one, and it has no equality — so it carries only its kind, for a
+    /// diagnostic to name. The only ones are those [`Interpreter::run_main`] hands `main`.
+    Cap(nazm_sema::CapabilityKind),
 }
 
 /// A record value: which record it is, and its fields in **declaration order**.
@@ -263,6 +267,7 @@ impl PartialEq for Value {
             (Self::Strs(a), Self::Strs(b)) => Arc::ptr_eq(a, b),
             (Self::Chan(a), Self::Chan(b)) => Arc::ptr_eq(a, b),
             (Self::Vec(a), Self::Vec(b)) => Arc::ptr_eq(a, b),
+            (Self::Cap(a), Self::Cap(b)) => a == b,
             // Field by field. Not what `==` means in a program — that is [`equal`], which
             // follows the language's law — and defined so that the rest of `Value` can
             // still be compared.
@@ -494,6 +499,7 @@ impl std::fmt::Display for Value {
                 Err(_) => f.write_str("Strs(unreadable)"),
             },
             Self::Chan(_) => f.write_str("Chan"),
+            Self::Cap(k) => f.write_str(k.type_name()),
             Self::Vec(v) => match v.lock() {
                 Ok(v) => write!(f, "Vec({} items)", v.len()),
                 Err(_) => f.write_str("Vec(unreadable)"),
@@ -833,9 +839,23 @@ impl Interpreter {
         // The **root** module's `main`, not whichever `main` the program happens to
         // contain. An imported module may have one of its own and it is not an entry
         // point; `docs/spec.md` says so and this is where that is true at runtime.
-        let main = self
-            .res
-            .definition(ModuleId::ROOT, "main")
+        let main_id = self.res.definition(ModuleId::ROOT, "main");
+        // The root of authority (N37): each capability parameter `main` declares is handed
+        // one, and nothing else in a program can make one. Checking has refused a `main`
+        // with a parameter of any other type.
+        let roots: Vec<Value> = main_id
+            .and_then(|id| self.res.function(id))
+            .map(|d| {
+                d.params
+                    .iter()
+                    .map(|t| match t {
+                        nazm_sema::Type::Cap(k) => Value::Cap(*k),
+                        _ => Value::Int(0),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let main = main_id
             .and_then(|id| self.declaration(&program, id))
             .ok_or_else(|| RuntimeError {
                 diagnostic: Box::new(Diagnostic::error(
@@ -845,6 +865,11 @@ impl Interpreter {
                 )),
             })?;
         let mut env: Env = vec![Frame::default()];
+        if let Some(frame) = env.last_mut() {
+            for (p, v) in main.params.iter().zip(roots) {
+                frame.insert(p.name.clone(), v);
+            }
+        }
         self.call_body(Self::body_of(main)?, &mut env, "main")
     }
 
@@ -2261,5 +2286,6 @@ fn type_name(v: &Value) -> &'static str {
         Value::Record(_) => "a record",
         Value::Enum(_) => "an enum",
         Value::Vec(_) => "a `Vec`",
+        Value::Cap(k) => k.type_name(),
     }
 }

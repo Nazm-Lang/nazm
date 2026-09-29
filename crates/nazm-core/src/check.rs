@@ -63,6 +63,20 @@ struct Binding {
     declared_at: Option<Span>,
 }
 
+/// An attempt to build a capability, which nothing but the runtime may (N37).
+fn forged(k: nazm_sema::CapabilityKind, at: Span) -> Diagnostic {
+    Diagnostic::error(
+        codes::CAPABILITY_CONSTRUCTED,
+        at,
+        format!("`{k}` is a capability, and a capability cannot be constructed"),
+    )
+    .help(format!(
+        "authority comes only from `main`: give it {} `{k}` parameter, which the runtime \
+         supplies, and pass that to what needs it",
+        k.article()
+    ))
+}
+
 /// Lexical scopes. Innermost last.
 #[derive(Debug, Default)]
 struct Scopes {
@@ -80,6 +94,24 @@ impl Scopes {
 
     fn lookup(&self, name: &str) -> Option<Binding> {
         self.frames.iter().rev().find_map(|f| f.get(name).copied())
+    }
+
+    /// The authority the bindings visible here hold (N37): the kind of every binding a
+    /// name reaches whose type is a capability. A shadowed binding is not reachable, so it
+    /// holds nothing; a binding of a record that contains one holds nothing either — the
+    /// authority is the capability value, and a reader sees it only once it is bound.
+    fn held(&self) -> nazm_sema::CapabilitySet {
+        let mut held = nazm_sema::CapabilitySet::EMPTY;
+        for (i, frame) in self.frames.iter().enumerate() {
+            for (name, b) in frame {
+                let Type::Cap(k) = b.ty else { continue };
+                let inner = self.frames.get(i + 1..).unwrap_or_default();
+                if !inner.iter().any(|f| f.contains_key(name)) {
+                    held = held.with(k);
+                }
+            }
+        }
+        held
     }
 
     /// Whether the name is already bound **in the innermost scope**.
@@ -544,6 +576,40 @@ pub fn check_reusing(
                  arguments. Make `main` concrete and call a generic function from it",
             ),
         );
+    }
+
+    // `main`'s parameters are the root of authority (N37): the runtime hands it one of each
+    // capability it declares, and it can supply nothing else.
+    if let Some(def) = res
+        .definition(graph.root(), "main")
+        .and_then(|id| res.function(id))
+    {
+        let root = units.iter().find(|u| u.module == graph.root());
+        let written = root.and_then(|u| {
+            u.functions
+                .iter()
+                .find(|(decl, _)| *decl == def.decl)
+                .map(|(_, f)| *f)
+        });
+        for (i, t) in def.params.iter().enumerate() {
+            if t.is_capability() {
+                continue;
+            }
+            let at = written
+                .and_then(|f| f.params.get(i))
+                .map_or(def.name_span, |p| p.span);
+            errors.push(
+                Diagnostic::error(
+                    codes::MAIN_PARAMETER,
+                    at,
+                    "a parameter of `main` must be a capability",
+                )
+                .help(
+                    "the runtime calls `main`, and what it can hand over is authority: \
+                     `IoCap` and `SpawnCap`. Read the command line with `arg` instead",
+                ),
+            );
+        }
     }
 
     // The **root** module owns `main`. Another module's `main` is one of its definitions
@@ -2480,6 +2546,13 @@ impl Checker<'_> {
                 );
                 None
             }
+            Type::Cap(k) => {
+                // Authority is not constructible (N37): the only capabilities are the ones
+                // the runtime hands `main`. Its own code, not "not a record", because the
+                // question a reader has is where one comes from, not what fields it lacks.
+                self.errors.push(forged(k, span));
+                None
+            }
             other => {
                 // A known type that is not a user-defined one: `Int(x: 1)`. Distinguished
                 // from an unknown name, which `resolve_type` has already reported.
@@ -3961,6 +4034,10 @@ impl Checker<'_> {
             } => {
                 let Some(sig) = self.resolve_callee(callee, *callee_span) else {
                     let d = self.why_invisible(callee, *callee_span).unwrap_or_else(|| {
+                        // `IoCap()`: the question is where authority comes from (N37).
+                        if let Some(Type::Cap(k)) = Type::from_name(callee) {
+                            return forged(k, *callee_span);
+                        }
                         Diagnostic::error(
                             codes::UNDEFINED_FUNCTION,
                             *callee_span,
@@ -4243,6 +4320,7 @@ impl Checker<'_> {
                 callee,
                 type_args,
                 spawned,
+                held: self.scopes.held(),
             },
         );
     }

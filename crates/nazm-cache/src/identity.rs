@@ -122,7 +122,19 @@ use crate::digest::{self, Framed};
 /// (`N0367`, `N0368`). The code set moved for those three, and the interface schema moved
 /// too (`/6`, a declared set is part of what a module publishes). The counter covers the
 /// part neither shows: a module's own bodies are now checked against its own declarations.
-pub const SEMANTIC_EPOCH: u32 = 8;
+///
+/// `9` — N37, 2026-09-30. Capabilities. A function that declares an effect set now holds
+/// only the authority of the capability values in its scope, so one that declares `! { io }`
+/// and calls `print` with no `IoCap` moved from accepted to refused (`N0369`); so did
+/// building a capability (`N0370`) and a `main` with a parameter that is not one (`N0371`,
+/// accepted by the checker until now and unrunnable). `IoCap` and `SpawnCap` became
+/// built-in type names, so a module declaring a type of either name is refused under the
+/// existing `N0331`. The code set moved for the three new codes. The interface schema did
+/// not (`/6`): a capability parameter is written as any built-in type is, so an importer's
+/// key moves through its dependencies' fingerprints when a contract's authority changes.
+/// The counter covers what neither shows — a module's own bodies, and its calls to
+/// undeclared functions, are now checked against the authority they hold.
+pub const SEMANTIC_EPOCH: u32 = 9;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -138,6 +150,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "BRANCH_TYPES_DIFFER",
     "BUILTIN_TYPE_REDEFINED",
     "CANNOT_INFER_TYPE_ARGUMENT",
+    "CAPABILITY_CONSTRUCTED",
     "CONDITION_NOT_BOOL",
     "CONFLICTING_TYPE_ARGUMENTS",
     "DUPLICATE_EFFECT",
@@ -153,7 +166,9 @@ pub const CHECKER_CODES: &[&str] = &[
     "IMPORT_COLLIDES_WITH_DEFINITION",
     "INVALID_OPERANDS",
     "INVALID_PROJECTION",
+    "MAIN_PARAMETER",
     "MATCH_ON_NON_ENUM",
+    "MISSING_AUTHORITY",
     "MISSING_FIELD",
     "MISSING_MAIN",
     "MISSING_TYPE_ARGUMENTS",

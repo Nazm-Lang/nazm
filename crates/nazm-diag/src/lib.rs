@@ -262,6 +262,15 @@ pub mod codes {
     pub const UNKNOWN_EFFECT: Code = Code::new("N0367");
     /// An effect written twice in one set: `! { io, io }`.
     pub const DUPLICATE_EFFECT: Code = Code::new("N0368");
+    /// An operation whose authority the function does not hold (N37): a body with a
+    /// declared effect set that calls `print` with no `IoCap` in scope. Not an effect
+    /// error — the effect may be declared — and never fixed automatically: authority is
+    /// threaded through parameters, which is a change to every caller.
+    pub const MISSING_AUTHORITY: Code = Code::new("N0369");
+    /// An attempt to build a capability: `IoCap(...)`. Authority is not constructible.
+    pub const CAPABILITY_CONSTRUCTED: Code = Code::new("N0370");
+    /// A `main` parameter that is not a capability: the runtime can supply nothing else.
+    pub const MAIN_PARAMETER: Code = Code::new("N0371");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

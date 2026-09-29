@@ -482,7 +482,7 @@ fn emit_artefacts(native: &nazm_lir::Native, names: &nazm_lir::SourceNames<'_>) 
     });
     out.push(Artefact {
         name: "entry".to_owned(),
-        ir: nazm_lir::emit_entry(&native.entry, needs),
+        ir: nazm_lir::emit_entry(&native.entry, native.entry_roots, needs),
         instance: false,
     });
     out
