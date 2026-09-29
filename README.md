@@ -336,6 +336,15 @@ the fixed documentation corpus and the repository's fixed inputs. An MCP client 
 
 [`docs/mcp.md`](docs/mcp.md) says what it answers and what it does not.
 
+### Token counts under several tokenizers
+
+`nazm-tokens` (a separate tool: `cargo build --release -p nazm-tokens`) counts the exact text on
+standard input under four pinned tokenizers of three families — OpenAI byte-level BPE
+(`cl100k_base`, `o200k_base`), SentencePiece BPE (Mistral 7B v0.1) and SentencePiece Unigram
+(T5-small) — offline, as `nazm.token-cost/1`: `nazm repo --task --seed ID --json | nazm-tokens
+measure`. It measures; it decides nothing, and nothing that ships depends on it
+([`docs/architecture.md`](docs/architecture.md) §7.36).
+
 ## The documents
 
 | | |

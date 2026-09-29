@@ -39,10 +39,10 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,757 passed, 0 failed, 21 ignored, across 99 suites**, run contained at
-N33 (2026-09-29), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle tests, run on
-their own (19 of 19 passed, contained), and two are N33's release-build measurements, run by hand
-(`performance.md`). N32-H3 ended at 1,728 across 95 with 19 ignored; N32-H2 ended at 1,718 across 95; N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,773 passed, 0 failed, 22 ignored, across 104 suites**, run contained and
+offline at N34 (2026-09-29), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle
+tests, run on their own (19 of 19 passed, contained), and three are N33's and N34's release-build
+measurements, run by hand (`performance.md`). N33 ended at 1,757 across 99 with 21 ignored; N32-H3 ended at 1,728 across 95 with 19 ignored; N32-H2 ended at 1,718 across 95; N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1870,6 +1870,37 @@ re-recording it means running generated programs on the host, which the resource
 forbids. `bench/baseline-linux-aarch64.json` is current. Cross-host comparison is refused
 rather than attempted. Every measurement under ~15 ms is below the method's noise floor.
 
+*N34, 2026-09-29: Tokenizer-Independent Context Measurement v1, `nazm.token-cost/1` — VERIFIED;
+Multi-Tokenizer Benchmark v1 — VERIFIED; G81 Tokenizer Independence — VERIFIED for context
+measurement and selection; G82 Multi-Tokenizer Benchmarking — VERIFIED; G80 — PARTIAL,
+strengthened; G83, G84, G85 — RESEARCH.* `nazm-tokens` (`crates/nazm-tokens/`, `architecture.md`
+§7.36), a tool beside the compiler that nothing depends on (the `tokenizer reach` gate), counts
+exact text under four pinned tokenizers of three families — OpenAI byte-level BPE (`cl100k_base`,
+`o200k_base`, one family), SentencePiece BPE (Mistral-7B-v0.1) and SentencePiece Unigram
+(T5-small) — offline, each identity carrying its library version, source revision, licence,
+normalisation, special-token policy and a BLAKE3 digest checked at load. Content only: template
+framing and unknown pieces are reported beside the count, and nothing is normalised first. The
+seven N33 tasks, with N33's baselines unchanged, keep a 72.7–97.5 % token reduction under every
+tokenizer, a median cross-tokenizer spread of 1.15 points and at most 6.25; the one-function
+diagnostic is 14–20× its program under all four and is reported as the stress case it is. G81 is
+verified at that scope — the planner selects by entities and bytes before any tokenizer counts, and
+no tokenizer reaches the compiler, the service, the planner or a server — not as an audit of the
+language's syntax decisions against tokenizers. G82 is verified: three families, pinned and
+reproducible offline. G83–G85 remain research: no model was run and no cost measured. Evidence:
+`crates/nazm-tokens/tests/tokens.rs` — every tokenizer's ids equal to independent Python
+implementations' (`tiktoken` 0.12.0, `tokenizers` 0.22.2 with onig) on thirteen fixtures of ASCII,
+Nazm, JSON, Markdown, Bangla, Arabic, emoji, combining marks, punctuation, a long identifier and
+special-token strings; the families and the two SentencePiece algorithms distinct; the same counts
+from every call and every registry; framing and unknown pieces reported, special-token text
+ordinary; composed and decomposed text two inputs; unknown ids unsupported and never another
+tokenizer; a missing, altered or non-JSON asset refused by name; large and unusual texts counted;
+the tool reading only standard input; every answer valid against `schema/nazm.token-cost-1.json`.
+`crates/nazm-tokens/tests/benchmark.rs` — the seven tasks under every tokenizer with every N33
+mechanical check in the same pass, the report byte-identical twice, every non-stress reduction at
+least 50 % under every tokenizer, worst ≤ median ≤ best; the fixed overhead attributed; source,
+JSON, Markdown and three scripts compared; one selection's range in tokens (`performance.md`).
+Eleven N34 mutations (area 30).
+
 **Next dependency** · A Darwin machine on which running generated programs is contained.
 
 **Accepted when** · Both baselines are current and recorded under containment.
@@ -1903,9 +1934,9 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **601** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2, 582 at N32-H3), **413** of them with a verified killer and all
-of them owned by one of twelve focused profiles;
+**Evidence** · `xtask/mutations/mutations.toml` holds **612** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2, 582 at N32-H3, 601 at N33), **424** of them with a verified killer and all
+of them owned by one of thirteen focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -2559,6 +2590,16 @@ taking any argument. **One warm session, campaign `82a3ad10e55b2183`, targeted, 
 from empty caches:** those nineteen and the fifteen MCP entries N33's server change touches —
 **34 of 34 caught at tier 1**, no survivor, crash, timeout, unusable or uninjected entry — and
 **every declared killer verified, 36 of 36**.
+
+*N34 (2026-09-29) added eleven mutations and a thirteenth profile, `tokens`,* on the frozen final
+source: one tokenizer counting for all, an unknown tokenizer ignored, bytes reported as tokens,
+framing counted as content, an altered asset loaded, the vocabulary digest ignoring the
+vocabulary, text normalised before counting, unknown pieces not reported, the stress case dropped
+from the report, a reduction's sign inverted, and a tokenizer's worst result reported as its best.
+**One warm session, campaign `17c8f2bebd2c1dd4`, targeted, P1, offline, 818 s wall from empty
+caches: 11 of 11 caught at tier 1** — no survivor, crash, timeout, unusable or uninjected entry —
+and **every declared killer verified, 12 of 12**. Three of the eleven are in the benchmark's own
+code (`tests/benchmark.rs`), where the numbers it reports are computed.
 
 **Limitation** · Two catalogued defects are MUTANT CRASH, not caught (above), and one N13
 defect is a known survivor (above): the suite cannot observe a read of freed storage nothing
