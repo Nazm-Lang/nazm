@@ -1256,3 +1256,130 @@ fn the_dry_run_needs_no_credential_and_no_network_and_a_run_refuses_without_them
         "nothing was sent or written"
     );
 }
+
+/// How a recorded client was run: its arguments, environment and standard input.
+type Runs = Vec<(Vec<String>, Vec<(String, String)>, String)>;
+
+/// A Claude Code client that answers with one recorded result and keeps how it was run.
+struct Client {
+    status: Option<i32>,
+    stdout: String,
+    runs: RefCell<Runs>,
+}
+
+impl nazm_agent_bench::provider::Exec for Client {
+    fn exec(
+        &self,
+        args: &[String],
+        env: &[(&str, String)],
+        stdin: &str,
+    ) -> Result<(Option<i32>, String, String), String> {
+        self.runs.borrow_mut().push((
+            args.to_vec(),
+            env.iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+            stdin.to_owned(),
+        ));
+        Ok((self.status, self.stdout.clone(), String::new()))
+    }
+}
+
+fn client(status: i32, stdout: Value) -> Client {
+    Client {
+        status: Some(status),
+        stdout: stdout.to_string(),
+        runs: RefCell::new(Vec::new()),
+    }
+}
+
+#[test]
+fn the_claude_code_client_runs_one_bare_turn_and_its_usage_is_normalised() {
+    use nazm_agent_bench::provider::ClaudeCode;
+    let result = json!({
+        "type": "result", "subtype": "success", "is_error": false, "num_turns": 1,
+        "result": "{\"answer\": {}}", "stop_reason": "end_turn", "api_error_status": null,
+        "total_cost_usd": 0.001,
+        "usage": {"input_tokens": 400, "output_tokens": 9, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+        "modelUsage": {"claude-haiku-4-5-20251001": {"inputTokens": 400, "outputTokens": 9, "cacheReadInputTokens": 3000, "cacheCreationInputTokens": 200, "thinkingTokens": 0}}
+    });
+    let p = ClaudeCode {
+        exec: client(0, result),
+        model: "claude-haiku-4-5-20251001".to_owned(),
+        version: "2.1.283 (Claude Code)".to_owned(),
+        max_output_tokens: 1024,
+    };
+    let r = prompt::request(task("T4"), Arm::N33);
+    let reply = p.complete_within(&r, 12_345_678).unwrap();
+    assert_eq!(reply.model, "claude-haiku-4-5-20251001");
+    assert_eq!(reply.text, "{\"answer\": {}}");
+    assert_eq!(
+        reply.usage,
+        Usage {
+            input_tokens: 3600,
+            uncached_input_tokens: 400,
+            cached_input_tokens: 3000,
+            cache_write_input_tokens: 200,
+            output_tokens: 9,
+            reasoning_tokens: Some(0),
+        }
+    );
+    let runs = p.exec.runs.borrow();
+    let (args, env, stdin) = &runs[0];
+    assert_eq!(stdin, &r.user, "the prompt goes on standard input");
+    let after = |flag: &str| args[args.iter().position(|a| a == flag).unwrap() + 1].clone();
+    assert_eq!(after("--system-prompt"), r.system);
+    assert_eq!(after("--tools"), "");
+    assert_eq!(after("--setting-sources"), "");
+    assert_eq!(after("--model"), "claude-haiku-4-5-20251001");
+    assert_eq!(after("--max-budget-usd"), "0.000013");
+    assert!(
+        args.iter().any(|a| a == "--strict-mcp-config")
+            && args.iter().any(|a| a == "--no-session-persistence")
+    );
+    assert!(env.contains(&("MAX_THINKING_TOKENS".to_owned(), "0".to_owned())));
+    assert!(env.contains(&(
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS".to_owned(),
+        "1024".to_owned()
+    )));
+    assert_eq!(p.parameters()["client_version"], "2.1.283 (Claude Code)");
+    assert_eq!(p.calls_per_request(), 2);
+    // An answer cut off at the output limit is a reply, and the oracle's to judge.
+    let cut = json!({"result": "API Error: Claude's response exceeded the 1024 output token maximum.", "is_error": true, "api_error_status": null,
+        "modelUsage": {"claude-haiku-4-5-20251001": {"inputTokens": 900, "outputTokens": 1024}}});
+    let p = ClaudeCode {
+        exec: client(1, cut),
+        ..p
+    };
+    let reply = p.complete(&r).unwrap();
+    assert_eq!(
+        oracle::score(task("T4"), Arm::N33, &reply.text).failure,
+        Some(Failure::InvalidStructuredOutput)
+    );
+    // An overloaded server is retryable; a refused request is not.
+    let p = ClaudeCode {
+        exec: client(1, json!({"api_error_status": 529, "result": "Overloaded"})),
+        ..p
+    };
+    assert!(matches!(
+        p.complete(&r),
+        Err(CallError::Retryable { billed: false, .. })
+    ));
+    let p = ClaudeCode {
+        exec: client(1, json!({"api_error_status": 400, "result": "bad"})),
+        ..p
+    };
+    assert!(matches!(p.complete(&r), Err(CallError::Fatal { .. })));
+    let p = ClaudeCode {
+        exec: Client {
+            status: Some(1),
+            stdout: "not json".to_owned(),
+            runs: RefCell::new(Vec::new()),
+        },
+        ..p
+    };
+    assert!(matches!(
+        p.complete(&r),
+        Err(CallError::Retryable { billed: true, .. })
+    ));
+}

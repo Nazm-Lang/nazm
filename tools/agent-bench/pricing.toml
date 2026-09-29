@@ -30,6 +30,17 @@ cache_write_input_usd_per_mtok = "1.25"
 output_usd_per_mtok = "5"
 
 [[price]]
+provider = "claude-code"
+model = "claude-haiku-4-5-20251001"
+effective = "2026-09-29"
+source = "https://platform.claude.com/docs/en/about-claude/pricing (the Anthropic API's list price; the client reaches the same model, and reports its own list-price estimate beside the usage)"
+input_usd_per_mtok = "1"
+cached_input_usd_per_mtok = "0.10"
+# The client marks its prompt for caching itself; a write is the five-minute rate.
+cache_write_input_usd_per_mtok = "1.25"
+output_usd_per_mtok = "5"
+
+[[price]]
 provider = "fake"
 model = "fake-1"
 effective = "2026-09-29"

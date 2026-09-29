@@ -59,6 +59,8 @@ pub struct Spec {
     pub parameters: Value,
     pub max_output_tokens: u64,
     pub input_bound: (u64, u64),
+    pub framing: u64,
+    pub calls_per_request: u64,
 }
 
 impl Spec {
@@ -70,6 +72,8 @@ impl Spec {
             parameters: p.parameters(),
             max_output_tokens: p.max_output_tokens(),
             input_bound: p.input_bound(),
+            framing: p.framing(),
+            calls_per_request: p.calls_per_request(),
         }
     }
 }
@@ -296,8 +300,18 @@ pub fn local(t: &nazm_tokens::Tokenizer, task: &Task, arm: Arm) -> Local {
 /// The input bound a request is admitted under, before any provider count.
 #[must_use]
 pub fn estimate(l: Local, spec: &Spec) -> u64 {
-    // 64 tokens for the provider's message framing, which neither count includes.
-    bound(l.context_tokens + l.fixed_tokens + 64, spec.input_bound)
+    bound(
+        l.context_tokens + l.fixed_tokens + spec.framing,
+        spec.input_bound,
+    )
+}
+
+/// The most one call of a request can cost, and the most the request can: the call's worst
+/// case times the calls a request can become.
+#[must_use]
+pub fn worst(input: u64, spec: &Spec, price: &Price) -> Option<(u64, u64)> {
+    let call = price::worst_case(input, spec.max_output_tokens, price)?;
+    Some((call, call.checked_mul(spec.calls_per_request.max(1))?))
 }
 
 fn ledger(evidence: &Path) -> Result<u64, String> {
@@ -395,7 +409,12 @@ pub struct DryRun {
     pub worst_case_with_retries: u64,
     pub already_spent: u64,
     pub cap: u64,
+    /// Whether every request at its worst case fits in what the cap leaves.
     pub within_cap: bool,
+    /// pico-USD: the dearest single request's worst case.
+    pub largest_request: u64,
+    /// Whether that one fits: a run whose pass may not fit starts, and stops at the cap.
+    pub startable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -430,15 +449,15 @@ pub fn dry_run(
     let planned = plan(suite, cfg.mode, cfg.trials, spec);
     let mut input = 0u64;
     let mut worst = 0u64;
+    let mut largest = 0u64;
     for p in &planned {
         let e = estimate(local(t, p.task, p.arm), spec);
         input += e;
-        worst = worst
-            .checked_add(
-                price::worst_case(e, spec.max_output_tokens, &cfg.price)
-                    .ok_or("a worst case overflows")?,
-            )
-            .ok_or("the worst case overflows")?;
+        let w = self::worst(e, spec, &cfg.price)
+            .ok_or("a worst case overflows")?
+            .1;
+        largest = largest.max(w);
+        worst = worst.checked_add(w).ok_or("the worst case overflows")?;
     }
     let tasks = tasks(suite, cfg.mode)
         .iter()
@@ -487,6 +506,8 @@ pub fn dry_run(
         already_spent: already,
         cap: cfg.cap,
         within_cap: already.saturating_add(worst) <= cfg.cap,
+        largest_request: largest,
+        startable: already.saturating_add(largest) <= cfg.cap,
     })
 }
 
@@ -589,9 +610,9 @@ pub fn run(
                 c
             }
         };
-        let input = estimate(l, &spec).max(counted.map_or(0, |c| c.full + 64));
-        let worst = price::worst_case(input, spec.max_output_tokens, &cfg.price)
-            .ok_or("a worst case overflows")?;
+        let input = estimate(l, &spec).max(counted.map_or(0, |c| c.full + spec.framing));
+        let (call_worst, worst) =
+            worst(input, &spec, &cfg.price).ok_or("a worst case overflows")?;
         let mut attempts = 0;
         let mut reasons = Vec::new();
         let mut retry_ms = 0u64;
@@ -615,7 +636,7 @@ pub fn run(
             }
             attempts += 1;
             let start = Instant::now();
-            let r = provider.complete(&p.request);
+            let r = provider.complete_within(&p.request, call_worst);
             let ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
             let charge = match &r {
                 Ok(reply) => price::cost(&reply.usage, &cfg.price).map_or(worst, |c| c.total),
