@@ -370,6 +370,51 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N35, in dependency order
+
+No item is chosen here; N35 left these standing, beside N34's and N33's below.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| The same benchmark on a second model family, through the direct adapters | a key a developer brings | none was supplied; the OpenAI and Anthropic adapters are tested against recorded responses only |
+| A deterministic run (temperature 0) | a provider that takes one | the Claude Code client sets none; the model's default applied |
+| More trials, and intervals rather than ranges | a budget for them | two trials show a spread, not a significance |
+| Routing a tiny, self-contained task to raw source | evidence across models, and a rule to test | N35 observed one crossover, for one model, between 744 and 6,720 input tokens; it routes nothing |
+| A task wording that keeps builtins out of "definitions" (T2) | a new suite version, compared from the start | the frozen suite is not edited after its results |
+| Tool-using and multi-turn agents | a protocol for them | N35 measures whether the context alone suffices |
+
+### N35 — Agent task token, cost and correctness benchmark v1 — **complete, 2026-09-29**
+
+`nazm-agent-bench` puts eight tasks over the seven N33 scenarios — understand, edit, diagnose,
+documentation and test selection, the 123-byte diagnostic among them — to a real model, each with
+the naive baseline and with `nazm repo --task`'s context, byte for byte and digest-addressed, one
+prompt for both. Each answer is scored fact by fact by an offline oracle whose truths come from the
+authorities; hallucinations are kept apart from misreadings; usage is kept raw and normalised, and
+dated prices are applied in integer pico-USD, never in an identity. A spend cap is checked before
+every attempt, transport failures are retried at most twice and never counted incorrect, the
+journal resumes, and a dry run needs no provider. On `claude-haiku-4-5-20251001` through the Claude
+Code client, two trials: the N33 context solved 12 of 16 requests to 6, with 112 of 116 facts to
+95, no hallucination in either arm, 94.36 % fewer input tokens and 95.39 % less cost as billed
+(92.86 % uncached); correctness was preserved on 7 of 8 tasks, T2 the exception by the
+pre-declared rule, and the diagnostic the one task where raw source was cheaper. Evaluation tooling
+only: no crate depends on it, and no grammar, semantics, `SEMANTIC_EPOCH` (7), `nazm.interface/5`
+or existing schema changed; one new schema.
+
+| Settled | Where |
+| --- | --- |
+| the suite, oracles, providers, runner and report | `crates/nazm-agent-bench/`, `architecture.md` §7.37 |
+| the dated price list | `tools/agent-bench/pricing.toml` |
+| the results | `tools/agent-bench/results/`, `performance.md` |
+| how to run it, and bring a key | `runbook.md`, *The agent task benchmark* |
+| nothing else on the network, nothing depending on it | `xtask/src/rules.rs`, the `network reach` and `tokenizer reach` gates |
+
+Mutation evidence: sixteen new mutations and an `agent` profile, all caught at tier 1 with their
+sixteen killers verified (`capability-matrix.md` §30). The MILESTONE gate ran offline after the
+paid run, at `0419b25`: 2,977 s of wall time (`performance.md`). The benchmark spent $1.78 of a $2
+cap, pilots included.
+
+**N36 has not started.**
+
 ### After N34, in dependency order
 
 No item is chosen here; N34 left these standing, beside N33's and N32's below.
@@ -408,7 +453,6 @@ Mutation evidence: eleven new mutations and a `tokens` profile, all caught at ti
 twelve killers verified (`capability-matrix.md` §30). The MILESTONE gate ran offline: 2,090 s of
 stages, 40.6 minutes of wall time with one documentation fix and its re-run (`performance.md`).
 
-**N35 has not started.**
 
 ### After N33, in dependency order
 
