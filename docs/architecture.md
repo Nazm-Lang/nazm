@@ -4108,6 +4108,79 @@ reader (N32's), a second context packet (N27's) — and any claim of project-wid
 callers are those of the manifest's compilations, and an exported definition's users elsewhere
 are not known.
 
+## 7.36 Tokenizer-independent context measurement — settled by N34, 2026-09-29
+
+```text
+nazm repo --task … --json            (selection: entities, source bytes, doc bytes — N33)
+        │  exact bytes, piped
+        ▼
+nazm-tokens measure                  nazm.token-cost/1        (a tool beside the compiler)
+        │
+        ├── tiktoken-rs 0.12.1       openai-bpe/cl100k_base, openai-bpe/o200k_base
+        └── tokenizers 0.23.1        sentencepiece-bpe/mistral-7b-v0.1, sentencepiece-unigram/t5-small
+                                     tools/tokenizers/*.tokenizer.json, pinned by BLAKE3
+```
+
+**Tokenizer independence.** No tokenizer reaches the language. `nazm-tokens` depends on no
+internal crate, and no crate depends on it: the layering table lists it nowhere, and the
+`tokenizer reach` gate refuses any other crate that depends on `tiktoken-rs` or `tokenizers`.
+Parsing, checking, `DefKey` and `ModuleKey`, diagnostics, code generation, the bootstrap, the
+documentation index and the planner's selection are what they were: `nazm` and `nazm-mcp` are
+built without a tokenizer anywhere in their graphs.
+
+**The byte-budget law.** N33's budgets — entities, bytes of definition source, bytes of section
+text — stay the canonical ones, because they are the same under every tokenizer. A context is
+selected first, from bytes and structure; it is counted afterwards, by any number of tokenizers,
+and no count, identity or tokenizer-specific rank changes what was selected. N34's benchmark shows
+why: one selection is 1.3–1.8× as many tokens under one tokenizer as under another, so a token
+budget would be a budget for one tokenizer.
+
+**Tokenizer identity.** A count is evidence only under the exact implementation and vocabulary.
+Each tokenizer's identity is its id (`family-slug/name`), family, algorithm, library and version,
+source and revision, licence, normalisation, special-token policy, and a BLAKE3 digest of its asset
+— for the Hugging Face files the file's bytes, for the OpenAI vocabularies every rank's bytes as
+the library decodes them — pinned in the crate and checked at every load. A missing, altered or
+malformed asset is refused by name; an id no tokenizer has is `unsupported`, never another
+tokenizer. Changing a version or an asset changes the identity.
+
+**Three families.** `openai_bpe` (byte-level BPE over a regex pre-split, no normalisation;
+`cl100k_base` and `o200k_base` are one family, two vocabularies), `sentencepiece_bpe` (Mistral
+7B v0.1: merges over metaspace pieces with byte fallback) and `sentencepiece_unigram` (T5-small:
+the most probable segmentation under per-piece scores, after the model's own NFKC-style
+normalisation and whitespace split). The two SentencePiece models are different algorithms, not
+two vocabularies of one: the files say `BPE` with 58,980 merges and a list of scored pieces, and the
+tests hold both.
+
+**The special-token law.** A count is of content: the exact text encoded as ordinary text.
+OpenAI's special-token strings count as text; the SentencePiece templates' `<s>` and `</s>` are
+not added, and are reported beside the count as `framing_tokens`. Chat roles, system framing and
+vendor protocol overhead are not measured.
+
+**The normalisation law.** Nothing is normalised before counting: the bytes measured are the
+bytes that would be sent, and a composed and a decomposed accent are two inputs. T5 normalises;
+that is its behaviour, recorded in its identity, and its unknown pieces are counted as
+`unknown_tokens` — a smaller count that lost the text is reported as such.
+
+**Offline and pinned.** The assets are in `tools/tokenizers/` with their provenance; the
+libraries are pinned exactly, with no HTTP, hub or download feature, and the crate has no network
+code. The container the gate runs in has no network.
+
+**The multi-tokenizer benchmark law.** The seven N33 tasks, with N33's naive baselines unchanged
+— they are defined once, in `crates/nazm-repo/tests/scenarios/`, for both benchmarks — are counted
+under every tokenizer, each separately; reductions are integer basis points; the spread is the
+largest minus the smallest reduction across tokenizers; the per-tokenizer median, worst and best
+exclude only the fixed-overhead stress case, which is reported in full beside them. Every N33
+mechanical check runs in the same pass.
+
+**Surfaces.** `nazm-tokens list` and `nazm-tokens measure [--tokenizer ID]…`, the text on
+standard input and never a path argument, one `nazm.token-cost/1` object on stdout. To measure a
+task context: `nazm repo --task … --json | nazm-tokens measure`. There is no MCP tool: a server
+that answers from the disk has no text of its own to measure, and would have to link a tokenizer.
+
+**Deliberately not here.** Token budgets, token-ranked selection, a compact transport,
+tokenizer-driven identity changes, chat-template accounting, model calls, and a persistent count
+cache.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
