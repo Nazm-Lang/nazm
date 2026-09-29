@@ -3220,6 +3220,7 @@ targets = [
     { package = "nazm-cli", test = "prelude" },
     { package = "nazm-cli", test = "native_cache" },
     { package = "nazm-cli", test = "effects" },
+    { package = "nazm-cli", test = "capabilities" },
 ]
 
 [[profile]]
@@ -3236,7 +3237,9 @@ targets = [
     { package = "nazm-core", test = "concurrency" },
     { package = "nazm-core", test = "unit_checking" },
     { package = "nazm-core", test = "effects" },
+    { package = "nazm-core", test = "capabilities" },
     { package = "nazm-cli", test = "effects" },
+    { package = "nazm-cli", test = "capabilities" },
     { package = "nazm-cli", test = "codes" },
     { package = "nazm-cli", test = "prelude" },
     { package = "nazm-cli", test = "propagation" },
@@ -3266,6 +3269,7 @@ targets = [
     { package = "nazm-service", test = "diagnostics" },
     { package = "nazm-service", test = "summary" },
     { package = "nazm-service", test = "incomplete" },
+    { package = "nazm-service", test = "capabilities" },
 ]
 
 [[profile]]
@@ -3293,6 +3297,7 @@ targets = [
     { package = "nazm-core", lib = true },
     { package = "nazm-core", test = "unit_checking" },
     { package = "nazm-core", test = "effects" },
+    { package = "nazm-core", test = "capabilities" },
     { package = "nazm-core", test = "records" },
     { package = "nazm-core", test = "enums" },
     { package = "nazm-core", test = "generics" },
@@ -7505,10 +7510,192 @@ find = """pub const SCHEMA: &str = "nazm.interface/6";"""
 replace = """pub const SCHEMA: &str = "nazm.interface/5";"""
 killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_schema_is_refused_and_never_read_as_this_one" }]
 
+# `n36-the-epoch-stays` is retired: N37 moved the epoch to 9, and the rule it pinned — the epoch
+# moves when the checker refuses what it accepted — is `n37-the-epoch-stays` now.
+
+# --- N37: capabilities / authority -----------------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.39 and `docs/spec.md`, *Capabilities*: a
+# built-in needs its identity's authority and a `spawn` the authority to start a task; a capability
+# kind is not interchangeable with another; nothing constructs one and nothing else is handed to
+# `main`; authority is the bindings a name reaches, never a spelling, a shadowed binding or a
+# declared effect; a function with no declared set exercises its caller's authority, across a
+# module too, and a task's function its spawner's; holding a capability adds no effect; the
+# witness follows the chain; a capability has no equality; the interface carries the kind; the
+# entry hands `main` its roots; and the epoch moved.
+
 [[mutation]]
-name = "n36-the-epoch-stays"
-why = "`SEMANTIC_EPOCH` is not bumped for a checker that now refuses bodies against their declared effects, so an N35 entry is filed where an N36 one is looked for"
+name = "n37-io-built-ins-need-no-authority"
+why = "no outside-world built-in requires an `IoCap`, so a function with a contract may print, read and exit holding nothing"
+file = "crates/nazm-sema/src/capability.rs"
+find = "            | Intrinsic::ExitWith => CapabilitySet::of(Self::Io),"
+replace = "            | Intrinsic::ExitWith => CapabilitySet::EMPTY,"
+killers = [{ package = "nazm-core", test = "capabilities", name = "an_effect_declared_without_authority_is_an_authority_error_and_not_an_effect_one" }]
+
+[[mutation]]
+name = "n37-print-needs-no-authority"
+why = "`print` alone is authorised by nothing, so one built-in reaches the outside world without authority"
+file = "crates/nazm-sema/src/capability.rs"
+find = """            // streams and ending the process alike.
+            Intrinsic::ArgsCount"""
+replace = """            // streams and ending the process alike.
+            Intrinsic::Print => CapabilitySet::EMPTY,
+            Intrinsic::ArgsCount"""
+killers = [{ package = "nazm-core", test = "capabilities", name = "an_effect_declared_without_authority_is_an_authority_error_and_not_an_effect_one" }]
+
+[[mutation]]
+name = "n37-a-spawn-cap-authorises-io"
+why = "an outside-world built-in is authorised by a `SpawnCap`, so the wrong capability is accepted and the right one refused"
+file = "crates/nazm-sema/src/capability.rs"
+find = "            | Intrinsic::ExitWith => CapabilitySet::of(Self::Io),"
+replace = "            | Intrinsic::ExitWith => CapabilitySet::of(Self::Spawn),"
+killers = [{ package = "nazm-core", test = "capabilities", name = "an_effect_declared_without_authority_is_an_authority_error_and_not_an_effect_one" }]
+
+[[mutation]]
+name = "n37-a-spawn-needs-no-authority"
+why = "starting a task requires no `SpawnCap`, so a function with a contract may spawn holding nothing"
+file = "crates/nazm-core/src/effects.rs"
+find = """        if site.spawned {
+            needs.push((CapabilityKind::to_start_a_task(), Needs::Spawn));"""
+replace = """        if false && site.spawned {
+            needs.push((CapabilityKind::to_start_a_task(), Needs::Spawn));"""
+killers = [{ package = "nazm-core", test = "capabilities", name = "starting_a_task_needs_spawn_authority_and_the_task_brings_none_of_its_own" }]
+
+[[mutation]]
+name = "n37-an-undeclared-callee-brings-its-own-authority"
+why = "a call to a function with no declared set needs nothing of its caller, so code with a contract reaches ambient authority through code without one"
+file = "crates/nazm-core/src/effects.rs"
+find = "                if let Some(effects) = effects {"
+replace = "                if let Some(effects) = effects.filter(|_| false) {"
+killers = [{ package = "nazm-core", test = "capabilities", name = "an_undeclared_callee_exercises_its_callers_authority_with_a_witness" }]
+
+[[mutation]]
+name = "n37-an-undeclared-import-brings-its-own-authority"
+why = "an import with no declared set needs nothing of its caller, so the compatibility bridge is a backdoor across a module boundary"
+file = "crates/nazm-core/src/effects.rs"
+find = """                        Some(Some(_)) => None,
+                        _ => Some(EffectSet::all()),"""
+replace = """                        Some(Some(_)) => None,
+                        _ => None,"""
+killers = [{ package = "nazm-cli", test = "incremental", name = "an_undeclared_import_needs_every_authority_from_a_caller_with_a_contract" }]
+
+[[mutation]]
+name = "n37-a-task-inherits-its-spawners-authority"
+why = "a task whose function declares nothing needs nothing of its spawner, so a `SpawnCap` alone lets a task exercise any authority"
+file = "crates/nazm-core/src/effects.rs"
+find = "                if let Some(effects) = effects {"
+replace = "                if let Some(effects) = effects.filter(|_| !site.spawned) {"
+killers = [{ package = "nazm-core", test = "capabilities", name = "starting_a_task_needs_spawn_authority_and_the_task_brings_none_of_its_own" }]
+
+[[mutation]]
+name = "n37-an-effect-set-grants-authority"
+why = "a declared effect counts as the capability for it, so `! { io }` alone authorises `print`"
+file = "crates/nazm-core/src/effects.rs"
+find = "            for kind in required.without(site.held).without(reported).iter() {"
+replace = "            for kind in required.without(site.held.union(CapabilitySet::for_effects(node.declared.unwrap_or_default()))).without(reported).iter() {"
+killers = [{ package = "nazm-core", test = "capabilities", name = "an_effect_declared_without_authority_is_an_authority_error_and_not_an_effect_one" }]
+
+[[mutation]]
+name = "n37-a-pure-contract-needs-no-authority"
+why = "authority is checked only for a function declaring some effect, so one declaring `! {}` that exercises authority is reported only for its effect"
+file = "crates/nazm-core/src/effects.rs"
+find = "        authority(node, &nodes, &sets, module, &contract, res, errors);"
+replace = "        if !declared.is_empty() { authority(node, &nodes, &sets, module, &contract, res, errors); }"
+killers = [{ package = "nazm-core", test = "capabilities", name = "authority_without_the_effect_is_an_effect_error_and_both_missing_is_both_in_order" }]
+
+[[mutation]]
+name = "n37-holding-authority-is-an-effect"
+why = "holding an `IoCap` adds `io` to a function's effects, so passing or storing authority is mistaken for exercising it"
+file = "crates/nazm-core/src/effects.rs"
+find = """            let at = site.span;
+            if site.spawned {"""
+replace = """            let at = site.span;
+            if site.held.contains(CapabilityKind::Io) {
+                direct.push(EffectReason { effect: Effect::Io, at, source: EffectSource::Spawn });
+            }
+            if site.spawned {"""
+killers = [{ package = "nazm-core", test = "capabilities", name = "authority_passed_from_main_through_helpers_recursion_and_storage_is_accepted" }]
+
+[[mutation]]
+name = "n37-the-authority-witness-stops-at-the-callee"
+why = "the witness for missing authority ends at the first undeclared callee, so it never shows what needs the authority"
+file = "crates/nazm-core/src/effects.rs"
+find = "                EffectSource::Inferred(h) => g = h,"
+replace = "                EffectSource::Inferred(_) => break,"
+killers = [{ package = "nazm-core", test = "capabilities", name = "an_undeclared_callee_exercises_its_callers_authority_with_a_witness" }]
+
+[[mutation]]
+name = "n37-authority-is-a-spelling"
+why = "a binding named `io` is authority whatever its type, so a spelling grants what only a capability value may"
+file = "crates/nazm-core/src/check.rs"
+find = "                let Type::Cap(k) = b.ty else { continue };"
+replace = "                let Type::Cap(k) = (if name == \"io\" { Type::Cap(nazm_sema::CapabilityKind::Io) } else { b.ty }) else { continue };"
+killers = [{ package = "nazm-core", test = "capabilities", name = "authority_is_the_bindings_a_name_reaches_and_nothing_else" }]
+
+[[mutation]]
+name = "n37-a-shadowed-capability-is-held"
+why = "a capability hidden by a later binding of its name still counts, so authority no expression can reach is held"
+file = "crates/nazm-core/src/check.rs"
+find = "                if !inner.iter().any(|f| f.contains_key(name)) {"
+replace = "                if !inner.is_empty() || inner.is_empty() {"
+killers = [{ package = "nazm-core", test = "capabilities", name = "authority_is_the_bindings_a_name_reaches_and_nothing_else" }]
+
+[[mutation]]
+name = "n37-a-capability-can-be-built"
+why = "building a capability with the record form is not refused, so authority is forged from nothing"
+file = "crates/nazm-core/src/check.rs"
+find = "                self.errors.push(forged(k, span));"
+replace = "                let _ = forged(k, span);"
+killers = [{ package = "nazm-core", test = "capabilities", name = "nothing_a_program_writes_constructs_a_capability" }]
+
+[[mutation]]
+name = "n37-main-takes-anything"
+why = "a `main` parameter that is not a capability is accepted, so the root of authority takes values the runtime cannot supply"
+file = "crates/nazm-core/src/check.rs"
+find = """            if t.is_capability() {
+                continue;
+            }"""
+replace = """            if t.is_capability() || true {
+                continue;
+            }"""
+killers = [{ package = "nazm-core", test = "capabilities", name = "main_is_the_root_of_authority_and_takes_nothing_else" }]
+
+[[mutation]]
+name = "n37-a-capability-has-equality"
+why = "a capability is given equality, and a record holding one derives it, so authority values can be compared as data"
+file = "crates/nazm-sema/src/udt.rs"
+find = "            Type::Int | Type::Bool | Type::Str => true,"
+replace = "            Type::Int | Type::Bool | Type::Str | Type::Cap(_) => true,"
+killers = [{ package = "nazm-core", test = "capabilities", name = "nothing_a_program_writes_constructs_a_capability" }]
+
+[[mutation]]
+name = "n37-the-interface-drops-authority"
+why = "a capability parameter is published as `Int`, so an importer is asked for an integer where authority is required"
+file = "crates/nazm-iface/src/wire.rs"
+find = "            .map(|n| PersistentType::Builtin(n.to_owned())),"
+replace = "            .map(|n| PersistentType::Builtin(if other.is_capability() { \"Int\".to_owned() } else { n.to_owned() })),"
+killers = [{ package = "nazm-cli", test = "incremental", name = "the_interface_a_cache_keeps_carries_the_declared_set_and_not_the_inferred_one" }]
+
+[[mutation]]
+name = "n37-the-interface-forgets-the-kind"
+why = "every capability parameter is published as an `IoCap`, so changing which authority a contract needs reaches no importer"
+file = "crates/nazm-iface/src/wire.rs"
+find = "            .map(|n| PersistentType::Builtin(n.to_owned())),"
+replace = "            .map(|n| PersistentType::Builtin(if other.is_capability() { \"IoCap\".to_owned() } else { n.to_owned() })),"
+killers = [{ package = "nazm-cli", test = "incremental", name = "a_capability_only_change_rechecks_the_importer_and_finds_what_it_breaks" }]
+
+[[mutation]]
+name = "n37-main-is-handed-nothing"
+why = "the entry wrapper hands `main` no roots, so a `main` that declares its authority is called with the wrong signature"
+file = "crates/nazm-lir/src/emit.rs"
+find = """    let root_args = vec!["i64 0"; roots].join(", ");"""
+replace = """    let root_args = vec!["i64 0"; 0].join(", ");"""
+killers = [{ package = "nazm-cli", test = "capabilities", name = "a_capability_parameter_lowers_exactly_as_an_int_one_and_main_is_handed_its_roots" }]
+
+[[mutation]]
+name = "n37-the-epoch-stays"
+why = "`SEMANTIC_EPOCH` is not bumped for a checker that now refuses bodies lacking the authority their effects need, so an N36 entry is filed where an N37 one is looked for"
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 8;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 7;"
+find = "pub const SEMANTIC_EPOCH: u32 = 9;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 8;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
