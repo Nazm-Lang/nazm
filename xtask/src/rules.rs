@@ -56,6 +56,11 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // exist. It reads the compiler's facts through the service, and the documentation
         // through `nazm-docs` — never a parser, a checker or a reader of its own.
         "nazm-repo" => &["nazm-core", "nazm-service", "nazm-docs"],
+        // Token measurement, N34: a tool beside the compiler. Its library depends on no
+        // internal crate; these four are the benchmark's dev-dependencies, which Cargo's
+        // metadata lists with the rest. No crate may depend on it — it is in no list here —
+        // so no tokenizer can reach parsing, checking, identity or selection.
+        "nazm-tokens" => &["nazm-core", "nazm-service", "nazm-docs", "nazm-repo"],
         // The CLI deliberately does NOT depend on nazm-syntax: it goes through nazm-core,
         // so there is one entry point into the front end rather than two that can drift.
         "nazm-cli" => &[
@@ -85,6 +90,14 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
     };
     Some(deps)
 }
+
+/// The tokenizer libraries, and the one crate that may depend on them (N34). A count is a
+/// measurement of text; nothing that decides what a program means or what a context holds
+/// may reach one.
+pub(crate) const TOKENIZER_CRATES: &[&str] = &["tiktoken-rs", "tokenizers"];
+
+/// The only crate that may depend on a tokenizer library.
+pub(crate) const TOKENIZER_OWNER: &str = "nazm-tokens";
 
 /// Crates permitted to contain `unsafe`, with the justification.
 ///
