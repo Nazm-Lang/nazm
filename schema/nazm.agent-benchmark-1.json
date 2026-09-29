@@ -134,7 +134,7 @@
     "record": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "benchmark", "suite", "mode", "identity", "task", "category", "arm", "trial", "order", "provider", "model_requested", "model_returned", "prompt_version", "prompt_digest", "context_digest", "context_bytes", "parameters", "status", "attempts", "retries", "retry_reasons", "usage", "raw_usage", "fingerprint", "stop_reason", "local", "counted", "price", "cost", "charged", "latency_ms", "retry_latency_ms", "answer_digest", "answer", "score", "failure"],
+      "required": ["schema", "benchmark", "suite", "mode", "identity", "task", "category", "arm", "trial", "order", "provider", "model_requested", "model_returned", "prompt_version", "prompt_digest", "context_digest", "context_bytes", "parameters", "status", "attempts", "retries", "retry_reasons", "usage", "raw_usage", "fingerprint", "stop_reason", "local", "counted", "price", "cost", "charged", "latency_ms", "retry_latency_ms", "answer_digest", "answer", "score", "lenient", "failure"],
       "properties": {
         "schema": { "const": "nazm.agent-benchmark/1" },
         "benchmark": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
@@ -193,6 +193,7 @@
         "answer_digest": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }] },
         "answer": { "type": ["object", "null"] },
         "score": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/score" }] },
+        "lenient": { "description": "The same oracle on the reply's last fenced block, when the reply was prose around one: secondary, never the verdict.", "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/score" }] },
         "failure": { "enum": [null, "runner_error", "model_drift", "invalid_structured_output", "refusal", "hallucinated_fact", "wrong_repository_fact", "missing_required_fact"] }
       }
     },

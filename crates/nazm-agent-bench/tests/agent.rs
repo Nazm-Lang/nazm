@@ -371,6 +371,19 @@ fn invalid_output_and_refusal_are_failures_of_their_own() {
     assert_eq!(s.correct, 0);
     let s = oracle::score(t, Arm::N33, r#"{"keyword": "struct"}"#);
     assert_eq!(s.failure, Some(Failure::InvalidStructuredOutput));
+    // Prose around a fenced answer breaks the contract; the lenient reading is kept apart.
+    let prose = format!(
+        "The production is `record`.\n\n```json\n{}\n```",
+        perfect(t)
+    );
+    assert_eq!(
+        oracle::score(t, Arm::N33, &prose).failure,
+        Some(Failure::InvalidStructuredOutput)
+    );
+    let block = oracle::fenced(&prose).unwrap();
+    assert!(oracle::score(t, Arm::N33, &block).solved);
+    assert_eq!(oracle::fenced(&perfect(t).to_string()), None);
+    assert_eq!(oracle::fenced("no fence at all"), None);
     let s = oracle::score(
         t,
         Arm::N33,

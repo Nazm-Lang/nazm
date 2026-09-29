@@ -105,6 +105,8 @@ pub struct ArmRow {
     pub runner_errors: usize,
     pub model_drift: usize,
     pub solved: usize,
+    /// Solved when an answer that was prose around a JSON block is read by that block.
+    pub solved_lenient: usize,
     pub required_facts: usize,
     pub correct_facts: usize,
     pub wrong_claims: usize,
@@ -370,6 +372,8 @@ fn arm_row(records: &[&Record], required: usize) -> ArmRow {
         }
         r.answered += 1;
         r.required_facts += required;
+        let lenient = x.lenient.as_ref().or(x.score.as_ref());
+        r.solved_lenient += usize::from(lenient.is_some_and(|s| s.solved));
         if let Some(s) = &x.score {
             r.solved += usize::from(s.solved);
             r.correct_facts += s.correct;
@@ -610,19 +614,23 @@ pub fn markdown(r: &Report) -> String {
         );
         let _ = writeln!(
             s,
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
         );
         for t in &p.tasks {
             let (b, n) = (&t.baseline, &t.n33);
             let _ = writeln!(
                 s,
-                "| {} {} | {} | {}/{} / {}/{} | {}/{} / {}/{} | {} / {} | {} / {} | {} → {} ({}) | {} / {} | {} → {} ({}) | {} → {} | {} |",
+                "| {} {} | {} | {}/{} / {}/{} | {}/{} / {}/{} | {}/{} / {}/{} | {} / {} | {} / {} | {} → {} ({}) | {} / {} | {} → {} ({}) | {} → {} | {} |",
                 t.task,
                 t.scenario,
                 t.category.name(),
                 b.solved,
                 b.trials,
                 n.solved,
+                n.trials,
+                b.solved_lenient,
+                b.trials,
+                n.solved_lenient,
                 n.trials,
                 b.correct_facts,
                 b.required_facts,
