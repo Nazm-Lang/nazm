@@ -9,15 +9,16 @@
 //! … [--evidence DIR] [--pricing FILE] [--max-output N]
 //! ```
 //!
-//! `P` is `openai` or `anthropic`. The credential is `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`,
-//! or `~/.config/nazm-agent-bench/<P>.key` (mode 0600); only `run` reads it, and only `run`
-//! reaches a network. The cap is required and covers everything the evidence directory's
+//! `P` is `openai`, `anthropic` or `claude-code`. The first two bring their own key:
+//! `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, or `~/.config/nazm-agent-bench/<P>.key` (mode
+//! 0600). `claude-code` runs the Claude Code client in print mode on the credentials it is
+//! already signed in with. Only `run` reads a credential, and only `run` reaches a network. The cap is required and covers everything the evidence directory's
 //! ledger has charged, pilots included. Exit status: 0 done, 1 stopped or refused, 2 usage.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use nazm_agent_bench::provider::{Anthropic, Curl, OpenAi, Provider, Secret};
+use nazm_agent_bench::provider::{Anthropic, ClaudeCode, Curl, OpenAi, Process, Provider, Secret};
 use nazm_agent_bench::run::{self, Config, Mode, Spec, Stop};
 use nazm_agent_bench::{price, report, suite};
 
@@ -107,8 +108,32 @@ fn provider(
             model: model.to_owned(),
             max_output_tokens: max_output,
         })),
-        other => Err(format!("unknown provider `{other}`: openai or anthropic")),
+        "claude-code" => Ok(Box::new(ClaudeCode {
+            exec: Process {
+                program: "claude".to_owned(),
+                timeout_seconds: 600,
+            },
+            model: model.to_owned(),
+            version: claude_version(),
+            max_output_tokens: max_output,
+        })),
+        other => Err(format!(
+            "unknown provider `{other}`: openai, anthropic or claude-code"
+        )),
     }
+}
+
+/// `claude --version`, or `unavailable` when there is no client to ask.
+fn claude_version() -> String {
+    std::process::Command::new("claude")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map_or_else(
+            || "unavailable".to_owned(),
+            |o| String::from_utf8_lossy(&o.stdout).trim().to_owned(),
+        )
 }
 
 fn key_var(name: &str) -> &'static str {
@@ -151,7 +176,12 @@ fn go(a: &Args) -> Result<bool, String> {
                     "an authoritative run needs --suite-digest, the frozen suite's".to_owned(),
                 );
             }
-            key = Some(Secret::load(key_var(name), name)?);
+            // The Claude Code client signs in with the session's own credentials.
+            key = Some(if name == "claude-code" {
+                Secret::new("")
+            } else {
+                Secret::load(key_var(name), name)?
+            });
         }
     }
     let suite = suite::build()?;
@@ -255,7 +285,7 @@ fn go(a: &Args) -> Result<bool, String> {
             );
             if a.command == "dry-run" {
                 println!("{v:#}");
-                return Ok(dry.within_cap);
+                return Ok(dry.startable);
             }
             if let Some(d) = &a.suite_digest {
                 if *d != suite.digest {
@@ -265,9 +295,16 @@ fn go(a: &Args) -> Result<bool, String> {
                     ));
                 }
             }
-            if !dry.within_cap {
+            if !dry.startable {
                 return Err(
-                    "the worst case of one pass exceeds the cap: refusing to start".to_owned(),
+                    "the dearest request's worst case exceeds what the cap leaves: refusing to start"
+                        .to_owned(),
+                );
+            }
+            if !dry.within_cap {
+                eprintln!(
+                    "note: every request at its worst case would pass the cap; each attempt is \
+                     checked before it is sent, and the run stops there"
                 );
             }
             let key = key.ok_or("no credential was loaded")?;

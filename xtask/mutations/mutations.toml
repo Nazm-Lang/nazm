@@ -7362,3 +7362,13 @@ file = "crates/nazm-agent-bench/src/provider.rs"
 find = "            text.replace(&self.0, \"[redacted]\")"
 replace = "            text.to_owned()"
 killers = [{ package = "nazm-agent-bench", test = "agent", name = "openai_usage_is_normalised_and_the_key_never_leaks" }]
+
+[[mutation]]
+name = "n35-the-client-keeps-its-tools"
+why = "the Claude Code client is run with its default tools, so the model can read the repository instead of the context it was given"
+file = "crates/nazm-agent-bench/src/provider.rs"
+find = """            "--tools",
+            "","""
+replace = """            "--tools",
+            "default","""
+killers = [{ package = "nazm-agent-bench", test = "agent", name = "the_claude_code_client_runs_one_bare_turn_and_its_usage_is_normalised" }]
