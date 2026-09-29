@@ -1,12 +1,13 @@
 # `nazm-mcp`
 
 A read-only [Model Context Protocol](https://modelcontextprotocol.io) server over stdio, built on
-the official Rust SDK. It offers nine tools: the compiler's semantic context packet for a
+the official Rust SDK. It offers eleven tools: the compiler's semantic context packet for a
 definition (N27), a semantic snapshot of the root's compilation and the delta against one kept
 earlier (N28), a planned rename or diagnostic fix (N29), the current diagnostics compactly or
-one in full (N30), a compact summary of the root's check (N31), and Nazm's own documentation by
-section (N32). It is local compiler tooling — it answers questions about one program and about
-the language, and changes nothing.
+one in full (N30), a compact summary of the root's check (N31), Nazm's own documentation by
+section (N32), and the Nazm repository's context map and the minimum context for a task (N33).
+It is local compiler tooling — it answers questions about one program, about the language and
+about its repository, and changes nothing.
 
 ## Running it
 
@@ -42,6 +43,8 @@ claims to know every caller or importer in a project.
 | `nazm.command_summary` | `operation`: `check` | `nazm.command-summary/1` |
 | `nazm.docs_index` | optionally `document` | `nazm.docs-index/1` |
 | `nazm.docs_section` | `id`, `state` | `nazm.docs-section/1` |
+| `nazm.repository_map` | none | `nazm.repository-map/1` |
+| `nazm.task_context` | `seeds`, `state`; optionally `intent`, `max_entities`, `max_source_bytes`, `max_doc_bytes` | `nazm.task-context/1` |
 
 Each result is carried **once**, in the tool result's structured content, with an empty `content`,
 and each tool's output schema is the published one in `schema/`.
@@ -151,11 +154,32 @@ is never a rule of the language. A `state` the documentation no longer has is `s
 no section has is `not_found`, never the nearest one. There is no path argument: `../README.md` or
 `/etc/passwd` is only an id no section has, and no file is opened for it.
 
+### `nazm.repository_map` and `nazm.task_context`
+
+The repository's context map and the minimum context for a task, exactly as `nazm repo` gives
+them (`schema/nazm.repository-map-1.json`, `schema/nazm.task-context-1.json`,
+`docs/architecture.md` §7.35), over the same repository as the documentation tools — the one given
+as `--docs`, or the one the server was built from — never the root's project.
+
+`nazm.repository_map` takes nothing and returns every entity with a durable identity — packages
+and targets, source roots, compilation roots, modules and durable definitions, documents, schemas,
+mutation profiles — with its authority, parent, structural relationships and how to retrieve more,
+and the repository `state`; no source body and no section text. `nazm.task_context` takes one to
+eight `seeds`, ids from that map, and that `state`, and an optional `intent` — `understand`,
+`edit` (the default, the widest), `diagnose` or `test` — and a structural budget. It returns the
+smallest context the repository can justify, one relationship step from each seed: each item
+with its reason, the seed it came from, its priority class, its authority and how to retrieve it
+again; the seed's exact source, other definitions by shape, and sections by their exact text. What
+a budget cuts is listed and makes the answer `partial`; a budget the seeds do not fit is
+`insufficient_budget`. A `state` the repository no longer has is `stale_state`; a seed is an id and
+never a path — `/etc/passwd` or `../x.nz` is `invalid_request`, and nothing is opened for it.
+
 ## What it reads, and when
 
 Every call opens the root **from disk as it is then**, derives its answer and drops the analysis.
 An edit written between two calls is seen by the second; a broken file gives no packet, snapshot or
-delta, never a previous one. The documentation tools read the corpus at each call in the same way.
+delta, never a previous one. The documentation and repository tools read the repository at each
+call in the same way.
 No snapshot, history or index is kept between calls. It does not see an editor's unsaved buffers — for those, use `nazm lsp`.
 
 ## What it does not do
@@ -165,7 +189,8 @@ No snapshot, history or index is kept between calls. It does not see an editor's
 - Read a file its root's compilation did not load, other than the fixed documentation corpus:
   `file` is matched against the compilation's own files and is otherwise refused unopened, a
   baseline is an object, never a path, and a documentation section is asked for by id.
-- Search documentation: ids are exact, with no fuzzy, full-text or semantic matching.
+- Search documentation or the repository: ids are exact, with no fuzzy, full-text or semantic
+  matching, and no directory listing or glob.
 - Keep a previous snapshot, watch the disk, or infer a rename.
 - Serve resources, prompts, completions or sampling; only stdio — no HTTP, no authentication.
 - Report effects, capabilities, tests, semantic history or behavioural equivalence: the compiler
