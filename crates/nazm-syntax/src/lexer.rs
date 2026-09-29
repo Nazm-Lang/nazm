@@ -80,6 +80,9 @@ pub enum TokenKind {
     /// `Result`. One character with one meaning; `??` is two of them, not a token of its
     /// own, so `r??` removes two `Result` layers exactly as `(r?)?` does.
     Question,
+    /// `!` — before a function's effect set, N36: `-> Int ! {io}`. It has no other
+    /// meaning, and `!=` is its own token, so neither can be read as the other.
+    Bang,
     Arrow,
     /// `=>` — between a `match` pattern and the arm it selects.
     ///
@@ -146,6 +149,7 @@ impl TokenKind {
         Self::Dot,
         Self::Semi,
         Self::Question,
+        Self::Bang,
         Self::Arrow,
         Self::FatArrow,
         Self::Eq,
@@ -203,6 +207,7 @@ impl TokenKind {
             Self::Dot => Some("."),
             Self::Semi => Some(";"),
             Self::Question => Some("?"),
+            Self::Bang => Some("!"),
             Self::Arrow => Some("->"),
             Self::FatArrow => Some("=>"),
             Self::Eq => Some("="),
@@ -257,6 +262,7 @@ impl TokenKind {
             Self::Dot => "`.`".to_owned(),
             Self::Semi => "`;`".to_owned(),
             Self::Question => "`?`".to_owned(),
+            Self::Bang => "`!`".to_owned(),
             Self::Arrow => "`->`".to_owned(),
             Self::FatArrow => "`=>`".to_owned(),
             Self::Eq => "`=`".to_owned(),
@@ -535,6 +541,7 @@ pub fn lex_lossless_in(file: FileId, text: &str) -> (Vec<Lexeme>, Vec<Diagnostic
             b'.' => Some(TokenKind::Dot),
             b';' => Some(TokenKind::Semi),
             b'?' => Some(TokenKind::Question),
+            b'!' => Some(TokenKind::Bang),
             b'=' => Some(TokenKind::Eq),
             b'+' => Some(TokenKind::Plus),
             b'-' => Some(TokenKind::Minus),
@@ -614,6 +621,20 @@ mod tests {
                 TokenKind::EqEq,
                 TokenKind::NotEq,
                 TokenKind::Arrow,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bang_is_its_own_token_and_never_half_of_not_equal() {
+        assert_eq!(
+            kinds("! != !{"),
+            vec![
+                TokenKind::Bang,
+                TokenKind::NotEq,
+                TokenKind::Bang,
+                TokenKind::LBrace,
                 TokenKind::Eof,
             ]
         );

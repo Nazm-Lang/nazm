@@ -372,7 +372,9 @@ accepts.
 | --- | --- |
 | `program` | `{ use_item } , { function \| record \| enumeration }` |
 | `use_item` | `"use" , STRING , ";"` |
-| `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , block` |
+| `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
+| `effect_set` | `"!" , "{" , [ effect_name , { "," , effect_name } ] , "}"` |
+| `effect_name` | `IDENT \| "spawn"` |
 | `type_parameters` | `"[" , type_parameter , { "," , type_parameter } , "]"` |
 | `type_parameter` | `IDENT , [ ":" , IDENT ]` |
 | `visibility` | `"pub"` |
@@ -458,7 +460,7 @@ use "lib/helpers.nz"; fn main() -> Int { 0 }
 ### `function`
 
 ```ebnf
-function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , block ;
+function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block ;
 ```
 
 ```nazm
@@ -475,6 +477,43 @@ pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) }
 
 ```nazm
 fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") }
+```
+
+### `effect_set`
+
+```ebnf
+effect_set = "!" , "{" , [ effect_name , { "," , effect_name } ] , "}" ;
+```
+
+The effects a function declares it may exercise: after the return type, a `!` and a
+set in braces. `! {}` is the empty set — the function is pure, and its body may call
+nothing that is not. With no set written the checker infers one from the body, and
+another module calling the function must assume every effect. The names live in their
+own namespace: `io` and `spawn` are the only effects, a name that is not one is refused,
+and so is one written twice. Order means nothing. See `docs/spec.md`, *Effects*.
+
+```nazm
+fn show(s: Str) -> Int ! { io } { print(s) } fn main() -> Int { show("hi") }
+```
+
+```nazm
+fn add(a: Int, b: Int) -> Int ! {} { a + b } fn main() -> Int { add(1, 2) }
+```
+
+```nazm
+fn w(c: Chan) -> Int { 0 } fn run() -> Int ! { spawn } { let c = chan_new(1); scope { spawn w(c); } 0 } fn main() -> Int { run() }
+```
+
+### `effect_name`
+
+```ebnf
+effect_name = IDENT | "spawn" ;
+```
+
+`spawn` is a keyword, and the effect of starting a task is named by it.
+
+```nazm
+fn w(c: Chan) -> Int { 0 } fn run() -> Int ! { io, spawn } { let c = chan_new(1); scope { spawn w(c); } print("done") } fn main() -> Int { run() }
 ```
 
 ### `type_parameters`
