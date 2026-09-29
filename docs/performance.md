@@ -1831,6 +1831,108 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### Agent task tokens, cost and correctness — N35, measured 2026-09-29
+
+`nazm-agent-bench` (N35, `architecture.md` §7.37). **One model configuration, recorded here and
+nowhere generalised:** Anthropic's `claude-haiku-4-5-20251001`, reached through the Claude Code
+client in print mode (`claude --print`, client 2.1.283) on this session's own sign-in — one turn,
+no tools, no MCP server, no setting source, no thinking (`MAX_THINKING_TOKENS=0`), at most 1,024
+output tokens, the benchmark's system text in place of the client's. **The client sets no
+temperature, so the model's default applies**; this is the benchmark's largest limitation. The
+direct OpenAI and Anthropic adapters exist, are tested against recorded responses, and were not
+run: no API key was supplied, and a developer who wants them brings their own
+(`runbook.md`, *The agent task benchmark*).
+
+Frozen before the run, at `c130f72`: suite `b7db4ccc…` (`nazm.agent-bench-suite/1`, eight tasks,
+116 required facts over two trials), prompt `nazm.agent-bench-prompt/1` (template `de954887…`),
+benchmark `ce659979f4f695b8`, two trials per task and arm, the arms alternating in order by
+trial, every request independent. The price list is `tools/agent-bench/pricing.toml`, read
+2026-09-29 from the provider's pricing page: $1 per million input tokens, $0.10 cache reads, $2
+one-hour cache writes, $5 output. The client's own list-price cost of every one of the 34 paid
+requests (the pilot's and the run's) equals the benchmark's to the micro-dollar.
+
+**Per task** (medians over two trials; *solved* is every fact correct and no false claim;
+*lenient* reads an answer that was prose around a JSON block by that block, and is never the
+verdict; cost is the sum of both trials):
+
+| Task | Solved, base / N33 | Lenient | Facts, base / N33 | False claims, base / N33 | Input tokens, base → N33 | Output, base / N33 | Cost billed, base → N33 | Cost uncached, base → N33 | Verdict |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| T1 understand `check_program` | 1/2 / 2/2 | 1/2 / 2/2 | 35/36 / 36/36 | 1 / 0 | 111,398 → 7,791 | 329 / 328 | $0.4489 → $0.0344 | $0.2261 → $0.0189 | N33 better |
+| T2 `attach_core`'s dependencies and callers | 0/2 / 0/2 | 0/2 / 0/2 | 0/8 / 8/8 | 0 / 32 | 111,471 → 3,360 | 676 / 293 | $0.4526 → $0.0097 | $0.2297 → $0.0097 | baseline better |
+| T3 edit plan for `attach_core` | 0/2 / 2/2 | 0/2 / 2/2 | 10/12 / 12/12 | 3 / 0 | 111,568 → 3,454 | 158 / 152 | $0.4478 → $0.0084 | $0.2247 → $0.0084 | N33 better |
+| T4 diagnose N0300 (stress case) | 2/2 / 2/2 | 2/2 / 2/2 | 6/6 / 6/6 | 0 / 0 | 744 → 1,367 | 72 / 72 | $0.0022 → $0.0035 | $0.0022 → $0.0035 | baseline better |
+| T5 specification: `return` | 1/2 / 2/2 | 1/2 / 2/2 | 11/12 / 12/12 | 0 / 0 | 37,914 → 1,916 | 122 / 102 | $0.1529 → $0.0049 | $0.0771 → $0.0049 | N33 better |
+| T6 grammar: `record` | 2/2 / 2/2 | 2/2 / 2/2 | 12/12 / 12/12 | 0 / 0 | 18,987 → 1,699 | 106 / 100 | $0.0770 → $0.0044 | $0.0390 → $0.0044 | N33 better |
+| T7 tests of `nazm-docs` | 0/2 / 0/2 | 0/2 / 0/2 | 21/26 / 22/26 | 0 / 0 | 16,090 → 2,486 | 823 / 324 | $0.0529 → $0.0082 | $0.0404 → $0.0082 | N33 better |
+| T8 tests of `core_module` | 0/2 / 2/2 | 2/2 / 2/2 | 2/2 / 2/2 | 0 / 0 | 6,720 → 1,310 | 752 / 90 | $0.0344 → $0.0035 | $0.0210 → $0.0035 | N33 better |
+
+**By category and in all** (input and cost over both trials):
+
+| Group | Correctness preserved | Solved, base / N33 | Facts, base / N33 | Input reduction | Total-token reduction | Cost reduction, billed | Cost reduction, uncached | Context-only reduction (o200k) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| understand (T1, T2) | 1/2 | 1/4 / 2/4 | 35/44 / 44/44 | 95.00 % | 94.74 % | 95.11 % | 93.74 % | 95.40 % |
+| edit (T3) | 1/1 | 0/2 / 2/2 | 10/12 / 12/12 | 96.90 % | 96.77 % | 98.12 % | 96.25 % | 97.46 % |
+| diagnose (T4) | 1/1 | 2/2 / 2/2 | 6/6 / 6/6 | −83.68 % | −76.30 % | −56.41 % | −56.41 % | −960.38 % |
+| docs (T5, T6) | 2/2 | 3/4 / 4/4 | 23/24 / 24/24 | 93.65 % | 93.32 % | 95.98 % | 92.03 % | 96.18 % |
+| tests (T7, T8) | 2/2 | 0/4 / 2/4 | 21/30 / 26/30 | 83.35 % | 82.73 % | 86.56 % | 80.88 % | 83.20 % |
+| **all eight** | **7/8** | **6/16 / 12/16** | **95/116 / 112/116** | **94.36 %** | **94.05 %** | **95.39 %** | **92.86 %** | **95.43 %** |
+
+- **Correctness first.** The N33 context solved 12 of 16 requests and the baseline 6; N33 got
+  112 of 116 facts, the baseline 95. Neither arm hallucinated a repository fact. The baseline's
+  four false claims were misreadings (`parse.nz::build_children`, `emit.nz::emit_program`, and a
+  package given as a test target); four of its answers broke the JSON-only contract by reasoning
+  in prose first — two of them (T8) correct when read leniently.
+- **The one correctness regression is T2, by the pre-declared rule.** The N33 arm named all
+  eight facts in both trials, and also listed sixteen of the language's builtins
+  (`ints_push`, `str_concat`, …) as `module.nz` definitions that `attach_core` depends on: 32
+  false claims, each a name the context does show being called. The baseline produced no valid
+  answer in either trial. The rule (solved, then facts minus false claims) scores that as
+  baseline better; it is reported as the rule says, not special-cased.
+- **Tokens and cost.** Across all sixteen pairs the N33 arm used 46,772 input tokens to the
+  baseline's 829,789 (−94.36 %), 49,694 total to 835,867 (−94.05 %), and cost $0.0770 to $1.6687
+  as billed (−95.39 %) or $0.0614 to $0.8602 with every input token at the uncached rate
+  (−92.86 %). The client wrote a one-hour cache for every prompt of 4,096 tokens or more and
+  read one back once in 32 requests, so its bill charges large prompts about twice the uncached
+  rate; the uncached figure is the comparison no caching choice can tilt. Output was 2,922 tokens
+  to 6,078: the smaller context did not buy its saving with longer answers.
+- **Efficiency.** Tokens per solved task: 139,311 baseline, 4,141 N33. Cost per solved task:
+  $0.2781 and $0.0064. Correct facts per thousand input tokens: 0.11 and 2.39; per dollar billed,
+  56.93 and 1,455.32.
+- **Scenario C and the crossover.** On the 123-byte program both arms solved both trials; the
+  structured context cost 1,367 input tokens to the raw source's 744 (+84 %, $0.0035 to $0.0022).
+  The client's own framing is about 430 tokens of every request, and the benchmark's fixed prompt
+  233–346 more (o200k); both are the same in both arms. The N33 context was the cheaper input
+  on every other task, the smallest of which had a 6,720-token baseline: for this model and suite
+  the crossover lies between 744 and 6,720 input tokens. That is an observation, not a routing
+  rule; nothing routes on it.
+- **Local counts.** Haiku's input was 1.08–1.26× the local `o200k_base` count of the same text
+  once the client's ~430 framing tokens are set aside (1.01× on the 53-token program): no N34
+  tokenizer is Anthropic's, and none is claimed to be.
+- **Latency** (a reply's own; no request was retried): baseline median 5,879 ms, 3,240–14,038;
+  N33 median 3,857 ms, 3,153–5,553. One baseline answer (T7, trial 2) reached the output limit
+  and the client continued it in a second call, which the record keeps.
+
+Spend: the authoritative run $1.745696, the two pilots $0.016399 and $0.021533 — $1.783628 of the
+$2 cap, which every attempt was checked against before it was sent. The pilots are not evidence:
+the first found that the worst case priced input as uncached though a cache write costs more, and
+that the client's own spend limit, set from that worst case, withheld one answer, which had been
+scored as the model's; both were fixed and the pilot re-run before the suite was frozen. The
+structured report is `tools/agent-bench/results/n35-v1-claude-code-haiku-4-5.json`; the journal
+and raw replies stay in the local, ignored evidence directory.
+
+**The gate**, offline after the paid run, at `0419b25`, contained on the M1 Pro: mutation 1,508 s
+(16 of 16 caught, 16 killers verified), workspace 393 s (1,795 passed, 0 failed, 22 ignored, 108
+suites, peak 3.6 GB), lifecycle 185 s (19 of 19), selfhost 57 s (38 of 38), bootstrap 38 s (C2 = C3,
+IR identical), release benchmarks 596 s, compiler benchmark 198 s (the same 21 pre-N33 drifts as
+N34's, each within 1 % of it), checks 2 s (18 of 18) — 2,977 s of wall time. The container had no
+network (`NETWORK-ABSENT`); the agent benchmark's 21 tests passed there on the fake provider and
+recorded responses. `nazm` is 4,527,008 bytes and `nazm-mcp` 4,134,624, both the same as at N34;
+`nazm-agent-bench` is 11,343,120 and ships in neither.
+
+**What this does not show.** One model, one client, two trials, the model's default
+temperature; the ranges above are what two samples show, not confidence intervals, and no
+significance is claimed. Eight tasks over one repository. At the recorded prices.
+
 ### Context under four tokenizers — N34, measured 2026-09-29
 
 `nazm-tokens` (N34, `architecture.md` §7.36), contained at P1 on the M1 Pro with **no network in

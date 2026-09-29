@@ -39,10 +39,10 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,773 passed, 0 failed, 22 ignored, across 104 suites**, run contained and
-offline at N34 (2026-09-29), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle
+**Current suite: 1,795 passed, 0 failed, 22 ignored, across 108 suites**, run contained and
+offline at N35 (2026-09-29), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle
 tests, run on their own (19 of 19 passed, contained), and three are N33's and N34's release-build
-measurements, run by hand (`performance.md`). N33 ended at 1,757 across 99 with 21 ignored; N32-H3 ended at 1,728 across 95 with 19 ignored; N32-H2 ended at 1,718 across 95; N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+measurements, run by hand (`performance.md`). N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 across 99 with 21 ignored; N32-H3 ended at 1,728 across 95 with 19 ignored; N32-H2 ended at 1,718 across 95; N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1901,6 +1901,42 @@ least 50 % under every tokenizer, worst ≤ median ≤ best; the fixed overhead 
 JSON, Markdown and three scripts compared; one selection's range in tokens (`performance.md`).
 Eleven N34 mutations (area 30).
 
+*N35, 2026-09-29: Agent Task Token Benchmark v1 — VERIFIED; Agent Cost Accounting v1 — VERIFIED;
+Token-to-Correctness Benchmark v1 — VERIFIED; G83, G84, G85 — VERIFIED within the benchmark's
+scope, one model configuration; G80 — PARTIAL, materially strengthened; G68 and G69 — PARTIAL,
+strengthened.* `nazm-agent-bench` (`crates/nazm-agent-bench/`, `architecture.md` §7.37),
+evaluation tooling nothing depends on (the `network reach` and `tokenizer reach` gates), puts eight
+tasks over the seven N33 scenarios — understand, edit, diagnose, documentation, test selection,
+Scenario C among them — to a real model with the naive baseline and with `nazm repo --task`'s
+context, byte for byte, digest-addressed, one system text, wording, contract and parameter set for
+both. Every answer is scored fact by fact, offline, against truths read from the authorities;
+hallucinations are counted apart from misreadings; usage is recorded raw and normalised; dated
+prices are applied in integer pico-USD, never in an identity, with input, cache reads, cache writes
+and output priced separately. **Scope:** `claude-haiku-4-5-20251001` through the Claude Code client
+2.1.283 in print mode — no tools, no thinking, the model's default temperature, which the client
+does not set — two trials, suite `b7db4ccc…`, prompt `nazm.agent-bench-prompt/1`, at the prices of
+2026-09-29. The N33 context solved 12 of 16 requests to the baseline's 6, 112 of 116 facts to 95,
+with no hallucination in either arm, 94.36 % fewer input tokens, 94.05 % fewer total tokens, and
+95.39 % less cost as billed or 92.86 % with every input token uncached; 4,141 tokens and $0.0064 per
+solved task against 139,311 and $0.2781. Correctness was preserved on 7 of 8 tasks: on T2 the N33
+arm had every fact and added 32 false claims (builtins listed as definitions) while the baseline
+gave no valid answer, which the pre-declared rule scores as baseline better. On the 123-byte
+diagnostic both arms solved it and raw source was the cheaper input, 744 tokens to 1,367; every
+other task's N33 context was cheaper, so for this model the crossover lies between 744 and 6,720
+input tokens. G83–G85 are verified for that configuration only: the direct OpenAI and Anthropic
+adapters are tested against recorded responses and were not run, because no key was supplied. G80
+stays partial — one repository, one model, eight tasks. Evidence: `crates/nazm-agent-bench/tests/
+agent.rs` — the suite's categories, Scenario C, the arms' distinct digests and the N33 arm equal to
+the planner's own bytes; one prompt for both arms, as the provider receives it; a perfect answer
+solving every task under either arm; missing, wrong and hallucinated claims counted apart; a bare
+name only when unambiguous; extra and invented citations; invalid output and refusal; exact cost
+arithmetic per category; zero denominators absent; identities and resume; the plan and its
+alternation; the cap before and during a run; bounded retries never counted incorrect; model drift;
+each adapter's normalisation and redaction; the report deterministic in any order; every record and
+report valid against `schema/nazm.agent-benchmark-1.json`; the dry run with no credential and no
+network. The results: `tools/agent-bench/results/`, `performance.md`. Sixteen N35 mutations
+(area 30).
+
 **Next dependency** · A Darwin machine on which running generated programs is contained.
 
 **Accepted when** · Both baselines are current and recorded under containment.
@@ -1934,9 +1970,9 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **612** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2, 582 at N32-H3, 601 at N33), **424** of them with a verified killer and all
-of them owned by one of thirteen focused profiles;
+**Evidence** · `xtask/mutations/mutations.toml` holds **628** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2, 582 at N32-H3, 601 at N33, 612 at N34), **440** of them with a verified killer and all
+of them owned by one of fourteen focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
 distinguishes seven verdicts and refuses to fold a non-result into "survived" — a
@@ -2600,6 +2636,18 @@ from the report, a reduction's sign inverted, and a tokenizer's worst result rep
 caches: 11 of 11 caught at tier 1** — no survivor, crash, timeout, unusable or uninjected entry —
 and **every declared killer verified, 12 of 12**. Three of the eleven are in the benchmark's own
 code (`tests/benchmark.rs`), where the numbers it reports are computed.
+
+*N35 (2026-09-29) added sixteen mutations and a fourteenth profile, `agent`,* on the frozen final
+source: both arms carrying one context, every answer scored by another task's oracle, a name the
+truths lack taken as a truth, a hallucination counted as a misreading, output recorded as input,
+cache reads priced as uncached input, output left out of a total, a zero denominator divided by,
+an identity without its prompt, a runner error counted as an answer, the stress case left out of
+the plan, one arm given another system text, a third retry, the cap checked without the attempt
+about to be made, a credential kept in error text, and the Claude Code client run with its tools.
+**One warm session, campaign `e8c0c93340e2158c`, targeted, P1, offline, 1,504 s wall: 16 of 16
+caught at tier 1** — no survivor, crash, timeout, unusable or uninjected entry — and **every
+declared killer verified, 16 of 16**. A first campaign on the fifteen before the Claude Code
+provider existed, `7b5dc0b2ba230b56`, caught all fifteen too.
 
 **Limitation** · Two catalogued defects are MUTANT CRASH, not caught (above), and one N13
 defect is a known survivor (above): the suite cannot observe a read of freed storage nothing

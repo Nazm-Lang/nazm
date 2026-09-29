@@ -345,6 +345,18 @@ standard input under four pinned tokenizers of three families — OpenAI byte-le
 measure`. It measures; it decides nothing, and nothing that ships depends on it
 ([`docs/architecture.md`](docs/architecture.md) §7.36).
 
+### An agent task benchmark
+
+`nazm-agent-bench` (evaluation tooling: `cargo build --release -p nazm-agent-bench`) puts eight
+repository tasks — understand, edit, diagnose, documentation, test selection — to a real model
+twice, once with the naive files and once with `nazm repo --task`'s context, and scores each
+answer fact by fact against the repository's own authorities, with usage and dated prices kept
+apart. On `claude-haiku-4-5-20251001` through the Claude Code client, two trials, the N33 context
+solved 12 of 16 requests to the naive arm's 6 with 94 % fewer input tokens; the 123-byte
+diagnostic stays the one task where raw source is cheaper
+([`docs/performance.md`](docs/performance.md)). The OpenAI and Anthropic adapters bring their own
+key; the steps are in [`docs/runbook.md`](docs/runbook.md). Nothing that ships depends on it.
+
 ## The documents
 
 | | |

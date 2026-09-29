@@ -573,3 +573,54 @@ against one tree.** The new runner takes the old marker while it runs so an old 
 usually stands down, and refuses to start if the old marker names a live process — but a
 first-protocol runner that has already passed its own check and not yet published is not
 covered by anything. Use one version.
+
+## The agent task benchmark
+
+`nazm-agent-bench` (N35, `architecture.md` §7.37) puts the eight N33 tasks to a real model with
+the naive context and with the N33 context, and records usage, cost and a fact-by-fact score. It
+is the one tool here that reaches a network, and it is never part of a gate: every test and
+mutation killer drives it with a fake provider or recorded responses, offline.
+
+**Providers.** `openai` and `anthropic` call the APIs directly and **bring their own key**;
+`claude-code` runs the Claude Code client (`claude --print`) on the credentials it is already
+signed in with, and needs no key. A key comes from `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, or
+from a file only its owner can read:
+
+```sh
+mkdir -p ~/.config/nazm-agent-bench && chmod 700 ~/.config/nazm-agent-bench
+read -s k && printf %s "$k" > ~/.config/nazm-agent-bench/openai.key && unset k
+chmod 600 ~/.config/nazm-agent-bench/openai.key
+```
+
+Type it in your own terminal. The key is passed to `curl` on its standard input, never on a
+command line; it is never written to a record, and it is removed from any error text kept.
+
+**Prices.** `tools/agent-bench/pricing.toml`, dated, with the page each rate came from. A run
+refuses a provider and model with no entry. When a price changes, add an entry; a report prices
+old usage again under the newest one without re-running anything.
+
+**The steps**, with `B=target/release/nazm-agent-bench` (`cargo build --release -p nazm-agent-bench`):
+
+```sh
+$B suite                                               # the tasks, contexts and digests
+$B dry-run --provider P --model M --cap-usd 2          # requests, sizes, worst case — no network
+$B run     --provider P --model M --cap-usd 2 --pilot  # 4 requests; never evidence
+$B run     --provider P --model M --cap-usd 2 --suite-digest D    # D from the dry run: frozen
+$B report [--markdown]                                 # authoritative records only
+```
+
+- **The cap is required** and covers everything the evidence directory's ledger has charged,
+  pilots included. Every attempt's worst case is checked against it before it is sent; a run that
+  would pass it stops there, with what it did in the journal. A run does not start when its
+  dearest single request could not fit.
+- **Freezing.** An authoritative run needs `--suite-digest`, and refuses a checkout whose suite
+  differs. The suite's N33 contexts carry the repository's state, so a benchmark is of one
+  checkout; commit first, run, then write anything up.
+- **Resume.** Run the same command again: every request already recorded is skipped. A runner
+  error — no reply after two retries — is repeated only with `--retry-runner-errors`. A different
+  model, parameter, prompt, trial count or suite is a different benchmark and starts from the
+  beginning.
+- **Where results live.** `target/n35/agent-bench/` (ignored): `spend.jsonl`, the ledger, and per
+  benchmark `benchmark.json`, `journal.jsonl` (`nazm.agent-benchmark/1` records) and `raw/`, the
+  providers' whole responses. It refuses to grow past 256 MiB. Commit the report, not the raw
+  replies.
