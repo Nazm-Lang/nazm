@@ -745,6 +745,16 @@ impl<E: Exec> ClaudeCode<E> {
             reason: format!("the client's output is not JSON: {e}"),
             billed: true,
         })?;
+        if at(&v, "/subtype").as_str() == Some("error_max_budget_usd") {
+            // The client's own spend limit withheld the answer: the harness's limit, not the
+            // model's reply, and not transient.
+            return Err(CallError::Fatal {
+                reason: format!(
+                    "the client's spend limit withheld the answer: {}",
+                    at(&v, "/errors")
+                ),
+            });
+        }
         if let Some(status) = at(&v, "/api_error_status").as_u64() {
             let reason = format!(
                 "API error {status}: {}",
