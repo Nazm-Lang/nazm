@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nazm.token-cost-1.json",
+  "title": "nazm.token-cost/1",
+  "description": "What a text costs, from `nazm-tokens measure` (the text on standard input, exactly as given): its bytes, Unicode scalars, lines and BLAKE3 digest, and for each tokenizer asked — every one when none is named — its pinned identity and the tokens its own implementation produces for those bytes as ordinary content. Nothing is normalised before counting; a tokenizer that normalises does so itself and its identity says so. What a tokenizer's template would add around the text (`<s>`, `</s>`) is `framing_tokens`, beside the count and not in it; `unknown_tokens` are pieces of the count that are the tokenizer's unknown piece. `unsupported` names ids no tokenizer has — never another tokenizer in their place; `invalid_input` is text that is not UTF-8; `unavailable` is an asset that is missing, altered or malformed. No network is ever used.",
+  "type": "object",
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": { "const": "nazm.token-cost/1" }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/available" },
+    { "$ref": "#/$defs/refused" }
+  ],
+  "$defs": {
+    "available": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "status", "input", "tokenizers"],
+      "properties": {
+        "schema": { "const": "nazm.token-cost/1" },
+        "status": { "const": "available" },
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bytes", "scalars", "lines", "digest"],
+          "properties": {
+            "bytes": { "type": "integer", "minimum": 0 },
+            "scalars": { "type": "integer", "minimum": 0 },
+            "lines": { "type": "integer", "minimum": 0 },
+            "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        },
+        "tokenizers": {
+          "type": "array",
+          "description": "In canonical order.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tokenizer", "tokens", "framing_tokens", "unknown_tokens", "bytes_per_token"],
+            "properties": {
+              "tokenizer": { "$ref": "#/$defs/identity" },
+              "tokens": { "type": "integer", "minimum": 0 },
+              "framing_tokens": { "type": "integer", "minimum": 0 },
+              "unknown_tokens": { "type": "integer", "minimum": 0 },
+              "bytes_per_token": { "type": ["string", "null"], "description": "Bytes over tokens to two decimal places, rounded half up by integer arithmetic; null for no tokens." }
+            }
+          }
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "family", "name", "algorithm", "library", "source", "license", "asset_digest", "normalization", "special_tokens"],
+      "properties": {
+        "id": { "enum": ["openai-bpe/cl100k_base", "openai-bpe/o200k_base", "sentencepiece-bpe/mistral-7b-v0.1", "sentencepiece-unigram/t5-small"] },
+        "family": { "enum": ["openai_bpe", "sentencepiece_bpe", "sentencepiece_unigram"] },
+        "name": { "type": "string" },
+        "algorithm": { "type": "string" },
+        "library": { "type": "string", "description": "The implementation and its exact version." },
+        "source": { "type": "string", "description": "Where the asset came from, at which revision." },
+        "license": { "type": "string" },
+        "asset_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "BLAKE3 of the asset, checked at every load; for the OpenAI vocabularies, over every rank's bytes in order." },
+        "normalization": { "type": "string" },
+        "special_tokens": { "type": "string" }
+      }
+    },
+    "refused": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "status", "tokenizers", "problems"],
+      "properties": {
+        "schema": { "const": "nazm.token-cost/1" },
+        "status": { "enum": ["unsupported", "invalid_input", "unavailable"] },
+        "tokenizers": { "type": "array", "items": { "type": "string" } },
+        "problems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "tokenizer", "value"],
+            "properties": {
+              "kind": { "enum": ["missing_asset", "asset_digest_mismatch", "malformed_asset", "encode_failed", "not_utf8"] },
+              "tokenizer": { "type": "string" },
+              "value": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}
