@@ -4132,7 +4132,8 @@ built without a tokenizer anywhere in their graphs.
 text — stay the canonical ones, because they are the same under every tokenizer. A context is
 selected first, from bytes and structure; it is counted afterwards, by any number of tokenizers,
 and no count, identity or tokenizer-specific rank changes what was selected. N34's benchmark shows
-why: one selection is 1.3–1.8× as many tokens under one tokenizer as under another, so a token
+why: one selection of `check_program`'s context is 1.63–1.66× as many tokens under one tokenizer
+as under another, so a token
 budget would be a budget for one tokenizer.
 
 **Tokenizer identity.** A count is evidence only under the exact implementation and vocabulary.
