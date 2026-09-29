@@ -1,5 +1,11 @@
 // A module's declared effect sets are what its importers check against.
 
 pub fn total(n: Int) -> Int ! {} {
-    if n == 0 { 0 } else { n + total(n - 1) }
+    let mut sum = 0;
+    let mut i = 1;
+    while i <= n {
+        sum = sum + i;
+        i = i + 1;
+    }
+    sum
 }

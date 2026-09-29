@@ -95,13 +95,13 @@ fn ir_of(files: &[(&str, &str)]) -> String {
 
 const PLAIN: &str = "fn worker(c: Chan) -> Int { chan_send(c, 7); 0 }\n\
     fn say(n: Int) -> Int { print(int_to_str(n)) }\n\
-    fn sum(n: Int) -> Int { if n == 0 { 0 } else { n + sum(n - 1) } }\n\
+    fn sum(n: Int) -> Int { let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\n\
     fn run() -> Int { let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(ints_pop(buf) + sum(3)) }\n\
     fn main() -> Int { run(); 0 }\n";
 
 const TYPED: &str = "fn worker(c: Chan) -> Int ! {} { chan_send(c, 7); 0 }\n\
     fn say(n: Int) -> Int ! { io } { print(int_to_str(n)) }\n\
-    fn sum(n: Int) -> Int ! {} { if n == 0 { 0 } else { n + sum(n - 1) } }\n\
+    fn sum(n: Int) -> Int ! {} { let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\n\
     fn run() -> Int ! { spawn, io } { let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(ints_pop(buf) + sum(3)) }\n\
     fn main() -> Int ! { io, spawn } { run(); 0 }\n";
 
@@ -109,9 +109,9 @@ const TYPED: &str = "fn worker(c: Chan) -> Int ! {} { chan_send(c, 7); 0 }\n\
 fn a_declared_effect_set_leaves_no_trace_in_the_native_program() {
     assert_eq!(ir_of(&[("m.nz", PLAIN)]), ir_of(&[("m.nz", TYPED)]));
     // Across modules too: a contract in an interface is not in the object either.
-    let lib_plain = "pub fn total(n: Int) -> Int { if n == 0 { 0 } else { n + total(n - 1) } }\n";
+    let lib_plain = "pub fn total(n: Int) -> Int { let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\n";
     let lib_typed =
-        "pub fn total(n: Int) -> Int ! {} { if n == 0 { 0 } else { n + total(n - 1) } }\n";
+        "pub fn total(n: Int) -> Int ! {} { let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\n";
     let main_plain = "use \"lib.nz\";\nfn main() -> Int { total(4) }\n";
     let main_typed = "use \"lib.nz\";\nfn main() -> Int ! {} { total(4) }\n";
     assert_eq!(
@@ -170,7 +170,10 @@ fn every_effects_example_runs_the_same_interpreted_and_compiled() {
     let src = repo_root().join("examples/effects");
     let dir = tempfile::tempdir().expect("tempdir");
     for e in std::fs::read_dir(&src).expect("examples/effects").flatten() {
-        std::fs::copy(e.path(), dir.path().join(e.file_name())).expect("copy");
+        let p = e.path();
+        if p.is_file() && p.extension().is_some_and(|x| x == "nz") {
+            std::fs::copy(&p, dir.path().join(e.file_name())).expect("copy");
+        }
     }
     assert_eq!(agree(dir.path(), "pure.nz"), "1275\n");
     assert_eq!(agree(dir.path(), "tasks.nz"), "30\n");

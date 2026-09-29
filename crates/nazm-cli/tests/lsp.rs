@@ -352,7 +352,9 @@ fn the_server_speaks_the_protocol_end_to_end() {
         json!({"textDocument": {"uri": uri(&main)}, "position": {"line": 1, "character": utf16(line, call)}}),
     );
     assert_eq!(
-        h["result"]["contents"]["value"], "fn helper(n: Int) -> Int",
+        // The signature, then an undeclared function's inferred effects (N36).
+        h["result"]["contents"]["value"],
+        "fn helper(n: Int) -> Int\ninferred effects: {}",
         "{h}"
     );
 
