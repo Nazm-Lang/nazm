@@ -1868,6 +1868,44 @@ The five-mutant checkpoint before it: setup 793 s, first mutant 13.1 s, then 27.
 dominated by the baseline workspace suite at one CPU, which the campaign needs to be green before
 any mutant is judged; it is the next stage to look at, and it was not weakened to get here.
 
+## Verification harness V3 — N32-H3, measured 2026-09-29
+
+From the gate's own summary (`target/n32h3/v3/summary.json`, harness evidence, not a schema):
+one authoritative harness-changing gate — 45 mutations (N32's seventeen, the twelve MCP entries,
+all sixteen harness entries), 48 killers, the scheduled workspace suite at P4W2T4, the full
+lifecycle suite, selfhost, bootstrap, the docs and MCP benchmark, the gates.
+
+| Stage, seconds | V1 | V2 warm | V3 |
+| --- | ---: | ---: | ---: |
+| mutation session (V3: setup 93, 45 mutants 738, median 13.4, p95 34.9) | 1,478 | 770 | 840 |
+| — of which the mutants' workspace builds | not recorded | 497 | 529 |
+| workspace suite | 439 | 418 (P4T4) | **257** (P4W2T4) |
+| lifecycle suite, full | 171 | 183 | 189 |
+| selfhost | 57 | 46 | 46 |
+| bootstrap | 62 | 37 | 37 |
+| benchmark | 196 | 199 | 224 (first fill of the bench cache) |
+| gates | 3 | 2 | 2 |
+| **the gate** | **2,406** | **1,655** | **1,595 — 26.6 min** |
+
+V3 decided 45 mutations where V2 decided 38. **The workspace suite fell 39%** against the P4T4
+run measured the same morning (424 s): 83 binaries over two workers of four threads, 250.7 s of
+running led by `nazm-service test:context` 80.5 s, `test:incomplete` 76.7 s and `nazm-cli
+test:selfhost` 60.5 s — the same 1,728 passed, 19 ignored, 95 result lines, each binary's counts
+identical to the plain run's, at a container peak of 1.63 GB against P4T4's 2.07 GB.
+
+**The gate is over the 25-minute closure line, and the largest stage is at a floor.** The mutation
+session's builds are `cargo build --workspace --tests` after each injection, the check that
+separates UNUSABLE from CAUGHT: a `nazm-docs` mutant compiles 40 dependent units in 24–31 s, an
+MCP one 2 in about 5.5 s, a harness one 2 to 4 in about 2 s — the order was already grouped by
+package, so bucketing measured no saving. The remaining 86 s is the restored killers' rebuild,
+which the restoration law requires. Neither is removed. The benchmark's 224 s included its
+cache's first fill.
+
+Two P4W* profiles were not run: `p4w2t2` was stopped before it started, and `p4w4t1`, `p4w3t2` and
+`p4w1t4` were not run — dominated by the model (serialising the slow few-test binaries, more
+oversubscription, `cargo test`'s own order). The scheduler's correctness is its unit tests,
+including a real-concurrency stress test repeated ten times, not repeated suite runs.
+
 ## The mutation baseline and the persistent cache — N32-H2, measured 2026-09-29
 
 V1's session paid 806 s of setup before its first mutant. V1 did not record its parts; V2's cold
