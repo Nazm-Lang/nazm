@@ -44,6 +44,11 @@ pub struct Signature {
     pub type_params: Vec<TypeParameter>,
     pub params: Vec<Parameter>,
     pub ret: Type,
+    /// The declared effect set — a function's `! { … }`, or a built-in's own effect — where
+    /// there is one to show (N36). `None` for a function that declares none and for a
+    /// built-in with no effect: the signature is what is declared, and an inferred set is
+    /// not a declaration.
+    pub effects: Option<nazm_core::sema::EffectSet>,
 }
 
 /// One declared type parameter.
@@ -82,6 +87,7 @@ impl Signature {
             type_params: type_parameters(res, ParamOwner::Function(id), f.type_params.len()),
             params: named(res, Callee::Function(id), &f.params),
             ret: f.ret,
+            effects: f.declared_effects,
         })
     }
 
@@ -89,18 +95,20 @@ impl Signature {
     /// with the parameter types the checker read from the module's environment.
     #[must_use]
     pub fn of_call(res: &Resolution, call: &CheckedCall) -> Option<Self> {
-        let (name, type_params) = match call.callee {
+        let (name, type_params, effects) = match call.callee {
             Callee::Function(id) => {
                 let f = res.function(id)?;
                 let n = f.type_params.len();
                 (
                     f.name.clone(),
                     type_parameters(res, ParamOwner::Function(id), n),
+                    f.declared_effects,
                 )
             }
             Callee::Builtin(i) => (
                 i.name().to_owned(),
                 type_parameters(res, ParamOwner::Builtin(i), i.generics() as usize),
+                nazm_core::sema::Effect::of_intrinsic(i).map(nazm_core::sema::EffectSet::of),
             ),
         };
         Some(Self {
@@ -109,11 +117,13 @@ impl Signature {
             type_params,
             params: named(res, call.callee, &call.params),
             ret: call.ret,
+            effects,
         })
     }
 
-    /// `fn name[T: Equality](a: T) -> T`: the one spelling of a signature, which hover,
-    /// completion and signature help all show.
+    /// `fn name[T: Equality](a: T) -> T ! { io }`: the one spelling of a signature, which
+    /// hover, completion and signature help all show — the effect set as the formatter
+    /// writes it, when there is a declared one.
     ///
     /// With `instance`, each type parameter, parameter and the result is shown as that call
     /// settled it — `fn identity[Int](x: Int) -> Int` — and whatever it did not settle as
@@ -154,6 +164,10 @@ impl Signature {
         let ret = instance.and_then(|x| x.ret).unwrap_or(self.ret);
         label.push_str(" -> ");
         label.push_str(&types.show(ret));
+        if let Some(effects) = self.effects {
+            label.push_str(" ! ");
+            label.push_str(&effects.to_string());
+        }
         Rendered { label, params }
     }
 }

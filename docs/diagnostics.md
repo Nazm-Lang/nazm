@@ -13,9 +13,9 @@ against them — so these documents are tested rather than described.
 | `nazm.test/1` | `nazm test --json` | stdout | one object per case |
 | `nazm.check-report/1` | `nazm check --cache-report` | stdout | one object |
 | `nazm.build-report/1` | `nazm build --build-report` | stdout | one object, before the executable's path |
-| `nazm.context/1` | `nazm context --json`, and the `nazm-mcp` tool `nazm.semantic_context` | stdout; the tool result's structured content | one object |
-| `nazm.snapshot/1` | `nazm snapshot --json`, and the `nazm-mcp` tool `nazm.semantic_snapshot` | stdout; the tool result's structured content | one object |
-| `nazm.delta/1` | `nazm delta --json`, and the `nazm-mcp` tool `nazm.semantic_delta` | stdout; the tool result's structured content | one object |
+| `nazm.context/2` | `nazm context --json`, and the `nazm-mcp` tool `nazm.semantic_context` | stdout; the tool result's structured content | one object |
+| `nazm.snapshot/2` | `nazm snapshot --json`, and the `nazm-mcp` tool `nazm.semantic_snapshot` | stdout; the tool result's structured content | one object |
+| `nazm.delta/2` | `nazm delta --json`, and the `nazm-mcp` tool `nazm.semantic_delta` | stdout; the tool result's structured content | one object |
 | `nazm.patch/1` | `nazm patch rename --json`, `nazm patch fix --json`, and the `nazm-mcp` tool `nazm.semantic_patch` | stdout; the tool result's structured content | one object |
 | `nazm.diagnostic-index/1` | `nazm diagnostics --json`, and the `nazm-mcp` tool `nazm.diagnostics` | stdout; the tool result's structured content | one object |
 | `nazm.diagnostic-detail/1` | `nazm diagnostics --detail ID --state DIGEST --json`, and the `nazm-mcp` tool `nazm.diagnostic_detail` | stdout; the tool result's structured content | one object |

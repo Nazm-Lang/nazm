@@ -1,4 +1,4 @@
-//! `nazm context` — one definition's semantic context packet, `nazm.context/1`. N27.
+//! `nazm context` — one definition's semantic context packet, `nazm.context/2`. N27.
 //!
 //! The root is analysed from disk exactly as `nazm check` would load it, the packet is
 //! derived from that analysis, and both are dropped: nothing is kept between runs, and a

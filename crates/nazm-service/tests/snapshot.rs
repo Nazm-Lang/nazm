@@ -85,7 +85,7 @@ fn identities(list: &Value) -> Vec<String> {
         .collect()
 }
 
-const SECTIONS: [&str; 8] = [
+const SECTIONS: [&str; 9] = [
     "source",
     "shape",
     "dependencies",
@@ -94,6 +94,7 @@ const SECTIONS: [&str; 8] = [
     "callers",
     "callees",
     "diagnostics",
+    "effects",
 ];
 
 /// The sections a changed definition reports as changed, by name, in the schema's order.
@@ -148,7 +149,7 @@ fn project() -> Project {
 fn a_snapshot_is_every_durable_definition_of_the_compilation_by_identity() {
     let p = project();
     let s = snapshot(&p.root());
-    assert_eq!(s["schema"], "nazm.snapshot/1");
+    assert_eq!(s["schema"], "nazm.snapshot/2");
     assert_eq!(s["status"], "available");
     assert_eq!(s["root"]["module"], "main.nz");
     assert!(s["root"]["compiler"].as_str().unwrap().starts_with("nazm "));
@@ -170,7 +171,6 @@ fn a_snapshot_is_every_durable_definition_of_the_compilation_by_identity() {
     assert_eq!(
         s["unsupported"],
         json!([
-            "effects",
             "capabilities",
             "tests",
             "semantic_history",
@@ -189,6 +189,7 @@ fn a_snapshot_is_every_durable_definition_of_the_compilation_by_identity() {
     // empty one.
     assert_eq!(point["digests"]["callers"], Value::Null);
     assert_eq!(point["digests"]["callees"], Value::Null);
+    assert_eq!(point["digests"]["effects"], Value::Null);
     let main = definition(&s, "main.nz::fn main");
     for section in [
         "source",
@@ -199,6 +200,7 @@ fn a_snapshot_is_every_durable_definition_of_the_compilation_by_identity() {
         "callers",
         "callees",
         "diagnostics",
+        "effects",
     ] {
         let d = main["digests"][section].as_str().unwrap();
         assert_eq!(d.len(), 64, "{section}");
@@ -209,9 +211,7 @@ fn a_snapshot_is_every_durable_definition_of_the_compilation_by_identity() {
     // No full packet and no source text: a compact manifest.
     let text = s.to_string();
     assert!(!text.contains("p.x"), "{text}");
-    assert!(!text.contains("nazm.context/1"), "{text}");
-    // No effect is reported unchanged, or at all, as a digest.
-    assert!(main["digests"].get("effects").is_none());
+    assert!(!text.contains("nazm.context/2"), "{text}");
 }
 
 #[test]
@@ -272,7 +272,7 @@ fn a_compilation_that_needed_recovery_has_no_snapshot() {
     let p = Project::new(&[("main.nz", "fn main() -> Int { 1 +  }\n")]);
     assert_eq!(
         snapshot(&p.root()),
-        json!({"schema": "nazm.snapshot/1", "status": "unavailable", "reason": "incomplete_compilation"})
+        json!({"schema": "nazm.snapshot/2", "status": "unavailable", "reason": "incomplete_compilation"})
     );
     let q = Project::new(&[("main.nz", "use \"missing.nz\";\nfn main() -> Int { 1 }\n")]);
     assert_eq!(snapshot(&q.root())["reason"], "incomplete_compilation");
@@ -287,7 +287,7 @@ fn no_edit_is_no_change_and_a_move_is_not_one_either() {
     let p = project();
     let before = snapshot(&p.root());
     let d = delta(&p.root(), &before);
-    assert_eq!(d["schema"], "nazm.delta/1");
+    assert_eq!(d["schema"], "nazm.delta/2");
     assert_eq!(d["status"], "available");
     assert_eq!(d["added"], json!([]));
     assert_eq!(d["removed"], json!([]));
@@ -319,7 +319,8 @@ fn a_comment_or_a_literal_changes_source_and_nothing_else() {
     assert_eq!(
         entry["sections"],
         json!({"source": true, "shape": false, "dependencies": false, "related_types": false,
-               "references": false, "callers": false, "callees": false, "diagnostics": false})
+               "references": false, "callers": false, "callees": false, "diagnostics": false,
+               "effects": false})
     );
     // `{ 7 }` to `{ 8 }`: a different program, and only `source` says so — the delta does
     // not claim the sections it records describe behaviour.
@@ -514,7 +515,7 @@ fn a_broken_edit_has_no_delta_and_a_repair_does() {
     );
     assert_eq!(
         delta(&p.root(), &before),
-        json!({"schema": "nazm.delta/1", "status": "unavailable", "reason": "incomplete_compilation"})
+        json!({"schema": "nazm.delta/2", "status": "unavailable", "reason": "incomplete_compilation"})
     );
     p.write("lib.nz", LIB);
     let d = delta(&p.root(), &before);
@@ -529,17 +530,17 @@ fn a_baseline_that_is_not_exactly_a_snapshot_of_this_root_is_refused() {
     let refused = |b: Value| delta(&p.root(), &b)["reason"].as_str().unwrap().to_owned();
 
     let mut b = good.clone();
-    b["schema"] = json!("nazm.snapshot/2");
+    b["schema"] = json!("nazm.snapshot/3");
     assert_eq!(refused(b), "baseline_wrong_schema");
     assert_eq!(
-        refused(json!({"schema": "nazm.context/1"})),
+        refused(json!({"schema": "nazm.context/2"})),
         "baseline_wrong_schema"
     );
     assert_eq!(refused(json!("not an object")), "baseline_wrong_schema");
 
     assert_eq!(
         refused(
-            json!({"schema": "nazm.snapshot/1", "status": "unavailable", "reason": "incomplete_compilation"})
+            json!({"schema": "nazm.snapshot/2", "status": "unavailable", "reason": "incomplete_compilation"})
         ),
         "baseline_unavailable"
     );
@@ -548,7 +549,7 @@ fn a_baseline_that_is_not_exactly_a_snapshot_of_this_root_is_refused() {
     b["extra"] = json!(1);
     assert_eq!(refused(b), "baseline_malformed");
     let mut b = good.clone();
-    b["definitions"][0]["digests"]["effects"] = json!("0".repeat(64));
+    b["definitions"][0]["digests"]["capabilities"] = json!("0".repeat(64));
     assert_eq!(refused(b), "baseline_malformed");
     let mut b = good.clone();
     b["definitions"][0]["digests"]
@@ -693,4 +694,52 @@ fn a_snapshot_is_the_same_at_any_generation_of_the_service() {
             .to_json()
             .contains("not_current"));
     });
+}
+
+// ---------------------------------------------------------------------------------------
+// N36: effects are a recorded section.
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn an_effect_change_is_its_own_section_whether_declared_or_required() {
+    let text = "fn f() -> Int { 1 }\nfn main() -> Int { f() }\n";
+    let p = Project::new(&[("main.nz", text)]);
+    let before = snapshot(&p.root());
+    // The body starts to print: nothing declared moved, but what `f` requires did, and so
+    // did what its caller requires. Neither's shape changed.
+    p.write(
+        "main.nz",
+        "fn f() -> Int { print(\"x\") }\nfn main() -> Int { f() }\n",
+    );
+    let d = delta(&p.root(), &before);
+    // A built-in is not a dependency or a callee entity: only `effects` says it is new.
+    assert_eq!(changed(&d, "main.nz::fn f"), ["source", "effects"]);
+    assert_eq!(changed(&d, "main.nz::fn main"), ["effects"]);
+    // Declared pure, same body: the contract is the signature, and it is an effect change.
+    p.write(
+        "main.nz",
+        "fn f() -> Int ! {} { 1 }\nfn main() -> Int { f() }\n",
+    );
+    let d = delta(&p.root(), &before);
+    assert_eq!(changed(&d, "main.nz::fn f"), ["source", "shape", "effects"]);
+    assert!(
+        d["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["identity"] != "main.nz::fn main"),
+        "{d}"
+    );
+    // One set in two orders is one contract: only the source differs.
+    p.write(
+        "main.nz",
+        "fn f() -> Int ! { io, spawn } { 1 }\nfn main() -> Int { f() }\n",
+    );
+    let one = snapshot(&p.root());
+    p.write(
+        "main.nz",
+        "fn f() -> Int ! { spawn, io } { 1 }\nfn main() -> Int { f() }\n",
+    );
+    let d = delta(&p.root(), &one);
+    assert_eq!(changed(&d, "main.nz::fn f"), ["source"]);
 }

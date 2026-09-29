@@ -108,7 +108,7 @@
       "required": ["schema", "args"],
       "description": "The existing answer that holds more, and the arguments of the command or tool that gives it.",
       "properties": {
-        "schema": { "enum": ["nazm.context/1", "nazm.diagnostic-detail/1", "nazm.diagnostic-index/1", "nazm.docs-index/1", "nazm.docs-section/1", "nazm.snapshot/1", "nazm.task-context/1"] },
+        "schema": { "enum": ["nazm.context/2", "nazm.diagnostic-detail/1", "nazm.diagnostic-index/1", "nazm.docs-index/1", "nazm.docs-section/1", "nazm.snapshot/2", "nazm.task-context/1"] },
         "args": {
           "type": "object",
           "additionalProperties": false,

@@ -1,6 +1,6 @@
-//! Semantic deltas: a baseline `nazm.snapshot/1` against the current compilation of the same
+//! Semantic deltas: a baseline `nazm.snapshot/2` against the current compilation of the same
 //! root — which durable definitions appeared, disappeared, or changed in a section Nazm
-//! records. `nazm.delta/1`. N28.
+//! records. `nazm.delta/2` (N28; the `effects` section since N36).
 //!
 //! # The contract
 //!
@@ -10,14 +10,14 @@
 //! `changed` when any recorded section's digest differs, and the change names exactly which
 //! sections: `source` alone for a comment, a reformatting or a different literal, with every
 //! other section unchanged. That is the whole claim — *the sections Nazm records did not
-//! change* — never that the program means the same: effects, capabilities, tests, history
+//! change* — never that the program means the same: capabilities, tests, history
 //! and behavioural equivalence are **unsupported**, not unchanged. Where a definition is
 //! declared is not a section, so moving one is no change.
 //!
 //! # A baseline is data
 //!
 //! It is validated before anything is compared, and refused — never reinterpreted or
-//! compared as well as it can be — when it is not `nazm.snapshot/1`, is an unavailable
+//! compared as well as it can be — when it is not `nazm.snapshot/2`, is an unavailable
 //! snapshot, has a field this version does not define, names a definition in anything but
 //! the canonical key spelling or under the wrong kind, names one twice, carries a digest
 //! that is not 64 lowercase hexadecimal digits, or is of another root or another compiler.
@@ -37,9 +37,9 @@ use crate::snapshot::{
 };
 
 /// The schema every delta declares.
-pub const SCHEMA: &str = "nazm.delta/1";
+pub const SCHEMA: &str = "nazm.delta/2";
 
-/// A delta, or why there is none, exactly as `nazm.delta/1` serialises it.
+/// A delta, or why there is none, exactly as `nazm.delta/2` serialises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum DeltaResult {
@@ -64,7 +64,7 @@ pub struct SemanticDelta {
     pub changed: Vec<DeltaChange>,
     /// In both, with every recorded section's digest equal.
     pub unchanged: usize,
-    pub unsupported: [&'static str; 5],
+    pub unsupported: [&'static str; 4],
 }
 
 /// How many durable definitions a side has, and how many it left untracked.
@@ -104,9 +104,11 @@ pub struct Sections {
     pub callers: Option<bool>,
     pub callees: Option<bool>,
     pub diagnostics: bool,
+    /// A function's effects, declared or required (N36); `None` for a record or an enum.
+    pub effects: Option<bool>,
 }
 
-/// Why there is no delta, as `nazm.delta/1` serialises it.
+/// Why there is no delta, as `nazm.delta/2` serialises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NoDeltaResult {
     pub schema: &'static str,
@@ -125,11 +127,11 @@ pub enum NoDelta {
     IncompleteCompilation,
     /// The current root module has no durable key.
     NoDurableRoot,
-    /// The baseline does not declare `nazm.snapshot/1`.
+    /// The baseline does not declare `nazm.snapshot/2`.
     BaselineWrongSchema,
     /// The baseline is an unavailable snapshot: there is nothing to compare with.
     BaselineUnavailable,
-    /// The baseline is not a well-formed `nazm.snapshot/1`: a missing or unknown field, a
+    /// The baseline is not a well-formed `nazm.snapshot/2`: a missing or unknown field, a
     /// wrong type, a section present for a kind that has none or absent for one that has.
     BaselineMalformed,
     /// A definition's identity is not a canonical durable key of its kind.
@@ -169,7 +171,7 @@ impl DeltaResult {
 }
 
 impl LanguageService {
-    /// What changed between `baseline`, a `nazm.snapshot/1` object, and the compilation
+    /// What changed between `baseline`, a `nazm.snapshot/2` object, and the compilation
     /// rooted at the open document `root`, at `version`.
     #[must_use]
     pub fn semantic_delta(
@@ -228,6 +230,7 @@ fn compare(baseline: &Baseline, current: SemanticSnapshot) -> SemanticDelta {
             callers: b.callers.as_ref().map(|c| a.callers.as_ref() != Some(c)),
             callees: b.callees.as_ref().map(|c| a.callees.as_ref() != Some(c)),
             diagnostics: a.diagnostics != b.diagnostics,
+            effects: b.effects.as_ref().map(|c| a.effects.as_ref() != Some(c)),
         };
         if sections.any() {
             changed.push(DeltaChange {
@@ -280,10 +283,11 @@ impl Sections {
             || self.callers == Some(true)
             || self.callees == Some(true)
             || self.diagnostics
+            || self.effects == Some(true)
     }
 }
 
-/// `nazm.snapshot/1` exactly as it is written, and nothing else: an unknown field is refused.
+/// `nazm.snapshot/2` exactly as it is written, and nothing else: an unknown field is refused.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Wire {
@@ -333,6 +337,8 @@ struct WireDigests {
     #[serde(deserialize_with = "required_option")]
     callees: Option<String>,
     diagnostics: String,
+    #[serde(deserialize_with = "required_option")]
+    effects: Option<String>,
 }
 
 /// A field that must be present and may be null — serde's default for an `Option` would
@@ -353,6 +359,7 @@ impl WireDefinition {
             callers: d.callers.clone(),
             callees: d.callees.clone(),
             diagnostics: d.diagnostics.clone(),
+            effects: d.effects.clone(),
         }
     }
 }
@@ -395,7 +402,10 @@ impl Baseline {
             }
             let x = &d.digests;
             let function = kind == DefKind::Function;
-            if x.callers.is_some() != function || x.callees.is_some() != function {
+            if x.callers.is_some() != function
+                || x.callees.is_some() != function
+                || x.effects.is_some() != function
+            {
                 return Err(NoDelta::BaselineMalformed);
             }
             if ![
@@ -407,6 +417,7 @@ impl Baseline {
                 x.callers.as_ref(),
                 x.callees.as_ref(),
                 Some(&x.diagnostics),
+                x.effects.as_ref(),
             ]
             .into_iter()
             .flatten()

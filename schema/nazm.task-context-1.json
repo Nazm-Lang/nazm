@@ -438,12 +438,12 @@
       "properties": {
         "schema": {
           "enum": [
-            "nazm.context/1",
+            "nazm.context/2",
             "nazm.diagnostic-detail/1",
             "nazm.diagnostic-index/1",
             "nazm.docs-index/1",
             "nazm.docs-section/1",
-            "nazm.snapshot/1",
+            "nazm.snapshot/2",
             "nazm.task-context/1"
           ]
         },

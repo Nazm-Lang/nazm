@@ -244,7 +244,7 @@ fn a_position_that_names_no_source_definition_has_no_packet() {
     let v = packet(&main, &p.path("other.nz"), 3);
     assert_eq!(
         v,
-        json!({"schema": "nazm.context/1", "status": "unavailable", "reason": "not_in_compilation"})
+        json!({"schema": "nazm.context/2", "status": "unavailable", "reason": "not_in_compilation"})
     );
     assert_eq!(
         packet(&main, Path::new("/etc/passwd"), 0)["reason"],
@@ -549,7 +549,6 @@ fn diagnostics_are_the_targets_own_and_what_is_not_known_is_unsupported() {
     assert_eq!(
         good["availability"],
         json!({
-            "effects": "unsupported",
             "capabilities": "unsupported",
             "tests": "unsupported",
             "semantic_changes": "unsupported",
@@ -836,4 +835,72 @@ fn two_dependencies_of_one_spelling_are_two_dependencies() {
     );
     assert_eq!(occurrences(fields[0]).len(), 2);
     assert_eq!(occurrences(fields[1]).len(), 1);
+}
+
+// ---------------------------------------------------------------------------------------
+// N36: a function's effects are the checker's.
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_functions_packet_carries_its_effects_and_why_from_the_checker() {
+    const FX: &str = "use \"lib.nz\";\n\
+        fn leaf() -> Int { print(\"x\") }\n\
+        fn mid() -> Int { leaf() }\n\
+        fn pure() -> Int ! {} { 1 }\n\
+        fn both() -> Int ! { io, spawn } { mid() }\n\
+        fn far() -> Int { helper() }\n\
+        struct P { x: Int, }\n\
+        fn main() -> Int { both() + pure() + far() + P(x: 1).x }\n";
+    let p = Project::new(&[
+        ("main.nz", FX),
+        ("lib.nz", "pub fn helper() -> Int { 2 }\n"),
+    ]);
+    let main = p.path("main.nz");
+    let of =
+        |name: &str| packet(&main, &main, at(FX, &format!("fn {name}("), 0) + 3)["effects"].clone();
+
+    let leaf = of("leaf");
+    assert_eq!(leaf["declared"], Value::Null);
+    assert_eq!(leaf["required"], json!(["io"]));
+    // Declaring nothing publishes nothing: another module must assume every effect.
+    assert_eq!(leaf["published"], json!(["io", "spawn"]));
+    assert_eq!(
+        leaf["reasons"],
+        json!([{"effect": "io", "at": {"file": "main.nz", "start": at(FX, "print", 0), "end": at(FX, "print", 0) + 5},
+                "source": "builtin", "builtin": "print", "callee": null}])
+    );
+    let mid = of("mid");
+    assert_eq!(mid["reasons"][0]["source"], "inferred");
+    assert_eq!(
+        mid["reasons"][0]["callee"]["definition"],
+        "main.nz::fn leaf"
+    );
+    assert_eq!(mid["reasons"][0]["at"]["start"], at(FX, "leaf() }", 0));
+    let pure = of("pure");
+    assert_eq!(
+        pure,
+        json!({"declared": [], "required": [], "published": [], "reasons": []})
+    );
+    let both = of("both");
+    assert_eq!(both["declared"], json!(["io", "spawn"]));
+    assert_eq!(both["required"], json!(["io"]));
+    assert_eq!(both["published"], json!(["io", "spawn"]));
+    let far = of("far");
+    assert_eq!(far["required"], json!(["io", "spawn"]));
+    assert!(
+        far["reasons"].as_array().unwrap().iter().all(
+            |r| r["source"] == "undeclared" && r["callee"]["definition"] == "lib.nz::fn helper"
+        ),
+        "{far}"
+    );
+    // A record has no effects to have: null, not empty.
+    let record = packet(&main, &main, at(FX, "struct P", 0) + 7);
+    assert_eq!(record["effects"], Value::Null);
+    assert_eq!(record["schema"], "nazm.context/2");
+    // And the signature shows a declared set as the formatter writes it.
+    let both_packet = packet(&main, &main, at(FX, "fn both(", 0) + 3);
+    assert_eq!(
+        both_packet["target"]["signature"],
+        "fn both() -> Int ! { io, spawn }"
+    );
 }

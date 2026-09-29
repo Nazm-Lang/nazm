@@ -31,7 +31,7 @@
 //! | Field | Is | Present |
 //! | --- | --- | --- |
 //! | `state.source` | BLAKE3 over the root's identity and every loaded source file's root-relative path and exact bytes, in load order | always |
-//! | `state.snapshot` | BLAKE3 of the root's `nazm.snapshot/1` (N28) | when the compilation has one — not after syntax recovery or a missing module |
+//! | `state.snapshot` | BLAKE3 of the root's `nazm.snapshot/2` (N28) | when the compilation has one — not after syntax recovery or a missing module |
 //!
 //! A detail request names the index's `state.source`; any other value is stale, and an id
 //! is resolved only within the state it came from — so an id never selects another
@@ -107,7 +107,7 @@ pub struct DiagnosticIndex {
 pub struct State {
     /// BLAKE3 over the root's identity and every loaded file's path and bytes.
     pub source: String,
-    /// BLAKE3 of the root's `nazm.snapshot/1`; `None` where the compilation has no snapshot.
+    /// BLAKE3 of the root's `nazm.snapshot/2`; `None` where the compilation has no snapshot.
     pub snapshot: Option<String>,
 }
 

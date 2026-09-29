@@ -1,5 +1,5 @@
 //! `nazm snapshot` and `nazm delta` — a root compilation's semantic snapshot,
-//! `nazm.snapshot/1`, and what changed since one, `nazm.delta/1`. N28.
+//! `nazm.snapshot/2`, and what changed since one, `nazm.delta/2`. N28.
 //!
 //! The root is analysed from disk exactly as `nazm check` would load it, the snapshot or
 //! delta is derived from that analysis, and both are dropped: nothing is kept between runs.

@@ -34,9 +34,9 @@ claims to know every caller or importer in a project.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
-| `nazm.semantic_context` | `file`, `byte_offset` | `nazm.context/1` |
-| `nazm.semantic_snapshot` | none | `nazm.snapshot/1` |
-| `nazm.semantic_delta` | `baseline`, a `nazm.snapshot/1` object | `nazm.delta/1` |
+| `nazm.semantic_context` | `file`, `byte_offset` | `nazm.context/2` |
+| `nazm.semantic_snapshot` | none | `nazm.snapshot/2` |
+| `nazm.semantic_delta` | `baseline`, a `nazm.snapshot/2` object | `nazm.delta/2` |
 | `nazm.semantic_patch` | `operation` (`rename` or `diagnostic_fix`) and its fields | `nazm.patch/1` |
 | `nazm.diagnostics` | none | `nazm.diagnostic-index/1` |
 | `nazm.diagnostic_detail` | `id`, `state` | `nazm.diagnostic-detail/1` |
@@ -59,7 +59,7 @@ Two arguments:
 | `byte_offset` | a UTF-8 byte offset into that file |
 
 The position must be on the declaration of a function, record or enum, or on a use of one. The
-result is a `nazm.context/1` object (`schema/nazm.context-1.json`, `docs/architecture.md` §7.29) in
+result is a `nazm.context/2` object (`schema/nazm.context-2.json`, `docs/architecture.md` §7.29) in
 the tool result's structured content, **once**: `content` is an empty array, not a second copy of the
 packet as text (which the specification only suggests, and which would double every response). A position with no such definition, a file the compilation did not load, or a
 compilation that needed syntax recovery gives an `unavailable` object and `isError: true`; a
@@ -76,7 +76,7 @@ inside it. To follow a link, call the tool again at the linked declaration.
 
 ### `nazm.semantic_snapshot` and `nazm.semantic_delta`
 
-A snapshot (`schema/nazm.snapshot-1.json`, `docs/architecture.md` §7.30) lists every durable
+A snapshot (`schema/nazm.snapshot-2.json`, `docs/architecture.md` §7.30) lists every durable
 function, record and enum of the root's compilation by its definition key, with one digest per
 section the compiler records — source, shape, dependencies, related types, references, callers,
 callees, diagnostics. **Keep it**: the server does not. To learn what changed, pass it back as
@@ -106,7 +106,7 @@ permission to change a file. Two operations:
 | `diagnostic_fix` | `file`, `byte_offset`, `fix` | fix number `fix` among those the current diagnostics at that byte carry |
 
 The result is minimal exact-byte edits — each renamed occurrence, or the compiler's one fix span —
-with three freshness layers: `baseline.snapshot`, BLAKE3 of the root's `nazm.snapshot/1`; each
+with three freshness layers: `baseline.snapshot`, BLAKE3 of the root's `nazm.snapshot/2`; each
 file's `digest`, BLAKE3 of its bytes; and each edit's `expected` bytes. A client that applies one
 checks all three first. A fix's `applicability` (`automatic` or `needs_review`) and `precondition`
 are structured fields: a `needs_review` patch is never safe to apply unread. An exported
