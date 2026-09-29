@@ -85,6 +85,10 @@ pub struct Export {
     /// the count is part of the interface — names are presentation, and a function read
     /// back from a persisted interface has none.
     pub type_params: Vec<String>,
+    /// Its declared effect set (N36), or `None` where it declares none. An importer never
+    /// reads the body, so `None` means **every** effect to it: what crosses a module
+    /// boundary is a contract, and an absent one promises nothing.
+    pub effects: Option<crate::EffectSet>,
 }
 
 /// One record definition an importer needs to see.
