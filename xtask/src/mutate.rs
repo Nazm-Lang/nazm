@@ -870,8 +870,20 @@ pub(crate) fn run_all(o: &Options) -> End {
     // Mutants Tier 1 did not decide, with the verification their one Tier-1 injection gave.
     let mut deferred: Vec<(&MutationPlan, Vec<KillerCheck>)> = Vec::new();
 
+    // Execution order (N32-H3): mutants of one package, then of one killer target, run
+    // consecutively, so Cargo rebuilds one slice at a time; the key is structured and the
+    // catalogue index breaks ties, so the order is deterministic. Only the order changes:
+    // each mutant starts from the digest-checked pristine tree whatever ran before it, and
+    // the selection, identity, journal and verdicts are the catalogue's.
+    let execution = bucket_order(&plans, &o.root);
+    println!(
+        "  execution order      {} bucket(s): {}",
+        execution.buckets.len(),
+        execution.buckets.join(", ")
+    );
+
     // Pass 1: Tier 1 for every targeted mutant with declared killers; the rest wait.
-    for p in &plans {
+    for p in execution.order.iter().filter_map(|&i| plans.get(i)) {
         if let Some(r) = reuse(&p.name) {
             println!(
                 "  {} {}  (reused from journal {key}: {})",
@@ -1141,6 +1153,55 @@ fn problem(verdict: &str, detail: &str, m: &Mutation) -> Option<String> {
     }
 }
 
+/// The order a session injects its mutants in, and the buckets it groups them into.
+pub(crate) struct Execution {
+    /// Indices into the plans.
+    pub(crate) order: Vec<usize>,
+    /// `package → killer target`, in order, each once.
+    pub(crate) buckets: Vec<String>,
+}
+
+/// Group plans by the package that owns the mutated file, then by their first killer's
+/// target, then catalogue order. Cargo's metadata says which package owns a file; where it
+/// cannot be read, every plan is its own package's and the catalogue order stands.
+pub(crate) fn bucket_order(plans: &[MutationPlan], root: &Path) -> Execution {
+    let packages = crate::metadata::package_dirs(root).unwrap_or_default();
+    bucketed(plans, &packages)
+}
+
+/// [`bucket_order`] over a given package map. Deterministic: a sort on structured keys.
+pub(crate) fn bucketed(plans: &[MutationPlan], packages: &[(String, String)]) -> Execution {
+    let key = |p: &MutationPlan| {
+        let owner = crate::metadata::owner(&p.file, packages)
+            .unwrap_or("")
+            .to_owned();
+        let target = p
+            .killers
+            .first()
+            .map(|k| k.target.label())
+            .unwrap_or_default();
+        (owner, target, p.index)
+    };
+    let mut keyed: Vec<((String, String, usize), usize)> =
+        plans.iter().enumerate().map(|(i, p)| (key(p), i)).collect();
+    keyed.sort();
+    let mut buckets: Vec<String> = Vec::new();
+    for ((owner, target, _), _) in &keyed {
+        let b = format!(
+            "{} → {}",
+            if owner.is_empty() { "?" } else { owner },
+            if target.is_empty() { "suite" } else { target }
+        );
+        if buckets.last() != Some(&b) {
+            buckets.push(b);
+        }
+    }
+    Execution {
+        order: keyed.into_iter().map(|(_, i)| i).collect(),
+        buckets,
+    }
+}
+
 /// How a mutant is to be decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -1210,6 +1271,7 @@ impl Pristine {
             reset_derived: o.reset_derived,
             logs: None,
             failing: Vec::new(),
+            rebuilt: Vec::new(),
         };
         let mut failing = Vec::new();
         for k in killers {
@@ -1366,6 +1428,7 @@ fn run_one(
         reset_derived: o.reset_derived,
         logs,
         failing: Vec::new(),
+        rebuilt: Vec::new(),
     };
     let verify = ask.verify && !p.killers.is_empty();
 
@@ -1412,6 +1475,22 @@ fn run_one(
         };
         (prov, rec.seen)
     };
+    // What the mutant's workspace build compiled, by package: advisory, N32-H3.
+    let rebuilt = std::mem::take(&mut ex.rebuilt);
+    if !rebuilt.is_empty() {
+        let mut by: BTreeMap<&str, usize> = BTreeMap::new();
+        for u in &rebuilt {
+            *by.entry(u.split(' ').next().unwrap_or("?")).or_insert(0) += 1;
+        }
+        let parts: Vec<String> = by.iter().map(|(k, n)| format!("{k} {n}")).collect();
+        println!(
+            "  build        {}: {} unit(s) compiled in {:.1}s ({})",
+            p.name,
+            rebuilt.len(),
+            prov.as_ref().map_or(0.0, |v| v.build_secs),
+            parts.join(", ")
+        );
+    }
     // The mutant half: the verdict's own observation of each killer, or — for one the
     // verdict did not reach — a run on this same mutant.
     let mutant = if verify {
@@ -1667,6 +1746,7 @@ pub(crate) fn verify_killer(
         reset_derived: o.reset_derived,
         logs: None,
         failing: Vec::new(),
+        rebuilt: Vec::new(),
     };
     let build = |ex: &mut campaign::Real<'_>, when: &str| -> Result<(), String> {
         match ex.build().0 {
@@ -2028,6 +2108,59 @@ mod tests {
         assert_eq!(p.runs, 1);
         p.forget();
         assert_eq!(p.get("tree-a", &selector("k")), None);
+    }
+
+    fn planned(index: usize, file: &str, killer: &str) -> crate::plan::MutationPlan {
+        crate::plan::MutationPlan {
+            index,
+            name: format!("m{index}"),
+            file: file.to_owned(),
+            killers: vec![selector(killer)],
+            profile: None,
+        }
+    }
+
+    /// Execution order groups by owning package, then killer target, then catalogue order —
+    /// deterministically — and only reorders: every plan appears exactly once. N32-H3.
+    #[test]
+    fn mutants_run_grouped_by_package_then_killer_and_every_one_once() {
+        let packages: Vec<(String, String)> = [
+            ("docs", "crates/nazm-docs"),
+            ("mcp", "crates/nazm-mcp"),
+            ("xtask", "xtask"),
+        ]
+        .map(|(a, b)| (a.to_owned(), b.to_owned()))
+        .to_vec();
+        let plans = vec![
+            planned(0, "crates/nazm-mcp/src/main.rs", "k"),
+            planned(1, "crates/nazm-docs/src/lib.rs", "k"),
+            planned(2, "xtask/src/mutate.rs", "k"),
+            planned(3, "crates/nazm-mcp/src/main.rs", "k"),
+            planned(4, "crates/nazm-docs/src/markdown.rs", "k"),
+        ];
+        let e = super::bucketed(&plans, &packages);
+        assert_eq!(e.order, [1, 4, 0, 3, 2]);
+        assert_eq!(e.buckets.len(), 3);
+        assert_eq!(super::bucketed(&plans, &packages).order, e.order);
+        let mut all = e.order.clone();
+        all.sort_unstable();
+        assert_eq!(all, [0, 1, 2, 3, 4]);
+        // With no package map, the catalogue order stands.
+        assert_eq!(super::bucketed(&plans, &[]).order, [0, 1, 2, 3, 4]);
+        // The longest directory owns a file.
+        let nested = vec![
+            ("outer".to_owned(), String::new()),
+            ("inner".to_owned(), "crates/a".to_owned()),
+        ];
+        assert_eq!(
+            crate::metadata::owner("crates/a/src/x.rs", &nested),
+            Some("inner")
+        );
+        assert_eq!(crate::metadata::owner("README.md", &nested), Some("outer"));
+        assert_eq!(
+            crate::metadata::owner("crates/ab/x.rs", nested.get(1..).unwrap()),
+            None
+        );
     }
 
     /// The verification law a warm session applies is `verify_killer`'s, and only its
