@@ -235,6 +235,7 @@
                     "input_reduction_bp": { "type": ["integer", "null"] },
                     "total_reduction_bp": { "type": ["integer", "null"] },
                     "cost_reduction_bp": { "type": ["integer", "null"] },
+                    "uncached_cost_reduction_bp": { "type": ["integer", "null"] },
                     "local_context_reduction_bp": { "type": ["integer", "null"] }
                   }
                 }
