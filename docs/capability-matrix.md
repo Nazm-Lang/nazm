@@ -1546,7 +1546,7 @@ callees (N25; `not_applicable` for a type) and diagnostics inside it; effects, c
 semantic changes and deltas are `unsupported`, never empty. Paths are source-root-relative and
 nothing session-local is serialised. `nazm context --json` prints it; `nazm-mcp`
 (`crates/nazm-mcp/src/main.rs`), on the official Rust SDK, serves it with
-`schema/nazm.context-1.json` as its output schema. This establishes semantic context retrieval for
+`schema/nazm.context-2.json` as its output schema. This establishes semantic context retrieval for
 those three kinds and a compact-by-design contract for the fields it promises; it does not make a
 packet sufficient for every task, and G68–G70 remain broader. Evidence:
 `crates/nazm-service/tests/context.rs` — a function, record and enum each the same packet from its
