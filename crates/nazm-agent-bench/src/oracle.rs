@@ -95,6 +95,21 @@ pub fn parse(reply: &str) -> Result<serde_json::Map<String, Value>, String> {
 
 use crate::suite::squash;
 
+/// The last fenced block of a reply that is prose around it — the secondary, lenient reading
+/// of an answer that broke the contract by explaining itself. `None` when there is no fence
+/// or the reply is already one JSON object.
+#[must_use]
+pub fn fenced(reply: &str) -> Option<String> {
+    if parse(reply).is_ok() {
+        return None;
+    }
+    let start = reply.rfind("```")?;
+    let before = reply.get(..start)?;
+    let open = before.rfind("```")?;
+    let block = reply.get(open..start + 3)?;
+    parse(block).ok().map(|_| block.to_owned())
+}
+
 fn plain(s: &str) -> String {
     squash(&s.replace('`', "").to_lowercase())
         .trim_end_matches('.')

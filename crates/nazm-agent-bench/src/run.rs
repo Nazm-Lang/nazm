@@ -249,6 +249,9 @@ pub struct Record {
     pub answer_digest: Option<String>,
     pub answer: Option<Value>,
     pub score: Option<Score>,
+    /// The same oracle on the reply's last fenced block, when the reply was prose around one:
+    /// secondary, never the verdict.
+    pub lenient: Option<Score>,
     /// The oracle's failure, or `runner_error`, or none when solved.
     pub failure: Option<String>,
 }
@@ -710,6 +713,7 @@ pub fn run(
             answer_digest: None,
             answer: None,
             score: None,
+            lenient: None,
             failure: Some("runner_error".to_owned()),
         };
         let mut drift = None;
@@ -736,6 +740,8 @@ pub fn run(
                         .unwrap_or_default()
                 });
                 record.score = Some(score);
+                record.lenient =
+                    oracle::fenced(&reply.text).map(|b| oracle::score(p.task, p.arm, &b));
                 record.status = Status::Answered;
             } else {
                 record.status = Status::ModelDrift;
