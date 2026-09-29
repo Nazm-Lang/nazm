@@ -194,14 +194,19 @@ fn hover_and_signature_help_render_one_signature() {
             let call = s.call_at(&main, 1, at(MAIN, needle, 0, into)).unwrap();
             let hover = s.hover(&main, 1, call.callee_start).unwrap();
             let res = analysis_of(&main);
+            // The signature is the first line; an undeclared function's inferred effects,
+            // which are not a declaration, follow it (N36).
             assert_eq!(
-                hover.text,
-                call.signature.render(&res, None).label,
+                hover.text.lines().next(),
+                Some(call.signature.render(&res, None).label.as_str()),
                 "{needle}"
             );
         }
         let h = s.hover(&main, 1, at(MAIN, "same(n", 0, 0)).unwrap();
-        assert_eq!(h.text, "fn same[T: Equality](a: T, b: T) -> Bool");
+        assert_eq!(
+            h.text,
+            "fn same[T: Equality](a: T, b: T) -> Bool\ninferred effects: {}"
+        );
     });
 }
 

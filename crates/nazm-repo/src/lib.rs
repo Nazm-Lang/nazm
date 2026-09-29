@@ -27,7 +27,7 @@
 //! `kind:authority-id`: `package:nazm-docs`, `target:nazm-docs:test:corpus`,
 //! `sources:compiler`, `root:compiler:emit.nz`, `module:compiler:analyse.nz`,
 //! `def:compiler:analyse.nz::fn check` (the compiler's durable definition key under a
-//! source root), `doc:spec:generics` (N32's id), `schema:nazm.context/1`,
+//! source root), `doc:spec:generics` (N32's id), `schema:nazm.context/2`,
 //! `profile:checker`, `mutation:n32-an-anchor-is-ignored`,
 //! `test:nazm-docs:test:corpus::a_duplicate_id_is_refused` (a catalogue killer), and
 //! `diagnostic:examples-bad:return_type_mismatch.nz:N0300@…` (N30's id within a root).

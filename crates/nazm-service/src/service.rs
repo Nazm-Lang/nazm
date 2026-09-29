@@ -557,9 +557,18 @@ impl LanguageService {
         let res = &s.analysis.resolution;
         let types = res.types();
         let text = if let Some(Callee::Function(id)) = res.callee(at) {
-            crate::Signature::of_function(res, id)?
+            let label = crate::Signature::of_function(res, id)?
                 .render(res, None)
-                .label
+                .label;
+            // A function that declares no effects has what its body requires, which is
+            // not a declaration and so is not in the signature — but is the compiler's.
+            match res.function(id) {
+                Some(f) if f.declared_effects.is_none() => match f.inferred_effects {
+                    Some(e) => format!("{label}\ninferred effects: {e}"),
+                    None => label,
+                },
+                _ => label,
+            }
         } else {
             let local = res.local(at)?;
             let f = res.function(local.function)?;

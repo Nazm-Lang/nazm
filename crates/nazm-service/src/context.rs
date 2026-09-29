@@ -1,5 +1,5 @@
 //! Semantic context packets: one source definition, its exact source, and compact links to
-//! what it is semantically connected to. `nazm.context/1`. N27.
+//! what it is semantically connected to. `nazm.context/2` (N27; effects since N36).
 //!
 //! # The contract
 //!
@@ -18,10 +18,13 @@
 //! | references: every use of the target | the reference index (N17) |
 //! | callers and callees of a function | call hierarchy (N25), direct only |
 //! | diagnostics whose primary span is inside it | the analysis |
+//! | a function's effects: declared, required, published, and why | the effect checker (N36) |
 //!
-//! Effects, capabilities, test coverage, semantic changes and semantic deltas are facts the
-//! compiler does not have, and are reported **unsupported** — never as an empty list, which
-//! would say they were looked for and none exist. A record or enum has no callers or
+//! Capabilities, test coverage, semantic changes and semantic deltas are facts the compiler
+//! does not have, and are reported **unsupported** — never as an empty list, which would
+//! say they were looked for and none exist. `/1` reported effects so too; N36 gave the
+//! compiler them, and since a `/1` reader may rely on that field being `unsupported`, the
+//! packet that has them is `/2`. A record or enum has no callers or
 //! callees: those sections are **not applicable** to it, which is also not an empty list.
 //!
 //! # Minimum context
@@ -56,9 +59,9 @@ use crate::structure::{members, StructureSite};
 use crate::symbols::SymbolKind;
 
 /// The schema every packet declares.
-pub const SCHEMA: &str = "nazm.context/1";
+pub const SCHEMA: &str = "nazm.context/2";
 
-/// A semantic context packet, or why there is none, exactly as `nazm.context/1` serialises
+/// A semantic context packet, or why there is none, exactly as `nazm.context/2` serialises
 /// it: `status` says which.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
@@ -87,7 +90,36 @@ pub struct ContextPacket {
     pub callees: Calls,
     /// The compiler's diagnostics whose primary span is inside the declaration.
     pub diagnostics: Vec<ContextDiagnostic>,
+    /// A function's effects (N36); `None` for a record or an enum, which has none to have.
+    pub effects: Option<ContextEffects>,
     pub availability: Availability,
+}
+
+/// What a function may do, from the effect checker: every set by name, in effect-id order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextEffects {
+    /// Its `! { … }`, or `None` where it declares none.
+    pub declared: Option<Vec<&'static str>>,
+    /// What its body requires: the least fixed point over the compilation's calls.
+    pub required: Vec<&'static str>,
+    /// What a caller in another module must assume: the declared set, or every effect.
+    pub published: Vec<&'static str>,
+    /// For each required effect, the first thing in the body that requires it.
+    pub reasons: Vec<ContextEffectReason>,
+}
+
+/// Why a function requires one effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextEffectReason {
+    pub effect: &'static str,
+    /// The call or `spawn` in the body, as a source range.
+    pub at: Option<SourceSpan>,
+    /// `builtin`, `spawn`, `inferred`, `declared` or `undeclared`.
+    pub source: &'static str,
+    /// The built-in's name, for `builtin`: it is the compiler's, and has no source.
+    pub builtin: Option<&'static str>,
+    /// The callee, for `inferred`, `declared` and `undeclared`.
+    pub callee: Option<Identity>,
 }
 
 /// The definition the packet is about.
@@ -200,7 +232,6 @@ pub struct ContextDiagnostic {
 /// The sections the compiler has no facts for: each is `unsupported`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Availability {
-    pub effects: &'static str,
     pub capabilities: &'static str,
     pub tests: &'static str,
     pub semantic_changes: &'static str,
@@ -209,7 +240,6 @@ pub struct Availability {
 
 impl Availability {
     const UNSUPPORTED: Self = Self {
-        effects: "unsupported",
         capabilities: "unsupported",
         tests: "unsupported",
         semantic_changes: "unsupported",
@@ -217,7 +247,7 @@ impl Availability {
     };
 }
 
-/// Why there is no packet, as `nazm.context/1` serialises it.
+/// Why there is no packet, as `nazm.context/2` serialises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Unavailable {
     pub schema: &'static str,
@@ -455,9 +485,49 @@ impl LanguageService {
             callers,
             callees,
             diagnostics,
+            effects: match entity {
+                ReferenceTarget::Function(id) => effects_of(s, &paths, id),
+                _ => None,
+            },
             availability: Availability::UNSUPPORTED,
         })
     }
+}
+
+/// A function's effects as the checker settled them, or `None` for one whose body was not
+/// checked in this compilation.
+fn effects_of(s: &Snapshot, paths: &Paths, id: nazm_core::sema::FnId) -> Option<ContextEffects> {
+    use nazm_core::sema::{EffectSet, EffectSource};
+    let res = &s.analysis.resolution;
+    let f = res.function(id)?;
+    let required = f.inferred_effects?;
+    let published = f.declared_effects.unwrap_or_else(EffectSet::all);
+    let reasons = f
+        .effect_reasons
+        .iter()
+        .map(|r| {
+            let (source, builtin, callee) = match r.source {
+                EffectSource::Builtin(b) => ("builtin", Some(b.name()), None),
+                EffectSource::Spawn => ("spawn", None, None),
+                EffectSource::Inferred(g) => ("inferred", None, Some(g)),
+                EffectSource::Declared(g) => ("declared", None, Some(g)),
+                EffectSource::Undeclared(g) => ("undeclared", None, Some(g)),
+            };
+            ContextEffectReason {
+                effect: r.effect.name(),
+                at: paths.span(r.at),
+                source,
+                builtin,
+                callee: callee.map(|g| identity_of(s, ReferenceTarget::Function(g))),
+            }
+        })
+        .collect();
+    Some(ContextEffects {
+        declared: f.declared_effects.map(EffectSet::names),
+        required: required.names(),
+        published: published.names(),
+        reasons,
+    })
 }
 
 impl Calls {

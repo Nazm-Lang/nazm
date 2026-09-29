@@ -58,7 +58,7 @@ fn validate(value: &Value, node: &Value, root: &Value, at: &str, problems: &mut 
     };
 
     // A node whose `type` admits null accepts null and describes nothing further about it:
-    // `nazm.context/1`'s sections that do not apply are null, not empty.
+    // `nazm.context/2`'s sections that do not apply are null, not empty.
     let admits_null = match map.get("type") {
         Some(Value::Array(a)) => a.iter().any(|t| t == "null"),
         Some(Value::String(t)) => t == "null",
@@ -559,7 +559,7 @@ fn h() -> Int { match f(P(x: 1), S.A()) { Option.Some(value: v) => v, Option.Non
     assert_eq!(packets[5]["reason"], "not_a_name");
     assert_eq!(packets[6]["reason"], "out_of_range");
     assert_eq!(packets[7]["reason"], "not_in_compilation");
-    check_against("nazm.context-1.json", &packets);
+    check_against("nazm.context-2.json", &packets);
 }
 
 #[test]
@@ -628,9 +628,9 @@ fn h() -> Int { f(P(x: 1), S.A()) }\n";
     let (broken_delta, _) = delta(&main, &baseline);
     assert_eq!(broken_delta["reason"], "incomplete_compilation");
 
-    check_against("nazm.snapshot-1.json", &[good, broken]);
+    check_against("nazm.snapshot-2.json", &[good, broken]);
     check_against(
-        "nazm.delta-1.json",
+        "nazm.delta-2.json",
         &[changed, malformed, wrong_root, broken_delta],
     );
 }
@@ -987,7 +987,7 @@ fn a_repository_map_and_a_task_context_are_their_schemas_in_every_status() {
         task("module:compiler:lex.nz", "understand", &[]),
         task("root:examples-bad:bare_return.nz", "understand", &[]),
         task("sources:examples", "edit", &[]),
-        task("schema:nazm.context/1", "understand", &[]),
+        task("schema:nazm.context/2", "understand", &[]),
         task(
             "def:compiler:module.nz::fn attach_core",
             "edit",

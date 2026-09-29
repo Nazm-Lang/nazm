@@ -23,7 +23,7 @@
 //!
 //! | Layer | Protects |
 //! | --- | --- |
-//! | `baseline.snapshot` — BLAKE3 of the root's `nazm.snapshot/1` bytes (N28) | the semantic state of the whole root compilation |
+//! | `baseline.snapshot` — BLAKE3 of the root's `nazm.snapshot/2` bytes (N28) | the semantic state of the whole root compilation |
 //! | `files[].digest` — BLAKE3 of the file's exact bytes | the whole of each edited file |
 //! | `edits[].expected` — the exact bytes each edit replaces | each edit's place and content |
 //!
@@ -143,7 +143,7 @@ pub struct FixedDiagnostic {
 /// The whole-root freshness binding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Baseline {
-    /// BLAKE3, lowercase hexadecimal, of the root's `nazm.snapshot/1` canonical bytes — what
+    /// BLAKE3, lowercase hexadecimal, of the root's `nazm.snapshot/2` canonical bytes — what
     /// `nazm snapshot --json` prints, without its newline.
     pub snapshot: String,
 }
