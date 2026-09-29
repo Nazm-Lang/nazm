@@ -39,9 +39,10 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,718 passed, 0 failed, 18 ignored, across 95 suites**, run contained at
-N32-H2 (2026-09-29), at P4T4; the eighteen ignored are the xtask lifecycle tests,
-run on their own (18 of 18 passed, contained). N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
+**Current suite: 1,728 passed, 0 failed, 19 ignored, across 95 suites**, run contained at
+N32-H3 (2026-09-29), scheduled at P4W2T4 and identical binary by binary to a P4T4 run; the
+nineteen ignored are the xtask lifecycle tests, run on their own (19 of 19 passed, contained).
+N32-H2 ended at 1,718 across 95; N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
 
@@ -1866,8 +1867,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **575** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32), **387** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **582** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2), **394** of them with a verified killer and all
 of them owned by one of eleven focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -2496,6 +2497,14 @@ two and the twelve MCP entries — **38 of 38 caught at tier 1**, no survivor, c
 unusable or uninjected entry, no runner error — and **every declared killer verified, 41 of 41**,
 each killer's mutant observation the run its verdict came from. The workspace suite was not run as
 the session's baseline: no mutant needed a tier beyond its killers.
+
+*N32-H3 (2026-09-29) added seven harness mutations,* on the frozen final source: a failing binary
+cancelling the rest, results in completion order, the shortest binary first, execution ignoring
+the owning package, an unknown path bringing no benchmark, the whole lifecycle suite not
+covering its tests, and a package id losing its name. **One warm session, campaign
+`f4f5c0b996691ef4`, targeted, P1, 833 s:** those seven, N32's seventeen, the twelve MCP entries and
+the nine earlier harness entries — **45 of 45 caught at tier 1**, no survivor, crash, timeout,
+unusable or uninjected entry, no runner error — and **every declared killer verified, 48 of 48**.
 
 The run also found three harness defects, all repaired before the counted run:
 `memory.rs` ran compiled programs with no deadline (the loop mutant waited 1500 s for a

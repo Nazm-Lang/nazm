@@ -329,6 +329,39 @@ MILESTONE is not DEV with a new name: its speed comes from not repeating work, n
 dropping a killer, the campaign, the suite, selfhost or bootstrap. N32's gate measured 40.1 min
 under v1 and N32-H2's 27.6 min under v2, warm (`performance.md`).
 
+### Verification harness V3 — N32-H3, 2026-09-29
+
+**Bucketed execution.** A session injects its mutants grouped by the package that owns the
+mutated file — Cargo's metadata says which, not a table kept here — then by the first killer's
+target, then catalogue order: a deterministic sort on structured keys. Only execution order
+changes: every mutant still starts from the digest-checked pristine tree, and selection,
+identity, journal and verdicts are the catalogue's. Each mutant's workspace build now reports,
+from Cargo's JSON messages, which units it compiled. That build — `cargo build --workspace
+--tests` — stays: it is what tells UNUSABLE from CAUGHT, and a `nazm-docs` mutant compiling 40
+dependent units is the price of that, recorded rather than removed.
+
+**The scheduled workspace suite**, `xtask workspace-tests`, runs through a calibration profile
+(`contained --profile p4w2t4 tests`, and the other `p4w*` names): Cargo builds every test binary
+once (`cargo test --workspace --no-run`) and names each in its JSON; each runs exactly once, in
+its package's directory with its package's variables, over a bounded number of workers, longest
+first; a failure cancels nothing; the report is in canonical order, not completion order; the
+doc-tests follow. A timing history in the checkout cache (`.nazm-suite-timings.json`, one
+schedule, bounded by the suite, removed by `contained cache clear`) decides the order and nothing
+else — absent or damaged, the order is canonical. **P4W2T4 is this machine's calibrated profile
+(M1 Pro)**; no workload defaults to it, and `contained tests` without a profile is still
+`cargo test --workspace` at P4T4.
+
+**Normal and harness-changing gates.** `gate-plan` now names every stage and responsibility a
+change calls for — the core stages, the lifecycle tests, the MCP shared mutations and the
+benchmark families (`compiler`, `docs`, `mcp`, `harness`; an unknown path brings all four) — and
+a test holds that a product or docs change's plan is covered by the plan for the same change
+plus a harness change. A measured harness-changing gate therefore bounds the normal gate over
+the same paths.
+
+**The bench cache.** `contained --cache bench run …` keeps a benchmark's release builds in a
+third harness-owned namespace, `nazm-verify-bench-<key>`, apart from `mutate` and `src`. A
+benchmark measures the binary it runs, the same bytes wherever they were compiled.
+
 ### Evidence tiers — escalate only while a mutant is still alive
 
 The default strategy, `targeted`, runs for each mutant, stopping at the first failure:
