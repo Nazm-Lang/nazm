@@ -381,3 +381,23 @@ fn a_requirement_is_written_one_way() {
         .unwrap_or_default();
     assert_eq!(params, vec![Some("Equality"), None]);
 }
+
+#[test]
+fn an_effect_set_is_laid_out_on_one_line_before_the_body_it_introduces() {
+    // N36. However the author spaced it, a set is one line and the body follows it.
+    let text = "fn a() -> Int !{io} { print(\"x\") }\nfn b() -> Int ! {\n    } {\n    1\n}\nfn c() -> Int ! { io,\n spawn } { 2 }\n";
+    let out = nazm_syntax::format(text).unwrap();
+    assert_eq!(
+        out,
+        "fn a() -> Int ! { io } { print(\"x\") }\nfn b() -> Int ! {} {\n    1\n}\nfn c() -> Int ! { io, spawn } { 2 }\n"
+    );
+    assert_eq!(nazm_syntax::format(&out).unwrap(), out, "idempotent");
+    let kinds = |t: &str| {
+        nazm_syntax::lex(t)
+            .0
+            .into_iter()
+            .map(|t| t.kind)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(kinds(text), kinds(&out), "the same tokens");
+}

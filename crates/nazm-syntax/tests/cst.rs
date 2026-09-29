@@ -1248,3 +1248,45 @@ fn a_node_is_found_by_its_position_and_reproduced_from_its_own_leaves() {
         "the comment before it did not move"
     );
 }
+
+#[test]
+fn an_effect_set_is_one_node_kept_byte_for_byte_and_a_broken_one_costs_nothing_after_it() {
+    // N36. The set is a node of its own, with its `!`, braces, names and commas, however
+    // it was spaced.
+    let text = "fn f() -> Int ! { io ,\n spawn } { 1 }\nfn g() -> Int !{} { 2 }\nfn main() -> Int { f() + g() }\n";
+    let (tree, errors) = cst(text);
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_lossless(&tree, text, "effect sets");
+    assert_eq!(
+        texts_of(&tree, SyntaxKind::EffectSet),
+        ["! { io ,\n spawn }", "!{}"]
+    );
+    // Malformed sets: each is one error, every byte is kept, and the next function is
+    // still a function.
+    for broken in [
+        "fn f() -> Int ! { io, } { 1 }\n",
+        "fn f() -> Int ! io { 1 }\n",
+        "fn f() -> Int ! { 3 } { 1 }\n",
+        "fn f() -> Int ! { io spawn } { 1 }\n",
+        "fn f() -> Int ! { io  { 1 }\n",
+        "fn f() -> Int ! \n",
+    ] {
+        let text = format!("{broken}fn g() -> Int {{ 2 }}\n");
+        let (tree, errors) = cst(&text);
+        assert!(!errors.is_empty(), "{broken:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|e| e.code == codes::UNEXPECTED_TOKEN || e.code.as_str().starts_with("N01")),
+            "{broken:?}: {errors:#?}"
+        );
+        assert_lossless(&tree, &text, broken);
+        assert!(
+            texts_of(&tree, SyntaxKind::FnItem)
+                .iter()
+                .any(|t| t == "fn g() -> Int { 2 }"),
+            "{broken:?}: {:?}",
+            texts_of(&tree, SyntaxKind::FnItem)
+        );
+    }
+}

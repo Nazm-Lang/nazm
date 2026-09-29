@@ -150,6 +150,11 @@ pub struct Function {
     /// Always written. Inference across a function boundary would make a signature
     /// change invisible at the definition, which is the opposite of what a reader needs.
     pub return_type: TypeName,
+    /// `! { … }` after the return type, N36: the effects the function declares it may
+    /// exercise. `None` where nothing was written — which is not "no effects": the
+    /// checker infers an undeclared function's effects from its body. What the names
+    /// mean, and whether they exist, is `nazm_sema`'s to decide; here they are words.
+    pub effects: Option<EffectDecl>,
     /// `None` when the body failed to parse.
     ///
     /// The signature survives anyway, so calls to this function still check against real
@@ -157,6 +162,16 @@ pub struct Function {
     /// mistake should produce one error.
     pub body: Option<Block>,
     pub span: Span,
+}
+
+/// A declared effect set as written: `! {}`, `! { io }`, `! { io, spawn }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectDecl {
+    /// From the `!` to the closing `}`.
+    pub span: Span,
+    /// Each name as written, in source order, duplicates and all: a duplicate is the
+    /// checker's to report, and it can only if the parser keeps it.
+    pub names: Vec<(String, Span)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

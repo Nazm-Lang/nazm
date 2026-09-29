@@ -35,9 +35,9 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, Span};
 
 use crate::ast::{
-    Assign, BinOp, Block, Enum, Expr, Field, FieldInit, Function, HoleSite, Import, Let, MatchArm,
-    Param, PatternField, Place, PlaceField, Program, Record, Requirement, Return, Scope, Spawn,
-    Stmt, TypeName, TypeParam, Variant, While,
+    Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, Function, HoleSite, Import,
+    Let, MatchArm, Param, PatternField, Place, PlaceField, Program, Record, Requirement, Return,
+    Scope, Spawn, Stmt, TypeName, TypeParam, Variant, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -1002,6 +1002,7 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Arrow, "before the return type")?;
         let return_type = self.type_name()?;
         self.wrap(ret, SyntaxKind::RetType);
+        let effects = self.effect_set()?;
 
         // Deliberately not `?`. A parse error inside the body would otherwise drop the
         // whole declaration, and every call to it would then report that the function
@@ -1032,9 +1033,56 @@ impl<'a> Parser<'a> {
             type_params,
             params,
             return_type,
+            effects,
             body,
             span: start.join(span),
         })
+    }
+
+    /// `! { name, … }` after a return type, or nothing (N36).
+    ///
+    /// Braces, not brackets or a bare list, so that the empty set — the purity
+    /// assertion — has a spelling of its own: `! {}`. Names are separated by commas with
+    /// no trailing one, like a type parameter list. Whether a name is an effect, and
+    /// whether it is written twice, are the checker's questions: this is punctuation.
+    /// Flat, so it adds no recursion.
+    fn effect_set(&mut self) -> Option<Option<EffectDecl>> {
+        if !self.at(&TokenKind::Bang) {
+            return Some(None);
+        }
+        let at = self.checkpoint();
+        let start = self.peek_span();
+        self.bump();
+        self.expect(&TokenKind::LBrace, "after `!`, to open the effect set")?;
+        let mut names = Vec::new();
+        if !self.at(&TokenKind::RBrace) {
+            loop {
+                let span = self.peek_span();
+                match self.advance() {
+                    TokenKind::Ident(n) => names.push((n, span)),
+                    // The effect of starting a task is named by the word that starts one.
+                    TokenKind::Spawn => names.push(("spawn".to_owned(), span)),
+                    other => {
+                        self.report(Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            span,
+                            format!("expected an effect name, found {}", other.describe()),
+                        ));
+                        return None;
+                    }
+                }
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        let end = self.peek_span();
+        self.expect(&TokenKind::RBrace, "to close the effect set")?;
+        self.wrap(at, SyntaxKind::EffectSet);
+        Some(Some(EffectDecl {
+            span: start.join(end),
+            names,
+        }))
     }
 
     /// `[A, B]` after a declared name, or nothing.

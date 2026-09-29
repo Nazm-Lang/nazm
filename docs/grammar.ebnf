@@ -35,7 +35,23 @@ use_item = "use" , STRING , ";" ;
 (* @example pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) } *)
 (* @example fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") } *)
 function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" ,
-           "->" , type , block ;
+           "->" , type , [ effect_set ] , block ;
+
+(* The effects a function declares it may exercise: after the return type, a `!` and a
+ * set in braces. `! {}` is the empty set — the function is pure, and its body may call
+ * nothing that is not. With no set written the checker infers one from the body, and
+ * another module calling the function must assume every effect. The names live in their
+ * own namespace: `io` and `spawn` are the only effects, a name that is not one is refused,
+ * and so is one written twice. Order means nothing. See `docs/spec.md`, *Effects*.
+ *)
+(* @example fn show(s: Str) -> Int ! { io } { print(s) } fn main() -> Int { show("hi") } *)
+(* @example fn add(a: Int, b: Int) -> Int ! {} { a + b } fn main() -> Int { add(1, 2) } *)
+(* @example fn w(c: Chan) -> Int { 0 } fn run() -> Int ! { spawn } { let c = chan_new(1); scope { spawn w(c); } 0 } fn main() -> Int { run() } *)
+effect_set = "!" , "{" , [ effect_name , { "," , effect_name } ] , "}" ;
+
+(* `spawn` is a keyword, and the effect of starting a task is named by it. *)
+(* @example fn w(c: Chan) -> Int { 0 } fn run() -> Int ! { io, spawn } { let c = chan_new(1); scope { spawn w(c); } print("done") } fn main() -> Int { run() } *)
+effect_name = IDENT | "spawn" ;
 
 (* A generic declaration's parameters: at least one, no trailing comma. A parameter
  * is a **position** — renaming one changes nothing — and it is a type and nothing else.
