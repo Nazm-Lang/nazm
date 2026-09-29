@@ -230,48 +230,104 @@ derived `.nazm/` cache excluded), built once, the workspace suite run once as th
 **baseline**, and then every selected mutant is injected, judged, restored, verified and
 journaled in catalogue order. `/src` stays read-only and the checkout is never mutated.
 
-### The warm-worker law — N32-H, 2026-09-29
+### The warm-worker law — N32-H and N32-H2, 2026-09-29
 
 **A session is one warm worker, never one container per mutant.** One copy, one pristine
-build, one baseline, one killer listing; then each mutant in turn — at most one injected at
-a time, restored to its original bytes and digest-checked before the next is touched —
-against the same target directory. The target is the container's own `/work/target`, which
-the image warms with the workspace's registry dependencies: it lives on the capped writable
-layer, dies with the container, and is shared with nothing. Workspace crates are compiled from
-the copy at `/work/mut`, a path no image artefact was built for; only dependencies Cargo's
-fingerprints say are unchanged are reused. Nothing is `cargo clean`ed between mutants: Cargo
-rebuilds from the bytes on disk, and `xtask/tests/lifecycle.rs` holds that to account — A,
-then B, then A again in one target, every killer run observed against its own bytes.
+build, one killer listing, one mutation baseline; then each mutant in turn — at most one
+injected at a time, restored to its original bytes and digest-checked before the next is
+touched — against the same target directory. Nothing is `cargo clean`ed between mutants:
+Cargo rebuilds from the bytes on disk, and `xtask/tests/lifecycle.rs` holds that to account —
+A, then B, then A again in one target, and a fresh copy against a persistent target, every
+killer run observed against its own bytes. At the end the whole tree must digest to the tree
+the session began with, or the session stops.
 
-**`--verify-killers` verifies in the same session.** Around the one injection a verdict is
-taken from, each declared killer is run on the pristine tree, on the mutant, and on the
-restored tree, and is verified only as passes, fails, passes — `--verify-killer`'s law,
-unchanged. It changes no verdict and is not journaled, so a resumed session that reuses a
-verdict says those killers were not verified here and ends incomplete. `--verify-killer M
---killer K` remains, for proving a new candidate.
+**Two baselines, two questions.** The *mutation baseline* is that every declared killer a
+pending mutant may be decided by passes on the pristine tree: each unique killer is run once,
+and its result is held for the session, keyed by the tree's digest, the killer's structured
+selector and the parallelism — never across trees, and never a mutant's or a restoration's
+result. A killer that does not pass refuses the session before anything is injected. The
+*workspace baseline* is that the whole suite is green, and it is the MILESTONE gate's own
+`contained tests` stage that establishes it. A session no longer runs the whole suite to
+decide Tier-1 verdicts, and it says nothing about the workspace's health: an unrelated failing
+test does not stop its verdicts, and the gate's workspace stage is what fails on it.
+
+**Two passes, one law.** Pass 1 decides every targeted mutant with declared killers at Tier 1
+alone — its build, then its killers, judged exactly as the full law judges them there, which a
+unit test holds to verdict-for-verdict. A mutant every killer passed on is restored and
+deferred. Only then, and only if something was deferred, does the session run the workspace
+suite once as the Tier-3 baseline, and pass 2 decides the deferred mutants by the unchanged
+full law — the one case where a mutant is injected twice. `--strategy full` runs the baseline
+first, as it always did.
+
+**One observation, two facts.** With `--verify-killers`, a killer's mutant observation is the
+very run its Tier-1 verdict was read from — not a second run of the same test on the same
+bytes; a killer the verdict did not reach is run once on the same mutant. Its pristine
+observation is the mutation baseline's, and its restored one is taken after the
+digest-checked restoration, every mutation, which `cargo test` rebuilds from. Verified only as
+passes, fails, passes. It changes no verdict and is not journaled, so a resumed session that
+reuses a verdict says those killers were not verified here and ends incomplete.
 
 **P1 means one active mutation worker**, with one CPU, one job and one thread — not one fresh
-container per mutation. No second worker was needed (`performance.md`, *The warm mutation
-session*); every parallel profile for this workload crossed the total-memory gate in N14.1.
+container per mutation. No second worker was needed (`performance.md`); every parallel profile
+for this workload crossed the total-memory gate in N14.1.
 
-**Stranded containers.** A supervisor killed by a signal leaves its container running until
-its own `timeout`; the checkout is read-only, so the container holds a disposable copy and
-nothing of the host's. Every contained run starts by removing, by exact name, any
-`nazm-<workload>-<pid>` container whose supervisor pid is no longer a process — and nothing
-else. To stop a run at once, signal its whole process group (Ctrl-C does), so the Docker client
-forwards the signal and the container ends with it.
+### The persistent verification cache — N32-H2
 
-### Verification gates
+`mutate`, `tests`, `selfhost` and `bootstrap` build in a harness-owned Docker volume mounted at
+`/work/target`, which survives the container; `bench`, `release` and `run` never do. There are
+**two namespaces, never one**: `nazm-verify-mutate-<key>` for mutation sessions, whose copy is
+always `/work/mut`, and `nazm-verify-src-<key>` for the workloads that build the read-only
+checkout at `/src`. They must not share a target: Cargo copies each binary out to
+`target/debug/<name>` and does not copy a unit it finds fresh again, so in one shared target the
+workspace suite ran the `nazm` a mutation copy had built — N32-H2's first cold gate found it.
+
+The key is BLAKE3 over the image id and environment, `Cargo.lock`, `rust-toolchain.toml`, the
+flags and the profile: any change is a new volume, never a partial reuse. Source is not in the
+key; Cargo's fingerprints handle it, and a mutation copy is extracted with fresh modification
+times (`tar -m`), so no workspace artefact of an earlier session is ever taken for current. A
+new volume is filled from the image's warmed target on first mount. Volumes carry the labels
+`nazm.owner=nazm-verification-harness`, `nazm.compat`, `nazm.created`, `nazm.namespace` and
+`nazm.cache-version`; at most two generations per namespace are kept, the oldest removed, and a
+volume over 16 GiB is emptied at the start of the next workload that mounts it.
+
+```sh
+cargo xtask contained cache          # list the harness's volumes
+cargo xtask contained cache clear    # remove them; the next run is slower, nothing else changes
+```
+
+Only volumes with the owner label are listed or removed. **The cache is never authority**: it
+is not in any campaign's identity or journal, cold and warm decide identically, a damaged one is
+rebuilt — where rustc's incremental cache would reuse damaged objects and the pristine build
+fails, a session whose target is the harness's own (`--disposable-target`, which the contained
+launcher passes) cleans it and builds once more — and deleting it loses nothing but time.
+
+### Stopping a run
+
+Stop the supervisor — the `cargo xtask contained …` process. Signalling it, or its process
+group, does **not** reliably stop the container: on 2026-09-29 the Docker client took SIGINT
+and the container ran on. The checkout is read-only, so a stranded container holds a disposable
+copy and nothing of the host's, and it stops itself at its own deadline. Every contained run
+starts by removing, by exact name, any `nazm-<workload>-<pid>` container whose supervisor pid
+is no longer a process, and nothing else; to free it at once, `docker rm -f` that exact name.
+
+### Verification gates — v2
 
 | Gate | What | Target on the M1 Pro | When |
 | --- | --- | --- | --- |
-| **DEV** | focused tests, host probes of new mutations, `fmt`, `clippy`, `cargo xtask check` | < 15 min | while iterating |
-| **MILESTONE** | every affected killer verified and one targeted campaign, in one warm session; the contained workspace suite; the lifecycle suite; selfhost; bootstrap; the milestone's own benchmark; the gates | < 60 min | to close a milestone |
-| **RELEASE** | broader and full campaigns, fuzzing, platforms | as long as it takes | a release, not every milestone |
+| **DEV** | focused tests, host probes of new or changed mutations, `fmt`, `clippy`, `cargo xtask check` | < 10 min | while iterating |
+| **MILESTONE** | every affected killer verified and one targeted campaign, in one warm session; the contained workspace suite (P4T4); the lifecycle suite `gate-plan` calls for; selfhost; bootstrap; the milestone's benchmark; the gates | ≤ 30 min | to close a milestone |
+| **RELEASE** | the full lifecycle suite, broader and full campaigns, fuzzing, platforms, long benchmarks, reproducibility | as long as it takes | a release, not every milestone |
 
-MILESTONE is not DEV with a new name: its speed comes from not repeating setup, never from
-dropping a killer, the campaign, the suite, selfhost or bootstrap. N32's gate measured 40 min
-(`performance.md`).
+`cargo xtask gate-plan PATH…` says which lifecycle evidence the changed paths call for: a path
+under `xtask/`, `docker/`, or the manifests and toolchain pin is the harness and calls for the
+whole lifecycle suite; a path under `crates/`, `compiler/`, `library/`, `docs/`, `schema/` or
+`examples/` calls for its three invariant tests; the MCP server brings its shared mutations; an
+unknown path, or no path at all, calls for everything. It narrows nothing else, and reads no
+Git history.
+
+MILESTONE is not DEV with a new name: its speed comes from not repeating work, never from
+dropping a killer, the campaign, the suite, selfhost or bootstrap. N32's gate measured 40.1 min
+under v1 and N32-H2's 27.6 min under v2, warm (`performance.md`).
 
 ### Evidence tiers — escalate only while a mutant is still alive
 
