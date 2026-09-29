@@ -370,6 +370,46 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N34, in dependency order
+
+No item is chosen here; N34 left these standing, beside N33's and N32's below.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| An agent task benchmark with a real model: tokens, cost, success (G83–G85) | task contexts ✓, multi-tokenizer counts ✓ | nothing has been run against a model, and a model run is its own protocol |
+| Framing and protocol overhead of a model conversation | a chosen protocol and model | N34 measures content only, by law |
+| A compact transport for tiny contexts | evidence that the fixed overhead matters in a real task | it is 400–700 tokens, constant, and carries the retrieval and reasons the planner's law requires |
+| An audit of syntax decisions against several tokenizers (the rest of G81) | a syntax change to decide | no syntax was changed or proposed here |
+| More families (e.g. WordPiece), a model's own chat template | a reason and a permissive asset | three families are what G82 asks |
+
+### N34 — Tokenizer-independent context measurement and multi-tokenizer benchmark v1 — **complete, 2026-09-29**
+
+`nazm-tokens measure` counts the exact text on standard input under four pinned tokenizers of
+three families — OpenAI byte-level BPE (`cl100k_base`, `o200k_base`), SentencePiece BPE
+(Mistral-7B-v0.1) and SentencePiece Unigram (T5-small) — offline, with every identity carrying its
+library, revision, licence, normalisation, special-token policy and asset digest, as
+`nazm.token-cost/1`. Content only; framing and unknown pieces beside the count; nothing normalised
+first; an unknown tokenizer or an altered asset refused by name. The seven N33 tasks, with their
+baselines unchanged, keep a 72.7–97.5 % reduction under every tokenizer, the one-function diagnostic
+reported as a stress case. It is a tool beside the compiler: no crate depends on it, and `nazm` is
+the same bytes as at N33. No grammar, semantics, `SEMANTIC_EPOCH` (7), `nazm.interface/5` or
+existing schema changed; one new schema.
+
+| Settled | Where |
+| --- | --- |
+| the tokenizers, their identities and the measurement | `crates/nazm-tokens/`, `architecture.md` §7.36 |
+| the pinned assets and their provenance | `tools/tokenizers/` |
+| one definition of the N33 tasks for both benchmarks | `crates/nazm-repo/tests/scenarios/` |
+| the benchmark | `crates/nazm-tokens/tests/benchmark.rs`, `performance.md` |
+| no tokenizer outside `nazm-tokens`, nothing depending on it | `xtask/src/rules.rs`, the `tokenizer reach` gate |
+| workloads with no network | `xtask/src/contained.rs` |
+
+Mutation evidence: eleven new mutations and a `tokens` profile, all caught at tier 1 with their
+twelve killers verified (`capability-matrix.md` §30). The MILESTONE gate ran offline: 2,090 s of
+stages, 40.6 minutes of wall time with one documentation fix and its re-run (`performance.md`).
+
+**N35 has not started.**
+
 ### After N33, in dependency order
 
 No item is chosen here; N33 left these standing, beside N32's below.
@@ -411,7 +451,6 @@ killers of those nineteen and of the fifteen MCP entries N33's server change tou
 all 34 — caught at tier 1 (`capability-matrix.md` §30). The MILESTONE gate took 40.5 minutes from
 empty caches (`performance.md`).
 
-**N34 has not started.**
 
 ### After N32, in dependency order
 

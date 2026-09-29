@@ -1831,6 +1831,84 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### Context under four tokenizers — N34, measured 2026-09-29
+
+`nazm-tokens` (N34, `architecture.md` §7.36), contained at P1 on the M1 Pro with **no network in
+the container**, release builds, at `ab499fa`. Four pinned tokenizers of three families:
+`openai-bpe/cl100k_base` and `openai-bpe/o200k_base` (one family), `sentencepiece-bpe/mistral-7b-v0.1`
+and `sentencepiece-unigram/t5-small`. Content tokens only — no template framing, no chat protocol.
+Every count is the library's own encoding of the exact bytes; the golden fixtures hold every
+tokenizer to an independent implementation's ids.
+
+**The seven N33 tasks, baselines unchanged** (one definition, `crates/nazm-repo/tests/scenarios/`,
+used by both benchmarks), naive → N33 tokens and reduction; every N33 mechanical check passes in the
+same run:
+
+| Task | Naive → N33 bytes | cl100k_base | o200k_base | Mistral 7B v0.1 | T5-small | Spread |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| A understand `check_program` | 356,043 → 20,059 (94.37 %) | 89,446 → 6,031 (93.26 %) | 89,260 → 5,936 (93.35 %) | 112,475 → 7,248 (93.56 %) | 121,458 → 9,872 (91.87 %) | 1.69 pts |
+| B edit `attach_core` | 348,233 → 7,844 (97.75 %) | 88,399 → 2,232 (97.48 %) | 88,337 → 2,245 (97.46 %) | 111,444 → 2,836 (97.46 %) | 124,660 → 3,660 (97.06 %) | 0.42 pts |
+| D understand `spec:returns` | 142,128 → 3,769 (97.35 %) | 34,334 → 1,054 (96.93 %) | 34,338 → 1,060 (96.91 %) | 38,782 → 1,256 (96.76 %) | 41,388 → 1,523 (96.32 %) | 0.61 pts |
+| D understand guide `record` | 53,386 → 2,768 (94.82 %) | 15,812 → 846 (94.65 %) | 15,857 → 854 (94.61 %) | 18,488 → 1,060 (94.27 %) | 22,383 → 1,329 (94.06 %) | 0.59 pts |
+| E tests of `nazm-docs` | 26,649 → 5,577 (79.07 %) | 7,327 → 1,541 (78.97 %) | 7,306 → 1,577 (78.42 %) | 9,605 → 2,081 (78.33 %) | 10,530 → 2,873 (72.72 %) | 6.25 pts |
+| E tests of `core_module` | 18,223 → 1,911 (89.51 %) | 4,824 → 535 (88.91 %) | 4,788 → 545 (88.62 %) | 6,023 → 721 (88.03 %) | 6,449 → 983 (84.76 %) | 4.15 pts |
+| **C diagnose `N0300` — the fixed-overhead stress case** | 123 → 1,925 (−1,465 %) | 40 → 563 (−1,308 %) | 40 → 565 (−1,313 %) | 50 → 782 (−1,464 %) | 51 → 1,007 (−1,875 %) | 567 pts |
+
+Excluding only the stress case: median reduction **93.95 %** (cl100k), **93.98 %** (o200k),
+**93.91 %** (Mistral), **92.96 %** (T5); every tokenizer's worst task is the `nazm-docs` tests
+(72.72–78.97 %) and its best the `attach_core` edit (97.06–97.48 %); **median spread 1.15 points,
+largest 6.25**. The benefit is not one tokenizer's: the smallest reduction under any tokenizer is
+72.72 %, and the ranking of tasks is the same under all four. T5 is consistently the lowest, because
+its vocabulary has no piece for `{`, `}` and several other characters JSON is made of — its
+repository-map count carries 2,188 unknown pieces — which is a property of the tokenizer, not of the
+context. A task context's exact token count also moves with its `state` digest, which is in the
+text: two builds of the same tree at different commits differ by a few tokens.
+
+**Where the stress case's tokens go** (cl100k / o200k / Mistral / T5): the whole context 563 / 565
+/ 782 / 1,007; without the three retrieval references 437 / 442 / 599 / 788; without the envelope
+(schema, state, budget, used, empty lists) 437 / 441 / 600 / 794; without reason, class, authority,
+via and compilation 478 / 484 / 663 / 845; the content strings alone (source, message, help) 53 /
+53 / 58 / 65; the naive program 40 / 40 / 50 / 51. The overhead is structural and fixed, about 400–700
+tokens, spread across retrieval, envelope and explanation roughly equally — and every tokenizer
+agrees on that ordering. No compact transport was adopted: each part is what the planner's law
+requires (a way to retrieve the item, the state it is of, and why it is there), and it is constant,
+not proportional to the task.
+
+**Source, JSON, Markdown and scripts** (tokens, bytes per token): `compiler/lex.nz` (11,558 B) 3,251
+(3.56) / 3,231 (3.58) / 3,957 (2.92) / 4,564 (2.53, 355 unknown); the repository map (112,735 B)
+29,241 (3.86) / 29,067 (3.88) / 36,608 (3.08) / 59,933 (1.88, 2,188 unknown); `spec:generics` 270 /
+270 / 330 / 345; `architecture:7.35` 2,264 / 2,267 / 2,608 / 2,836. Bangla prose (290 B): **133 /
+37 / 123 / 35** (T5 with 17 unknown); Arabic (149 B): 63 / 30 / 76 / 27 (13 unknown); mixed English,
+Bangla and code (164 B): 64 / 34 / 57 / 42. The families differ most on scripts — `cl100k_base`
+spends 3.6× the tokens of `o200k_base` on the same Bangla — and least on JSON and code, where the
+two OpenAI vocabularies agree within 1 %.
+
+**One byte budget, one selection** (`check_program`, understand, `max_entities` 3, 8, 20): 3, 8 and
+20 items — the planner's, the same whichever tokenizer then counts them — at 10,591, 13,266 and
+20,057 bytes; in tokens 3,114–4,995, 3,950–6,454 and 5,936–9,870, **1.63–1.66× between the
+cheapest and the dearest tokenizer**. A token budget would select differently for each tokenizer;
+the byte and entity budgets select once.
+
+**What measuring costs.** Loading the four tokenizers: 256 ms (the OpenAI vocabularies are digested
+rank by rank at load). The stress context (1,925 bytes): 0.37–0.80 ms per tokenizer. Task A's naive
+baseline (356,043 bytes): 17.7 ms (o200k), 26.9 ms (cl100k), 100.2 ms (Mistral), 117.4 ms (T5).
+**1,000 measurements of an N33 context under all four: 4.24 ms each on average, resident memory
+209,392 kB settled and 209,392 kB after** — flat across those calls, in a process that had already
+loaded the tokenizers for earlier tests. `nazm-tokens` is 9,180,488 bytes. **`nazm` is 4,527,008
+bytes, exactly as at N33**; neither it nor `nazm-mcp` (4,134,624) has a tokenizer in its graph.
+
+**The MILESTONE gate** (`gate-plan`: full lifecycle — `xtask/`, the root manifest and
+`tools/` changed — the eleven N34 mutations and every benchmark family; no MCP entries, the server
+unchanged), every workload with no network, every cache empty — the lockfile changed, and the
+N33-key caches were cleared first for disk: mutation 835 s, workspace 318 s (1,773 passed across
+104 suites; the first run, 344 s, failed one test — the interface table did not list
+`nazm.token-cost/1` — and was re-run after the row was added), lifecycle 185 s, selfhost 58 s,
+bootstrap 39 s, release benchmarks 459 s, compiler benchmark 193 s, checks 3 s: **2,090 s of stages,
+2,436 s (40.6 minutes) of wall time** including the failed run. The compiler benchmark shows the
+same ~2× drift against the 2026-09-21 baseline as at N33, which N33's back-to-back comparison placed
+before N33; `nazm` is unchanged byte for byte. The image was rebuilt once before the gate, with the
+network, to carry the new crates; that was bootstrap, not evidence.
+
 ### What the counting costs
 
 Workloads sized so process start is noise. Median of five, `-O2`, Darwin arm64.
