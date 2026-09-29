@@ -3219,6 +3219,7 @@ targets = [
     { package = "nazm-cli", test = "generics" },
     { package = "nazm-cli", test = "prelude" },
     { package = "nazm-cli", test = "native_cache" },
+    { package = "nazm-cli", test = "effects" },
 ]
 
 [[profile]]
@@ -3234,6 +3235,8 @@ targets = [
     { package = "nazm-core", test = "generics" },
     { package = "nazm-core", test = "concurrency" },
     { package = "nazm-core", test = "unit_checking" },
+    { package = "nazm-core", test = "effects" },
+    { package = "nazm-cli", test = "effects" },
     { package = "nazm-cli", test = "codes" },
     { package = "nazm-cli", test = "prelude" },
     { package = "nazm-cli", test = "propagation" },
@@ -3289,6 +3292,7 @@ targets = [
     { package = "nazm-sema", lib = true },
     { package = "nazm-core", lib = true },
     { package = "nazm-core", test = "unit_checking" },
+    { package = "nazm-core", test = "effects" },
     { package = "nazm-core", test = "records" },
     { package = "nazm-core", test = "enums" },
     { package = "nazm-core", test = "generics" },
@@ -3876,22 +3880,6 @@ find = """            if e.requires_equality
             {"""
 replace = """            if false {"""
 killers = [{ package = "nazm-iface", test = "persistence", name = "a_requirement_is_written_by_position_and_read_back_canonically" }]
-
-[[mutation]]
-name = "n14-the-interface-schema-stays"
-why = "the interface keeps the `/4` name for a shape that now carries requirements, so a `/4` file with none is read as a `/5` one"
-file = "crates/nazm-iface/src/wire.rs"
-find = """pub const SCHEMA: &str = "nazm.interface/5";"""
-replace = """pub const SCHEMA: &str = "nazm.interface/4";"""
-killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_schema_is_refused_and_never_read_as_this_one" }]
-
-[[mutation]]
-name = "n14-the-epoch-stays"
-why = "`SEMANTIC_EPOCH` is not bumped for a rule that moved under an existing code, so an N13 entry is filed where an N14 one is looked for"
-file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 7;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 6;"
-killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 [[mutation]]
 name = "n14-the-parser-drops-the-requirement"
@@ -5675,11 +5663,11 @@ replace = """            .uses(entity)
 killers = [{ package = "nazm-service", test = "context", name = "references_are_every_use_and_not_the_declaration" }]
 
 [[mutation]]
-name = "n27-effects-are-claimed"
-why = "a packet says effects are supported, which the compiler has no facts for"
+name = "n27-capabilities-are-claimed"
+why = "a packet says capabilities are supported, which the compiler has no facts for (effects were this entry's subject until N36 gave the compiler them)"
 file = "crates/nazm-service/src/context.rs"
-find = """        effects: "unsupported","""
-replace = """        effects: "supported","""
+find = """        capabilities: "unsupported","""
+replace = """        capabilities: "supported","""
 killers = [{ package = "nazm-service", test = "context", name = "diagnostics_are_the_targets_own_and_what_is_not_known_is_unsupported" }]
 
 [[mutation]]
@@ -5868,13 +5856,13 @@ replace = "                        let _ = (d, from);"
 killers = [{ package = "nazm-service", test = "snapshot", name = "a_use_elsewhere_changes_references_of_a_type" }]
 
 [[mutation]]
-name = "n28-effects-are-not-declared-unsupported"
-why = "a snapshot stops listing effects as unsupported, so their absence reads as nothing having changed"
+name = "n28-capabilities-are-not-declared-unsupported"
+why = "a snapshot stops listing capabilities as unsupported, so their absence reads as nothing having changed (effects were this entry's subject until N36 recorded them)"
 file = "crates/nazm-service/src/snapshot.rs"
-find = """    "effects",
-    "capabilities","""
-replace = """    "capabilities",
-    "capabilities","""
+find = """    "capabilities",
+    "tests","""
+replace = """    "tests",
+    "tests","""
 killers = [{ package = "nazm-service", test = "snapshot", name = "a_snapshot_is_every_durable_definition_of_the_compilation_by_identity" }]
 
 [[mutation]]
@@ -7372,3 +7360,155 @@ find = """            "--tools",
 replace = """            "--tools",
             "default","""
 killers = [{ package = "nazm-agent-bench", test = "agent", name = "the_claude_code_client_runs_one_bare_turn_and_its_usage_is_normalised" }]
+
+# --- N36: typed effects ----------------------------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.38 and `docs/spec.md`, *Effects*: a set is a
+# union and is canonical, a built-in's effect is its identity's, a `spawn` is an effect, a callee's
+# effects reach its caller and a cycle reaches its fixed point, a contract holds its body, an
+# unknown or repeated name is refused, an undeclared import promises nothing, the witness points at
+# the call that needs the effect, the interface carries and returns the declared set, a snapshot and
+# a packet say what the checker knows, and the epoch and the interface schema moved.
+
+[[mutation]]
+name = "n36-a-union-drops-an-effect"
+why = "the union of two sets is the first, so a function calling two callees has only the first one's effects"
+file = "crates/nazm-sema/src/effect.rs"
+find = "        Self(self.0 | other.0)"
+replace = "        Self(self.0)"
+killers = [{ package = "nazm-sema", lib = true, name = "effect::tests::union_within_and_without_are_set_operations" }]
+
+[[mutation]]
+name = "n36-a-set-is-iterated-backwards"
+why = "a set is iterated against id order, so it is shown, persisted and compared in a spelling that is not canonical"
+file = "crates/nazm-sema/src/effect.rs"
+find = "        Effect::ALL.into_iter().filter(move |e| self.contains(*e))"
+replace = "        Effect::ALL.into_iter().rev().filter(move |e| self.contains(*e))"
+killers = [{ package = "nazm-sema", lib = true, name = "effect::tests::a_set_is_the_same_whatever_order_or_repetition_built_it" }]
+
+[[mutation]]
+name = "n36-print-is-pure"
+why = "`print` is classified with the built-ins that compute, so a pure function may write to standard output"
+file = "crates/nazm-sema/src/effect.rs"
+find = """        match i {
+            Intrinsic::ArgsCount"""
+replace = """        match i {
+            Intrinsic::Print => None,
+            Intrinsic::ArgsCount"""
+killers = [{ package = "nazm-core", test = "effects", name = "every_outside_world_built_in_requires_io_and_a_pure_function_may_call_none_of_them" }]
+
+[[mutation]]
+name = "n36-a-spawn-is-free"
+why = "a `spawn` exercises no effect, so a function declaring none may start tasks"
+file = "crates/nazm-core/src/effects.rs"
+find = "            if site.spawned {"
+replace = "            if false && site.spawned {"
+killers = [{ package = "nazm-core", test = "effects", name = "a_spawn_requires_spawn_and_every_effect_of_the_task_it_starts" }]
+
+[[mutation]]
+name = "n36-a-callees-effects-stay-with-it"
+why = "a callee's effects are not added to its caller's, so a pure function may call one that prints"
+file = "crates/nazm-core/src/effects.rs"
+find = "                for effect in theirs.iter() {"
+replace = "                for effect in EffectSet::EMPTY.iter() {"
+killers = [{ package = "nazm-core", test = "effects", name = "a_purity_assertion_fails_through_every_level_and_names_a_shortest_witness" }]
+
+[[mutation]]
+name = "n36-one-round-is-the-fixed-point"
+why = "propagation stops after one round, so an effect two calls away, or around a cycle, never arrives"
+file = "crates/nazm-core/src/effects.rs"
+find = "        if !changed {"
+replace = "        if !changed || true {"
+killers = [{ package = "nazm-core", test = "effects", name = "recursion_reaches_the_least_fixed_point_and_injects_nothing" }]
+
+[[mutation]]
+name = "n36-a-contract-is-not-held"
+why = "a body requiring an effect its declared set lacks is accepted, so a declared set means nothing"
+file = "crates/nazm-core/src/effects.rs"
+find = "        if missing.is_empty() {"
+replace = "        if missing.is_empty() || true {"
+killers = [{ package = "nazm-core", test = "effects", name = "every_outside_world_built_in_requires_io_and_a_pure_function_may_call_none_of_them" }]
+
+[[mutation]]
+name = "n36-an-unknown-effect-is-io"
+why = "a name that is not an effect is read as `io` without a word, so a misspelling becomes a contract"
+file = "crates/nazm-core/src/effects.rs"
+find = "        match Effect::by_name(name) {"
+replace = "        match Effect::by_name(name).or(Some(Effect::Io)) {"
+killers = [{ package = "nazm-core", test = "effects", name = "an_unknown_or_repeated_effect_is_refused_once_and_does_not_cascade" }]
+
+[[mutation]]
+name = "n36-a-repeated-effect-is-accepted"
+why = "an effect written twice is accepted silently, so a mistaken set is never reported"
+file = "crates/nazm-core/src/effects.rs"
+find = "            Some(e) if set.contains(e) => {"
+replace = "            Some(e) if false && set.contains(e) => {"
+killers = [{ package = "nazm-core", test = "effects", name = "an_unknown_or_repeated_effect_is_refused_once_and_does_not_cascade" }]
+
+[[mutation]]
+name = "n36-an-undeclared-import-is-pure"
+why = "an import that declares no set is taken to have no effects, so a caller trusts a body it may not read"
+file = "crates/nazm-core/src/effects.rs"
+find = "                                direct.extend(EffectSet::all().iter().map(|effect| EffectReason {"
+replace = "                                direct.extend(EffectSet::EMPTY.iter().map(|effect| EffectReason {"
+killers = [{ package = "nazm-service", test = "context", name = "a_functions_packet_carries_its_effects_and_why_from_the_checker" }]
+
+[[mutation]]
+name = "n36-the-witness-points-at-the-function"
+why = "the reason an effect was added is the caller's name rather than the call, so the witness points away from what requires it"
+file = "crates/nazm-core/src/effects.rs"
+find = """                                at,
+                                source: EffectSource::Inferred(callee),"""
+replace = """                                at: node.f.name_span,
+                                source: EffectSource::Inferred(callee),"""
+killers = [{ package = "nazm-core", test = "effects", name = "a_purity_assertion_fails_through_every_level_and_names_a_shortest_witness" }]
+
+[[mutation]]
+name = "n36-the-interface-omits-effects"
+why = "a declared set is not written into the published interface, so an importer reads every contract as undeclared"
+file = "crates/nazm-iface/src/wire.rs"
+find = """                effects: e
+                    .effects
+                    .map(|s| s.names().into_iter().map(str::to_owned).collect()),"""
+replace = """                effects: None,"""
+killers = [{ package = "nazm-iface", test = "persistence", name = "a_declared_set_is_published_by_name_in_id_order_and_an_undeclared_one_is_absent" }]
+
+[[mutation]]
+name = "n36-the-reader-drops-effects"
+why = "a persisted declared set is not read back, so a dependent checked against a stored interface sees no contract"
+file = "crates/nazm-iface/src/wire.rs"
+find = "                effects: e.effects.as_ref().map(|names| {"
+replace = "                effects: e.effects.as_ref().filter(|_| false).map(|names| {"
+killers = [{ package = "nazm-iface", test = "persistence", name = "a_declared_set_is_read_back_exactly_and_a_malformed_one_is_refused" }]
+
+[[mutation]]
+name = "n36-an-effect-change-is-invisible-to-a-snapshot"
+why = "every function's effects digest is the same, so an effect-only change reads as nothing having changed"
+file = "crates/nazm-service/src/snapshot.rs"
+find = "                effects: function.then(|| effects_digest(res, &d)),"
+replace = """                effects: function.then(|| Digest::new("effects").hex()),"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "an_effect_change_is_its_own_section_whether_declared_or_required" }]
+
+[[mutation]]
+name = "n36-a-packet-has-no-effects"
+why = "a function's packet carries no effects, as though the compiler still had none"
+file = "crates/nazm-service/src/context.rs"
+find = "                ReferenceTarget::Function(id) => effects_of(s, &paths, id),"
+replace = "                ReferenceTarget::Function(_) => None,"
+killers = [{ package = "nazm-service", test = "context", name = "a_functions_packet_carries_its_effects_and_why_from_the_checker" }]
+
+[[mutation]]
+name = "n36-the-interface-schema-stays"
+why = "the interface keeps the `/5` name for a shape whose absent `effects` now means undeclared, so a `/5` file is read as a `/6` one"
+file = "crates/nazm-iface/src/wire.rs"
+find = """pub const SCHEMA: &str = "nazm.interface/6";"""
+replace = """pub const SCHEMA: &str = "nazm.interface/5";"""
+killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_schema_is_refused_and_never_read_as_this_one" }]
+
+[[mutation]]
+name = "n36-the-epoch-stays"
+why = "`SEMANTIC_EPOCH` is not bumped for a checker that now refuses bodies against their declared effects, so an N35 entry is filed where an N36 one is looked for"
+file = "crates/nazm-cache/src/identity.rs"
+find = "pub const SEMANTIC_EPOCH: u32 = 8;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 7;"
+killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
