@@ -643,6 +643,10 @@ pub(crate) fn run(repo: &Path, name: &str, argv: &[&str], b: &Bounds) -> Report 
         ])
         // Reaps orphans, so a detached grandchild cannot accumulate against the pid limit.
         .arg("--init")
+        // No network, ever (N34): the image carries every crate and the repository every
+        // asset, so a workload that reached for the network would be one whose evidence
+        // could not be reproduced offline.
+        .args(["--network", "none"])
         .args(["--log-driver", "none"])
         .arg("--mount")
         .arg(format!(
