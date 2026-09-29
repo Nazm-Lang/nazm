@@ -161,12 +161,12 @@ pub enum Intrinsic {
 
     // --- the outside world -------------------------------------------------------
     //
-    // **Ambient authority, and labelled as such.** These are callable from anywhere,
-    // and nothing in the language restricts which functions may reach the file system
-    // or the process arguments. That is a real limitation, not a design: see
-    // `docs/spec.md`, *What the outside-world built-ins do and do not promise*. The
-    // growth path is a capability parameter, and the built-ins are shaped so that
-    // adding one changes what may call them rather than what they mean.
+    // **Authority, since N37.** A function that declares an effect set may call these
+    // only while it holds an `IoCap` (`crate::capability`, `docs/spec.md`, *Capabilities*);
+    // one that declares none is still ambient, exercising its caller's authority — a
+    // compatibility bridge, labelled as such, and bounded so that code with a contract
+    // cannot reach through it. The signatures did not change: the capability changes
+    // what may call them rather than what they mean, which is how they were shaped.
     /// `args_count() -> Int` — how many arguments the program was given, **excluding**
     /// the program's own name.
     ArgsCount,

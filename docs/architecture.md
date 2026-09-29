@@ -4340,9 +4340,108 @@ a function's checked set is on its `FnDef` for lowering to carry, which is where
 
 **Deliberately not here.** Handlers, effect variables and polymorphism, user-defined effects,
 `alloc`, `native`/`unsafe`/`foreign` (no FFI exists to exercise them), divergence and panic as
-effects, capabilities and authority, profiles that forbid effects, completion of effect names,
+effects, capabilities and authority (§7.39 since N37), profiles that forbid effects, completion of effect names,
 and the Nazm-written compiler reading effect sets — its lexer and parser do not, and no source it
 reads writes one (`examples/effects/` is outside the folders its agreement tests read).
+
+## 7.39 Capabilities and authority — settled by N37, 2026-09-30
+
+```text
+types        Type::Cap(CapabilityKind)            IoCap, SpawnCap: built-in names, Type::ALL, no equality leaf
+  │
+check        record_site per call and spawn      CallSite.held = kinds of the capability bindings a name reaches
+  │           construction of a capability        N0370 (record form and call form)
+  │           main's parameters                   N0371 unless every one is a capability
+settle       crate::effects::analyse             effects to the least fixed point (§7.38), unchanged
+  │
+authority    crate::effects::authority           per function with a declared set, per site, in body order:
+  │                                               built-in → CapabilityKind::of_intrinsic
+  │                                               spawn → to_start_a_task
+  │                                               undeclared callee → for_effects(its effects; every effect if imported)
+  │                                               required ∖ held → N0369 once per kind, witness, no fix
+contract     inferred ⊆ declared?                N0366, after the function's N0369s
+  │
+runtime      interpreter: Value::Cap(kind) for main's parameters · native: an i64 0 per root in the entry wrapper
+```
+
+**Effect versus authority.** An effect (§7.38) is what a function does; a capability is what allows
+it to. `nazm_sema::CapabilityKind` is the compiler's: two variants with stable ids, each the
+authority for one effect today (`CapabilityKind::for_effect`, exhaustive, returning a
+`CapabilitySet` so a finer mapping is a table change). A built-in's required authority is
+`CapabilityKind::of_intrinsic`, a second exhaustive table on the built-in's identity — written out
+rather than derived from `Effect::of_intrinsic`, since what a built-in does and what allows it are
+two questions, and a unit test holds the two consistent. `spawn`'s is `to_start_a_task`: authority
+to **create** a task, kept apart from whatever the task itself does.
+
+**Identity and namespace.** A capability's type is `Type::Cap(kind)`: a built-in type, in
+`Type::ALL`, parsed by `Type::from_name` and refused as a declaration by the existing
+`BUILTIN_TYPE_REDEFINED`. Kind and resource are separate by construction: the kind is the whole of a
+v1 capability, and a resource-specific one would be `Cap` with an argument, not a new mechanism.
+
+**Possession is lexical.** The checker's scope stack already holds every binding's type, so
+`record_site` records, on each `CallSite`, the kinds of the capability-typed bindings a name reaches
+there — innermost first, a shadowed binding reaching nothing. That set is the only authority input:
+no function carries a flag, and nothing about a function's name, module or effect declaration adds
+to it. A record containing a capability holds nothing until it is bound; a type parameter holds
+nothing whatever instantiates it, which is parametricity rather than a special case.
+
+**The check.** After the effect fixed point, `effects::authority` runs for each function with a
+declared set — the ones that have left the bridge — over its call sites in body order. What each
+site needs is decided from resolution only: a built-in's table entry, a `spawn`'s `SpawnCap`, and for
+a callee with no declared set the authority for its effects — its inferred set in this module,
+every effect across one. A declared callee needs nothing at the call: its authority is its
+parameters, and ordinary type checking has already made the caller supply them. What is missing is
+`N0369`, once per kind per function at the first site needing it, with the chain through the
+module's undeclared functions (the §7.38 reasons, followed for the effect the kind authorises) and
+no fix. Authority diagnostics precede the function's `N0366`, so a body wrong in both is reported
+in one order every time.
+
+**Unforgeability and the root.** No expression produces a capability: the record form and the call
+form are `N0370`, there is no literal, conversion or default, and no built-in returns one. The root
+is `main`, whose parameters must all be capabilities (`N0371`) and are supplied by the runtime —
+`Interpreter::run_main` binds `Value::Cap(kind)` to each, and `emit_entry` passes an `i64 0` per
+root. `lower` accepts a `main` whose parameters are all capabilities and still refuses any other.
+
+**Spawn.** Starting a task needs a `SpawnCap` at the `spawn`. The task's authority is whatever the
+`spawn` passes as arguments — capabilities cross into a task because they are values, not sequences
+— and, for a task function with no declared set, what its effects need, which the spawner must
+hold. A task never inherits its spawner's scope.
+
+**The interface.** A capability parameter is a parameter: `nazm.interface/6` writes it as
+`"IoCap"`, the built-in form every built-in type has, so authority crosses a module with no body
+inspected and no new field. `/6` is kept deliberately: no field was added and none changed meaning,
+an absent `effects` still means *declares none* — the rule that an importer with a contract must
+then hold every authority is the checker's, covered by `SEMANTIC_EPOCH` 9 — and an older reader
+refuses `IoCap` as an unknown type rather than misreading it. A capability-only change changes the
+export's parameter list, so the interface fingerprint, every importer's key, the snapshot's `shape`
+digest and the delta move; `DefKey` does not, so the definition is changed, not replaced.
+
+**The compatibility bridge.** A function with no declared set is ambient: it has no authority of
+its own and exercises its caller's. Its only root is a `main` with no set, which is handed all of it.
+The bound is enforced at the one place the bridge meets explicit code — a call or `spawn` of an
+ambient function from a function with a declared set needs the callee's authority held — so explicit
+code cannot reach ambient authority, and an undeclared import is every authority. Before N37 every
+source in the repository was ambient; each still is, unchanged.
+
+**The enforcement boundary.** Static only. `Ty::of(Type::Cap(_))` is `Ty::Int`: a word that is
+always 0 and that nothing reads — a word rather than a zero-sized `{}` because every storage, copy
+and sequence path already handles a word, where a zero-byte element would reach a zero-byte
+allocation. A capability parameter's function lowers to exactly the IR of the same function taking
+an `Int`. There is no runtime check, no sandbox and no operating-system boundary; erasure permits
+no forgery because forgery is refused before anything runs.
+
+**Tooling.** Nothing new: a capability is a built-in type to hover, signature help, completion
+(offered in type positions as a built-in type, never in a call head as a constructor), semantic
+tokens and packets. `nazm.context/2`, `nazm.snapshot/2` and `nazm.delta/2` are unchanged — a
+function's authority is its parameter list, which they already carry, and whether it is ambient is
+whether `effects.declared` is null. No machine schema was added.
+
+**Deliberately not here.** Attenuation and resource-specific kinds (nothing narrower exists to
+derive), revocation, linear or affine capabilities, lifetimes, capability polymorphism,
+user-defined capabilities, channels as authority, restriction profiles, foreign and unsafe
+authority, runtime enforcement, retiring the bridge, and the Nazm-written compiler reading
+capabilities — no source it reads declares one (`examples/capabilities/` is outside its
+agreement tests' folders).
 
 ## 8. Toolchain, and one real incompatibility
 

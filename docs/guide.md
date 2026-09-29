@@ -29,7 +29,8 @@ running anything, and `nazm test` runs a directory of programs against recorded 
   nameable here. Everything else in it stays private to it, and what *it* imports does not
   come with it.
 - **`fn main() -> Int` is the entry point**, and every function writes its parameter and
-  return types — there is no inference across a function boundary.
+  return types — there is no inference across a function boundary. `main` may take
+  capabilities, `fn main(io: IoCap) -> Int`, and nothing else.
 - **Bindings are immutable** unless written `let mut`, and a parameter is never mutable.
 - **A block's last expression, with no `;`, is its value.** That is how `if` produces one.
 - **Arithmetic is checked.** Overflow, division by zero and `Int::MIN / -1` fail with a
@@ -50,6 +51,7 @@ running anything, and `nazm test` runs a directory of programs against recorded 
 | a `struct` you declare | A **record**: a value with named fields, each keeping its own type's rules |
 | an `enum` you declare | One of a fixed set of named **variants**, each with its own named fields |
 | `Vec[T]` | A growable sequence of **any** type — records, enums, strings, other `Vec`s — by reference |
+| `IoCap`, `SpawnCap` | **Capabilities**: authority to reach the outside world, and to start a task. Only `main` receives them; nothing constructs one |
 
 `Ints`, `Strs`, `Vec[T]` and `Chan` are handles: two bindings of one sequence are the same storage,
 and `==` is not offered on them, because it would have to mean either identity or
@@ -323,6 +325,38 @@ fn first_or(xs: Vec[Int], fallback: Int) -> Int {
 
 There are no methods on either — no `unwrap`, no `map` — and runtime failures such as an
 index out of bounds are still runtime failures, not `Err` values.
+
+## Effects and capabilities
+
+A function may say what it does — `! { io }` reaches the outside world, `! { spawn }` starts
+tasks, `! {}` does neither — and the checker holds its body to that. Leaving the set out is
+not the same as `! {}`: an undeclared function's effects are inferred, and to another module
+it may do anything.
+
+A function that declares a set must also **hold the authority** for what it does: an
+`IoCap` to call `print`, `read_file` and the other outside-world built-ins, a `SpawnCap` to
+`spawn`. Authority is a value. `main` is handed it, and passes it to what needs it:
+
+```nazm
+fn log(io: IoCap, n: Int) -> Int ! { io } {
+    print(int_to_str(n));
+    print(str_from_byte(10))
+}
+
+fn double(n: Int) -> Int ! {} { n * 2 }
+
+fn main(io: IoCap) -> Int ! { io } {
+    log(io, double(21));
+    0
+}
+```
+
+Declaring `! { io }` without holding an `IoCap` is refused, and so is holding one while
+declaring `! {}` — two different mistakes, two different errors. A function that declares
+nothing uses its caller's authority, which is how programs written without any of this keep
+working; one that declares a set may call it only while holding what it needs. The checking
+is static: a capability costs nothing at runtime, and it does not sandbox the program.
+`docs/spec.md`, *Effects* and *Capabilities*, is the law.
 
 ## Memory: what you do not have to do
 

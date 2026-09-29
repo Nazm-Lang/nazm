@@ -57,6 +57,17 @@ version:
 - Changing what an existing diagnostic code means, or reusing a retired one.
 - Changing `span` offsets from bytes to anything else.
 
+**Applied to N37, capabilities.** No schema moved. Three diagnostic codes appeared —
+`N0369` (missing authority), `N0370` (a capability constructed) and `N0371` (a `main`
+parameter that is not a capability) — which is a new code, compatible. `IoCap` and
+`SpawnCap` are two more built-in types, so `nazm.capabilities/1`'s type list has two more
+elements, compatible. A function's authority is its parameter list, which
+`nazm.context/2`, `nazm.snapshot/2` and `nazm.delta/2` already carry, so a capability-only
+change is a `shape` change there and needed no new field; whether a function is ambient is
+whether `effects.declared` is `null`, which already meant *declares none*. The persisted
+module interface, which is not one of these schemas, stays `nazm.interface/6` for the same
+reason: a capability parameter is written as every built-in type already is.
+
 A consumer that fails on an unrecognised field is not compatible with this contract, and
 the `additionalProperties: false` in the schema documents is a statement about *this*
 version's output, not a promise that the next one adds nothing.
@@ -151,6 +162,10 @@ is tested to parse and to remove its diagnostic when applied alone, and that a c
 buffer has moved on cannot apply an edit tied to the old version.
 
 ## The capability inventory
+
+Not the language's capabilities. `IoCap` and `SpawnCap` are **authority**, values a program
+holds (`docs/spec.md`, *Capabilities*); this inventory is a list of what the toolchain can
+do, and the two share a word and nothing else.
 
 `nazm capabilities` reports what **this build** supports, read from the tables the
 compiler dispatches on: `Intrinsic::ALL` for the front end, the backend's own `Builtin`

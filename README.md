@@ -97,7 +97,9 @@ concurrency — lexed, parsed, type-checked and evaluated. **Recursion runs here
 refused by `nazm build`**; that asymmetry is the one place the two paths disagree, and it
 is reported by name. Still absent: user-defined types, pattern matching, generics and
 floats. (Effects were in this list until N36: a function may now declare `! { io }` or
-`! {}` — see [`docs/spec.md`](docs/spec.md), *Effects*.) A program using one of those is **refused by name** rather than misparsed into
+`! {}` — see [`docs/spec.md`](docs/spec.md), *Effects*. Since N37 one that declares a set must
+also hold the authority for it, an `IoCap` or `SpawnCap` handed down from `main` — *Capabilities*;
+the check is static and is not a sandbox.) A program using one of those is **refused by name** rather than misparsed into
 something else.
 
 The semantics it commits to are in [`docs/spec.md`](docs/spec.md): overflow traps
@@ -248,6 +250,7 @@ Stated up front, because these are easy to blur:
 | Ownership / exclusivity | Business-logic correctness. Two valid transactions can still oversell inventory |
 | Provenance / taint | Authorization. Correctly-parameterised SQL can still read another tenant's rows |
 | Effect rows / purity | That an edit preserves behaviour — and not, alone, that a call can be dropped or reordered |
+| Capabilities (static, N37) | Isolation at runtime. Nothing sandboxes the process, and a function with no declared effects still uses its caller's authority |
 | Definition-hash equality | All behaviour-preserving rewrites. Only one class: normalised-Core alpha-equivalence |
 | Passing the test suite | Correctness |
 | Reproducible bootstrap | Compiler trustworthiness |

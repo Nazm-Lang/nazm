@@ -1800,28 +1800,37 @@ a path and an interpreted one has no equivalent, so including it would make the 
 program mean different things under `nazm run` and `nazm build`. Excluded, they agree
 exactly.
 
-#### Authority is ambient, and that is a limitation
+#### Authority is explicit where a contract is written, and ambient elsewhere
 
-**Nothing in the language restricts which functions may reach the file system.** Any
-function can call `read_file`. There is no capability parameter and no enforcement of
-authority of any kind.
+**Since N37 a function that declares an effect set may reach these built-ins only while it
+holds an `IoCap`** — a capability value its scope reaches, handed down from `main`, which is
+the one place authority enters a program (*Capabilities: what allows a function to act*). A
+function that declares no set is still ambient: it exercises its caller's authority, which
+is how every program written before N37 is accepted unchanged.
+
+*Corrected 2026-09-30, N37.* This section was titled *Authority is ambient, and that is a
+limitation*, and said any function could call `read_file` and there was no capability
+parameter. That is no longer true for a function with a declared set, and it is still true
+for one without — which is now a **compatibility bridge**, bounded so that code with a
+contract never reaches authority it does not hold by calling code without one. The
+limitation that remains is stated there, not hidden here: the checking is static, v1
+capabilities are coarse, and nothing at runtime sandboxes a Nazm program.
 
 *Corrected 2026-09-29, N36.* This said there was no effect annotation. There is one now
 (*Effects: what a function may do*): a function may declare `! { io }`, and one declaring
 `! {}` may not reach these built-ins, directly or through anything it calls. That restricts
-**what a function does**, not **who may do it**: any function may still declare `io` and
-call `read_file`, so authority remains ambient, and this section's limitation stands.
+**what a function does**, not **who may do it** — which is what N37 then added.
 
-This is stated rather than implied because the alternative — shipping the built-ins and
-describing the design as capability-based because a capability design exists in
-`docs/architecture.md` — would be a claim the implementation does not support. Partial
-enforcement labelled as full enforcement is worse than none.
+This is stated rather than implied because the alternative — describing the design as
+capability-based wherever a capability design exists — would be a claim the implementation
+does not support. Partial enforcement labelled as full enforcement is worse than none.
 
-The growth path is a capability parameter on `main`, threaded to whatever needs it. The
-built-ins above are shaped so that adding one changes *what may call them*, not what they
-mean, so no program's behaviour changes when it arrives. That design is **not settled**,
-and in particular `main(io: IO)` is not chosen merely because an earlier note suggested
-it.
+The growth path this section once left open — *a capability parameter on `main`, threaded to
+whatever needs it* — is the one N37 took, and for a stated reason rather than because an
+earlier note suggested it: `main` is the only function the runtime calls, so it is the only
+place a value can come from that no expression produced. The built-ins were shaped so that
+the capability changes *what may call them*, not what they mean, and no program's
+behaviour changed when it arrived.
 
 #### There is no process spawning, deliberately
 
@@ -2329,14 +2338,14 @@ about what an accepted program does, and add nothing to what runs.
 ```nazm
 fn area(w: Int, h: Int) -> Int ! {} { w * h }
 
-fn show(n: Int) -> Int ! { io } { print(int_to_str(n)) }
+fn show(io: IoCap, n: Int) -> Int ! { io } { print(int_to_str(n)) }
 
 fn worker(c: Chan) -> Int ! {} { chan_send(c, 1); 0 }
 
-fn run() -> Int ! { io, spawn } {
+fn run(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn } {
     let c = chan_new(1);
     scope { spawn worker(c); }
-    show(area(2, 3))
+    show(io, area(2, 3))
 }
 ```
 
@@ -2396,6 +2405,18 @@ word.
 - **A caller reads a callee's contract when it has one**, and what its body requires when it
   has none — but only within the callee's own module.
 
+**No set is not the empty set.** `fn f() -> Int` and `fn f() -> Int ! {}` are different
+declarations, and only the second promises anything:
+
+| Written | Contract | Its own module's callers see | Another module's callers see | Authority (N37) |
+| --- | --- | --- | --- | --- |
+| `fn f() -> Int` | none | what its body requires, inferred | every effect, `{ io, spawn }` | its caller's: the compatibility bridge |
+| `fn f() -> Int ! {}` | pure | `{}` | `{}` | only the capabilities its scope holds |
+| `fn f(io: IoCap) -> Int ! { io }` | may reach the outside world | `{ io }` | `{ io }` | the `IoCap` it is handed |
+
+Omitting the set is never a way to say *pure*: to another module an undeclared function may
+do anything, and its effects are inferred only for its own module's callers.
+
 #### Across modules
 
 **A caller never needs another module's body to know its effects.** What crosses a module
@@ -2416,9 +2437,158 @@ the same reason there is no effect polymorphism — no effect variables, no hand
 that removes an effect once it is required. Those are later work, and a later milestone
 adds them rather than N36 pretending concrete sets cover them.
 
-**Effects are not authority.** A function declaring `! { io }` may reach the file system;
-that says what kind of power it uses, not that anything granted it. Who may exercise a power
-is the capability question, and it is still open (*What the outside-world built-ins do*).
+**Effects are not authority.** A function declaring `! { io }` says what kind of power it
+uses, not that anything granted it. Since N37 who may exercise a power is a separate
+question with a separate check: *Capabilities: what allows a function to act*, next.
+
+### Capabilities: what allows a function to act
+<!-- id: capabilities -->
+
+An effect describes **behaviour**: `! { io }` says a function may reach the outside world. A
+**capability** describes **authority**: a value of a compiler-owned type whose presence in a
+function's scope is what allows it to. The two are separate facts, checked separately and
+reported under separate codes, and neither implies the other.
+
+```nazm
+fn save(io: IoCap, path: Str, data: Str) -> Int ! { io } { write_file(path, data) }
+
+fn log(io: IoCap, s: Str) -> Int ! { io } { print(s) }
+
+fn keep(io: IoCap) -> IoCap ! {} { io }
+
+fn main(io: IoCap) -> Int ! { io } {
+    log(keep(io), "saving");
+    save(io, "out.txt", "data");
+    0
+}
+```
+
+#### The capabilities
+
+There are exactly two, and they are the compiler's. There are **no user-defined
+capabilities**.
+
+| Kind | Type | Authorises | Effect it authorises |
+| --- | --- | --- | --- |
+| `Io` | `IoCap` | the eight outside-world built-ins — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` | `io` |
+| `Spawn` | `SpawnCap` | a `spawn` statement: starting a task | `spawn` |
+
+A kind is identified by the compiler, never by how its type is spelled. `IoCap` and
+`SpawnCap` are **built-in type names**, like `Chan`: they mean the same in every module, and a
+module may not declare a type of either name (`N0331`). Which authority a built-in needs is a
+property of the built-in's identity, decided by an exhaustive table the checker reads — a
+program's own function cannot be named `print`, so a call spelled `print` is the built-in.
+
+**v1 capabilities are coarse.** An `IoCap` authorises the arguments, every file, both
+standard streams and ending the process alike: it is not least privilege, and it does not
+distinguish a read from a write, one file from another, or output from exit. A capability
+authorises its **kind**; a resource-specific capability — one file, one directory — would be
+a kind with a type argument, and none exists yet.
+
+#### Authority is a value in scope
+
+**A function that declares an effect set holds exactly the authority of the capability values
+its scope reaches**: at each point in its body, every parameter or `let` of a capability type
+whose name is visible there. A binding hidden by a later one of the same name holds nothing,
+since no expression can reach it; a record, `Vec` or variant that contains a capability holds
+nothing until the capability is bound; a type parameter holds nothing whatever it is
+instantiated with, since nothing is known about it. Possession is read from bindings a reader
+can see, and from nothing else — there is no flag and no hidden grant.
+
+At each point, what is needed:
+
+- **A built-in** needs the authority its identity requires.
+- **A `spawn`** needs a `SpawnCap`, to start the task. What the task then does is its function's
+  business: a function with a declared set has only what the `spawn` hands it as arguments, so
+  authority enters a task only by being **passed**, like any value. A task never gains its
+  spawner's authority by being started.
+- **A call to a function with a declared set** needs nothing more here. Its authority is in
+  its parameters, and the caller supplies them as it supplies any argument — ordinary type
+  checking, with a missing or wrong capability being a missing or wrong argument.
+- **A call — or a `spawn` — of a function with no declared set** needs whatever that function's
+  effects need: in its own module, its inferred effects; from another module, every effect.
+
+Lacking any of these is `N0369`, once per missing kind, at the first point that needs it, with
+the chain through undeclared functions to what needs the authority. It is never fixed
+automatically: threading authority through parameters changes every caller.
+
+#### Effects and authority are checked apart
+
+| The function… | holds the capability | does not hold it |
+| --- | --- | --- |
+| **declares the effect** | accepted | `N0369` — authority |
+| **does not declare it** | `N0366` — effect | `N0369`, then `N0366` |
+
+A body wrong in both gets both, authority first, in that order every time. Holding a
+capability is not exercising it: receiving, passing, returning and storing one adds no effect,
+so `fn keep(io: IoCap) -> IoCap ! {}` is pure. Holding authority a body never uses is allowed,
+as declaring an effect it never exercises is.
+
+#### Where authority comes from
+
+**`main` is the root of authority.** The runtime calls it, and hands it one capability of each
+kind it declares a parameter of — any number, in any order. A `main` parameter of any other
+type is refused (`N0371`): the runtime has nothing else to hand over. Every capability in a
+running program is one of those, or a copy of one.
+
+**Nothing a program writes constructs one.** `IoCap()` and `IoCap(x: 1)` are refused
+(`N0370`); there is no literal, no conversion from another type and no default value, and a
+generic function cannot produce a value of a type parameter it was not given. A capability is
+unforgeable because no expression but a parameter of `main` has one to give.
+
+#### A value like any other, with two exceptions
+
+A capability is **shareable**: it is copied freely, and a copy is the same authority — there
+is no linear or affine use, and so no revocation. It may be stored in a record, a `Vec` or an
+enum payload, returned, passed through a generic function, and handed to a task as a `spawn`
+argument; matching a payload binds the capability that was stored, and creates none. The two
+exceptions:
+
+- **No equality.** `==` on a capability is `N0304`, and a record or enum containing one derives
+  none: two authority values are not data to compare.
+- **No representation a program can read.** No built-in takes one, and nothing converts one
+  to an `Int` or a `Str`, so a capability cannot be printed, written to a file or persisted.
+
+#### The compatibility bridge: a function with no declared set
+
+A function that declares no effect set is **ambient**: it has no authority of its own and
+exercises its **caller's**. That is how every program written before N37 is accepted unchanged
+— a `main` with no set is the bridge's root and is handed all of it, and every undeclared
+function it calls exercises it in turn.
+
+The bridge is bounded, and the bound is the point: a function that declares a set may call or
+spawn an ambient one **only while holding what that callee's effects need** — every effect, for
+an import it cannot read. So code that states its contract never reaches authority it does not
+hold by calling code that states none, in its own module or another. Declaring a set is how a
+function leaves the bridge; nothing makes a function leave it silently, and nothing lets one
+re-enter it.
+
+#### Across modules
+
+**A caller never needs another module's body to know what authority it requires.** A
+capability parameter is an ordinary parameter of a built-in type, so it is in the published
+interface as any parameter is, and an importer checks its call against it. Changing which
+capability a function takes — adding one, removing one, or trading `IoCap` for `SpawnCap` —
+changes the interface, and every importer is checked again.
+
+#### What is checked, and what is not
+
+**The checking is static, and nothing at runtime enforces it.** A capability erases: each
+lowers to a machine word holding 0, which nothing reads, and a program behaves identically
+interpreted and compiled, with its capabilities or with `Int`s in their place. Erasure permits
+no forgery, because forgery is a question the checker answers before anything runs: no
+expression produces a capability, so there is nothing at runtime to fake.
+
+There is **no sandbox**. A Nazm program can affect its machine exactly as much as the process
+running it can; an operating-system boundary, a broker or a resource quota is not part of the
+language. What N37 establishes is narrower and exact: **Nazm v1 statically represents and
+checks explicit compiler-owned authority** — for every function that declares its effects —
+and labels everywhere else as the ambient bridge it is.
+
+Not in v1, and not implied by anything above: attenuation (there is no narrower capability to
+derive one into), resource-specific authority, revocation, linear or affine capabilities,
+capability polymorphism, user-defined capabilities, restriction profiles, and authority for a
+foreign function or unsafe code (*Open*, *Capabilities*).
 
 ### The integer boundaries, stated rather than inherited
 <!-- id: integer-boundaries -->
@@ -2566,6 +2736,27 @@ open:
 - Evaluation order: specified, or deliberately unspecified? If unspecified, differential
   testing across backends cannot compare it (`architecture.md` §6).
 - Which handlers lower statically, and which require one-shot continuation capture?
+
+### Capabilities
+<!-- id: open-capabilities -->
+
+*Settled by N37*: what a capability is, the two kinds, lexical possession, `main` as the root,
+unforgeability, separate authority and effect checks, the ambient bridge and its bound, and
+static erasure (*Capabilities: what allows a function to act*). Still open:
+
+- **Attenuation and resource-specific authority.** A read-only `IoCap`, one file's, one
+  directory's: each needs a kind with a resource argument, and the rule for deriving a
+  narrower capability from a wider one. v1 has no narrower kind to derive into.
+- **Linearity.** Whether some authority should be affine — usable once, or movable but not
+  copyable — needs move semantics the language does not have.
+- **Revocation and lifetime.** A copied capability lives as long as any copy; a scoped grant
+  needs a lifetime analysis.
+- **Retiring the bridge.** When a function with no declared set stops being ambient, and what
+  a program declaring nothing is migrated to.
+- **Runtime enforcement.** Whether a later milestone backs the static check with an
+  operating-system boundary for a program that crosses into foreign code.
+- **Foreign and unsafe authority.** A foreign-function call or unsafe code would need
+  authority of its own kind.
 
 ### Provenance and information flow
 <!-- id: open-provenance -->
