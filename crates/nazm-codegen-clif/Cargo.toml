@@ -1,0 +1,34 @@
+[package]
+name = "nazm-codegen-clif"
+description = "The Cranelift backend: validated MIR to native object code, in process."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["architecture:7.43"]
+
+[dependencies]
+nazm-span = { workspace = true }
+nazm-diag = { workspace = true }
+nazm-sema = { workspace = true }
+# What it compiles: validated MIR.
+nazm-mir = { workspace = true }
+# The backend boundary, the units, symbols, linkage and layout tables every backend shares,
+# and the runtime registry every call into the runtime is built from.
+nazm-lir = { workspace = true }
+# Pinned exactly (N41): a code generator is part of every object's cache key, and a floating
+# version would change machine code under an unchanged key.
+cranelift-codegen = { version = "=0.136.1" }
+cranelift-frontend = { version = "=0.136.1" }
+cranelift-module = { version = "=0.136.1" }
+cranelift-object = { version = "=0.136.1" }
+target-lexicon = { version = "=0.13.5" }
+# Each object's cache key.
+blake3 = { workspace = true }
+
+[lints]
+workspace = true

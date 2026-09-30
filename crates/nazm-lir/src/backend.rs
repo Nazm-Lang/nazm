@@ -1,0 +1,332 @@
+//! The backend boundary (N41): what a code generator is handed, what it hands back, and the
+//! target it was asked for.
+//!
+//! `docs/architecture.md` §7.43. A backend reads a [`Native`] — validated MIR, and the units,
+//! symbols, linkage and layout tables `crate::lower` settled from it for every backend alike —
+//! and returns one artefact per unit: LLVM text for clang to compile, or object bytes. Nothing
+//! of any code generator's own types appears here, so no crate above a backend's can depend on
+//! one by accident.
+
+use nazm_diag::Diagnostic;
+
+use crate::emit::{emit_unit, Needs};
+use crate::lower::Native;
+use crate::names::SourceNames;
+
+/// Which backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BackendId {
+    /// LLVM IR as text, compiled by clang. The default, and the differential reference.
+    Llvm,
+    /// Cranelift, in process, to object bytes.
+    Cranelift,
+}
+
+impl BackendId {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Llvm => "llvm",
+            Self::Cranelift => "cranelift",
+        }
+    }
+
+    #[must_use]
+    pub fn by_name(name: &str) -> Option<Self> {
+        match name {
+            "llvm" => Some(Self::Llvm),
+            "cranelift" => Some(Self::Cranelift),
+            _ => None,
+        }
+    }
+}
+
+/// A processor family this compiler generates code for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Arch {
+    Aarch64,
+    X86_64,
+}
+
+/// An operating system this compiler links for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Os {
+    Macos,
+    Linux,
+}
+
+/// A target, by its explicit triple.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Target {
+    pub triple: String,
+    pub arch: Arch,
+    pub os: Os,
+}
+
+impl Target {
+    /// The v1 matrix: 64-bit ARM and x86 on macOS and Linux, and nothing else. A triple
+    /// outside it is refused by name rather than guessed at.
+    ///
+    /// # Errors
+    ///
+    /// A triple this compiler has no code generator or runtime for.
+    pub fn parse(triple: &str) -> Result<Self, String> {
+        let (arch, os) = match triple {
+            "aarch64-apple-darwin" => (Arch::Aarch64, Os::Macos),
+            "aarch64-unknown-linux-gnu" => (Arch::Aarch64, Os::Linux),
+            "x86_64-apple-darwin" => (Arch::X86_64, Os::Macos),
+            "x86_64-unknown-linux-gnu" => (Arch::X86_64, Os::Linux),
+            other => {
+                return Err(format!(
+                    "`{other}` is not a target this compiler generates code for; the v1 \
+                     targets are aarch64-apple-darwin, aarch64-unknown-linux-gnu, \
+                     x86_64-apple-darwin and x86_64-unknown-linux-gnu"
+                ))
+            }
+        };
+        Ok(Self {
+            triple: triple.to_owned(),
+            arch,
+            os,
+        })
+    }
+
+    /// The machine this compiler is running on.
+    ///
+    /// # Errors
+    ///
+    /// A host outside the v1 matrix.
+    pub fn host() -> Result<Self, String> {
+        let triple = match (std::env::consts::ARCH, std::env::consts::OS) {
+            ("aarch64", "macos") => "aarch64-apple-darwin",
+            ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
+            ("x86_64", "macos") => "x86_64-apple-darwin",
+            ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
+            (a, o) => {
+                return Err(format!(
+                    "this host ({a}-{o}) is outside the v1 target matrix"
+                ))
+            }
+        };
+        Self::parse(triple)
+    }
+
+    /// The target a build asked for: the host, or a named triple that must be the host.
+    ///
+    /// # Errors
+    ///
+    /// An unknown triple, or one that is not the host: an object for a foreign target needs a
+    /// foreign linker and a foreign runtime, and v1 has neither.
+    pub fn requested(triple: Option<&str>) -> Result<Self, String> {
+        let host = Self::host()?;
+        let Some(t) = triple else {
+            return Ok(host);
+        };
+        let wanted = Self::parse(t)?;
+        if wanted != host {
+            return Err(format!(
+                "cross-compilation is not supported: `{t}` was requested on a \
+                 {} host, and v1 links only for the host",
+                host.triple
+            ));
+        }
+        Ok(wanted)
+    }
+}
+
+/// What a unit became.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Code {
+    /// LLVM IR text, for clang to compile to an object.
+    Llvm(String),
+    /// An object, ready to link.
+    Object(Vec<u8>),
+}
+
+/// One unit, before anything is generated for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Planned {
+    /// `m{i}` for the i-th module's unit, `g{i}` for the i-th instance's.
+    pub name: String,
+    /// Whether it is a generic instance's unit.
+    pub instance: bool,
+    /// What the unit's object is a function of — its MIR, its layouts, the target, the
+    /// backend's version and settings, the runtime ABI revision — when a backend can say so
+    /// before generating it, so a cached object is reused without generating anything. `None`
+    /// for LLVM text, whose key is its own bytes once they exist.
+    pub key: Option<String>,
+}
+
+/// One unit, generated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Generated {
+    pub code: Code,
+    /// What the unit reaches of the runtime.
+    pub needs: Needs,
+}
+
+/// Everything a backend produced for one program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Emitted {
+    pub units: Vec<(Planned, Generated)>,
+    /// What the program's units reach of the runtime.
+    pub needs: Needs,
+}
+
+/// A code generator.
+pub trait Backend {
+    fn id(&self) -> BackendId;
+    /// Its version and every codegen-affecting setting, as one string that enters every cache
+    /// key: a new code generator or a changed setting is a new key.
+    fn version(&self) -> String;
+    fn target(&self) -> &Target;
+    /// Every unit of a program, modules first and then instances, in the order they link.
+    fn plan(&self, native: &Native) -> Vec<Planned>;
+    /// One unit, by its position in [`Self::plan`].
+    ///
+    /// # Errors
+    ///
+    /// An operation or type outside this backend's support set (`N0101`), named, with nothing
+    /// produced; or a compiler defect (`N0900`).
+    fn generate(
+        &self,
+        native: &Native,
+        names: &SourceNames<'_>,
+        unit: usize,
+    ) -> Result<Generated, Vec<Diagnostic>>;
+    /// What of the runtime any unit of this backend's may reach, whatever it contains — so a
+    /// unit reused from the cache needs no generation to say what it links against.
+    fn baseline(&self) -> Needs;
+
+    /// Every unit, generated.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::generate`], collected over every unit.
+    fn emit(&self, native: &Native, names: &SourceNames<'_>) -> Result<Emitted, Vec<Diagnostic>> {
+        let mut needs = self.baseline();
+        let mut units = Vec::new();
+        let mut errors = Vec::new();
+        for (i, p) in self.plan(native).into_iter().enumerate() {
+            match self.generate(native, names, i) {
+                Ok(g) => {
+                    needs = needs.union(g.needs);
+                    units.push((p, g));
+                }
+                Err(mut e) => errors.append(&mut e),
+            }
+        }
+        if errors.is_empty() {
+            Ok(Emitted { units, needs })
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+/// A native program's units, modules first and then instances, with their artefact names.
+#[must_use]
+pub fn units(native: &Native) -> Vec<(String, &crate::ir::Unit, bool)> {
+    native
+        .units
+        .iter()
+        .enumerate()
+        .map(|(i, u)| (format!("m{i}"), u, false))
+        .chain(
+            native
+                .instances
+                .iter()
+                .enumerate()
+                .map(|(i, u)| (format!("g{i}"), u, true)),
+        )
+        .collect()
+}
+
+/// The LLVM text backend.
+#[derive(Debug, Clone)]
+pub struct LlvmText {
+    target: Target,
+}
+
+impl LlvmText {
+    #[must_use]
+    pub const fn new(target: Target) -> Self {
+        Self { target }
+    }
+}
+
+impl Backend for LlvmText {
+    fn id(&self) -> BackendId {
+        BackendId::Llvm
+    }
+
+    fn version(&self) -> String {
+        // The object cache already keys LLVM text on its own bytes and on the clang that
+        // compiles it (`crates/nazm-cli/src/backend.rs`); this names the emitter.
+        "llvm-text".to_owned()
+    }
+
+    fn target(&self) -> &Target {
+        &self.target
+    }
+
+    fn plan(&self, native: &Native) -> Vec<Planned> {
+        units(native)
+            .into_iter()
+            .map(|(name, _, instance)| Planned {
+                name,
+                instance,
+                key: None,
+            })
+            .collect()
+    }
+
+    fn generate(
+        &self,
+        native: &Native,
+        names: &SourceNames<'_>,
+        unit: usize,
+    ) -> Result<Generated, Vec<Diagnostic>> {
+        let Some((_, u, _)) = units(native).into_iter().nth(unit) else {
+            return Ok(Generated {
+                code: Code::Llvm(String::new()),
+                needs: Needs::default(),
+            });
+        };
+        let (ir, needs) = emit_unit(native, u, names);
+        Ok(Generated {
+            code: Code::Llvm(ir),
+            needs,
+        })
+    }
+
+    fn baseline(&self) -> Needs {
+        Needs::default()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unknown_triple_is_refused_by_name() {
+        let e = Target::parse("riscv64gc-unknown-linux-gnu").unwrap_err();
+        assert!(e.contains("riscv64gc"), "{e}");
+    }
+
+    #[test]
+    fn a_foreign_target_is_refused_rather_than_built_for_the_host() {
+        let host = Target::host().unwrap();
+        let foreign = if host.arch == Arch::Aarch64 {
+            "x86_64-unknown-linux-gnu"
+        } else {
+            "aarch64-unknown-linux-gnu"
+        };
+        let e = Target::requested(Some(foreign)).unwrap_err();
+        assert!(e.contains("cross-compilation"), "{e}");
+        assert_eq!(Target::requested(None).unwrap(), host);
+        assert_eq!(Target::requested(Some(&host.triple)).unwrap(), host);
+    }
+}

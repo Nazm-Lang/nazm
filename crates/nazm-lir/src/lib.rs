@@ -25,10 +25,12 @@
 //! `nazm capabilities`, both read from the implementation; `docs/capability-matrix.md` carries
 //! the architectural view.
 
+pub mod backend;
 pub mod emit;
 pub mod ir;
 pub mod lower;
 pub mod names;
+pub mod runtime;
 pub mod symbol;
 
 pub use emit::{

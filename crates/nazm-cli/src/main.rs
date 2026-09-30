@@ -558,6 +558,15 @@ enum Command {
         /// unchanged. `--json` still gives every diagnostic in full.
         #[arg(long, conflicts_with_all = ["json", "build_report"])]
         summary_json: bool,
+        /// The code generator: `llvm` (the default: LLVM IR text compiled by clang) or
+        /// `cranelift` (in process). Neither falls back to the other; a program one cannot
+        /// compile is refused by name.
+        #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift"])]
+        backend: String,
+        /// The target triple. v1 builds for the host only, so any other triple is refused
+        /// rather than silently built for this machine.
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
     },
 }
 
@@ -596,6 +605,8 @@ fn main() -> ExitCode {
         no_cache,
         build_report,
         summary_json,
+        backend,
+        target,
     } = cli.command
     {
         return build::run(
@@ -607,6 +618,11 @@ fn main() -> ExitCode {
             !no_cache,
             build_report,
             summary_json,
+            build::Choice {
+                backend: nazm_lir::backend::BackendId::by_name(&backend)
+                    .unwrap_or(nazm_lir::backend::BackendId::Llvm),
+                target: target.as_deref(),
+            },
         );
     }
     match cli.command {

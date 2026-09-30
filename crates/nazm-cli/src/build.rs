@@ -77,6 +77,7 @@ pub(crate) fn run(
     cache: bool,
     with_report: bool,
     summary: bool,
+    choice: Choice<'_>,
 ) -> ExitCode {
     // `--summary-json` (N31): at every exit below, the outcome reported as one
     // `nazm.command-summary/1` on stdout in place of the rendering and the path. The exit
@@ -106,6 +107,37 @@ pub(crate) fn run(
             eprintln!("nazm: {e}");
             return ExitCode::from(exit::NO_SUCH_FILE);
         }
+    };
+    // The target and the backend, settled before anything is compiled (N41). A target that
+    // is not this host is refused: an object for it would need a linker and a runtime v1
+    // does not have, and building for the host instead would be a silent lie.
+    let target = match nazm_lir::backend::Target::requested(choice.target) {
+        Ok(t) => t,
+        Err(e) => {
+            if summary {
+                return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+            }
+            eprintln!("nazm: {e}");
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        }
+    };
+    let llvm = nazm_lir::backend::LlvmText::new(target.clone());
+    let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level);
+    let chosen: &(dyn nazm_lir::backend::Backend + Sync) = match choice.backend {
+        nazm_lir::backend::BackendId::Llvm => &llvm,
+        nazm_lir::backend::BackendId::Cranelift => &cranelift,
+    };
+    // Objects a backend can key before generating them are looked up by that key, so a
+    // reused unit is not generated at all. Keyed apart from clang's: a Cranelift object is a
+    // function of its MIR and Cranelift's settings, not of any C compiler.
+    let clif_store: Option<ObjectStore> =
+        cache.then(|| crate::derived::objects(source_root.path()));
+    let clif_key = |k: &str| {
+        ObjectKey::of(
+            LlvmInput::of(k.as_bytes()),
+            nazm_cache::BackendIdentity::of(chosen.id().name(), &chosen.version()),
+            nazm_cache::CodegenConfig::of(&[chosen.target().triple.clone()]),
+        )
     };
     let loaded = match crate::load::load(input, source_root.path()) {
         Ok(f) => f,
@@ -170,9 +202,12 @@ pub(crate) fn run(
         nazm_core::Entry::Required,
         |core, resolution| {
             let program = crate::mir::lower(core, resolution, &loaded.graph)?;
-            nazm_lir::lower(program, &names)
-                .map(|native| emit_artefacts(&native, &names))
-                .map_err(|e| e.diagnostics)
+            let native = nazm_lir::lower(program, &names).map_err(|e| e.diagnostics)?;
+            let cached = |k: &str| match clif_store.as_ref().map(|s| s.get(&clif_key(k))) {
+                Some(ObjectFound::Hit(bytes)) => Some(bytes),
+                _ => None,
+            };
+            emit_artefacts(&native, &names, chosen, &cached)
         },
     ) {
         Ok(a) => a,
@@ -262,11 +297,57 @@ pub(crate) fn run(
         let ll = work.join(format!("{}.ll", artefact.name));
         let obj = work.join(format!("{}.o", artefact.name));
 
+        // An object a backend produced itself: written down, and stored under the key its
+        // backend gave it, unless it came from the store.
+        let ir = match &artefact.code {
+            nazm_lir::backend::Code::Llvm(ir) => ir,
+            nazm_lir::backend::Code::Object(bytes) => {
+                if let Err(e) = std::fs::write(&obj, bytes) {
+                    cleanup(false);
+                    eprintln!("nazm: cannot write {}: {e}", obj.display());
+                    if summary {
+                        return summarized(
+                            Status::ToolchainFailed,
+                            exit::TOOLCHAIN_FAILED,
+                            &[],
+                            Some(map),
+                            None,
+                        );
+                    }
+                    return ExitCode::from(exit::TOOLCHAIN_FAILED);
+                }
+                if artefact.reused {
+                    tally.reused += 1;
+                    if artefact.instance {
+                        tally.instances_reused += 1;
+                    }
+                } else {
+                    tally.compiled += 1;
+                    if artefact.instance {
+                        tally.instances_compiled += 1;
+                    }
+                    if let (Some(store), Some(k)) = (clif_store.as_ref(), artefact.key.as_deref()) {
+                        let entry = ObjectArtifact::of(
+                            LlvmInput::of(k.as_bytes()),
+                            nazm_cache::BackendIdentity::of(chosen.id().name(), &chosen.version()),
+                            nazm_cache::CodegenConfig::of(&[chosen.target().triple.clone()]),
+                            bytes.clone(),
+                        );
+                        if entry.key() == Some(clif_key(k)) && store.put(&entry).is_ok() {
+                            tally.stored += 1;
+                        }
+                    }
+                }
+                objects.push(obj);
+                continue;
+            }
+        };
+
         // The key is over the bytes that are about to be handed over, so it cannot
         // describe anything but what is compiled.
         let key = backend
             .settled()
-            .map(|s| ObjectKey::of(LlvmInput::of(artefact.ir.as_bytes()), s.identity, s.config));
+            .map(|s| ObjectKey::of(LlvmInput::of(ir.as_bytes()), s.identity, s.config));
         if let (Some(store), Some(key)) = (store.as_ref(), key) {
             match store.get(&key) {
                 ObjectFound::Hit(bytes) => {
@@ -287,7 +368,7 @@ pub(crate) fn run(
             }
         }
 
-        if let Err(e) = std::fs::write(&ll, &artefact.ir) {
+        if let Err(e) = std::fs::write(&ll, ir) {
             cleanup(false);
             eprintln!("nazm: cannot write {}: {e}", ll.display());
             if summary {
@@ -331,7 +412,7 @@ pub(crate) fn run(
             (store.as_ref(), key, backend.settled(), std::fs::read(&obj))
         {
             let entry = ObjectArtifact::of(
-                LlvmInput::of(artefact.ir.as_bytes()),
+                LlvmInput::of(ir.as_bytes()),
                 settled.identity,
                 settled.config,
                 bytes,
@@ -365,8 +446,11 @@ pub(crate) fn run(
     if emit_ir {
         // Beside the output, one file per unit, named as the artefacts are.
         for artefact in &artefacts {
+            let nazm_lir::backend::Code::Llvm(ir) = &artefact.code else {
+                continue;
+            };
             let beside = with_suffix(&output, &format!("{}.ll", artefact.name));
-            if let Err(e) = std::fs::write(&beside, &artefact.ir) {
+            if let Err(e) = std::fs::write(&beside, ir) {
                 eprintln!("nazm: cannot write {}: {e}", beside.display());
             }
         }
@@ -440,6 +524,14 @@ fn report(root: crate::root::How, modules: usize, t: Native) -> String {
     )
 }
 
+/// What `nazm build` was asked to generate code with (N41).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Choice<'a> {
+    pub(crate) backend: nazm_lir::backend::BackendId,
+    /// An explicit target triple, which must be the host's.
+    pub(crate) target: Option<&'a str>,
+}
+
 /// One generated native unit, ready to be written down.
 struct Artefact {
     /// The file name to use, without an extension.
@@ -449,53 +541,83 @@ struct Artefact {
     /// **not this compiler's to trust**. `docs/architecture.md` records it as build
     /// plumbing, deliberately not as an identity.
     name: String,
-    ir: String,
+    /// LLVM text for clang, or an object a backend produced itself.
+    code: nazm_lir::backend::Code,
     /// Whether this is a generic function instance's unit.
     instance: bool,
+    /// For an object: the key its backend gave it before generating it.
+    key: Option<String>,
+    /// Whether the object came from the store under that key rather than being generated.
+    reused: bool,
 }
 
 /// Lower a checked compilation into one artefact per module, plus the program's support.
 ///
 /// The order is load order, then the runtime, then the entry. Nothing here reads a
-/// directory, so the same program produces the same artefacts in the same order.
-fn emit_artefacts(native: &nazm_lir::Native, names: &nazm_lir::SourceNames<'_>) -> Vec<Artefact> {
+/// directory, so the same program produces the same artefacts in the same order. A unit the
+/// backend can key before generating it, and whose object is in the store, is not generated.
+fn emit_artefacts(
+    native: &nazm_lir::Native,
+    names: &nazm_lir::SourceNames<'_>,
+    backend: &dyn nazm_lir::backend::Backend,
+    cached: &dyn Fn(&str) -> Option<Vec<u8>>,
+) -> Result<Vec<Artefact>, Vec<nazm_diag::Diagnostic>> {
     let mut out = Vec::new();
-    let mut needs = nazm_lir::Needs::default();
-    for (i, unit) in native.units.iter().enumerate() {
-        let (ir, reached) = nazm_lir::emit_unit(native, unit, names);
-        needs = needs.union(reached);
-        out.push(Artefact {
-            name: format!("m{i}"),
-            ir,
-            instance: false,
-        });
+    let mut needs = backend.baseline();
+    let mut errors = Vec::new();
+    // One artefact per module and one per generic function instance, never folded into a
+    // caller's: the object cache then reuses each by its own identity, one instance
+    // requested by two modules is one object, and a module's object does not change when
+    // another module starts instantiating something. `docs/architecture.md` §7.12.
+    for (i, plan) in backend.plan(native).into_iter().enumerate() {
+        if let Some(bytes) = plan.key.as_deref().and_then(cached) {
+            out.push(Artefact {
+                name: plan.name,
+                code: nazm_lir::backend::Code::Object(bytes),
+                instance: plan.instance,
+                key: plan.key,
+                reused: true,
+            });
+            continue;
+        }
+        match backend.generate(native, names, i) {
+            Ok(g) => {
+                needs = needs.union(g.needs);
+                out.push(Artefact {
+                    name: plan.name,
+                    code: g.code,
+                    instance: plan.instance,
+                    key: plan.key,
+                    reused: false,
+                });
+            }
+            Err(mut e) => errors.append(&mut e),
+        }
     }
-    // One artefact per generic function instance, never folded into a caller's: the
-    // object cache then reuses each by its own bytes, one instance requested by two modules
-    // is one object, and a module's object does not change when another module starts
-    // instantiating something. `docs/architecture.md` §7.12.
-    for (i, unit) in native.instances.iter().enumerate() {
-        let (ir, reached) = nazm_lir::emit_unit(native, unit, names);
-        needs = needs.union(reached);
-        out.push(Artefact {
-            name: format!("g{i}"),
-            ir,
-            instance: true,
-        });
+    if !errors.is_empty() {
+        return Err(errors);
     }
     // After every unit, because what the runtime must define is the union of what the
     // modules reached — a whole-program fact, and the only one emission needs.
     out.push(Artefact {
         name: "runtime".to_owned(),
-        ir: nazm_lir::emit_runtime(needs),
+        code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_runtime(needs)),
         instance: false,
+        key: None,
+        reused: false,
     });
     out.push(Artefact {
         name: "entry".to_owned(),
-        ir: nazm_lir::emit_entry(&native.entry, native.entry_roots, needs),
+        code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_entry(
+            &native.entry,
+            native.entry_roots,
+            needs,
+        )),
         instance: false,
+        key: None,
+        reused: false,
     });
-    out
+    Ok(out)
 }
 
 /// Explain a `clang` failure, keeping the IR when its complaint is about it.
