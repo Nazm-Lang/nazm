@@ -519,6 +519,101 @@ fn an_undeclared_import_needs_every_authority_from_a_caller_with_a_contract() {
     assert!(cold(dir.path(), "a.nz").accepted);
 }
 
+// --- N38: provenance crosses as facts, and is solved every run ------------------------------
+
+#[test]
+fn a_callees_provenance_reaches_a_caller_the_cache_did_not_check_again() {
+    // B's body changes what `target` returns — a constant, then a file's contents — and
+    // nothing B declares moves, so A's key does not either and A is reused. The flow is
+    // solved over every module's facts every run, so A is still told, and refused.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { write_file(target(io), \"x\"); 0 }\n",
+    );
+    let local = "pub fn target(io: IoCap) -> Str ! { io } { \"out.txt\" }\n";
+    write(dir.path(), "b.nz", local);
+    let first = check(dir.path(), "a.nz");
+    assert!(first.accepted, "{first:?}");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn target(io: IoCap) -> Str ! { io } { read_file(\"manifest\") }\n",
+    );
+    let after = check(dir.path(), "a.nz");
+    assert_eq!((after.checked, after.reused), (1, 1 + PRELUDE), "{after:?}");
+    assert!(!after.accepted);
+    assert_eq!(after.diagnostics.len(), 1, "{after:?}");
+    assert!(after.diagnostics[0].starts_with("N0372"), "{after:?}");
+    assert_eq!(meaning(&after), meaning(&cold(dir.path(), "a.nz")));
+    // Once more with every module reused: the facts come from the entries.
+    let again = check(dir.path(), "a.nz");
+    assert_eq!(again.reused, 2 + PRELUDE, "{again:?}");
+    assert_eq!(meaning(&again), meaning(&after));
+    // And back: nothing stale either way.
+    write(dir.path(), "b.nz", local);
+    let back = check(dir.path(), "a.nz");
+    assert!(back.accepted, "{back:?}");
+}
+
+#[test]
+fn a_helper_in_another_module_that_writes_to_its_parameter_carries_the_rule_across() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn save(io: IoCap, p: Str) -> Int ! { io } { write_file(p, \"x\") }\n",
+    );
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { save(io, read_file(\"cfg\")) }\n",
+    );
+    let warm = check(dir.path(), "a.nz");
+    assert!(
+        warm.diagnostics.iter().all(|d| d.starts_with("N0372")) && !warm.accepted,
+        "{warm:?}"
+    );
+    let reused = check(dir.path(), "a.nz");
+    assert_eq!(meaning(&reused), meaning(&warm));
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { save(io, arg(0)) }\n",
+    );
+    assert!(check(dir.path(), "a.nz").accepted);
+}
+
+#[test]
+fn an_entry_keeps_the_modules_provenance_facts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path());
+    write(
+        dir.path(),
+        "a.nz",
+        "use \"b.nz\";\nfn main() -> Int { str_len(load()) }\n",
+    );
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn load() -> Str { read_file(\"f\") }\n",
+    );
+    assert!(check(dir.path(), "a.nz").accepted);
+    let b = check_entries(dir.path())
+        .into_iter()
+        .map(|(_, a)| a)
+        .find(|a| a.module == "b.nz")
+        .expect("b's entry");
+    assert_eq!(b.schema, "nazm.check/2");
+    let f = &b.provenance.functions[0];
+    assert_eq!(f.name, "load");
+    assert_eq!(f.result.origins.len(), 1);
+    assert_eq!(f.result.origins[0].0, "file");
+}
+
 // --- §35: A → B → C, and where propagation stops -----------------------------------------
 
 fn three_modules(dir: &Path, c: &str) {
@@ -782,7 +877,7 @@ fn a_damaged_entry_is_recomputed_rather_than_believed() {
         ("emptied", |_| String::new()),
         ("not json at all", |_| "nonsense".to_owned()),
         ("a schema from the future", |t| {
-            t.replace("nazm.check/1", "nazm.check/9")
+            t.replace("nazm.check/2", "nazm.check/9")
         }),
         ("an edited interface", |t| {
             t.replace(r#""ret":"Int""#, r#""ret":"Str""#)
@@ -1186,9 +1281,9 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        9,
-        "N9, N10, N11, N12, N13, N14, N36 and N37 each changed what the checker accepts, so \
-         the epoch moved eight times"
+        10,
+        "N9, N10, N11, N12, N13, N14, N36, N37 and N38 each changed what the checker accepts, \
+         so the epoch moved nine times"
     );
     assert_eq!(nazm_iface::SCHEMA, "nazm.interface/6");
 }
@@ -1569,6 +1664,6 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     assert!(again.accepted, "{again:?}");
     assert_eq!(again.reused, 0, "an epoch-6 entry was read: {again:?}");
     // N36 moved it again, for effects: `an_entry_from_the_checker_before_effects_is_never_read`,
-    // and N37 for authority.
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 9);
+    // and N37 for authority, and N38 for provenance.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 10);
 }

@@ -1,0 +1,8 @@
+// A helper that writes to a path it is given (N38). Its callers are told, through the
+// module's provenance facts, that `path` reaches `write_file`'s path: a caller with a
+// declared effect set may hand it a path from the command line or one it computed, and not
+// one read out of a file.
+
+pub fn save(io: IoCap, path: Str, text: Str) -> Int ! { io } {
+    write_file(path, text)
+}
