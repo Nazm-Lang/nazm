@@ -74,9 +74,9 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 15 | Advanced scheduler | RESEARCH |
 | 16 | Standard library | PARTIAL (v1 foundation VERIFIED) |
 | 17 | FFI and ABI | PARTIAL (v1: C, `Int`/`Bool`) |
-| 18 | Embedded support | MISSING |
-| 19 | Critical profile | DESIGNED |
-| 20 | Cybersecurity profile | DESIGNED |
+| 18 | Embedded support | MISSING (profile rules PARTIAL) |
+| 19 | Critical profile | PARTIAL (rules v1) |
+| 20 | Cybersecurity profile | PARTIAL (rules v1) |
 | 21 | AI/HPC | RESEARCH |
 | 22 | Diagnostics | VERIFIED |
 | 23 | Formatter | VERIFIED |
@@ -1278,6 +1278,20 @@ target, no `no_std` equivalent, no control over allocation. `crates/nazm-cli/src
 emits a module with no triple and lets `clang` supply the host's. The emitted runtime
 declares 18 libc and pthread symbols and cannot currently be built without them.
 
+**N47: the `embedded` profile — PARTIAL.** *N47, 2026-10-01: restriction profiles v1 (`architecture.md` §7.49).* `--profile NAME` on `check`,
+`build` and `run`, or `profile = "NAME"` in any package manifest of the build; rules read semantic
+facts only — `main`'s required effect set, each function's declared contract, the build's lock —
+and refuse with `N0510` and witnesses; `nazm check --profile-report` prints the deterministic
+`nazm.profile-report/1`, marked compiler evidence and not certification. Evidence:
+`crates/nazm-cli/tests/profiles.rs` — every profile's verdicts on one program, the chain of calls
+in a refusal, the ambient bridge refused, foreign calls refused, `io` seen through a standard
+wrapper, a locked package build satisfying the build rule and a tampered one not, a dependency's
+required profile holding the whole program, a profile never changing what runs nor its verdict
+being cached, and the report's bytes and outcome. `embedded` refuses `io` and `spawn` —
+no operating-system services, no scheduler — and allows `foreign`, the way hardware is reached.
+It does **not** restrict allocation (untracked: BLOCKED) or bound the stack, and there is still
+no freestanding target, so a program it accepts still links the host's C library.
+
 **Next dependency** · Cross-compilation (area 33), then a freestanding runtime — which
 means area 13. *This clause added "and therefore area 4" with the sentence "A language that
 never frees cannot run on a device with kilobytes." The first half of that is closed since
@@ -1289,7 +1303,7 @@ allocating.*
 computed rather than hoped for. Native frame counts do not bound stack bytes, and that
 obligation is inherited here.
 
-### 19. Critical profile — DESIGNED
+### 19. Critical profile — PARTIAL (restriction rules v1)
 
 **Read this before the rest.** This profile is an architectural intention. It is **not** a
 claim that Nazm is suitable for any safety-related, airborne, medical, automotive or
@@ -1300,6 +1314,20 @@ anticipating a Critical profile is not evidence for one.**
 **What it would restrict** · No dynamic allocation, no recursion, bounded loops with an
 established bound, total functions, and every failure mode enumerated rather than trapped;
 contracts and invariants checked rather than asserted.
+
+**What `--profile critical` enforces now** · *N47, 2026-10-01: restriction profiles v1 (`architecture.md` §7.49).* `--profile NAME` on `check`,
+`build` and `run`, or `profile = "NAME"` in any package manifest of the build; rules read semantic
+facts only — `main`'s required effect set, each function's declared contract, the build's lock —
+and refuse with `N0510` and witnesses; `nazm check --profile-report` prints the deterministic
+`nazm.profile-report/1`, marked compiler evidence and not certification. Evidence:
+`crates/nazm-cli/tests/profiles.rs` — every profile's verdicts on one program, the chain of calls
+in a refusal, the ambient bridge refused, foreign calls refused, `io` seen through a standard
+wrapper, a locked package build satisfying the build rule and a tampered one not, a dependency's
+required profile holding the whole program, a profile never changing what runs nor its verdict
+being cached, and the report's bytes and outcome. `critical` requires every function of the
+program to declare its effect set (no ambient bridge), forbids `spawn` and `foreign`, and requires a
+package build held to its lockfile. Nothing about allocation, loop bounds, totality or contracts:
+those stay DESIGNED, and the disclaimer above stands in full.
 
 **What exists that is genuinely relevant** · Three things, and they are real. Arithmetic is
 **specified rather than inherited from the hardware** — overflow traps, and
@@ -1315,7 +1343,7 @@ a qualified toolchain, which the bootstrap explicitly does **not** provide — `
 **Accepted when** · A proof obligation is discharged on a real Nazm program and assessed
 against a named standard by someone qualified to make that assessment. Not a test count.
 
-### 20. Cybersecurity profile — DESIGNED
+### 20. Cybersecurity profile — PARTIAL (restriction rules v1)
 
 **What it would restrict** · Untrusted input tracked to its uses; declassification
 explicit and audited; no ambient authority; constant-time obligations honoured where they
@@ -1324,12 +1352,25 @@ are declared.
 **Evidence** · The one real ingredient present is refuse-by-name-with-a-span rather than
 silent degradation, and failures that are diagnostics rather than undefined behaviour.
 
-**Limitation** · Against that: authority is **ambient and labelled as such in the source**
-— `crates/nazm-sema/src/intrinsic.rs` says nothing in the language restricts which
-functions may reach the filesystem.
+**N47: `--profile cyber`** · *N47, 2026-10-01: restriction profiles v1 (`architecture.md` §7.49).* `--profile NAME` on `check`,
+`build` and `run`, or `profile = "NAME"` in any package manifest of the build; rules read semantic
+facts only — `main`'s required effect set, each function's declared contract, the build's lock —
+and refuse with `N0510` and witnesses; `nazm check --profile-report` prints the deterministic
+`nazm.profile-report/1`, marked compiler evidence and not certification. Evidence:
+`crates/nazm-cli/tests/profiles.rs` — every profile's verdicts on one program, the chain of calls
+in a refusal, the ambient bridge refused, foreign calls refused, `io` seen through a standard
+wrapper, a locked package build satisfying the build rule and a tampered one not, a dependency's
+required profile holding the whole program, a profile never changing what runs nor its verdict
+being cached, and the report's bytes and outcome. `cyber` requires declared effect sets everywhere — so no
+ambient authority, and N38's restricted flow (`N0372`) applies to every function — forbids
+`foreign`, and requires a locked, integrity-checked package build. Capabilities (area 6, N37) and
+information flow (area 7, N38) are what it rests on. It is not a sandbox, it does not make a
+program secure, and it claims nothing about side channels, constant time or declassification.
 
-**Next dependency** · Areas 6 and 7 — capabilities and information flow — both MISSING,
-with every design question still open in `docs/spec.md`.
+**Limitation** · Untrusted input is tracked only to `write_file` paths (N38); there is no
+declassification and no constant-time rule.
+
+**Next dependency** · More sinks and an explicit declassification, in N38's framework.
 
 **Accepted when** · Untrusted input is tracked to its uses and declassification is explicit
 and audited, with the approximation's blind spots stated.
