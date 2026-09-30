@@ -745,6 +745,16 @@ pub(crate) fn validate(root: &Path, catalogue: &Catalogue) -> Vec<String> {
 /// Indices of the selected mutations, in catalogue order. Substring match, repeatable,
 /// exactly as `--only` has always worked; a selection of nothing is an error, because a
 /// run that selects nothing reports a clean result having tested nothing.
+/// Whether a mutant's name answers one `--only` filter: a substring, or — written `=NAME` —
+/// exactly that name, for a mutant whose name another's contains (N40:
+/// `vec-get-returns-a-borrowed-element` inside `selfhost-vec-get-returns-a-borrowed-element`).
+fn answers(name: &str, filter: &str) -> bool {
+    match filter.strip_prefix('=') {
+        Some(exact) => name == exact,
+        None => name.contains(filter),
+    }
+}
+
 pub(crate) fn select(catalogue: &Catalogue, only: &[String]) -> Result<Vec<usize>, String> {
     let all: Vec<usize> = (0..catalogue.mutation.len()).collect();
     if only.is_empty() {
@@ -756,7 +766,7 @@ pub(crate) fn select(catalogue: &Catalogue, only: &[String]) -> Result<Vec<usize
             catalogue
                 .mutation
                 .get(i)
-                .is_some_and(|m| only.iter().any(|w| m.name.contains(w.as_str())))
+                .is_some_and(|m| only.iter().any(|w| answers(&m.name, w)))
         })
         .collect();
     if chosen.is_empty() {
@@ -905,6 +915,15 @@ replace = "r"
         assert!(select(&c, &["zzz".to_owned()]).is_err());
         assert_eq!(select(&c, &[]).unwrap(), vec![0]);
         assert_eq!(select(&c, &["m".to_owned()]).unwrap(), vec![0]);
+    }
+
+    #[test]
+    fn an_exact_filter_selects_one_name_and_not_the_names_containing_it() {
+        assert!(super::answers("vec-get", "vec-get"));
+        assert!(super::answers("selfhost-vec-get", "vec-get"));
+        assert!(super::answers("vec-get", "=vec-get"));
+        assert!(!super::answers("selfhost-vec-get", "=vec-get"));
+        assert!(!super::answers("vec-get-x", "=vec-get"));
     }
 
     /// A tiny workspace on disk, for the resolution checks.
