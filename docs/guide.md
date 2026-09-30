@@ -421,6 +421,22 @@ compiler's own tables — and for each one, whether `nazm run` has it and whethe
 `nazm build` compiles it. `--json` gives the same thing under a versioned schema; see
 `docs/diagnostics.md`.
 
+## Seeing what a program became
+
+```
+nazm core-ir prog.nz
+```
+
+prints the program's Core IR — what each function became after checking, and what both
+`nazm run` and `nazm build` start from: every value with its type, every call naming the
+definition or built-in it reaches, every `break` and `continue` naming the loop it leaves, and
+each `?` written out as the `match` it means. Definitions and types are named by their durable
+keys (`main.nz::fn helper`), so the output is the same from any checkout; `--no-spans` leaves
+out source positions, and `--json` gives one line. A program that does not check prints
+nothing but its diagnostics. It is a view for a person asking *what did this source become*,
+not a syntax to write or a format to depend on: `docs/architecture.md` §7.41 says what its
+version, `nazm.core-ir/1`, promises and what it does not.
+
 ## The syntax
 
 <!-- generated from docs/grammar.ebnf: begin -->

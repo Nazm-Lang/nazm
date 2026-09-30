@@ -295,6 +295,7 @@ business raising the floor for the crates that ship.
 | `nazm fmt FILE…` | Lay files out canonically. `--check` writes nothing and fails if any would change |
 | `nazm fix FILE` | Apply the repairs the compiler already knows about. Nothing is written without `--apply`, and only fixes marked `automatic` are ever applied |
 | `nazm capabilities` | What this build supports, read from the compiler's own tables |
+| `nazm core-ir FILE` | What a checked program became — its Core IR, `nazm.core-ir/1`: typed, every name an identity, every transfer explicit. A debugging view of what `nazm run` and `nazm build` both start from; `--no-spans`, `--json` |
 | `nazm interface FILE` | Write what that module offers, durably — `nazm.interface/1`, or its fingerprint with `--hash`. Not a cache: it reuses nothing |
 | `nazm context --root FILE --file FILE --byte N` | One definition's semantic context packet, `nazm.context/1`: the exact source of the function, record or enum declared or used at that byte, and compact links to what it uses, what uses it, what it calls and what calls it — in the root's compilation, read from disk. `--json` prints the canonical compact form |
 | `nazm snapshot --root FILE` | The root compilation's semantic snapshot, `nazm.snapshot/1`: every durable function, record and enum by identity, with one digest per section the compiler records — source, shape, dependencies, related types, references, callers, callees, diagnostics. Equal digests are not equal behaviour. `--json` prints the canonical compact form |
@@ -388,8 +389,9 @@ Almost everything. Specifically:
 
 - **The language is an interpreter and a native path over *overlapping* subsets** —
   not the same one: recursion runs interpreted and is refused natively. Lexer, parser,
-  type checker and tree-walking evaluator; `nazm build` compiles everything in the list
-  above. One IR level (`nazm-lir`), one backend (LLVM IR as text → `clang`), two verified
+  type checker, one lowering to Core IR (`nazm-cir`), and an evaluator over Core IR;
+  `nazm build` compiles everything in the list above from the same Core IR. Two IR levels
+  (Core IR and `nazm-lir`), one backend (LLVM IR as text → `clang`), two verified
   targets (`aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`, the latter inside the
   contained runner); other targets are **unverified rather than unsupported**, and there
   is no cross-compilation at all. Run `nazm capabilities` for what this build actually has,

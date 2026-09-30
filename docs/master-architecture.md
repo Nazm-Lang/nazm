@@ -238,6 +238,15 @@ Two consequences worth naming, because both are dependencies rather than complai
 >
 > The paragraph below still holds, and the level it pointed at was built: the
 > responsibility it named was owned twice, and now is not.
+>
+> **2026-09-30 (N39).** "No level between the AST and this one exists" is no longer true,
+> and is kept above for the reason the bullets are. Core IR, `crates/nazm-cir`, sits between
+> checking and both backends (`architecture.md` §7.41), and it met this section's test: what
+> each position of the tree *means* — which slot, which callee, which field, what `?`
+> becomes, which loop a `break` leaves — was decided twice, by the evaluator as it ran and
+> by `crates/nazm-lir/src/lower.rs` as it lowered, and is now decided once. It is level 3 by
+> responsibility, not by §2's shape: a tree of regions, not ANF. HIR, MIR and
+> monomorphisation remain absent.
 
 **An IR level earns its existence by owning a semantic responsibility no existing level
 owns.** Matching the diagram is not such a reason. By that test, the next level is the one
