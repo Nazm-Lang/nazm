@@ -131,7 +131,17 @@ impl Signature {
     #[must_use]
     pub fn render(&self, res: &Resolution, instance: Option<&Instantiation>) -> Rendered {
         let types = res.types();
-        let mut label = format!("fn {}", self.name);
+        // A foreign function (N42) is shown as it is declared: its ABI and its C symbol are
+        // what a reader needs, and its effect is always `foreign`.
+        let foreign = match self.callee {
+            Callee::Function(id) => res.function(id).and_then(|f| f.foreign.clone()),
+            Callee::Builtin(_) => None,
+        };
+        let mut label = if foreign.is_some() {
+            format!("extern \"C\" fn {}", self.name)
+        } else {
+            format!("fn {}", self.name)
+        };
         if !self.type_params.is_empty() {
             let shown: Vec<String> = self
                 .type_params
@@ -164,7 +174,11 @@ impl Signature {
         let ret = instance.and_then(|x| x.ret).unwrap_or(self.ret);
         label.push_str(" -> ");
         label.push_str(&types.show(ret));
-        if let Some(effects) = self.effects {
+        if let Some(symbol) = foreign {
+            label.push_str(" = \"");
+            label.push_str(&symbol);
+            label.push('"');
+        } else if let Some(effects) = self.effects {
             label.push_str(" ! ");
             label.push_str(&effects.to_string());
         }

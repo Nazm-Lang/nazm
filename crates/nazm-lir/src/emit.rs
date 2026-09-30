@@ -112,6 +112,16 @@ struct Layouts<'a> {
     vecs: &'a [VecLayout],
 }
 
+/// A parameter's or result's LLVM type at a call or declaration: a foreign function's
+/// `Bool` is C's `bool`, which the C ABI zero-extends (N42); everything else as [`llvm_type`].
+fn c_type(layouts: Layouts<'_>, t: Ty, foreign: bool, result: bool) -> String {
+    match (foreign && t == Ty::Bool, result) {
+        (true, true) => "zeroext i1".to_owned(),
+        (true, false) => "i1 zeroext".to_owned(),
+        (false, _) => llvm_type(layouts, t),
+    }
+}
+
 /// How a type is written in LLVM text.
 fn llvm_type(types: Layouts<'_>, t: Ty) -> String {
     match t {
@@ -1444,9 +1454,10 @@ impl Emitter<'_> {
             }
             mir::Rvalue::Call { callee, args } => {
                 let vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
+                let foreign = self.sigs.get(callee.index()).is_some_and(|s| s.foreign);
                 let list = vals
                     .iter()
-                    .map(|(v, t)| format!("{} %{v}", llvm_type(self.types, *t)))
+                    .map(|(v, t)| format!("{} %{v}", c_type(self.types, *t, foreign, false)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let (symbol, ret) = self
@@ -1459,11 +1470,14 @@ impl Emitter<'_> {
                 let _ = writeln!(
                     self.out,
                     "  %{out} = call {} {symbol}({list})",
-                    llvm_type(self.types, ret)
+                    c_type(self.types, ret, foreign, true)
                 );
                 // A callee that failed has already unwound to its own `ret` and handed back
-                // a stand-in value. This is where that is noticed.
-                self.check_failed();
+                // a stand-in value. This is where that is noticed. A foreign callee cannot
+                // fail the Nazm way, so nothing is checked after one (N42).
+                if !foreign {
+                    self.check_failed();
+                }
                 format!("%{out}")
             }
             mir::Rvalue::Primitive { op, elem, args } => {
@@ -3250,16 +3264,17 @@ pub fn emit_unit(native: &Native, unit: &Unit, names: &SourceNames<'_>) -> (Stri
     // The Nazm definitions this module calls and does not own. One line each, in the order
     // `lower` sorted them, so two builds of one module produce one text.
     for x in &unit.externals {
+        // A foreign function is C's: a `Bool` crosses as C's `bool`, zero-extended (N42).
         let params = x
             .params
             .iter()
-            .map(|t| llvm_type(layouts, *t))
+            .map(|t| c_type(layouts, *t, x.foreign, false))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(
             head,
             "declare {} {}({params})",
-            llvm_type(layouts, x.ret),
+            c_type(layouts, x.ret, x.foreign, true),
             x.symbol
         );
     }

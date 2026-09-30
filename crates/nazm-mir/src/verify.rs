@@ -28,6 +28,14 @@ pub fn verify(program: &Program) -> Vec<String> {
             ));
         }
         let mut out = Vec::new();
+        if f.foreign.is_some() {
+            // A foreign function has its parameters and no body (N42).
+            if !f.blocks.is_empty() || f.locals.len() != f.params as usize {
+                out.push("a foreign function with a body".to_owned());
+            }
+            errors.extend(out.into_iter().map(|e| format!("`{}`: {e}", f.name)));
+            continue;
+        }
         structure(program, f, &mut out);
         if out.is_empty() {
             ownership(&program.types, f, &mut out);

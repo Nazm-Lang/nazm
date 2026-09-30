@@ -515,6 +515,8 @@ pub struct External {
     pub symbol: NativeSymbol,
     pub params: Vec<Ty>,
     pub ret: Ty,
+    /// Whether this is a foreign (C) function, declared with the C convention (N42).
+    pub foreign: bool,
 }
 
 /// The built-ins this backend can lower.

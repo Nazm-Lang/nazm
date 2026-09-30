@@ -121,6 +121,19 @@ pub(crate) fn run(
             return ExitCode::from(exit::TOOLCHAIN_FAILED);
         }
     };
+    // A foreign object that is not there is refused before anything is compiled, by name,
+    // rather than reported by the linker as an undefined symbol after the whole build (N42).
+    if let Some(missing) = choice.link.iter().find(|p| !p.is_file()) {
+        if summary {
+            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+        }
+        eprintln!(
+            "nazm: `--link {}`: no such file; `--link` names an object or library that \
+             defines foreign functions",
+            missing.display()
+        );
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
     let llvm = nazm_lir::backend::LlvmText::new(target.clone());
     let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level);
     let chosen: &(dyn nazm_lir::backend::Backend + Sync) = match choice.backend {
@@ -196,6 +209,9 @@ pub(crate) fn run(
     //
     // The backend is handed validated MIR, lowered from Core IR — never the tree (N39), and
     // never Core IR or the checker's tables either (N40).
+    // The foreign symbols the program calls, so a link that cannot resolve them is reported
+    // as the missing `--link` it is rather than as a compiler bug (N42).
+    let mut foreign: Vec<String> = Vec::new();
     let artefacts = match nazm_core::on_lowered(
         map,
         &loaded.graph,
@@ -203,6 +219,12 @@ pub(crate) fn run(
         |core, resolution| {
             let program = crate::mir::lower(core, resolution, &loaded.graph)?;
             let native = nazm_lir::lower(program, &names).map_err(|e| e.diagnostics)?;
+            foreign = native
+                .sigs
+                .iter()
+                .filter(|s| s.foreign)
+                .map(|s| s.symbol.as_str().to_owned())
+                .collect();
             let cached = |k: &str| match clif_store.as_ref().map(|s| s.get(&clif_key(k))) {
                 Some(ObjectFound::Hit(bytes)) => Some(bytes),
                 _ => None,
@@ -426,8 +448,35 @@ pub(crate) fn run(
 
     // Deterministic: the units are in load order and the support artefacts last, so the
     // command line does not depend on anything the filesystem decided.
+    objects.extend(choice.link.iter().cloned());
     match backend.link(&tmp_exe, &objects) {
         Outcome::Ran(o) if o.status.success() => {}
+        Outcome::Ran(o) if !foreign.is_empty() => {
+            // A program that calls C links against what `--link` named, so an unresolved
+            // symbol is most likely the user's, not the compiler's: say which ones it may be.
+            cleanup(false);
+            eprint!("{}", String::from_utf8_lossy(&o.stderr));
+            eprintln!(
+                "nazm: linking failed. This program calls the foreign function{} {}; each \
+                 must be defined by an object or library passed with `--link FILE`",
+                if foreign.len() == 1 { "" } else { "s" },
+                foreign
+                    .iter()
+                    .map(|f| format!("`{f}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if summary {
+                return summarized(
+                    Status::ToolchainFailed,
+                    exit::TOOLCHAIN_FAILED,
+                    &[],
+                    Some(map),
+                    None,
+                );
+            }
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        }
         other => {
             let code = report_clang(other, &work, cleanup);
             if summary {
@@ -530,6 +579,8 @@ pub(crate) struct Choice<'a> {
     pub(crate) backend: nazm_lir::backend::BackendId,
     /// An explicit target triple, which must be the host's.
     pub(crate) target: Option<&'a str>,
+    /// Foreign objects and libraries for the linker (N42), in the order given.
+    pub(crate) link: &'a [std::path::PathBuf],
 }
 
 /// One generated native unit, ready to be written down.
