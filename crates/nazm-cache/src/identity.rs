@@ -26,7 +26,7 @@
 //! | [`SEMANTIC_EPOCH`] | declared | every change to a checking rule |
 //! | crate version | derived | a release |
 //! | `nazm.interface/1` | derived | a change to what a module publishes |
-//! | `nazm.check/1` | derived | a change to the artefact's own shape |
+//! | `nazm.check/2` | derived | a change to the artefact's own shape |
 //! | the built-in table | derived | a built-in added, removed, or re-typed |
 //! | the type set | derived | a type added or removed |
 //! | the checker's diagnostic codes | declared, and **gated** | a rule added or removed |
@@ -134,7 +134,14 @@ use crate::digest::{self, Framed};
 /// key moves through its dependencies' fingerprints when a contract's authority changes.
 /// The counter covers what neither shows — a module's own bodies, and its calls to
 /// undeclared functions, are now checked against the authority they hold.
-pub const SEMANTIC_EPOCH: u32 = 9;
+///
+/// `10` — N38, 2026-09-30. Provenance. In a function that declares an effect set, a path given
+/// to `write_file` that derives from a file's contents, or from a sequence or channel the
+/// checker does not follow, moved from accepted to refused (`N0372`) — including through a
+/// function in another module, whose body the importer's key does not cover. That flow is
+/// solved over every module's facts on every run rather than cached, and the check-artefact
+/// schema moved (`nazm.check/2`) to carry those facts; the counter covers the refusal itself.
+pub const SEMANTIC_EPOCH: u32 = 10;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -182,6 +189,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "PROPAGATE_NON_RESULT",
     "PROPAGATE_OUTSIDE_RESULT",
     "RECURSIVE_RECORD",
+    "RESTRICTED_FLOW",
     "SPAWN_OUTSIDE_SCOPE",
     "TYPE_ARGUMENTS_ON_NON_GENERIC",
     "TYPE_MISMATCH",

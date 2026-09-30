@@ -7,6 +7,7 @@
 pub mod check;
 mod effects;
 pub mod eval;
+mod provenance;
 
 pub use check::{
     check, check_reusing, check_unit, declare_types, declare_unit, resolve_type_fields,
