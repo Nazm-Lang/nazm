@@ -275,6 +275,18 @@ pub mod codes {
     /// `write_file` derives from a file's contents or from storage the checker does not
     /// follow — directly, or through a function that writes to a path it is given.
     pub const RESTRICTED_FLOW: Code = Code::new("N0372");
+    /// A foreign declaration names an ABI other than `"C"` (N42).
+    pub const FOREIGN_ABI: Code = Code::new("N0380");
+    /// A foreign declaration takes or returns a type that cannot cross the C boundary (N42).
+    pub const FOREIGN_TYPE: Code = Code::new("N0381");
+    /// A foreign declaration's symbol is not a C identifier a linker can be handed (N42).
+    pub const FOREIGN_SYMBOL: Code = Code::new("N0382");
+    /// Two foreign declarations of one symbol disagree about its signature (N42).
+    pub const FOREIGN_CONFLICT: Code = Code::new("N0383");
+    /// A foreign declaration has type parameters or a written effect set (N42).
+    pub const FOREIGN_SHAPE: Code = Code::new("N0384");
+    /// `nazm run` was asked to run a program that calls a foreign function (N42).
+    pub const FOREIGN_NOT_INTERPRETED: Code = Code::new("N0385");
 
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no

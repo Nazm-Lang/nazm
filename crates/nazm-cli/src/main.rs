@@ -567,6 +567,11 @@ enum Command {
         /// rather than silently built for this machine.
         #[arg(long, value_name = "TRIPLE")]
         target: Option<String>,
+        /// An object file or static library that defines foreign (`extern "C"`) functions
+        /// the program calls, handed to the linker after the program's own objects. It may
+        /// be given more than once; it must exist. Nazm does not compile C.
+        #[arg(long = "link", value_name = "FILE")]
+        link: Vec<PathBuf>,
     },
 }
 
@@ -607,6 +612,7 @@ fn main() -> ExitCode {
         summary_json,
         backend,
         target,
+        link,
     } = cli.command
     {
         return build::run(
@@ -622,6 +628,7 @@ fn main() -> ExitCode {
                 backend: nazm_lir::backend::BackendId::by_name(&backend)
                     .unwrap_or(nazm_lir::backend::BackendId::Llvm),
                 target: target.as_deref(),
+                link: &link,
             },
         );
     }

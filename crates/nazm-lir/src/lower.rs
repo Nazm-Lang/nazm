@@ -64,6 +64,9 @@ pub struct Sig {
     pub module: ModuleId,
     /// Whether this is a generic instance's, which is always defined in a unit of its own.
     pub instance: bool,
+    /// Whether this is a foreign (C) function (N42): declared wherever it is called, defined
+    /// nowhere in the program, and called with the C convention.
+    pub foreign: bool,
 }
 
 /// Everything one `nazm build` generates, before any of it is written down.
@@ -214,6 +217,42 @@ fn callees(f: &mir::Function) -> Vec<(mir::FuncId, Span)> {
 /// # Errors
 ///
 /// Every construct outside the native subset, each with the span that names it.
+/// Two foreign declarations of one C symbol that disagree about its signature, anywhere in
+/// the program (N42, `N0383`). Each module's unit declares the symbol it calls with its own
+/// signature, and the linker binds them all to one definition without comparing them, so a
+/// disagreement is a call with the wrong ABI that nothing downstream would notice.
+fn report_foreign_conflicts(program: &mir::Program, errors: &mut Vec<Diagnostic>) {
+    let mut seen: std::collections::BTreeMap<&str, &mir::Function> =
+        std::collections::BTreeMap::new();
+    for f in &program.functions {
+        let Some(sym) = f.foreign.as_deref() else {
+            continue;
+        };
+        let Some(first) = seen.get(sym).copied() else {
+            seen.insert(sym, f);
+            continue;
+        };
+        let same = first.ret == f.ret && first.param_types().eq(f.param_types());
+        if !same {
+            errors.push(
+                Diagnostic::error(
+                    codes::FOREIGN_CONFLICT,
+                    f.span,
+                    format!(
+                        "the C symbol `{sym}` is declared here with a signature another \
+                         declaration of it does not have"
+                    ),
+                )
+                .secondary(first.span, "declared differently here")
+                .help(
+                    "a C function has one signature; declare it once, or declare it the same \
+                     way everywhere",
+                ),
+            );
+        }
+    }
+}
+
 pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, LowerError> {
     let mut errors = Vec::new();
     let entry_id = program.entry;
@@ -234,12 +273,16 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
                     Linkage::Internal
                 };
             Sig {
-                symbol: of_identity(&f.identity),
+                symbol: f
+                    .foreign
+                    .as_deref()
+                    .map_or_else(|| of_identity(&f.identity), NativeSymbol::foreign),
                 linkage,
                 params: f.param_types().map(Ty::of).collect(),
                 ret: Ty::of(f.ret),
                 module: f.module,
                 instance,
+                foreign: f.foreign.is_some(),
             }
         })
         .collect();
@@ -291,6 +334,7 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
     }
 
     report_cycles(&program, &mut errors);
+    report_foreign_conflicts(&program, &mut errors);
 
     let Some((entry_symbol, entry_roots)) = entry else {
         if errors.is_empty() {
@@ -355,8 +399,9 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
                     continue;
                 };
                 // An instance's unit owns no module's definitions, so everything it calls is
-                // external to it; a module's unit owns its own non-instance functions.
-                if owns_module && sig.module == module && !sig.instance {
+                // external to it; a module's unit owns its own non-instance functions. A
+                // foreign function is defined by no unit, so every caller declares it.
+                if owns_module && sig.module == module && !sig.instance && !sig.foreign {
                     continue;
                 }
                 if let Some(g) = program.function(callee) {
@@ -367,6 +412,7 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
                     symbol: sig.symbol.clone(),
                     params: sig.params.clone(),
                     ret: sig.ret,
+                    foreign: sig.foreign,
                 };
                 if !externals.contains(&x) {
                     externals.push(x);
@@ -441,7 +487,7 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
             let functions = program
                 .functions
                 .iter()
-                .filter(|f| f.module == *m && f.type_args.is_empty())
+                .filter(|f| f.module == *m && f.type_args.is_empty() && f.foreign.is_none())
                 .map(|f| f.id)
                 .collect();
             unit_of(functions, *m, true)

@@ -273,7 +273,11 @@ impl Printer<'_> {
             ("loops", J::uint(f.loops)),
         ];
         self.at(&mut o, f.span);
-        o.push(("body", self.block(&f.body)));
+        match &f.foreign {
+            // A foreign function has no body to print, only the C symbol it names (N42).
+            Some(sym) => o.push(("foreign", J::Str(sym.clone()))),
+            None => o.push(("body", self.block(&f.body))),
+        }
         J::Obj(o)
     }
 

@@ -558,7 +558,12 @@ fn effects_of(s: &Snapshot, paths: &Paths, id: nazm_core::sema::FnId) -> Option<
     let res = &s.analysis.resolution;
     let f = res.function(id)?;
     let required = f.inferred_effects?;
-    let published = f.declared_effects.unwrap_or_else(EffectSet::all);
+    // An undeclared function publishes what its callers are held to assume of it: every
+    // effect the compatibility bridge covers, and `foreign` only where it can be handed a
+    // `ForeignCap` (N42) — the checker's own rule, so the two cannot disagree.
+    let published = f
+        .declared_effects
+        .unwrap_or_else(|| nazm_core::assumed_effects(id, res));
     let reasons = f
         .effect_reasons
         .iter()

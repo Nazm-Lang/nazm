@@ -141,6 +141,22 @@ impl<'a> Gen<'a> {
         s
     }
 
+    /// A foreign function's C signature (N42): only `Int` (`int64_t`) and `Bool` (C's `bool`,
+    /// a zero-extended byte) cross, both by value, so no pointer and no sret appear.
+    pub(crate) fn c_signature(&self, params: &[Ty], ret: Ty) -> Signature {
+        let c = |t: Ty| {
+            if t == Ty::Bool {
+                AbiParam::new(types::I8).uext()
+            } else {
+                AbiParam::new(types::I64)
+            }
+        };
+        let mut s = self.module.make_signature();
+        s.returns.push(c(ret));
+        s.params.extend(params.iter().map(|p| c(*p)));
+        s
+    }
+
     /// Declare every function this unit defines or calls.
     pub(crate) fn declare_functions(&mut self) -> Result<(), String> {
         let native = self.native;
@@ -175,7 +191,11 @@ impl<'a> Gen<'a> {
             } else {
                 Linkage::Hidden
             };
-            let signature = self.signature(&sig.params, sig.ret);
+            let signature = if sig.foreign {
+                self.c_signature(&sig.params, sig.ret)
+            } else {
+                self.signature(&sig.params, sig.ret)
+            };
             let f = self
                 .module
                 .declare_function(sig.symbol.as_str(), linkage, &signature)

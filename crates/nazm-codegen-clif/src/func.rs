@@ -748,8 +748,17 @@ impl<'g, 'a, 'b> Fx<'g, 'a, 'b> {
                 let r = self.func(fid);
                 let inst = self.b.ins().call(r, &vals);
                 let result = self.b.inst_results(inst).first().copied();
-                // A callee that failed returned a stand-in; this is where that is noticed.
-                self.check_failed();
+                // A callee that failed returned a stand-in; this is where that is noticed. A
+                // foreign callee cannot fail the Nazm way, so nothing is checked (N42).
+                if !self
+                    .g
+                    .native
+                    .sigs
+                    .get(callee.index())
+                    .is_some_and(|s| s.foreign)
+                {
+                    self.check_failed();
+                }
                 if !in_memory(dt) {
                     if let Some(v) = result {
                         self.set(dst, v);

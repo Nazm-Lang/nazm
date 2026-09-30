@@ -63,6 +63,9 @@ pub struct Function {
     pub span: Span,
     pub name_span: Span,
     pub ret_span: Span,
+    /// The C symbol of a foreign declaration (N42): a function whose body is not Nazm's.
+    /// Its `body` is an empty region no consumer walks.
+    pub foreign: Option<String>,
 }
 
 impl Function {

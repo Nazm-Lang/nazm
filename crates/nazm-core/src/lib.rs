@@ -7,6 +7,8 @@
 
 pub mod check;
 mod effects;
+/// What a caller must assume of a function that declares no effect set (N37, N42).
+pub use effects::assumed as assumed_effects;
 pub mod eval;
 mod lower;
 mod provenance;
@@ -177,6 +179,29 @@ fn pipeline(
 
     if !diagnostics.is_empty() {
         return Outcome::CheckFailed(diagnostics);
+    }
+
+    // The interpreter cannot call C (N42): a program that calls a foreign function is
+    // refused before it starts, never stopped part way through.
+    let foreign_call = resolution.functions().iter().find_map(|f| {
+        f.call_sites.iter().find_map(|site| match site.callee {
+            sema::resolve::Callee::Function(g) => resolution
+                .function(g)
+                .filter(|d| d.foreign.is_some())
+                .map(|d| (site.span, d.name.clone())),
+            sema::resolve::Callee::Builtin(_) => None,
+        })
+    });
+    if let Some((at, name)) = foreign_call {
+        return Outcome::CheckFailed(vec![nazm_diag::Diagnostic::error(
+            nazm_diag::codes::FOREIGN_NOT_INTERPRETED,
+            at,
+            format!("`nazm run` cannot call the foreign function `{name}`"),
+        )
+        .primary_label("a call into C")
+        .help(
+            "foreign functions run only in a native build: `nazm build`, then run the executable",
+        )]);
     }
 
     // The one lowering, and then nothing of the front end is needed: the tree and the

@@ -72,6 +72,9 @@ pub fn print(program: &Program, options: &Options<'_>) -> String {
         let _ = write!(s, "\"name\": {}, ", escape(&f.name));
         let effects: Vec<String> = f.effects.iter().map(|e| escape(e.name())).collect();
         let _ = write!(s, "\"effects\": [{}], ", effects.join(", "));
+        if let Some(sym) = &f.foreign {
+            let _ = write!(s, "\"foreign\": {}, ", escape(sym));
+        }
         let _ = write!(s, "\"params\": {}, ", f.params);
         let _ = write!(s, "\"ret\": {}, ", escape(&text::ty(program, f.ret)));
         let _ = write!(

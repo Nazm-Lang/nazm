@@ -89,6 +89,9 @@ pub struct Export {
     /// reads the body, so `None` means **every** effect to it: what crosses a module
     /// boundary is a contract, and an absent one promises nothing.
     pub effects: Option<crate::EffectSet>,
+    /// The C symbol, for a foreign declaration (N42): an importer calls it without the
+    /// declaration's source, and must know a call to it needs a `ForeignCap`.
+    pub foreign: Option<String>,
 }
 
 /// One record definition an importer needs to see.

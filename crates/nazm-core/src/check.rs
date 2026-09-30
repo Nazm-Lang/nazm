@@ -1698,6 +1698,141 @@ fn wrong_arity(name: &str, want: usize, got: usize, at: Span) -> Diagnostic {
     .help("a generic definition is applied to exactly as many types as it declares")
 }
 
+/// The C symbols the native runtime and the platform entry declare themselves (N42): a
+/// foreign declaration of one could disagree with the runtime's, so each is refused (`N0383`).
+/// `a_reserved_c_symbol_is_every_one_the_runtime_calls` keeps this list the registry's.
+pub const RESERVED_C_SYMBOLS: &[&str] = &[
+    "exit",
+    "fclose",
+    "fopen",
+    "fread",
+    "free",
+    "fseek",
+    "ftell",
+    "fwrite",
+    "getenv",
+    "main",
+    "malloc",
+    "memcmp",
+    "memcpy",
+    "printf",
+    "pthread_cond_broadcast",
+    "pthread_cond_destroy",
+    "pthread_cond_init",
+    "pthread_cond_wait",
+    "pthread_create",
+    "pthread_join",
+    "pthread_mutex_destroy",
+    "pthread_mutex_init",
+    "pthread_mutex_lock",
+    "pthread_mutex_unlock",
+    "realloc",
+    "snprintf",
+    "strlen",
+    "write",
+];
+
+/// The rules a foreign declaration must meet (N42, `docs/architecture.md` §7.44).
+fn check_foreign(
+    f: &Function,
+    d: &nazm_syntax::ForeignDecl,
+    params: &[Type],
+    ret: Type,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if d.abi != "C" {
+        errors.push(
+            Diagnostic::error(
+                codes::FOREIGN_ABI,
+                d.abi_span,
+                format!("`\"{}\"` is not an ABI this compiler calls", d.abi),
+            )
+            .help("the one foreign ABI is `\"C\"`: the C calling convention of the target"),
+        );
+    }
+    let first_ok = d
+        .symbol
+        .bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_');
+    let rest_ok = d
+        .symbol
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    if !first_ok || !rest_ok || d.symbol.len() > 255 {
+        errors.push(
+            Diagnostic::error(
+                codes::FOREIGN_SYMBOL,
+                d.symbol_span,
+                format!("`\"{}\"` is not a C symbol", d.symbol.escape_debug()),
+            )
+            .help(
+                "a foreign symbol is a C identifier: ASCII letters, digits and `_`, not \
+                 starting with a digit, at most 255 bytes",
+            ),
+        );
+    }
+    if RESERVED_C_SYMBOLS.contains(&d.symbol.as_str()) {
+        errors.push(
+            Diagnostic::error(
+                codes::FOREIGN_CONFLICT,
+                d.symbol_span,
+                format!(
+                    "`{}` is a symbol the native runtime already declares",
+                    d.symbol
+                ),
+            )
+            .help(
+                "the runtime and the platform entry call these themselves with their own \
+                 signatures; a foreign declaration of one could disagree with it",
+            ),
+        );
+    }
+    if let (Some(first), Some(last)) = (f.type_params.first(), f.type_params.last()) {
+        errors.push(
+            Diagnostic::error(
+                codes::FOREIGN_SHAPE,
+                first.span.join(last.span),
+                "a foreign function cannot be generic",
+            )
+            .help("a C function has one signature; declare one per type"),
+        );
+    }
+    if let Some(e) = &f.effects {
+        errors.push(
+            Diagnostic::error(
+                codes::FOREIGN_SHAPE,
+                e.span,
+                "a foreign function's effects are not written",
+            )
+            .help("calling one is always the effect `foreign`, which needs a `ForeignCap`"),
+        );
+    }
+    let safe = |t: Type| matches!(t, Type::Int | Type::Bool);
+    for (t, p) in params.iter().zip(&f.params) {
+        if !safe(*t) {
+            errors.push(foreign_type(p.ty.span, "take"));
+        }
+    }
+    if !safe(ret) {
+        errors.push(foreign_type(f.return_type.span, "return"));
+    }
+}
+
+fn foreign_type(at: Span, what: &str) -> Diagnostic {
+    Diagnostic::error(
+        codes::FOREIGN_TYPE,
+        at,
+        format!("a foreign function cannot {what} this type"),
+    )
+    .primary_label("not FFI-safe")
+    .help(
+        "only `Int` (C `int64_t`) and `Bool` (C `bool`) cross the C boundary in v1; a `Str` is \
+         not a C string, a record or enum has no C layout, and a capability is never a word \
+         C can forge",
+    )
+}
+
 /// Stage 1 for one module: declare what it defines, and say what it offers.
 ///
 /// Reads this module's declarations and nothing else — no other module's source, no other
@@ -1712,6 +1847,9 @@ pub fn declare_unit(
     let types = type_environment(unit, deps, res, errors, Collisions::Silent);
     let mut exports = Vec::new();
 
+    // Each foreign symbol's first declaration in this module, for `N0383`.
+    let mut foreign_seen: std::collections::HashMap<String, (Vec<Type>, Type, Span)> =
+        std::collections::HashMap::new();
     for (decl, f) in &unit.functions {
         // A generic function's parameter types mention its own parameters, and a parameter
         // names its owner — so the id comes first. Nothing else declares a function between
@@ -1770,6 +1908,39 @@ pub fn declare_unit(
             continue;
         }
 
+        // A foreign declaration (N42): its shape, its ABI, its symbol and its types, each
+        // refused by name. What it declares is a contract with no body — the effect
+        // `foreign` and nothing else.
+        let foreign = f.foreign.as_ref().map(|d| {
+            check_foreign(f, d, &params, ret, errors);
+            match foreign_seen.get(d.symbol.as_str()) {
+                Some((p, r, at)) if (p.as_slice(), *r) != (params.as_slice(), ret) => {
+                    errors.push(
+                        Diagnostic::error(
+                            codes::FOREIGN_CONFLICT,
+                            d.symbol_span,
+                            format!(
+                                "the C symbol `{}` is declared again with another signature",
+                                d.symbol
+                            ),
+                        )
+                        .secondary(*at, "declared differently here")
+                        .help("a C function has one signature; declare it the same way"),
+                    );
+                }
+                Some(_) => {}
+                None => {
+                    foreign_seen.insert(d.symbol.clone(), (params.clone(), ret, d.symbol_span));
+                }
+            }
+            d.symbol.clone()
+        });
+        let declared_effects = if foreign.is_some() {
+            Some(nazm_sema::EffectSet::of(nazm_sema::Effect::Foreign))
+        } else {
+            declared_effects
+        };
+
         let visibility = Visibility::from_keyword(f.pub_span);
         let declared = res.declare(FnDef {
             name: f.name.clone(),
@@ -1787,6 +1958,7 @@ pub fn declare_unit(
             effect_reasons: Vec::new(),
             provenance: None,
             mentions: Vec::new(),
+            foreign: foreign.clone(),
         });
         debug_assert_eq!(declared, id);
         declare_type_params(res, &f.type_params, ParamOwner::Function(id));
@@ -1816,6 +1988,7 @@ pub fn declare_unit(
                 def: id,
                 type_params: generics,
                 effects: declared_effects,
+                foreign: foreign.clone(),
             });
         }
     }
@@ -3440,6 +3613,11 @@ impl Checker<'_> {
         }
 
         let declared = self.signature_type(&f.return_type);
+        if f.foreign.is_some() {
+            // A foreign declaration has no body, and that is not a parse failure (N42).
+            self.close_scope();
+            return;
+        }
         let Some(body) = &f.body else {
             // The body failed to parse; the parse error is already reported. Anything
             // said about statements that were never built would be about the parser's

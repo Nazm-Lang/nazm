@@ -74,6 +74,13 @@ impl Verifier<'_> {
         if f.params as usize > f.locals.len() {
             self.bad("more parameters than locals");
         }
+        if f.foreign.is_some() {
+            // No body to walk: a foreign function's region is empty by construction (N42).
+            if !f.body.stmts.is_empty() || f.body.tail.is_some() {
+                self.bad("a foreign function with a body");
+            }
+            return;
+        }
         self.region(&f.body, Region::Value);
         if let Some(t) = &f.body.tail {
             if !fits(t, f.ret) {
