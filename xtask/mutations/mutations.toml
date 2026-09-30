@@ -233,11 +233,12 @@ name = "call-depth-never-released"
 why = """
 leaves the counter raised after a call returns, so a long sequence of sibling calls hits
 the depth limit although nothing is nested
+Repointed by N39: the interpreter walks Core IR, and a call is `ExprKind::Call` there.
 """
 file = "crates/nazm-core/src/eval.rs"
-find = """                let out = self.call_body(Self::body_of(f)?, &mut call_env, callee);
+find = """                let out = self.call_body(g, frame(g, values));
                 self.depth -= 1;"""
-replace = """                let out = self.call_body(Self::body_of(f)?, &mut call_env, callee);"""
+replace = "                let out = self.call_body(g, frame(g, values));"
 
 [[mutation]]
 name = "a-returned-value-is-discarded"
@@ -261,12 +262,13 @@ name = "return-does-not-leave-its-block"
 why = """
 stops only for `break` and `continue`, so a `return` runs the rest of the block and the
 statements after it decide the function's value
+Repointed by N39: the region walk over Core IR, where a transfer names its loop.
 """
 file = "crates/nazm-core/src/eval.rs"
-find = """            let flow = self.stmt(stmt, env)?;
+find = """            let flow = self.stmt(f, stmt, env)?;
             if !flow.is_fall_through() {"""
-replace = """            let flow = self.stmt(stmt, env)?;
-            if matches!(flow, Flow::Break | Flow::Continue) {"""
+replace = """            let flow = self.stmt(f, stmt, env)?;
+            if matches!(flow, Flow::Break(_) | Flow::Continue(_)) {"""
 
 [[mutation]]
 name = "a-diverging-branch-forgets-the-other"
@@ -283,13 +285,14 @@ name = "remainder-inherits-the-hardware-fault"
 why = """
 makes `smallest % -1` an overflow error, although its result is 0 and 0 is representable —
 the exception the spec exists to remove
+Repointed by N39: checked arithmetic moved from `binary` to `arith`, over Core IR's `ArithOp`.
 """
 file = "crates/nazm-core/src/eval.rs"
-find = "            (BinOp::Rem, Int(a), Int(b)) => Ok(Int(a.wrapping_rem(*b))),"
-replace = """            (BinOp::Rem, Int(a), Int(b)) => a
-                .checked_rem(*b)
-                .map(Int)
-                .ok_or_else(|| overflow("remainder")),"""
+find = "        (Rem, Int(a), Int(b)) => Ok(Int(a.wrapping_rem(*b))),"
+replace = """        (Rem, Int(a), Int(b)) => a
+            .checked_rem(*b)
+            .map(Int)
+            .ok_or_else(|| overflow("remainder")),"""
 
 [[mutation]]
 name = "negative-literals-not-range-checked"
@@ -731,11 +734,11 @@ program, which is what makes the refusal wrong rather than a matter of taste.
 Caught by `a_body_where_every_path_returns_needs_no_tail` and the `classify` program in
 `the_emitted_ir_for_a_return_heavy_function_is_well_formed`, both of which fail at the
 build step with a diagnostic instead of producing a value.
+Repointed by N39: LIR lowering reads Core IR statements; the refusal is the same.
 """
 file = "crates/nazm-lir/src/lower.rs"
 find = """                // A `return` leaves the function whether or not its operand lowered, so
-                // the rest of the block is unreachable either way — and the checker has
-                // already reported anything written after it (`N0313`).
+                // the rest of the block is unreachable either way.
                 return (stmts, Ends::Transfers);"""
 replace = """                return (stmts, Ends::FallsThrough);"""
 
@@ -2705,42 +2708,40 @@ killers = [{ package = "nazm-cli", test = "prelude", name = "a_dependent_checks_
 name = "lowered-propagation-tests-the-error-tag"
 why = """
 the lowered `match` treats the error variant as the success, so every `Ok` propagates and every `Err` is read as a value
+Repointed by N39: `?` has one meaning, stated once in the lowering to Core IR, which both backends run; the success arm is keyed on the error variant and the error arm on the success one.
 """
-file = "crates/nazm-lir/src/lower.rs"
-find = "    let ok_tag = ctx.tag(eid, p.ok)?;"
-replace = "    let ok_tag = ctx.tag(eid, p.err)?;"
+file = "crates/nazm-core/src/lower.rs"
+find = """        let ok_arm = arm(p.ok, ok, Vec::new(), Some(Box::new(local(ok, ok_ty))));
+        let err_arm = arm(p.err, err, vec![leave], None);"""
+replace = """        let ok_arm = arm(p.err, ok, Vec::new(), Some(Box::new(local(ok, ok_ty))));
+        let err_arm = arm(p.ok, err, vec![leave], None);"""
 
 [[mutation]]
 name = "lowered-propagation-returns-the-operand-s-result"
 why = """
 the error is returned in the operand's `Result` instead of the function's, which differ whenever the success types do
+Repointed by N39: the error is rebuilt in Core IR, for both backends.
 """
-file = "crates/nazm-lir/src/lower.rs"
-find = "    let into_ty = ctx.ty(Type::Enum(p.into), at)?;"
-replace = "    let into_ty = ctx.ty(Type::Enum(p.operand), at)?;"
+file = "crates/nazm-core/src/lower.rs"
+find = """            kind: ExprKind::Variant {
+                enumeration: p.into,"""
+replace = """            kind: ExprKind::Variant {
+                enumeration: p.operand,"""
 
 [[mutation]]
 name = "lowered-propagation-falls-through-on-error"
 why = """
 the error path builds the function's `Result` and discards it instead of returning, so an `Err` reaches the join with no value and the code after `?` runs
+Repointed by N39: the error arm's `return` is Core IR's, for both backends.
 """
-file = "crates/nazm-lir/src/lower.rs"
-find = "                Stmt::Return(Expr::Variant {"
-replace = "                Stmt::Discard(Expr::Variant {"
+file = "crates/nazm-core/src/lower.rs"
+find = "        let leave = Stmt::Return { value: rebuilt, at };"
+replace = "        let leave = Stmt::Eval(rebuilt);"
 
-[[mutation]]
-name = "interpreted-propagation-carries-on-with-the-error"
-why = """
-the interpreter hands the error value to the rest of the expression instead of returning it — the exception-less analogue of swallowing an exception
-"""
-file = "crates/nazm-core/src/eval.rs"
-find = """        let error = payload(&subject)?;
-        Ok(Flow::Return(Value::Enum(EnumVal::new("""
-replace = """        let error = payload(&subject)?;
-        if true {
-            return Ok(Flow::Fell(Some(error)));
-        }
-        Ok(Flow::Return(Value::Enum(EnumVal::new("""
+# `interpreted-propagation-carries-on-with-the-error` is retired by N39: the interpreter has no `?`
+# of its own any more. `?` is lowered once, to a `match` whose error arm returns, and both backends
+# run that; `lowered-propagation-falls-through-on-error` now mutates the one place the error path is
+# made, and so reaches the interpreter as well as the native backend.
 
 [[mutation]]
 name = "selfhost-question-mark-accepts-any-enum"
@@ -2955,9 +2956,10 @@ killers = [{ package = "nazm-sema", lib = true, name = "module::tests::the_prelu
 name = "lowered-arm-block-drops-its-statements"
 why = """
 an arm written as a block keeps only its tail, so the statements before it — the bindings its tail reads, the effects it has — never run
+Repointed by N39: LIR lowering of a Core IR arm region.
 """
 file = "crates/nazm-lir/src/lower.rs"
-find = "                stmts.extend(inner.stmts);"
+find = "        stmts.extend(inner.stmts);"
 replace = "                let _ = inner.stmts;"
 killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_pattern_binding_returned_through_an_arm_block_outlives_the_scrutinee" }]
 
@@ -2994,10 +2996,12 @@ killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_str_tail_sur
 name = "a-statement-block-is-skipped"
 why = """
 a block written as a statement lowers to nothing, so its assignments never happen
+Repointed by N39: Core IR keeps a statement block as a region, and LIR flattens it in place.
 """
 file = "crates/nazm-lir/src/lower.rs"
-find = "        AstExpr::Block(b) => lower_body(ctx, b),"
-replace = "        AstExpr::Block(_) => (Vec::new(), Ends::FallsThrough),"
+find = "                let (inner, ends) = lower_body(ctx, b);"
+replace = """                let (inner, ends) = (Vec::new(), Ends::FallsThrough);
+                let _ = b;"""
 killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_statement_match_whose_arms_produce_nothing_assigns_in_place" }]
 
 [[mutation]]
@@ -3537,10 +3541,13 @@ killers = [{ package = "nazm-core", test = "equality", name = "an_enum_compares_
 
 [[mutation]]
 name = "n13-interpreted-inequality-is-not-the-negation"
-why = "`!=` answers what `==` answers — a second relation that drifted from the first"
+why = """
+`!=` answers what `==` answers — a second relation that drifted from the first
+Repointed by N39: the interpreter compares by Core IR's `CmpOp`.
+"""
 file = "crates/nazm-core/src/eval.rs"
-find = "            (BinOp::NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(false))),"
-replace = "            (BinOp::NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(true))),"
+find = "        (NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(false))),"
+replace = "        (NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(true))),"
 killers = [{ package = "nazm-core", test = "equality", name = "a_record_is_equal_when_every_field_is" }]
 
 [[mutation]]
@@ -7939,3 +7946,212 @@ find = "pub const SEMANTIC_EPOCH: u32 = 10;"
 replace = "pub const SEMANTIC_EPOCH: u32 = 9;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
+
+# --- N39: Core IR, the one lowering ------------------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.41: a call names its callee by identity, every
+# value is typed, an `if`'s branches, a `return` and a loop's back edge mean what they say, every
+# `break` and `continue` names its loop, an initialiser fills its field and a construction its
+# variant, a function's effect contract and authority survive, a digest names callees durably,
+# covers the body, keeps effects out of the body digest and ignores arm order, the verifier refuses
+# a stray transfer, a generic call has its instantiated result, the interpreter picks the arm the
+# value is, and nothing below Core IR asks the resolution what a position meant.
+
+[[mutation]]
+name = "n39-a-call-is-resolved-by-its-spelling"
+why = "a call's callee is looked up by its name in the root module instead of taken from the checker's resolution, so a module calling its own private helper reaches another module's of the same name"
+file = "crates/nazm-core/src/lower.rs"
+find = """            Callee::Function(callee) => {
+                let generic = self"""
+replace = """            Callee::Function(callee) => {
+                let callee = self
+                    .res
+                    .function(callee)
+                    .and_then(|d| self.res.definition(nazm_sema::ModuleId::ROOT, &d.name))
+                    .unwrap_or(callee);
+                let generic = self"""
+killers = [{ package = "nazm-cli", test = "core_ir", name = "two_modules_same_named_helpers_are_two_identities" }]
+
+[[mutation]]
+name = "n39-a-read-has-no-type"
+why = "a local's read is lowered with no type, as if it never produced a value — the typing law every consumer relies on, and what the verifier holds"
+file = "crates/nazm-core/src/lower.rs"
+find = "                node(ExprKind::Local(l), Some(self.local_ty(l)?), *span)"
+replace = "                node(ExprKind::Local(l), None, *span)"
+killers = [{ package = "nazm-core", lib = true, name = "lower::tests::a_checked_program_lowers_and_verifies" }]
+
+[[mutation]]
+name = "n39-the-branches-of-a-value-if-swap"
+why = "a value `if` runs its `else` branch when the condition holds, in both backends, since both run the one Core IR"
+file = "crates/nazm-core/src/lower.rs"
+find = """                    ExprKind::If {
+                        cond: Box::new(cond),
+                        then,
+                        otherwise,
+                    },"""
+replace = """                    ExprKind::If {
+                        cond: Box::new(cond),
+                        then: otherwise,
+                        otherwise: then,
+                    },"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "value_if_return_and_completion_are_explicit" }]
+
+[[mutation]]
+name = "n39-a-loop-body-runs-once"
+why = "the interpreter's loop leaves after one turn of a body that fell through — the back edge removed"
+file = "crates/nazm-core/src/eval.rs"
+find = """                Flow::Fell(_) => {}
+                Flow::Continue(t) if t == id => {}"""
+replace = """                Flow::Fell(_) => return Ok(Flow::Fell(None)),
+                Flow::Continue(t) if t == id => {}"""
+killers = [{ package = "nazm-core", test = "language", name = "a_while_loop_accumulates" }]
+
+[[mutation]]
+name = "n39-return-falls-through"
+why = "a `return` is lowered as its operand evaluated and discarded, so the function carries on past it"
+file = "crates/nazm-core/src/lower.rs"
+find = """            AstStmt::Return(r) => Stmt::Return {
+                value: self.expr(&r.value)?,
+                at: r.span,
+            },"""
+replace = """            AstStmt::Return(r) => Stmt::Eval(self.expr(&r.value)?),"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "value_if_return_and_completion_are_explicit" }]
+
+[[mutation]]
+name = "n39-a-break-in-a-condition-names-its-own-loop"
+why = "a loop's target is raised around its condition too, so a `break` written in the condition names that loop rather than the enclosing one the language has always meant"
+file = "crates/nazm-core/src/lower.rs"
+find = """                let cond = self.expr(&w.cond)?;
+                self.targets.push(id);"""
+replace = """                self.targets.push(id);
+                let cond = self.expr(&w.cond)?;"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "every_break_and_continue_names_the_loop_it_leaves" }]
+
+[[mutation]]
+name = "n39-continue-names-the-outermost-loop"
+why = "a `continue` names the outermost enclosing loop instead of the innermost, so in a nested loop it restarts the wrong one"
+file = "crates/nazm-core/src/lower.rs"
+find = """                target: self.target("continue", *span)?,"""
+replace = """                target: self
+                    .targets
+                    .first()
+                    .copied()
+                    .map_or_else(|| self.target("continue", *span), Ok)?,"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "every_break_and_continue_names_the_loop_it_leaves" }]
+
+[[mutation]]
+name = "n39-an-initialiser-fills-the-field-at-its-position"
+why = "a record initialiser fills the field at its written position rather than the field it names, so `P(y: 2, x: 1)` swaps them"
+file = "crates/nazm-core/src/lower.rs"
+find = """                    inits.push(Init {
+                        field: to.field,"""
+replace = """                    inits.push(Init {
+                        field: u32::try_from(inits.len()).unwrap_or(u32::MAX),"""
+killers = [{ package = "nazm-core", test = "records", name = "initialisers_may_be_written_in_any_order_and_mean_the_same_record" }]
+
+[[mutation]]
+name = "n39-every-variant-is-the-first"
+why = "a variant construction loses its variant identity and builds the enum's first variant"
+file = "crates/nazm-core/src/lower.rs"
+find = """                    ExprKind::Variant {
+                        enumeration: to.enumeration,
+                        variant: to.variant,"""
+replace = """                    ExprKind::Variant {
+                        enumeration: to.enumeration,
+                        variant: 0,"""
+killers = [{ package = "nazm-core", test = "enums", name = "a_variant_is_built_by_naming_its_enum_and_eliminated_by_match" }]
+
+[[mutation]]
+name = "n39-the-effect-contract-is-dropped"
+why = "a function's declared effect set does not survive into Core IR, so a later pass would see an ambient function where the source wrote a contract"
+file = "crates/nazm-core/src/lower.rs"
+find = "                declared: def.declared_effects,"
+replace = "                declared: None,"
+killers = [{ package = "nazm-core", test = "core_ir", name = "effects_and_authority_survive_as_function_metadata" }]
+
+[[mutation]]
+name = "n39-authority-forgets-its-capabilities"
+why = "a function's authority is computed as empty, so a capability parameter no longer says what the function holds"
+file = "crates/nazm-cir/src/ir.rs"
+find = "                Type::Cap(k) => Some(k),"
+replace = "                Type::Cap(_) => None,"
+killers = [{ package = "nazm-core", test = "core_ir", name = "effects_and_authority_survive_as_function_metadata" }]
+
+[[mutation]]
+name = "n39-a-digest-names-a-callee-by-its-session-number"
+why = "a call is digested by its callee's session-local number rather than its durable key, so adding an unrelated function earlier in a file moves the digest of every caller after it"
+file = "crates/nazm-cir/src/digest.rs"
+find = """                self.tag("call");
+                let name = self.names.function(*callee);"""
+replace = """                self.tag("call");
+                let name = callee.index().to_string();"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "an_unrelated_definition_moves_no_digest" }]
+
+[[mutation]]
+name = "n39-the-body-digest-ignores-the-body"
+why = "neither digest covers the body, so a function whose body changed reads as the same definition"
+file = "crates/nazm-cir/src/digest.rs"
+find = """            self.ty(l.ty);
+        }
+        self.block(&f.body);"""
+replace = """            self.ty(l.ty);
+        }"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "a_body_change_moves_both_digests" }]
+
+[[mutation]]
+name = "n39-an-effect-change-moves-the-body-digest"
+why = "the body digest covers the effect contract, collapsing semantic identity into what code generation reads — an effect-only edit would look like a code change"
+file = "crates/nazm-cir/src/digest.rs"
+find = """    body.tag("body");
+    body.code(f);"""
+replace = """    body.tag("body");
+    body.effects(f.effects.declared);
+    body.code(f);"""
+killers = [{ package = "nazm-core", test = "core_ir", name = "an_effect_only_change_moves_the_semantic_digest_and_not_the_body_digest" }]
+
+[[mutation]]
+name = "n39-a-digest-keeps-the-arm-order"
+why = "a match's arms are digested in written order, so reordering exhaustive, disjoint arms — which means nothing — moves the digest"
+file = "crates/nazm-cir/src/digest.rs"
+find = "        arms.sort_by(|a, b| a.0.cmp(&b.0));"
+replace = "        let _ = &mut arms;"
+killers = [{ package = "nazm-core", test = "core_ir", name = "declaration_and_arm_order_move_no_digest_but_evaluation_order_does" }]
+
+[[mutation]]
+name = "n39-the-verifier-accepts-a-stray-break"
+why = "the verifier accepts a `break` naming a loop that does not enclose it, so a lowering that misplaced a target would reach both backends unreported"
+file = "crates/nazm-cir/src/verify.rs"
+find = "        } else if !self.loops.contains(&t) {"
+replace = "        } else if self.loops.is_empty() && !self.loops.contains(&t) {"
+killers = [{ package = "nazm-core", test = "core_ir", name = "the_verifier_refuses_core_ir_that_breaks_an_invariant" }]
+
+[[mutation]]
+name = "n39-a-generic-call-keeps-its-declared-result"
+why = "a generic call is typed with its callee's declared result, mentioning the callee's own parameters, rather than the checker's instantiation"
+file = "crates/nazm-core/src/lower.rs"
+find = """            Some(i) => i.ret.or_else(|| {
+                self.res
+                    .type_args(callee_at)
+                    .and_then(|args| self.res.types().substituted(checked.ret, i.owner, args))
+            }),"""
+replace = """            Some(_) => Some(checked.ret),"""
+killers = [{ package = "nazm-core", test = "generics", name = "the_milestone_example_runs" }]
+
+[[mutation]]
+name = "n39-a-match-runs-its-first-arm"
+why = "the interpreter runs a match's first arm whatever the scrutinee's variant is"
+file = "crates/nazm-core/src/eval.rs"
+find = "        let Some(arm) = m.arms.iter().find(|a| a.variant == subject.variant) else {"
+replace = "        let Some(arm) = m.arms.first() else {"
+killers = [{ package = "nazm-core", test = "enums", name = "a_variant_is_built_by_naming_its_enum_and_eliminated_by_match" }]
+
+[[mutation]]
+name = "n39-the-backend-asks-the-resolution-again"
+why = "the native backend asks the checker's position map what a call was, beside what Core IR says — a second lowering growing back; behaviour is unchanged, so only the boundary the suite enforces sees it"
+file = "crates/nazm-lir/src/lower.rs"
+find = "    let callee = ctx.function_name(fid);"
+replace = """    let callee = ctx
+        .res
+        .checked_call(callee_span)
+        .map_or_else(|| ctx.function_name(fid), |_| ctx.function_name(fid));"""
+killers = [{ package = "xtask", bin = "xtask", name = "tests::nothing_below_core_ir_asks_what_a_source_position_meant" }]
