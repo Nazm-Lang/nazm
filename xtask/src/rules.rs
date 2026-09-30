@@ -52,7 +52,11 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // syntax tree, which it cannot see since N39 — and produces LLVM IR *as text*, so it
         // needs no code-generator dependency, which is why `may_depend_on_codegen` below
         // stays false for it.
-        "nazm-lir" => &["nazm-span", "nazm-diag", "nazm-sema", "nazm-cir"],
+        // MIR, N40: level 6 of the table in `docs/architecture.md` §2 by responsibility. It is
+        // lowered from Core IR and the checker's tables, and describes nothing about how a
+        // program was written. `docs/architecture.md` §7.42.
+        "nazm-mir" => &["nazm-span", "nazm-diag", "nazm-sema", "nazm-cir"],
+        "nazm-lir" => &["nazm-span", "nazm-diag", "nazm-sema", "nazm-mir"],
         // The driver library and the language service, N16. Through `nazm-core` only, like
         // the CLI and for the same reason: the service consumes the compiler's answers,
         // and a direct dependency on the parser or on `nazm-sema` would be the first step
@@ -90,6 +94,7 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
             "nazm-diag",
             "nazm-core",
             "nazm-lir",
+            "nazm-mir",
             "nazm-iface",
             "nazm-cache",
             "nazm-service",
@@ -161,6 +166,7 @@ pub(crate) fn emission_allowlist() -> &'static [(&'static str, &'static [&'stati
         ("crates/nazm-cache", &[]),
         // Core IR is a representation; it emits nothing and runs nothing.
         ("crates/nazm-cir", &[]),
+        ("crates/nazm-mir", &[]),
         ("crates/nazm-lir", &["emits LLVM IR"]),
         // The language service answers questions; it never emits or runs anything.
         ("crates/nazm-service", &[]),
@@ -209,9 +215,16 @@ mod tests {
         // N39: Core IR is the one lowering, and everything below it starts from it. The
         // native backend reading the tree again would be a second lowering; Core IR reaching
         // the parser or the checker would make it describe how a program was written.
+        //
+        // N40: the backend reads MIR and nothing above it — not Core IR, not the checker —
+        // and MIR is lowered from Core IR, never from the tree.
         let lir = allowed_internal_deps("nazm-lir").unwrap();
         assert!(!lir.contains(&"nazm-syntax") && !lir.contains(&"nazm-core"));
-        assert!(lir.contains(&"nazm-cir"));
+        assert!(!lir.contains(&"nazm-cir"));
+        assert!(lir.contains(&"nazm-mir"));
+        let mir = allowed_internal_deps("nazm-mir").unwrap();
+        assert!(mir.contains(&"nazm-cir"));
+        assert!(!mir.contains(&"nazm-syntax") && !mir.contains(&"nazm-core"));
         assert_eq!(
             allowed_internal_deps("nazm-cir"),
             Some(&["nazm-span", "nazm-sema"][..])
@@ -220,7 +233,7 @@ mod tests {
 
     #[test]
     fn an_unplaced_crate_is_a_failure_not_a_default() {
-        assert!(allowed_internal_deps("nazm-mir").is_none());
+        assert!(allowed_internal_deps("nazm-codegen-clif").is_none());
     }
 
     #[test]
@@ -264,6 +277,7 @@ mod tests {
             "nazm-cache",
             "nazm-cir",
             "nazm-core",
+            "nazm-mir",
             "nazm-lir",
             "nazm-service",
             "nazm-docs",

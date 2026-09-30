@@ -1,0 +1,27 @@
+[package]
+name = "nazm-mir"
+description = "MIR: each concrete function of a native program as a typed control-flow graph with its ownership and cleanup written out."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["architecture:7.42"]
+
+[dependencies]
+nazm-span = { workspace = true }
+# Diagnostics for the instance planner's bounds (`N0703`, `N0704`) and for a compiler defect.
+nazm-diag = { workspace = true }
+# The vocabulary MIR is written in: types, definitions, built-ins, durable keys.
+nazm-sema = { workspace = true }
+# What MIR is lowered from (N39). Not `nazm-syntax` and not `nazm-core`: MIR is lowered from the
+# checked meaning, never from how a program was written.
+nazm-cir = { workspace = true }
+# Each function's executable digest, with the digest `architecture.md` §8 chose.
+blake3 = { workspace = true }
+
+[lints]
+workspace = true

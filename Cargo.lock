@@ -992,6 +992,7 @@ dependencies = [
  "nazm-docs",
  "nazm-iface",
  "nazm-lir",
+ "nazm-mir",
  "nazm-repo",
  "nazm-service",
  "nazm-span",
@@ -1045,8 +1046,8 @@ dependencies = [
 name = "nazm-lir"
 version = "0.0.1"
 dependencies = [
- "nazm-cir",
  "nazm-diag",
+ "nazm-mir",
  "nazm-sema",
  "nazm-span",
 ]
@@ -1064,6 +1065,17 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "nazm-mir"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "nazm-cir",
+ "nazm-diag",
+ "nazm-sema",
+ "nazm-span",
 ]
 
 [[package]]

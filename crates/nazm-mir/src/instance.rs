@@ -17,8 +17,12 @@
 //! tree, so planning decides nothing the checker did not already decide.
 //!
 //! Order is fixed by the resolution, never by a map or a thread, and the finished list is
-//! **sorted by symbol** — so the set of instances, their names and their order are
-//! functions of the program alone.
+//! **sorted by identity** — definition, then the arguments' canonical keys — so the set of
+//! instances, their names and their order are functions of the program alone.
+//!
+//! Moved here from `nazm-lir` by N40, unchanged in what it plans: MIR is post-instantiation
+//! (`docs/architecture.md` §7.42), so the decision of which instances exist belongs to the
+//! level that creates them, and a backend reads the result.
 //!
 //! Finite because the only way an instance family grows without bound is a generic
 //! function reaching itself with a *larger* argument — `f[T]` calling `f[Vec[T]]` — and
@@ -28,13 +32,14 @@
 use std::collections::HashMap;
 
 use nazm_diag::{codes, Diagnostic};
-use nazm_sema::key::{DefKey, DefKind};
+use nazm_sema::key::DefKind;
 use nazm_sema::module::ModuleGraph;
 use nazm_sema::resolve::{Callee, FnId, Resolution};
 use nazm_sema::types::{ParamOwner, Type, TypeParam};
 use nazm_span::Span;
 
-use crate::symbol::{type_key, NativeSymbol};
+use crate::ir::Identity;
+use crate::names::{self, type_key};
 
 /// How many concrete instances one program may need.
 ///
@@ -52,25 +57,26 @@ pub const MAX_INSTANCE_NESTING: usize = 2 * nazm_sema::MAX_TYPE_DEPTH;
 
 /// One concrete instance: a generic definition and its concrete type arguments.
 ///
-/// The **generic instance key**. Its durable spelling is its symbol, which is derived from
-/// the definition's `DefKey` and the arguments' canonical keys and from nothing
-/// session-local.
+/// The **generic instance key**. Its durable spelling is its [`Identity`] — the definition's
+/// `DefKey` and the arguments' canonical keys, nothing session-local — which is also what a
+/// backend derives its symbol from.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InstanceKey {
     pub def: FnId,
     pub args: Vec<Type>,
 }
 
-/// One planned instance: its key, its symbol, and its signature under its substitution.
+/// One planned instance: its key, its durable identity, and its signature under its
+/// substitution.
 #[derive(Debug, Clone)]
 pub struct Planned {
     pub key: InstanceKey,
-    pub symbol: NativeSymbol,
+    pub identity: Identity,
     pub params: Vec<Type>,
     pub ret: Type,
 }
 
-/// Every instance a program needs, sorted by symbol.
+/// Every instance a program needs, sorted by identity.
 #[derive(Debug, Clone, Default)]
 pub struct Instances {
     pub planned: Vec<Planned>,
@@ -82,6 +88,12 @@ impl Instances {
     #[must_use]
     pub fn get(&self, key: &InstanceKey) -> Option<&Planned> {
         self.index.get(key).and_then(|i| self.planned.get(*i))
+    }
+
+    /// Where an instance sits in [`Self::planned`].
+    #[must_use]
+    pub fn position(&self, key: &InstanceKey) -> Option<usize> {
+        self.index.get(key).copied()
     }
 }
 
@@ -190,7 +202,7 @@ pub fn plan_instances(
         }
     }
 
-    // Each instance's signature, and its symbol.
+    // Each instance's signature, and its identity.
     let mut planned: Vec<Planned> = Vec::with_capacity(order.len());
     for (key, _) in order {
         let owner = ParamOwner::Function(key.def);
@@ -203,29 +215,24 @@ pub fn plan_instances(
             .map(|t| res.types_mut().substitute(*t, owner, &key.args))
             .collect();
         let ret = res.types_mut().substitute(def.ret, owner, &key.args);
-        let base = match graph.key(def.module) {
-            Some(k) => NativeSymbol::of_definition(&DefKey::new(
-                k.clone(),
-                DefKind::Function,
-                def.name.clone(),
-            )),
-            None => NativeSymbol::of_unkeyed(def.module, &def.name),
-        };
         let keys: Vec<String> = key
             .args
             .iter()
             .map(|a| type_key(*a, res.types(), graph))
             .collect();
         planned.push(Planned {
-            symbol: NativeSymbol::of_instance(&base, &keys),
+            identity: Identity {
+                owner: names::owner(graph, def.module, DefKind::Function, &def.name),
+                args: keys,
+            },
             key,
             params,
             ret,
         });
     }
-    // By symbol: the order the worklist happened to find them in is not part of what the
+    // By identity: the order the worklist happened to find them in is not part of what the
     // program needs.
-    planned.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+    planned.sort_by(|a, b| a.identity.cmp(&b.identity));
     let index = planned
         .iter()
         .enumerate()
