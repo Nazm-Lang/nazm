@@ -1176,19 +1176,23 @@ fn a_raised_budget_still_runs_what_fits_inside_it() {
     // The companion: the budget is raised and the program stays within it, so it must
     // produce its value rather than trip a limit the stack was resized to accommodate.
     // The recursion is kept well inside the base reservation so that this test reports a
-    // wrong answer rather than aborting when the sizing is what has broken.
+    // wrong answer rather than aborting when the sizing is what has broken. It was 1,000
+    // levels until N39's campaign showed a debug build does not fit that in the base 24 MiB:
+    // with the sizing taken away this binary aborted, and the mutant was a crash rather than
+    // a catch. 200 levels fit on any build, and `nazm-cli/tests/cli.rs` holds the raised
+    // budget itself out of process, where an abort is an exit code.
     let src = r"
         fn sum_to(n: Int) -> Int {
             if n == 0 { 0 } else { n + sum_to(n - 1) }
         }
-        fn main() -> Int { sum_to(1000) }
+        fn main() -> Int { sum_to(200) }
     ";
     let raised = nazm_core::eval::Limits {
         max_depth: 5_000,
         ..Default::default()
     };
     match nazm_core::run_with_limits(src, raised) {
-        Outcome::Value(v) => assert_eq!(v, Value::Int(500_500)),
+        Outcome::Value(v) => assert_eq!(v, Value::Int(20_100)),
         other => panic!("expected a value, got {other:?}"),
     }
 }
