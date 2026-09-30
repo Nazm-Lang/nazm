@@ -1200,30 +1200,29 @@ fn a_raised_budget_still_runs_what_fits_inside_it() {
 #[test]
 fn a_function_with_no_body_is_never_run_as_an_empty_one() {
     // Keeping the signature must not turn a body that failed to parse into a body that
-    // does nothing. Driving the interpreter directly is the only way to reach this: the
-    // normal path refuses to evaluate a program that reported errors.
+    // does nothing. Until N39 this drove the interpreter directly over the partial tree;
+    // the interpreter now runs Core IR, and Core IR exists only for a program that checked,
+    // so there is no route by which such a body could run — the run is refused at checking
+    // and nothing is evaluated.
     let src = "fn f() -> Int { return; }\nfn main() -> Int { f() }";
     let (program, errors) = nazm_syntax::parse_source(src);
     assert!(!errors.is_empty(), "the body should have failed to parse");
-    assert!(
-        program.functions.iter().any(|f| f.name == "f"),
-        "the signature should survive"
-    );
     assert!(
         program
             .functions
             .iter()
             .find(|f| f.name == "f")
             .is_some_and(|f| f.body.is_none()),
-        "and the body should be absent, not empty"
+        "the signature should survive, and the body should be absent, not empty"
     );
-
-    // A resolution for a program whose body did not parse: checking still declares the
-    // signature, which is what makes the call resolve to a function with nothing to run.
-    let (resolution, _) = nazm_core::check(&program, &nazm_core::sema::ModuleGraph::single());
-    match nazm_core::eval::Interpreter::new(&program, &resolution).run_main() {
-        Err(e) => assert_eq!(e.diagnostic.code, codes::UNSUPPORTED_CONSTRUCT),
-        Ok(v) => panic!("a function with no body must not run, got {v}"),
+    match nazm_core::run(src) {
+        Outcome::CheckFailed(ds) => {
+            assert!(
+                ds.iter().any(|d| d.code == codes::UNSUPPORTED_CONSTRUCT),
+                "{ds:?}"
+            );
+        }
+        other => panic!("a function with no body must not run, got {other:?}"),
     }
 }
 
