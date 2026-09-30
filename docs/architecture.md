@@ -309,14 +309,21 @@ a responsibility away from two places that each held it: deciding, from the tree
 program's positions, `?`s, blocks and transfers mean. `nazm-hir`, `nazm-ty`, `nazm-db`,
 `nazm-mir` and `nazm-mono` are still design.
 
+**Corrected 2026-10-01 (N40).** `nazm-mir` exists: MIR, the one lowering from Core IR for the
+native backend (§7.42), which took from `nazm-lir` its temporaries, its partly-built slots and its
+`?` completion, and from the emitter every cleanup decision it used to make per exit. The instance
+planner moved into it, so monomorphisation — the table's `nazm-mono` — is MIR lowering's first
+step rather than a crate of its own. `nazm-hir`, `nazm-ty` and `nazm-db` are still design.
+
 | Phase | Crates | State |
 | --- | --- | --- |
 | 2 | `nazm-bench` · `xtask` | **exists** |
 | 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-sema` · `nazm-iface` · `nazm-core` · `nazm-cli` | **exists** (`nazm-core` is the checker, the one lowering to Core IR, and the evaluator over Core IR; `nazm-sema` and `nazm-iface` are not on this diagram at all — see §7.2 and §7.3) |
 | 4 | **`nazm-cir`** | **exists** (N39) — Core IR, level 3 by responsibility: typed, resolved, explicit control, effects as function metadata. A tree of structured regions, not ANF, and no traits to lower. §7.41 |
 | 4 | `nazm-hir` · `nazm-ty` · `nazm-mcp` | planned |
-| 6 | `nazm-db` · `nazm-mir` · `nazm-lsp` | planned |
-| 7 | **`nazm-lir`** | **exists** — named for this level, but a structured typed tree over numbered slots rather than SSA over a CFG of places. See the note below |
+| 6 | **`nazm-mir`** | **exists** (N40) — MIR, level 6 by responsibility: each concrete function as a typed CFG with every copy, move, drop, scope join and failure edge explicit, validated. Not SSA, and no borrow checking. §7.42 |
+| 6 | `nazm-db` · `nazm-lsp` | planned |
+| 7 | **`nazm-lir`** | **exists** — since N40 it reads validated MIR and holds layout, symbols and LLVM text emission; the structured tree that was once named for this level is gone. See the note below |
 | 7 | `nazm-codegen-clif` · `nazm-link` · `nazm-driver` | planned |
 | 7 | `nazm-test` | **exists as a subcommand**, `nazm test`, not as a crate |
 | 8 | `nazm-rt` | planned |

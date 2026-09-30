@@ -437,6 +437,19 @@ nothing but its diagnostics. It is a view for a person asking *what did this sou
 not a syntax to write or a format to depend on: `docs/architecture.md` §7.41 says what its
 version, `nazm.core-ir/1`, promises and what it does not.
 
+```
+nazm mir prog.nz
+```
+
+goes one level down, to what `nazm build` compiles: each concrete function — every instance of a
+generic one included — as MIR, a graph of basic blocks in which every copy, move and drop of a
+string, sequence, channel, record or enum is written out, every `scope` is joined on every way
+out, and every operation that can fail names the block its failure goes to. Each function comes
+with its executable digest, which a comment, a renamed local or an effect annotation does not
+change. `--spans` names each statement's source position and `--json` gives one line. The same
+promise as Core IR's: a debugging view, `nazm.mir/1`, internal and unstable
+(`docs/architecture.md` §7.42).
+
 ## The syntax
 
 <!-- generated from docs/grammar.ebnf: begin -->
