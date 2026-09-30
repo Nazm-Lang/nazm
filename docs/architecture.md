@@ -4792,6 +4792,81 @@ failure messages, and nothing of the checker. Remaining exceptions: `nazm-lir` s
 `nazm-sema`'s *type and key definitions* (`Type`, `Intrinsic`, `DefKey`) as the vocabulary MIR is
 written in — never a `Resolution`.
 
+## 7.43 The backend boundary and the Cranelift backend — N41, 2026-10-01
+
+Written before the code. `crates/nazm-lir/src/backend.rs` is the interface; `crates/nazm-codegen-clif`
+is the second implementation of it.
+
+```text
+MIR (validated) ─ nazm-lir::lower: layout, symbols, linkage, units ─ Native
+                                                                       │
+                     ┌─────────────────── Backend ─────────────────────┤
+                     ▼                                                 ▼
+          LLVM text (nazm-lir::emit)                      Cranelift (nazm-codegen-clif)
+          → clang -c → object                             → object bytes (cranelift-object)
+                     └──────────── clang links, with the runtime ─────┘
+```
+
+**Backend input.** A `Native`: validated MIR, and what `nazm-lir::lower` settled from it for every
+backend alike — the units (one per module, one per generic instance), each function's symbol and
+linkage, and the refusals of the native subset. A backend reads MIR and nothing of the checker,
+and decides nothing about the language.
+
+**The interface.** `Backend` names itself (`id`, a version string that enters every cache key),
+states its target, and turns a `Native` into artefacts: LLVM text for clang to compile, or object
+bytes. Nothing from Cranelift appears in its signature, or in any crate above `nazm-codegen-clif`.
+
+**Codegen unit.** The unit is `nazm-lir`'s: one per module and one per instance, so object reuse is
+per unit for both backends. The runtime and the platform entry are LLVM text in every build — they
+are the runtime, not code generated from a program's MIR, and N43 owns them.
+
+**Runtime symbol boundary.** Every runtime entry point a backend calls is in one typed registry
+(`crates/nazm-lir/src/runtime.rs`): its symbol, its parameters and result in machine words and
+pointers only, and what it does with ownership. A revision number names the registry; it enters
+every object's cache key. Cranelift code calls the runtime only through it. Where the runtime took
+or returned a first-class aggregate, the registry has a pointer-taking entry (`nz.str_join_to`,
+`nz.read_file_to`, `nz.scope_join_to`) and a scalar accessor for thread-local state
+(`nz.failed_now`), so no aggregate crosses between code two compilers generated.
+
+**Internal calling convention (Cranelift).** The target's default convention. `Int` and a
+capability are an `i64`, `Bool` an `i8`, a handle (`Ints`, `Strs`, `Chan`, `Vec`) a pointer; a `Str`,
+record or enum is passed as a pointer to the caller's memory, which the callee borrows and never
+writes, and returned through a pointer the caller supplies as the first argument. This is the
+Cranelift backend's own convention and says nothing about C (N42).
+
+**Layout (Cranelift).** Every type has a size and an alignment: 8 for a word, 1 for a `Bool`, 24
+for a `Str` (pointer, length, owner); a record is its fields in the canonical order with natural
+alignment; an enum is an 8-byte discriminant followed by the largest payload, each payload laid
+out as a record. Both backends take field positions and discriminants from `nazm-lir`'s canonical
+tables; the byte layouts differ and never meet, because no value crosses between the two in one
+program.
+
+**Object emission and linking.** A Cranelift unit is one object module, written by
+`cranelift-object`. `nazm build` owns nothing past that: clang compiles the LLVM-text artefacts and
+links every object with the runtime, with arguments built as a vector, never through a shell.
+
+**Targets.** The v1 matrix is the host: `aarch64-apple-darwin` (verified on this machine) and
+`aarch64-unknown-linux-gnu` (the contained, authoritative evidence); `x86_64` hosts are accepted by
+the ISA but carry no evidence. A requested target that is not the host is refused: an object for a
+foreign target needs a foreign linker and runtime, and building one here would be a claim with
+nothing behind it. ISA flags are Cranelift's baseline for the triple; no host feature is detected.
+
+**Settings.** `opt_level` none for `--opt-level 0`, speed otherwise; the Cranelift verifier on for
+every function; position-independent code. All of them are in the backend's version string, so a
+change to any of them is a new cache key.
+
+**Choice and fallback.** `nazm build --backend llvm` (the default) or `--backend cranelift`. The
+LLVM backend stays as the default and as the differential reference. A program Cranelift cannot
+compile is refused by name with `N0101` and nothing is written; nothing falls back to the other
+backend without being asked.
+
+**Determinism.** The same MIR, target and settings produce the same object bytes; functions, data
+and relocations are defined in MIR order.
+
+**Failures.** An unsupported target or operation is a diagnostic (`N0101`); a Cranelift verifier
+rejection of generated code is a compiler defect (`N0900`); a link failure is the toolchain's and
+reported as one — none is a program error.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
