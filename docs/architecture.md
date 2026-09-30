@@ -5186,6 +5186,79 @@ the front end for the programs in this tree, none of which imports a standard mo
 resolves every import against the importing file's directory, so it reports `@std/text` as a
 module it cannot find.
 
+## 7.48 Packages, locking and reproducible builds — N46, 2026-10-01
+
+Written before the code. `crates/nazm-package` holds the model; the loader and the command line
+consume it. No registry, no network, no build scripts.
+
+**A package** is a directory holding `nazm.toml`, its manifest, `nazm.package/1`:
+
+```toml
+schema = "nazm.package/1"
+
+[package]
+name = "geometry"        # [a-z][a-z0-9-]*, at most 64 bytes
+version = "1.2.0"        # MAJOR.MINOR.PATCH, decimal, no pre-release in v1
+root = "src"             # the source root, relative to the manifest; default "src"
+main = "main.nz"         # the entry module, relative to the root; only a binary has one
+
+[dependencies]
+shapes = { path = "../shapes", version = "0.3.1" }
+```
+
+Nothing else is accepted: an unknown key is refused by name, so a manifest cannot carry
+configuration the compiler silently ignores. Descriptive metadata (authors, licence) is out of v1.
+
+**Identity.** A package is its name, its exact version and its source — in v1 always a path,
+relative to the manifest that names it. Two packages of one name in one build are a conflict and
+refused, whatever their versions: a module's durable key is `NAME@VERSION/path`, and a program
+with two `shapes` would have two answers to which one a `use` means. A dependency's declared
+version must equal the version its own manifest states — exactly; there are no ranges in v1, so
+nothing is ever chosen for a program.
+
+**Imports.** `use "shapes:polygon.nz";` imports the module `polygon.nz` of the package the
+importing package declares as `shapes`, resolved against that package's source root. Only a
+package's own dependencies are visible to it: its dependency's dependencies are not. A path with
+no `NAME:` stays relative to the importing file and may not leave its package's source root.
+
+**Resolution** starts at the root package and visits dependencies in name order, depth first,
+reading each manifest once by its canonical directory; a package reached twice by one identity is
+one package (a diamond), by two is a conflict, and a package reached from itself is a cycle,
+reported with its path. The result is a list sorted by name and a graph whose edges are sorted:
+no hash-map iteration, directory listing order or filesystem timestamp enters it.
+
+**Digest.** A package's digest is BLAKE3 over its manifest's bytes and every `.nz` file under its
+source root — each as its path relative to the root with `/` separators, its length and its bytes,
+in path order — under a domain-separation tag. No timestamp, permission, absolute path or
+directory order is an input.
+
+**The lockfile**, `nazm.lock` beside the root manifest, is `nazm.lock/1`: one entry per package in
+name order — name, version, source (a path relative to the root package, `/`-separated) and
+digest — and each package's dependency names. `nazm lock DIR` writes it, and writes it only when
+its bytes would change: resolving the same packages twice gives the same bytes. Nothing else
+writes it. `--locked` makes it authoritative: the build resolves as usual and refuses — before
+compiling anything — if the lockfile is missing, if any package's identity, source or
+dependencies differ from it, or if any package's bytes no longer match its digest (tampering).
+
+**Offline, always.** Every v1 source is a path, so resolution never reaches a network; a missing
+dependency directory is refused by name. There is no download step to disable.
+
+**Builds and caches.** `nazm check|build|run DIR` builds the package in `DIR` from its `main`.
+Module keys of dependency modules carry `NAME@VERSION`, and every cache key already covers a
+module's source bytes and its dependencies' interfaces (§7.6), so a changed dependency invalidates
+its dependents and nothing else, and an unchanged one is reused. The build's configuration — the
+backend, its version and settings, the optimisation level, the target and the runtime ABI — is in
+every object key (§7.43, §7.45): that is the profile, and there is no second profile mechanism.
+
+**Environment.** A build reads no environment variable that changes its output, except the ones
+the C toolchain is handed by name (`nazm-cli/src/backend.rs`, `PASSED`), which the toolchain's own
+identity then covers. There are no build scripts.
+
+**Reproducibility, stated exactly.** The same package sources, lockfile, toolchain, target,
+backend and configuration give byte-identical executables — tested on one host by building two
+copies of a package in two directories from empty caches. Nothing is claimed across operating
+systems or toolchain versions.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
