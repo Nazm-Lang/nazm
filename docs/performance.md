@@ -1831,6 +1831,26 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### The runtime contract — N43, measured 2026-10-01
+
+N43 moved the runtime into `crates/nazm-lir/src/runtime/` and wrote its contract down; it changed
+no instruction, so what is measured is what the runtime costs, now that there is a harness that
+calls it directly.
+
+- **Nothing a program runs changed.** All 205 sources, N42 (`9b35099`) against N43 release builds,
+  `nazm build --no-cache --emit-ir`: the same status and diagnostics for all 205, and every LLVM
+  file of the 104 that build — runtime and entry units included — byte-identical.
+- **Cold start.** An executable whose `main` returns `0`, host, 200 runs: median 3.65 ms (LLVM),
+  3.73 ms (Cranelift); p10–p90 3.25–4.22 and 3.37–4.30 ms. Nothing is initialised lazily and the
+  entry does four stores before calling `main`, so this is the process's own cost.
+- **What a runtime call costs**, host, clang `-O2`, 10 million iterations, best of four: a string
+  backing allocated and released 15.3 ns; a retain and a release of a shared backing (two atomic
+  operations) 11.6 ns; a sequence push through `nz.arr_grow`, amortised over doubling, 1.7 ns.
+- **Memory.** The same harness peaks at 84.1 MB, which is the 10-million-element sequence
+  (80 MB of data after doubling) and nothing else; the direct-test harness runs at under 10 MB.
+- **Size.** The smallest executable is 50,680 B (LLVM) and 52,832 B (Cranelift, which links the
+  whole runtime); unchanged by N43.
+
 ### Foreign calls — N42, measured 2026-10-01
 
 A foreign call is a direct call with the C convention and no failure check after it, so what is

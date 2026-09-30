@@ -116,6 +116,13 @@ may contain `"foreign"` — a new value of an existing field, which is compatibl
 fails for a program with foreign calls names the foreign symbols and `--link` rather than
 reporting a compiler bug.
 
+**Applied to N43, the runtime constitution.** No schema moved and no code appeared. The runtime's
+failures keep their codes and now have one written classification (`architecture.md` §7.45):
+`N0400`, `N0401` and `N0405` are the language's; `N0406` and `N0404` are the host refusing memory
+or a thread — `N0404` in a native build means the operating system would not start a task's
+thread, as `nazm run` uses it when the interpreter could not start; `N0407` is I/O. Status 2 is a
+reported failure, `exit_with`'s is the program's, and 0 a normal return.
+
 A consumer that fails on an unrecognised field is not compatible with this contract, and
 the `additionalProperties: false` in the schema documents is a statement about *this*
 version's output, not a promise that the next one adds nothing.
