@@ -334,7 +334,21 @@ fn build(dir: &Path) -> std::path::PathBuf {
 fn the_runtime_s_services_keep_their_contract_when_called_directly() {
     let dir = tempfile::tempdir().unwrap();
     let exe = build(dir.path());
-    let o = common::bounded_exe(&exe).output().expect("run");
+    // A deadline: a runtime whose channel loses a wakeup blocks for ever rather than failing.
+    let mut child = common::bounded_exe(&exe)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run");
+    let start = std::time::Instant::now();
+    while child.try_wait().expect("wait").is_none() {
+        if start.elapsed() > std::time::Duration::from_secs(120) {
+            let _ = child.kill();
+            panic!("the harness did not finish: a deadlock or a lost wakeup in the runtime");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let o = child.wait_with_output().expect("output");
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(
         o.status.success(),
