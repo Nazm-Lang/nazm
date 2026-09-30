@@ -31,6 +31,12 @@ one cannot compile is refused, never quietly built by the other. `--target` name
 triple, and v1 builds for the machine it runs on only, so any other triple is refused rather than
 built for this one.
 
+A native program can call C. `extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";` declares a
+C function by its signature and its symbol, and `nazm build --link add.o` hands the object that
+defines it to the linker. Only `Int` (`int64_t`) and `Bool` (`bool`) cross; every call needs a
+`ForeignCap` in scope and is the effect `foreign`; and `nazm run` refuses such a program rather
+than pretend to run C. See `docs/spec.md`, *Foreign functions*.
+
 ## The shape of the language, in six sentences
 
 - **A file is a module.** `use "other.nz";` makes the definitions that file marked `pub`
@@ -468,9 +474,10 @@ accepts.
 
 | Rule | Definition |
 | --- | --- |
-| `program` | `{ use_item } , { function \| record \| enumeration }` |
+| `program` | `{ use_item } , { function \| foreign_function \| record \| enumeration }` |
 | `use_item` | `"use" , STRING , ";"` |
 | `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
+| `foreign_function` | `[ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , "=" , STRING , ";"` |
 | `effect_set` | `"!" , "{" , [ effect_name , { "," , effect_name } ] , "}"` |
 | `effect_name` | `IDENT \| "spawn"` |
 | `type_parameters` | `"[" , type_parameter , { "," , type_parameter } , "]"` |
@@ -522,7 +529,7 @@ accepts.
 ### `program`
 
 ```ebnf
-program = { use_item } , { function | record | enumeration } ;
+program = { use_item } , { function | foreign_function | record | enumeration } ;
 ```
 
 ```nazm
@@ -577,6 +584,28 @@ pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) }
 fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") }
 ```
 
+### `foreign_function`
+
+```ebnf
+foreign_function = [ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , "=" , STRING , ";" ;
+```
+
+A foreign function (N42): a C function this program calls, declared by its signature and
+its C symbol, with no body. `extern` is not a keyword — it is recognised only where a
+declaration starts, before a string — so it is an IDENT here, and the string before `fn`
+is the ABI, which must be `"C"`. Only `Int` and `Bool` cross; no type parameters and no
+written effect set: calling one is always the effect `foreign`, and needs a `ForeignCap`.
+`nazm run` refuses a program that calls one; `nazm build --link FILE` links it. See
+`docs/spec.md`, *Foreign functions*.
+
+```nazm
+extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add"; fn main() -> Int { 0 }
+```
+
+```nazm
+pub extern "C" fn is_even(n: Int) -> Bool = "c_is_even"; fn main() -> Int { 0 }
+```
+
 ### `effect_set`
 
 ```ebnf
@@ -590,7 +619,7 @@ another module calling the function must assume every effect — so `fn f() -> I
 `fn f() -> Int ! {}` are not the same: only the second promises purity. A declared set
 says what a function does, not what allows it: its body holds only the authority of
 the capability values in its scope (`IoCap`, `SpawnCap`). The names live in their
-own namespace: `io` and `spawn` are the only effects, a name that is not one is refused,
+own namespace: `io`, `spawn` and `foreign` are the only effects, a name that is not one is refused,
 and so is one written twice. Order means nothing. See `docs/spec.md`, *Effects*.
 
 ```nazm

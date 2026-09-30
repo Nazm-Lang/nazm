@@ -73,7 +73,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | RESEARCH |
 | 16 | Standard library | MISSING |
-| 17 | FFI and ABI | MISSING |
+| 17 | FFI and ABI | PARTIAL (v1: C, `Int`/`Bool`) |
 | 18 | Embedded support | MISSING |
 | 19 | Critical profile | DESIGNED |
 | 20 | Cybersecurity profile | DESIGNED |
@@ -711,7 +711,8 @@ effectful call refused where a pure one is accepted.
 VERIFIED; Effect-capability checking v1 — VERIFIED; Cross-module authority contracts v1 —
 VERIFIED; Capability unforgeability v1 — VERIFIED. Attenuation, resource-specific authority,
 revocation, linearity and runtime enforcement are not here.* Two compiler-owned kinds with stable
-ids, `IoCap` and `SpawnCap`, as built-in types (`crates/nazm-sema/src/capability.rs`); each
+ids, `IoCap` and `SpawnCap` — three since N42 added `ForeignCap`, whose call-site check has no
+compatibility bridge (area 17) — as built-in types (`crates/nazm-sema/src/capability.rs`); each
 built-in's required authority is an exhaustive table on its identity. A function that declares an
 effect set holds exactly the capability values its scope reaches — lexically, recorded per call
 site by the checker — and every built-in, `spawn` and call of an undeclared function needs the
@@ -1168,21 +1169,40 @@ write a newline.
 **Accepted when** · A `.nz` library ships, is versioned, and is not special-cased by the
 compiler.
 
-### 17. FFI and ABI — MISSING
+### 17. FFI and ABI — PARTIAL (v1: C, `Int` and `Bool`, native builds on the host)
 
-**Evidence of absence** · No `extern`, no ABI annotation, no such token in
-`crates/nazm-syntax/src/lexer.rs`. The 18 libc symbols are emitted *by* the compiler to
-implement built-ins; a user program cannot declare or call anything else. `docs/spec.md`
-lists the FFI boundary under *Open*, so it is not designed either.
+**Evidence** · N42 (2026-10-01). `extern "C" fn name(p: T, …) -> R = "symbol";` declares a C
+function by its signature and its C symbol (`crates/nazm-syntax/src/parser.rs`; `extern` is
+contextual, not a keyword); `architecture.md` §7.44 is the constitution, written first, and
+`docs/spec.md` *Foreign functions* the language rule. `nazm build --link FILE` hands objects and
+libraries to the linker. Both backends declare the symbol with the target's C convention and call
+it with no failure check after it.
 
-**Limitation** · Total. This is the single largest gap between the language and any
-systems, embedded or cybersecurity use.
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| A C function is declared and called, with both backends agreeing | VERIFIED | `a_program_calls_c_with_ints_and_bools_and_both_backends_agree` (registers and the stack, `INT64_MAX`, nested calls, C state), clang-compiled fixtures |
+| Only FFI-safe types cross | VERIFIED | `Int` as `int64_t`, `Bool` as zero-extended `bool`; `Str`, sequences, records, enums, capabilities refused, `N0381` (`every_declaration_outside_the_subset_is_refused_by_its_own_code`) |
+| The declaration's shape is checked | VERIFIED | ABI `N0380`, symbol `N0382`, generic or effect-annotated `N0384`, conflicting or runtime-reserved symbol `N0383` in one module and across modules (`two_modules_that_disagree_about_a_symbol_are_refused_before_linking`, `a_reserved_c_symbol_is_every_one_the_runtime_calls`) |
+| Calling C is an effect and needs authority | VERIFIED | effect `foreign`; a `ForeignCap` held at every call, declared set or not (`a_foreign_call_needs_a_foreign_cap_everywhere`, `an_imported_foreign_function_needs_a_foreign_cap_too`) |
+| The provenance question | VERIFIED | what C returns carries `unknown` and its arguments' origins; `N0372` for a restricted `write_file` path computed from it (`what_c_returns_carries_the_unknown_origin`) |
+| Ownership across the call | VERIFIED | nothing managed crosses; values live across calls are reclaimed on every path, a failure after a foreign call included (`a_foreign_call_inside_managed_code_leaks_nothing`) |
+| The interpreter | VERIFIED (refusal) | `nazm run` refuses a program calling C before running any of it, `N0385` (`nazm_run_refuses_a_foreign_call_before_running_anything`) |
+| Link inputs | VERIFIED | `--link` is passed in order; a missing file is refused before compiling; an unresolved symbol is reported as a missing `--link`, not a compiler bug (`the_linker_is_handed_exactly_what_link_names`) |
+| Interface and cache | VERIFIED | `nazm.interface/7` carries a foreign export's symbol; semantic epoch 11; the C symbol enters the object key (`the_c_symbol_enters_the_object_key`) |
+| Pointers, strings, structs, callbacks, variadics, `errno` | MISSING | not designed in v1: no FFI type can express them safely yet |
+| Exporting Nazm functions to C | MISSING | no `extern` definitions; a C caller cannot reach Nazm code |
+| Other ABIs and cross-target | MISSING | `"C"` only; the host only (area 33) |
 
-**Next dependency** · A settled ABI and layout story, which `docs/bootstrap.md`
-deliberately left unfrozen.
+**Limitation** · Two scalar types, by value. C is trusted entirely once called: an abort, a loop or
+memory corruption inside it is outside every Nazm guarantee, and nothing is checked after the call.
+`nazm run` cannot call C at all, so a program that does has one implementation, not two.
 
-**Accepted when** · A C function is declared and called, with the safety boundary stated
-and the provenance question (what label a returned value carries) answered.
+**Next dependency** · A layout story for records (a `repr(C)`-like promise) and a borrowed-string
+type before anything but scalars can cross; a callback needs function values, which the language
+does not have.
+
+**Accepted when** · Met for the v1 set above. The whole area is accepted when a record and a string
+cross with their layout and ownership stated.
 
 ---
 
@@ -1207,7 +1227,7 @@ left as a gap.
 **Systems — MISSING.** Would need explicit control over allocation and layout, no hidden
 allocation where none is declared, and a stated ABI; would grant raw memory access and
 foreign calls inside a named, narrow boundary. Nothing profile-specific exists. Blocked on
-area 17 (FFI and ABI, MISSING) and on area 4, which is now VERIFIED for the current type
+area 17 (FFI and ABI, PARTIAL: scalars only) and on area 4, which is now VERIFIED for the current type
 universe but says nothing about *explicit* control over allocation and layout — a profile
 that must declare where memory comes from needs more than automatic reclamation. The architectural
 commitment that keeps it reachable — field access stays symbolic until the lowest level, so
