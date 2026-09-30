@@ -1831,6 +1831,19 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### Packages — N46, measured 2026-10-01
+
+Host, best of 5 (`what_packages_cost`, `crates/nazm-cli/tests/packages.rs`, `--ignored`), the
+three-package diamond of the tests: `nazm lock` 5.2 ms (resolution, three manifests, three
+digests, the lockfile's bytes compared and left alone); `nazm check` 8.5 ms with `--no-cache` and
+10.0 ms from a warm cache (for three one-function packages the cache's reads cost more than the
+checking they save); `nazm build --no-cache` 210.9 ms and a warm build 86.9 ms (clang is most of
+both). Two hundred packages, each depending on up to three earlier ones: resolving, locking,
+checking and locking again takes 2.6 s in all, dominated by checking 200 modules. Every existing
+program is unaffected: nothing that is not a package takes the new paths, and the only change to
+the link — `ZERO_AR_DATE=1`, and linking under the final file name — makes executables
+reproducible without changing what they contain.
+
 ### The standard library — N45, measured 2026-10-01
 
 The standard library is Nazm source, so what it costs is what the code generators make of it.

@@ -128,6 +128,17 @@ that cannot be found) gained a case: an import beginning with `@std/` that names
 whose help lists the ones there are. A standard module's definitions are named `@std/NAME::…` in
 every packet that names a definition, exactly as a project module's are named by its path.
 
+**Applied to N46, packages.** Ten codes appeared, all compatible: `N0500` (an invalid manifest),
+`N0501` (a dependency that is not there), `N0502` (a version mismatch), `N0503` (two packages of
+one name, or a declared name the package does not have), `N0504` (a cycle), `N0505` (`--locked`
+with no lockfile), `N0506` (other packages than the lockfile records), `N0507` (a package whose
+bytes no longer match its digest), `N0508` (an import naming a package the importer does not
+declare) and `N0509` (a package with no `main`). They are about manifests, directories and the
+lockfile rather than positions in a module, so they carry a synthetic span. Two new formats have
+their own versions and are not these schemas: the manifest, `nazm.package/1`, and the lockfile,
+`nazm.lock/1`. `nazm.check-report/1` and `nazm.build-report/1` gained `"package"` as a value of
+`root`, compatible.
+
 A consumer that fails on an unrecognised field is not compatible with this contract, and
 the `additionalProperties: false` in the schema documents is a statement about *this*
 version's output, not a promise that the next one adds nothing.

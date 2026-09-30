@@ -2056,6 +2056,46 @@ compilation were a duplicate definition, so imported files had to rename theirs.
 `main` need not be `pub`. Being the entry point is not the same as being importable, and
 requiring the keyword would suggest the runtime resolves it by name from outside.
 
+### Packages — `nazm.toml`, `use "NAME:path"` and `nazm.lock`
+<!-- id: packages -->
+
+A **package** is a directory holding a manifest, `nazm.toml` (`nazm.package/1`): its name, its
+exact version, its source root (`src` unless it says otherwise), an optional entry module, and
+its dependencies — each a path and the exact version that package must state.
+
+```toml
+schema = "nazm.package/1"
+
+[package]
+name = "app"
+version = "0.1.0"
+main = "main.nz"
+
+[dependencies]
+geo = { path = "../geo", version = "1.2.0" }
+```
+
+`use "geo:lib.nz";` imports the module `lib.nz` of the package `app` declares as `geo`, resolved
+against `geo`'s source root. A package sees its own dependencies and nothing else — not its
+dependencies' dependencies (`N0508`) — and a relative import stays inside its package's source
+root. A dependency's module is identified as `NAME@VERSION/path` (`geo@1.2.0/lib.nz`), which no
+project path can be.
+
+`nazm check|build|run DIR` builds the package in `DIR` from its `main` (`N0509` without one).
+Resolution is exact and deterministic: packages are read in name order; a declared version its
+manifest does not state is `N0502`, two packages of one name `N0503`, a cycle `N0504`, a missing
+dependency `N0501`, an invalid manifest — an unknown key included — `N0500`. Every source is a
+path, so nothing is ever downloaded.
+
+`nazm lock DIR` writes `nazm.lock` (`nazm.lock/1`): each package's name, version, source relative
+to the root package, and a BLAKE3 digest of its manifest and sources, in name order — the same
+bytes for the same packages anywhere. `--locked` holds `check`, `build` or `run` to it before
+anything is compiled: no lockfile is `N0505`, other packages than it records `N0506`, and a package
+whose bytes changed since it was locked `N0507`.
+
+**Reproducible builds.** The same sources, lockfile, toolchain, target, backend and settings give
+byte-identical executables on one host, from empty caches, in any directory.
+
 ### Durable identity: what makes this the same module, or the same definition
 <!-- id: durable-identity -->
 
