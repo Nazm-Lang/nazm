@@ -1,12 +1,28 @@
-//! Syntax tree to [`crate::ir`], with everything outside the native subset refused by name.
+//! Core IR to [`crate::ir`], with everything outside the native subset refused by name.
+//!
+//! # What this reads
+//!
+//! Core IR (`docs/architecture.md` §7.41) and the checker's semantic tables — signatures,
+//! visibility, the call graph, the user-type table. **Not** the syntax tree, which this crate
+//! cannot see, and not the resolution's position maps: which slot a name is, which function a
+//! call is, which field a projection reads, what a `?` means and which loop a `break` leaves
+//! all arrive in Core IR, decided once by the one lowering in `nazm-core`. Until N39 this file
+//! walked the tree and asked the resolution each of those questions again, span by span —
+//! the same questions the interpreter asked as it ran. `cargo xtask check` now refuses a
+//! position lookup here.
+//!
+//! What is decided here, and only here, is what Core IR deliberately leaves out: layout —
+//! where a field sits, what a variant's discriminant is — linkage and symbols, which
+//! temporaries need a slot so a failure part way through a construction can release what it
+//! built, and which instance of a generic function a call reaches.
 //!
 //! # Refusal, not partial compilation
 //!
-//! Lowering runs *after* `nazm_core::check` has passed, so a program reaching here is
-//! well-typed. That is exactly why the refusals below are about the backend's coverage
-//! and not about the program being wrong: `while` is a perfectly good Nazm construct that
-//! this increment cannot compile, and saying so is different from saying it is invalid.
-//! Every refusal points at `nazm run`, which still executes all of it.
+//! Lowering runs *after* checking has passed and Core IR has been verified, so a program
+//! reaching here is well-typed. That is exactly why the refusals below are about the
+//! backend's coverage and not about the program being wrong: recursion is a perfectly good
+//! Nazm construct that this backend cannot compile, and saying so is different from saying
+//! it is invalid. Every refusal points at `nazm run`, which still executes all of it.
 //!
 //! Every unsupported construct produces a diagnostic and **no output**. A compiler that
 //! emits something for a program it did not fully understand is worse than one that
@@ -14,43 +30,27 @@
 //!
 //! # The one `if`, in two positions
 //!
-//! `docs/spec.md` has a single `if` whose meaning is decided by checking, not by syntax,
-//! and this file does not add a second. The same `AstExpr::If` becomes `Stmt::If` when it
-//! is found where no value is wanted and `Expr::If` when it is found where one is — which
-//! is the position, not the syntax, exactly as checking decides it. There are three such
-//! places and they are named, not discovered: a statement (`AstStmt::Expr`), the tail of
-//! a body that wants no value ([`lower_body`]), and anywhere an expression is lowered
-//! ([`lower_expr`]).
-//!
-//! What differs between the two is **completion**, and that is represented rather than
-//! implied. A statement `if` without `else` always falls through; one whose branches both
-//! transfer never does; a value `if` with one transferring branch takes its value from
-//! the other. [`Ends`] records which, for statement sequences, and `Option` on
-//! [`Block::result`] and on `Expr::If`'s type records it for values.
-//!
-//! # Blocks that produce a value, and blocks that do not
-//!
-//! A function body and a value-position `if` branch produce a value; a loop body and a
-//! statement-`if` branch do not. Those are different obligations, so they are different
-//! functions here — [`lower_block`] returns a [`Block`] and [`lower_body`] returns a
-//! `Vec<Stmt>` — over a shared [`lower_stmts`] that has no opinion about either.
+//! Core IR has already said which `if` is a statement and which is a value, and which region
+//! wants a value: a function body, a value `if` branch or `match` arm, and a block used as a
+//! value do; a loop body, a statement branch or arm, a `scope` body and a block written as a
+//! statement do not. [`lower_block`] and [`lower_body`] are those two kinds, over a shared
+//! [`lower_stmts`] that has no opinion about either. What differs between the positions is
+//! completion, and that is represented rather than implied: [`Ends`] records it for
+//! statement sequences, and `Option` on [`Block::result`] and on `Expr::If`'s type for values.
 //!
 //! # Where `break` and `continue` may appear
 //!
-//! Only inside a loop **body**. A loop's *condition* is outside that loop: a transfer
-//! raised there targets the enclosing one. That is the existing language's rule, taken
-//! from `check.rs` (which raises `loop_depth` around the body alone) and from `eval.rs`
-//! (whose `take!` lets a `Flow::Break` from the condition leave `while_loop`), not
-//! invented here. [`Ctx::loop_depth`] reproduces it so that a `break` this backend cannot
-//! place is refused rather than emitted somewhere plausible.
+//! Core IR names the loop each one targets; LIR does not — the emitter acts on the innermost
+//! loop whose **body** encloses the transfer. The two agree because a `break` in a loop's
+//! *condition* names the enclosing loop, which is the innermost body around it; a target
+//! that is not the innermost is refused as a compiler bug rather than emitted against the
+//! wrong loop ([`loop_target`]).
 
+use nazm_cir as cir;
+use nazm_cir::Ends;
 use nazm_diag::{codes, Diagnostic};
 use nazm_sema::resolve::{Callee, FnId, Resolution};
 use nazm_span::Span;
-use nazm_syntax::{
-    BinOp as AstOp, Block as AstBlock, Expr as AstExpr, Function as AstFn, MatchArm as AstArm,
-    Program, Spawn as AstSpawn, Stmt as AstStmt,
-};
 
 use nazm_sema::key::{DefKey, DefKind};
 use nazm_sema::module::{ModuleGraph, ModuleId};
@@ -169,31 +169,23 @@ struct Ctx<'a> {
     /// Whether this unit is a generic instance's. Such a unit defines exactly one function
     /// and **owns no module's definitions**, so everything it calls is external to it.
     instance_unit: bool,
-    /// Locals of the function being lowered, in slot order, taken from the resolution.
+    /// Locals of the function being lowered, in slot order: Core IR's resolved locals, then
+    /// the hidden slots made here.
     locals: Vec<Local>,
-    /// The function whose body is being lowered.
-    current: FnId,
+    /// How many of [`Self::locals`] are Core IR's resolved locals — the checker's slots.
+    resolved: usize,
+    /// For each Core IR temporary, the hidden slot it became, once the body mentions it.
+    temps: Vec<Option<usize>>,
+    /// The Core IR function whose body is being lowered: its constants and locals.
+    function: Option<&'a cir::Function>,
     /// The declared return type of the function being lowered, for checking `return`.
     /// Reset per function, like everything else about a function's body.
     ret_ty: Ty,
-    /// How many loop **bodies** enclose the statement being lowered.
-    ///
-    /// Mirrors the checker's field of the same name, including where it is raised: around
-    /// a loop's body and not around its condition. Reset per function, because a loop
-    /// target cannot cross a function boundary.
-    loop_depth: u32,
+    /// The loops whose **bodies** enclose the statement being lowered, innermost last: the
+    /// emitter's target stack, which a Core IR transfer's named target must agree with.
+    /// Reset per function, because a loop target cannot cross a function boundary.
+    loops: Vec<cir::LoopId>,
     errors: Vec<Diagnostic>,
-}
-
-/// How a statement sequence finishes. The checker's `Completion`, minus the value case
-/// that a statement sequence cannot have.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Ends {
-    /// Reaches the end; whatever follows can run.
-    FallsThrough,
-    /// Every path leaves through `break` or `continue`. Nothing after it can run, and the
-    /// checker has already said so (`N0313`).
-    Transfers,
 }
 
 /// How every record in this compilation is laid out.
@@ -481,14 +473,43 @@ impl Ctx<'_> {
         self.errors.push(unsupported_at(span, what));
     }
 
-    /// Which slot the name written at `span` refers to, and its type.
+    /// Which slot a Core IR local is, and its type.
     ///
-    /// A lookup, not a search. Scope rules — shadowing, a branch's bindings dying at the
-    /// join, a local not shadowing a function — were applied once, by the checker, and
-    /// this reads the answer.
-    fn slot_at(&self, span: Span) -> Option<(usize, Ty)> {
-        let slot = self.res.var(span)? as usize;
-        self.locals.get(slot).map(|l| (slot, l.ty))
+    /// A resolved local is its own slot: the checker numbered them, parameters first, and
+    /// Core IR kept the numbering. A temporary becomes a hidden slot the first time the body
+    /// mentions it — named for what it holds, so `--emit-ir` shows `ok#7` where a `?`'s
+    /// success value lives.
+    fn slot_of(&mut self, l: cir::LocalId) -> Option<(usize, Ty)> {
+        if l.index() < self.resolved {
+            return self.locals.get(l.index()).map(|x| (l.index(), x.ty));
+        }
+        let at = l.index() - self.resolved;
+        if let Some(Some(slot)) = self.temps.get(at) {
+            let slot = *slot;
+            return self.locals.get(slot).map(|x| (slot, x.ty));
+        }
+        let local = self.function.and_then(|f| f.local(l))?;
+        let (name, t) = (local.name.clone(), local.ty);
+        let ty = self.ty(t, local.at)?;
+        let slot = self.hidden(ty, &name);
+        if let Some(entry) = self.temps.get_mut(at) {
+            *entry = Some(slot);
+        }
+        Some((slot, ty))
+    }
+
+    /// A Core IR local's display name, for a diagnostic.
+    fn local_name(&self, l: cir::LocalId) -> String {
+        self.function
+            .and_then(|f| f.local(l))
+            .map_or_else(|| format!("local {}", l.0), |x| x.name.clone())
+    }
+
+    /// A function's display name, for a diagnostic. Never resolved against.
+    fn function_name(&self, id: FnId) -> String {
+        self.res
+            .function(id)
+            .map_or_else(|| "?".to_owned(), |d| d.name.clone())
     }
 
     /// The backend's signature for a `FnId`, if it accepted one.
@@ -539,7 +560,7 @@ impl Ctx<'_> {
 ///
 /// A `main` this backend refuses, or a program with none.
 pub fn plan(
-    program: &Program,
+    core: &cir::Program,
     res: &Resolution,
     graph: &ModuleGraph,
     instances: Instances,
@@ -572,7 +593,7 @@ pub fn plan(
         if !def.type_params.is_empty() {
             continue;
         }
-        let Some(f) = program.functions.get(def.decl as usize) else {
+        let Some(f) = core.function(id) else {
             continue;
         };
         if let Some(mut accepted) = signature(res, graph, id, f, &mut errors) {
@@ -678,9 +699,11 @@ fn context<'a>(res: &'a Resolution, plan: &'a Plan, module: ModuleId) -> Ctx<'a>
         subst: None,
         instance_unit: false,
         locals: Vec::new(),
-        current: FnId::from_index(0),
+        resolved: 0,
+        temps: Vec::new(),
+        function: None,
         ret_ty: Ty::Int,
-        loop_depth: 0,
+        loops: Vec::new(),
         errors: Vec::new(),
     }
 }
@@ -774,7 +797,7 @@ fn finish(ctx: Ctx<'_>, module: ModuleId, source: &str, functions: Vec<Function>
 /// Its generic definitions are **not** here. They have no one signature and no one body
 /// as native code; each instance is lowered into a unit of its own by [`lower_instance`].
 pub fn lower_module(
-    program: &Program,
+    core: &cir::Program,
     res: &Resolution,
     plan: &Plan,
     module: ModuleId,
@@ -782,18 +805,11 @@ pub fn lower_module(
 ) -> Lowered {
     let mut ctx = context(res, plan, module);
     let mut functions = Vec::new();
-    for (i, def) in res.functions().iter().enumerate() {
-        if def.module != module || !def.type_params.is_empty() {
+    for f in core.of_module(module) {
+        if f.type_params > 0 || ctx.sig(f.def).is_none() {
             continue;
         }
-        let id = FnId::from_index(i);
-        let Some(f) = program.functions.get(def.decl as usize) else {
-            continue;
-        };
-        if ctx.sig(id).is_none() {
-            continue;
-        }
-        if let Some(lowered) = lower_function(&mut ctx, id, f) {
+        if let Some(lowered) = lower_function(&mut ctx, f) {
             functions.push(lowered);
         }
     }
@@ -802,31 +818,30 @@ pub fn lower_module(
 
 /// Lower one generic function instance into a unit of its own.
 ///
-/// The generic definition's **resolved body**, lowered under the instance's substitution:
+/// The generic definition's **Core IR body**, lowered under the instance's substitution:
 /// nothing is re-parsed, re-resolved or re-checked, and no source is copied. Every name in
 /// the body means what the checker said it meant; only the types it was checked with are
 /// replaced, and they are replaced by lookup ([`Ctx::ty`]). Spans are the definition's own,
 /// so a failure inside an instance names the line of the generic function that failed.
 pub fn lower_instance(
-    program: &Program,
+    core: &cir::Program,
     res: &Resolution,
     plan: &Plan,
     at: usize,
     source: &str,
 ) -> Option<Lowered> {
     let planned = plan.instances.planned.get(at)?;
-    let def = res.function(planned.key.def)?;
-    let f = program.functions.get(def.decl as usize)?;
-    let mut ctx = context(res, plan, def.module);
+    let f = core.function(planned.key.def)?;
+    let mut ctx = context(res, plan, f.module);
     ctx.subst = Some((
         ParamOwner::Function(planned.key.def),
         planned.key.args.clone(),
     ));
     ctx.instance_unit = true;
     let sig = plan.instance_sigs.get(at)?.clone();
-    let lowered = lower_body_as(&mut ctx, planned.key.def, f, &sig);
+    let lowered = lower_body_as(&mut ctx, f, &sig);
     let functions = lowered.into_iter().collect();
-    Some(finish(ctx, def.module, source, functions))
+    Some(finish(ctx, f.module, source, functions))
 }
 
 /// Lower a checked program into one native unit per module, and one per generic function
@@ -835,7 +850,7 @@ pub fn lower_instance(
 /// # The pipeline
 ///
 /// ```text
-/// resolved compilation → instance plan → plan (global) → lower each module
+/// Core IR + resolution → instance plan → plan (global) → lower each module
 ///                                                      → lower each instance
 ///                      → recursion check (global)
 /// ```
@@ -849,7 +864,7 @@ pub fn lower_instance(
 /// should say everything that would have to change, which is the same
 /// one-mistake-one-error discipline the rest of the front end holds to.
 pub fn lower(
-    program: &Program,
+    core: &cir::Program,
     res: &Resolution,
     graph: &ModuleGraph,
     names: &crate::names::SourceNames<'_>,
@@ -858,7 +873,7 @@ pub fn lower(
     let instances =
         plan_instances(&mut res, graph).map_err(|diagnostics| LowerError { diagnostics })?;
     let res = res;
-    let settled = plan(program, &res, graph, instances)?;
+    let settled = plan(core, &res, graph, instances)?;
 
     let mut units = Vec::new();
     let mut errors = Vec::new();
@@ -873,7 +888,7 @@ pub fn lower(
         // The module's durable identity where it has one, which is what makes the
         // artefact the same bytes from any checkout. `crate::names` owns the rule.
         let source = graph.file(module).map_or("", |f| names.name(f));
-        let mut lowered = lower_module(program, &res, &settled, module, source);
+        let mut lowered = lower_module(core, &res, &settled, module, source);
         units.push(lowered.unit);
         errors.append(&mut lowered.errors);
     }
@@ -888,7 +903,7 @@ pub fn lower(
         let source = module
             .and_then(|m| graph.file(m))
             .map_or("", |f| names.name(f));
-        if let Some(mut lowered) = lower_instance(program, &res, &settled, at, source) {
+        if let Some(mut lowered) = lower_instance(core, &res, &settled, at, source) {
             instances.push(lowered.unit);
             errors.append(&mut lowered.errors);
         }
@@ -926,7 +941,7 @@ fn signature(
     res: &Resolution,
     graph: &ModuleGraph,
     id: FnId,
-    f: &AstFn,
+    f: &cir::Function,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<Sig> {
     let def = res.function(id)?;
@@ -948,7 +963,7 @@ fn signature(
         }
         if ret != Ty::Int {
             errors.push(unsupported_at(
-                f.return_type.span,
+                f.ret_span,
                 "a `main` that does not return `Int`",
             ));
             ok = false;
@@ -1005,33 +1020,36 @@ fn unsupported_at(span: Span, what: &str) -> Diagnostic {
 ///
 /// # The slot space arrives, it is not built
 ///
-/// This used to reset a scope stack, walk the parameters binding each into a fresh slot,
-/// and nest the body inside the parameter scope — reproducing, carefully and separately,
-/// the rules the checker had already applied. The comment on the nesting said why:
-/// "keeps the two implementations agreeing for the same reason rather than by
-/// coincidence". There is one implementation now. The slots, their order and their types
-/// come from the resolution, **parameters first**, and nothing here can disagree with the
-/// checker about which binding a name means.
-fn lower_function(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn) -> Option<Function> {
-    let sig = ctx.sig(id)?.clone();
-    lower_body_as(ctx, id, f, &sig)
+/// The slots, their order and their types are Core IR's locals — the checker's slots,
+/// **parameters first** — and nothing here can disagree with the checker about which binding a
+/// name means. Core IR's own temporaries (a `?`'s two bindings) become hidden slots where the
+/// body first mentions them, which is where the lowering that preceded Core IR made them.
+fn lower_function<'a>(ctx: &mut Ctx<'a>, f: &'a cir::Function) -> Option<Function> {
+    let sig = ctx.sig(f.def)?.clone();
+    lower_body_as(ctx, f, &sig)
 }
 
 /// Lower a body under a signature: an ordinary function's own, or an instance's.
-fn lower_body_as(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn, sig: &Sig) -> Option<Function> {
+fn lower_body_as<'a>(ctx: &mut Ctx<'a>, f: &'a cir::Function, sig: &Sig) -> Option<Function> {
     let Sig {
         symbol,
         linkage,
         ret,
         ..
     } = sig.clone();
-    let def = ctx.res.function(id)?;
-    let declared: Vec<(String, Type)> = def.locals.iter().map(|l| (l.name.clone(), l.ty)).collect();
-    let mut locals = Vec::with_capacity(declared.len());
-    for (name, t) in declared {
+    let resolved: Vec<(String, Type)> = f
+        .locals
+        .iter()
+        .take_while(|l| !matches!(l.origin, cir::LocalOrigin::Temp(_)))
+        .map(|l| (l.name.clone(), l.ty))
+        .collect();
+    let mut locals = Vec::with_capacity(f.locals.len());
+    for (name, t) in resolved {
         let ty = ctx.ty(t, f.name_span)?;
         locals.push(Local { name, ty });
     }
+    ctx.resolved = locals.len();
+    ctx.temps = vec![None; f.locals.len().saturating_sub(ctx.resolved)];
     ctx.locals = locals;
     // Every local's type is mentioned by this unit's text: it is the type of an `alloca`.
     let local_types: Vec<Ty> = ctx.locals.iter().map(|l| l.ty).collect();
@@ -1039,35 +1057,33 @@ fn lower_body_as(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn, sig: &Sig) -> Option<Fu
         ctx.note(t);
     }
     ctx.note(ret);
-    ctx.current = id;
     ctx.ret_ty = ret;
-    // No loop target crosses a function boundary, so the depth starts at zero here and
-    // not wherever the previous function left it.
-    ctx.loop_depth = 0;
+    // No loop target crosses a function boundary.
+    ctx.loops.clear();
 
-    let params = f.params.len();
-    let body = f.body.as_ref()?;
-    let block = lower_block(ctx, body)?;
-    // No tail is legitimate now: a body every path of which returns has nothing to fall
-    // off the end with, and `check_function` accepts exactly that by treating
-    // `Completion::Diverges` as satisfying the signature. Emission writes no terminator
-    // for such a body, because the `ret` is already there.
+    let previous = ctx.function.replace(f);
+    let block = lower_block(ctx, &f.body);
+    ctx.function = previous;
+    let block = block?;
+    // No tail is legitimate: a body every path of which returns has nothing to fall off the
+    // end with, and checking accepts exactly that. Emission writes no terminator for such a
+    // body, because the `ret` is already there.
     let Some(result) = block.result.as_ref() else {
         return Some(Function {
             symbol,
             linkage,
             name: f.name.clone(),
             locals: std::mem::take(&mut ctx.locals),
-            params,
+            params: f.params as usize,
             ret,
             body: block,
         });
     };
     if !fits(result, ret) {
         // Unreachable after checking, which requires the body to produce the declared
-        // type. Reported rather than assumed away.
+        // type, and after Core IR's own verification. Reported rather than assumed away.
         ctx.unsupported(
-            body.span,
+            f.body.at,
             &format!(
                 "a `{}` whose body produces `{}` but is declared `{}`",
                 f.name,
@@ -1083,7 +1099,7 @@ fn lower_body_as(ctx: &mut Ctx<'_>, id: FnId, f: &AstFn, sig: &Sig) -> Option<Fu
         linkage,
         name: f.name.clone(),
         locals: std::mem::take(&mut ctx.locals),
-        params,
+        params: f.params as usize,
         ret,
         body: block,
     })
@@ -1199,19 +1215,13 @@ fn report_cycles(res: &Resolution, errors: &mut Vec<Diagnostic>) {
     }
 }
 
-/// A block used as a value: statements, then a tail.
-///
-/// Reached for a function body and for a value-position `if` branch, and for nothing
-/// else. A bare `{ … }` in expression position is refused in [`lower_expr`], and a block
-/// that wants no value goes to [`lower_body`] — so "which blocks may this backend
-/// compile" has one answer written in one place.
-fn lower_block(ctx: &mut Ctx<'_>, b: &AstBlock) -> Option<Block> {
-    let (stmts, ends) = lower_stmts(ctx, &b.statements);
+/// A value region: statements, then a tail — none where the statements transfer.
+fn lower_block(ctx: &mut Ctx<'_>, b: &cir::Block) -> Option<Block> {
+    let (stmts, ends) = lower_stmts(ctx, &b.stmts);
 
     if ends == Ends::Transfers {
-        // Every path through the statements leaves, so the block has no value. There is
-        // no tail to lower either: one written after a transfer is `N0313`, which the
-        // checker reports before lowering runs.
+        // Every path through the statements leaves, so the block has no value, and Core IR
+        // lowered no tail for it.
         return Some(Block {
             stmts,
             result: None,
@@ -1219,7 +1229,7 @@ fn lower_block(ctx: &mut Ctx<'_>, b: &AstBlock) -> Option<Block> {
     }
 
     let Some(tail) = &b.tail else {
-        ctx.unsupported(b.span, "a block with no final result expression");
+        ctx.unsupported(b.at, "a block with no final result expression");
         return None;
     };
 
@@ -1230,113 +1240,34 @@ fn lower_block(ctx: &mut Ctx<'_>, b: &AstBlock) -> Option<Block> {
     })
 }
 
-/// A body that wants no value: a loop body, or a branch of a statement-position `if`.
-///
-/// The caller decides the scope. A loop body and an `if` branch are both scopes in the
-/// language, and both callers wrap this in [`Ctx::scoped`]; doing it here instead would
-/// hide which construct owns the scope.
-///
-/// # The tail
-///
-/// A block in this position may still have a tail, and what it means depends on what it
-/// is. An `if` is a **statement-position `if`** — `while c { … if d { x = 1; } }` parses
-/// the trailing `if` as the body's tail, and `check_while` accepts it because its
-/// completion is Unit. Anything else is a value the language discards: `check_expr` for
-/// an `if` with no `else` returns Unit whatever its branch produced, so `if c { 1 }`
-/// evaluates the `1` and drops it, and `nazm run` does exactly that.
-fn lower_body(ctx: &mut Ctx<'_>, b: &AstBlock) -> (Vec<Stmt>, Ends) {
-    let (mut stmts, ends) = lower_stmts(ctx, &b.statements);
-
-    if let Some(tail) = &b.tail {
-        if ends == Ends::Transfers {
-            // Unreachable: a tail after a transfer is `N0313`. Nothing is lowered for it,
-            // which is also what emission would do with it.
-            return (stmts, ends);
-        }
-        let (effect, tail_ends) = lower_effect(ctx, tail);
-        stmts.extend(effect);
-        return (stmts, tail_ends);
-    }
-
-    (stmts, ends)
+/// A statement region: a loop body, a statement `if` branch or `match` arm, a `scope` body, a
+/// block written as a statement. Its statements, in place.
+fn lower_body(ctx: &mut Ctx<'_>, b: &cir::Block) -> (Vec<Stmt>, Ends) {
+    lower_stmts(ctx, &b.stmts)
 }
 
-/// An expression found where no value is wanted: an expression statement, or the tail of
-/// a block that wants none.
-///
-/// The three constructs that contain blocks keep their statement form here, because each
-/// may complete with nothing — a branch or an arm that only assigns — and a value form
-/// cannot say so. An `if` becomes [`Stmt::If`], a `match` [`Stmt::Match`], and a bare
-/// block its own statements in place: resolution gave its bindings their own slots, so
-/// no scope has to be marked. Anything else is evaluated and its value dropped, which is
-/// what `nazm run` does with it.
-fn lower_effect(ctx: &mut Ctx<'_>, e: &AstExpr) -> (Vec<Stmt>, Ends) {
-    match e {
-        AstExpr::If {
-            cond,
-            then_block,
-            else_block,
-            span,
-        } => {
-            let (stmt, ends) =
-                lower_statement_if(ctx, cond, then_block, else_block.as_ref(), *span);
-            (stmt.into_iter().collect(), ends)
-        }
-        AstExpr::Match {
-            scrutinee,
-            arms,
-            span,
-        } => {
-            let (stmt, ends) = lower_statement_match(ctx, scrutinee, arms, *span);
-            (stmt.into_iter().collect(), ends)
-        }
-        AstExpr::Block(b) => lower_body(ctx, b),
-        // A sequence operation is written this way (`ints_push(a, 1);`), and having to
-        // bind a result nobody wants would be a workaround for the language's lack of a
-        // unit type rather than a rule worth having.
-        other => (
-            lower_expr(ctx, other)
-                .map(Stmt::Discard)
-                .into_iter()
-                .collect(),
-            Ends::FallsThrough,
-        ),
-    }
-}
-
-/// The statements every kind of block shares.
+/// The statements every kind of region shares.
 ///
 /// A statement that cannot be lowered records a diagnostic and contributes nothing, which
 /// is safe because [`lower`] returns `Err` whenever any diagnostic was recorded — no
 /// module is ever built out of a partially lowered body.
-fn lower_stmts(ctx: &mut Ctx<'_>, statements: &[AstStmt]) -> (Vec<Stmt>, Ends) {
+fn lower_stmts(ctx: &mut Ctx<'_>, statements: &[cir::Stmt]) -> (Vec<Stmt>, Ends) {
     let mut stmts = Vec::new();
     for s in statements {
         match s {
             // `let` and `let mut` lower identically. Mutability is a *checking* property:
             // it decides whether an assignment to this binding is legal, and the checker
-            // has already decided that (`N0310`). Encoding it again here would be a
-            // second mutability rule, and two rules are two chances to disagree.
-            AstStmt::Let(l) => {
-                // The initialiser is lowered *before* the name is bound, so `let x = x;`
-                // reads the outer `x` exactly as the checker says it does.
-                let value = lower_expr(ctx, &l.value);
-                // A binding whose initialiser always transfers is typed `Int`, which is
-                // not a guess: `check_stmt` asks `value_type(&l.value, None)`, and that
-                // returns `expected.unwrap_or(Int)` for a `Completion::Diverges`. The
-                // binding is never written, so the choice is observable only in whether
-                // the two implementations agree about the program being legal.
-                let _ = value.as_ref().and_then(Expr::ty).unwrap_or(Ty::Int);
-                // The slot this `let` introduces, as resolution assigned it. The backend
-                // used to allocate one here from its own counter.
-                let Some((slot, _)) = ctx.slot_at(l.name_span) else {
+            // has already decided that (`N0310`).
+            cir::Stmt::Let { local, value } => {
+                let value = lower_expr(ctx, value);
+                let Some((slot, _)) = ctx.slot_of(*local) else {
                     ctx.errors.push(
                         Diagnostic::error(
                             codes::UNDEFINED_VARIABLE,
-                            l.name_span,
-                            format!("`{}` has no resolved binding", l.name),
+                            Span::synthetic(),
+                            format!("local {} has no slot", local.0),
                         )
-                        .help("this is a compiler bug: checking assigned no slot here"),
+                        .help("this is a compiler bug: Core IR names a local it does not have"),
                     );
                     continue;
                 };
@@ -1344,55 +1275,82 @@ fn lower_stmts(ctx: &mut Ctx<'_>, statements: &[AstStmt]) -> (Vec<Stmt>, Ends) {
                     stmts.push(Stmt::Let { slot, value });
                 }
             }
-            AstStmt::Assign(a) => stmts.extend(lower_assign(ctx, a)),
-            AstStmt::While(w) => stmts.extend(lower_while(ctx, w)),
-            AstStmt::Scope(sc) => {
+            cir::Stmt::Assign {
+                local,
+                path,
+                value,
+                at,
+            } => stmts.extend(lower_assign(ctx, *local, path, value, *at)),
+            cir::Stmt::Loop { id, cond, body, .. } => {
+                stmts.extend(lower_while(ctx, *id, cond, body));
+            }
+            cir::Stmt::Scope { body, at } => {
                 // Its own scope in the language too: a binding made inside `scope { … }`
                 // does not outlive it, exactly as in any other block.
-                let (body, ends) = lower_body(ctx, &sc.body);
-                stmts.push(Stmt::Scope {
-                    body,
-                    span: sc.span,
-                });
+                let (body, ends) = lower_body(ctx, body);
+                stmts.push(Stmt::Scope { body, span: *at });
                 // A `scope` whose body always transfers transfers too — after the join,
                 // which emission is what arranges. Nothing after it can run.
                 if ends == Ends::Transfers {
                     return (stmts, Ends::Transfers);
                 }
             }
-            AstStmt::Spawn(sp) => {
-                if let Some(stmt) = lower_spawn(ctx, sp) {
+            cir::Stmt::Spawn {
+                callee,
+                args,
+                at,
+                callee_at,
+            } => {
+                if let Some(stmt) = lower_spawn(ctx, *callee, args, *at, *callee_at) {
                     stmts.push(stmt);
                 }
             }
-            AstStmt::Return(r) => {
-                if let Some(stmt) = lower_return(ctx, r) {
+            cir::Stmt::Return { value, at } => {
+                if let Some(stmt) = lower_return(ctx, value, *at) {
                     stmts.push(stmt);
                 }
                 // A `return` leaves the function whether or not its operand lowered, so
-                // the rest of the block is unreachable either way — and the checker has
-                // already reported anything written after it (`N0313`).
+                // the rest of the block is unreachable either way.
                 return (stmts, Ends::Transfers);
             }
-            AstStmt::Break { span } => {
-                if loop_target(ctx, "break", *span) {
+            cir::Stmt::Break { target, at } => {
+                if loop_target(ctx, "break", *target, *at) {
                     stmts.push(Stmt::Break);
                     return (stmts, Ends::Transfers);
                 }
             }
-            AstStmt::Continue { span } => {
-                if loop_target(ctx, "continue", *span) {
+            cir::Stmt::Continue { target, at } => {
+                if loop_target(ctx, "continue", *target, *at) {
                     stmts.push(Stmt::Continue);
                     return (stmts, Ends::Transfers);
                 }
             }
-            // An expression statement: the same `if`, `match` or block as everywhere
-            // else, found where no value is wanted, or any other expression evaluated and
-            // its value dropped — which is what the language means by putting a `;` after
-            // an expression. See `lower_effect`.
-            AstStmt::Expr(e) => {
-                let (effect, ends) = lower_effect(ctx, e);
-                stmts.extend(effect);
+            // Evaluated and its value dropped — what the language means by `e;`.
+            cir::Stmt::Eval(e) => stmts.extend(lower_expr(ctx, e).map(Stmt::Discard)),
+            cir::Stmt::If {
+                cond,
+                then,
+                otherwise,
+                ..
+            } => {
+                let (stmt, ends) = lower_statement_if(ctx, cond, then, otherwise.as_ref());
+                stmts.extend(stmt);
+                if ends == Ends::Transfers {
+                    return (stmts, ends);
+                }
+            }
+            cir::Stmt::Match(m) => {
+                let (stmt, ends) = lower_statement_match(ctx, m);
+                stmts.extend(stmt);
+                if ends == Ends::Transfers {
+                    return (stmts, ends);
+                }
+            }
+            // A block written as a statement is its statements, in place: each binding in
+            // it already has a slot of its own, so no scope has to be marked.
+            cir::Stmt::Block(b) => {
+                let (inner, ends) = lower_body(ctx, b);
+                stmts.extend(inner);
                 if ends == Ends::Transfers {
                     return (stmts, ends);
                 }
@@ -1402,19 +1360,16 @@ fn lower_stmts(ctx: &mut Ctx<'_>, statements: &[AstStmt]) -> (Vec<Stmt>, Ends) {
     (stmts, Ends::FallsThrough)
 }
 
-/// `return e;` — leave the function with `e`.
-///
-/// No loop target is consulted: a `return` inside a loop leaves the *function*, which is
-/// what both existing implementations do (`eval.rs` lets `Flow::Return` travel out
-/// through `while_loop`) and why this needs nothing from the target stack.
-fn lower_return(ctx: &mut Ctx<'_>, r: &nazm_syntax::Return) -> Option<Stmt> {
-    let value = lower_expr(ctx, &r.value)?;
+/// `return e;` — leave the function with `e`. No loop target is consulted: a `return`
+/// inside a loop leaves the *function*.
+fn lower_return(ctx: &mut Ctx<'_>, value: &cir::Expr, at: Span) -> Option<Stmt> {
+    let value = lower_expr(ctx, value)?;
     if !fits(&value, ctx.ret_ty) {
         // Unreachable after checking, which requires a `return` to match the signature
         // (`N0300`). Reported rather than assumed away: a `ret` of the wrong type is a
         // module clang rejects for a reason that names none of this.
         ctx.unsupported(
-            r.span,
+            at,
             &format!(
                 "a `return` of `{}` from a function declared `{}`",
                 value.ty().map_or("nothing", Ty::name),
@@ -1426,44 +1381,52 @@ fn lower_return(ctx: &mut Ctx<'_>, r: &nazm_syntax::Return) -> Option<Stmt> {
     Some(Stmt::Return(value))
 }
 
-/// Whether a `break` or `continue` has a loop to affect.
+/// Whether a `break` or `continue` names the loop this backend would leave or restart.
 ///
-/// The checker reports `N0312` for one that does not, so a `false` here means this
-/// resolver disagrees with the checker — a compiler bug, reported as one. Emission relies
-/// on it: a `Stmt::Break` reaches the emitter only from inside a `Stmt::While` body, so
-/// the emitter's target stack is never empty when it reads one.
-fn loop_target(ctx: &mut Ctx<'_>, word: &str, span: Span) -> bool {
-    if ctx.loop_depth > 0 {
-        return true;
+/// LIR spells a transfer without its target: the emitter's target stack is the loops whose
+/// bodies enclose it, innermost last, and a transfer acts on the innermost. Core IR names the
+/// target, so the two must agree — a `break` in a loop's *condition* names the enclosing loop,
+/// which is exactly the innermost body around it. A target that is not the innermost would be
+/// emitted against the wrong loop, so it is refused as the compiler bug it is.
+fn loop_target(ctx: &mut Ctx<'_>, word: &str, target: cir::LoopId, span: Span) -> bool {
+    match ctx.loops.last() {
+        Some(innermost) if *innermost == target => true,
+        Some(_) => {
+            ctx.errors.push(
+                Diagnostic::error(
+                    codes::NOT_IN_A_LOOP,
+                    span,
+                    format!("`{word}` names a loop other than the innermost one around it"),
+                )
+                .help("this is a bug in the compiler; `nazm run` still works"),
+            );
+            false
+        }
+        None => {
+            ctx.errors.push(
+                Diagnostic::error(
+                    codes::NOT_IN_A_LOOP,
+                    span,
+                    format!("`{word}` reached the native backend with no loop to affect"),
+                )
+                .help("this is a bug in the compiler; `nazm run` still works"),
+            );
+            false
+        }
     }
-    ctx.errors.push(
-        Diagnostic::error(
-            codes::NOT_IN_A_LOOP,
-            span,
-            format!("`{word}` reached the native backend with no loop to affect"),
-        )
-        .help("this is a bug in the compiler; `nazm run` still works"),
-    );
-    false
 }
 
-/// Statement-position `if`, with or without `else`.
-///
-/// # Completion
-///
-/// Without an `else` the statement **always falls through**, whatever the branch does,
-/// because the condition may be false — which is exactly what `check_expr` says by
-/// returning `Completion::Unit` for a no-`else` `if` regardless of its branch. With an
-/// `else` it transfers only when *both* branches do.
+/// Statement `if`, with or without `else`. Without an `else` it always falls through; with
+/// one it transfers only when both branches do.
 fn lower_statement_if(
     ctx: &mut Ctx<'_>,
-    cond: &AstExpr,
-    then_block: &AstBlock,
-    else_block: Option<&AstBlock>,
-    span: Span,
+    cond: &cir::Expr,
+    then_block: &cir::Block,
+    else_block: Option<&cir::Block>,
 ) -> (Option<Stmt>, Ends) {
     // The condition is lowered outside both branch scopes: it is evaluated before either
     // and cannot see a binding made inside one.
+    let span = cond.at;
     let cond = lower_expr(ctx, cond);
 
     let (then_body, then_ends) = lower_body(ctx, then_block);
@@ -1493,131 +1456,125 @@ fn lower_statement_if(
     )
 }
 
-/// `name = value;` — a store into the slot `name` resolves to *now*.
-///
-/// # Which binding
-///
-/// Resolution is the same innermost-first walk a read uses, so an assignment reaches
-/// whatever the name means at that point in the text. Inside a loop body that has
-/// shadowed an outer binding, an assignment written *before* the inner `let` reaches the
-/// outer slot and one written after reaches the inner — which is exactly what the
-/// interpreter does, because each iteration enters the body with a fresh frame and the
-/// inner name is not in it until its `let` runs again.
-///
-/// # Order
+/// `local.path = value;` — a store into the slot Core IR names, through the field path it
+/// names, each step turned from a field identity into a position.
 ///
 /// The value is lowered first and stored second, and the emitter keeps that order: a
 /// right-hand side that fails at run time, or that transfers control, takes its own path
-/// and the slot is never written. An assignment is not a place where a half-evaluated
-/// expression can leave a local holding something.
-fn lower_assign(ctx: &mut Ctx<'_>, a: &nazm_syntax::Assign) -> Option<Stmt> {
-    let value = lower_expr(ctx, &a.value);
-    let place = &a.place;
+/// and the slot is never written.
+fn lower_assign(
+    ctx: &mut Ctx<'_>,
+    local: cir::LocalId,
+    path: &[cir::Step],
+    value: &cir::Expr,
+    at: Span,
+) -> Option<Stmt> {
+    let value = lower_expr(ctx, value);
+    let name = ctx.local_name(local);
 
-    let Some((slot, ty)) = ctx.slot_at(place.name_span) else {
-        // Unreachable: the checker resolved this name and recorded the slot. Reaching
-        // here means the resolution is missing an entry it should have, which is a
-        // compiler bug and worth reporting as one rather than as "unsupported".
+    let Some((slot, ty)) = ctx.slot_of(local) else {
         ctx.errors.push(
             Diagnostic::error(
                 codes::UNDEFINED_VARIABLE,
-                place.name_span,
-                format!("`{}` is not a local the native backend can see", place.name),
+                at,
+                format!("`{name}` is not a local the native backend can see"),
             )
             .help("this is a bug in the compiler; `nazm run` still works"),
         );
         return None;
     };
 
-    // The projection path, one step at a time, each turned from a field identity into a
-    // position. `target` is what the assignment actually writes.
-    let mut path: Vec<(u32, Ty)> = Vec::with_capacity(place.path.len());
+    let mut steps: Vec<(u32, Ty)> = Vec::with_capacity(path.len());
     let mut target = ty;
-    for step in &place.path {
-        let to = ctx.res.field(step.name_span)?;
+    for step in path {
         let Ty::Record(rid) = target else {
-            ctx.unsupported(
-                place.span,
-                "a field written on something that is not a record",
-            );
+            ctx.unsupported(at, "a field written on something that is not a record");
             return None;
         };
-        let at = ctx.field_index(rid, to.field)?;
+        let position = ctx.field_index(rid, step.field)?;
         let field_ty = ctx
             .layout(rid)
-            .and_then(|l| l.fields.get(at as usize).copied())?;
+            .and_then(|l| l.fields.get(position as usize).copied())?;
         ctx.note(field_ty);
-        path.push((at, field_ty));
+        steps.push((position, field_ty));
         target = field_ty;
     }
 
     let value = value?;
     if !fits(&value, target) {
         // Unreachable after checking, which requires an assignment to match the place's
-        // declared type (`N0300`). Reported rather than assumed away: a mismatched store
-        // is a miscompile, and LLVM would reject the module for a reason that named none
-        // of this.
+        // declared type (`N0300`). A mismatched store is a miscompile.
         ctx.unsupported(
-            a.span,
+            at,
             &format!(
-                "an assignment of `{}` to `{}`, which is `{}`",
+                "an assignment of `{}` to `{name}`, which is `{}`",
                 value.ty().map_or("nothing", Ty::name),
-                place.name,
                 target.name()
             ),
         );
         return None;
     }
 
-    if path.is_empty() {
+    if steps.is_empty() {
         Some(Stmt::Assign { slot, value })
     } else {
-        Some(Stmt::SetField { slot, path, value })
+        Some(Stmt::SetField {
+            slot,
+            path: steps,
+            value,
+        })
     }
 }
 
 /// `while cond { body }`.
 ///
-/// The condition is lowered **outside** the body's scope and **outside its loop depth**.
-/// Outside the scope because a binding made in the body is not visible to it; outside the
-/// depth because a `break` written in a condition belongs to the *enclosing* loop, which
-/// is the existing language's rule in both implementations. Raising the depth around the
-/// condition too would silently retarget such a `break` at this loop — a miscompile of a
-/// program that runs correctly today.
-fn lower_while(ctx: &mut Ctx<'_>, w: &nazm_syntax::While) -> Option<Stmt> {
-    let cond = lower_expr(ctx, &w.cond);
+/// The condition is lowered **outside** the loop's own target: a `break` written in a
+/// condition belongs to the *enclosing* loop, which Core IR has already said by naming it.
+fn lower_while(
+    ctx: &mut Ctx<'_>,
+    id: cir::LoopId,
+    cond: &cir::Expr,
+    body: &cir::Block,
+) -> Option<Stmt> {
+    let span = cond.at;
+    let cond = lower_expr(ctx, cond);
 
-    ctx.loop_depth += 1;
+    ctx.loops.push(id);
     // Lowered whether or not the condition did, so a program with problems in both
     // reports both.
-    let (body, _) = lower_body(ctx, &w.body);
-    ctx.loop_depth -= 1;
+    let (body, _) = lower_body(ctx, body);
+    ctx.loops.pop();
 
     let cond = cond?;
     if !fits(&cond, Ty::Bool) {
-        // Unreachable after checking, which requires a `Bool` condition (`N0301`) — there
-        // is no truthiness in this language.
-        ctx.unsupported(w.cond.span(), "a `while` whose condition is not a `Bool`");
+        // Unreachable after checking, which requires a `Bool` condition (`N0301`).
+        ctx.unsupported(span, "a `while` whose condition is not a `Bool`");
         return None;
     }
 
     Some(Stmt::While { cond, body })
 }
 
-fn lower_expr(ctx: &mut Ctx<'_>, e: &AstExpr) -> Option<Expr> {
-    match e {
-        AstExpr::Int { value, .. } => Some(Expr::Int(*value)),
-        AstExpr::Bool { value, .. } => Some(Expr::Bool(*value)),
-        AstExpr::Str { value, .. } => Some(Expr::Str(value.clone().into_bytes())),
-        AstExpr::Var { name, span } => match ctx.slot_at(*span) {
+fn lower_expr(ctx: &mut Ctx<'_>, e: &cir::Expr) -> Option<Expr> {
+    match &e.kind {
+        cir::ExprKind::Const(c) => match ctx.function.and_then(|f| f.constant(*c)) {
+            Some(cir::Const::Int(v)) => Some(Expr::Int(*v)),
+            Some(cir::Const::Bool(v)) => Some(Expr::Bool(*v)),
+            Some(cir::Const::Str(v)) => Some(Expr::Str(v.clone())),
+            None => {
+                ctx.unsupported(e.at, "a literal missing from its function's constants");
+                None
+            }
+        },
+        cir::ExprKind::Local(l) => match ctx.slot_of(*l) {
             Some((slot, ty)) => Some(Expr::Load { slot, ty }),
             None => {
-                // Unreachable after a successful check, which records a slot for every
-                // mention. Reported as a compiler bug rather than as "unsupported".
+                // Unreachable: Core IR's verifier holds every local in range.
+                let name = ctx.local_name(*l);
                 ctx.errors.push(
                     Diagnostic::error(
                         codes::UNDEFINED_VARIABLE,
-                        *span,
+                        e.at,
                         format!("`{name}` is not a local the native backend can see"),
                     )
                     .help("this is a bug in the compiler; `nazm run` still works"),
@@ -1625,109 +1582,78 @@ fn lower_expr(ctx: &mut Ctx<'_>, e: &AstExpr) -> Option<Expr> {
                 None
             }
         },
-        AstExpr::Neg {
-            operand, op_span, ..
-        } => {
+        cir::ExprKind::Neg(operand) => {
             let operand = lower_expr(ctx, operand)?;
             if !fits(&operand, Ty::Int) {
-                // Unreachable after checking, which rejects `-true`. Reported rather than
-                // assumed away: the emitter has no `i1` negation to fall back on.
-                ctx.unsupported(*op_span, "negation of a non-`Int` value");
+                ctx.unsupported(e.at, "negation of a non-`Int` value");
                 return None;
             }
             Some(Expr::Neg {
                 operand: Box::new(operand),
-                span: *op_span,
+                span: e.at,
             })
         }
-        AstExpr::Binary {
-            op,
-            lhs,
-            rhs,
-            op_span,
-            ..
-        } => lower_binary(ctx, *op, lhs, rhs, *op_span),
-        AstExpr::Call {
+        cir::ExprKind::Arith { op, lhs, rhs } => lower_arith(ctx, *op, lhs, rhs, e.at),
+        cir::ExprKind::Compare { op, lhs, rhs, .. } => lower_compare(ctx, *op, lhs, rhs, e.at),
+        cir::ExprKind::Call {
             callee,
-            callee_span,
+            type_args,
             args,
-            ..
-        } => lower_call(ctx, callee, *callee_span, args),
-        AstExpr::Construct {
-            ty_span, fields, ..
-        } => lower_construct(ctx, *ty_span, fields),
-        AstExpr::Field {
-            base,
-            name_span,
-            span,
-            ..
-        } => lower_field(ctx, base, *name_span, *span),
-        AstExpr::Variant {
-            variant_span,
+            callee_at,
+        } => lower_call(ctx, *callee, type_args, args, *callee_at),
+        cir::ExprKind::Builtin {
+            op,
+            type_args,
+            args,
+            callee_at,
+        } => {
+            // Arguments first, left to right, and all of them.
+            let lowered: Vec<Option<Expr>> = args.iter().map(|a| lower_expr(ctx, a)).collect();
+            // **Built-in or user function is read, not decided again**: Core IR says which,
+            // and an instruction sequence is what a built-in becomes.
+            if op.generics() > 0 {
+                lower_vec(ctx, *op, lowered, type_args, *callee_at)
+            } else {
+                lower_builtin(ctx, *op, lowered, *callee_at)
+            }
+        }
+        cir::ExprKind::Record { record, fields, .. } => lower_construct(ctx, *record, fields, e.at),
+        cir::ExprKind::Variant {
+            enumeration,
+            variant,
             fields,
             ..
-        } => lower_variant(ctx, *variant_span, fields),
-        AstExpr::Match {
-            scrutinee,
-            arms,
-            span,
-        } => lower_match(ctx, scrutinee, arms, *span),
-        AstExpr::Propagate {
-            operand, op_span, ..
-        } => lower_propagate(ctx, operand, *op_span),
-        AstExpr::If {
+        } => lower_variant(ctx, *enumeration, *variant, fields, e.at),
+        cir::ExprKind::Field { base, field, .. } => lower_field(ctx, base, *field, e.at),
+        cir::ExprKind::Match(m) => lower_match(ctx, m),
+        cir::ExprKind::If {
             cond,
-            then_block,
-            else_block,
-            span,
-        } => lower_if(ctx, cond, then_block, else_block.as_ref(), *span),
-        // The block every other block is, in a position that uses its value. Its scope
-        // question is already answered: resolution gave each binding inside it a slot of
-        // its own, exactly as it does inside an `if` branch.
-        AstExpr::Block(b) => lower_block(ctx, b).map(|b| Expr::Block(Box::new(b))),
+            then,
+            otherwise,
+        } => lower_if(ctx, cond, then, otherwise, e.at),
+        // The block every other block is, in a position that uses its value. Its bindings
+        // already have slots of their own.
+        cir::ExprKind::Block(b) => lower_block(ctx, b).map(|b| Expr::Block(Box::new(b))),
     }
 }
 
-/// `spawn f(args);`
-///
-/// Shaped like [`lower_call`] and deliberately not sharing its body: a spawn resolves a
-/// **name**, not an expression, produces no value, and can never be a built-in. Folding
-/// the two together would mean a call path carrying a "was this a spawn" flag through
-/// every branch of it.
-fn lower_spawn(ctx: &mut Ctx<'_>, sp: &AstSpawn) -> Option<Stmt> {
+/// `spawn f(args);` — a task running a function of this compilation, by its identity.
+fn lower_spawn(
+    ctx: &mut Ctx<'_>,
+    fid: FnId,
+    args: &[cir::Expr],
+    span: Span,
+    callee_span: Span,
+) -> Option<Stmt> {
     // Every argument, even when the callee turns out to be unusable, so a spawn with two
     // bad arguments reports both.
-    let lowered: Vec<Option<Expr>> = sp.args.iter().map(|a| lower_expr(ctx, a)).collect();
+    let lowered: Vec<Option<Expr>> = args.iter().map(|a| lower_expr(ctx, a)).collect();
+    let name = ctx.function_name(fid);
 
-    if matches!(ctx.res.callee(sp.callee_span), Some(Callee::Builtin(_))) {
-        // The checker refuses this first. Saying it here too costs one line and means a
-        // lowering reached without the checker still reports rather than emitting a call
-        // to a symbol that does not exist.
-        ctx.unsupported(
-            sp.callee_span,
-            &format!(
-                "`spawn {}`, which is a built-in rather than a function",
-                sp.callee
-            ),
-        );
-        return None;
-    }
-
-    // What this spawn's callee resolved to was decided once, by the checker.
-    let Some(Callee::Function(fid)) = ctx.res.callee(sp.callee_span) else {
-        // A built-in, or unresolved. `check_spawn` rejects both (`N0201`, and spawning a
-        // built-in has no signature to run), so this is a coverage statement rather than
-        // a repeat of the checker.
-        ctx.unsupported(sp.callee_span, &format!("a task running `{}`", sp.callee));
-        return None;
-    };
     let Some(sig) = ctx.sig(fid).cloned() else {
         ctx.unsupported(
-            sp.callee_span,
-            &format!(
-                "a task running `{}`, whose signature this backend refused",
-                sp.callee
-            ),
+            callee_span,
+            &format!("a task running `{name}`, whose signature this backend refused"),
         );
         return None;
     };
@@ -1749,11 +1675,8 @@ fn lower_spawn(ctx: &mut Ctx<'_>, sp: &AstSpawn) -> Option<Stmt> {
         ctx.errors.push(
             Diagnostic::error(
                 codes::UNSUPPORTED_CONSTRUCT,
-                sp.callee_span,
-                format!(
-                    "`nazm build` lowered a task running `{}` with the wrong arguments",
-                    sp.callee
-                ),
+                callee_span,
+                format!("`nazm build` lowered a task running `{name}` with the wrong arguments"),
             )
             .help("this is a bug in the compiler; `nazm run` still works"),
         );
@@ -1768,7 +1691,7 @@ fn lower_spawn(ctx: &mut Ctx<'_>, sp: &AstSpawn) -> Option<Stmt> {
         _ => None,
     }) {
         ctx.unsupported(
-            sp.callee_span,
+            callee_span,
             &format!(
                 "a task given a `{}`, which may not cross into one",
                 bad.name()
@@ -1781,38 +1704,58 @@ fn lower_spawn(ctx: &mut Ctx<'_>, sp: &AstSpawn) -> Option<Stmt> {
         callee: symbol,
         args,
         ret,
-        span: sp.span,
+        span,
     })
 }
 
-fn lower_binary(
+fn lower_arith(
     ctx: &mut Ctx<'_>,
-    op: AstOp,
-    lhs: &AstExpr,
-    rhs: &AstExpr,
+    op: cir::ArithOp,
+    lhs: &cir::Expr,
+    rhs: &cir::Expr,
     op_span: Span,
 ) -> Option<Expr> {
-    // Left, then right, always — including when the operator itself turns out to be
-    // unsupported, so a program with problems on both sides reports both.
+    // Left, then right, always, so a program with problems on both sides reports both.
     let lhs = lower_expr(ctx, lhs);
     let rhs = lower_expr(ctx, rhs);
     let (lhs, rhs) = (lhs?, rhs?);
-
-    if let Some(op) = arithmetic(op) {
-        if !fits(&lhs, Ty::Int) || !fits(&rhs, Ty::Int) {
-            // Unreachable after checking: arithmetic is `Int` only.
-            ctx.unsupported(op_span, "arithmetic on a non-`Int` value");
-            return None;
-        }
-        return Some(Expr::Arith {
-            op,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-            span: op_span,
-        });
+    if !fits(&lhs, Ty::Int) || !fits(&rhs, Ty::Int) {
+        // Unreachable after checking: arithmetic is `Int` only.
+        ctx.unsupported(op_span, "arithmetic on a non-`Int` value");
+        return None;
     }
+    Some(Expr::Arith {
+        op: match op {
+            cir::ArithOp::Add => ArithOp::Add,
+            cir::ArithOp::Sub => ArithOp::Sub,
+            cir::ArithOp::Mul => ArithOp::Mul,
+            cir::ArithOp::Div => ArithOp::Div,
+            cir::ArithOp::Rem => ArithOp::Rem,
+        },
+        lhs: Box::new(lhs),
+        rhs: Box::new(rhs),
+        span: op_span,
+    })
+}
 
-    let cmp = comparison(op)?;
+fn lower_compare(
+    ctx: &mut Ctx<'_>,
+    op: cir::CmpOp,
+    lhs: &cir::Expr,
+    rhs: &cir::Expr,
+    op_span: Span,
+) -> Option<Expr> {
+    let lhs = lower_expr(ctx, lhs);
+    let rhs = lower_expr(ctx, rhs);
+    let (lhs, rhs) = (lhs?, rhs?);
+    let cmp = match op {
+        cir::CmpOp::Eq => CmpOp::Eq,
+        cir::CmpOp::NotEq => CmpOp::NotEq,
+        cir::CmpOp::Lt => CmpOp::Lt,
+        cir::CmpOp::LtEq => CmpOp::LtEq,
+        cir::CmpOp::Gt => CmpOp::Gt,
+        cir::CmpOp::GtEq => CmpOp::GtEq,
+    };
     if let (Some(l), Some(r)) = (lhs.ty(), rhs.ty()) {
         if l != r {
             // Unreachable after checking, which requires both sides of `==` to be one
@@ -1823,17 +1766,16 @@ fn lower_binary(
     }
     // Whichever operand has a type; they agree when both do. When *neither* does — both
     // sides always transfer — no `icmp` is ever emitted, because emission stops at the
-    // left operand, so the recorded type is never read. `Int` is recorded rather than
-    // left unrepresentable, and this is the one place in the file where that matters.
+    // left operand, so the recorded type is never read.
     let operand_ty = lhs.ty().or_else(|| rhs.ty()).unwrap_or(Ty::Int);
     if cmp.is_ordering() && !fits(&lhs, Ty::Int) {
         ctx.unsupported(op_span, &format!("ordering `{}` values", operand_ty.name()));
         return None;
     }
-    // Unreachable after checking, which gives a handle no equality (`N0304`). Refused
-    // rather than emitted, because the only instruction that fits a pointer is an `icmp`
-    // on it, and that would answer "the same storage" — the one choice the language has
-    // not made.
+    // Unreachable after checking, which gives a handle no equality (`N0304`) — and Core IR
+    // settled the law it compares by. Refused rather than emitted, because the only
+    // instruction that fits a pointer is an `icmp` on it, which would answer "the same
+    // storage".
     if matches!(operand_ty, Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_)) {
         ctx.unsupported(
             op_span,
@@ -1849,77 +1791,43 @@ fn lower_binary(
     })
 }
 
-/// A direct call to a named function.
-///
-/// The name is resolved against the signature table — the same namespace the checker
-/// uses, which is separate from local bindings there. So a local called `f` does not
-/// shadow a function `f`, exactly as `nazm run` behaves. No new shadowing rule is
-/// invented here, and none should be.
+/// A call to a function of this compilation, by identity. A generic callee is one of its
+/// **instances**: the type arguments Core IR recorded for this call, under the substitution
+/// of the body being lowered, are the instance's key, and the plan has its symbol.
 fn lower_call(
     ctx: &mut Ctx<'_>,
-    callee: &str,
+    fid: FnId,
+    type_args: &[Type],
+    args: &[cir::Expr],
     callee_span: Span,
-    args: &[AstExpr],
 ) -> Option<Expr> {
     // Arguments first, left to right, and **all of them** even when the callee turns out
     // to be unusable — a program with problems in two arguments should report two.
     let lowered: Vec<Option<Expr>> = args.iter().map(|a| lower_expr(ctx, a)).collect();
+    let callee = ctx.function_name(fid);
 
-    // A built-in is not a `FuncId` and never enters the call graph, so the cycle check
-    // does not see it and cannot: it is emitted as instructions, and instructions do not
-    // recurse.
-    // **Built-in or user function is read, not decided again.** The rule that a built-in
-    // resolves first is the language's, and it lived in three places: the checker, the
-    // evaluator, and here. It lives in the checker now, and this reads the answer — so a
-    // program cannot mean one thing interpreted and another compiled because two copies of
-    // one rule drifted.
-    let target = ctx.res.callee(callee_span);
-    if let Some(Callee::Builtin(op)) = target {
-        if op.generics() > 0 {
-            return lower_vec(ctx, op, lowered, callee_span);
-        }
-        return lower_builtin(ctx, op, lowered, callee_span);
-    }
-
-    // By id. The name is not consulted here and could not be: two modules may define
-    // the same one, and this backend stopped being able to tell them apart by spelling on
-    // 2026-09-22.
-    //
-    // A generic callee is one of its **instances**: the type arguments the checker settled
-    // for this call, under the substitution of the body being lowered, are the instance's
-    // key, and the plan has its symbol.
-    let resolved = match target {
-        Some(Callee::Function(fid)) if is_generic(ctx.res, fid) => {
-            let written = ctx.res.type_args(callee_span).map(<[Type]>::to_vec);
-            let args: Option<Vec<Type>> =
-                written.and_then(|w| w.into_iter().map(|t| ctx.concrete(t)).collect());
-            args.and_then(|args| {
-                let key = InstanceKey { def: fid, args };
-                ctx.plan
-                    .instances
-                    .planned
-                    .iter()
-                    .position(|p| p.key == key)
-                    .and_then(|i| ctx.plan.instance_sigs.get(i))
-                    .cloned()
-            })
-        }
-        Some(Callee::Function(fid)) => ctx.sig(fid).cloned(),
-        _ => None,
+    let resolved = if is_generic(ctx.res, fid) {
+        let concrete: Option<Vec<Type>> = type_args.iter().map(|t| ctx.concrete(*t)).collect();
+        concrete.and_then(|args| {
+            let key = InstanceKey { def: fid, args };
+            ctx.plan
+                .instances
+                .planned
+                .iter()
+                .position(|p| p.key == key)
+                .and_then(|i| ctx.plan.instance_sigs.get(i))
+                .cloned()
+        })
+    } else {
+        ctx.sig(fid).cloned()
     };
     let Some(sig) = resolved else {
-        // The checker reports an unknown function (`N0201`) and a mismatched signature
-        // (`N0303`, `N0300`) already. Reaching here means the callee resolved to a
-        // function whose signature *this backend* refused — a different fact, and worth
-        // saying so rather than repeating the checker.
-        if target.is_some() {
-            ctx.unsupported(
-                callee_span,
-                &format!("a call to `{callee}`, whose signature this backend refused"),
-            );
-        } else {
-            ctx.unsupported(callee_span, &format!("the built-in `{callee}`"));
-        }
+        // Reaching here means the callee is a function whose signature *this backend*
+        // refused — a different fact from any the checker reports.
+        ctx.unsupported(
+            callee_span,
+            &format!("a call to `{callee}`, whose signature this backend refused"),
+        );
         return None;
     };
 
@@ -1936,8 +1844,7 @@ fn lower_call(
     // The checker has already established arity and argument types (`N0303`, `N0300`),
     // so this agreeing is the normal case. It is checked anyway because the one thing it
     // would catch is a *lowering* bug — an argument that acquired the wrong type on the
-    // way here — and that is a miscompile rather than a diagnostic. LLVM would reject
-    // the call too, but "clang rejected our IR" is a much worse way to find out.
+    // way here — and that is a miscompile rather than a diagnostic.
     if args.len() != params.len() || !args.iter().zip(&params).all(|(a, want)| fits(a, *want)) {
         ctx.errors.push(
             Diagnostic::error(
@@ -1957,25 +1864,22 @@ fn lower_call(
     })
 }
 
-/// `Point(x: 1, y: 2)`.
-///
-/// Which record, and which field each initialiser fills, are **read from the resolution**:
-/// the checker decided both, and deciding them again here would be the second resolver
-/// N1 removed. What is decided here — and only here — is where each field sits.
+/// `Point(x: 1, y: 2)`. Which record and which field each initialiser fills are Core IR's;
+/// what is decided here — and only here — is where each field sits.
 fn lower_construct(
     ctx: &mut Ctx<'_>,
-    ty_span: Span,
-    fields: &[nazm_syntax::FieldInit],
+    written: nazm_sema::RecordId,
+    fields: &[cir::Init],
+    at: Span,
 ) -> Option<Expr> {
-    let written = ctx.res.construction(ty_span)?;
     // The record this construction builds, **as this instance sees it**: `Box[T]` in a
-    // generic body is `Box[Int]` in the instance for `Int`. The field a name refers to is
-    // the same declaration index in every application, so the checker's answers carry.
+    // generic body is `Box[Int]` in the instance for `Int`. The field an initialiser names
+    // is the same declaration index in every application.
     let concrete = ctx.concrete(Type::Record(written))?;
     let Type::Record(id) = concrete else {
         return None;
     };
-    let ty = ctx.ty(concrete, ty_span)?;
+    let ty = ctx.ty(concrete, at)?;
     ctx.note(ty);
     let Ty::Record(rid) = ty else { return None };
 
@@ -1983,14 +1887,9 @@ fn lower_construct(
     // index rides along, so emission never has to know the field's name.
     let mut lowered = Vec::with_capacity(fields.len());
     for f in fields {
-        let declared = ctx
-            .res
-            .records()
-            .get(id)
-            .and_then(|d| d.field(&f.name).map(|(i, _)| i))?;
-        let at = ctx.field_index(rid, declared)?;
+        let position = ctx.field_index(rid, f.field)?;
         let value = lower_expr(ctx, &f.value)?;
-        lowered.push((at, value));
+        lowered.push((position, value));
     }
 
     // A slot only where a field owns something. A record of `Int`s cannot leak a partial
@@ -2008,38 +1907,31 @@ fn lower_construct(
     })
 }
 
-/// `Enum.Variant(field: value, …)`.
-///
-/// Which enum and which variant, and which payload field each initialiser fills, are
-/// **read from the resolution**: the checker decided all three, and deciding them again
-/// here would be the second resolver N1 removed. What is decided here — and only here —
-/// is the discriminant and where each field sits.
+/// `Enum.Variant(field: value, …)`. Which enum, which variant and which payload field each
+/// initialiser fills are Core IR's; what is decided here is the discriminant and where each
+/// field sits.
 fn lower_variant(
     ctx: &mut Ctx<'_>,
-    variant_span: Span,
-    fields: &[nazm_syntax::FieldInit],
+    enumeration: nazm_sema::EnumId,
+    variant: u32,
+    fields: &[cir::Init],
+    at: Span,
 ) -> Option<Expr> {
-    let to = ctx.res.variant(variant_span)?;
-    let ty = ctx.ty(Type::Enum(to.enumeration), variant_span)?;
+    let ty = ctx.ty(Type::Enum(enumeration), at)?;
     ctx.note(ty);
     let Ty::Enum(eid) = ty else { return None };
-    let tag = ctx.tag(eid, to.variant)?;
+    let tag = ctx.tag(eid, variant)?;
 
-    // In the order **written**, which is the order side effects happen in. The payload
-    // index rides along, so emission never has to know the field's name.
+    // In the order **written**, which is the order side effects happen in.
     let mut lowered = Vec::with_capacity(fields.len());
     for f in fields {
-        let at = ctx
-            .res
-            .payload(f.name_span)
-            .and_then(|p| ctx.payload_index(eid, tag, p.field))?;
+        let position = ctx.payload_index(eid, tag, f.field)?;
         let value = lower_expr(ctx, &f.value)?;
-        lowered.push((at, value));
+        lowered.push((position, value));
     }
 
-    // A slot only where a payload field of **this variant** owns something. An enum whose
-    // other variants own things costs nothing here: what a construction can leak is what
-    // it has already built, and that is this variant's payload and nothing else.
+    // A slot only where a payload field of **this variant** owns something: what a
+    // construction can leak is what it has already built.
     let owns = ctx
         .enum_layout(eid)
         .and_then(|l| l.variants.get(tag as usize))
@@ -2054,54 +1946,42 @@ fn lower_variant(
     })
 }
 
-/// `match scrutinee { … }`.
+/// A value `match` — a written one, or the one a `?` is.
 ///
 /// The scrutinee is lowered once into a hidden local this expression owns — which is what
 /// `docs/spec.md`'s *the scrutinee is a value the match owns* means in the backend — and
-/// each arm becomes a block whose head binds the payload fields it names.
+/// each arm becomes a block whose head binds the payload fields it names, each an ordinary
+/// [`Stmt::Let`] over an [`Expr::Payload`]: a binding *is* a local that takes a reference to
+/// what it names, and `Stmt::Let` is the one path that already gets take-before-release
+/// right when the same slot is reached again on the next turn of a loop.
 ///
-/// A pattern binding is lowered to an ordinary [`Stmt::Let`] over an [`Expr::Payload`].
-/// That is not a convenience: a binding *is* a local that takes a reference to what it
-/// names, and `Stmt::Let` is the one path that already gets take-before-release right when
-/// the same slot is reached again on the next turn of a loop.
-fn lower_match(
-    ctx: &mut Ctx<'_>,
-    scrutinee: &AstExpr,
-    arms: &[AstArm],
-    span: Span,
-) -> Option<Expr> {
-    let lowered = lower_expr(ctx, scrutinee)?;
+/// A `?`'s error arm is an ordinary `return`, so every scope it leaves is joined and every
+/// local and temporary released on the way out by the one path that does that for `return`.
+/// There is no landing pad and no unwinding, because there is nothing to unwind.
+fn lower_match(ctx: &mut Ctx<'_>, m: &cir::Match) -> Option<Expr> {
+    let lowered = lower_expr(ctx, &m.scrutinee)?;
     let scrutinee_ty = lowered.ty()?;
     let Ty::Enum(eid) = scrutinee_ty else {
         // Unreachable after checking, which refuses a `match` on anything else (`N0342`).
-        ctx.unsupported(span, "a `match` on something that is not an enum");
+        ctx.unsupported(m.at, "a `match` on something that is not an enum");
         return None;
     };
     ctx.note(scrutinee_ty);
-    let slot = ctx.hidden(scrutinee_ty, "match");
+    let slot = ctx.hidden(scrutinee_ty, scrutinee_name(m.origin));
 
-    let mut lowered_arms: Vec<MatchArm> = Vec::with_capacity(arms.len());
+    let mut lowered_arms: Vec<MatchArm> = Vec::with_capacity(m.arms.len());
     let mut result: Option<Ty> = None;
-    for arm in arms {
+    for arm in &m.arms {
         let (tag, mut stmts) = lower_arm_head(ctx, arm, eid, scrutinee_ty, slot)?;
-        // An arm written as a block is that block: its statements run after the
-        // bindings, in the arm's own branch, and its tail is the arm's value. Lowered by
-        // the one function every value block goes through, so an arm cannot acquire a
-        // completion rule of its own — a block whose statements all leave has no result,
-        // which is what keeps a transferring arm out of the join.
-        let block = match &arm.body {
-            AstExpr::Block(b) => {
-                let inner = lower_block(ctx, b)?;
-                stmts.extend(inner.stmts);
-                Block {
-                    stmts,
-                    result: inner.result,
-                }
-            }
-            body => Block {
-                stmts,
-                result: lower_expr(ctx, body).map(Box::new),
-            },
+        // An arm's body is a value region: its statements run after the bindings, in the
+        // arm's own branch, and its tail is the arm's value — lowered by the one function
+        // every value region goes through, so a transferring arm has no result and stays
+        // out of the join.
+        let inner = lower_block(ctx, &arm.body)?;
+        stmts.extend(inner.stmts);
+        let block = Block {
+            stmts,
+            result: inner.result,
         };
         if let Some(t) = block.result.as_ref().and_then(|e| e.ty()) {
             result = Some(t);
@@ -2121,19 +2001,20 @@ fn lower_match(
     })
 }
 
-/// Statement-position `match`: the arms are statements, and one may complete with
-/// nothing.
-///
-/// Shaped like [`lower_statement_if`], and for the same reason: the source `match` is one
-/// construct, and what differs between positions is completion. The statement transfers
-/// only when **every** arm does; one arm falling through is a path past it.
-fn lower_statement_match(
-    ctx: &mut Ctx<'_>,
-    scrutinee: &AstExpr,
-    arms: &[AstArm],
-    span: Span,
-) -> (Option<Stmt>, Ends) {
-    let lowered = lower_expr(ctx, scrutinee);
+/// What `--emit-ir` calls the hidden local a `match` owns its scrutinee in: `propagate` for
+/// the one a `?` is, `match` for one that was written. The text a reader recognises, and the
+/// only thing about a `match` that remembers where it came from.
+fn scrutinee_name(origin: cir::MatchOrigin) -> &'static str {
+    match origin {
+        cir::MatchOrigin::Written => "match",
+        cir::MatchOrigin::Propagate => "propagate",
+    }
+}
+
+/// Statement `match`: the arms are statements, and one may complete with nothing. It
+/// transfers only when **every** arm does; one arm falling through is a path past it.
+fn lower_statement_match(ctx: &mut Ctx<'_>, m: &cir::Match) -> (Option<Stmt>, Ends) {
+    let lowered = lower_expr(ctx, &m.scrutinee);
     let Some(scrutinee_ty) = lowered.as_ref().and_then(Expr::ty) else {
         // A scrutinee that failed to lower has reported; one that always transfers leaves
         // before any arm could run, so nothing after it is reachable either.
@@ -2143,19 +2024,19 @@ fn lower_statement_match(
         };
     };
     let Ty::Enum(eid) = scrutinee_ty else {
-        ctx.unsupported(span, "a `match` on something that is not an enum");
+        ctx.unsupported(m.at, "a `match` on something that is not an enum");
         return (None, Ends::FallsThrough);
     };
     ctx.note(scrutinee_ty);
-    let slot = ctx.hidden(scrutinee_ty, "match");
+    let slot = ctx.hidden(scrutinee_ty, scrutinee_name(m.origin));
 
-    let mut lowered_arms: Vec<StatementArm> = Vec::with_capacity(arms.len());
-    let mut every_arm_leaves = !arms.is_empty();
-    for arm in arms {
+    let mut lowered_arms: Vec<StatementArm> = Vec::with_capacity(m.arms.len());
+    let mut every_arm_leaves = !m.arms.is_empty();
+    for arm in &m.arms {
         let Some((tag, mut body)) = lower_arm_head(ctx, arm, eid, scrutinee_ty, slot) else {
             return (None, Ends::FallsThrough);
         };
-        let (effect, ends) = lower_effect(ctx, &arm.body);
+        let (effect, ends) = lower_body(ctx, &arm.body);
         body.extend(effect);
         if ends == Ends::FallsThrough {
             every_arm_leaves = false;
@@ -2182,32 +2063,23 @@ fn lower_statement_match(
     )
 }
 
-/// One arm's discriminant, and its pattern's bindings as the first statements of its body.
+/// One arm's discriminant, and its bindings as the first statements of its body.
 ///
 /// Shared by both forms of `match`, so a binding means the same thing whether or not the
 /// `match` produces a value: an ordinary [`Stmt::Let`] of an [`Expr::Payload`], which takes
 /// its own reference through the one path that already gets take-before-release right.
 fn lower_arm_head(
     ctx: &mut Ctx<'_>,
-    arm: &AstArm,
+    arm: &cir::Arm,
     eid: EnumTy,
     scrutinee_ty: Ty,
     slot: usize,
 ) -> Option<(u32, Vec<Stmt>)> {
-    let to = ctx.res.variant(arm.variant_span)?;
-    let tag = ctx.tag(eid, to.variant)?;
+    let tag = ctx.tag(eid, arm.variant)?;
     let mut stmts: Vec<Stmt> = Vec::new();
-    for f in &arm.fields {
-        // A discard names no binding, so there is nothing to lower — and nothing is
-        // lost: the value is the scrutinee's, and the scrutinee is released whole.
-        if f.binding.is_none() {
-            continue;
-        }
-        let at = ctx
-            .res
-            .payload(f.name_span)
-            .and_then(|p| ctx.payload_index(eid, tag, p.field))?;
-        let (binding_slot, ty) = ctx.slot_at(f.binding_span)?;
+    for b in &arm.bindings {
+        let position = ctx.payload_index(eid, tag, b.field)?;
+        let (binding_slot, ty) = ctx.slot_of(b.local)?;
         ctx.note(ty);
         stmts.push(Stmt::Let {
             slot: binding_slot,
@@ -2218,7 +2090,7 @@ fn lower_arm_head(
                 }),
                 base_ty: scrutinee_ty,
                 tag,
-                at,
+                at: position,
                 ty,
             },
         });
@@ -2226,132 +2098,8 @@ fn lower_arm_head(
     Some((tag, stmts))
 }
 
-/// `operand?` — lowered to the `match` it means, with no construct of its own.
-///
-/// ```text
-/// match operand {
-///     Result.Ok(value: v)  => v,
-///     Result.Err(error: e) => return <the function's Result>.Err(error: e),
-/// }
-/// ```
-///
-/// Which enum the operand is, which variant is which, and which `Result` the function
-/// returns were all decided by the checker and are read from its [`Propagation`] record;
-/// nothing here asks whether a type is called `Result`. Everything else is what a written
-/// `match` with a `return` in one arm already gets: the operand evaluated once into a
-/// hidden local the frame releases, each payload bound by an ordinary `Stmt::Let` that
-/// takes its own reference, and the error path an ordinary `Stmt::Return` — so every scope
-/// it leaves is joined and every local and temporary released on the way out, by the one
-/// path that does that for `return`. There is no landing pad and no unwinding, because
-/// there is nothing to unwind: this is a branch.
-///
-/// [`Propagation`]: nazm_sema::Propagation
-fn lower_propagate(ctx: &mut Ctx<'_>, operand: &AstExpr, at: Span) -> Option<Expr> {
-    let p = ctx.res.propagation(at)?;
-    let lowered = lower_expr(ctx, operand)?;
-    let scrutinee_ty = lowered.ty()?;
-    let Ty::Enum(eid) = scrutinee_ty else {
-        // Unreachable after checking, which records a propagation only on a `Result`.
-        ctx.unsupported(at, "a `?` on something that is not a `Result`");
-        return None;
-    };
-    ctx.note(scrutinee_ty);
-    let into_ty = ctx.ty(Type::Enum(p.into), at)?;
-    let Ty::Enum(into) = into_ty else {
-        ctx.unsupported(at, "a `?` in a function that does not return a `Result`");
-        return None;
-    };
-    ctx.note(into_ty);
-    let slot = ctx.hidden(scrutinee_ty, "propagate");
-
-    // One payload field each, declared first — `Ok(value: T)` and `Err(error: E)`.
-    let field = |ctx: &Ctx<'_>, id: EnumTy, tag: u32| -> Option<(u32, Ty)> {
-        let at = ctx.payload_index(id, tag, 0)?;
-        let ty = *ctx
-            .enum_layout(id)?
-            .variants
-            .get(tag as usize)?
-            .fields
-            .get(at as usize)?;
-        Some((at, ty))
-    };
-    let ok_tag = ctx.tag(eid, p.ok)?;
-    let err_tag = ctx.tag(eid, p.err)?;
-    let into_tag = ctx.tag(into, p.into_err)?;
-    let (ok_at, ok_ty) = field(ctx, eid, ok_tag)?;
-    let (err_at, err_ty) = field(ctx, eid, err_tag)?;
-    let (into_at, _) = field(ctx, into, into_tag)?;
-    ctx.note(ok_ty);
-    ctx.note(err_ty);
-
-    let payload = |tag: u32, at: u32, ty: Ty| Expr::Payload {
-        base: Box::new(Expr::Load {
-            slot,
-            ty: scrutinee_ty,
-        }),
-        base_ty: scrutinee_ty,
-        tag,
-        at,
-        ty,
-    };
-    let value = ctx.hidden(ok_ty, "ok");
-    let ok = MatchArm {
-        tag: ok_tag,
-        block: Block {
-            stmts: vec![Stmt::Let {
-                slot: value,
-                value: payload(ok_tag, ok_at, ok_ty),
-            }],
-            result: Some(Box::new(Expr::Load {
-                slot: value,
-                ty: ok_ty,
-            })),
-        },
-    };
-
-    let error = ctx.hidden(err_ty, "err");
-    let owns = ctx
-        .enum_layout(into)
-        .and_then(|l| l.variants.get(into_tag as usize))
-        .is_some_and(|v| v.fields.iter().any(|t| t.owns().is_some()));
-    let built = owns.then(|| ctx.hidden(into_ty, "variant"));
-    let err = MatchArm {
-        tag: err_tag,
-        block: Block {
-            stmts: vec![
-                Stmt::Let {
-                    slot: error,
-                    value: payload(err_tag, err_at, err_ty),
-                },
-                Stmt::Return(Expr::Variant {
-                    ty: into_ty,
-                    tag: into_tag,
-                    fields: vec![(
-                        into_at,
-                        Expr::Load {
-                            slot: error,
-                            ty: err_ty,
-                        },
-                    )],
-                    slot: built,
-                }),
-            ],
-            result: None,
-        },
-    };
-
-    Some(Expr::Match {
-        scrutinee: Box::new(lowered),
-        scrutinee_ty,
-        slot,
-        arms: vec![ok, err],
-        ty: Some(ok_ty),
-    })
-}
-
-/// `base.name`.
-fn lower_field(ctx: &mut Ctx<'_>, base: &AstExpr, name_span: Span, span: Span) -> Option<Expr> {
-    let to = ctx.res.field(name_span)?;
+/// `base.field`.
+fn lower_field(ctx: &mut Ctx<'_>, base: &cir::Expr, field: u32, span: Span) -> Option<Expr> {
     let base_lowered = lower_expr(ctx, base)?;
     let base_ty = base_lowered.ty()?;
     let Ty::Record(rid) = base_ty else {
@@ -2360,16 +2108,16 @@ fn lower_field(ctx: &mut Ctx<'_>, base: &AstExpr, name_span: Span, span: Span) -
         ctx.unsupported(span, "a field read from something that is not a record");
         return None;
     };
-    let at = ctx.field_index(rid, to.field)?;
+    let position = ctx.field_index(rid, field)?;
     let ty = ctx
         .layout(rid)
-        .and_then(|l| l.fields.get(at as usize).copied())?;
+        .and_then(|l| l.fields.get(position as usize).copied())?;
     ctx.note(base_ty);
     ctx.note(ty);
     Some(Expr::Field {
         base: Box::new(base_lowered),
         base_ty,
-        at,
+        at: position,
         ty,
     })
 }
@@ -2380,17 +2128,18 @@ fn is_generic(res: &Resolution, f: FnId) -> bool {
 
 /// One of the `Vec[T]` built-ins, with its concrete vector.
 ///
-/// Which vector is **this site's**: its type argument, as the checker settled it and as the
-/// body being lowered substitutes it. The element type follows from it, and so does every
-/// ownership rule the emitter applies — nothing here depends on how `T` was spelled.
+/// Which vector is **this site's**: the element type Core IR recorded for the call, as the
+/// body being lowered substitutes it. Every ownership rule the emitter applies follows from
+/// it — nothing here depends on how `T` was spelled.
 fn lower_vec(
     ctx: &mut Ctx<'_>,
     op: Builtin,
     lowered: Vec<Option<Expr>>,
+    type_args: &[Type],
     span: Span,
 ) -> Option<Expr> {
     let args: Vec<Expr> = lowered.into_iter().collect::<Option<_>>()?;
-    let elem = ctx.res.type_args(span).and_then(|a| a.first().copied())?;
+    let elem = type_args.first().copied()?;
     let elem = ctx.concrete(elem)?;
     let Some(vec) = ctx.res.types().find_vec(elem) else {
         ctx.errors.push(
@@ -2475,28 +2224,19 @@ fn lower_builtin(
     Some(Expr::Builtin { op, args, span })
 }
 
-/// Value-position `if`, and only that.
+/// Value-position `if`: both branches are value regions, each its own scope.
 fn lower_if(
     ctx: &mut Ctx<'_>,
-    cond: &AstExpr,
-    then_block: &AstBlock,
-    else_block: Option<&AstBlock>,
+    cond: &cir::Expr,
+    then_block: &cir::Block,
+    else_block: &cir::Block,
     span: Span,
 ) -> Option<Expr> {
-    // The condition is lowered first, and outside both branch scopes: it is evaluated
-    // before either branch and cannot see a binding made inside one.
+    // The condition is lowered first, and outside both branch scopes.
     let cond = lower_expr(ctx, cond);
 
-    let Some(else_block) = else_block else {
-        // In value position the checker rejects this already; in statement position it
-        // never reaches here. Refused rather than assumed unreachable.
-        ctx.unsupported(span, "an `if` with no `else` used as a value");
-        return None;
-    };
-
-    // Each branch gets its own scope, so a binding made in one is invisible in the other
-    // and after the join. Both are lowered even when the condition failed, so all the
-    // problems in the program are reported at once.
+    // Both are lowered even when the condition failed, so all the problems in the program
+    // are reported at once.
     let then_lowered = lower_block(ctx, then_block);
     let else_lowered = lower_block(ctx, else_block);
 
@@ -2534,27 +2274,4 @@ fn lower_if(
 /// The type a value block produces, or `None` when it never produces one.
 fn block_ty(b: &Block) -> Option<Ty> {
     b.result.as_ref().and_then(|e| e.ty())
-}
-
-fn arithmetic(op: AstOp) -> Option<ArithOp> {
-    match op {
-        AstOp::Add => Some(ArithOp::Add),
-        AstOp::Sub => Some(ArithOp::Sub),
-        AstOp::Mul => Some(ArithOp::Mul),
-        AstOp::Div => Some(ArithOp::Div),
-        AstOp::Rem => Some(ArithOp::Rem),
-        AstOp::Eq | AstOp::NotEq | AstOp::Lt | AstOp::LtEq | AstOp::Gt | AstOp::GtEq => None,
-    }
-}
-
-fn comparison(op: AstOp) -> Option<CmpOp> {
-    match op {
-        AstOp::Eq => Some(CmpOp::Eq),
-        AstOp::NotEq => Some(CmpOp::NotEq),
-        AstOp::Lt => Some(CmpOp::Lt),
-        AstOp::LtEq => Some(CmpOp::LtEq),
-        AstOp::Gt => Some(CmpOp::Gt),
-        AstOp::GtEq => Some(CmpOp::GtEq),
-        AstOp::Add | AstOp::Sub | AstOp::Mul | AstOp::Div | AstOp::Rem => None,
-    }
 }

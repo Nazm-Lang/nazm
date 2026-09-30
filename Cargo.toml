@@ -5,9 +5,10 @@
 # Design record: docs/architecture.md · Spec: docs/spec.md
 # Evaluation protocol (draft, not pre-registered): docs/research/evaluation.md
 #
-# Two tracks in one workspace. The language — span, diag, syntax, sema, core, lir, cli — is
-# an interpreter and a native compiler: lexer, parser, checker, tree-walking evaluator, one
-# IR level (nazm-lir) and one backend (LLVM IR as text, assembled by clang). `nazm-sema`
+# Two tracks in one workspace. The language — span, diag, syntax, sema, cir, core, lir, cli —
+# is an interpreter and a native compiler: lexer, parser, checker, one lowering to Core IR
+# (nazm-cir) that an evaluator runs and nazm-lir lowers, and one backend (LLVM IR as text,
+# assembled by clang). Two IR levels, Core IR since N39. `nazm-sema`
 # holds what a program *means* — types, built-ins, modules, interfaces, resolution — and
 # depends on spans and nothing else. Alongside them, nazm-bench, an agent-cost harness that
 # now measures specific claims rather than gating the project's existence.
@@ -28,6 +29,7 @@ members = [
     "crates/nazm-sema",
     "crates/nazm-iface",
     "crates/nazm-cache",
+    "crates/nazm-cir",
     "crates/nazm-core",
     "crates/nazm-lir",
     "crates/nazm-service",
@@ -79,6 +81,7 @@ nazm-syntax = { path = "crates/nazm-syntax" }
 nazm-sema = { path = "crates/nazm-sema" }
 nazm-iface = { path = "crates/nazm-iface" }
 nazm-cache = { path = "crates/nazm-cache" }
+nazm-cir = { path = "crates/nazm-cir" }
 nazm-core = { path = "crates/nazm-core" }
 nazm-lir = { path = "crates/nazm-lir" }
 nazm-service = { path = "crates/nazm-service" }
