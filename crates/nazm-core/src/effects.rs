@@ -304,11 +304,16 @@ pub(crate) fn analyse(
             let Callee::Function(g) = site.callee else {
                 continue;
             };
-            let foreign = res.function(g).is_some_and(|d| d.foreign.is_some())
-                || deps
+            // This module's own declaration is read from the resolution; another module's is
+            // what its interface publishes, as its effect contract is — the importer does not
+            // read the declaration.
+            let foreign = match res.function(g) {
+                Some(d) if d.module == module => d.foreign.is_some(),
+                _ => deps
                     .iter()
                     .flat_map(|d| d.exports())
-                    .any(|e| e.def == g && e.foreign.is_some());
+                    .any(|e| e.def == g && e.foreign.is_some()),
+            };
             if foreign && !site.held.contains(CapabilityKind::Foreign) {
                 errors.push(missing_authority(
                     node,

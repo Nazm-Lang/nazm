@@ -8577,7 +8577,7 @@ name = "n42-every-type-is-ffi-safe"
 why = "a `Str`, record, sequence or capability crosses the C boundary, where its layout and ownership mean nothing"
 file = "crates/nazm-core/src/check.rs"
 find = "    let safe = |t: Type| matches!(t, Type::Int | Type::Bool);"
-replace = "    let safe = |t: Type| !matches!(t, Type::Unit);"
+replace = "    let safe = |t: Type| matches!(t, Type::Int | Type::Bool) || t != Type::Int;"
 killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outside_the_subset_is_refused_by_its_own_code" }]
 
 [[mutation]]
@@ -8638,13 +8638,13 @@ killers = [{ package = "nazm-cli", test = "ffi", name = "a_foreign_call_needs_a_
 name = "n42-an-imported-foreign-function-is-an-ordinary-one"
 why = "the authority check reads only this module's declarations, so a `pub extern` function called through its interface needs no `ForeignCap`"
 file = "crates/nazm-core/src/effects.rs"
-find = "                    .any(|e| e.def == g && e.foreign.is_some());"
-replace = "                    .any(|e| e.def == g && e.foreign.is_none() && false);"
+find = "                    .any(|e| e.def == g && e.foreign.is_some()),"
+replace = "                    .any(|e| e.def == g && e.foreign.is_none() && false),"
 killers = [{ package = "nazm-cli", test = "ffi", name = "an_imported_foreign_function_needs_a_foreign_cap_too" }]
 
 [[mutation]]
 name = "n42-the-interface-forgets-a-foreign-export"
-why = "a published interface drops an export's C symbol, so an importer reading it from the cache takes a C function for a Nazm one"
+why = "a published interface drops an export's C symbol, so the artefact that says what a module offers presents a C function as a Nazm one (importers re-declare from source in this build, so the artefact is where the loss shows)"
 file = "crates/nazm-iface/src/wire.rs"
 find = """                    .map(|s| s.names().into_iter().map(str::to_owned).collect()),
                 foreign: e.foreign.clone(),"""
