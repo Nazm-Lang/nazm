@@ -8941,3 +8941,80 @@ file = "crates/nazm-mir/src/lower.rs"
 find = "                Entry::Scope(l) => self.push(StatementKind::ScopeJoin { list: *l }, at),"
 replace = "                Entry::Scope(_) => {}"
 killers = [{ package = "nazm-cli", test = "concurrent", name = "a_return_out_of_a_scope_still_waits_for_its_tasks" }]
+
+# --- N45: the standard library ---------------------------------------------------------------
+
+[[profile]]
+name = "stdlib"
+why = "the standard library is observed by programs importing it, run by the interpreter and both backends, and by its documentation and loader tests"
+owns = ["library/std/", "crates/nazm-sema/src/stdlib.rs"]
+targets = [
+    { package = "nazm-cli", test = "stdlib" },
+    { package = "nazm-sema", lib = true },
+]
+
+[[mutation]]
+name = "n45-a-wrapper-drops-its-effect"
+why = "`io_println` declares no effect, so the standard module does not check: a wrapper's contract has to say what its body does"
+file = "library/std/io.nz"
+find = "pub fn io_println(io: IoCap, s: Str) -> Int ! { io } {"
+replace = "pub fn io_println(io: IoCap, s: Str) -> Int ! {} {"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "io_and_process_need_the_authority_they_show" }]
+
+[[mutation]]
+name = "n45-a-wrapper-needs-no-capability"
+why = "`io_read` takes no `IoCap` and declares nothing, so reading a file through the standard library would need no authority its signature shows"
+file = "library/std/io.nz"
+find = "pub fn io_read(io: IoCap, path: Str) -> Result[Str, Str] ! { io } {"
+replace = "pub fn io_read(path: Str) -> Result[Str, Str] {"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "io_and_process_need_the_authority_they_show" }]
+
+[[mutation]]
+name = "n45-an-error-is-swallowed"
+why = "`result_err` never hands the error back, so a program that asked for it is told there was none"
+file = "library/std/result.nz"
+find = "        Result.Err(error: e) => Option[E].Some(value: e),"
+replace = "        Result.Err(error: e) => Option[E].None(),"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "option_result_and_seq_helpers_work_for_every_type" }]
+
+[[mutation]]
+name = "n45-a-parse-overflows-instead-of-failing"
+why = "`text_parse_int` does not check the limit before each step, so a number outside `Int` traps with `N0400` instead of being an `Err`"
+file = "library/std/text.nz"
+find = "let over = if acc < limit { true } else { if acc == limit { d > 8 } else { false } };"
+replace = "let over = false;"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "text_behaves_as_documented_at_its_edges" }]
+
+[[mutation]]
+name = "n45-a-search-reads-past-the-end"
+why = "`text_find` tries one position past the last, so a search that finds nothing slices outside the string and traps with `N0405`"
+file = "library/std/text.nz"
+find = """        if i + n > m {
+            found = 0 - 2;"""
+replace = """        if i + n > m + 1 {
+            found = 0 - 2;"""
+killers = [{ package = "nazm-cli", test = "stdlib", name = "text_behaves_as_documented_at_its_edges" }]
+
+[[mutation]]
+name = "n45-a-reserved-path-is-read-from-disk"
+why = "an import beginning with `@std/` that names no standard module is looked for on disk, so a project file can answer for the toolchain"
+file = "crates/nazm-service/src/load.rs"
+find = "            if nazm_core::sema::stdlib::reserved(&import.path) {"
+replace = "            if nazm_core::sema::stdlib::module(&import.path).is_some() {"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "every_standard_module_is_found_by_name_and_checks_cleanly" }]
+
+[[mutation]]
+name = "n45-a-standard-module-is-found-by-its-length"
+why = "a standard module is looked up by the length of its name, so `@std/text` resolves to whichever four-letter module is listed first"
+file = "crates/nazm-sema/src/stdlib.rs"
+find = "    MODULES.iter().find(|(n, _)| *n == name).copied()"
+replace = "    MODULES.iter().find(|(n, _)| n.len() == name.len()).copied()"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "text_behaves_as_documented_at_its_edges" }]
+
+[[mutation]]
+name = "n45-a-project-path-can-take-a-standard-key"
+why = "`ModuleKey::relative` no longer refuses `@std`, so a project file under a directory of that name is keyed as a standard module"
+file = "crates/nazm-sema/src/key.rs"
+find = """        if key.0 == STD || key.0.starts_with("@std/") {"""
+replace = """        if key.0 == STD && key.0.starts_with("@std/") {"""
+killers = [{ package = "nazm-sema", lib = true, name = "stdlib::tests::no_project_path_is_keyed_as_a_standard_module" }]
