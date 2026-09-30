@@ -5259,6 +5259,18 @@ backend and configuration give byte-identical executables — tested on one host
 copies of a package in two directories from empty caches. Nothing is claimed across operating
 systems or toolchain versions.
 
+**Amended during implementation.** Three facts the first draft did not know. *The linker*: the
+Apple linker gives every link a new UUID unless `ZERO_AR_DATE=1` is in its environment, and
+derives the UUID and the ad-hoc signature from the output's file name — so the link is made with
+that variable set, under the final file name, inside the build's working directory, and renamed
+into place (`two_copies_built_from_empty_caches_are_byte_identical` failed until both were done).
+*Stored keys*: `ModuleKey::parse` read back only the prelude's key and project paths, so neither a
+dependency's module (`NAME@VERSION/…`) nor a standard one (`@std/…`, N45's — a gap N45's tests did
+not cover) was ever reused from the cache; both now read back as themselves. *The first
+component*: only a key's first component may not hold `@`, because `lib/@core/x.nz` was already a
+project's own key. The source-root decision (`nazm-service/src/root.rs`) learned a fourth answer,
+`package`, reported by `--cache-report` and `--build-report` as a new value of `root`.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
