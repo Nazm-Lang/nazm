@@ -5045,6 +5045,86 @@ generation (§7.43); there is no per-OS code path in the runtime, so there is no
 **Not here.** A scheduler, work stealing, task priorities (N44); runtime provenance tags (N38
 provenance is static and erased); a runtime for `nazm run` (the interpreter is its own).
 
+## 7.46 Structured concurrency and the scheduler — N44, 2026-10-01
+
+Written before the code. `docs/spec.md` *Concurrency* is the language rule; this is what both
+implementations — the interpreter and the native runtime (§7.45) — owe it, and what the scheduler
+is and is not.
+
+**Task and scope.** A *task* is a call started by `spawn f(args)` inside a `scope { … }` block. A
+scope owns every task started in it, and **no task outlives its scope**: every exit from the
+block — its closing brace, a `return`, a `break` or `continue` leaving it, a `?`, and a failure
+unwinding through it — joins every task it started, innermost scope first (§7.42's cleanup law).
+There are no detached tasks, no task handles a program can hold, and no way to name a task.
+
+**Task states.** *recorded* (in its scope's list, before its thread exists) → *running* (its
+thread started) → *finished* (its body returned; a failure, if any, published into its block) →
+*joined* (its thread joined by the scope, its block freed). The order is fixed by the runtime:
+`nz.spawn` records first and undoes the record if the thread cannot be started, so no task is
+running and unrecorded; `nz.scope_join` joins in the order tasks were started and frees each block
+after its thread is joined. A task that cannot be started is `N0404` at the `spawn`, and the
+scope still joins every task started before it.
+
+**Failure.** A failed task stops at its failure and publishes it. Its siblings are **not**
+cancelled: they run to completion. At the scope's join, the first failure *in start order* is
+the scope's, and it continues in the parent as the parent's own failure — at the closing brace or
+the exit that joined. Later failures are dropped. A failure in the parent while tasks run is held
+until they are joined, then unwinds. So a scope's result is a function of its tasks' outcomes, not
+of the order they happened to finish in.
+
+**Cancellation: none in v1.** There is no cancel operation, no cancellation on sibling failure,
+and no timeout. A blocked `chan_recv` waits until a value arrives or the channel is closed. This
+is a decision, not an omission to fill quietly: cooperative cancellation needs observation
+points in blocking operations, and both implementations would have to agree on every one of them.
+
+**The scheduler is the operating system's.** Each task runs on its own OS thread, started at the
+`spawn` and joined by its scope. There is no worker pool, no run queue and no work stealing in
+Nazm, and the compiler emits no scheduling policy — MIR says `spawn` and `join` (§7.42), the
+backends call `nz.spawn` and `nz.scope_join`, and the runtime starts and joins threads. This is
+the simplest architecture that keeps the language's progress guarantee: channel operations block
+the calling thread, so a fixed pool of *N* workers would deadlock any program with more than *N*
+tasks blocked at once — a program that is correct today. A pool becomes possible only with
+suspendable tasks (stack switching or compiled continuations), which is research, not v1.
+
+**Fairness and determinism.** Nothing is promised about the order tasks run in, interleave, or
+finish, beyond what the OS scheduler does for threads. Program output that depends on task order
+is the program's nondeterminism. What *is* deterministic: which failure a scope reports (first in
+start order), when a scope ends (after every task), and what is reclaimed (everything).
+
+**Blocking.** File I/O, `print` and channel operations block the calling task's thread and no other.
+
+**Authority.** `spawn` is the effect `spawn` and needs a `SpawnCap` in scope (N37); holding one is
+not the effect. A child has exactly the authority its arguments carry: a declared child needs its
+capabilities passed to it (`N0369` otherwise), and an undeclared one exercises the spawner's under
+N37's compatibility bridge, which the spawner must therefore hold (`N0369` at the `spawn`). A task
+inherits nothing else.
+
+**Provenance.** A task's arguments carry their origins into it: N38's summaries treat a spawn as a
+call, so a value from a file handed to a task that writes to a path derived from it is `N0372`
+exactly as a direct call is.
+
+**What may cross into a task.** Scalars, strings (immutable, atomically counted), channels (shared,
+locked), capabilities, and records and enums of those. Not a sequence, nor anything holding one
+(`N0321`): a sequence is shared and mutable, and nothing synchronises it. So **Nazm has no data
+races on its own values**: every value two tasks can reach is immutable or a channel. It does not
+prevent deadlock (two tasks each waiting on a channel the other would fill), livelock or
+starvation, and no diagnostic claims to.
+
+**Channels.** `chan_new(n)` is a bounded FIFO of `Int`s with capacity *n*; `chan_send` blocks while
+it is full (backpressure) and returns `false` once the channel is closed; `chan_recv` blocks while
+it is empty, then appends the oldest value to a sequence and returns `true`, or returns `false`
+once the channel is closed **and** drained — a close never discards what was sent. Every state
+change wakes every waiter (a broadcast under the channel's lock), so no wakeup is lost. Only `Int`s
+are queued, so no managed value is owned by a channel; the channel itself is atomically counted
+and freed by its last holder.
+
+**Shutdown.** `main` returns only after every scope in it has joined, so no task is running when
+the process ends normally or reports a failure. `exit_with` inside a task ends the whole process at
+once, with its siblings still running: that is what `exit_with` means.
+
+**Not here.** Cancellation, timeouts, select over several channels, detached tasks, a worker pool,
+task priorities, async I/O.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
