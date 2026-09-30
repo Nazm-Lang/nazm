@@ -2590,6 +2590,127 @@ derive one into), resource-specific authority, revocation, linear or affine capa
 capability polymorphism, user-defined capabilities, restriction profiles, and authority for a
 foreign function or unsafe code (*Open*, *Capabilities*).
 
+### Provenance: where a value came from, and where it may go
+<!-- id: provenance -->
+
+A value's **provenance** is the set of **origins** its contents were derived from by explicit
+data flow. It is a checker fact, computed from resolved bodies and erased before anything
+runs: not an effect (reading a file is `io`; the text read is not), not a capability (knowing
+a value came from the root authority grants none), not a type, and not a runtime tag.
+
+```nazm
+fn lines(text: Str) -> Int ! {} {
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(text) {
+        if str_byte(text, i) == 10 { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let text = read_file("notes.txt");      // from a file's contents
+    write_file("count.txt", int_to_str(lines(text)));   // a path the program chose: allowed
+    0
+}
+```
+
+#### The origins
+
+Four, and the compiler's; there are no user-defined labels. The absence of every origin is
+**local**: a literal, or anything computed only from literals.
+
+| Origin | Where it enters |
+| --- | --- |
+| `argument` | `arg` and `args_count`: the command line, supplied by whoever ran the program |
+| `file` | `read_file`'s contents and `file_exists`'s answer: supplied by whoever could write that file |
+| `authority` | a capability `main` is handed (N37): the runtime's root authority |
+| `unknown` | a value read out of a sequence, a `Vec` or a channel, which the checker does not follow |
+
+An origin is identified by the compiler, and a built-in's by an exhaustive table on its
+identity — never by spelling, and no program can write a label. Output is not input: `print`,
+`eprint` and `write_file` are not sources. v1 is coarse: an origin is a *kind* of source, not a
+particular argument or file, and a diagnostic names where each one was first met.
+
+`unknown` is explicit and never trusted. Sequences and channels are shared handles, and a value
+read out of one is whatever any alias wrote, which a local analysis cannot see; so it may be any
+of the others, and a restriction treats it as the worst of them.
+
+#### How provenance flows
+
+**Explicit data flow only.** A value carries what it was computed from:
+
+- a binding, everything ever assigned to it — flow-insensitively, to a fixed point, so a loop is
+  not a special case;
+- an operator, both operands'; a built-in that computes, its arguments';
+- a record or a variant, its fields'; a field read, a pattern's binding and `?`, the whole value's
+  — records, variants, `Result` and `Option` are tracked as a whole, not field by field;
+- a call, its callee's summary applied to its arguments;
+- an `if` or a `match`, its arms'. **The condition contributes nothing**: branching on a value is
+  implicit flow, which v1 does not track.
+
+A **join** is a set union: commutative, associative and idempotent, so the order values are
+combined in changes nothing they carry.
+
+#### Function summaries
+
+A function's provenance is summarised, over the whole program, as three facts:
+
+- the **origins** its result carries whatever it is given;
+- the **parameters it passes on**: those its result is computed from. `fn id(x: Str) -> Str { x }`
+  passes on `x`; `fn len(x: Str) -> Int { str_len(x) }` does too; `fn one(x: Str) -> Int { 1 }`
+  passes on nothing, and its result is local whatever it is handed;
+- the **parameters that reach a restricted sink** (below).
+
+Summaries are the **least fixed point** over every call, `spawn`, recursion, mutual recursion and
+import cycle: they start empty and grow until nothing changes, over a finite set of origins and
+parameter positions, so they always settle, and source order changes nothing. A caller reads its
+callee's summary, never its body.
+
+#### Across modules
+
+A module's bodies are reduced to **facts** — each function's flows in terms of its parameters and
+the calls it makes — which depend only on the module's source and its imports' declarations, as
+its checking does. A cache keeps them beside the module's other results, so a module whose bodies
+are not checked again still contributes them. Every run then solves the whole program's summaries
+from all modules' facts: a callee's changed body changes what its caller is told in the same run,
+though the caller was not checked again. An importer never needs another module's body.
+
+#### Provenance, effects and authority are three facts
+
+External data is not an effect: once read, computing over it is pure, and `lines` above declares
+`! {}`. Provenance never adds an effect, never removes one, and never grants authority — a value
+known to have come from an `IoCap` is not an `IoCap` in scope. Passing, storing and spawning with a
+capability keep its `authority` origin: a parameter records the origins its callers hand it, so a
+task's capability is recorded as the spawner's.
+
+#### The restricted flow
+
+**In a function that declares an effect set, the path given to `write_file` must not derive from
+a file's contents or from what the checker does not follow** (`N0372`). It may come from the
+command line — whoever ran the program already holds every authority it has — or be computed in
+the program. The rule reaches through calls: a function whose parameter reaches `write_file`'s
+path, however many calls deep and whether it declares effects or not, carries the rule to its
+callers, and the call that hands it a file's contents is refused there. The diagnostic shows one
+chain, to the `write_file` and to where the contents were read. There is no automatic fix and no
+way to vouch for such a value in v1: declassification and sanitisers are later work.
+
+A function that declares no effect set is the bridge N37 describes, and its own writes are not
+checked; but explicit code cannot launder a file's contents through it.
+
+Authority needs no restriction of its own here: no built-in accepts a capability and none
+converts one to data, so authority reaching output, a file or a channel is already impossible by
+type, and provenance does not claim to enforce what types already do.
+
+#### What this is not
+
+**Explicit information-flow provenance**, statically, for one sink. Not non-interference — implicit
+flow through conditions is not tracked — and not taint tracking at runtime, confidentiality
+enforcement, side-channel or constant-time guarantees, or a sandbox. Records, variants and
+containers are coarse, shared storage is `unknown`, and there are no user labels, no
+declassification and no policy language.
+
 ### The integer boundaries, stated rather than inherited
 <!-- id: integer-boundaries -->
 
@@ -2760,6 +2881,12 @@ static erasure (*Capabilities: what allows a function to act*). Still open:
 
 ### Provenance and information flow
 <!-- id: open-provenance -->
+
+*Settled by N38*: the four origins, explicit data flow, joins, summaries and their fixed point,
+facts across modules, the separation from effects and authority, and one restricted sink
+(*Provenance: where a value came from*). Still open:
+
+- Field-, element- and alias-precise tracking, instead of whole values and `unknown` shared storage.
 
 - Implicit flows: is branching on a `Secret` a leak? Full non-interference is usually
   unusable in practice; what is the chosen approximation, and what does it miss?

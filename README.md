@@ -251,6 +251,7 @@ Stated up front, because these are easy to blur:
 | Provenance / taint | Authorization. Correctly-parameterised SQL can still read another tenant's rows |
 | Effect rows / purity | That an edit preserves behaviour — and not, alone, that a call can be dropped or reordered |
 | Capabilities (static, N37) | Isolation at runtime. Nothing sandboxes the process, and a function with no declared effects still uses its caller's authority |
+| Provenance (static, N38) | Non-interference or confidentiality. Only explicit data flow is tracked, one sink is restricted, and containers are coarse |
 | Definition-hash equality | All behaviour-preserving rewrites. Only one class: normalised-Core alpha-equivalence |
 | Passing the test suite | Correctness |
 | Reproducible bootstrap | Compiler trustworthiness |

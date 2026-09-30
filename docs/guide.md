@@ -358,6 +358,33 @@ working; one that declares a set may call it only while holding what it needs. T
 is static: a capability costs nothing at runtime, and it does not sandbox the program.
 `docs/spec.md`, *Effects* and *Capabilities*, is the law.
 
+## Where values come from
+
+The checker records where each value's contents came from: the command line (`arg`,
+`args_count`), a file (`read_file`, `file_exists`), `main`'s capabilities, or storage it does
+not follow (anything read out of a sequence, a `Vec` or a channel). Computing over input keeps its
+origin, and needs no effect:
+
+```nazm
+fn shout(s: Str) -> Str ! {} { str_concat(s, "!") }
+
+fn main(io: IoCap) -> Int ! { io } {
+    let text = read_file("in.txt");
+    write_file(arg(0), shout(text));
+    0
+}
+```
+
+`text`, and `shout(text)`, are from a file; `shout` is still pure. A function that returns a
+constant passes nothing on, whatever it is given.
+
+One flow is refused: in a function that declares its effects, the path `write_file` writes to
+may not come from a file's contents — nor from a sequence or channel — directly or through a
+function that writes to a path it is handed. `write_file(read_file("manifest"), "x")` is
+`N0372`, with the chain from the read to the write. A path from the command line, or one the
+program built, is fine. This is explicit data flow only: a value is not tainted by the condition
+that chose it. `docs/spec.md`, *Provenance*, is the law.
+
 ## Memory: what you do not have to do
 
 **Nothing.** There is no `free`, no `new`, no ownership annotation and no lifetime to
