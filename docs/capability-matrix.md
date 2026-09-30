@@ -39,10 +39,12 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,869 passed, 0 failed, 23 ignored, across 117 suites**, run contained and
-offline at N38 (2026-09-30), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle
-tests, run on their own (19 of 19 passed, contained), and four are N33's, N34's and N36's
-release-build measurements, run by hand (`performance.md`). N37 ended at 1,846 across 115 with 23
+**Current suite: 1,903 passed, 0 failed, 25 ignored, across 121 suites**, run contained and
+offline at N39 (2026-09-30), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle
+tests, run on their own (19 of 19 passed, contained), and six are N33's, N34's, N36's, N38's (the
+3,000-request MCP confirmation) and N39's release-build measurements, run by hand or in the
+release-benchmark stage (`performance.md`). N38
+ended at 1,869 across 117 with 23 ignored; N37 ended at 1,846 across 115 with 23
 ignored; N36 ended at 1,825 across 111 with 23
 ignored; N35 ended at 1,795 across 108 with 22
 ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 across 99 with 21 ignored; N32-H3 ended at 1,728 across 95 with 19 ignored; N32-H2 ended at 1,718 across 95; N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
@@ -2852,7 +2854,42 @@ tier 1 with killers verified, and the two selected killerless entries at tier 2 
 suite, and the workspace suite for the prelude key entry); no survivor, over two sessions and three
 resumes that found nothing left (5,848 s of the gate).
 
-**Limitation** · Two catalogued defects are MUTANT CRASH, not caught (above), and one N13
+*N39 (2026-09-30) added nineteen mutations, repointed twelve and retired one.* The nineteen attack
+the Core IR laws: a call resolved by its spelling, a read with no type, a value `if`'s branches
+swapped, a loop's back edge, a `return` falling through, a `break` in a condition naming its own
+loop, a `continue` naming the outermost, an initialiser filling the field at its position, a variant
+losing its identity, the effect contract and a function's authority dropped, a digest naming a callee
+by session number, ignoring the body, collapsing effects into the body digest or keeping arm order,
+the verifier accepting a stray `break`, a generic call keeping its declared result, the interpreter
+running a `match`'s first arm, and the backend asking the resolution again — which only the boundary
+gate the suite now runs can see. Twelve historical entries were **repointed**, because the rule each
+pins moved: into the one lowering (the three `lowered-propagation-*`, now reaching both backends),
+into the Core IR evaluator (`call-depth-never-released`, `return-does-not-leave-its-block`,
+`remainder-inherits-the-hardware-fault`, `n13-interpreted-inequality-is-not-the-negation`,
+`a-returned-value-is-discarded`, `a-flow-in-value-position-is-an-error`) and into native lowering
+from Core IR (`return-does-not-end-the-block-it-is-in`, `lowered-arm-block-drops-its-statements`,
+`a-statement-block-is-skipped`); the last two of the evaluator's were found *unusable* by the
+campaign — their text still matched and their replacements named the tree walker's variables — and
+were repointed after it. `interpreted-propagation-carries-on-with-the-error` is **retired**: the
+interpreter has no `?` of its own. Six more were selected for a rule N39 rewrote the code of: the
+call-depth guard and the stack's sizing (`call-depth-unbounded`, `stack-not-sized-from-the-budget`),
+and native lowering's construction cleanup, field positions and statement-`match` completion
+(`a-partly-built-record-is-not-cleaned`, `a-partly-built-variant-is-not-cleaned`,
+`a-field-is-read-from-the-wrong-position`, `a-statement-match-claims-every-arm-leaves`). Layout,
+symbol, linkage and cycle-check entries were not selected: their code did not change and every
+emitted IR file is byte-identical. Every N39 killer was verified by hand on the host first, which
+found the boundary gate blind to a lookup written across lines; it reads code whitespace-free now.
+**Campaign, targeted, P1, offline: 37 of 37 caught — 23 at tier 1 with killers verified, 13 at tier
+2, 1 at tier 3 — and no survivor.** `stack-not-sized-from-the-budget`, a MUTANT CRASH in every
+campaign that had run it, is caught for the first time: the in-process test that aborted its binary
+(`a_raised_budget_still_runs_what_fits_inside_it`) recursed deeper than its own comment's bound, and
+recurses 200 levels now, leaving the out-of-process check to fail. It took six sessions and
+13,876 s; the first session's journal was not read by the next, whose campaign key differed, so its
+23 verdicts were established twice. 34 verdicts are at `ab0a761`; the three repaired entries' are at
+`eb80464`.
+
+**Limitation** · One catalogued defect is a MUTANT CRASH, not caught (above; N39 turned the other,
+`stack-not-sized-from-the-budget`, into a catch), and one N13
 defect is a known survivor (above): the suite cannot observe a read of freed storage nothing
 has reused. **VERIFIED here means the harness runs every catalogued mutant and accounts for
 every verdict — not that every meaningful mutation is killed.** A campaign is
@@ -2862,8 +2899,8 @@ which then simply run again. The 71 entries in `compiler/` cost 45 % of per-muta
 almost all at the selfhost profile, because 51 of them have no killer yet. **Fuzzing does not
 exist** — no fuzz directory at the repository root, no targets, no corpus.
 
-**Next dependency** · For mutation, killers for the older `compiler/` entries, and the two
-crashing cases moved out of process. For fuzzing, a decision to start.
+**Next dependency** · For mutation, killers for the older `compiler/` entries, and the one
+remaining crashing case moved out of process. For fuzzing, a decision to start.
 
 **Accepted when** · A full catalogue run completes with every verdict accounted for. **Met on
 2026-09-25**: 233 of 233, as above. Fuzzing's status is separate and unchanged.
