@@ -495,7 +495,7 @@ N36's wording was corrected so that `fn f() -> Int` and `fn f() -> Int ! {}` can
 | capability kinds, sets and the built-in table | `crates/nazm-sema/src/capability.rs`, `types.rs` |
 | possession, forging, `main`'s parameters | `crates/nazm-core/src/check.rs` |
 | the authority check and its witness | `crates/nazm-core/src/effects.rs` |
-| the root at runtime | `crates/nazm-core/src/eval.rs`, `crates/nazm-lir/src/emit.rs` |
+| the root at runtime | `crates/nazm-core/src/eval.rs`, `crates/nazm-lir/src/runtime/entry.rs` |
 | the law | `spec.md` *Capabilities: what allows a function to act*, `architecture.md` §7.39 |
 
 Mutation evidence, under the new responsibility law: twenty new mutations and one retired; 33
