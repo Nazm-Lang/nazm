@@ -72,7 +72,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 13 | Runtime | PARTIAL (v1 contract VERIFIED) |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | RESEARCH |
-| 16 | Standard library | MISSING |
+| 16 | Standard library | PARTIAL (v1 foundation VERIFIED) |
 | 17 | FFI and ABI | PARTIAL (v1: C, `Int`/`Bool`) |
 | 18 | Embedded support | MISSING |
 | 19 | Critical profile | DESIGNED |
@@ -1174,26 +1174,33 @@ implementation.
 
 ## Libraries and interop
 
-### 16. Standard library — MISSING
+### 16. Standard library — PARTIAL (v1 foundation VERIFIED)
 
-*Since N12 there is one `.nz` library file, and it is not a standard library:*
-`library/core/prelude.nz` declares `Result` and `Option`, is checked as ordinary source, and
-is special only in its identity and in being imported everywhere (area 2). Nothing can add a
-second declaration to it or a second such module.
+**Evidence** · N45 (2026-10-01), `architecture.md` §7.47 first. Seven toolchain-owned Nazm
+modules in `library/std/`, imported by name — `use "@std/text";` — resolved by the loader
+(`crates/nazm-service/src/load.rs`) to the compiler's copy of their bytes
+(`crates/nazm-sema/src/stdlib.rs`) and keyed `@std/NAME`, which no project path can take. They are
+ordinary source: no compiler support beyond resolution, and the built-in table is unchanged. The
+prelude (`library/core/prelude.nz`, `Result` and `Option`) is still the only module imported
+without a `use`.
 
-**Evidence of absence** · No `.nz` library beyond that prelude. Thirty-one compiler built-ins in
-one table, `crates/nazm-sema/src/intrinsic.rs`, mirrored by the backend in
-`crates/nazm-lir/src/ir.rs`. Every built-in the front end has, the backend lowers — there
-is no coverage gap today, and a test enforces that.
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| Found by name and only by name; `@std/` never read from disk | VERIFIED | `every_standard_module_is_found_by_name_and_checks_cleanly`, `no_project_path_is_keyed_as_a_standard_module` |
+| Text, option, result, sequence, I/O, process and channel helpers behave as documented at their edges | VERIFIED | `text_behaves_as_documented_at_its_edges`, `option_result_and_seq_helpers_work_for_every_type`, `chan_take_receives_one_value_at_a_time_across_tasks` — interpreter, LLVM −O0/−O2 and Cranelift, everything reclaimed |
+| Authority visible in every signature | VERIFIED | `io_and_process_need_the_authority_they_show` |
+| Origins preserved through wrappers | VERIFIED | `what_a_standard_function_reads_keeps_its_origin` |
+| Ordinary failure is a value | VERIFIED | `text_parse_int` `Err` for no digits, a non-digit and both ends of the range; `None` for an absent search or an empty maximum |
+| Documented where the spec lists it | VERIFIED | `every_public_standard_function_is_documented_and_listed`; `nazm docs --section spec:std`; the spec's example runs (`the_spec_s_example_runs_everywhere`) |
+| Higher-order helpers, formatting, domains (HTTP, JSON, time, crypto) | MISSING | no function values; out of scope for v1 |
 
-**Limitation** · The table is the library. Names live in the ordinary function namespace
-and cannot be redefined. There are no string escapes, so `str_from_byte` is the only way to
-write a newline.
+**Limitation** · Functions carry their module's name because there are no qualified names. The
+compiler written in Nazm reports an `@std` import as a missing module. Pre-1.0: modules may change.
 
-**Next dependency** · User-defined types, or the library stays a table.
+**Next dependency** · Function values (for `map`, `filter`, sorting by key), and qualified names.
 
-**Accepted when** · A `.nz` library ships, is versioned, and is not special-cased by the
-compiler.
+**Accepted when** · For v1: met. For the area: a library a real program can be written against
+without reimplementing collections or text handling, with a stability policy past 1.0.
 
 ### 17. FFI and ABI — PARTIAL (v1: C, `Int` and `Bool`, native builds on the host)
 

@@ -5142,10 +5142,13 @@ the same backends, cached by the same keys; nothing in the compiler knows what a
 functions does. So the standard library adds no compiler magic, and the list of true primitives
 is the built-in list, unchanged.
 
-**Naming and resolution.** An import path beginning with `@` belongs to the toolchain and is never
-looked for on disk. `@std/NAME` is the standard module `NAME`, keyed `@std/NAME` — a key no project
-path can produce, as `@core` is not (`ModuleKey::relative` refuses both prefixes) — and any other
-`@` path is `N0205`, naming the modules there are. A standard module may import only standard
+**Naming and resolution.** An import path beginning with `@std/` belongs to the toolchain and is
+never looked for on disk. `@std/NAME` is the standard module `NAME`, keyed `@std/NAME` — a key no
+project path can produce, as `@core` is not (`ModuleKey::relative` refuses both prefixes) — and any
+other `@std/` path is `N0205`, naming the modules there are. *Narrowed during implementation:* the
+first draft reserved every path beginning with `@`, which broke an existing contract — a project
+may keep and import its own files under a directory named `@core` (`prelude.rs`) — so only
+`@std/` is reserved, and every other path resolves on disk as it always has. A standard module may import only standard
 modules. The compiler carries each file's bytes, so a compilation needs no installation directory;
 what is checked is those bytes, parsed as source.
 
@@ -5180,7 +5183,8 @@ because the checker's rules did not change.
 
 **The compiler written in Nazm** does not resolve `@std` imports: it is a second implementation of
 the front end for the programs in this tree, none of which imports a standard module, and it
-refuses such an import by name.
+resolves every import against the importing file's directory, so it reports `@std/text` as a
+module it cannot find.
 
 ## 8. Toolchain, and one real incompatibility
 
