@@ -1865,19 +1865,34 @@ the servers that analyse the repository.
 - **The planner and servers**, contained: `repo --map` 407–419 ms (N37 352–363), the four task
   contexts 59–634 ms (49–567), 1,000 MCP task contexts 113.6 ms each (104.2), the docs index 28.4 ms
   (25.6) — about 10–15 % slower, since every analysis they request now includes the solve.
-- **The MCP task-context memory check failed.** `a_thousand_task_contexts_over_this_repository`
-  read RSS 53,240 kB after warm-up and 93,576 kB after 1,000 calls, over its 4 MB allowance. Probed
-  every 250 calls over 3,000: flat at 53,252 kB for 750 calls, one step to 93,416 kB, then flat to the
-  end — a single step, not growth. With `MALLOC_ARENA_MAX=1` the same run is flat at 61,308–61,320 kB
-  across all 3,000 calls. So the step is glibc giving a second worker thread its own arena, which
-  N38's larger per-analysis allocations reach sooner, and not a leak; the check was not changed.
+- **The MCP task-context memory check, and why its law changed.** In the gate it failed: RSS read
+  53,240 kB after warm-up and 93,576 kB after 1,000 calls, over its +4 MB allowance. Diagnosis:
+  sampled every 250 calls over 3,000, RSS was flat at 53,252 kB for 750 calls, stepped once to
+  93,416 kB, and stayed flat to the end; with `MALLOC_ARENA_MAX=1` — a diagnostic only, never the
+  benchmark's environment — the same run was flat at 61,308–61,320 kB throughout. The step is glibc
+  giving a worker thread its own arena the first time threads contend, at a moment set by
+  scheduling rather than by how many requests came before: a sequential warm-up of 1,000 requests,
+  flat throughout, was followed by the step inside the measured window. Concurrent warm-up
+  absorbed it, but reached 174–321 MB of retained memory a leak could hide in, and was not used.
+  **The law now** (`crates/nazm-mcp/tests/protocol.rs`, `growth`): after a sequential warm-up,
+  bounded at 3,000 requests and ended once five consecutive samples 250 requests apart lie within
+  4 MB, the 1,000-request window is sampled every 250 requests. It passes if every sample is within
+  +4 MB of the baseline, or if there is exactly one adjacent increase over +4 MB with every sample
+  before it within +4 MB of the baseline and at least one after it, all within +4 MB of the first
+  post-step sample. Two steps, growth past the bound before or after one, and a step at the last
+  sample, with no plateau seen, fail — synthetic sequences in its unit test cover each.
+  Confirmation, 3,000 sequential requests, normal allocator: 72,904 kB at every one of 13 samples
+  (the step came before the first), peak 74,872 kB. The release-benchmark stage, run again alone:
+  warm-up 1,000 requests at 53,128 kB, measured window 53,128 kB at all five samples, `Flat`, peak
+  72,760 kB — **passed**.
 
 **The gate**, offline, at `2861d31`: mutation 5,848 s (34 of 34 caught: 32 at tier 1 with killers
 verified, one killerless entry at tier 2 and one at tier 3, over two sessions and three resumes that
 found nothing left), workspace 416 s (1,869 passed, 0 failed, 23 ignored, 117 suites; the container's
 `memory.peak` again read its 4 GiB limit with no OOM kill), lifecycle 185 s (19 of 19), selfhost 57 s
 (38 of 38), bootstrap 37 s (C2 = C3, IR identical, executables identical once the linker UUID is
-removed), release benchmarks 460 s (**failed** at the MCP memory check above), compiler benchmark 197
+removed), release benchmarks 460 s (failed at the MCP memory check above; after its law changed, run
+again alone at `e6e9454` and passed in 327 s), compiler benchmark 197
 s (the same 21 pre-N33 drifts), checks 17 s (18 of 18) — 7,217 s of wall time, one run, no network
 (`NETWORK-ABSENT`). The compiler benchmark's harness counted one `nazm-` container at its end; none
 remained afterwards, and which it was is not established.
