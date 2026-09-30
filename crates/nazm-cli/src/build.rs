@@ -1,8 +1,9 @@
 //! `nazm build` — source to a native executable.
 //!
-//! The pipeline is the existing front end plus two new steps: `nazm_lir::lower` turns a
-//! checked program's Core IR into the low-level representation, `nazm_lir::emit_llvm` turns that into
-//! LLVM IR text, and `clang` turns that into a binary. No LLVM is linked into `nazm` —
+//! The pipeline is the existing front end, then Core IR lowered to MIR and validated
+//! (`nazm_mir`, N40), then `nazm_lir::lower` laying MIR out into one unit per module and per
+//! generic instance, `nazm_lir::emit_unit` writing each as LLVM IR text, and `clang` turning
+//! that into a binary. No LLVM is linked into `nazm` —
 //! `docs/architecture.md` §1 says not to in year one, and `clang` reads IR from a file.
 //!
 //! # Publishing the result
@@ -161,14 +162,15 @@ pub(crate) fn run(
     // so the same project built from two checkouts produces the same bytes.
     let names = nazm_lir::SourceNames::of(map, &loaded.graph);
     //
-    // The backend is handed Core IR — the one lowering of the checked program — and never
-    // the tree (N39).
+    // The backend is handed validated MIR, lowered from Core IR — never the tree (N39), and
+    // never Core IR or the checker's tables either (N40).
     let artefacts = match nazm_core::on_lowered(
         map,
         &loaded.graph,
         nazm_core::Entry::Required,
         |core, resolution| {
-            nazm_lir::lower(core, resolution, &loaded.graph, &names)
+            let program = crate::mir::lower(core, resolution, &loaded.graph)?;
+            nazm_lir::lower(program, &names)
                 .map(|native| emit_artefacts(&native, &names))
                 .map_err(|e| e.diagnostics)
         },
@@ -460,7 +462,7 @@ fn emit_artefacts(native: &nazm_lir::Native, names: &nazm_lir::SourceNames<'_>) 
     let mut out = Vec::new();
     let mut needs = nazm_lir::Needs::default();
     for (i, unit) in native.units.iter().enumerate() {
-        let (ir, reached) = nazm_lir::emit_unit(unit, names);
+        let (ir, reached) = nazm_lir::emit_unit(native, unit, names);
         needs = needs.union(reached);
         out.push(Artefact {
             name: format!("m{i}"),
@@ -473,7 +475,7 @@ fn emit_artefacts(native: &nazm_lir::Native, names: &nazm_lir::SourceNames<'_>) 
     // is one object, and a module's object does not change when another module starts
     // instantiating something. `docs/architecture.md` §7.12.
     for (i, unit) in native.instances.iter().enumerate() {
-        let (ir, reached) = nazm_lir::emit_unit(unit, names);
+        let (ir, reached) = nazm_lir::emit_unit(native, unit, names);
         needs = needs.union(reached);
         out.push(Artefact {
             name: format!("g{i}"),
