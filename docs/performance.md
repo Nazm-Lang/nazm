@@ -1831,6 +1831,57 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### Provenance — N38, measured 2026-09-30
+
+Provenance is a checker fact and a whole-program solve over kept facts (`architecture.md` §7.40),
+so what is measured is what it costs the compiler, what it leaves in programs, and what it did to
+the servers that analyse the repository.
+
+- **Nothing in the program.** `nazm build --emit-ir -O0` under the N37 and N38 release builds gives
+  byte-identical IR for `examples/capabilities/workers.nz` and `ledger.nz`, `examples/effects/tasks.nz`,
+  `examples/provenance/tally.nz`, `examples/primes.nz`, `examples/pipeline.nz` and `compiler/emit.nz`
+  (host, built and not run). `nazm-lir` reads no provenance.
+- **Compatibility.** All 203 `.nz` sources at N37's HEAD (`git archive 6577c14`) give byte-identical
+  `nazm check --no-cache` output and exit status under the N37 and N38 release builds: none is newly
+  refused, since no existing function with a declared effect set writes to a file-derived path.
+- **Checking time.** Release, host, median of 25: `compiler/emit.nz` 51.3 ms under N37 and 56.6 ms
+  under N38 (+10 %); `compiler/check.nz` 31.7 and 34.7 ms. Of the added time on `emit.nz`, reducing
+  bodies to facts is about 5 ms and the solve about 1.5 ms. Two optimisations came before the gate: a
+  join that reports whether it grew, rather than a clone compared after, and re-walking a body only
+  when a binding grew after it was read — 261 of `emit.nz`'s 432 functions had needed a second,
+  confirming walk. In the container the compiler benchmark's `compiler/check` is 98.2 ms, against
+  N37's 80.6 (+22 %).
+- **Memory.** Peak RSS of `nazm check compiler/emit.nz`, host, median of 7: 29.0 MB under N37, 29.6 MB
+  under N38.
+- **Size.** Linux release, contained: `nazm` 4,592,544 → 4,723,616 B (+131,072, +2.85 %); `nazm-mcp`
+  4,134,624 → 4,265,696 B (+131,072). Host (macOS) `nazm`: 4,782,752 B.
+- **The large graph.** A 2,000-function chain passing the command line through, and a 500-function
+  cycle one of whose members reads a file, check in one debug test well under its 60 s bound — the
+  whole provenance suite is 1.3 s in debug. Before the worklist the same test took 29 s: rounds that
+  moved a summary one call each were quadratic along a chain.
+- **Precision.** A function returning a constant is handed a file's contents and its result is local;
+  a function returning its second parameter carries only that one; a choice made on `file_exists`
+  is local (`crates/nazm-core/tests/provenance.rs`).
+- **The planner and servers**, contained: `repo --map` 407–419 ms (N37 352–363), the four task
+  contexts 59–634 ms (49–567), 1,000 MCP task contexts 113.6 ms each (104.2), the docs index 28.4 ms
+  (25.6) — about 10–15 % slower, since every analysis they request now includes the solve.
+- **The MCP task-context memory check failed.** `a_thousand_task_contexts_over_this_repository`
+  read RSS 53,240 kB after warm-up and 93,576 kB after 1,000 calls, over its 4 MB allowance. Probed
+  every 250 calls over 3,000: flat at 53,252 kB for 750 calls, one step to 93,416 kB, then flat to the
+  end — a single step, not growth. With `MALLOC_ARENA_MAX=1` the same run is flat at 61,308–61,320 kB
+  across all 3,000 calls. So the step is glibc giving a second worker thread its own arena, which
+  N38's larger per-analysis allocations reach sooner, and not a leak; the check was not changed.
+
+**The gate**, offline, at `2861d31`: mutation 5,848 s (34 of 34 caught: 32 at tier 1 with killers
+verified, one killerless entry at tier 2 and one at tier 3, over two sessions and three resumes that
+found nothing left), workspace 416 s (1,869 passed, 0 failed, 23 ignored, 117 suites; the container's
+`memory.peak` again read its 4 GiB limit with no OOM kill), lifecycle 185 s (19 of 19), selfhost 57 s
+(38 of 38), bootstrap 37 s (C2 = C3, IR identical, executables identical once the linker UUID is
+removed), release benchmarks 460 s (**failed** at the MCP memory check above), compiler benchmark 197
+s (the same 21 pre-N33 drifts), checks 17 s (18 of 18) — 7,217 s of wall time, one run, no network
+(`NETWORK-ABSENT`). The compiler benchmark's harness counted one `nazm-` container at its end; none
+remained afterwards, and which it was is not established.
+
 ### Capabilities — N37, measured 2026-09-30
 
 Authority is checked statically and a capability erases (`architecture.md` §7.39), so what is
