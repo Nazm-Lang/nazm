@@ -48,6 +48,7 @@ mod lsp;
 mod mir;
 mod package;
 mod patch;
+mod profile;
 mod repo;
 mod snapshot;
 mod summary;
@@ -187,6 +188,11 @@ enum Command {
         /// resolves to, with their bytes unchanged (N46).
         #[arg(long)]
         locked: bool,
+        /// A restriction profile to hold the program to (N47): `general`, `embedded`,
+        /// `critical` or `cyber`. Added to any the packages' manifests require; a profile only
+        /// refuses, and never changes what an accepted program does.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
     },
     /// Type-check without evaluating.
     Check {
@@ -223,6 +229,15 @@ enum Command {
         /// resolves to, with their bytes unchanged (N46).
         #[arg(long)]
         locked: bool,
+        /// A restriction profile to hold the program to (N47): `general`, `embedded`,
+        /// `critical` or `cyber`. Added to any the packages' manifests require; a profile only
+        /// refuses, and never changes what an accepted program does.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
+        /// One `nazm.profile-report/1` object on stdout: every rule of the profiles in force,
+        /// its verdict and its witnesses.
+        #[arg(long)]
+        profile_report: bool,
     },
     /// Apply the repairs the compiler already knows about.
     ///
@@ -585,6 +600,11 @@ enum Command {
         /// resolves to, with their bytes unchanged (N46).
         #[arg(long)]
         locked: bool,
+        /// A restriction profile to hold the program to (N47): `general`, `embedded`,
+        /// `critical` or `cyber`. Added to any the packages' manifests require; a profile only
+        /// refuses, and never changes what an accepted program does.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
     },
     /// Resolve a package and write its `nazm.lock` (N46): the exact package versions, sources
     /// and digests a `--locked` build is held to. Written only when its bytes would change.
@@ -635,6 +655,44 @@ fn main() -> ExitCode {
         },
         _ => {}
     }
+    // Restriction profiles (N47): held before the command does its own work, from the facts a
+    // full check settles.
+    let wants_report = matches!(
+        &cli.command,
+        Command::Check {
+            profile_report: true,
+            ..
+        }
+    );
+    match &cli.command {
+        Command::Run {
+            file,
+            locked,
+            profile,
+            ..
+        }
+        | Command::Build {
+            file,
+            locked,
+            profile,
+            ..
+        } => {
+            if let Err(code) = profile::enforce(file, profile.as_deref(), *locked, false) {
+                return code;
+            }
+        }
+        Command::Check {
+            file,
+            locked,
+            profile,
+            ..
+        } => {
+            if let Err(code) = profile::enforce(file, profile.as_deref(), *locked, wants_report) {
+                return code;
+            }
+        }
+        _ => {}
+    }
     if let Command::Build {
         file,
         out,
@@ -648,6 +706,7 @@ fn main() -> ExitCode {
         target,
         link,
         locked: _,
+        profile: _,
     } = cli.command
     {
         return build::run(
@@ -676,6 +735,8 @@ fn main() -> ExitCode {
             cache_report,
             summary_json,
             locked: _,
+            profile: _,
+            profile_report: _,
         } => {
             return checking::run(
                 &file,
@@ -834,6 +895,7 @@ fn main() -> ExitCode {
             max_iterations,
             max_depth,
             locked: _,
+            profile: _,
         } => (
             file,
             json,
