@@ -4868,6 +4868,68 @@ and relocations are defined in MIR order.
 rejection of generated code is a compiler defect (`N0900`); a link failure is the toolchain's and
 reported as one — none is a program error.
 
+## 7.44 The ABI and the foreign-function interface — N42, 2026-10-01
+
+Written before the code.
+
+**Two ABIs, never one.** The *internal* ABI is how code this compiler generated calls code this
+compiler generated, and it is each backend's own: the LLVM backend passes and returns LLVM
+first-class values (an `Int` an `i64`, a `Bool` an `i1`, a `Str` the `{ ptr, i64, ptr }` it is, a
+record or enum its named struct), and the Cranelift backend follows §7.43 (in-memory values by
+pointer, an in-memory result through a pointer passed first). Neither is C's and neither is
+promised to anything outside one build: both are revision 1 (`INTERNAL_ABI_REVISION`), the
+backend's identity is in every object's cache key, and no program mixes the two. The *external*
+ABI is the C calling convention of the host target, and it is the only one a foreign function is
+called with.
+
+**v1 scope: import only, C only, scalars only.** A Nazm program may call a C function; C may not
+call Nazm (no export, no callbacks, no runtime entry from a foreign thread). Only two types cross:
+
+| Nazm | C | LLVM | Cranelift |
+| --- | --- | --- | --- |
+| `Int` | `int64_t` | `i64` | `i64` |
+| `Bool` | `bool` (`_Bool`, one byte, 0 or 1) | `zeroext i1` | `i8`, zero-extended |
+
+Everything else is refused by name (`N0381`): a `Str` is not a C string and has no NUL; a sequence,
+channel, record or enum has a layout no C declaration states; a capability is authority and must
+never become a forgeable word; generics have no single C signature. No pointer or opaque handle
+exists in v1, so no ownership crosses the boundary and there is nothing to borrow, transfer or free.
+
+**Declaration.** `[pub] extern "C" fn name(p: T, …) -> R = "symbol";` at the top level. `extern` is
+contextual: it is an identifier everywhere except at the start of an item, so no program that
+names something `extern` changes meaning. The ABI string is exactly `"C"` (`N0380` otherwise); the
+symbol is written, never derived, and must be a C identifier — ASCII letters, digits and `_`, not
+starting with a digit, at most 255 bytes — which cannot collide with a Nazm symbol (those contain
+`.`) or the runtime's (`nz.`); anything else is `N0382`, so no malformed name reaches a linker
+command. A foreign declaration has no body, no type parameters and no written effect set (`N0384`).
+Two declarations of one symbol with different signatures are refused (`N0383`); the same signature
+twice is one import.
+
+**Authority and effects.** A foreign function can do anything a C function can, so calling one is
+the effect `foreign` and needs the capability `ForeignCap`, held at the call — in every function,
+with or without a declared effect set: N37's compatibility bridge does not extend to it, because
+there is no older program to stay compatible with. `main` may take a `ForeignCap`, minted by the
+runtime at start-up like `IoCap`; nothing else creates one. A wrapper that takes a `ForeignCap` and
+calls the foreign function is the safe pattern; its callers then see `foreign` in its effects and
+must pass it the capability. Importing a module that declares a foreign function grants nothing.
+
+**Interpreter.** `nazm run` cannot call C. A program that calls a foreign function is refused before
+it runs (`N0385`), not stopped part way; `nazm check` accepts it.
+
+**Linking.** `nazm build --link FILE` adds an object or archive to the link, each as its own
+argument, never through a shell; the path must exist. A symbol no linked file defines is the
+linker's failure, reported with its output as a toolchain failure, never as a program error. No
+search path, no dynamic loading and no library name resolution exist in v1.
+
+**Guarantees kept and lost.** Nazm's checks stop at the boundary. The compiler guarantees the
+declared types and that authority was held; it cannot know what the C function does, and a call
+into C may corrupt memory, block, never return, or longjmp — none of which Nazm's cleanup or failure
+model survives. A foreign call cannot fail the Nazm way, so no failure edge is taken after one.
+
+**Interface and versions.** A `pub extern` function is exported with its symbol, so another module
+calls it without seeing the declaration's source: `nazm.interface/7`. The language gained syntax, an
+effect and a capability kind, so the semantic epoch moves from 10 to 11.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
