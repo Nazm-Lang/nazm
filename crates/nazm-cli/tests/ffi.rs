@@ -380,6 +380,23 @@ fn an_imported_foreign_function_needs_a_foreign_cap_too() {
             stderr(&o)
         );
     }
+    // An edit to the importer re-checks it against `lib.nz`'s interface as the store holds
+    // it, read back from disk: the persisted export must still say it is C's.
+    std::fs::write(
+        d.path("prog.nz"),
+        "use \"lib.nz\";\nfn g(n: Int) -> Int\n{ c_add(n, 2) }\nfn main(f: ForeignCap) -> Int { g(1) }\n",
+    )
+    .unwrap();
+    let o = d.nazm(&["check", "--json", "prog.nz"]);
+    assert!(codes(&o).contains(&"N0369".to_owned()), "{}", stderr(&o));
+    // The published interface names the symbol, so what `lib.nz` offers is legible without
+    // its source.
+    let o = d.nazm(&["interface", "lib.nz"]);
+    let published = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        published.contains(r#""effects":["foreign"],"foreign":"c_add""#),
+        "{published}"
+    );
     let d = Dir::new(&[
         ("lib.nz", lib),
         (
