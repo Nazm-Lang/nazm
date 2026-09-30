@@ -1,5 +1,6 @@
 //! Semantic context packets: one source definition, its exact source, and compact links to
-//! what it is semantically connected to. `nazm.context/2` (N27; effects since N36).
+//! what it is semantically connected to. `nazm.context/3` (N27; effects since N36,
+//! provenance since N38).
 //!
 //! # The contract
 //!
@@ -19,12 +20,15 @@
 //! | callers and callees of a function | call hierarchy (N25), direct only |
 //! | diagnostics whose primary span is inside it | the analysis |
 //! | a function's effects: declared, required, published, and why | the effect checker (N36) |
+//! | a function's provenance: the origins its result carries, the parameters it passes on and those that reach a restricted sink | the provenance solver (N38) |
 //!
 //! Capabilities, test coverage, semantic changes and semantic deltas are facts the compiler
 //! does not have, and are reported **unsupported** — never as an empty list, which would
 //! say they were looked for and none exist. `/1` reported effects so too; N36 gave the
 //! compiler them, and since a `/1` reader may rely on that field being `unsupported`, the
-//! packet that has them is `/2`. A record or enum has no callers or
+//! packet that has them is `/2`. N38 adds a `provenance` section a `/2` reader does not know,
+//! and an object that validates against `/2` has no such field, so the packet is `/3`. A
+//! record or enum has no callers or
 //! callees: those sections are **not applicable** to it, which is also not an empty list.
 //!
 //! # Minimum context
@@ -59,9 +63,9 @@ use crate::structure::{members, StructureSite};
 use crate::symbols::SymbolKind;
 
 /// The schema every packet declares.
-pub const SCHEMA: &str = "nazm.context/2";
+pub const SCHEMA: &str = "nazm.context/3";
 
-/// A semantic context packet, or why there is none, exactly as `nazm.context/2` serialises
+/// A semantic context packet, or why there is none, exactly as `nazm.context/3` serialises
 /// it: `status` says which.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
@@ -92,7 +96,29 @@ pub struct ContextPacket {
     pub diagnostics: Vec<ContextDiagnostic>,
     /// A function's effects (N36); `None` for a record or an enum, which has none to have.
     pub effects: Option<ContextEffects>,
+    /// A function's provenance summary (N38); `None` for a record or an enum.
+    pub provenance: Option<ContextProvenance>,
     pub availability: Availability,
+}
+
+/// Where a function's result comes from, as the whole program's solve settled it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextProvenance {
+    /// Origins its result carries whatever it is given, by name in origin-id order.
+    pub origins: Vec<&'static str>,
+    /// The parameters whose provenance its result carries, by name, in parameter order.
+    pub passes_on: Vec<String>,
+    /// The parameters whose value may become the path `write_file` writes to.
+    pub reaches_write_path: Vec<String>,
+    /// For each parameter, in order, the origins the program's calls and `spawn`s hand it.
+    pub receives: Vec<ContextReceives>,
+}
+
+/// What one parameter is handed, over every call site in the program.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextReceives {
+    pub param: String,
+    pub origins: Vec<&'static str>,
 }
 
 /// What a function may do, from the effect checker: every set by name, in effect-id order.
@@ -247,7 +273,7 @@ impl Availability {
     };
 }
 
-/// Why there is no packet, as `nazm.context/2` serialises it.
+/// Why there is no packet, as `nazm.context/3` serialises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Unavailable {
     pub schema: &'static str,
@@ -489,9 +515,40 @@ impl LanguageService {
                 ReferenceTarget::Function(id) => effects_of(s, &paths, id),
                 _ => None,
             },
+            provenance: match entity {
+                ReferenceTarget::Function(id) => provenance_of(s, id),
+                _ => None,
+            },
             availability: Availability::UNSUPPORTED,
         })
     }
+}
+
+/// A function's provenance summary, or `None` for one whose body was not checked.
+fn provenance_of(s: &Snapshot, id: nazm_core::sema::FnId) -> Option<ContextProvenance> {
+    let f = s.analysis.resolution.function(id)?;
+    let summary = f.provenance.as_ref()?;
+    let names = |ps: &[u32]| -> Vec<String> {
+        ps.iter()
+            .filter_map(|p| f.locals.get(*p as usize).map(|l| l.name.clone()))
+            .collect()
+    };
+    Some(ContextProvenance {
+        origins: summary.origins.names(),
+        passes_on: names(&summary.params),
+        reaches_write_path: names(&summary.reaches),
+        receives: summary
+            .receives
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| {
+                f.locals.get(i).map(|l| ContextReceives {
+                    param: l.name.clone(),
+                    origins: o.names(),
+                })
+            })
+            .collect(),
+    })
 }
 
 /// A function's effects as the checker settled them, or `None` for one whose body was not
