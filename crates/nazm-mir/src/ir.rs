@@ -89,6 +89,9 @@ pub struct Function {
     pub span: Span,
     /// Where the result type is written, for a diagnostic about it.
     pub ret_span: Span,
+    /// The C symbol of a foreign function (N42). A foreign function has its parameters and no
+    /// blocks: its body is C's, and a backend declares it and calls it with the C convention.
+    pub foreign: Option<String>,
 }
 
 impl Function {

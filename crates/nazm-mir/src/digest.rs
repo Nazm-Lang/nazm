@@ -29,6 +29,9 @@ pub fn executable(program: &Program, f: &Function) -> String {
 pub fn canonical(program: &Program, f: &Function) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "nazm.mir/1 function");
+    if let Some(sym) = &f.foreign {
+        let _ = writeln!(s, "foreign {sym}");
+    }
     let args: Vec<String> = f.type_args.iter().map(|t| text::ty(program, *t)).collect();
     let _ = writeln!(s, "args [{}]", args.join(","));
     let _ = writeln!(s, "params {}", f.params);

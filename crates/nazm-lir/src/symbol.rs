@@ -131,6 +131,14 @@ impl NativeSymbol {
         &self.0
     }
 
+    /// A foreign function's symbol (N42): exactly the C identifier its declaration wrote,
+    /// validated by the checker. It never collides with a Nazm symbol, which always
+    /// contains a `.`.
+    #[must_use]
+    pub fn foreign(symbol: &str) -> Self {
+        Self(symbol.to_owned())
+    }
+
     /// A symbol no definition has: what a reference to a function MIR does not contain
     /// spells, so that the object refuses to link rather than calling something else.
     #[must_use]

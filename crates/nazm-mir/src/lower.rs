@@ -245,6 +245,40 @@ fn lower_function(
     identity: Identity,
     from_generic: &[bool],
 ) -> Result<Function, Box<Diagnostic>> {
+    if let Some(symbol) = &f.foreign {
+        // A foreign function: its signature, as locals, and no body (N42).
+        let locals = f
+            .locals
+            .iter()
+            .take(f.params as usize)
+            .map(|l| LocalDecl {
+                ty: LocalTy::Value(l.ty),
+                name: l.name.clone(),
+                origin: LocalOrigin::Param,
+                at: l.at,
+            })
+            .collect();
+        return Ok(Function {
+            id,
+            def: f.def,
+            type_args: Vec::new(),
+            module: f.module,
+            name: f.name.clone(),
+            identity,
+            exported: res
+                .function(f.def)
+                .is_some_and(|d| d.visibility.is_exported()),
+            reached_from_generic: false,
+            params: f.params,
+            locals,
+            ret: f.ret,
+            blocks: Vec::new(),
+            effects: f.effects.published(),
+            span: f.span,
+            ret_span: f.ret_span,
+            foreign: Some(symbol.clone()),
+        });
+    }
     let mut fx = Fx {
         res,
         map,
@@ -316,6 +350,7 @@ fn lower_function(
         effects: f.effects.published(),
         span: f.span,
         ret_span: f.ret_span,
+        foreign: None,
     })
 }
 

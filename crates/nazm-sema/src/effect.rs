@@ -40,11 +40,14 @@ pub enum Effect {
     Io,
     /// Starting a task.
     Spawn,
+    /// Calling a foreign (C) function (N42): whatever that function does, which Nazm cannot
+    /// see.
+    Foreign,
 }
 
 impl Effect {
     /// Every effect, in id order.
-    pub const ALL: [Self; 2] = [Self::Io, Self::Spawn];
+    pub const ALL: [Self; 3] = [Self::Io, Self::Spawn, Self::Foreign];
 
     /// The effect's stable identity. Never reused and never reordered: a persisted
     /// interface writes names, and a set's order is this order.
@@ -53,6 +56,7 @@ impl Effect {
         match self {
             Self::Io => 0,
             Self::Spawn => 1,
+            Self::Foreign => 2,
         }
     }
 
@@ -62,6 +66,7 @@ impl Effect {
         match self {
             Self::Io => "io",
             Self::Spawn => "spawn",
+            Self::Foreign => "foreign",
         }
     }
 
@@ -147,6 +152,16 @@ impl EffectSet {
     pub const fn all() -> Self {
         // A test holds this equal to `Effect::ALL` collected, so a new effect left out of it
         // fails there.
+        Self(Effect::Io.bit() | Effect::Spawn.bit() | Effect::Foreign.bit())
+    }
+
+    /// What N37's compatibility bridge assumes of a function in another module that declares
+    /// no effect set: `io` and `spawn`. Not `foreign` (N42): a foreign call needs a
+    /// `ForeignCap` held wherever it is written, declared set or not, so an undeclared
+    /// function can reach C only through a capability its caller passes it — which the caller
+    /// then already holds.
+    #[must_use]
+    pub const fn bridged() -> Self {
         Self(Effect::Io.bit() | Effect::Spawn.bit())
     }
 
@@ -259,7 +274,10 @@ mod tests {
         assert_eq!(a.names(), ["io", "spawn"]);
         assert_eq!(a.to_string(), "{ io, spawn }");
         assert_eq!(EffectSet::EMPTY.to_string(), "{}");
-        assert_eq!(EffectSet::all(), b);
+        // The compatibility bridge covers the two N36 effects; `foreign` (N42) is never assumed.
+        assert_eq!(EffectSet::bridged(), b);
+        assert_eq!(EffectSet::all(), b.with(Effect::Foreign));
+        assert_eq!(EffectSet::all().names(), ["io", "spawn", "foreign"]);
     }
 
     #[test]

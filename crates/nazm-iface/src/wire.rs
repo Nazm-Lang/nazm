@@ -103,9 +103,17 @@ use nazm_span::Span;
 /// cannot do is know `IoCap` and `SpawnCap`, and it refuses them as unknown types rather
 /// than misreading them.
 ///
-/// Unknown majors remain refused rather than reinterpreted — including a future `/7`, and
-/// including `/1` to `/5`, which this build no longer reads.
-pub const SCHEMA: &str = "nazm.interface/6";
+/// Unknown majors remain refused rather than reinterpreted — including a future `/8`, and
+/// including `/1` to `/6`, which this build no longer reads.
+///
+/// # `/7` (N42)
+///
+/// An export may carry `foreign`: the C symbol of a `pub extern "C" fn`. An importer calls a
+/// foreign function without the declaration's source, so it must know the callee is one —
+/// a call to it needs a `ForeignCap` held — and which symbol it links against. The field is
+/// absent for every Nazm function, but a `/6` reader would silently take a foreign export for
+/// an ordinary function with no body, so the major moves.
+pub const SCHEMA: &str = "nazm.interface/7";
 
 /// A type as persisted.
 ///
@@ -249,6 +257,10 @@ pub struct PersistentExport {
     /// written differently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effects: Option<Vec<String>>,
+    /// The C symbol of a foreign declaration (N42). **Absent** for a Nazm function, so a
+    /// module with no foreign declaration is written exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign: Option<String>,
 }
 
 /// How a type is written in a persisted interface.
@@ -577,6 +589,7 @@ impl PersistentUnitInterface {
                 effects: e
                     .effects
                     .map(|s| s.names().into_iter().map(str::to_owned).collect()),
+                foreign: e.foreign.clone(),
             });
         }
         // By name: the order a module declares its functions in is not part of what it
@@ -995,6 +1008,7 @@ impl PersistentUnitInterface {
                         .filter_map(|n| nazm_sema::Effect::by_name(n))
                         .collect()
                 }),
+                foreign: e.foreign.clone(),
             });
             for &index in &e.requires_equality {
                 types.require_equality(TypeParam { owner, index });

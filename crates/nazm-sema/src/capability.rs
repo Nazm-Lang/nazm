@@ -43,11 +43,13 @@ pub enum CapabilityKind {
     Io,
     /// Authority to start a task: what the `spawn` effect exercises.
     Spawn,
+    /// Authority to call a foreign (C) function: what the `foreign` effect exercises (N42).
+    Foreign,
 }
 
 impl CapabilityKind {
     /// Every kind, in id order.
-    pub const ALL: [Self; 2] = [Self::Io, Self::Spawn];
+    pub const ALL: [Self; 3] = [Self::Io, Self::Spawn, Self::Foreign];
 
     /// The kind's stable identity. Never reused and never reordered.
     #[must_use]
@@ -55,6 +57,7 @@ impl CapabilityKind {
         match self {
             Self::Io => 0,
             Self::Spawn => 1,
+            Self::Foreign => 2,
         }
     }
 
@@ -64,6 +67,7 @@ impl CapabilityKind {
         match self {
             Self::Io => "IoCap",
             Self::Spawn => "SpawnCap",
+            Self::Foreign => "ForeignCap",
         }
     }
 
@@ -82,6 +86,7 @@ impl CapabilityKind {
         match effect {
             Effect::Io => CapabilitySet::of(Self::Io),
             Effect::Spawn => CapabilitySet::of(Self::Spawn),
+            Effect::Foreign => CapabilitySet::of(Self::Foreign),
         }
     }
 
@@ -149,7 +154,7 @@ impl CapabilityKind {
     pub const fn article(self) -> &'static str {
         match self {
             Self::Io => "an",
-            Self::Spawn => "a",
+            Self::Spawn | Self::Foreign => "a",
         }
     }
 
@@ -272,7 +277,11 @@ mod tests {
             a.iter().collect::<Vec<_>>(),
             [CapabilityKind::Io, CapabilityKind::Spawn]
         );
-        assert_eq!(CapabilitySet::for_effects(EffectSet::all()), a);
+        assert_eq!(CapabilitySet::for_effects(EffectSet::bridged()), a);
+        assert_eq!(
+            CapabilitySet::for_effects(EffectSet::all()),
+            a.union(CapabilitySet::of(CapabilityKind::Foreign))
+        );
         assert!(CapabilitySet::for_effects(EffectSet::EMPTY).is_empty());
         assert_eq!(
             a.without(CapabilitySet::of(CapabilityKind::Io)),
