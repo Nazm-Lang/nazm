@@ -88,6 +88,13 @@ or its Core IR broke an invariant (`architecture.md` §7.41). It describes the c
 program, carries no fix, and nothing is run or built after it. The printed Core IR,
 `nazm.core-ir/1`, is a debugging form with its own version and is not one of these schemas.
 
+**Applied to N40, MIR.** No schema moved and no code appeared. `N0900` gained one more way to be
+raised: a program that checked whose MIR the validator rejects (`architecture.md` §7.42) — `nazm
+build` then emits nothing. The native subset's own refusals (`N0101` for recursion, a `main` it
+cannot call, a sequence handed to a task) are raised from MIR now and read exactly as before:
+across all 205 sources in the tree, every build diagnostic is byte-identical. The printed MIR,
+`nazm.mir/1`, is a debugging form with its own version and is not one of these schemas.
+
 A consumer that fails on an unrecognised field is not compatible with this contract, and
 the `additionalProperties: false` in the schema documents is a statement about *this*
 version's output, not a promise that the next one adds nothing.
