@@ -9151,3 +9151,89 @@ file = "crates/nazm-sema/src/key.rs"
 find = "            return ok.then(|| Self::std(name));"
 replace = "            return None;"
 killers = [{ package = "nazm-cli", test = "stdlib", name = "a_standard_module_is_reused_from_the_cache_like_any_module" }]
+
+# --- N47: restriction profiles ---------------------------------------------------------------
+
+[[profile]]
+name = "restriction"
+why = "restriction profiles are observed by checking, building and running programs under each profile, with and without packages and reports"
+owns = ["crates/nazm-service/src/profile.rs", "crates/nazm-cli/src/profile.rs"]
+targets = [
+    { package = "nazm-cli", test = "profiles" },
+]
+
+[[mutation]]
+name = "n47-a-profile-is-ignored"
+why = "the command line never evaluates the profiles in force, so every program is accepted whatever profile is named"
+file = "crates/nazm-cli/src/profile.rs"
+find = "    let strict = profiles.iter().any(|p| *p != Profile::General);"
+replace = "    let strict = profiles.iter().any(|p| *p != Profile::General) && false;"
+killers = [{ package = "nazm-cli", test = "profiles", name = "a_refusal_names_the_profile_the_rule_and_the_chain_of_calls" }]
+
+[[mutation]]
+name = "n47-a-rule-is-skipped"
+why = "`embedded` loses `no-spawn`, so a program that starts tasks passes a profile that forbids the scheduler"
+file = "crates/nazm-service/src/profile.rs"
+find = "            Self::Embedded => &[Rule::NoIo, Rule::NoSpawn],"
+replace = "            Self::Embedded => &[Rule::NoIo],"
+killers = [{ package = "nazm-cli", test = "profiles", name = "every_profile_s_rules_and_verdicts" }]
+
+[[mutation]]
+name = "n47-the-ambient-bridge-is-allowed"
+why = "`declared-effects` counts nothing, so functions that exercise their caller's authority pass the strict profiles"
+file = "crates/nazm-service/src/profile.rs"
+find = """                        f.declared_effects.is_none()
+                            && f.foreign.is_none()"""
+replace = """                        f.declared_effects.is_none()
+                            && f.foreign.is_some()"""
+killers = [{ package = "nazm-cli", test = "profiles", name = "the_ambient_bridge_is_refused_by_the_strict_profiles" }]
+
+[[mutation]]
+name = "n47-a-forbidden-effect-is-read-from-the-wrong-function"
+why = "an effect rule reads `main`'s declared set only, so an undeclared `main` whose body requires the effect passes"
+file = "crates/nazm-service/src/profile.rs"
+find = "        .and_then(|f| f.inferred_effects.or(f.declared_effects))"
+replace = "        .and_then(|f| f.declared_effects)"
+killers = [{ package = "nazm-cli", test = "profiles", name = "every_profile_s_rules_and_verdicts" }]
+
+[[mutation]]
+name = "n47-no-foreign-forbids-another-effect"
+why = "`no-foreign` checks `spawn`, so a call into C passes the profiles that forbid it"
+file = "crates/nazm-service/src/profile.rs"
+find = "            Self::NoForeign => Some(Effect::Foreign),"
+replace = "            Self::NoForeign => Some(Effect::Spawn),"
+killers = [{ package = "nazm-cli", test = "profiles", name = "a_foreign_call_is_refused_where_no_foreign_is_in_force" }]
+
+[[mutation]]
+name = "n47-the-lock-requirement-is-ignored"
+why = "`locked-build` passes a build that is not held to a lockfile"
+file = "crates/nazm-service/src/profile.rs"
+find = """            } else if locked {
+                Vec::new()"""
+replace = """            } else if locked || true {
+                Vec::new()"""
+killers = [{ package = "nazm-cli", test = "profiles", name = "a_locked_package_build_satisfies_the_build_rule_and_a_tampered_one_does_not" }]
+
+[[mutation]]
+name = "n47-a-tampered-lock-satisfies-the-profile"
+why = "a profile that requires a locked build takes a lockfile's presence for its verification, so a dependency changed after locking passes"
+file = "crates/nazm-cli/src/profile.rs"
+find = "        .is_some_and(|g| locked_flag || nazm_package::verify_locked(g).is_ok());"
+replace = "        .is_some_and(|g| locked_flag || g.root_package().is_some_and(|r| r.dir.join(nazm_package::LOCKFILE).is_file()));"
+killers = [{ package = "nazm-cli", test = "profiles", name = "a_locked_package_build_satisfies_the_build_rule_and_a_tampered_one_does_not" }]
+
+[[mutation]]
+name = "n47-a-dependency-s-profile-is-ignored"
+why = "a profile a dependency's manifest requires is not put in force, so a package that promises `embedded` can be part of a program that is not"
+file = "crates/nazm-cli/src/profile.rs"
+find = "                profiles.push(prof);"
+replace = "                let _ = prof;"
+killers = [{ package = "nazm-cli", test = "profiles", name = "a_dependency_s_required_profile_holds_the_whole_program" }]
+
+[[mutation]]
+name = "n47-the-report-says-accepted-despite-a-refusal"
+why = "the report's outcome is `accepted` whatever the verdicts, so a tool reading it is told a refused program passed"
+file = "crates/nazm-service/src/profile.rs"
+find = """        if e.accepted() { "accepted" } else { "refused" }"""
+replace = """        if e.accepted() || true { "accepted" } else { "refused" }"""
+killers = [{ package = "nazm-cli", test = "profiles", name = "every_profile_s_rules_and_verdicts" }]
