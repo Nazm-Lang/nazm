@@ -139,6 +139,14 @@ their own versions and are not these schemas: the manifest, `nazm.package/1`, an
 `nazm.lock/1`. `nazm.check-report/1` and `nazm.build-report/1` gained `"package"` as a value of
 `root`, compatible.
 
+**Applied to N47, restriction profiles.** Two codes appeared, compatible: `N0510` (a rule of a
+profile in force refused the program — one per rule, at its first witness, with the rest as
+secondary labels) and `N0511` (an unknown profile). One new format has its own version:
+`nazm.profile-report/1`, one line of JSON — `schema`, `profiles`, `outcome` (`accepted` or
+`refused`), `rules` (each `id`, `verdict` `pass`/`fail`, `witnesses` of `file`, `start`, `end`,
+`note`), and a `note` that it is not a certification. Rule ids are stable: `declared-effects`,
+`no-io`, `no-spawn`, `no-foreign`, `locked-build`.
+
 A consumer that fails on an unrecognised field is not compatible with this contract, and
 the `additionalProperties: false` in the schema documents is a statement about *this*
 version's output, not a promise that the next one adds nothing.

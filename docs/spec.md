@@ -2096,6 +2096,28 @@ whose bytes changed since it was locked `N0507`.
 **Reproducible builds.** The same sources, lockfile, toolchain, target, backend and settings give
 byte-identical executables on one host, from empty caches, in any directory.
 
+### Restriction profiles — `--profile`
+<!-- id: profiles -->
+
+A **profile** refuses some programs and changes nothing about the ones it accepts. It is chosen
+with `--profile NAME` on `check`, `build` and `run`, or required by a package's manifest
+(`profile = "NAME"` under `[package]`); every profile in force applies to the whole program.
+
+| Profile | Rules |
+| --- | --- |
+| `general` | none |
+| `embedded` | `no-io`, `no-spawn` |
+| `critical` | `declared-effects`, `no-spawn`, `no-foreign`, `locked-build` |
+| `cyber` | `declared-effects`, `no-foreign`, `locked-build` |
+
+`no-io`, `no-spawn` and `no-foreign` refuse a program whose `main` requires that effect, through
+any call, standard functions included. `declared-effects` refuses any function of the program that
+writes no `! { … }`, so no function exercises its caller's authority. `locked-build` refuses a
+build that is not a package build whose lockfile verifies. A refusal is `N0510`, naming the profile,
+the rule and where it comes from; an unknown profile is `N0511`. `nazm check --profile-report`
+prints `nazm.profile-report/1`. A profile is compiler-enforced evidence about these rules and
+nothing more: not a certification, not a sandbox.
+
 ### Durable identity: what makes this the same module, or the same definition
 <!-- id: durable-identity -->
 

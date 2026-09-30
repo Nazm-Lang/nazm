@@ -1831,6 +1831,16 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### Restriction profiles — N47, measured 2026-10-01
+
+Host, release, `nazm check --no-cache`, median of 9. The rules themselves cost nothing measurable:
+they read facts the check already settled. What a profile costs is the check it runs to get those
+facts, before the command's own: a 2,000-function pure program takes 31.4 ms under `general`, 56.2 ms
+under `embedded` (accepted: two checks) and 31.8 ms under `cyber` (refused before the command
+checks); `--profile-report` alone costs the same second check, 56.0 ms. On the compiler's own
+`compiler/emit.nz`, refused under `embedded` and `critical`, 59.4 ms against 59.5 ms. Reusing the
+command's check for the profile would remove the second one; v1 does not.
+
 ### Packages — N46, measured 2026-10-01
 
 Host, best of 5 (`what_packages_cost`, `crates/nazm-cli/tests/packages.rs`, `--ignored`), the
