@@ -659,10 +659,13 @@ one the tests below never had to catch.
 
 Caught by `arguments_are_not_swapped`, which uses noncommutative operations: `sub(10, 3)`
 is 7 and the transposition makes it -7. `mix(1, 2, 3)` catches a rotation as well.
+Repointed by N40: a call's operands are MIR's, loaded in order by the backend.
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = "                let list = vals"
-replace = """                if vals.len() >= 2 && vals[0].1 == vals[1].1 {
+find = """                let vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
+                let list = vals"""
+replace = """                let mut vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
+                if vals.len() >= 2 && vals[0].1 == vals[1].1 {
                     vals.swap(0, 1);
                 }
                 let list = vals"""
@@ -8267,7 +8270,7 @@ find = """                    "  %{out} = extractvalue {payload_ty} %{slot}, {at
 replace = """                    "  %{out} = extractvalue {payload_ty} %{slot}, {at}    ; {}",
                     llvm_type(self.types, fty)
                 );"""
-killers = [{ package = "nazm-cli", test = "mir", name = "every_construct_runs_natively_as_it_is_interpreted_and_reclaims_everything" }]
+killers = [{ package = "nazm-cli", test = "mir", name = "a_pattern_binding_holds_its_own_reference_to_a_heap_payload" }]
 
 [[mutation]]
 name = "n40-a-drop-releases-nothing"
@@ -8290,7 +8293,7 @@ find = """                    let v = self.load(*l);
                     self.release(v, ty);"""
 replace = """                    let v = self.load(*l);
                     self.release(v, ty);"""
-killers = [{ package = "nazm-cli", test = "mir", name = "cleanup_on_every_exit_is_balanced" }]
+killers = [{ package = "nazm-cli", test = "mir", name = "every_move_and_drop_leaves_its_slot_holding_the_zero" }]
 
 [[mutation]]
 name = "n40-a-move-leaves-its-source-owning"
@@ -8301,7 +8304,7 @@ find = """            mir::Rvalue::Move(l) => {
                 self.store_zero(*l);"""
 replace = """            mir::Rvalue::Move(l) => {
                 let x = self.load(*l);"""
-killers = [{ package = "nazm-cli", test = "mir", name = "cleanup_on_every_exit_is_balanced" }]
+killers = [{ package = "nazm-cli", test = "mir", name = "every_move_and_drop_leaves_its_slot_holding_the_zero" }]
 
 [[mutation]]
 name = "n40-a-field-write-copies-its-value"
@@ -8312,7 +8315,7 @@ find = """                let new_ty = self.slot_ty(*value);
                 self.store_zero(*value);"""
 replace = """                let new_ty = self.slot_ty(*value);
                 let new = self.load(*value);"""
-killers = [{ package = "nazm-cli", test = "mir", name = "a_field_write_moves_its_value_and_releases_the_old_one" }]
+killers = [{ package = "nazm-cli", test = "mir", name = "every_move_and_drop_leaves_its_slot_holding_the_zero" }]
 
 [[mutation]]
 name = "n40-a-variant-is-tagged-by-declaration-order"
