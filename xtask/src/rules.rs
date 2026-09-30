@@ -72,7 +72,8 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // and a direct dependency on the parser or on `nazm-sema` would be the first step
         // to it computing its own. Not `nazm-cache` either: an unsaved buffer is not state
         // the cache may record.
-        "nazm-service" => &["nazm-span", "nazm-diag", "nazm-core"],
+        "nazm-service" => &["nazm-span", "nazm-diag", "nazm-core", "nazm-package"],
+        "nazm-package" => &["nazm-span", "nazm-diag"],
         // Nazm's own documentation as sections, N32. It reads the corpus's files and nothing
         // of the compiler: answering a documentation query must not need a parse, a check
         // or a backend.
@@ -109,6 +110,7 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
             "nazm-iface",
             "nazm-cache",
             "nazm-service",
+            "nazm-package",
             "nazm-docs",
             "nazm-repo",
         ],

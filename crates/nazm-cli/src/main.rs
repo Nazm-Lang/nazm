@@ -46,6 +46,7 @@ mod fmt;
 mod interface;
 mod lsp;
 mod mir;
+mod package;
 mod patch;
 mod repo;
 mod snapshot;
@@ -182,6 +183,10 @@ enum Command {
             value_parser = max_depth,
         )]
         max_depth: usize,
+        /// Refuse to build unless the package's `nazm.lock` records exactly the packages this
+        /// resolves to, with their bytes unchanged (N46).
+        #[arg(long)]
+        locked: bool,
     },
     /// Type-check without evaluating.
     Check {
@@ -214,6 +219,10 @@ enum Command {
         /// unchanged. `--json` still gives every diagnostic in full.
         #[arg(long, conflicts_with_all = ["json", "cache_report"])]
         summary_json: bool,
+        /// Refuse to build unless the package's `nazm.lock` records exactly the packages this
+        /// resolves to, with their bytes unchanged (N46).
+        #[arg(long)]
+        locked: bool,
     },
     /// Apply the repairs the compiler already knows about.
     ///
@@ -572,6 +581,16 @@ enum Command {
         /// be given more than once; it must exist. Nazm does not compile C.
         #[arg(long = "link", value_name = "FILE")]
         link: Vec<PathBuf>,
+        /// Refuse to build unless the package's `nazm.lock` records exactly the packages this
+        /// resolves to, with their bytes unchanged (N46).
+        #[arg(long)]
+        locked: bool,
+    },
+    /// Resolve a package and write its `nazm.lock` (N46): the exact package versions, sources
+    /// and digests a `--locked` build is held to. Written only when its bytes would change.
+    Lock {
+        /// The package's directory, holding `nazm.toml`.
+        dir: PathBuf,
     },
 }
 
@@ -600,7 +619,22 @@ fn max_depth(raw: &str) -> Result<usize, String> {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    // A package (N46): its directory stands for its `main`, and `--locked` holds the build to
+    // its lockfile — both settled before any command sees the file.
+    if let Command::Lock { dir } = &cli.command {
+        return package::lock(dir);
+    }
+    match &mut cli.command {
+        Command::Run { file, locked, .. }
+        | Command::Check { file, locked, .. }
+        | Command::Build { file, locked, .. } => match package::entry(file, *locked) {
+            Ok(Some(main)) => *file = main,
+            Ok(None) => {}
+            Err(code) => return code,
+        },
+        _ => {}
+    }
     if let Command::Build {
         file,
         out,
@@ -613,6 +647,7 @@ fn main() -> ExitCode {
         backend,
         target,
         link,
+        locked: _,
     } = cli.command
     {
         return build::run(
@@ -640,6 +675,7 @@ fn main() -> ExitCode {
             no_cache,
             cache_report,
             summary_json,
+            locked: _,
         } => {
             return checking::run(
                 &file,
@@ -797,6 +833,7 @@ fn main() -> ExitCode {
             json,
             max_iterations,
             max_depth,
+            locked: _,
         } => (
             file,
             json,
@@ -826,7 +863,8 @@ fn main() -> ExitCode {
         | Command::Lsp { .. }
         | Command::CoreIr { .. }
         | Command::Mir { .. }
-        | Command::Capabilities { .. } => {
+        | Command::Capabilities { .. }
+        | Command::Lock { .. } => {
             unreachable!("handled above")
         }
     };
