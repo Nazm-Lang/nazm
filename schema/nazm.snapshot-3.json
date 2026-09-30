@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nazm.snapshot-2.json",
-  "title": "nazm.snapshot/2",
+  "$id": "nazm.snapshot-3.json",
+  "title": "nazm.snapshot/3",
   "description": "One root compilation's durable definitions, from `nazm snapshot --json` and the `nazm-mcp` tool `nazm.semantic_snapshot`: every function, record and enum declared from a file of the compilation with a durable definition key, each with one BLAKE3 digest per semantic section the compiler records. `status` is `available` with every section, or `unavailable` with a `reason` and no other section. A digest is evidence that the canonical data it was taken over is equal, never that behaviour is. Paths are relative to the source root; nothing session-local or host-specific is included, so the same sources give the same bytes from any checkout.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "status"],
   "properties": {
-    "schema": { "const": "nazm.snapshot/2" },
+    "schema": { "const": "nazm.snapshot/3" },
     "status": { "enum": ["available", "unavailable"] },
     "reason": {
       "enum": ["not_current", "incomplete_compilation", "no_durable_root"],
@@ -61,7 +61,7 @@
         "digests": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["source", "shape", "dependencies", "related_types", "references", "callers", "callees", "diagnostics", "effects"],
+          "required": ["source", "shape", "dependencies", "related_types", "references", "callers", "callees", "diagnostics", "effects", "provenance"],
           "properties": {
             "source": { "$ref": "#/$defs/digest", "description": "The declaration's exact bytes." },
             "shape": { "$ref": "#/$defs/digest", "description": "Kind, visibility, and the signature, or the fields, or the variants and payloads." },
@@ -71,7 +71,8 @@
             "callers": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "A function's direct checked callers, by identity and count; null for a record or an enum." },
             "callees": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "A function's direct checked callees, by identity and count; null for a record or an enum." },
             "diagnostics": { "$ref": "#/$defs/digest", "description": "Code, severity, fix count and relative range of each diagnostic whose primary span is inside it; never a message." },
-            "effects": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "A function's declared effect set, or that it declares none, and the set its body requires (N36), by name in effect-id order; null for a record or an enum." }
+            "effects": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "A function's declared effect set, or that it declares none, and the set its body requires (N36), by name in effect-id order; null for a record or an enum." },
+            "provenance": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "A function's solved provenance summary (N38): the origins its result carries, and the positions of the parameters it passes on and of those that reach a restricted sink; null for a record or an enum." }
           }
         }
       }

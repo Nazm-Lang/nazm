@@ -1,6 +1,6 @@
 //! Semantic snapshots: one root compilation as a compact manifest of its durable
-//! definitions, each with a digest per semantic section Nazm records. `nazm.snapshot/2`
-//! (N28; the `effects` section since N36).
+//! definitions, each with a digest per semantic section Nazm records. `nazm.snapshot/3`
+//! (N28; the `effects` section since N36, `provenance` since N38).
 //!
 //! # The contract
 //!
@@ -12,7 +12,9 @@
 //! only in `source`. Behavioural equivalence, capabilities, tests and history are not
 //! recorded, and a snapshot lists them as **unsupported** — never as unchanged. `/1` listed
 //! effects there too; N36 records them, which changes what a `/1` reader was told it could
-//! never learn, so the snapshot that does is `/2`.
+//! never learn, so the snapshot that does is `/2`. N38 adds a `provenance` section, which a
+//! `/2` reader would not know to compare — and a provenance summary can move with no byte of
+//! the function changing, when a callee's body does — so the snapshot that has it is `/3`.
 //!
 //! # Which definitions
 //!
@@ -39,6 +41,7 @@
 //! | `callers`, `callees` | a function's direct checked calls in and out (N25's edge rule), by the identity of the function at the other end, with how many; absent for a record or an enum |
 //! | `diagnostics` | code, severity, fix count and range relative to the declaration of every diagnostic whose primary span is inside it — never its message |
 //! | `effects` | a function's declared effect set, or that it declares none, and the set its body requires (N36), by name in effect-id order; absent for a record or an enum |
+//! | `provenance` | a function's solved provenance summary (N38): the origins its result carries by name in origin-id order, the positions of the parameters it passes on and of those that reach a restricted sink, and the origins each parameter is handed; absent for a record or an enum |
 //!
 //! Identities, never byte offsets, are what relationship digests are taken over, so a line
 //! added above a definition changes no digest of anything below it: the declaration's own
@@ -65,7 +68,7 @@ use crate::service::{FileKey, LanguageService, Snapshot};
 use crate::symbols::{declared_in, SymbolKind};
 
 /// The schema every snapshot declares.
-pub const SCHEMA: &str = "nazm.snapshot/2";
+pub const SCHEMA: &str = "nazm.snapshot/3";
 
 /// What a snapshot and a delta cannot know, and say so rather than report as unchanged.
 pub const UNSUPPORTED: [&str; 4] = [
@@ -79,7 +82,7 @@ pub const UNSUPPORTED: [&str; 4] = [
 /// build is not comparable, since what a renderer writes may differ.
 pub(crate) const COMPILER: &str = concat!("nazm ", env!("CARGO_PKG_VERSION"));
 
-/// A snapshot, or why there is none, exactly as `nazm.snapshot/2` serialises it.
+/// A snapshot, or why there is none, exactly as `nazm.snapshot/3` serialises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum SnapshotResult {
@@ -135,9 +138,11 @@ pub struct Digests {
     pub diagnostics: String,
     /// A function's effects (N36); `None` for a record or an enum.
     pub effects: Option<String>,
+    /// A function's provenance summary (N38); `None` for a record or an enum.
+    pub provenance: Option<String>,
 }
 
-/// Why there is no snapshot, as `nazm.snapshot/2` serialises it.
+/// Why there is no snapshot, as `nazm.snapshot/3` serialises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NoSnapshotResult {
     pub schema: &'static str,
@@ -438,6 +443,7 @@ impl Manifest {
                 callees: function.then(|| counts("callees", &d.callees)),
                 diagnostics: diagnostics_digest(&d.diagnostics),
                 effects: function.then(|| effects_digest(res, &d)),
+                provenance: function.then(|| provenance_digest(res, &d)),
             };
             by_identity
                 .entry(identity.clone())
@@ -508,6 +514,43 @@ fn effects_digest(res: &nazm_core::Resolution, d: &Decl) -> String {
         }
         None => {
             h.field("unchecked");
+        }
+    }
+    h.hex()
+}
+
+/// A function's solved provenance: what its result carries, which parameters it passes on,
+/// and which reach a restricted sink.
+fn provenance_digest(res: &nazm_core::Resolution, d: &Decl) -> String {
+    let mut h = Digest::new("provenance");
+    let summary = match d.entity {
+        ReferenceTarget::Function(id) => res.function(id).and_then(|f| f.provenance.as_ref()),
+        _ => None,
+    };
+    match summary {
+        Some(s) => {
+            h.field("origins").number(s.origins.names().len());
+            for n in s.origins.names() {
+                h.field(n);
+            }
+            h.field("params").number(s.params.len());
+            for p in &s.params {
+                h.number(*p as usize);
+            }
+            h.field("reaches").number(s.reaches.len());
+            for p in &s.reaches {
+                h.number(*p as usize);
+            }
+            h.field("receives").number(s.receives.len());
+            for r in &s.receives {
+                h.number(r.names().len());
+                for n in r.names() {
+                    h.field(n);
+                }
+            }
+        }
+        None => {
+            h.field("unsolved");
         }
     }
     h.hex()
