@@ -5126,6 +5126,62 @@ once, with its siblings still running: that is what `exit_with` means.
 **Not here.** Cancellation, timeouts, select over several channels, detached tasks, a worker pool,
 task priorities, async I/O.
 
+## 7.47 The standard library — N45, 2026-10-01
+
+Written before the code. A foundation, not a catalogue: the smallest set of source-backed modules
+real programs were writing for themselves, with every boundary stated.
+
+**Three layers.** *Built-ins* are the compiler's: the operations the language cannot express in
+itself — string bytes and slices, the sequences, channels, the process and file primitives,
+`print` — each an `Intrinsic` with a fixed signature, effect and authority (§7.38–7.40). *The
+prelude* (`@core/prelude`, §7.13) is two enums every module sees without importing them, and stays
+two: `Result` and `Option`. *The standard library* is new: toolchain-owned Nazm modules a program
+imports by name — `use "@std/text";` — and that no module sees unless it writes the `use`. A
+standard module is ordinary source (`library/std/*.nz`), checked by the same checker, compiled by
+the same backends, cached by the same keys; nothing in the compiler knows what any of its
+functions does. So the standard library adds no compiler magic, and the list of true primitives
+is the built-in list, unchanged.
+
+**Naming and resolution.** An import path beginning with `@` belongs to the toolchain and is never
+looked for on disk. `@std/NAME` is the standard module `NAME`, keyed `@std/NAME` — a key no project
+path can produce, as `@core` is not (`ModuleKey::relative` refuses both prefixes) — and any other
+`@` path is `N0205`, naming the modules there are. A standard module may import only standard
+modules. The compiler carries each file's bytes, so a compilation needs no installation directory;
+what is checked is those bytes, parsed as source.
+
+**The v1 modules.** `@std/text` (prefix and suffix tests, find, contains, repeat, split, trim,
+`parse_int`), `@std/option` and `@std/result` (the tests and fallbacks every use of them wrote
+again), `@std/seq` (search, sum, maximum and minimum over `Ints`, `Strs` and `Vec[T]`),
+`@std/io` (`println`, `eprintln`, `read` as a `Result`), `@std/process` (the arguments as one
+sequence), `@std/chan` (one value as an `Option`). Function names carry their module's name —
+`text_split`, `option_unwrap_or` — because Nazm has no qualified names and a module's exports
+enter the importer's namespace: a prefix is the only thing that keeps two modules' names apart.
+
+**Contracts.** Every standard function declares its effect set: `! {}` for everything pure,
+`! { io }` for `@std/io` and `@std/process`, each of which takes the `IoCap` it needs — so a
+wrapper never has authority its signature does not show, and calling one is as visible as calling
+the built-in. Provenance flows through them because they are ordinary calls N38 follows: what
+`io_read` returns is `file`, exactly as `read_file`'s is.
+
+**Errors.** Ordinary failure is a value. `text_parse_int` returns `Err` for no digits, a
+non-digit or a value outside `Int` — never an overflow; `text_find` and `ints_max` return `None`
+rather than a sentinel; `io_read` returns `Err` for a missing file. A standard function traps only
+where the built-in it calls would, and says so: `ints_sum` overflows as `+` does; `io_read`'s read
+of a file that exists and still cannot be read is `N0407`, because the check and the read are two
+steps and the language has no way to make them one.
+
+**What is not here, deliberately.** No `map` or `filter` (Nazm has no function values), no
+formatting framework, no HTTP, JSON, crypto or time. `exit_with`, `print`, `str_concat` and the
+rest are not wrapped: a second name for one thing is a second way to say it.
+
+**Stability.** Pre-1.0: a standard module may change between milestones, and its interface hash
+says when. Its identity is its key and its bytes; no semantic epoch moves for a library change,
+because the checker's rules did not change.
+
+**The compiler written in Nazm** does not resolve `@std` imports: it is a second implementation of
+the front end for the programs in this tree, none of which imports a standard module, and it
+refuses such an import by name.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
