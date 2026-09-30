@@ -234,8 +234,20 @@ fn probe(opt_level: u8, work: &Path) -> Option<Settled> {
     }
     Some(Settled {
         identity: BackendIdentity::of(DRIVER, &banner),
-        config: CodegenConfig::of(&arguments),
+        config: configuration(arguments),
     })
+}
+
+/// The code generation configuration: what the driver resolved, and the runtime ABI
+/// revision. The runtime's contract decides what a unit's calls into it mean, so an object
+/// built against another revision is another object (N43, §7.45).
+fn configuration(mut arguments: Vec<String>) -> CodegenConfig {
+    arguments.push(runtime_abi(nazm_lir::runtime::RUNTIME_ABI_REVISION));
+    CodegenConfig::of(&arguments)
+}
+
+fn runtime_abi(revision: u32) -> String {
+    format!("nazm-runtime-abi={revision}")
 }
 
 /// What the driver says it is, minus where it says it is installed.
@@ -451,6 +463,19 @@ mod tests {
     ///
     /// Not a mock: the point of asking the compiler what it will do is that nobody has to
     /// predict the answer, and a test that predicted it would be testing the prediction.
+    #[test]
+    fn the_runtime_abi_revision_is_part_of_every_configuration() {
+        let resolved = vec!["-cc1".to_owned(), "-O0".to_owned()];
+        let with = configuration(resolved.clone());
+        assert_ne!(with, CodegenConfig::of(&resolved));
+        let mut this = resolved.clone();
+        this.push(runtime_abi(nazm_lir::runtime::RUNTIME_ABI_REVISION));
+        assert_eq!(with, CodegenConfig::of(&this));
+        let mut older = resolved;
+        older.push(runtime_abi(nazm_lir::runtime::RUNTIME_ABI_REVISION - 1));
+        assert_ne!(with, CodegenConfig::of(&older));
+    }
+
     #[test]
     fn this_machine_s_backend_identifies_itself_and_its_configuration() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -109,8 +109,10 @@ pub mod codes {
     pub const DIVISION_BY_ZERO: Code = Code::new("N0401");
     /// The interpreter's iteration guard, not a language rule. See `docs/spec.md`.
     pub const ITERATION_LIMIT: Code = Code::new("N0402");
-    /// The interpreter could not start. Not the program's fault, and said so plainly
-    /// rather than reported as a failure of the code being run.
+    /// The host refused what running needs: the interpreter could not start, or — in a native
+    /// build — the operating system would not start a task's thread (§7.45, *The failure
+    /// model*). Not the program's fault, and said so plainly rather than reported as a failure
+    /// of the code being run.
     pub const INTERPRETER_UNAVAILABLE: Code = Code::new("N0404");
 
     /// An index outside a value's bounds: `str_byte` past the end, a slice whose range
