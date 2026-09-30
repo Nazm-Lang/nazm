@@ -313,6 +313,12 @@ pub mod codes {
     /// A package built as a program has no `main`.
     pub const NO_ENTRY: Code = Code::new("N0509");
 
+    // Restriction profiles (N47, `docs/architecture.md` §7.49)
+    /// A program that breaks a rule of a profile in force: the rule, and its witnesses.
+    pub const PROFILE_VIOLATION: Code = Code::new("N0510");
+    /// A profile named on the command line or in a manifest that does not exist.
+    pub const UNKNOWN_PROFILE: Code = Code::new("N0511");
+
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no
     /// diagnostic could not be lowered to Core IR, or its Core IR broke an invariant every
