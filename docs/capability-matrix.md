@@ -69,7 +69,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 10b | Native object reuse | VERIFIED |
 | 11 | LLVM backend | VERIFIED |
 | 12 | Cranelift backend | VERIFIED (v1, native subset, host) |
-| 13 | Runtime | PARTIAL |
+| 13 | Runtime | PARTIAL (v1 contract VERIFIED) |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | RESEARCH |
 | 16 | Standard library | MISSING |
@@ -936,7 +936,7 @@ it. That was accurate, and it is no longer true — see area 10a.*
 its own, and the objects are linked. `crates/nazm-lir/src/lower.rs` splits into a global
 `plan` — signature admissibility and the recursion refusal, both of which span modules —
 and `lower_module`, which reads one module's bodies and every function's *signature*;
-`crates/nazm-lir/src/emit.rs` has `emit_unit`, `emit_runtime` and `emit_entry`;
+`crates/nazm-lir/src/emit.rs` has `emit_unit`, and `crates/nazm-lir/src/runtime/` `emit_runtime` and `emit_entry` (moved by N43);
 `crates/nazm-cli/src/build.rs` runs `clang -c` per artefact and links.
 
 A symbol is a spelling of the definition's `DefKey` (`crates/nazm-lir/src/symbol.rs`), not
@@ -1065,7 +1065,7 @@ the differential reference. `architecture.md` §7.43 is the constitution, writte
 | The whole native subset compiles with Cranelift | VERIFIED | all 104 programs of the 205-source corpus that build: stdout, stderr, exit status and memory report identical to the LLVM backend's (`performance.md`, N41); `crates/nazm-cli/tests/cranelift.rs` against the interpreter too |
 | Traps and arithmetic edges | VERIFIED | `every_trap_is_the_same_trap` (overflow, `/` and `%` by zero, `MIN / -1`, bounds, capacities), `signed_arithmetic_and_its_edges_agree` (`MIN % -1` is 0) |
 | No silent fallback | VERIFIED | `choosing_cranelift_writes_no_llvm_text_for_any_unit`; a refusal writes nothing (`recursion_is_refused_whichever_backend_is_asked`) |
-| Typed, centralised runtime imports | VERIFIED | every call into the runtime is built from `crates/nazm-lir/src/runtime.rs`; `a_runtime_entry_the_registry_names_is_one_the_runtime_defines` |
+| Typed, centralised runtime imports | VERIFIED | every call into the runtime is built from `crates/nazm-lir/src/runtime/mod.rs`; `a_runtime_entry_the_registry_names_is_one_the_runtime_defines` |
 | Object-cache identity and reuse | VERIFIED | a key over each unit's MIR digests, layouts, callee signatures, target, backend version and settings and the runtime ABI revision, known before generation; `an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated`, `a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those` |
 | Deterministic objects | VERIFIED | `the_same_mir_gives_the_same_object_bytes` (the compiler's own source) |
 | Debug information | MISSING | no DWARF; function symbols only (N48) |
@@ -1084,24 +1084,35 @@ convention and layout; nothing passes a value between code the two backends gene
 
 ## Runtime and concurrency
 
-### 13. Runtime — PARTIAL
+### 13. Runtime — PARTIAL (the v1 contract VERIFIED; no runtime crate, no scheduler)
 
-**Evidence** · There is no runtime crate; the runtime is LLVM IR generated into each
-program, emitted lazily only when reached — `crates/nazm-lir/src/emit.rs` carries the
-join, I/O, sequence, string, task and channel runtimes. `compiler/emit.nz` does not
-*mirror* them since N8: its copy is **derived** from the Rust one line by line, and
-`cargo xtask check`'s `runtime parity` gate re-derives it and refuses a difference. The
-external surface is 26 libc/pthread symbols plus five overflow intrinsics and `memcpy`.
+**Evidence** · N43 (2026-10-01): `architecture.md` §7.45 is the runtime constitution, written
+first. The runtime is LLVM text generated into each program, emitted only for the parts reached,
+from `crates/nazm-lir/src/runtime/`: `core.rs` (the portable text — state, failure and report,
+sequences, strings, I/O, join, tasks, channels, the second-backend shims), `os.rs` (the operating-
+system adapter: the only C-library and POSIX-threads entry points anything calls), `entry.rs`
+(the platform entry) and `mod.rs` (the contract). `compiler/emit.nz`'s copy is **derived** from
+`core.rs` line by line, re-derived by `cargo xtask check`'s `runtime parity` gate since N8.
 
-**Limitation** · No `nazm-rt` crate, so no scheduler, no allocator, no reactor. *This
-read "No deallocation (area 4)" until N8; the emitted runtime reclaims every heap-backed
-value now, and the remaining gap is the crate rather than the model.*
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| One typed, versioned inventory of every runtime symbol | VERIFIED | `INVENTORY` (32 functions: signature, part, responsibility, ownership, effect, failure, thread safety) and `GLOBALS` (11); units' declarations generated from it; `every_runtime_definition_is_inventoried_with_its_exact_signature`, `every_runtime_global_is_inventoried`, `the_word_view_agrees_with_the_inventory` |
+| Runtime ABI revision in every object key | VERIFIED | `RUNTIME_ABI_REVISION` 2; Cranelift keys (N41) and clang's configuration (`the_runtime_abi_revision_is_part_of_every_configuration`) |
+| Startup and shutdown defined | VERIFIED | arguments stored once without the program's name, roots minted by the entry alone, three distinguished endings (`the_three_ways_a_program_ends_are_distinguished`, `the_arguments_are_stored_once_at_startup_without_the_program_name`, `root_capabilities_come_from_the_entry_alone`) |
+| Memory contract | VERIFIED | strings, sequences, sequences of strings and of records, channels, shared backings across four threads, allocation-failure paths, all counted exactly (`the_runtime_s_services_keep_their_contract_when_called_directly`, a C harness linked against the runtime alone) |
+| Failure classes | VERIFIED | language, host-refused, I/O and explicit exit distinguished; a `Result` never becomes one (`an_err_is_data_and_never_a_failure`) |
+| Portable core, one OS adapter | VERIFIED | `a_runtime_calls_the_operating_system_only_through_the_adapter`; the same POSIX surface on every v1 target |
+| A runtime crate, a scheduler, an allocator | MISSING | one OS thread per task (N44's) |
 
-**Next dependency** · A reason to have a runtime crate — stack switching or a custom
-allocator — since the memory model no longer waits on one.
+**Limitation** · Still no `nazm-rt` crate: the runtime is text, so its tests link it with a C
+harness rather than call it from Rust. Thread safety is by construction (atomic string and channel
+counts, sequences confined by `N0321`), not by a sanitizer run. One OS thread per task.
 
-**Accepted when** · `nazm-rt` exists with a narrow `unsafe` allowance that `xtask check`
-enforces, per `architecture.md` §7.
+**Next dependency** · N44's scheduler, and a reason for a runtime crate (stack switching, a custom
+allocator).
+
+**Accepted when** · For v1: met. For the area: a scheduler beyond one thread per task, with its
+policy stated.
 
 ### 14. Structured concurrency — VERIFIED
 

@@ -1395,7 +1395,7 @@ computes the same answers as one that does.**
 
 Two hand-kept transcriptions of a memory model is the arrangement that produced that, so
 there is now one. Every line of the Nazm emitter's `runtime`, `task_runtime` and
-`channel_runtime` is a line of `crates/nazm-lir/src/emit.rs`'s runtime constants with
+`channel_runtime` is a line of `crates/nazm-lir/src/runtime/core.rs`'s runtime constants (in `emit.rs` until N43) with
 `hidden` changed to `internal`, and `cargo xtask check`'s **`runtime parity`** gate performs
 the derivation again and refuses a difference by line number.
 
@@ -4822,7 +4822,7 @@ per unit for both backends. The runtime and the platform entry are LLVM text in 
 are the runtime, not code generated from a program's MIR, and N43 owns them.
 
 **Runtime symbol boundary.** Every runtime entry point a backend calls is in one typed registry
-(`crates/nazm-lir/src/runtime.rs`): its symbol, its parameters and result in machine words and
+(`crates/nazm-lir/src/runtime/mod.rs` since N43): its symbol, its parameters and result in machine words and
 pointers only, and what it does with ownership. A revision number names the registry; it enters
 every object's cache key. Cranelift code calls the runtime only through it. Where the runtime took
 or returned a first-class aggregate, the registry has a pointer-taking entry (`nz.str_join_to`,
@@ -4878,7 +4878,7 @@ first-class values (an `Int` an `i64`, a `Bool` an `i1`, a `Str` the `{ ptr, i64
 record or enum its named struct), and the Cranelift backend follows §7.43 (in-memory values by
 pointer, an in-memory result through a pointer passed first). Neither is C's and neither is
 promised to anything outside one build: the backend's identity and settings are in every object's
-cache key, the runtime's calling contract is `RUNTIME_ABI_REVISION` (1, `nazm-lir/src/runtime.rs`),
+cache key, the runtime's calling contract is `RUNTIME_ABI_REVISION` (`nazm-lir/src/runtime/mod.rs`),
 and no program mixes the two backends' objects. The *external*
 ABI is the C calling convention of the host target, and it is the only one a foreign function is
 called with.
@@ -4996,8 +4996,10 @@ allocates and frees it on the last release. A string backing is a 16-byte header
 count at 0) and its bytes; a literal and `arg`'s strings are immortal (their owner is null, and
 retaining or releasing null is a no-op). A sequence is a 32-byte header and a data block that grows
 by `realloc`; `nz.vec_release` releases each element with the element type's release function at
-the element's stride, then the sequence. A channel is one block holding its lock, its condition,
-its buffer and its count. Allocation failure is never undefined behaviour: every allocating entry
+the element's stride, then the sequence. A channel is a 64-byte block (capacity, length, head,
+closed flag, ring, lock, condition, reference count) and three allocations beside it — the ring,
+the lock and the condition — taken in order and released together, with a failure part-way
+through freeing exactly what was taken. Allocation failure is never undefined behaviour: every allocating entry
 returns null or a status, and the call site records `N0406`. Each release decrements and frees on
 zero; a count never underflows because MIR's validator proves every owned value is released
 exactly once (§7.42).
