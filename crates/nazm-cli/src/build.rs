@@ -1,7 +1,7 @@
 //! `nazm build` — source to a native executable.
 //!
 //! The pipeline is the existing front end plus two new steps: `nazm_lir::lower` turns a
-//! *checked* tree into the low-level representation, `nazm_lir::emit_llvm` turns that into
+//! checked program's Core IR into the low-level representation, `nazm_lir::emit_llvm` turns that into
 //! LLVM IR text, and `clang` turns that into a binary. No LLVM is linked into `nazm` —
 //! `docs/architecture.md` §1 says not to in year one, and `clang` reads IR from a file.
 //!
@@ -160,11 +160,19 @@ pub(crate) fn run(
     // What a generated artefact calls each file: its durable identity where it has one,
     // so the same project built from two checkouts produces the same bytes.
     let names = nazm_lir::SourceNames::of(map, &loaded.graph);
-    let artefacts = match nazm_core::on_checked_map(map, &loaded.graph, |program, resolution| {
-        nazm_lir::lower(program, resolution, &loaded.graph, &names)
-            .map(|native| emit_artefacts(&native, &names))
-            .map_err(|e| e.diagnostics)
-    }) {
+    //
+    // The backend is handed Core IR — the one lowering of the checked program — and never
+    // the tree (N39).
+    let artefacts = match nazm_core::on_lowered(
+        map,
+        &loaded.graph,
+        nazm_core::Entry::Required,
+        |core, resolution| {
+            nazm_lir::lower(core, resolution, &loaded.graph, &names)
+                .map(|native| emit_artefacts(&native, &names))
+                .map_err(|e| e.diagnostics)
+        },
+    ) {
         Ok(a) => a,
         Err(diagnostics) => {
             // `N0101` is this backend's "not yet", and it reads differently from a

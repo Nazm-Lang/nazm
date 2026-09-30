@@ -1,6 +1,6 @@
 [package]
 name = "nazm-lir"
-description = "The typed low-level representation, and the LLVM IR text a backend reads."
+description = "Core IR lowered to the typed low-level representation, and the LLVM IR text a backend reads."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,13 +9,14 @@ publish = false
 
 [package.metadata.nazm]
 # The sections that are this package's authority, as N32 identifies them (N33).
-docs = ["architecture:2", "architecture:7.5"]
+docs = ["architecture:2", "architecture:7.5", "architecture:7.41"]
 
 [dependencies]
 nazm-span = { workspace = true }
 nazm-diag = { workspace = true }
-nazm-syntax = { workspace = true }
 nazm-sema = { workspace = true }
+# What it lowers (N39). Not `nazm-syntax`: the backend never sees how a program was written.
+nazm-cir = { workspace = true }
 
 [lints]
 workspace = true

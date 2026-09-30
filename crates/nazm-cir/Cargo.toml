@@ -1,0 +1,25 @@
+[package]
+name = "nazm-cir"
+description = "Core IR: the checked meaning of a program, typed and resolved, that every backend starts from."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["architecture:7.41"]
+
+[dependencies]
+nazm-span = { workspace = true }
+# The vocabulary a checked program is written in: definitions, types, built-ins, effects.
+# Not `nazm-syntax`: Core IR is what a program means, and nothing in it may describe how it
+# was written. Not `nazm-core` either — the lowering lives there, behind checking.
+nazm-sema = { workspace = true }
+# Each function's digests, with the digest `architecture.md` §8 chose and for its reason:
+# a collision in a key a cache will read is an invalid hit.
+blake3 = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,12 +1,16 @@
-//! The one representation between the syntax tree and a backend, and the LLVM IR it emits.
+//! Core IR lowered to the representation a backend reads, and the LLVM IR it emits.
 //!
-//! # Why there is one level here and not eight
+//! # Where this sits
 //!
-//! `docs/architecture.md` §2 describes eight IR levels. This crate is the only one that
-//! exists. The levels in between exist to carry information the language has none of:
-//! there are no generics to monomorphise, no traits to lower to dictionaries, no regions
-//! to infer, and no effects to track. Building them now would produce a chain of
-//! pass-throughs that matches the diagram and says nothing.
+//! `docs/architecture.md` §2 describes eight IR levels. Two exist: Core IR (`nazm-cir`, since
+//! N39), the one lowering of a checked program, and this one, which lowers it. This crate
+//! reads Core IR and the checker's semantic tables and never the syntax tree — it does not
+//! depend on `nazm-syntax` — and what it adds is what Core IR deliberately leaves out: layout,
+//! symbols, linkage, the hidden slots that let a partly built value be released, and one
+//! concrete instance per generic function a program needs. The levels between the two still
+//! exist to carry what the language has none of: no traits to lower to dictionaries, no
+//! regions to infer. Building them now would produce pass-throughs that match the diagram and
+//! say nothing.
 //!
 //! **It is named for level 7, and it is not shaped like level 7.** §2 describes that level
 //! as SSA with concrete layouts over a CFG of places; what is here is a structured typed
@@ -15,9 +19,9 @@
 //! status claims in September 2026; `docs/master-architecture.md` §3 states the rule that
 //! replaced it.
 //!
-//! What this level *does* carry is the thing the AST does not: which operations can fail,
-//! and where the source said so. That is the whole reason for a separate representation
-//! at this stage — the emitter must not have to re-derive from syntax whether a `/` needs
+//! What this level *does* carry is the thing Core IR does not: which operations can fail at
+//! the machine level, and where the source said so. That is the whole reason for a separate
+//! representation at this stage — the emitter must not have to re-derive whether a `/` needs
 //! two guards or one.
 //!
 //! # Scope

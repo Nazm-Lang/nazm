@@ -1,23 +1,32 @@
-//! Tree-walking evaluator.
+//! The Core IR evaluator — `nazm run`'s interpreter.
 //!
-//! Runs only after checking has passed, so the shapes it handles are the ones the checker
-//! guaranteed. What remains at runtime is the two failures a type system cannot rule out:
-//! integer overflow and division by zero. Both stop the program with a diagnostic that
-//! points at the operator, and both behave identically in every build — a bug that
-//! reproduces only in one build configuration is the worst kind to be handed.
+//! Runs only Core IR, and Core IR exists only for a program that checked, so the shapes it
+//! handles are the ones the checker guaranteed and the lowering stated. What remains at runtime
+//! is what a type system cannot rule out: integer overflow and division by zero, an index
+//! outside a string or sequence, a failing file operation. Each stops the program with a
+//! diagnostic at the operator or call, and each behaves identically in every build — a bug
+//! that reproduces only in one build configuration is the worst kind to be handed.
+//!
+//! # What it reads
+//!
+//! Core IR, and nothing else (`docs/architecture.md` §7.41). Not the syntax tree, and not the
+//! checker's resolution: a local is a slot, a call names its callee, a field is an index, a
+//! `break` names its loop, and `?` has already become the `match` it means. Until N39 this
+//! walked the tree, found locals by searching frames for a name, and asked the resolution at
+//! every call and field what the source had meant — a second lowering, done again on every
+//! step, beside the native backend's.
 
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
+use nazm_cir as cir;
 use nazm_diag::{codes, Diagnostic};
 use nazm_span::Span;
-use nazm_syntax::{Assign, BinOp, Block, Expr, Function, MatchArm, Place, Program, Stmt, While};
 
+use cir::{Block, ExprKind, Stmt};
 use nazm_sema::enums::EnumId;
 use nazm_sema::intrinsic::Intrinsic;
-use nazm_sema::module::ModuleId;
 use nazm_sema::record::RecordId;
-use nazm_sema::resolve::{Callee, FnId, Resolution};
 
 /// A runtime value.
 ///
@@ -535,66 +544,36 @@ impl From<Diagnostic> for RuntimeError {
     }
 }
 
-/// One lexical scope's bindings: a short association list, not a map.
+/// One call's locals, by [`cir::LocalId`]: `None` for a slot not yet bound, or bound in a
+/// region that has since been left.
 ///
-/// # Why not a `HashMap`
+/// # Why a slot vector and not names
 ///
-/// It was one. `cargo xtask bench` on `bench/programs/arith.nz` — a loop doing nothing
-/// but arithmetic on five locals — spent **29% of the interpreter's time** hashing
-/// variable names and comparing them: 43 samples in `RandomState::hash_one::<String>`,
-/// 23 in SipHash's `write`, and 15 in `memcmp`, out of 277 on the evaluation thread.
+/// Until N39 a frame was an association list of `(name, value)` pairs, one per lexical
+/// scope, searched innermost-first at every read — itself the fix for a `HashMap` that spent
+/// 29% of `bench/programs/arith.nz` hashing names (`docs/performance.md`). Resolution had
+/// already decided which binding each name meant; the search repeated that decision at run
+/// time. Core IR carries the answer, so a read is an index.
 ///
-/// A frame holds a handful of bindings, and the checker refuses two of one name in the
-/// same scope, so a linear scan compares a few short strings and hashes nothing. The
-/// measurement is recorded in `docs/performance.md`; the point of repeating it here is
-/// that the obvious refactor back to a map would undo a measured result, and whoever
-/// proposes it should have to argue with a number rather than with a preference.
-#[derive(Debug, Default)]
-struct Frame {
-    slots: Vec<(String, Value)>,
-}
-
-impl Frame {
-    fn get(&self, name: &str) -> Option<&Value> {
-        self.slots.iter().find(|(n, _)| n == name).map(|(_, v)| v)
-    }
-
-    fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
-        self.slots
-            .iter_mut()
-            .find(|(n, _)| n == name)
-            .map(|(_, v)| v)
-    }
-
-    /// Bind a name, replacing any existing binding of it.
-    ///
-    /// Replacing rather than appending keeps this exactly what the `HashMap` did. Two
-    /// `let`s of one name in one scope is refused by the checker, so the case is
-    /// unreachable — and a second entry shadowing the first would be a silent
-    /// difference in behaviour if it ever became reachable, which is the kind found
-    /// years later.
-    fn insert(&mut self, name: String, value: Value) {
-        match self.get_mut(&name) {
-            Some(slot) => *slot = value,
-            None => self.slots.push((name, value)),
-        }
-    }
-}
-
-type Env = Vec<Frame>;
+/// A region's exit clears the slots it owns ([`Block::owns`]), which is exactly when a
+/// scope's frame used to be dropped — so a string backing or sequence a binding held is
+/// released at the same moment it always was, and the counters in `tests/memory.rs` see no
+/// difference.
+type Frame = Vec<Option<Value>>;
 
 /// How a statement finished.
 ///
 /// A statement normally falls through to the next one; `break` and `continue` do not, and
 /// the loop that has to act on them may be several blocks up. Returning the signal rather
 /// than unwinding keeps the control flow visible in the types — every caller has to say
-/// what it does with a `Break` it did not expect.
+/// what it does with a `Break` it did not expect. Since N39 a `break` and a `continue` name
+/// the loop they target, and only that loop consumes them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Flow {
     /// Fell off the end. Carries the tail's value when the block had one.
     Fell(Option<Value>),
-    Break,
-    Continue,
+    Break(cir::LoopId),
+    Continue(cir::LoopId),
     Return(Value),
 }
 
@@ -616,13 +595,37 @@ impl Flow {
 /// the checker lets a diverging branch take the other branch's type — failed at run time
 /// with "control flow escaped", a message about the interpreter rather than the program.
 macro_rules! take {
-    ($slf:ident, $e:expr, $env:expr) => {
-        match $slf.eval($e, $env)? {
+    ($slf:ident, $f:expr, $e:expr, $env:expr) => {
+        match $slf.eval($f, $e, $env)? {
             Flow::Fell(Some(v)) => v,
-            Flow::Fell(None) => return Err($slf.no_value($e)),
+            Flow::Fell(None) => return Err(no_value($e)),
             left => return Ok(left),
         }
     };
+}
+
+/// A runtime error with one diagnostic.
+fn fail(code: nazm_diag::Code, at: Span, message: impl Into<String>) -> RuntimeError {
+    RuntimeError {
+        diagnostic: Box::new(Diagnostic::error(code, at, message)),
+    }
+}
+
+/// An expression that was asked for a value and produced none.
+///
+/// Checking has already established that one arrives, so this is a checker bug rather
+/// than a program's mistake — reported, not panicked on.
+fn no_value(e: &cir::Expr) -> RuntimeError {
+    RuntimeError {
+        diagnostic: Box::new(
+            Diagnostic::error(
+                codes::TYPE_MISMATCH,
+                e.at,
+                "this produces no value, but one is needed here",
+            )
+            .help("a block's value is its final expression — one with no `;` after it"),
+        ),
+    }
 }
 
 /// Ten million iterations: high enough that no reasonable program reaches it, low enough
@@ -638,11 +641,12 @@ pub const STACK_BYTES_PER_CALL: usize = 32 * 1024;
 
 /// Reserved on top of the per-call budget, for everything not proportional to call depth.
 ///
-/// Chiefly the passes over the tree — parsing, checking, evaluating and dropping it —
-/// which recurse with its shape rather than with call depth. That requirement belongs to
-/// the parser, which sets the nesting limit, so the number is taken from there rather
-/// than restated here where the two could drift apart.
-pub const STACK_BASE_BYTES: usize = nazm_syntax::PARSE_STACK_BYTES;
+/// Chiefly the passes that run on this thread before the program does — parsing,
+/// checking, lowering to Core IR and dropping the tree — which recurse with the program's
+/// shape rather than with call depth. That requirement belongs to the parser, which sets
+/// the nesting limit, so the pipeline takes the number from there ([`crate::TREE_STACK_BYTES`])
+/// rather than restating it here where the two could drift apart.
+pub const STACK_BASE_BYTES: usize = crate::TREE_STACK_BYTES;
 
 /// The largest depth budget this interpreter will accept.
 ///
@@ -745,17 +749,11 @@ pub struct Interpreter {
     /// the whole scope body inside `std::thread::scope` — means threading the scope
     /// handle through every method of the interpreter, including the ones that have
     /// nothing to do with concurrency.
-    program: Arc<Program>,
-    /// What resolution decided. Shared with tasks for the same reason as the tree.
     ///
-    /// The evaluator used to carry a `HashMap<String, usize>` of its own, built over
-    /// every function in the program, and to apply the built-in-first rule itself at each
-    /// call. That was a third implementation of name resolution after the checker's and
-    /// the backend's, and once a name could mean different things in different modules it
-    /// stopped being merely duplicated and started being **wrong**: one map cannot hold
-    /// two modules' private `helper`. Calls are now looked up by the span of the callee,
-    /// which the checker already resolved.
-    res: Arc<Resolution>,
+    /// Core IR only. The syntax tree was cloned in here until N39, and the resolution with
+    /// it; neither is needed, so neither is kept, and a run holds one representation of the
+    /// program rather than three.
+    core: Arc<cir::Program>,
     /// Tasks started by the innermost `scope`, innermost last.
     ///
     /// A stack, because a scope may contain another and the inner one joins first.
@@ -782,38 +780,27 @@ pub struct Interpreter {
     args: Vec<String>,
 }
 
+/// A fresh frame for `f`, with its parameters bound to `args`.
+fn frame(f: &cir::Function, args: Vec<Value>) -> Frame {
+    let mut frame: Frame = vec![None; f.locals.len()];
+    for (slot, v) in frame.iter_mut().zip(args) {
+        *slot = Some(v);
+    }
+    frame
+}
+
 impl Interpreter {
+    /// An interpreter for a checked program's Core IR, which it takes.
     #[must_use]
-    ///
-    /// The tree is cloned once, here, so that tasks can share it. One copy per run of a
-    /// program is not a cost worth designing around; one copy per task would be.
-    pub fn new(program: &Program, res: &Resolution) -> Self {
+    pub fn new(core: cir::Program) -> Self {
         Self {
-            program: Arc::new(program.clone()),
-            res: Arc::new(res.clone()),
+            core: Arc::new(core),
             pending: Vec::new(),
             depth: 0,
             max_depth: DEFAULT_MAX_DEPTH,
             iterations_left: DEFAULT_MAX_ITERATIONS,
             args: Vec::new(),
         }
-    }
-
-    /// Which declaration the call whose callee was written at `at` refers to.
-    ///
-    /// An index into `Program::functions`, because the syntax tree is still the only
-    /// place a body lives. Two hops — span to definition, definition to declaration —
-    /// and neither of them is a name.
-    fn decl_at(&self, at: nazm_span::Span) -> Option<usize> {
-        match self.res.callee(at)? {
-            Callee::Function(id) => Some(self.res.function(id)?.decl as usize),
-            Callee::Builtin(_) => None,
-        }
-    }
-
-    /// The declaration of a definition, by id.
-    fn declaration<'p>(&self, program: &'p Program, id: FnId) -> Option<&'p Function> {
-        program.functions.get(self.res.function(id)?.decl as usize)
     }
 
     /// The arguments `arg(i)` will see.
@@ -833,44 +820,29 @@ impl Interpreter {
 
     /// Evaluate `main` and return its value.
     pub fn run_main(&mut self) -> Result<Value, RuntimeError> {
-        // Cloned before the lookup so that the body being run borrows the clone and not
-        // `self`, which `call_body` needs mutably.
-        let program = Arc::clone(&self.program);
-        // The **root** module's `main`, not whichever `main` the program happens to
-        // contain. An imported module may have one of its own and it is not an entry
-        // point; `docs/spec.md` says so and this is where that is true at runtime.
-        let main_id = self.res.definition(ModuleId::ROOT, "main");
+        let core = Arc::clone(&self.core);
+        // The **root** module's `main`, which the lowering recorded as the entry. An
+        // imported module may have one of its own and it is not an entry point;
+        // `docs/spec.md` says so and this is where that is true at runtime.
+        let Some(main) = core.entry.and_then(|e| core.function(e)) else {
+            return Err(fail(
+                codes::MISSING_MAIN,
+                Span::synthetic(),
+                "this program has no `main` function",
+            ));
+        };
         // The root of authority (N37): each capability parameter `main` declares is handed
         // one, and nothing else in a program can make one. Checking has refused a `main`
         // with a parameter of any other type.
-        let roots: Vec<Value> = main_id
-            .and_then(|id| self.res.function(id))
-            .map(|d| {
-                d.params
-                    .iter()
-                    .map(|t| match t {
-                        nazm_sema::Type::Cap(k) => Value::Cap(*k),
-                        _ => Value::Int(0),
-                    })
-                    .collect()
+        let roots: Vec<Value> = main
+            .param_locals()
+            .iter()
+            .map(|l| match l.ty {
+                nazm_sema::Type::Cap(k) => Value::Cap(k),
+                _ => Value::Int(0),
             })
-            .unwrap_or_default();
-        let main = main_id
-            .and_then(|id| self.declaration(&program, id))
-            .ok_or_else(|| RuntimeError {
-                diagnostic: Box::new(Diagnostic::error(
-                    codes::MISSING_MAIN,
-                    nazm_span::Span::synthetic(),
-                    "this program has no `main` function",
-                )),
-            })?;
-        let mut env: Env = vec![Frame::default()];
-        if let Some(frame) = env.last_mut() {
-            for (p, v) in main.params.iter().zip(roots) {
-                frame.insert(p.name.clone(), v);
-            }
-        }
-        self.call_body(Self::body_of(main)?, &mut env, "main")
+            .collect();
+        self.call_body(main, frame(main, roots))
     }
 
     /// Run a function body and produce its value.
@@ -878,115 +850,95 @@ impl Interpreter {
     /// `return` and falling off the end with a tail are the two ways a function produces
     /// one; checking guarantees every path does one or the other, so the remaining cases
     /// are diagnostics rather than panics.
-    fn call_body(
-        &mut self,
-        body: &Block,
-        env: &mut Env,
-        name: &str,
-    ) -> Result<Value, RuntimeError> {
-        match self.block_value(body, env)? {
+    fn call_body(&mut self, f: &cir::Function, mut env: Frame) -> Result<Value, RuntimeError> {
+        match self.block(f, &f.body, &mut env)? {
             Flow::Return(v) | Flow::Fell(Some(v)) => Ok(v),
-            Flow::Fell(None) => Err(RuntimeError {
-                diagnostic: Box::new(Diagnostic::error(
-                    codes::TYPE_MISMATCH,
-                    body.span,
-                    format!("`{name}` finished without producing a value"),
-                )),
-            }),
-            Flow::Break | Flow::Continue => Err(RuntimeError {
-                diagnostic: Box::new(Diagnostic::error(
-                    codes::NOT_IN_A_LOOP,
-                    body.span,
-                    format!("loop control escaped from `{name}`"),
-                )),
-            }),
+            Flow::Fell(None) => Err(fail(
+                codes::TYPE_MISMATCH,
+                f.body.at,
+                format!("`{}` finished without producing a value", f.name),
+            )),
+            Flow::Break(_) | Flow::Continue(_) => Err(fail(
+                codes::NOT_IN_A_LOOP,
+                f.body.at,
+                format!("loop control escaped from `{}`", f.name),
+            )),
         }
     }
 
-    /// Run a block in its own scope.
-    /// `match scrutinee { … }`.
+    /// Run a region, then release what it owns.
+    ///
+    /// The release is the language's: a binding's value is dropped when the region it was
+    /// bound in is left, by falling through, by any transfer, or by a failure — the moment a
+    /// scope's frame used to be popped.
+    fn block(
+        &mut self,
+        f: &cir::Function,
+        b: &Block,
+        env: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        let out = self.block_inner(f, b, env);
+        for l in &b.owns {
+            if let Some(slot) = env.get_mut(l.index()) {
+                *slot = None;
+            }
+        }
+        out
+    }
+
+    fn block_inner(
+        &mut self,
+        f: &cir::Function,
+        b: &Block,
+        env: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        for stmt in &b.stmts {
+            let flow = self.stmt(f, stmt, env)?;
+            if !flow.is_fall_through() {
+                // Leaves this block and travels outward to whatever handles it.
+                return Ok(flow);
+            }
+        }
+        match &b.tail {
+            Some(tail) => self.eval(f, tail, env),
+            None => Ok(Flow::Fell(None)),
+        }
+    }
+
+    /// `match`, in either position.
     ///
     /// The scrutinee is evaluated **once**, into a value this expression owns, and the arm
-    /// runs with the payload bound into a scope of its own. `docs/spec.md` specifies value
-    /// evaluation rather than a borrow of the caller's storage, so `match x { … }` leaves
-    /// `x` untouched and `match make() { … }` has a clear owner for the temporary.
+    /// runs with the payload bound into locals its region owns. `docs/spec.md` specifies
+    /// value evaluation rather than a borrow of the caller's storage, so `match x { … }`
+    /// leaves `x` untouched and `match make() { … }` has a clear owner for the temporary.
     ///
     /// The bindings are **clones of the payload values**, which is the same operation a
     /// projection out of a record performs and the same rule: what comes out holds its own
     /// reference to whatever backs it, so an arm may return it and it survives the
     /// scrutinee. The scrutinee is dropped when this function returns, after the arm's
     /// value has been established — which is the ordering the whole milestone turns on.
-    /// `operand?`: the operand once, then either its success value or a `return`.
     ///
-    /// No host mechanism is involved — not a panic, not an unwind. The `Err` path is the
-    /// same [`Flow::Return`] a written `return` produces, so it travels out through loops,
-    /// scopes and blocks exactly as one does, and a scope it leaves joins its tasks on the
-    /// way. What it returns is the enclosing function's own `Result`, which may be a
-    /// different instance from the operand's: only the error value is carried across.
-    fn propagate(&mut self, operand: &Expr, at: Span, env: &mut Env) -> Result<Flow, RuntimeError> {
-        let value = take!(self, operand, env);
-        let (Value::Enum(subject), Some(p)) = (value, self.res.propagation(at)) else {
-            // Unreachable for a checked program, which records every `?` it accepts.
-            return Err(RuntimeError {
-                diagnostic: Box::new(Diagnostic::error(
-                    codes::PROPAGATE_NON_RESULT,
-                    at,
-                    "this `?` was not resolved to a `Result`",
-                )),
-            });
-        };
-        let payload = |v: &EnumVal| {
-            v.field(0).cloned().ok_or_else(|| RuntimeError {
-                diagnostic: Box::new(Diagnostic::error(
-                    codes::UNKNOWN_FIELD,
-                    at,
-                    "this `Result` variant has no payload",
-                )),
-            })
-        };
-        if subject.variant() == p.ok {
-            return Ok(Flow::Fell(Some(payload(&subject)?)));
-        }
-        let error = payload(&subject)?;
-        Ok(Flow::Return(Value::Enum(EnumVal::new(
-            p.into,
-            p.into_err,
-            vec![error],
-        ))))
-    }
-
-    fn match_expr(
+    /// A `?` is one of these since N39 — its `Err` arm an ordinary `return` — so its error
+    /// path travels out through loops, scopes and blocks exactly as a written `return` does,
+    /// and a scope it leaves joins its tasks on the way.
+    fn matching(
         &mut self,
-        scrutinee: &Expr,
-        arms: &[MatchArm],
-        span: Span,
-        env: &mut Env,
+        f: &cir::Function,
+        m: &cir::Match,
+        env: &mut Frame,
     ) -> Result<Flow, RuntimeError> {
-        let value = take!(self, scrutinee, env);
+        let value = take!(self, f, &m.scrutinee, env);
         let Value::Enum(subject) = value else {
-            return Err(RuntimeError {
-                diagnostic: Box::new(Diagnostic::error(
-                    codes::MATCH_ON_NON_ENUM,
-                    scrutinee.span(),
-                    "this is not an enum",
-                )),
-            });
+            return Err(fail(
+                codes::MATCH_ON_NON_ENUM,
+                m.scrutinee.at,
+                "this is not an enum",
+            ));
         };
-        // The discriminant selects the arm. Checking has established that exactly one arm
-        // names each variant, so the first match is the only match and there is no
-        // fallthrough to express.
-        //
-        // Compared by **definition**, since N11: the interpreter is parametric, so an arm in
-        // a generic body names `Maybe[T]` while the value it meets is a `Maybe[Int]`, and
-        // both are the one enum `Maybe` whose variants every application shares.
-        let types = self.res.types();
-        let subject_def = types.definition_of(nazm_sema::Type::Enum(subject.def));
-        let Some(arm) = arms.iter().find(|a| {
-            self.res.variant(a.variant_span).is_some_and(|v| {
-                types.definition_of(nazm_sema::Type::Enum(v.enumeration)) == subject_def
-                    && v.variant == subject.variant
-            })
-        }) else {
+        // The variant selects the arm. Checking has established that exactly one arm names
+        // each variant, so the first match is the only match and there is no fallthrough to
+        // express — and the arm names its variant by the same index the value carries.
+        let Some(arm) = m.arms.iter().find(|a| a.variant == subject.variant) else {
             // Unreachable for a checked program: `N0343` refuses a `match` that leaves a
             // variant uncovered. Reported rather than assumed away, and deliberately not
             // as a language-visible trap — it says the compiler is wrong, not the program.
@@ -994,170 +946,124 @@ impl Interpreter {
                 diagnostic: Box::new(
                     Diagnostic::error(
                         codes::NON_EXHAUSTIVE_MATCH,
-                        span,
+                        m.at,
                         "no arm covers this value's variant",
                     )
                     .help("this is a bug in the compiler: exhaustiveness is checked"),
                 ),
             });
         };
-        let mut frame = Frame::default();
-        for f in &arm.fields {
-            let Some(name) = &f.binding else { continue };
-            let Some(at) = self.res.payload(f.name_span) else {
-                continue;
+        for b in &arm.bindings {
+            let Some(v) = subject.field(b.field) else {
+                return Err(fail(
+                    codes::UNKNOWN_FIELD,
+                    b.at,
+                    "this variant has no such payload field",
+                ));
             };
-            let Some(v) = subject.field(at.field) else {
-                return Err(RuntimeError {
-                    diagnostic: Box::new(Diagnostic::error(
-                        codes::UNKNOWN_FIELD,
-                        f.name_span,
-                        "this variant has no such payload field",
-                    )),
-                });
-            };
-            frame.insert(name.clone(), v.clone());
+            if let Some(slot) = env.get_mut(b.local.index()) {
+                *slot = Some(v.clone());
+            }
         }
-        env.push(frame);
-        let out = self.eval(&arm.body, env);
-        env.pop();
         // `subject` is dropped here, after the arm's value has been established — which is
         // what keeps a returned payload valid. A `_` field is in `subject` like any other
         // and goes with it; declining to name a value is not declining to own it.
-        out
+        self.block(f, &arm.body, env)
     }
 
-    fn block(&mut self, b: &Block, env: &mut Env) -> Result<Flow, RuntimeError> {
-        env.push(Frame::default());
-        let out = self.block_inner(b, env);
-        env.pop();
-        out
-    }
-
-    fn block_inner(&mut self, b: &Block, env: &mut Env) -> Result<Flow, RuntimeError> {
-        for stmt in &b.statements {
-            let flow = self.stmt(stmt, env)?;
-            if !flow.is_fall_through() {
-                // Leaves this block and travels outward to whatever handles it.
-                return Ok(flow);
-            }
-        }
-        match &b.tail {
-            Some(tail) => self.eval(tail, env),
-            None => Ok(Flow::Fell(None)),
-        }
-    }
-
-    /// Run a block where a value is required.
-    ///
-    /// Used for `if` branches in expression position and for a function body. A block
-    /// that diverges has no value and the caller decides what that means.
-    fn block_value(&mut self, b: &Block, env: &mut Env) -> Result<Flow, RuntimeError> {
-        self.block(b, env)
-    }
-
-    fn stmt(&mut self, stmt: &Stmt, env: &mut Env) -> Result<Flow, RuntimeError> {
+    fn stmt(
+        &mut self,
+        f: &cir::Function,
+        stmt: &Stmt,
+        env: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        // What a statement's own value is: nothing. A flow still travels outward — an `if`
+        // in statement position may still `return` or `break`.
+        let discard = |flow: Flow| match flow {
+            Flow::Fell(_) => Flow::Fell(None),
+            other => other,
+        };
         match stmt {
-            Stmt::Let(l) => {
-                let v = take!(self, &l.value, env);
-                if let Some(frame) = env.last_mut() {
-                    frame.insert(l.name.clone(), v);
+            Stmt::Let { local, value } => {
+                let v = take!(self, f, value, env);
+                if let Some(slot) = env.get_mut(local.index()) {
+                    *slot = Some(v);
                 }
                 Ok(Flow::Fell(None))
             }
-            Stmt::Assign(a) => self.assign(a, env),
+            Stmt::Assign {
+                local,
+                path,
+                value,
+                at,
+            } => self.assign(f, *local, path, value, *at, env),
+            Stmt::Eval(e) => Ok(discard(self.eval(f, e, env)?)),
+            Stmt::If {
+                cond,
+                then,
+                otherwise,
+                ..
+            } => {
+                let c = take!(self, f, cond, env);
+                let flow = if as_bool(&c, cond)? {
+                    self.block(f, then, env)?
+                } else if let Some(b) = otherwise {
+                    self.block(f, b, env)?
+                } else {
+                    Flow::Fell(None)
+                };
+                Ok(discard(flow))
+            }
+            Stmt::Match(m) => Ok(discard(self.matching(f, m, env)?)),
             // A loop consumes its own `break` and `continue`, but a `return` inside one
-            // leaves the function and must travel through.
-            Stmt::While(w) => self.while_loop(w, env),
+            // leaves the function and must travel through — as must a `break` naming an
+            // enclosing loop.
+            Stmt::Loop { id, cond, body, at } => self.while_loop(f, *id, cond, body, *at, env),
+            Stmt::Block(b) => Ok(discard(self.block(f, b, env)?)),
             // Through `take!`: `return (if c { return 1; } else { 2 });` is legal, and
             // the inner `return` is the one that wins.
-            Stmt::Return(r) => Ok(Flow::Return(take!(self, &r.value, env))),
-            Stmt::Break { .. } => Ok(Flow::Break),
-            Stmt::Continue { .. } => Ok(Flow::Continue),
-            Stmt::Scope(sc) => {
+            Stmt::Return { value, .. } => Ok(Flow::Return(take!(self, f, value, env))),
+            Stmt::Break { target, .. } => Ok(Flow::Break(*target)),
+            Stmt::Continue { target, .. } => Ok(Flow::Continue(*target)),
+            Stmt::Scope { body, .. } => {
                 // Tasks run while the body does. The closing brace joins every one of
                 // them, and joins them *before* propagating a failure of the body —
                 // returning early would leave tasks running past the scope that promised
                 // to contain them, which is the one guarantee this construct exists for.
                 self.pending.push(Vec::new());
-                let flow = self.block(&sc.body, env);
+                let flow = self.block(f, body, env);
                 let joined = Self::join_all(self.pending.pop().unwrap_or_default());
                 // The body's failure wins: a task that failed because the body stopped
                 // feeding it is a consequence, not the cause.
                 let flow = flow?;
                 joined?;
-                Ok(match flow {
-                    // A `scope` produces nothing; a `break` or `return` inside one still
-                    // travels outward, after the join.
-                    Flow::Fell(_) => Flow::Fell(None),
-                    other => other,
-                })
+                // A `scope` produces nothing; a `break` or `return` inside one still
+                // travels outward, after the join.
+                Ok(discard(flow))
             }
-            Stmt::Spawn(sp) => {
-                let mut values = Vec::with_capacity(sp.args.len());
-                for a in &sp.args {
-                    values.push(take!(self, a, env));
+            Stmt::Spawn {
+                callee, args, at, ..
+            } => {
+                let mut values = Vec::with_capacity(args.len());
+                for a in args {
+                    values.push(take!(self, f, a, env));
                 }
                 // Checked before starting anything: a task with no scope to join it is
                 // the one case where starting it would be unrecoverable. Unreachable —
                 // the checker reports `N0320`.
                 if self.pending.is_empty() {
-                    return Err(RuntimeError {
-                        diagnostic: Box::new(Diagnostic::error(
-                            codes::SPAWN_OUTSIDE_SCOPE,
-                            sp.span,
-                            "`spawn` reached the interpreter with no scope to join it",
-                        )),
-                    });
+                    return Err(fail(
+                        codes::SPAWN_OUTSIDE_SCOPE,
+                        *at,
+                        "`spawn` reached the interpreter with no scope to join it",
+                    ));
                 }
-                let task = self.start_task(&sp.callee, sp.callee_span, values, sp.span)?;
+                let task = self.start_task(*callee, values, *at)?;
                 if let Some(scope) = self.pending.last_mut() {
                     scope.push(task);
                 }
                 Ok(Flow::Fell(None))
             }
-            Stmt::Expr(e) => {
-                // The value is dropped; the flow is not. An `if` in statement position
-                // may still `return` or `break`, and that has to travel outward.
-                Ok(match self.eval(e, env)? {
-                    Flow::Fell(_) => Flow::Fell(None),
-                    other => other,
-                })
-            }
-        }
-    }
-
-    /// A condition's value, once something has established it produced one.
-    ///
-    /// Not a `Bool` here means checking passed something it should not have, so this
-    /// reports rather than panics: a checker bug should be readable.
-    fn as_bool(&self, v: &Value, cond: &Expr) -> Result<bool, RuntimeError> {
-        match v {
-            Value::Bool(b) => Ok(*b),
-            other => Err(RuntimeError {
-                diagnostic: Box::new(Diagnostic::error(
-                    codes::CONDITION_NOT_BOOL,
-                    cond.span(),
-                    format!("a condition must be `Bool`, but this is `{other}`"),
-                )),
-            }),
-        }
-    }
-
-    /// An expression that was asked for a value and produced none.
-    ///
-    /// Checking has already established that one arrives, so this is a checker bug rather
-    /// than a program's mistake — reported, not panicked on.
-    fn no_value(&self, e: &Expr) -> RuntimeError {
-        RuntimeError {
-            diagnostic: Box::new(
-                Diagnostic::error(
-                    codes::TYPE_MISMATCH,
-                    e.span(),
-                    "this produces no value, but one is needed here",
-                )
-                .help("a block's value is its final expression — one with no `;` after it"),
-            ),
         }
     }
 
@@ -1585,23 +1491,21 @@ impl Interpreter {
     /// tasks happened to be running, which is not something a person can reason about.
     fn start_task(
         &self,
-        callee: &str,
-        at: nazm_span::Span,
+        callee: nazm_sema::FnId,
         args: Vec<Value>,
-        span: nazm_span::Span,
+        span: Span,
     ) -> Result<JoinHandle<Result<(), RuntimeError>>, RuntimeError> {
-        let index = self.decl_at(at).ok_or_else(|| RuntimeError {
-            diagnostic: Box::new(Diagnostic::error(
+        let Some(name) = self.core.function(callee).map(|f| f.name.clone()) else {
+            return Err(fail(
                 codes::UNDEFINED_FUNCTION,
                 span,
-                format!("`{callee}` is not a function"),
-            )),
-        })?;
-        let program = Arc::clone(&self.program);
-        let res = Arc::clone(&self.res);
+                "this task's function is not in the program",
+            ));
+        };
+        let core = Arc::clone(&self.core);
         let max_depth = self.max_depth;
         let iterations_left = self.iterations_left;
-        let name = callee.to_string();
+        let task_name = name.clone();
 
         std::thread::Builder::new()
             .name(name.clone())
@@ -1611,8 +1515,7 @@ impl Interpreter {
             .stack_size(stack_for(max_depth))
             .spawn(move || {
                 let mut task = Self {
-                    program: Arc::clone(&program),
-                    res,
+                    core: Arc::clone(&core),
                     pending: Vec::new(),
                     depth: 0,
                     max_depth,
@@ -1621,35 +1524,29 @@ impl Interpreter {
                     // command line, and a task is not a program.
                     args: Vec::new(),
                 };
-                // The index was taken from the table built over this program, so it is
-                // always in range. Reported rather than indexed, because a panic in a
-                // task loses every other task's diagnostic along with its own.
-                let Some(f) = program.functions.get(index) else {
+                // Looked up in the program this task shares, which is the one the callee
+                // was resolved in. Reported rather than indexed, because a panic in a task
+                // loses every other task's diagnostic along with its own.
+                let Some(f) = core.function(callee) else {
                     return Err(RuntimeError {
                         diagnostic: Box::new(
                             Diagnostic::error(
                                 codes::INTERPRETER_UNAVAILABLE,
-                                nazm_span::Span::synthetic(),
-                                format!("a task was started for `{name}`, which is not there"),
+                                Span::synthetic(),
+                                format!("a task was started for `{task_name}`, which is not there"),
                             )
                             .help("this is a bug in the interpreter"),
                         ),
                     });
                 };
-                let mut env: Env = vec![Frame::default()];
-                if let Some(frame) = env.last_mut() {
-                    for (p, v) in f.params.iter().zip(args) {
-                        frame.insert(p.name.clone(), v);
-                    }
-                }
-                Self::body_of(f).and_then(|body| task.call_body(body, &mut env, &name).map(|_| ()))
+                task.call_body(f, frame(f, args)).map(|_| ())
             })
             .map_err(|e| RuntimeError {
                 diagnostic: Box::new(
                     Diagnostic::error(
                         codes::INTERPRETER_UNAVAILABLE,
                         span,
-                        format!("could not start a task for `{callee}`: {e}"),
+                        format!("could not start a task for `{name}`: {e}"),
                     )
                     .help(
                         "each task is an operating-system thread; this is a limit of the \
@@ -1697,86 +1594,69 @@ impl Interpreter {
         }
     }
 
-    /// Assign to the innermost binding of that name.
+    /// `local.path = value;`.
     ///
-    /// Innermost, so a loop body assigning to a variable declared outside it updates that
-    /// one rather than creating a shadow that vanishes each iteration — which would make
-    /// every accumulator silently do nothing.
-    fn assign(&mut self, a: &Assign, env: &mut Env) -> Result<Flow, RuntimeError> {
-        // **The new value first, always.** `docs/spec.md` requires a replacement to be
-        // secured before the old one is let go, so that `p.name = p.name` and a failing
-        // right-hand side are both safe. Evaluating here rather than after the walk is
-        // what makes that true: by the time anything is overwritten, `v` already holds
-        // its own reference to whatever backs it.
-        let v = take!(self, &a.value, env);
-        let place = &a.place;
-        // Cloned handle rather than a borrow: `env` is borrowed mutably below, and the
-        // resolution is behind the same `self`.
-        let res = Arc::clone(&self.res);
-        for frame in env.iter_mut().rev() {
-            if let Some(slot) = frame.get_mut(&place.name) {
-                return Self::replace(&res, slot, place, &v).map(|()| Flow::Fell(None));
-            }
-        }
-        Err(RuntimeError {
-            diagnostic: Box::new(Diagnostic::error(
-                codes::UNDEFINED_VARIABLE,
-                place.name_span,
-                format!("`{}` is not defined", place.name),
-            )),
-        })
-    }
-
-    /// Write `v` at the end of `place`'s projection path, starting from the binding.
-    ///
-    /// The old value at that position is dropped by the store, which is where a `Str`
-    /// backing, a sequence or a channel loses the reference this record held — the same
-    /// event, at the same moment, as the compiled program's release.
+    /// **The new value first, always.** `docs/spec.md` requires a replacement to be secured
+    /// before the old one is let go, so that `p.name = p.name` and a failing right-hand side
+    /// are both safe. Evaluating here rather than after the walk is what makes that true: by
+    /// the time anything is overwritten, `v` already holds its own reference to whatever
+    /// backs it. The old value at the end of the path is dropped by the store, which is where
+    /// a `Str` backing, a sequence or a channel loses the reference this record held — the
+    /// same event, at the same moment, as the compiled program's release.
     ///
     /// Iterative: a path is a list, and walking it with a loop keeps the depth of a
     /// projection out of the host's stack.
-    ///
-    /// Which field each step names is **read from the resolution**, not looked up by
-    /// name here. The checker already decided it, and deciding it again would be the
-    /// second resolver N1 removed.
-    fn replace(
-        res: &Resolution,
-        mut slot: &mut Value,
-        place: &Place,
-        v: &Value,
-    ) -> Result<(), RuntimeError> {
-        for step in &place.path {
+    fn assign(
+        &mut self,
+        f: &cir::Function,
+        local: cir::LocalId,
+        path: &[cir::Step],
+        value: &cir::Expr,
+        at: Span,
+        env: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        let v = take!(self, f, value, env);
+        let Some(Some(mut slot)) = env.get_mut(local.index()).map(Option::as_mut) else {
+            return Err(fail(
+                codes::UNDEFINED_VARIABLE,
+                at,
+                format!(
+                    "`{}` is not defined",
+                    f.local(local).map_or("a local", |l| l.name.as_str())
+                ),
+            ));
+        };
+        for step in path {
             // Unreachable if checking ran: the checker resolved this path and refused
             // anything it could not. A diagnostic rather than a panic, so a checker bug
             // surfaces as a report.
-            let (Value::Record(r), Some(at)) = (&mut *slot, res.field(step.name_span)) else {
-                return Err(Self::no_such_place(place));
+            let Value::Record(r) = slot else {
+                return Err(no_such_place(at));
             };
-            let Some(next) = r.field_mut(at.field) else {
-                return Err(Self::no_such_place(place));
+            let Some(next) = r.field_mut(step.field) else {
+                return Err(no_such_place(at));
             };
             slot = next;
         }
-        *slot = v.clone();
-        Ok(())
+        *slot = v;
+        Ok(Flow::Fell(None))
     }
 
-    fn no_such_place(place: &Place) -> RuntimeError {
-        RuntimeError {
-            diagnostic: Box::new(Diagnostic::error(
-                codes::UNDEFINED_VARIABLE,
-                place.span,
-                "this is not a place that can be written to",
-            )),
-        }
-    }
-
-    fn while_loop(&mut self, w: &While, env: &mut Env) -> Result<Flow, RuntimeError> {
+    fn while_loop(
+        &mut self,
+        f: &cir::Function,
+        id: cir::LoopId,
+        cond: &cir::Expr,
+        body: &Block,
+        at: Span,
+        env: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
         loop {
             // `take!`, because a condition is an expression like any other: `while (if c
-            // { return 1; } else { true })` leaves the function from the condition.
-            let c = take!(self, &w.cond, env);
-            if !self.as_bool(&c, &w.cond)? {
+            // { return 1; } else { true })` leaves the function from the condition — and a
+            // `break` there names the enclosing loop, which is where it travels.
+            let c = take!(self, f, cond, env);
+            if !as_bool(&c, cond)? {
                 return Ok(Flow::Fell(None));
             }
 
@@ -1785,7 +1665,7 @@ impl Interpreter {
                     diagnostic: Box::new(
                         Diagnostic::error(
                             codes::ITERATION_LIMIT,
-                            w.span,
+                            at,
                             "this program exceeded the interpreter's iteration limit",
                         )
                         .help(
@@ -1799,11 +1679,13 @@ impl Interpreter {
             };
             self.iterations_left = left;
 
-            match self.block(&w.body, env)? {
-                Flow::Fell(_) | Flow::Continue => {}
-                Flow::Break => return Ok(Flow::Fell(None)),
-                // A `return` inside a loop leaves the function, not just the loop.
-                r @ Flow::Return(_) => return Ok(r),
+            match self.block(f, body, env)? {
+                Flow::Fell(_) => {}
+                Flow::Continue(t) if t == id => {}
+                Flow::Break(t) if t == id => return Ok(Flow::Fell(None)),
+                // A `return` inside a loop leaves the function, not just the loop; a
+                // transfer naming an enclosing loop leaves this one on its way there.
+                other => return Ok(other),
             }
         }
     }
@@ -1816,73 +1698,82 @@ impl Interpreter {
     /// else { 2 };` is the same shape one level in. Every sub-expression here takes its
     /// operands through `take!`, so a flow raised anywhere inside travels straight out
     /// instead of being mistaken for a value that never arrives.
-    fn eval(&mut self, e: &Expr, env: &mut Env) -> Result<Flow, RuntimeError> {
-        let value = match e {
-            Expr::Int { value, .. } => Value::Int(*value),
-            Expr::Bool { value, .. } => Value::Bool(*value),
-            // A literal's bytes are the source's bytes, which are valid UTF-8 because
-            // the source is. Nothing downstream may assume that of every `Str`.
-            // A literal is **immortal**: the compiled program puts it in a constant and
-            // the interpreter must not pretend it allocated one, or the two would
-            // disagree about what a program with no allocation did.
-            Expr::Str { value, .. } => Value::Str(Str::immortal(value.clone().into_bytes())),
-
-            Expr::Var { name, span } => env
-                .iter()
-                .rev()
-                .find_map(|f| f.get(name).cloned())
-                .ok_or_else(|| RuntimeError {
-                    // Unreachable if checking ran. A diagnostic rather than a panic, so a
-                    // checker bug surfaces as a report.
-                    diagnostic: Box::new(Diagnostic::error(
-                        codes::UNDEFINED_VARIABLE,
-                        *span,
-                        format!("`{name}` is not defined"),
-                    )),
-                })?,
-
-            Expr::Neg {
-                operand, op_span, ..
-            } => match take!(self, operand, env) {
-                // `-i64::MIN` has no representable result, so negation overflows exactly
-                // once — and it is the value people reach for when testing edges.
-                Value::Int(v) => v
-                    .checked_neg()
-                    .map(Value::Int)
-                    .ok_or_else(|| RuntimeError {
-                        diagnostic: Box::new(Diagnostic::error(
-                            codes::INTEGER_OVERFLOW,
-                            *op_span,
-                            "this negation overflows `Int`",
-                        )),
-                    })?,
-                other => {
-                    return Err(RuntimeError {
-                        diagnostic: Box::new(Diagnostic::error(
-                            codes::INVALID_OPERANDS,
-                            *op_span,
-                            format!("`-` applies to `Int`, but this is `{other}`"),
-                        )),
-                    })
+    fn eval(
+        &mut self,
+        f: &cir::Function,
+        e: &cir::Expr,
+        env: &mut Frame,
+    ) -> Result<Flow, RuntimeError> {
+        let value = match &e.kind {
+            ExprKind::Const(c) => match f.constant(*c) {
+                Some(cir::Const::Int(v)) => Value::Int(*v),
+                Some(cir::Const::Bool(v)) => Value::Bool(*v),
+                // A literal is **immortal**: the compiled program puts it in a constant and
+                // the interpreter must not pretend it allocated one, or the two would
+                // disagree about what a program with no allocation did.
+                Some(cir::Const::Str(v)) => Value::Str(Str::immortal(v.clone())),
+                None => {
+                    return Err(fail(
+                        codes::TYPE_MISMATCH,
+                        e.at,
+                        "this literal is not in its function's constants",
+                    ))
                 }
             },
 
-            Expr::Binary {
-                op,
-                lhs,
-                rhs,
-                op_span,
-                ..
-            } => {
+            ExprKind::Local(l) => match env.get(l.index()).and_then(Option::as_ref) {
+                Some(v) => v.clone(),
+                // Unreachable if checking ran. A diagnostic rather than a panic, so a
+                // checker bug surfaces as a report.
+                None => {
+                    return Err(fail(
+                        codes::UNDEFINED_VARIABLE,
+                        e.at,
+                        format!(
+                            "`{}` is not defined",
+                            f.local(*l).map_or("a local", |l| l.name.as_str())
+                        ),
+                    ))
+                }
+            },
+
+            ExprKind::Neg(operand) => match take!(self, f, operand, env) {
+                // `-i64::MIN` has no representable result, so negation overflows exactly
+                // once — and it is the value people reach for when testing edges.
+                Value::Int(v) => v.checked_neg().map(Value::Int).ok_or_else(|| {
+                    fail(
+                        codes::INTEGER_OVERFLOW,
+                        e.at,
+                        "this negation overflows `Int`",
+                    )
+                })?,
+                other => {
+                    return Err(fail(
+                        codes::INVALID_OPERANDS,
+                        e.at,
+                        format!("`-` applies to `Int`, but this is `{other}`"),
+                    ))
+                }
+            },
+
+            ExprKind::Arith { op, lhs, rhs } => {
                 // Left to right, as the spec fixes — and `take!` preserves that: a flow
                 // raised by the left operand leaves before the right one is evaluated.
-                let l = take!(self, lhs, env);
-                let r = take!(self, rhs, env);
-                self.binary(*op, &l, &r, *op_span)?
+                let l = take!(self, f, lhs, env);
+                let r = take!(self, f, rhs, env);
+                arith(*op, &l, &r, e.at)?
             }
 
-            Expr::Construct {
-                ty_span, fields, ..
+            ExprKind::Compare { op, lhs, rhs, .. } => {
+                let l = take!(self, f, lhs, env);
+                let r = take!(self, f, rhs, env);
+                compare(*op, &l, &r, e.at)?
+            }
+
+            ExprKind::Record {
+                arity,
+                fields,
+                record,
             } => {
                 // **In the order written**, which `docs/spec.md` fixes as the evaluation
                 // order and which physical layout has nothing to do with. A failure part
@@ -1890,180 +1781,75 @@ impl Interpreter {
                 // error — and that drop is what releases a string backing or a sequence
                 // reference an earlier initialiser had taken. The counters observe it, so
                 // the cleanup is evidence rather than an assumption about the host.
-                let Some(def) = self.res.construction(*ty_span) else {
-                    return Err(RuntimeError {
-                        diagnostic: Box::new(Diagnostic::error(
-                            codes::UNKNOWN_TYPE,
-                            *ty_span,
-                            "this record was not resolved",
-                        )),
-                    });
-                };
-                let arity = self.res.records().get(def).map_or(0, |d| d.fields.len());
-                let mut built: Vec<Option<Value>> = vec![None; arity];
-                for f in fields {
-                    let v = take!(self, &f.value, env);
-                    // Placed by **declaration** index, taken by name, so the order the
-                    // author wrote the initialisers in cannot change the record's shape.
-                    let at = self
-                        .res
-                        .records()
-                        .get(def)
-                        .and_then(|d| d.field(&f.name).map(|(i, _)| i as usize));
-                    if let Some(slot) = at.and_then(|i| built.get_mut(i)) {
-                        *slot = Some(v);
-                    }
+                let values = self.initialise(f, *arity, fields, e.at, env)?;
+                match values {
+                    Ok(values) => Value::Record(Rec::new(*record, values)),
+                    Err(flow) => return Ok(flow),
                 }
-                // Checking guarantees every field was given exactly one value, so an
-                // absent one is a checker bug rather than a program's mistake.
-                let mut values = Vec::with_capacity(arity);
-                for (i, v) in built.into_iter().enumerate() {
-                    match v {
-                        Some(v) => values.push(v),
-                        None => {
-                            let name = self
-                                .res
-                                .records()
-                                .get(def)
-                                .and_then(|d| d.fields.get(i))
-                                .map_or_else(|| "a field".to_owned(), |f| format!("`{}`", f.name));
-                            return Err(RuntimeError {
-                                diagnostic: Box::new(Diagnostic::error(
-                                    codes::MISSING_FIELD,
-                                    *ty_span,
-                                    format!("{name} was given no value"),
-                                )),
-                            });
-                        }
-                    }
-                }
-                Value::Record(Rec::new(def, values))
             }
 
-            Expr::Variant {
-                ty_span,
-                variant_span,
+            ExprKind::Variant {
+                enumeration,
+                variant,
+                arity,
                 fields,
-                ..
             } => {
                 // In the order written, like a record construction, and the same drop on
-                // the way out: a failure part way through takes the `Vec` with it, which
-                // releases whatever the earlier initialisers had taken. The discriminant
-                // is only written once every payload field exists, so no partially built
-                // value is ever a value of a variant.
-                let Some(to) = self.res.variant(*variant_span) else {
-                    return Err(RuntimeError {
-                        diagnostic: Box::new(Diagnostic::error(
-                            codes::UNKNOWN_VARIANT,
-                            *variant_span,
-                            "this variant was not resolved",
-                        )),
-                    });
-                };
-                let arity = self
-                    .res
-                    .enums()
-                    .get(to.enumeration)
-                    .and_then(|d| d.variants.get(to.variant as usize))
-                    .map_or(0, |v| v.fields.len());
-                let mut built: Vec<Option<Value>> = vec![None; arity];
-                for f in fields {
-                    let v = take!(self, &f.value, env);
-                    let at = self.res.payload(f.name_span).map(|p| p.field as usize);
-                    if let Some(slot) = at.and_then(|i| built.get_mut(i)) {
-                        *slot = Some(v);
-                    }
+                // the way out. The discriminant is only written once every payload field
+                // exists, so no partially built value is ever a value of a variant.
+                let values = self.initialise(f, *arity, fields, e.at, env)?;
+                match values {
+                    Ok(values) => Value::Enum(EnumVal::new(*enumeration, *variant, values)),
+                    Err(flow) => return Ok(flow),
                 }
-                let mut values = Vec::with_capacity(arity);
-                for v in built {
-                    match v {
-                        Some(v) => values.push(v),
-                        None => {
-                            return Err(RuntimeError {
-                                diagnostic: Box::new(Diagnostic::error(
-                                    codes::MISSING_FIELD,
-                                    *ty_span,
-                                    "a payload field was given no value",
-                                )),
-                            })
-                        }
-                    }
-                }
-                Value::Enum(EnumVal::new(to.enumeration, to.variant, values))
             }
 
-            Expr::Match {
-                scrutinee,
-                arms,
-                span,
-            } => {
-                return self.match_expr(scrutinee, arms, *span, env);
-            }
+            ExprKind::Match(m) => return self.matching(f, m, env),
 
-            Expr::Propagate {
-                operand, op_span, ..
-            } => return self.propagate(operand, *op_span, env),
-
-            Expr::Field {
-                base, name_span, ..
-            } => {
-                let base = take!(self, base, env);
+            ExprKind::Field { base, field, .. } => {
+                let base = take!(self, f, base, env);
                 // The field's value is **cloned out**, which is the whole of rule 3 for a
                 // projection: what comes out holds its own reference to whatever backs
                 // it, so it survives the record it came from — including when that record
                 // was a temporary that dies on this very line.
-                let (Value::Record(r), Some(at)) = (&base, self.res.field(*name_span)) else {
-                    return Err(RuntimeError {
-                        diagnostic: Box::new(Diagnostic::error(
-                            codes::INVALID_PROJECTION,
-                            *name_span,
-                            "this is not a record",
-                        )),
-                    });
+                let Value::Record(r) = &base else {
+                    return Err(fail(
+                        codes::INVALID_PROJECTION,
+                        e.at,
+                        "this is not a record",
+                    ));
                 };
-                let Some(v) = r.field(at.field) else {
-                    return Err(RuntimeError {
-                        diagnostic: Box::new(Diagnostic::error(
-                            codes::UNKNOWN_FIELD,
-                            *name_span,
-                            "this record has no such field",
-                        )),
-                    });
+                let Some(v) = r.field(*field) else {
+                    return Err(fail(
+                        codes::UNKNOWN_FIELD,
+                        e.at,
+                        "this record has no such field",
+                    ));
                 };
                 v.clone()
             }
 
-            Expr::Call {
-                callee,
-                callee_span,
-                args,
-                span,
-                ..
-            } => {
+            ExprKind::Builtin { op, args, .. } => {
                 let mut values = Vec::with_capacity(args.len());
                 for a in args {
-                    values.push(take!(self, a, env));
+                    values.push(take!(self, f, a, env));
                 }
-                // What this call means was decided once, by the checker, and is read here
-                // rather than decided again. "Built-ins before user functions" used to be
-                // applied at this line with its own copy of the rule; it is now one of the
-                // two answers `Callee` can hold.
-                let resolved = self.res.callee(*callee_span);
-                if let Some(Callee::Builtin(i)) = resolved {
-                    return Ok(Flow::Fell(Some(self.intrinsic(i, &values, *span)?)));
-                }
+                self.intrinsic(*op, &values, e.at)?
+            }
 
-                let program = Arc::clone(&self.program);
-                let f = self
-                    .decl_at(*callee_span)
-                    .and_then(|i| program.functions.get(i))
-                    .ok_or_else(|| RuntimeError {
-                        diagnostic: Box::new(Diagnostic::error(
-                            codes::UNDEFINED_FUNCTION,
-                            *span,
-                            format!("`{callee}` is not a function"),
-                        )),
-                    })?;
+            ExprKind::Call { callee, args, .. } => {
+                let mut values = Vec::with_capacity(args.len());
+                for a in args {
+                    values.push(take!(self, f, a, env));
+                }
+                let core = Arc::clone(&self.core);
+                let Some(g) = core.function(*callee) else {
+                    return Err(fail(
+                        codes::UNDEFINED_FUNCTION,
+                        e.at,
+                        "this call's function is not in the program",
+                    ));
+                };
 
                 self.depth += 1;
                 if self.depth > self.max_depth {
@@ -2072,8 +1858,8 @@ impl Interpreter {
                         diagnostic: Box::new(
                             Diagnostic::error(
                                 codes::CALL_DEPTH_LIMIT,
-                                *span,
-                                format!("`{callee}` recursed deeper than {}", self.max_depth),
+                                e.at,
+                                format!("`{}` recursed deeper than {}", g.name, self.max_depth),
                             )
                             .help(
                                 "the interpreter bounds call depth so runaway recursion \
@@ -2085,150 +1871,183 @@ impl Interpreter {
                     });
                 }
 
-                // A fresh environment: a function sees its parameters and nothing from
-                // the caller. Lexical scope, not dynamic.
-                let mut call_env: Env = vec![Frame::default()];
-                if let Some(frame) = call_env.last_mut() {
-                    for (p, v) in f.params.iter().zip(values) {
-                        frame.insert(p.name.clone(), v);
-                    }
-                }
-                let out = self.call_body(Self::body_of(f)?, &mut call_env, callee);
+                // A fresh frame: a function sees its parameters and nothing from the
+                // caller. Lexical scope, not dynamic.
+                let out = self.call_body(g, frame(g, values));
                 self.depth -= 1;
                 // A call absorbs its callee's `return`: that is what makes it a call and
                 // not a jump. Nothing propagates outward from here but a genuine error.
                 out?
             }
 
-            // Both return their flow directly rather than a value. An `if` with no `else`
-            // produces nothing, and whether that is allowed is the caller's question —
-            // `take!` reports it where a value was needed, and `stmt` drops it where one
-            // was not.
-            Expr::If {
+            // Both branches are value regions; the one taken is the `if`'s flow.
+            ExprKind::If {
                 cond,
-                then_block,
-                else_block,
-                ..
+                then,
+                otherwise,
             } => {
-                let c = take!(self, cond, env);
-                return if self.as_bool(&c, cond)? {
-                    self.block(then_block, env)
-                } else if let Some(b) = else_block {
-                    self.block(b, env)
+                let c = take!(self, f, cond, env);
+                return if as_bool(&c, cond)? {
+                    self.block(f, then, env)
                 } else {
-                    Ok(Flow::Fell(None))
+                    self.block(f, otherwise, env)
                 };
             }
 
-            Expr::Block(b) => return self.block(b, env),
+            ExprKind::Block(b) => return self.block(f, b, env),
         };
         Ok(Flow::Fell(Some(value)))
     }
 
-    /// The body of a function that is about to run.
-    ///
-    /// A missing body means the parser reported an error, and a program with errors is
-    /// never evaluated — so this is unreachable. It reports rather than panicking,
-    /// because a bug in that reasoning should still produce something readable.
-    fn body_of(f: &Function) -> Result<&Block, RuntimeError> {
-        f.body.as_ref().ok_or_else(|| RuntimeError {
-            diagnostic: Box::new(
-                Diagnostic::error(
-                    codes::UNSUPPORTED_CONSTRUCT,
-                    f.name_span,
-                    format!("`{}` has no body to run", f.name),
-                )
-                .help("its body did not parse; fix the reported syntax error first"),
-            ),
-        })
+    /// Evaluate initialisers in the order written and place each at its field's declaration
+    /// index. `Err` carries a flow that left part way, which drops what was built.
+    fn initialise(
+        &mut self,
+        f: &cir::Function,
+        arity: u32,
+        fields: &[cir::Init],
+        at: Span,
+        env: &mut Frame,
+    ) -> Result<Result<Vec<Value>, Flow>, RuntimeError> {
+        let mut built: Vec<Option<Value>> = vec![None; arity as usize];
+        for i in fields {
+            let v = match self.eval(f, &i.value, env)? {
+                Flow::Fell(Some(v)) => v,
+                Flow::Fell(None) => return Err(no_value(&i.value)),
+                left => return Ok(Err(left)),
+            };
+            if let Some(slot) = built.get_mut(i.field as usize) {
+                *slot = Some(v);
+            }
+        }
+        // Checking guarantees every field was given exactly one value, so an absent one is
+        // a checker bug rather than a program's mistake.
+        let mut values = Vec::with_capacity(built.len());
+        for v in built {
+            match v {
+                Some(v) => values.push(v),
+                None => return Err(fail(codes::MISSING_FIELD, at, "a field was given no value")),
+            }
+        }
+        Ok(Ok(values))
     }
+}
 
-    fn binary(
-        &self,
-        op: BinOp,
-        l: &Value,
-        r: &Value,
-        op_span: nazm_span::Span,
-    ) -> Result<Value, RuntimeError> {
-        use Value::{Bool, Int};
+/// A condition's value, once something has established it produced one.
+///
+/// Not a `Bool` here means checking passed something it should not have, so this
+/// reports rather than panics: a checker bug should be readable.
+fn as_bool(v: &Value, cond: &cir::Expr) -> Result<bool, RuntimeError> {
+    match v {
+        Value::Bool(b) => Ok(*b),
+        other => Err(fail(
+            codes::CONDITION_NOT_BOOL,
+            cond.at,
+            format!("a condition must be `Bool`, but this is `{other}`"),
+        )),
+    }
+}
 
-        let overflow = |what: &str| {
-            RuntimeError {
-            diagnostic: Box::new(Diagnostic::error(
+fn no_such_place(at: Span) -> RuntimeError {
+    fail(
+        codes::UNDEFINED_VARIABLE,
+        at,
+        "this is not a place that can be written to",
+    )
+}
+
+/// Checked `Int` arithmetic, failing exactly where `docs/spec.md` says it does.
+fn arith(op: cir::ArithOp, l: &Value, r: &Value, at: Span) -> Result<Value, RuntimeError> {
+    use cir::ArithOp::{Add, Div, Mul, Rem, Sub};
+    use Value::Int;
+
+    let overflow = |what: &str| RuntimeError {
+        diagnostic: Box::new(
+            Diagnostic::error(
                 codes::INTEGER_OVERFLOW,
-                op_span,
+                at,
                 format!("this {what} overflows `Int`"),
             )
             .help(
                 "`Int` is a 64-bit signed integer; overflow stops the program rather than wrapping",
-            )),
-        }
-        };
+            ),
+        ),
+    };
+    match (op, l, r) {
+        (Add, Int(a), Int(b)) => a
+            .checked_add(*b)
+            .map(Int)
+            .ok_or_else(|| overflow("addition")),
+        (Sub, Int(a), Int(b)) => a
+            .checked_sub(*b)
+            .map(Int)
+            .ok_or_else(|| overflow("subtraction")),
+        (Mul, Int(a), Int(b)) => a
+            .checked_mul(*b)
+            .map(Int)
+            .ok_or_else(|| overflow("multiplication")),
+        (Div | Rem, Int(_), Int(0)) => Err(RuntimeError {
+            diagnostic: Box::new(
+                Diagnostic::error(codes::DIVISION_BY_ZERO, at, "division by zero")
+                    .help("guard the divisor, for example `if d != 0 { n / d } else { 0 }`"),
+            ),
+        }),
+        // `checked_div` also catches i64::MIN / -1, which overflows rather than dividing —
+        // the one division that is not a zero check.
+        (Div, Int(a), Int(b)) => a
+            .checked_div(*b)
+            .map(Int)
+            .ok_or_else(|| overflow("division")),
+        // `i64::MIN % -1` is mathematically 0 and 0 is representable, so nothing overflows.
+        // `checked_rem` says `None` anyway, because the hardware instruction that computes
+        // it faults on the *quotient*. Inheriting that would make the rule "`%` fails on a
+        // zero divisor, and also on one exact pair of operands" — a wart an agent would have
+        // to memorise. `wrapping_rem` is the correct answer here, and the zero divisor is
+        // already handled above.
+        (Rem, Int(a), Int(b)) => Ok(Int(a.wrapping_rem(*b))),
+        // Unreachable after checking. A diagnostic rather than a panic.
+        (op, a, b) => Err(fail(
+            codes::INVALID_OPERANDS,
+            at,
+            format!(
+                "`{}` does not apply to `{}` and `{}`",
+                op.symbol(),
+                type_name(a),
+                type_name(b)
+            ),
+        )),
+    }
+}
 
-        let same = if matches!(op, BinOp::Eq | BinOp::NotEq) {
-            equal(l, r)
-        } else {
-            None
-        };
-        match (op, l, r) {
-            (BinOp::Add, Int(a), Int(b)) => a
-                .checked_add(*b)
-                .map(Int)
-                .ok_or_else(|| overflow("addition")),
-            (BinOp::Sub, Int(a), Int(b)) => a
-                .checked_sub(*b)
-                .map(Int)
-                .ok_or_else(|| overflow("subtraction")),
-            (BinOp::Mul, Int(a), Int(b)) => a
-                .checked_mul(*b)
-                .map(Int)
-                .ok_or_else(|| overflow("multiplication")),
+/// A comparison. Ordering is `Int`'s; equality is [`equal`], the language's law, and `!=` is
+/// its negation rather than a second walk that could drift from it.
+fn compare(op: cir::CmpOp, l: &Value, r: &Value, at: Span) -> Result<Value, RuntimeError> {
+    use cir::CmpOp::{Eq, Gt, GtEq, Lt, LtEq, NotEq};
+    use Value::{Bool, Int};
 
-            (BinOp::Div | BinOp::Rem, Int(_), Int(0)) => Err(RuntimeError {
-                diagnostic: Box::new(
-                    Diagnostic::error(codes::DIVISION_BY_ZERO, op_span, "division by zero")
-                        .help("guard the divisor, for example `if d != 0 { n / d } else { 0 }`"),
-                ),
-            }),
-            // `checked_div` also catches i64::MIN / -1, which overflows rather than
-            // dividing — the one division that is not a zero check.
-            (BinOp::Div, Int(a), Int(b)) => a
-                .checked_div(*b)
-                .map(Int)
-                .ok_or_else(|| overflow("division")),
-            // `i64::MIN % -1` is mathematically 0 and 0 is representable, so nothing
-            // overflows. `checked_rem` says `None` anyway, because the hardware
-            // instruction that computes it faults on the *quotient*. Inheriting that
-            // would make the rule "`%` fails on a zero divisor, and also on one exact
-            // pair of operands" — a wart an agent would have to memorise. `wrapping_rem`
-            // is the correct answer here, and the zero divisor is already handled above.
-            (BinOp::Rem, Int(a), Int(b)) => Ok(Int(a.wrapping_rem(*b))),
-
-            (BinOp::Lt, Int(a), Int(b)) => Ok(Bool(a < b)),
-            (BinOp::LtEq, Int(a), Int(b)) => Ok(Bool(a <= b)),
-            (BinOp::Gt, Int(a), Int(b)) => Ok(Bool(a > b)),
-            (BinOp::GtEq, Int(a), Int(b)) => Ok(Bool(a >= b)),
-
-            // One relation, and `!=` is its negation rather than a second walk that could
-            // drift from it. A value with no equality falls to the arm below.
-            (BinOp::Eq, _, _) if same.is_some() => Ok(Bool(same == Some(true))),
-            (BinOp::NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(false))),
-
-            // Unreachable after checking. A diagnostic rather than a panic, for the same
-            // reason as the undefined-variable arm above.
-            (op, a, b) => Err(RuntimeError {
-                diagnostic: Box::new(Diagnostic::error(
-                    codes::INVALID_OPERANDS,
-                    op_span,
-                    format!(
-                        "`{}` does not apply to `{}` and `{}`",
-                        op.symbol(),
-                        type_name(a),
-                        type_name(b)
-                    ),
-                )),
-            }),
-        }
+    let same = if matches!(op, Eq | NotEq) {
+        equal(l, r)
+    } else {
+        None
+    };
+    match (op, l, r) {
+        (Lt, Int(a), Int(b)) => Ok(Bool(a < b)),
+        (LtEq, Int(a), Int(b)) => Ok(Bool(a <= b)),
+        (Gt, Int(a), Int(b)) => Ok(Bool(a > b)),
+        (GtEq, Int(a), Int(b)) => Ok(Bool(a >= b)),
+        (Eq, _, _) if same.is_some() => Ok(Bool(same == Some(true))),
+        (NotEq, _, _) if same.is_some() => Ok(Bool(same == Some(false))),
+        // Unreachable after checking. A diagnostic rather than a panic.
+        (op, a, b) => Err(fail(
+            codes::INVALID_OPERANDS,
+            at,
+            format!(
+                "`{}` does not apply to `{}` and `{}`",
+                op.symbol(),
+                type_name(a),
+                type_name(b)
+            ),
+        )),
     }
 }
 

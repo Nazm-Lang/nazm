@@ -37,6 +37,7 @@ mod build;
 mod capabilities;
 mod checking;
 mod context;
+mod core_ir;
 mod derived;
 mod diagnostics;
 mod docs;
@@ -471,6 +472,26 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
     },
+    /// Print a checked program's Core IR, `nazm.core-ir/1`: what each function became,
+    /// typed, with every name resolved and every transfer explicit.
+    ///
+    /// A debugging view of the one representation `nazm run` and `nazm build` both start
+    /// from, built only for a program that checks. Deterministic, and naming every
+    /// definition and type by its durable key. Not user-facing syntax, and its version
+    /// promises nothing to a reader outside this build; `docs/architecture.md` §7.41.
+    CoreIr {
+        file: PathBuf,
+        /// The one canonical compact serialisation. Without it, the same object indented.
+        #[arg(long)]
+        json: bool,
+        /// Leave out every node's source span, so two programs that differ only in where
+        /// their text sits print the same.
+        #[arg(long)]
+        no_spans: bool,
+        /// Where this project begins. As `nazm check --source-root`.
+        #[arg(long, value_name = "DIR")]
+        source_root: Option<PathBuf>,
+    },
     /// Report what this build of the compiler actually supports.
     ///
     /// Read from the compiler's own tables rather than from a written list, so it cannot
@@ -597,6 +618,12 @@ fn main() -> ExitCode {
             source_root,
         } => return interface::run(&file, hash, source_root.as_deref()),
         Command::Capabilities { json } => return capabilities::run(json),
+        Command::CoreIr {
+            file,
+            json,
+            no_spans,
+            source_root,
+        } => return core_ir::run(&file, json, !no_spans, source_root.as_deref()),
         Command::Lsp { source_root } => return lsp::run(source_root.as_deref()),
         Command::Context {
             root,
@@ -752,6 +779,7 @@ fn main() -> ExitCode {
         | Command::Test { .. }
         | Command::Interface { .. }
         | Command::Lsp { .. }
+        | Command::CoreIr { .. }
         | Command::Capabilities { .. } => {
             unreachable!("handled above")
         }
