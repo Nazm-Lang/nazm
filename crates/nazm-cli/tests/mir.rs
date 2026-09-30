@@ -332,6 +332,173 @@ fn main() -> Int {
 }
 
 #[test]
+fn a_failure_after_moves_drops_and_field_writes_reclaims_each_value_once() {
+    // The shared unwind block drops every managed local, trusting that a moved, dropped or
+    // field-written local was emptied. A failure after each of those — a reassignment (a
+    // move), a region's end (a drop) and a field write — must reclaim every value exactly
+    // once, and report the failure the interpreter reports.
+    let src = r#"
+struct P { name: Str, n: Int, }
+fn main() -> Int {
+    let mut p = P(name: int_to_str(1), n: 0);
+    let mut s = int_to_str(7);
+    let mut i = 0;
+    while i < 5 {
+        let t = int_to_str(i);
+        s = str_concat(s, t);
+        p.name = str_concat(p.name, "x");
+        i = i + 1;
+    }
+    let z = i - 5;
+    str_len(s) / z
+}
+"#;
+    let (native, interp) = both(src);
+    assert_eq!(native.code, Some(2), "{}", native.stderr);
+    assert_eq!(native.code, interp.code);
+    assert!(native.stderr.contains("N0401"), "{}", native.stderr);
+    balanced(&native.stderr);
+}
+
+#[test]
+fn every_move_and_drop_leaves_its_slot_holding_the_zero() {
+    // The shared unwind block drops every managed local, which is correct only because a
+    // local that has been moved from or dropped holds the representation's zero again. A
+    // double release that follows from breaking this lands on freed memory, which no counter
+    // can see — so this checks the invariant itself: for every managed slot of `main`, one
+    // zero stored in the entry block and exactly one more for each MIR `drop` and `move` of it.
+    let src = r#"
+struct P { name: Str, n: Int, }
+fn main() -> Int {
+    let mut p = P(name: int_to_str(1), n: 0);
+    let mut s = int_to_str(7);
+    let mut i = 0;
+    while i < 5 {
+        let t = int_to_str(i);
+        s = str_concat(s, t);
+        p.name = str_concat(p.name, "x");
+        i = i + 1;
+    }
+    str_len(s) + str_len(p.name)
+}
+"#;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("prog.nz");
+    std::fs::write(&path, src).unwrap();
+    let exe = dir.path().join("prog");
+    let built = Command::new(NAZM)
+        .args(["build", "--emit-ir", path.to_str().unwrap(), "-o"])
+        .arg(&exe)
+        .output()
+        .expect("build");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let ir = std::fs::read_to_string(dir.path().join("prog.m0.ll")).expect("unit IR");
+    let body: Vec<&str> = ir
+        .split("main() {")
+        .nth(1)
+        .expect("main")
+        .lines()
+        .take_while(|l| l.trim() != "}")
+        .collect();
+    let mir = Command::new(NAZM)
+        .args(["mir", "--json", path.to_str().unwrap()])
+        .output()
+        .expect("mir");
+    let mir: serde_json::Value = serde_json::from_slice(&mir.stdout).expect("json");
+    let main = mir
+        .get("functions")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|fs| fs.iter().find(|f| f.get("name") == Some(&"main".into())))
+        .expect("main's MIR");
+    let lines: Vec<String> = main
+        .get("blocks")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|b| {
+            b.get("stmts")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .filter_map(|s| s.as_str().map(str::to_owned))
+        .collect();
+    let zero_store = |slot: usize| {
+        body.iter()
+            .filter(|l| {
+                let l = l.trim();
+                l.starts_with("store ")
+                    && (l.contains(" zeroinitializer, ") || l.contains(" null, "))
+                    && l.ends_with(&format!(" %slot{slot}"))
+            })
+            .count()
+    };
+    let mut checked = 0;
+    for slot in 0..200 {
+        if zero_store(slot) == 0 {
+            continue;
+        }
+        let local = format!("_{slot}");
+        let empties = lines
+            .iter()
+            .map(|l| {
+                let drops = usize::from(l == &format!("drop {local}"));
+                let moves = l
+                    .match_indices(&format!("move {local}"))
+                    .filter(|(i, _)| {
+                        let after = &l[i + 5 + local.len()..];
+                        !after.starts_with(|c: char| c.is_ascii_digit())
+                    })
+                    .count();
+                drops + moves
+            })
+            .sum::<usize>();
+        assert_eq!(
+            zero_store(slot),
+            1 + empties,
+            "slot {slot}: one zero at entry and one per drop or move ({empties})\n{}",
+            body.join("\n")
+        );
+        checked += 1;
+    }
+    assert!(checked >= 5, "only {checked} managed slots checked");
+}
+
+#[test]
+fn a_pattern_binding_holds_its_own_reference_to_a_heap_payload() {
+    // A binding reads its payload with a reference of its own: the binding is dropped at its
+    // arm's end and the scrutinee at the join, and each gives back one reference.
+    agree(
+        r#"
+enum Tok { Word(text: Str), Pair(a: Str, b: Str), Nothing }
+fn size(t: Tok) -> Int {
+    match t {
+        Tok.Word(text: w) => str_len(w),
+        Tok.Pair(a: x, b: y) => str_len(str_concat(x, y)),
+        Tok.Nothing() => 0,
+    }
+}
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 20 {
+        total = total + size(Tok.Word(text: int_to_str(i)));
+        total = total + size(Tok.Pair(a: int_to_str(i), b: str_concat(int_to_str(i), "z")));
+        let kept = Tok.Word(text: int_to_str(i * 3));
+        total = total + match kept { Tok.Word(text: w) => str_len(w), Tok.Pair(a: x, b: _) => str_len(x), Tok.Nothing() => 0 };
+        i = i + 1;
+    }
+    total
+}
+"#,
+    );
+}
+
+#[test]
 fn concurrency_lowers_to_scope_primitives_and_every_exit_joins() {
     let src = r#"
 fn worker(c: Chan, n: Int) -> Int { chan_send(c, n * 2); 0 }

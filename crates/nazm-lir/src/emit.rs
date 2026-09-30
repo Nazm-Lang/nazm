@@ -1496,7 +1496,12 @@ impl Emitter<'_> {
                 for (field, tmp) in fields {
                     let fty = self.slot_ty(*tmp);
                     let v = self.load(*tmp);
-                    self.store_zero(*tmp);
+                    // Moved into the aggregate: its slot is emptied, so the unwind block's drop
+                    // of it — should a later operation fail — finds the zero. A temporary that
+                    // owns nothing needs no emptying.
+                    if owns_anything(self.types, fty) {
+                        self.store_zero(*tmp);
+                    }
                     let at = self.field_position(mir::FieldRef {
                         record: *record,
                         field: *field,
@@ -1525,7 +1530,12 @@ impl Emitter<'_> {
                 for (field, tmp) in fields {
                     let fty = self.slot_ty(*tmp);
                     let v = self.load(*tmp);
-                    self.store_zero(*tmp);
+                    // Moved into the aggregate: its slot is emptied, so the unwind block's drop
+                    // of it — should a later operation fail — finds the zero. A temporary that
+                    // owns nothing needs no emptying.
+                    if owns_anything(self.types, fty) {
+                        self.store_zero(*tmp);
+                    }
                     let at = self.payload_position(*enumeration, tag, *field);
                     let out = self.fresh();
                     let _ = writeln!(
