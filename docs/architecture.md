@@ -4659,6 +4659,132 @@ is reused across runs at this level yet, so nothing can be reused wrongly.
 definitions, signatures, visibility, the call graph, the user-type table — and nothing that answers
 a question about a source position. `cargo xtask check` enforces it.
 
+## 7.42 MIR: the constitution — N40, 2026-09-30
+
+Written before the representation, like §7.41. `crates/nazm-mir` holds MIR; this section is what
+it is allowed to be.
+
+```text
+Core IR (nazm-cir) ─ nazm-mir::lower (instances, CFG, cleanup) ─ MIR (nazm.mir/1) ─ verify
+                                                                    │
+                          interpreter stays on Core IR              └─ nazm-lir: layout, symbols,
+                          (a tree walker; §7.41)                       LLVM text ─ clang
+```
+
+**What MIR represents.** Each *concrete* function the native program contains — every
+non-generic definition and every generic instance a program needs — as an explicit control-flow
+graph whose ownership and cleanup obligations are written out. A backend reading MIR makes no
+language decision: which loop a `break` leaves, what a `?` does, which values die on an edge,
+which scopes must be joined before a `return`, whether a construction that failed half-way must
+release what it took — all are statements and terminators in MIR.
+
+**What it deliberately omits.** Syntax and everything Core IR already omits. Layout (field
+positions, discriminants, sizes), symbols, mangling, linkage, object files, registers, stack
+slots, calling conventions, relocations: the backend's, below MIR. Provenance: none (below).
+Effects are function-level metadata only; nothing in MIR re-infers or checks them.
+
+**When Core IR becomes MIR.** Only for `nazm build`, after the program checked cleanly and Core IR
+was built and verified. MIR lowering plans the generic instances (moved here from `nazm-lir`,
+unchanged: the same planner and bounds), then lowers each concrete function once. The
+interpreter does not use MIR (below). A MIR the validator rejects after a clean check is a
+compiler defect, `N0900`, and nothing is emitted.
+
+**Front-end, MIR and backend concerns.** Front end: names, types, exhaustiveness, effects,
+capabilities, provenance, which region owns which binding (§7.41). MIR: instantiation, the CFG,
+evaluation into temporaries in the language's order, the move/copy/drop of every managed value,
+scope joins and failure edges. Backend: layout, symbols and linkage, how a primitive is
+implemented, how a drop of a given type is expanded into runtime calls, instruction selection.
+
+**Invariants later passes may assume.**
+
+1. *Typed.* Every local has a concrete type — a checker type with no parameter left, or the
+   internal task-list type a `scope` holds. Every rvalue's result type is the destination's; no
+   pass infers one.
+2. *Resolved.* A call names a MIR function (`FuncId`); a primitive is an `Intrinsic`, with its
+   element type for `Vec[T]`; records, fields, enums, variants and payload fields are the
+   checker's identities (definition id plus declaration index). No string is an identity; names
+   are display.
+3. *Blocks and terminators.* Basic blocks, `BlockId(0)` the entry. Each block has exactly one
+   terminator and nothing after it; statements do not transfer control except along an explicit
+   *failure edge* (below). Terminators: `goto`, `branch` on a `Bool`, `switch` over an enum's
+   variants (one arm per variant, no default), `return`, `unwind` (the failure exit), `exit` (the
+   process ends: `exit_with`). No fall-through between blocks exists.
+4. *Locals.* `LocalId`s are per function: parameters first, then the checker's bindings, then
+   MIR's temporaries in creation order. They are ephemeral — never a `DefKey`, never persisted.
+5. *Deterministic.* Functions: non-generic definitions in `FnId` order, then instances in
+   canonical-key order. Blocks, locals and temporaries are numbered in creation order by a
+   deterministic walk of Core IR; no map iteration reaches MIR.
+6. *Source-linked.* Each statement and terminator carries the span a failure or diagnostic about
+   it names. Compiler-made operations — drops, joins, the shared unwind block — carry a synthetic
+   span and say so; no source position is fabricated.
+
+**Ownership law.** A value of a *managed* type (`Str`, `Ints`, `Strs`, `Chan`, `Vec[T]`, and a
+record or enum any field of which is managed, transitively) is owned by exactly one local at a
+time. `copy l` takes a new reference (retain); `move l` transfers the one `l` holds and leaves `l`
+empty; `drop l` gives it back and leaves `l` empty. An operand that reads a local *borrows* it:
+calls, primitives and comparisons borrow their arguments, and a callee never releases a
+parameter. Every result an rvalue produces is owned by its destination — a call's result, a
+primitive's (a string literal and `arg` are owned too: their storage is immortal and their
+release is a no-op), a projected field or payload (retained). A record or enum is built only
+complete, from moved temporaries: there is no partially initialised aggregate in MIR, so
+cleanup can never reach an uninitialised field. The empty state is the representation's zero,
+and releasing it is a no-op, which is what makes `drop` of an already-moved local safe.
+
+**Cleanup law.** Every edge that leaves a region drops what the region owns: the locals bound in
+it so far, in reverse binding order, and every temporary still live. `return` drops everything
+but the returned temporary, which it moves out; `break` and `continue` drop only what lies inside
+the loop they leave, and join only the scopes opened inside it; `?` is a `match` whose error arm
+returns (Core IR), and is cleaned like any `return`; a region's normal end drops its own. A
+`scope` is opened by an allocation and closed by a join on **every** exit, innermost first; the
+closing brace's join is followed by a failure check, as the language requires. Destruction order
+is not observable (Nazm has no destructors) and is fixed anyway: reverse binding order.
+
+**Failure edges and traps.** An operation that can fail — checked arithmetic, a call (the callee
+may have failed), a primitive, opening a scope, spawning, the failure check after a join —
+carries an explicit edge to a cleanup block. That block joins every open scope, innermost first,
+and goes to the function's shared unwind block, which drops every managed local (null-safe) and
+ends in `unwind`. A trap is this edge and nothing else; a `Result` is ordinary data and ordinary
+control flow, and never an unwind. `exit_with` ends the process with no cleanup, as it always
+has.
+
+**Validator.** `nazm_mir::verify` checks, for every function: block targets and switch arms
+exist; exactly one terminator per block; locals and constants exist and their types agree with
+every operation (call signatures, primitive signatures, field and payload identities, record and
+variant completeness, branch conditions); failure edges exist exactly on fallible operations;
+payload reads occur only in the arm of a `switch` on the same local and variant; and, by a
+forward dataflow over managed locals (`empty`, `owned`, `maybe`): no read of an empty local, no
+overwrite of an owned one, no parameter dropped or moved, and at every `return` and `unwind`
+nothing managed is still owned (no leak) and every task list has been joined. It never mutates
+MIR, and running it twice gives the same answer.
+
+**Generics.** MIR is post-instantiation. The planner is the one `nazm-lir` used since N11, moved,
+with its bounds (`N0703`, `N0704`); an instance is identified by its definition and its type
+arguments' canonical keys, which is also what its backend symbol is derived from. There is no
+second generic system.
+
+**The provenance boundary.** None. Provenance stopped above Core IR (§7.40, §7.41); MIR carries
+no origin set and no summary. **Effects and capabilities:** each function records its published
+effect set as metadata; a capability is an ordinary typed parameter; nothing below MIR is a
+permission check.
+
+**Printed form and digest.** `nazm mir FILE` prints `nazm.mir/1`: deterministic JSON, internal and
+unstable, debug-only and not read back. Each function has an *executable digest*: BLAKE3 over its
+signature types, locals' types, blocks and constants, naming definitions and types by durable
+key, with no span, display name or effect metadata. A source-only or effect-only change leaves it
+unchanged; a capability-parameter change moves it (the parameter's type is part of the
+signature); a provenance-only change cannot reach it. It is not yet a cache key: objects are still
+keyed on the emitted unit's bytes, which are a function of MIR (§7.9).
+
+**The interpreter decision.** It stays on Core IR. It is a tree walker whose semantics are
+Core IR's structured regions, it runs generic code parametrically, and it needs none of what MIR
+adds — instantiation, explicit reference counting, failure edges. Moving it would be symmetry,
+not a responsibility taken away from anywhere.
+
+**Backend boundary.** After N40 the native backend reads MIR and a source-position table for
+failure messages, and nothing of the checker. Remaining exceptions: `nazm-lir` still takes
+`nazm-sema`'s *type and key definitions* (`Type`, `Intrinsic`, `DefKey`) as the vocabulary MIR is
+written in — never a `Resolution`.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
