@@ -971,6 +971,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nazm-cir"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "nazm-sema",
+ "nazm-span",
+]
+
+[[package]]
 name = "nazm-cli"
 version = "0.0.1"
 dependencies = [
@@ -995,6 +1004,7 @@ dependencies = [
 name = "nazm-core"
 version = "0.0.1"
 dependencies = [
+ "nazm-cir",
  "nazm-diag",
  "nazm-sema",
  "nazm-span",
@@ -1035,10 +1045,10 @@ dependencies = [
 name = "nazm-lir"
 version = "0.0.1"
 dependencies = [
+ "nazm-cir",
  "nazm-diag",
  "nazm-sema",
  "nazm-span",
- "nazm-syntax",
 ]
 
 [[package]]

@@ -36,12 +36,23 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // Deliberately **not** `nazm-core`: it cannot check anything, so it cannot become
         // a second place where checking happens. The driver joins the two.
         "nazm-cache" => &["nazm-sema", "nazm-iface"],
-        "nazm-core" => &["nazm-span", "nazm-diag", "nazm-syntax", "nazm-sema"],
-        // Level 7 of the table in `docs/architecture.md` §2, and the only level built.
-        // It reads the syntax tree and produces LLVM IR *as text*, so it needs no
-        // code-generator dependency — which is why `may_depend_on_codegen` below stays
-        // false for it.
-        "nazm-lir" => &["nazm-span", "nazm-diag", "nazm-syntax", "nazm-sema"],
+        // Core IR, N39: level 3 of the table in `docs/architecture.md` §2 by responsibility.
+        // Spans and meaning, and deliberately nothing that describes how a program was
+        // written: not `nazm-syntax`, and not `nazm-core`, where the one lowering to it lives
+        // behind checking. `docs/architecture.md` §7.41.
+        "nazm-cir" => &["nazm-span", "nazm-sema"],
+        "nazm-core" => &[
+            "nazm-span",
+            "nazm-diag",
+            "nazm-syntax",
+            "nazm-sema",
+            "nazm-cir",
+        ],
+        // Level 7 of the table in `docs/architecture.md` §2. It lowers **Core IR** — not the
+        // syntax tree, which it cannot see since N39 — and produces LLVM IR *as text*, so it
+        // needs no code-generator dependency, which is why `may_depend_on_codegen` below
+        // stays false for it.
+        "nazm-lir" => &["nazm-span", "nazm-diag", "nazm-sema", "nazm-cir"],
         // The driver library and the language service, N16. Through `nazm-core` only, like
         // the CLI and for the same reason: the service consumes the compiler's answers,
         // and a direct dependency on the parser or on `nazm-sema` would be the first step
@@ -148,6 +159,8 @@ pub(crate) fn emission_allowlist() -> &'static [(&'static str, &'static [&'stati
         // The checker and evaluator. Empty on purpose: this is the check-only path.
         ("crates/nazm-core", &[]),
         ("crates/nazm-cache", &[]),
+        // Core IR is a representation; it emits nothing and runs nothing.
+        ("crates/nazm-cir", &[]),
         ("crates/nazm-lir", &["emits LLVM IR"]),
         // The language service answers questions; it never emits or runs anything.
         ("crates/nazm-service", &[]),
@@ -189,6 +202,20 @@ mod tests {
         // It must run with no compiler present. A dependency here would mean benchmark
         // results could not be reproduced without building Nazm.
         assert_eq!(allowed_internal_deps("nazm-bench"), Some(&[][..]));
+    }
+
+    #[test]
+    fn the_backend_cannot_see_the_syntax_tree_and_core_ir_cannot_see_the_compiler() {
+        // N39: Core IR is the one lowering, and everything below it starts from it. The
+        // native backend reading the tree again would be a second lowering; Core IR reaching
+        // the parser or the checker would make it describe how a program was written.
+        let lir = allowed_internal_deps("nazm-lir").unwrap();
+        assert!(!lir.contains(&"nazm-syntax") && !lir.contains(&"nazm-core"));
+        assert!(lir.contains(&"nazm-cir"));
+        assert_eq!(
+            allowed_internal_deps("nazm-cir"),
+            Some(&["nazm-span", "nazm-sema"][..])
+        );
     }
 
     #[test]
@@ -235,6 +262,7 @@ mod tests {
             "nazm-sema",
             "nazm-iface",
             "nazm-cache",
+            "nazm-cir",
             "nazm-core",
             "nazm-lir",
             "nazm-service",

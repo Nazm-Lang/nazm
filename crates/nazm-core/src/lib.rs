@@ -1,13 +1,19 @@
-//! Checking and evaluation for Nazm v0.1.
+//! Checking, the one lowering to Core IR, and evaluation.
 //!
 //! The pipeline is deliberately one direction with no back edges: source → tokens → AST →
-//! checked → evaluated. Each stage collects every diagnostic it can before the next runs,
-//! so a program with three mistakes reports three.
+//! checked → Core IR → evaluated, or handed to a backend. Each stage collects every
+//! diagnostic it can before the next runs, so a program with three mistakes reports three —
+//! and Core IR is built only for a program with none (`docs/architecture.md` §7.41).
 
 pub mod check;
 mod effects;
 pub mod eval;
+mod lower;
 mod provenance;
+
+/// Core IR (N39): what a checked program lowers to, and what every backend starts from.
+/// Re-exported so a consumer has one route to the compiler, as with [`sema`].
+pub use nazm_cir as cir;
 
 pub use check::{
     check, check_reusing, check_unit, declare_types, declare_unit, resolve_type_fields,
@@ -44,6 +50,11 @@ pub mod __syntax {
 }
 
 use nazm_diag::Diagnostic;
+
+/// The stack every pass over a program's shape needs — parsing, checking, lowering, and
+/// dropping the tree — which the parser's nesting limit bounds. The evaluator's reservation
+/// starts from it (`eval::STACK_BASE_BYTES`).
+pub(crate) const TREE_STACK_BYTES: usize = nazm_syntax::PARSE_STACK_BYTES;
 
 /// What running a program produced.
 #[derive(Debug)]
@@ -168,7 +179,17 @@ fn pipeline(
         return Outcome::CheckFailed(diagnostics);
     }
 
-    match Interpreter::new(&program, &resolution)
+    // The one lowering, and then nothing of the front end is needed: the tree and the
+    // resolution are dropped here, before the program runs, rather than kept alive beside
+    // the Core IR for the length of the run.
+    let core = match lower::lower(&program, &resolution) {
+        Ok(core) => core,
+        Err(defects) => return Outcome::CheckFailed(defects),
+    };
+    drop(program);
+    drop(resolution);
+
+    match Interpreter::new(core)
         .with_limits(limits)
         .with_args(args)
         .run_main()
@@ -423,6 +444,52 @@ pub fn probe(map: &nazm_span::SourceMap, graph: &sema::ModuleGraph, offset: u32)
         hole,
         root,
     }
+}
+
+/// Parse, check, lower to Core IR, and run `f` over it — all on the interpreter's own stack.
+///
+/// The backend's entry point, and the only way anything outside this crate obtains Core IR:
+/// `f` is called only for a program that parsed and checked with no diagnostic, and it sees
+/// Core IR and the checker's semantic tables — never the syntax tree, which is dropped
+/// before `f` runs. `entry` says whether the root must have a `main`, as for
+/// [`on_checked_map`] and [`on_module_map`].
+///
+/// # Errors
+///
+/// The parse and check diagnostics if there are any; a `N0900` compiler defect if the
+/// lowering could not do its job; otherwise whatever `f` returns.
+pub fn on_lowered<T, F>(
+    map: &nazm_span::SourceMap,
+    graph: &sema::ModuleGraph,
+    entry: Entry,
+    f: F,
+) -> Result<T, Vec<nazm_diag::Diagnostic>>
+where
+    T: Send,
+    F: FnOnce(&cir::Program, &Resolution) -> Result<T, Vec<nazm_diag::Diagnostic>> + Send,
+{
+    let run = || {
+        let a = analyse(map, graph, entry);
+        if !a.diagnostics.is_empty() {
+            return Err(a.diagnostics);
+        }
+        let core = lower::lower(&a.program, &a.resolution)?;
+        let Analysis {
+            program,
+            resolution,
+            ..
+        } = a;
+        drop(program);
+        f(&core, &resolution)
+    };
+
+    eval::on_interpreter_stack(0, run).unwrap_or_else(|e| {
+        Err(vec![nazm_diag::Diagnostic::error(
+            nazm_diag::codes::INTERPRETER_UNAVAILABLE,
+            nazm_span::Span::synthetic(),
+            format!("could not start the checker: {e}"),
+        )])
+    })
 }
 
 fn on_checked_with<T, F>(
