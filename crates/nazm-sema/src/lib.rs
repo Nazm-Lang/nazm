@@ -52,6 +52,7 @@ pub mod record;
 pub mod references;
 pub mod resolve;
 pub mod scope;
+pub mod stdlib;
 pub mod types;
 pub mod udt;
 

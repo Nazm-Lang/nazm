@@ -1,0 +1,27 @@
+// `@std/io`: output with a newline, and reading a file as a `Result`.
+//
+// Imported with `use "@std/io";`. Every function here needs an `IoCap` and says so: it takes
+// one, and its effect set is `{ io }`, so a caller's authority is as visible as it would be
+// calling the built-ins directly. What a function here reads carries the built-ins' origins —
+// a file's contents are `file` — because they are ordinary calls the checker follows.
+
+/// `s` and a newline on standard output; the byte count.
+pub fn io_println(io: IoCap, s: Str) -> Int ! { io } {
+    print(str_concat(s, str_from_byte(10)))
+}
+
+/// `s` and a newline on standard error; the byte count.
+pub fn io_eprintln(io: IoCap, s: Str) -> Int ! { io } {
+    eprint(str_concat(s, str_from_byte(10)))
+}
+
+/// The contents of the file at `path`, or an `Err` when there is no such file. A file that
+/// exists and still cannot be read is `read_file`'s failure, `N0407`: the check and the read
+/// are two steps, and the language has no way to make them one.
+pub fn io_read(io: IoCap, path: Str) -> Result[Str, Str] ! { io } {
+    if file_exists(path) {
+        Result[Str, Str].Ok(value: read_file(path))
+    } else {
+        Result[Str, Str].Err(error: str_concat("no such file: ", path))
+    }
+}
