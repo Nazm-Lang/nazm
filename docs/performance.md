@@ -1831,6 +1831,34 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### Foreign calls — N42, measured 2026-10-01
+
+A foreign call is a direct call with the C convention and no failure check after it, so what is
+measured is what one costs against a Nazm call, and what the feature costs a build.
+
+- **A call into C costs what a Nazm call costs.** Host, `-O2`, best of 3, a checked loop of 10
+  million iterations whose body is one call (`t = add(t, i)`) and an overflow-checked `+`: calling
+  a clang `-O1` C `c_add` 56.6 ms with the LLVM backend and 53.8 ms with Cranelift; the same loop
+  calling a Nazm `add` 48.0 ms (LLVM, which can inline it) and 62.3 ms (Cranelift, which cannot,
+  and checks for a failure after each call). About 5–6 ns an iteration either way; nothing is
+  marshalled, because only `Int` and `Bool` cross.
+- **Nothing else moved.** A build of the loop takes 0.14 s with or without the foreign
+  declaration and `--link`. A program with no foreign declaration is untouched: all 205 sources in
+  the tree, N41 (`eceeccc`) against N42 release builds, `nazm build --no-cache --emit-ir` — the same
+  status and diagnostics for all 205, and every LLVM file of the 104 that build byte-identical.
+
+### The Cranelift backend — N41, measured 2026-10-01
+
+- **Every buildable program behaves identically under both backends**: the 104 programs of the
+  205-source corpus that build, stdout, stderr, exit status and the memory report.
+- **Build time.** `nazm build --no-cache compiler/emit.nz` at `-O0`, host: Cranelift 0.74 s, LLVM
+  (clang) 1.21 s. The Cranelift figure still includes clang compiling the runtime's LLVM text and
+  linking.
+- **Code size.** The resulting executable: 1.89 MB (Cranelift) and 1.87 MB (LLVM `-O0`).
+- **Reuse.** An unchanged unit's Cranelift object is found by a key computed from MIR before any
+  code is generated, so a warm rebuild generates nothing for it
+  (`an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated`).
+
 ### Core IR — N39, measured 2026-09-30
 
 Core IR is a lowering every checked program now passes through (`architecture.md` §7.41), so what
