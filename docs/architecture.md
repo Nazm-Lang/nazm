@@ -4877,8 +4877,9 @@ compiler generated, and it is each backend's own: the LLVM backend passes and re
 first-class values (an `Int` an `i64`, a `Bool` an `i1`, a `Str` the `{ ptr, i64, ptr }` it is, a
 record or enum its named struct), and the Cranelift backend follows §7.43 (in-memory values by
 pointer, an in-memory result through a pointer passed first). Neither is C's and neither is
-promised to anything outside one build: both are revision 1 (`INTERNAL_ABI_REVISION`), the
-backend's identity is in every object's cache key, and no program mixes the two. The *external*
+promised to anything outside one build: the backend's identity and settings are in every object's
+cache key, the runtime's calling contract is `RUNTIME_ABI_REVISION` (1, `nazm-lir/src/runtime.rs`),
+and no program mixes the two backends' objects. The *external*
 ABI is the C calling convention of the host target, and it is the only one a foreign function is
 called with.
 
@@ -4925,6 +4926,18 @@ search path, no dynamic loading and no library name resolution exist in v1.
 declared types and that authority was held; it cannot know what the C function does, and a call
 into C may corrupt memory, block, never return, or longjmp — none of which Nazm's cleanup or failure
 model survives. A foreign call cannot fail the Nazm way, so no failure edge is taken after one.
+
+**Amended during implementation.** Three rules the first draft did not state. *Reserved symbols*:
+a foreign declaration may not name a C symbol the runtime or the platform entry declares itself
+(`main`, `malloc`, `write`, the `pthread_*` family; `nazm_core::check::RESERVED_C_SYMBOLS`, kept
+equal to the runtime's text by a test), because two declarations of one symbol in one link could
+disagree — `N0383`, like any other conflict, which is also checked across modules when the program
+is built, where every unit's declarations are visible at once. *Provenance*: what C returns carries
+the origin `unknown` and every argument's origins, so a restricted `write_file` path computed from
+it is `N0372`; what C does with an argument is not a Nazm sink. *Threads*: a task may call C — it
+is handed the `ForeignCap` like any value — and C then runs on that task's OS thread, so a C
+function called from two tasks must itself be thread-safe; Nazm adds no lock around it. A failed
+link names the program's foreign symbols and `--link`, never "a bug in `nazm build`".
 
 **Interface and versions.** A `pub extern` function is exported with its symbol, so another module
 calls it without seeing the declaration's source: `nazm.interface/7`. The language gained syntax, an
