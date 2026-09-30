@@ -123,6 +123,11 @@ or a thread — `N0404` in a native build means the operating system would not s
 thread, as `nazm run` uses it when the interpreter could not start; `N0407` is I/O. Status 2 is a
 reported failure, `exit_with`'s is the program's, and 0 a normal return.
 
+**Applied to N45, the standard library.** No schema moved and no code appeared. `N0205` (a module
+that cannot be found) gained a case: an import beginning with `@std/` that names no standard module,
+whose help lists the ones there are. A standard module's definitions are named `@std/NAME::…` in
+every packet that names a definition, exactly as a project module's are named by its path.
+
 A consumer that fails on an unrecognised field is not compatible with this contract, and
 the `additionalProperties: false` in the schema documents is a statement about *this*
 version's output, not a promise that the next one adds nothing.

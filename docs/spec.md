@@ -1065,6 +1065,56 @@ would need a propagation protocol, and traits do not exist.
 **`main` is unchanged.** It returns `Int`, so a program handles its errors itself with a
 `match` and decides what they mean; nothing maps an `Err` to an exit status.
 
+### The standard library — `use "@std/…"`
+<!-- id: std -->
+
+A **standard module** is a toolchain-owned Nazm module a program imports by name. There are seven,
+each ordinary source checked like any module, and none is visible unless a module writes its `use`:
+
+```nazm
+use "@std/text";
+use "@std/io";
+
+fn main(io: IoCap) -> Int ! { io } {
+    let words = text_split("alpha,beta,,gamma", ",");
+    io_println(io, int_to_str(strs_len(words)));
+    match text_parse_int(text_trim("  42 ")) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0,
+    }
+}
+```
+
+**Resolution.** An import path beginning with `@std/` names a module the toolchain provides and
+is never looked for on disk: `@std/NAME` is the standard module `NAME`, and any other `@std/` path
+is `N0205`. Every other path, including one beginning with another `@`, is relative to the
+importing file as before. A standard module's durable identity is `@std/NAME`, which no project file can have. Its
+exported functions enter the importer's namespace like any module's, so each is named after its
+module — `text_split`, not `split` — and a program may not define a function of the same name in a
+module that imports it (`N0208`).
+
+**Contracts.** Every standard function declares its effect set. The pure ones are `! {}`; the ones
+that reach the outside world take the `IoCap` they need and declare `! { io }`, so a caller's
+authority is as visible as with the built-ins. What they read carries the built-ins' origins:
+`io_read`'s result is `file`.
+
+**Errors.** Ordinary failure is a value: `Err` or `None`, never a trap. A standard function fails
+only where a built-in it calls would — `ints_sum` overflows as `+` does, and `io_read` of a file
+that exists but cannot be read is `N0407`.
+
+| Module | Functions |
+| --- | --- |
+| `@std/text` | `text_starts_with(s, prefix) -> Bool`, `text_ends_with(s, suffix) -> Bool`, `text_find(s, needle) -> Option[Int]`, `text_contains(s, needle) -> Bool`, `text_repeat(s, n) -> Str`, `text_split(s, sep) -> Strs`, `text_is_space(byte) -> Bool`, `text_trim(s) -> Str`, `text_parse_int(s) -> Result[Int, Str]` |
+| `@std/option` | `option_is_some[T](o) -> Bool`, `option_is_none[T](o) -> Bool`, `option_unwrap_or[T](o, fallback) -> T` |
+| `@std/result` | `result_is_ok[T, E](r) -> Bool`, `result_is_err[T, E](r) -> Bool`, `result_unwrap_or[T, E](r, fallback) -> T`, `result_ok[T, E](r) -> Option[T]`, `result_err[T, E](r) -> Option[E]` |
+| `@std/seq` | `ints_index_of(xs, x) -> Option[Int]`, `ints_contains(xs, x) -> Bool`, `ints_sum(xs) -> Int`, `ints_max(xs) -> Option[Int]`, `ints_min(xs) -> Option[Int]`, `strs_index_of(xs, x) -> Option[Int]`, `strs_contains(xs, x) -> Bool`, `vec_index_of[T: Equality](xs, x) -> Option[Int]` |
+| `@std/io` | `io_println(io, s) -> Int`, `io_eprintln(io, s) -> Int`, `io_read(io, path) -> Result[Str, Str]` — each `! { io }` |
+| `@std/process` | `process_args(io) -> Strs` — `! { io }` |
+| `@std/chan` | `chan_take(c) -> Option[Int]`: the next value, or `None` once closed and drained |
+
+**Stability.** Pre-1.0. A standard module may change between milestones; its interface hash says
+when, and no semantic epoch moves for it.
+
 ### Equality is derived — `==` on the value types that can have it
 <!-- id: equality -->
 

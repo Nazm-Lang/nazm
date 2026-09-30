@@ -1831,6 +1831,25 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### The standard library — N45, measured 2026-10-01
+
+The standard library is Nazm source, so what it costs is what the code generators make of it.
+Host, `-O2`, best of 5 (`what_the_standard_library_costs`, `crates/nazm-cli/tests/stdlib.rs`,
+`--ignored`):
+
+| | LLVM | Cranelift |
+| --- | --- | --- |
+| `text_split` of a 120 KB string into 20,000 pieces, 50 times (1 M pieces) | 111.9 ms | 84.6 ms |
+| `text_find` over 100,001 bytes, 20 times (2 M positions) | 27.2 ms | 27.3 ms |
+| `text_parse_int` of `int_to_str(i)` for 1 M values | 83.0 ms | 102.8 ms |
+| `ints_sum` and `ints_max` over 1 M elements, 20 times | 17.4 ms | 72.6 ms |
+
+About 110 ns a piece to split (each piece a borrowed slice pushed into a `Strs`), 14 ns a
+position to search (a slice and a byte comparison), 80–100 ns to format and parse an integer. The
+sequence loop is where the backends differ most: LLVM keeps the loop in registers; Cranelift, which
+holds every local in a stack slot (§7.43), reloads it each iteration. No program's code changed:
+nothing in the tree imports a standard module.
+
 ### Tasks and channels — N44, measured 2026-10-01
 
 N44 kept the scheduler — one OS thread per task, joined by its scope — and wrote its contract
