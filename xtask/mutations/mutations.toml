@@ -3221,6 +3221,7 @@ targets = [
     { package = "nazm-cli", test = "native_cache" },
     { package = "nazm-cli", test = "effects" },
     { package = "nazm-cli", test = "capabilities" },
+    { package = "nazm-cli", test = "provenance" },
 ]
 
 [[profile]]
@@ -3238,6 +3239,7 @@ targets = [
     { package = "nazm-core", test = "unit_checking" },
     { package = "nazm-core", test = "effects" },
     { package = "nazm-core", test = "capabilities" },
+    { package = "nazm-core", test = "provenance" },
     { package = "nazm-cli", test = "effects" },
     { package = "nazm-cli", test = "capabilities" },
     { package = "nazm-cli", test = "codes" },
@@ -3298,6 +3300,7 @@ targets = [
     { package = "nazm-core", test = "unit_checking" },
     { package = "nazm-core", test = "effects" },
     { package = "nazm-core", test = "capabilities" },
+    { package = "nazm-core", test = "provenance" },
     { package = "nazm-core", test = "records" },
     { package = "nazm-core", test = "enums" },
     { package = "nazm-core", test = "generics" },
@@ -7692,10 +7695,247 @@ find = """    let root_args = vec!["i64 0"; roots].join(", ");"""
 replace = """    let root_args = vec!["i64 0"; 0].join(", ");"""
 killers = [{ package = "nazm-cli", test = "capabilities", name = "a_capability_parameter_lowers_exactly_as_an_int_one_and_main_is_handed_its_roots" }]
 
+# `n37-the-epoch-stays` is retired: N38 moved the epoch to 10, and `n38-the-epoch-stays` pins it.
+
+# --- N38: provenance and information flow ----------------------------------------------------
+#
+# Each attacks one law of `docs/architecture.md` §7.40 and `docs/spec.md`, *Provenance*: the
+# sources are the built-ins that bring data in and output is not input; shared storage is not
+# followed and a channel does not drop an origin; a join is a union in any order; a binding keeps
+# everything assigned to it; a condition contributes nothing; a callee passes on only what its
+# result is computed from; the worklist reaches the fixed point; `main`'s capabilities are the
+# runtime's authority and a `spawn` resets nothing; file contents and what is not followed are
+# restricted at `write_file`'s path, and a helper — declared or not — carries the rule to its
+# callers; the witness reaches the read; a reused module's facts come from its entry, which keeps
+# them under `nazm.check/2`; a snapshot and a packet say what the solver knows, under their new
+# schemas; and the epoch moved.
+
 [[mutation]]
-name = "n37-the-epoch-stays"
-why = "`SEMANTIC_EPOCH` is not bumped for a checker that now refuses bodies lacking the authority their effects need, so an N36 entry is filed where an N37 one is looked for"
+name = "n38-a-file-read-is-local"
+why = "`read_file` and `file_exists` are taken to compute from their arguments, so a file's contents carry no origin"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            Intrinsic::ReadFile | Intrinsic::FileExists => BuiltinFlow::Source(Self::File),"
+replace = "            Intrinsic::ReadFile | Intrinsic::FileExists => BuiltinFlow::Derive,"
+killers = [{ package = "nazm-core", test = "provenance", name = "the_sources_are_the_built_ins_that_bring_data_in_and_nothing_else" }]
+
+[[mutation]]
+name = "n38-the-command-line-is-a-file"
+why = "an argument is classed as a file's contents, so a path the invoker chose is refused"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            Intrinsic::ArgsCount | Intrinsic::Arg => BuiltinFlow::Source(Self::Argument),"
+replace = "            Intrinsic::ArgsCount | Intrinsic::Arg => BuiltinFlow::Source(Self::File),"
+killers = [{ package = "nazm-core", test = "provenance", name = "a_path_from_the_command_line_or_the_program_is_allowed_and_nothing_is_over_tainted" }]
+
+[[mutation]]
+name = "n38-output-is-input"
+why = "`print` is classed as a source, so writing a value is mistaken for reading one"
+file = "crates/nazm-sema/src/provenance.rs"
+find = """        match i {
+            Intrinsic::ArgsCount | Intrinsic::Arg => BuiltinFlow::Source(Self::Argument),"""
+replace = """        match i {
+            Intrinsic::Print => BuiltinFlow::Source(Self::File),
+            Intrinsic::ArgsCount | Intrinsic::Arg => BuiltinFlow::Source(Self::Argument),"""
+killers = [{ package = "nazm-core", test = "provenance", name = "the_sources_are_the_built_ins_that_bring_data_in_and_nothing_else" }]
+
+[[mutation]]
+name = "n38-shared-storage-is-followed"
+why = "a value read out of a sequence is taken to carry only what the read's arguments carry, as though no alias could have written it"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            | Intrinsic::ChanRecv => BuiltinFlow::Read,"
+replace = "            | Intrinsic::ChanRecv => BuiltinFlow::Derive,"
+killers = [{ package = "nazm-core", test = "provenance", name = "shared_storage_is_not_followed_and_is_unknown" }]
+
+[[mutation]]
+name = "n38-a-channel-drops-provenance"
+why = "what a task receives from a channel carries nothing, so a value loses its origin crossing between tasks"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "            | Intrinsic::ChanRecv => BuiltinFlow::Read,"
+replace = """            => BuiltinFlow::Read,
+            Intrinsic::ChanRecv => BuiltinFlow::Fresh,"""
+killers = [{ package = "nazm-core", test = "provenance", name = "shared_storage_is_not_followed_and_is_unknown" }]
+
+[[mutation]]
+name = "n38-a-file-path-is-allowed"
+why = "file contents are not a restricted origin, so a path read out of a file may be written to"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "    pub const RESTRICTED: Self = Self(Origin::File.bit() | Origin::Unknown.bit());"
+replace = "    pub const RESTRICTED: Self = Self(Origin::Unknown.bit());"
+killers = [{ package = "nazm-core", test = "provenance", name = "a_path_from_a_files_contents_is_refused_with_its_witness" }]
+
+[[mutation]]
+name = "n38-unknown-is-trusted"
+why = "what the checker does not follow is not restricted, so a path read out of a sequence is written to unchecked"
+file = "crates/nazm-sema/src/provenance.rs"
+find = "    pub const RESTRICTED: Self = Self(Origin::File.bit() | Origin::Unknown.bit());"
+replace = "    pub const RESTRICTED: Self = Self(Origin::File.bit());"
+killers = [{ package = "nazm-core", test = "provenance", name = "a_path_from_a_files_contents_is_refused_with_its_witness" }]
+
+[[mutation]]
+name = "n38-a-join-is-order-dependent"
+why = "a join keeps the first side whenever it already carries something, so which operand is written first decides what a value carries"
+file = "crates/nazm-sema/src/provenance.rs"
+find = """    pub fn join(&mut self, other: &Self) -> bool {
+        let mut grew = false;"""
+replace = """    pub fn join(&mut self, other: &Self) -> bool {
+        if !self.is_local() {
+            return false;
+        }
+        let mut grew = false;"""
+killers = [{ package = "nazm-core", test = "provenance", name = "explicit_data_flow_carries_provenance_and_a_join_is_a_union_in_any_order" }]
+
+[[mutation]]
+name = "n38-a-join-drops-a-side"
+why = "an operator's value carries only its left operand's provenance"
+file = "crates/nazm-core/src/provenance.rs"
+find = """                let r = self.expr(rhs);
+                l.joined(&r)"""
+replace = """                let _r = self.expr(rhs);
+                l"""
+killers = [{ package = "nazm-core", test = "provenance", name = "explicit_data_flow_carries_provenance_and_a_join_is_a_union_in_any_order" }]
+
+[[mutation]]
+name = "n38-a-binding-keeps-its-first-value"
+why = "a binding already carrying something ignores what is assigned to it later"
+file = "crates/nazm-core/src/provenance.rs"
+find = "            if slot.join(v) && self.read.get(s) == Some(&true) {"
+replace = "            if slot.is_local() && slot.join(v) && self.read.get(s) == Some(&true) {"
+killers = [{ package = "nazm-core", test = "provenance", name = "explicit_data_flow_carries_provenance_and_a_join_is_a_union_in_any_order" }]
+
+[[mutation]]
+name = "n38-a-condition-flows"
+why = "an `if`'s condition joins its value, so implicit flow is tracked where the law says it is not — and a local choice made on a file's existence is over-tainted"
+file = "crates/nazm-core/src/provenance.rs"
+find = """                self.expr(cond);
+                let t = self.block(then_block);"""
+replace = """                let c = self.expr(cond);
+                let t = self.block(then_block).joined(&c);"""
+killers = [{ package = "nazm-core", test = "provenance", name = "a_summary_passes_on_only_what_the_result_is_computed_from" }]
+
+[[mutation]]
+name = "n38-a-constant-inherits-its-input"
+why = "a callee passes on every argument it is given, so a function returning a constant is tainted by its parameters"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                    for &p in &s.params {"
+replace = "                    for p in 0..u32::try_from(c.args.len()).unwrap_or(0) {"
+killers = [{ package = "nazm-core", test = "provenance", name = "a_summary_passes_on_only_what_the_result_is_computed_from" }]
+
+[[mutation]]
+name = "n38-one-pass-is-the-fixed-point"
+why = "a changed summary does not re-queue its callers, so provenance reaches a caller only if its callees happened to be settled first"
+file = "crates/nazm-core/src/provenance.rs"
+find = """            s.origins = r.origins;
+            s.params = params;
+"""
+replace = """            s.origins = r.origins;
+            s.params = params;
+            continue;
+"""
+killers = [{ package = "nazm-core", test = "provenance", name = "recursion_and_mutual_recursion_reach_the_least_fixed_point_in_any_order" }]
+
+[[mutation]]
+name = "n38-authority-is-not-an-origin"
+why = "`main`'s capabilities are classed as the command line, so the runtime's authority is not what a parameter is recorded as receiving"
+file = "crates/nazm-core/src/provenance.rs"
+find = """                (true, Type::Cap(_)) => Flow::origin(
+                    Origin::Authority,"""
+replace = """                (true, Type::Cap(_)) => Flow::origin(
+                    Origin::Argument,"""
+killers = [{ package = "nazm-core", test = "provenance", name = "authority_comes_from_main_and_survives_passing_storage_and_tasks" }]
+
+[[mutation]]
+name = "n38-a-spawn-resets-provenance"
+why = "what a `spawn` hands a task carries nothing, so a value — authority included — loses its origin at the task boundary"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                let args: Vec<Flow> = sp.args.iter().map(|a| self.expr(a)).collect();"
+replace = "                let args: Vec<Flow> = sp.args.iter().map(|a| { let _ = self.expr(a); Flow::default() }).collect();"
+killers = [{ package = "nazm-core", test = "provenance", name = "authority_comes_from_main_and_survives_passing_storage_and_tasks" }]
+
+[[mutation]]
+name = "n38-a-helper-launders-a-path"
+why = "a sink does not make the parameter its path came from reach it, so a function that writes to a path it is given carries no rule to its callers"
+file = "crates/nazm-core/src/provenance.rs"
+find = """        for s in &f.sinks {
+            reach.extend(Program::eval(&s.path, calls).params);
+        }"""
+replace = """        for s in &f.sinks {
+            let _ = Program::eval(&s.path, calls);
+        }"""
+killers = [{ package = "nazm-core", test = "provenance", name = "a_function_that_writes_to_a_path_it_is_given_carries_the_rule_to_its_callers" }]
+
+[[mutation]]
+name = "n38-an-undeclared-helper-launders-a-path"
+why = "a callee with no declared effect set passes on no sink, so explicit code routes a file's contents to `write_file` through the bridge"
+file = "crates/nazm-core/src/provenance.rs"
+find = """            reach.extend(Program::eval(&s.path, calls).params);
+        }
+        for c in &f.calls {"""
+replace = """            reach.extend(Program::eval(&s.path, calls).params);
+        }
+        for c in f.calls.iter().filter(|c| res.function(c.callee).is_some_and(|d| d.declared_effects.is_some())) {"""
+killers = [{ package = "nazm-core", test = "provenance", name = "ambient_code_is_the_bridge_and_is_not_checked_but_cannot_launder" }]
+
+[[mutation]]
+name = "n38-the-witness-stops-at-the-callee"
+why = "the witness for a restricted flow ends at the call whose result carries it, never showing where it was read"
+file = "crates/nazm-core/src/provenance.rs"
+find = "                witness(p, res, g, &g.result, o, labels, depth + 1);"
+replace = "                let _ = g;"
+killers = [{ package = "nazm-core", test = "provenance", name = "a_path_from_a_files_contents_is_refused_with_its_witness" }]
+
+[[mutation]]
+name = "n38-a-reused-module-has-no-facts"
+why = "a module the cache reuses supplies no provenance facts, so its functions are the worst case and its sinks go unchecked"
+file = "crates/nazm-cli/src/checking.rs"
+find = "            .rehydrate(module, res, &self.graph)"
+replace = """            .rehydrate(module, res, &self.graph)
+            .filter(|_| false)"""
+killers = [{ package = "nazm-cli", test = "incremental", name = "a_callees_provenance_reaches_a_caller_the_cache_did_not_check_again" }]
+
+[[mutation]]
+name = "n38-an-entry-drops-the-facts"
+why = "an entry is written without the module's provenance facts, so a later run that reuses it sees a module with no flows"
+file = "crates/nazm-cli/src/checking.rs"
+find = "        let artifact = artifact.with_provenance(persisted);"
+replace = "        let _ = persisted;"
+killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_keeps_the_modules_provenance_facts" }]
+
+[[mutation]]
+name = "n38-the-entry-schema-stays"
+why = "the check entry keeps the `/1` name for a shape that now carries facts, so an entry without them is read as one with none"
+file = "crates/nazm-cache/src/artifact.rs"
+find = """pub const SCHEMA: &str = "nazm.check/2";"""
+replace = """pub const SCHEMA: &str = "nazm.check/1";"""
+killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_keeps_the_modules_provenance_facts" }]
+
+[[mutation]]
+name = "n38-a-provenance-change-is-invisible-to-a-snapshot"
+why = "every function's provenance digest is the same, so a caller whose summary moved with a callee's body reads as unchanged"
+file = "crates/nazm-service/src/snapshot.rs"
+find = "                provenance: function.then(|| provenance_digest(res, &d)),"
+replace = """                provenance: function.then(|| Digest::new("provenance").hex()),"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_provenance_change_is_its_own_section_even_where_no_byte_of_the_function_moved" }]
+
+[[mutation]]
+name = "n38-a-packet-has-no-provenance"
+why = "a function's packet carries no provenance, as though the compiler had none"
+file = "crates/nazm-service/src/context.rs"
+find = "                ReferenceTarget::Function(id) => provenance_of(s, id),"
+replace = "                ReferenceTarget::Function(_) => None,"
+killers = [{ package = "nazm-service", test = "context", name = "a_functions_packet_carries_its_provenance_summary" }]
+
+[[mutation]]
+name = "n38-the-snapshot-schema-stays"
+why = "the snapshot keeps the `/2` name for a shape with a `provenance` section a `/2` reader does not know to compare"
+file = "crates/nazm-service/src/snapshot.rs"
+find = """pub const SCHEMA: &str = "nazm.snapshot/3";"""
+replace = """pub const SCHEMA: &str = "nazm.snapshot/2";"""
+killers = [{ package = "nazm-service", test = "snapshot", name = "a_snapshot_is_every_durable_definition_of_the_compilation_by_identity" }]
+
+[[mutation]]
+name = "n38-the-epoch-stays"
+why = "`SEMANTIC_EPOCH` is not bumped for a checker that now refuses a restricted flow, so an N37 entry is filed where an N38 one is looked for"
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 9;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 8;"
+find = "pub const SEMANTIC_EPOCH: u32 = 10;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 9;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
+
