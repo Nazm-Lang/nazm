@@ -4943,6 +4943,106 @@ link names the program's foreign symbols and `--link`, never "a bug in `nazm bui
 calls it without seeing the declaration's source: `nazm.interface/7`. The language gained syntax, an
 effect and a capability kind, so the semantic epoch moves from 10 to 11.
 
+## 7.45 The runtime constitution — N43, 2026-10-01
+
+Written before the code. The native runtime is compiler-owned LLVM text linked into every
+executable (`crates/nazm-lir/src/runtime/`); this section is the contract it keeps with the code
+both backends generate, with the operating system, and with the language.
+
+**What the runtime is responsible for, and what it is not.** At run time: the process's entry and
+end; the thread's failure state and the one place a failure is reported; string backings,
+sequences and channels — their allocation, sharing and reclamation; files and the process's
+arguments; starting and joining tasks; the memory accounting. At compile time only, and never in
+the runtime: every check the language makes (types, effects, capabilities, provenance, ownership
+— MIR decides every retain and release, §7.42), layout, and which runtime parts a program links.
+The runtime makes no decision the language specifies: it carries out MIR's.
+
+**One inventory.** Every symbol the runtime defines is listed once in
+`nazm_lir::runtime::INVENTORY` — its exact LLVM signature, the runtime part that defines it, its
+responsibility, what it does with ownership, its failure behaviour, its thread safety, and who
+calls it (generated code of either backend, the entry, or the runtime itself) — and every global
+in `GLOBALS`, with who writes it and how it is synchronised. The declarations every unit sees are
+generated from the inventory, not written beside it; the word-level view Cranelift calls through
+(`IMPORTS`, §7.43) must agree with it entry by entry; and tests hold the runtime text to both, so
+a symbol defined and not inventoried, inventoried and not defined, or declared with a signature
+it is not defined with, fails the build.
+
+**Runtime ABI revision.** `RUNTIME_ABI_REVISION` names this contract: the inventory's signatures,
+the sequence header (`len` at 0, `cap` at 8, `data` at 16, the reference count at 24), a string's
+`(pointer, length, owner)` and a string backing's count at 0. It enters every object key of both
+backends — Cranelift's directly, and clang's through the code generation configuration — so an
+object built against another revision is never reused. N43 moves it to 2 because the inventory is
+now the contract: the numbering says a revision-1 object was built against a contract nobody wrote
+down.
+
+**Startup.** The platform's `main(argc, argv)` is the entry unit's and nothing else is an entry.
+In order: if the program reads its arguments, `nz.argc` (one fewer than `argc`: `argv[0]` is not
+visible) and `nz.argv` are stored — before any task exists, never written again; each root
+capability `main` takes is minted as the word `0` (authority was checked when the program was);
+the program's `main` is called. There is no other initialisation and no lazy one: every other
+global is statically initialised, and every helper set is stateless until called.
+
+**Shutdown.** Three ways to end, distinguished. *Normal return*: every scope `main` opened has
+been joined, the memory report is written to stderr if `NAZM_MEMORY_REPORT` is set, `main`'s
+result is printed to stdout in decimal with a newline, and the process exits 0. *Failure*: the
+memory report as above (the counts are final: nothing is still running), then `nz.report` writes
+the thread's first failure message to stderr and exits 2. *Explicit exit*: `exit_with(code)` ends
+the process at once with that status — no scope is joined, nothing is reclaimed, no report is
+written — as the spec says. Nothing is freed at exit that the program had not already released:
+the operating system reclaims the process.
+
+**Memory.** `malloc`, `realloc` and `free` are the allocator; the runtime owns every block it
+allocates and frees it on the last release. A string backing is a 16-byte header (the reference
+count at 0) and its bytes; a literal and `arg`'s strings are immortal (their owner is null, and
+retaining or releasing null is a no-op). A sequence is a 32-byte header and a data block that grows
+by `realloc`; `nz.vec_release` releases each element with the element type's release function at
+the element's stride, then the sequence. A channel is one block holding its lock, its condition,
+its buffer and its count. Allocation failure is never undefined behaviour: every allocating entry
+returns null or a status, and the call site records `N0406`. Each release decrements and frees on
+zero; a count never underflows because MIR's validator proves every owned value is released
+exactly once (§7.42).
+
+**Thread safety, before N44.** String backings' and channels' counts are atomic (`monotonic` up,
+`release` down with an `acquire` fence before freeing), because both may be shared between
+tasks. Sequence counts are not atomic and need not be: a sequence may not cross into a task
+(`N0321`), so one is only ever touched by one thread. The failure state is thread-local; the
+accounting counters are atomic; `nz.argc`/`nz.argv` are written once before any task starts.
+A channel's operations take its mutex. Nothing else is shared.
+
+**Tasks and channels: the primitive boundary.** The runtime provides `nz.spawn` (start an OS
+thread for a task and record it in its scope's list, record-first), `nz.scope_join` (join every
+task in the list and hand back the first failure), and the channel operations (bounded buffer,
+blocking send and receive, close). *Which* thread runs a task, when, and in what order is not a
+runtime contract before N44: v1 starts one OS thread per task.
+
+**The failure model.** Four classes, never confused:
+
+| Class | Codes | What happens |
+| --- | --- | --- |
+| A language failure the spec defines | `N0400` overflow, `N0401` division by zero, `N0405` index or capacity | recorded (the thread's first), unwound by MIR's failure edges, joined at the scope, reported by the entry, exit 2 |
+| The host refused a resource | `N0406` allocation, `N0404` a thread (in a native build `N0404` means the operating system would not start one; in `nazm run`, that the interpreter could not) | recorded and reported the same way: the program cannot continue, and says why |
+| An I/O failure | `N0407` | the same, for `read_file` and `write_file`; `file_exists` answers instead of failing |
+| Explicit exit | — | `exit_with`: the process ends with the program's status |
+
+A `Result` is data and never any of these: nothing in the runtime turns an `Err` into a failure or
+a failure into an `Err`. A runtime invariant the compiler guarantees (a count underflow, a join of
+a list that was never opened) has no code, because MIR's validator makes it unreachable; a
+foreign function that crashes is outside every class (§7.44).
+
+**Capability roots.** Only the entry mints capabilities, and only for `main`'s parameters. No
+runtime symbol returns one, no built-in constructs one (`N0370`), and none crosses to C (`N0381`).
+
+**Foreign code.** A foreign call is made on the calling task's thread with no runtime state
+touched. C cannot call into the runtime: its symbols are `hidden` and none is a C entry point.
+
+**The operating system.** The runtime reaches it only through the C library and POSIX-threads
+entry points the adapter (`runtime/os.rs`) declares — the same list on every v1 target — and a
+test holds the runtime text to that list. A target outside the v1 matrix is refused before
+generation (§7.43); there is no per-OS code path in the runtime, so there is no per-OS behaviour.
+
+**Not here.** A scheduler, work stealing, task priorities (N44); runtime provenance tags (N38
+provenance is static and erased); a runtime for `nazm run` (the interpreter is its own).
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
