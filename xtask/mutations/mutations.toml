@@ -245,17 +245,16 @@ name = "a-returned-value-is-discarded"
 why = """
 drops the arm that turns a Flow::Return into the call's value, so every `return` reports
 that the function finished without producing anything
+Repointed by N39: the call body is a Core IR function's, and its failure is built by `fail`.
 """
 file = "crates/nazm-core/src/eval.rs"
 find = "            Flow::Return(v) | Flow::Fell(Some(v)) => Ok(v),"
 replace = """            Flow::Fell(Some(v)) => Ok(v),
-            Flow::Return(_) => Err(RuntimeError {
-                diagnostic: Box::new(Diagnostic::error(
-                    codes::TYPE_MISMATCH,
-                    body.span,
-                    format!("`{name}` finished without producing a value"),
-                )),
-            }),"""
+            Flow::Return(_) => Err(fail(
+                codes::TYPE_MISMATCH,
+                f.body.at,
+                format!("`{}` finished without producing a value", f.name),
+            )),"""
 
 [[mutation]]
 name = "return-does-not-leave-its-block"
@@ -440,10 +439,11 @@ name = "a-flow-in-value-position-is-an-error"
 why = """
 treats a `return` raised inside an expression as a failure instead of propagating it, so
 `let x = if c { return 1; } else { 2 };` type-checks and then fails at run time
+Repointed by N39: `take!` evaluates a Core IR expression, and `no_value` is a free function.
 """
 file = "crates/nazm-core/src/eval.rs"
 find = "            left => return Ok(left),"
-replace = "            left => return Err($slf.no_value($e)),"
+replace = "            left => return Err(no_value($e)),"
 
 [[mutation]]
 name = "stack-not-sized-from-the-budget"
