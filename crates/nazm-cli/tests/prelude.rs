@@ -236,7 +236,13 @@ fn prelude_interface() -> String {
         fn must_check(&self, _: ModuleId) -> bool {
             true
         }
-        fn checked_clean(&mut self, _: ModuleId) {}
+        fn checked_clean(
+            &mut self,
+            _: ModuleId,
+            _: &nazm_core::sema::ModuleFacts,
+            _: &nazm_core::sema::resolve::Resolution,
+        ) {
+        }
     }
     let (map, graph) = nazm_core::one_file("fn main() -> Int { 0 }\n");
     let (program, errors) = nazm_core::__syntax::parse_map(&map);
@@ -527,7 +533,13 @@ fn fixture_hash(prelude: &str) -> InterfaceHash {
         fn must_check(&self, _: ModuleId) -> bool {
             true
         }
-        fn checked_clean(&mut self, _: ModuleId) {}
+        fn checked_clean(
+            &mut self,
+            _: ModuleId,
+            _: &nazm_core::sema::ModuleFacts,
+            _: &nazm_core::sema::resolve::Resolution,
+        ) {
+        }
     }
     let (program, errors) = nazm_core::__syntax::parse_map(&map);
     assert!(errors.is_empty(), "{errors:#?}");

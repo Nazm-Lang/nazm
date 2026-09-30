@@ -103,7 +103,10 @@ fn census(path: &Path) -> Option<Census> {
         .diagnostics
         .iter()
         .filter(|d| {
-            ["N0366", "N0367", "N0368", "N0369", "N0370", "N0371"].contains(&d.code.as_str())
+            [
+                "N0366", "N0367", "N0368", "N0369", "N0370", "N0371", "N0372",
+            ]
+            .contains(&d.code.as_str())
         })
         .count();
     Some(Census {
