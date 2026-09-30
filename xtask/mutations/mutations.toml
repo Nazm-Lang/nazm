@@ -3267,6 +3267,7 @@ why = "lowering and emission are observed by compiling and running programs: mem
 owns = ["crates/nazm-lir/"]
 targets = [
     { package = "nazm-lir", lib = true },
+    { package = "nazm-cli", test = "mir" },
     { package = "nazm-cli", test = "memory" },
     { package = "nazm-cli", test = "value_blocks" },
     { package = "nazm-cli", test = "native_units" },
@@ -3277,6 +3278,23 @@ targets = [
     { package = "nazm-cli", test = "effects" },
     { package = "nazm-cli", test = "capabilities" },
     { package = "nazm-cli", test = "provenance" },
+]
+
+[[profile]]
+name = "mir"
+why = "MIR lowering, validation and its digest are observed by the MIR suite — laws, validator refusals, stress — and, through the native backend reading MIR, by compiling and running programs"
+owns = ["crates/nazm-mir/"]
+targets = [
+    { package = "nazm-cli", test = "mir" },
+    { package = "nazm-cli", test = "build" },
+    { package = "nazm-cli", test = "memory" },
+    { package = "nazm-cli", test = "value_blocks" },
+    { package = "nazm-cli", test = "propagation" },
+    { package = "nazm-cli", test = "generics" },
+    { package = "nazm-cli", test = "equality" },
+    { package = "nazm-cli", test = "concurrent" },
+    { package = "nazm-cli", test = "native_units" },
+    { package = "nazm-cli", test = "native_cache" },
 ]
 
 [[profile]]
