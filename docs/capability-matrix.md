@@ -39,10 +39,11 @@ file. The schema is `schema/nazm.capabilities-1.json`.
 
 ## Summary
 
-**Current suite: 1,825 passed, 0 failed, 23 ignored, across 111 suites**, run contained and
-offline at N36 (2026-09-30), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle
+**Current suite: 1,846 passed, 0 failed, 23 ignored, across 115 suites**, run contained and
+offline at N37 (2026-09-30), scheduled at P4W2T4; nineteen of the ignored are the xtask lifecycle
 tests, run on their own (19 of 19 passed, contained), and four are N33's, N34's and N36's
-release-build measurements, run by hand (`performance.md`). N35 ended at 1,795 across 108 with 22
+release-build measurements, run by hand (`performance.md`). N36 ended at 1,825 across 111 with 23
+ignored; N35 ended at 1,795 across 108 with 22
 ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 across 99 with 21 ignored; N32-H3 ended at 1,728 across 95 with 19 ignored; N32-H2 ended at 1,718 across 95; N32 ended at 1,706 across 95; N31 ended at 1,669 across 91, 1,663 before its closure correction, N30 ended at 1,647 across 89, N29 ended at 1,629 across 88, N28 ended at 1,609 across 87, N27 ended at 1,582 across 86 (1,580 before its closure correction), N26 ended at 1,555 across 83, N25 ended at 1,532 across 81, N24 ended at 1,514 across 80, N23 ended at 1,491 across 79, N22 ended at 1,476 across 78, N21 ended at 1,461 across 77, N20 ended at 1,448 across 76, N19 at 1,435 across 75, N18 at 1,417 across 74, N17 at 1,395 across 73, N16 at 1,376 across 72, N15 at 1,348 across 68, N14 at 1,317 across 67, N13 at 1,291 across 65, N12.2 at 1,255 across 63, N12.1 at 1,211 across
 63, N12 at 1,186 across 62, N11 at 1,125 across 58. The frozen count at the tested release commit is in
 [`releases/4fb1554.md`](releases/4fb1554.md) and does not move.
@@ -2050,8 +2051,8 @@ invisible to all five. `docs/spec.md` names what must be settled before
 
 ### 30. Mutation testing — VERIFIED · Fuzzing — MISSING
 
-**Evidence** · `xtask/mutations/mutations.toml` holds **643** catalogued defects (158 when
-this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2, 582 at N32-H3, 601 at N33, 612 at N34, 628 at N35), **455** of them with a verified killer and all
+**Evidence** · `xtask/mutations/mutations.toml` holds **662** catalogued defects (158 when
+this sentence was first written, 233 at N12.2, 266 at N13, 288 at N14, 304 at N15, 318 at N16, 334 at N17, 348 at N18, 362 at N19, 376 at N20, 391 at N21, 404 at N22, 418 at N23, 435 at N24, 449 at N25, 457 at N26, 473 at N27 with its closure correction, 493 at N28, 509 at N29, 527 at N30, 542 at N31 before its closure correction, 549 after it, 568 at N32, 575 at N32-H2, 582 at N32-H3, 601 at N33, 612 at N34, 628 at N35, 643 at N36), **474** of them with a verified killer and all
 of them owned by one of fourteen focused profiles;
 `xtask/src/mutate.rs` injects each under a kernel advisory lock with a write-ahead backup,
 requires the pattern to match exactly once, rebuilds, runs the suite and restores. It
@@ -2745,6 +2746,26 @@ signature renderer — **78 at tier 1 with every killer verified in the session 
 or uninjected entry. It took two sessions (5,862 s of the gate, three further resumes finding
 nothing left), and the harness's one-session coverage check reads *incomplete* because the 78
 verifications are split across them, not because any is missing.
+
+*N37 (2026-09-30) added twenty mutations and retired one,* and was the first milestone selected
+by the **responsibility law**: new mutations, and existing ones only where N37 changed the code
+they guard or the tests that kill them, never because a layer was touched. The twenty attack the
+authority laws — the outside-world built-ins or `print` needing nothing, a `SpawnCap` authorising
+`io`, a free `spawn`, an undeclared callee or import bringing its own authority, a task inheriting
+its spawner's, an effect set granting authority, a `! {}` contract skipping the check, holding
+treated as an effect, the witness stopping at the callee, authority by spelling, a shadowed
+capability held, a capability built, a `main` taking anything, a capability with equality, the
+interface dropping authority or forgetting its kind, `main` handed no roots, and the epoch staying
+8. `n36-the-epoch-stays` is retired for the last. Thirteen N36 entries were selected with a link
+each: ten whose code (`effects.rs`, where the authority check now sits) or whose killer tests N37
+edited to hand functions their capabilities, and three on the interface's effect field and schema
+version, which N37 reads as the authority mode and kept at `/6`. N13's equality leaves, N17's
+reference index and the lowering entries in the files N37 touched were considered and left out: N37
+changes nothing they guard. **Campaign `60c5ee822617e3c9`, targeted, P1, offline: 33 of 33 caught,
+32 at tier 1 with killers verified, 1 at tier 2**, no survivor; two sessions (4,395 s of the gate).
+The tier-2 one, `n37-holding-authority-is-an-effect`, exposed a declared killer whose pure function
+made no call; the test was strengthened after the gate and the mutant verified alone at tier 1
+(164 s). The one-session coverage check reads *incomplete* for the split, as N36's did.
 
 **Limitation** · Two catalogued defects are MUTANT CRASH, not caught (above), and one N13
 defect is a known survivor (above): the suite cannot observe a read of freed storage nothing

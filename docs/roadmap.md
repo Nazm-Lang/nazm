@@ -370,13 +370,58 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N37, in dependency order
+
+No item is chosen here; N37 left these standing, beside N36's below.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Attenuation and resource-specific capabilities (a read-only `IoCap`, one file, one directory) | a kind with a resource argument | v1 has no narrower kind to derive one into |
+| Retiring the ambient bridge | declared sets on the compiler's own sources, and a migration story | 1,034 of 1,054 function checks in the tree still declare no set |
+| Runtime or operating-system enforcement | a design for what crosses into foreign code | the check is static; nothing at runtime consults a capability |
+| Linear or affine authority, revocation | move semantics, lifetimes | a capability copies freely today |
+| Restriction profiles (no `IoCap` in embedded, no `SpawnCap` in critical) | capabilities ✓, a profile mechanism | nothing selects a profile yet |
+| Foreign and unsafe authority | an FFI | there is none to authorise |
+| The Nazm-written compiler reading capabilities | the same lexer and parser work as effect sets | no source it reads declares one |
+
+### N37 — Capabilities / authority v1 — **complete, 2026-09-30**
+
+An effect says what a function does; a capability says what allows it. Two compiler-owned kinds,
+`IoCap` and `SpawnCap`, are built-in types: a function that declares an effect set holds exactly
+the capability values its scope reaches, and every outside-world built-in, `spawn` and call of an
+undeclared function needs the authority for what it does (`N0369`), checked apart from the effect
+(`N0366`) and reported before it. `main` is the root: the runtime hands it one of each capability
+it declares, it may take nothing else (`N0371`), and nothing constructs one (`N0370`). A function
+that declares no set is the **compatibility bridge** — it exercises its caller's authority — and is
+bounded so that code with a contract cannot reach authority it does not hold through it, in its
+module or another. Authority crosses a module as parameter types, in `nazm.interface/6` unchanged.
+The checking is static and a capability erases to a word nothing reads; there is no sandbox.
+`SEMANTIC_EPOCH` 8 → 9. Of the 200 `.nz` sources at N36, 197 check exactly as before; the three
+that do not are N36's `examples/effects/`, which declared effects without authority and now hold it.
+N36's wording was corrected so that `fn f() -> Int` and `fn f() -> Int ! {}` cannot be read as one.
+
+| Settled | Where |
+| --- | --- |
+| capability kinds, sets and the built-in table | `crates/nazm-sema/src/capability.rs`, `types.rs` |
+| possession, forging, `main`'s parameters | `crates/nazm-core/src/check.rs` |
+| the authority check and its witness | `crates/nazm-core/src/effects.rs` |
+| the root at runtime | `crates/nazm-core/src/eval.rs`, `crates/nazm-lir/src/emit.rs` |
+| the law | `spec.md` *Capabilities: what allows a function to act*, `architecture.md` §7.39 |
+
+Mutation evidence, under the new responsibility law: twenty new mutations and one retired; 33
+selected — the twenty and thirteen N36 entries each with a stated link — all caught, 32 at tier 1
+and 1 at tier 2 whose killer was then strengthened and verified alone (`capability-matrix.md` §30).
+The MILESTONE gate ran offline: 5,737 s of wall time across its stages (`performance.md`).
+
+**N38 has not started.**
+
 ### After N36, in dependency order
 
 No item is chosen here; N36 left these standing, beside N35's and N34's below.
 
 | | Depends on | Why not before |
 | --- | --- | --- |
-| Capabilities: who may exercise an effect | the effect sets N36 settled | an effect says what kind of power, not who granted it |
+| ~~Capabilities: who may exercise an effect~~ | the effect sets N36 settled | **done in N37** |
 | Profiles that forbid effects (critical: no `io`, no `spawn`; embedded) | effect sets ✓, a profile mechanism | nothing selects a profile yet |
 | The Nazm-written compiler reading effect sets | a lexer token and a parser rule in `compiler/*.nz`, and a bootstrap | N36 avoided migrating the compiler's sources; none of them declares a set |
 | Declared sets on the compiler's own exports | the item above | an undeclared import is every effect to its importer, so 152 of 1,044 function checks in the tree read `{ io, spawn }` |
@@ -411,7 +456,6 @@ Mutation evidence: seventeen new mutations, two retired, two repointed; 85 selec
 78 at tier 1 with their killers verified and 7 at tier 2 (`capability-matrix.md` §30). The
 MILESTONE gate ran offline: 7,242 s of wall time across its stages (`performance.md`).
 
-**N37 has not started.**
 
 ### After N35, in dependency order
 

@@ -1831,6 +1831,50 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### Capabilities — N37, measured 2026-09-30
+
+Authority is checked statically and a capability erases (`architecture.md` §7.39), so what is
+measured is what the check costs the compiler and what a capability leaves in the program.
+
+- **Next to nothing in the program.** A function taking an `IoCap` lowers to exactly the IR of the
+  same function taking an `Int` (`crates/nazm-cli/tests/capabilities.rs`); `main` receives one
+  `i64 0` per root from the entry wrapper. `examples/capabilities/workers.nz` and its twin with
+  `Int` in place of every capability build to executables of the same size at `-O2` (52,104 B,
+  host); the `-O2` IR differs by 254 B, `main`'s two parameters and the entry's call.
+- **Compatibility.** The 200 `.nz` sources at N36's HEAD (`git archive 9deed77`) were checked with
+  the N36 and N37 release builds (host, `--no-cache`): 197 give byte-identical output and exit
+  status; the three that differ are `examples/effects/pure.nz`, `report.nz` and `tasks.nz`, which
+  declared effects and exercised them with no capability, and were migrated. The N36 build used is
+  the one built from its sources before its last commits, none of which touched `crates/*/src`.
+- **Census** over the tree's roots: 1,054 function checks, 20 declaring a set, 11 holding a
+  capability; the inferred sets are N36's plus the new examples (870 `{}`, 27 `{ io }`, 3
+  `{ spawn }`, 154 `{ io, spawn }`).
+- **Checking time.** `nazm check --no-cache`, release, host, median of 25: `compiler/emit.nz`
+  52.4–52.9 ms under N36 and 52.9–53.0 ms under N37; `compiler/check.nz` 33.0–33.5 and 33.0–33.4
+  ms — the same within noise, since no function there declares a set and the check runs only for
+  those that do. A synthetic 3,001-function chain in which every function declares `! { io }` and
+  threads an `IoCap` checks in 73.3–73.8 ms, against 66.6–67.8 ms for its twin with no sets and an
+  `Int` in place of the capability: about 6.5 ms for 3,001 contracts checked for effects and
+  authority. The compiler benchmark's `compiler/check` is 80.6 ms (N36: 83.0).
+- **Memory.** Peak RSS of `nazm check compiler/emit.nz`, host: 27.9 MB under N36, 27.8 MB under N37.
+  One capability set per call site is recorded.
+- **Size.** Linux release, contained: `nazm` 4,592,544 B and `nazm-mcp` 4,134,624 B, both the same as
+  N36 at the 64 KiB granularity these sizes move in. Host (macOS) `nazm`: 4,631,328 → 4,647,984 B.
+- **The planner and servers**, contained: `repo --map` 352–363 ms, the four task contexts 49–567 ms,
+  1,000 MCP task contexts 104.2 ms each, RSS settled 72,268 kB; the docs index 25.6 ms (frame
+  237,983 B). Within N36's range.
+
+**The gate**, offline, at `0c94d74`: mutation 4,395 s (33 of 33 caught, 32 at tier 1 with killers
+verified and 1 at tier 2, over two sessions and three resumes that found nothing left), workspace
+392 s (1,846 passed, 0 failed, 23 ignored, 115 suites), lifecycle 185 s (19 of 19), selfhost 53 s
+(38 of 38), bootstrap 37 s (C2 = C3, IR identical, executables identical once the linker UUID is
+removed), release benchmarks 463 s, compiler benchmark 195 s (the same 21 pre-N33 drifts), checks
+17 s (18 of 18) — 5,737 s of wall time, one run. The container had no network (`NETWORK-ABSENT`).
+The workspace container's `memory.peak` read 4,294,967,296 B — its limit — with no OOM kill; that
+counter includes page cache, and N36's read 1.96 GB. Why it was higher this time was not
+established. After the gate, the tier-2 mutant's declared killer was strengthened and the mutant
+verified alone at tier 1 (164 s, one test file changed).
+
 ### Typed effects — N36, measured 2026-09-30
 
 Effects are a checker fact (`architecture.md` §7.38), so what is measured is what they cost the
