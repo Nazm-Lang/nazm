@@ -32,6 +32,7 @@ members = [
     "crates/nazm-cir",
     "crates/nazm-core",
     "crates/nazm-lir",
+    "crates/nazm-mir",
     "crates/nazm-service",
     "crates/nazm-docs",
     "crates/nazm-repo",
@@ -84,6 +85,7 @@ nazm-cache = { path = "crates/nazm-cache" }
 nazm-cir = { path = "crates/nazm-cir" }
 nazm-core = { path = "crates/nazm-core" }
 nazm-lir = { path = "crates/nazm-lir" }
+nazm-mir = { path = "crates/nazm-mir" }
 nazm-service = { path = "crates/nazm-service" }
 nazm-docs = { path = "crates/nazm-docs" }
 nazm-repo = { path = "crates/nazm-repo" }

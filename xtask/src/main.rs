@@ -892,20 +892,26 @@ fn check_core_ir_boundary() -> Result<(), Vec<String>> {
     ];
     const INTERPRETER: &str = "crates/nazm-core/src/eval.rs";
     const INTERPRETER_MAY_NOT_NAME: &[&str] = &["Resolution", "nazm_syntax", "res."];
+    // N40: the native backend reads validated MIR and nothing of the checker or of Core IR —
+    // no `Resolution`, no Core IR, no question to the checker at all.
+    const BACKEND: &str = "crates/nazm-lir/src/";
+    const BACKEND_MAY_NOT_NAME: &[&str] = &["Resolution", "nazm_cir", "cir::", "res."];
     let Some(root) = workspace_root() else {
         return Err(vec!["could not locate workspace root".to_owned()]);
     };
     let mut files: Vec<String> = Vec::new();
-    match std::fs::read_dir(root.join("crates/nazm-lir/src")) {
-        Ok(entries) => {
-            for e in entries.flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if name.ends_with(".rs") {
-                    files.push(format!("crates/nazm-lir/src/{name}"));
+    for dir in ["crates/nazm-lir/src", "crates/nazm-mir/src"] {
+        match std::fs::read_dir(root.join(dir)) {
+            Ok(entries) => {
+                for e in entries.flatten() {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    if name.ends_with(".rs") {
+                        files.push(format!("{dir}/{name}"));
+                    }
                 }
             }
+            Err(e) => return Err(vec![format!("could not read {dir}: {e}")]),
         }
-        Err(e) => return Err(vec![format!("could not read crates/nazm-lir/src: {e}")]),
     }
     files.sort();
     files.push(INTERPRETER.to_owned());
@@ -936,6 +942,17 @@ fn check_core_ir_boundary() -> Result<(), Vec<String>> {
                      second lowering (docs/architecture.md §7.41)",
                     at(i)
                 ));
+            }
+        }
+        if rel.starts_with(BACKEND) {
+            for word in BACKEND_MAY_NOT_NAME {
+                for (i, _) in flat.match_indices(word) {
+                    problems.push(format!(
+                        "{rel}:{} names `{word}`: the native backend reads validated MIR and \
+                         nothing of the checker or of Core IR (docs/architecture.md §7.42)",
+                        at(i)
+                    ));
+                }
             }
         }
         if rel == INTERPRETER {

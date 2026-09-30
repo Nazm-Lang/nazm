@@ -45,6 +45,7 @@ mod fix;
 mod fmt;
 mod interface;
 mod lsp;
+mod mir;
 mod patch;
 mod repo;
 mod snapshot;
@@ -492,6 +493,21 @@ enum Command {
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
     },
+    /// Print each concrete function of the native program as MIR, `nazm.mir/1` (N40): basic
+    /// blocks with every copy, move, drop, scope join and failure edge written out, after the
+    /// validator accepted it. Debug output, internal and unstable; `docs/architecture.md` §7.42.
+    Mir {
+        file: PathBuf,
+        /// One line rather than indented.
+        #[arg(long)]
+        json: bool,
+        /// Name each statement's source position.
+        #[arg(long)]
+        spans: bool,
+        /// Where this project begins. As `nazm check --source-root`.
+        #[arg(long, value_name = "DIR")]
+        source_root: Option<PathBuf>,
+    },
     /// Report what this build of the compiler actually supports.
     ///
     /// Read from the compiler's own tables rather than from a written list, so it cannot
@@ -624,6 +640,12 @@ fn main() -> ExitCode {
             no_spans,
             source_root,
         } => return core_ir::run(&file, json, !no_spans, source_root.as_deref()),
+        Command::Mir {
+            file,
+            json,
+            spans,
+            source_root,
+        } => return mir::run(&file, json, spans, source_root.as_deref()),
         Command::Lsp { source_root } => return lsp::run(source_root.as_deref()),
         Command::Context {
             root,
@@ -780,6 +802,7 @@ fn main() -> ExitCode {
         | Command::Interface { .. }
         | Command::Lsp { .. }
         | Command::CoreIr { .. }
+        | Command::Mir { .. }
         | Command::Capabilities { .. } => {
             unreachable!("handled above")
         }

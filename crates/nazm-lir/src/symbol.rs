@@ -130,6 +130,13 @@ impl NativeSymbol {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// A symbol no definition has: what a reference to a function MIR does not contain
+    /// spells, so that the object refuses to link rather than calling something else.
+    #[must_use]
+    pub fn missing() -> Self {
+        Self("nz.missing".to_owned())
+    }
 }
 
 /// How a symbol is written where LLVM wants a global value.
@@ -268,6 +275,21 @@ impl Linkage {
 ///
 /// A module with no durable identity is spelled by its load position — `u.3` — exactly as
 /// its functions' symbols are, and for the same reason: it still compiles.
+/// The symbol of a MIR function or planned instance: its definition's, extended by its type
+/// arguments' canonical keys.
+#[must_use]
+pub fn of_identity(i: &nazm_mir::Identity) -> NativeSymbol {
+    let base = match &i.owner {
+        nazm_mir::Owner::Keyed(k) => NativeSymbol::of_definition(k),
+        nazm_mir::Owner::Unkeyed { module, name } => NativeSymbol::of_unkeyed(*module, name),
+    };
+    if i.args.is_empty() {
+        base
+    } else {
+        NativeSymbol::of_instance(&base, &i.args)
+    }
+}
+
 #[must_use]
 pub fn type_key(t: Type, types: &UserTypes, graph: &ModuleGraph) -> String {
     match t {

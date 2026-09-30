@@ -1,4 +1,13 @@
-//! [`crate::ir`] to LLVM IR text.
+//! MIR to LLVM IR text.
+//!
+//! # What this reads
+//!
+//! Validated MIR (`docs/architecture.md` §7.42) and the layouts, symbols and linkage
+//! [`crate::lower`] settled from it. Every language decision — which loop a `break` leaves, what
+//! a `?` does, which values die on an edge, which scopes are joined before a `return`, where a
+//! failure goes — is already a MIR statement or terminator. This file decides only how each
+//! becomes instructions: a block becomes a label, a local a stack slot, a drop a call to the
+//! runtime's release for that type, a failure edge a branch.
 //!
 //! # The contract this file exists to keep
 //!
@@ -13,9 +22,9 @@
 //!
 //! `llvm.trap` is not used either. It raises `SIGILL`, and a process killed by a signal
 //! is not the runtime-error contract Nazm promises: the spec says the program *stops with
-//! a diagnostic*. So a failing operation calls a generated helper that writes the
-//! diagnostic to standard error and exits 2 — the same status `nazm run` uses for a
-//! runtime failure.
+//! a diagnostic*. So a failing operation records the diagnostic and leaves along its MIR
+//! failure edge; the platform entry writes it and exits 2 — the same status `nazm run` uses
+//! for a runtime failure.
 //!
 //! The four cases that are easy to get wrong, and what is emitted for each:
 //!
@@ -30,29 +39,25 @@
 //! not belt-and-braces — they are what stops the hardware fault that `docs/spec.md`
 //! describes.
 //!
-//! # Blocks, and why the current one is tracked
+//! # Locals are slots
 //!
-//! Emission is linear: every instruction is appended, and opening a label continues into
-//! it. That works for straight-line code and for the guards above, and it would quietly
-//! produce *wrong* `phi` nodes for `if` without [`Emitter::current`].
-//!
-//! A `phi` names the block each incoming value came from. The naive answer is the label
-//! the branch started at — and that is wrong whenever the branch emitted any block of its
-//! own, which happens for a nested `if`, and for any checked arithmetic, since a guard
-//! opens a continuation block. The predecessor is the block holding the terminator that
-//! jumps to the join, which is whatever block emission *ended* in. So [`Emitter::open`]
-//! records it and the `phi` reads it back after each branch.
+//! Every MIR local has a stack slot, allocated in the entry block and zeroed there if it can
+//! own anything, so a drop of a local that holds nothing releases the representation's zero,
+//! which every release in the runtime ignores. A move reads the slot and zeroes it. No `phi`
+//! joins values across MIR blocks: MIR has none, and a value that crosses a block is in a slot.
 
 use std::fmt::Write as _;
 
+use nazm_mir as mir;
 use nazm_span::Span;
 
 use crate::names::SourceNames;
 
 use crate::ir::{
-    ArithOp, Block, Builtin, EnumLayout, EnumTy, Expr, Function, Lowering as _, MatchArm, Owns,
-    RecordLayout, RecordTy, StatementArm, Stmt, Ty, Unit, VariantLayout, VecLayout, VecTy,
+    ArithOp, Builtin, EnumLayout, EnumTy, Lowering as _, Owns, RecordLayout, RecordTy, Ty, Unit,
+    VariantLayout, VecLayout, VecTy,
 };
+use crate::lower::{Native, Sig};
 use crate::symbol::NativeSymbol;
 
 /// What this emitter has been verified against, recorded so a reader does not have to
@@ -182,11 +187,11 @@ struct Failure {
 struct Emitter<'a> {
     out: String,
     /// Next SSA value number. LLVM requires unnamed values to be numbered consecutively
-    /// within a function, so this also numbers blocks to keep them distinct.
+    /// within a function.
     next: u32,
     next_label: u32,
     /// The block instructions are currently being appended to — the predecessor a `phi`
-    /// must name. See the module documentation.
+    /// inside one statement's expansion must name.
     current: String,
     /// Error strings, interned so a program with the same failure twice carries it once.
     strings: Vec<(String, String)>,
@@ -195,80 +200,23 @@ struct Emitter<'a> {
     /// bytes and are never NUL-terminated.
     blobs: Vec<(String, Vec<u8>)>,
     /// Where every span in this module came from.
-    ///
-    /// The emitter used to build its own line-start table from a single source string —
-    /// a third copy of logic `nazm-span` already owned, and one that assumed all files
-    /// were one buffer. It asks the map now, which also means a baked position names the
-    /// line of the file the error is in rather than of a concatenation.
     names: &'a SourceNames<'a>,
-    /// How each record this unit mentions is laid out.
-    ///
-    /// Borrowed from the unit, which got it from the plan: one table for the whole
-    /// compilation, so two units that pass a record between them cannot disagree about
-    /// where its fields are. See [`RecordLayout`].
+    /// How each record, enum and `Vec` this unit mentions is laid out.
     types: Layouts<'a>,
-    /// Active loops, innermost last. Pushed around a loop's **body** only — a `break` in
-    /// a loop's *condition* belongs to the enclosing loop, which is the existing
-    /// language's rule (`docs/spec.md`, *Where a loop target binds*). Cleared at every
-    /// function boundary, so no target can leak from one function into another.
-    loops: Vec<Targets>,
-    /// SSA values holding a **+1 reference** to storage that nobody has taken over yet.
-    ///
-    /// `docs/spec.md`'s memory constitution says storage is reclaimed when the last
-    /// reference dies; this is how the emitter knows which references exist. A value is in
-    /// here when the expression that produced it created a reference — `ints_new`, or a
-    /// call whose callee transferred one on return — and it leaves when something consumes
-    /// it: a binding takes it over, a `return` carries it out, or a discard releases it.
-    ///
-    /// Reading a variable is **not** in here. That is rule 2: a borrowed reference costs
-    /// nothing, which is why passing a sequence to a function emits no traffic at all.
-    owned: std::collections::BTreeSet<u32>,
-    /// The type of each value that has ever been in [`Self::owned`], in the order they
-    /// were created.
-    ///
-    /// `owned` is a set of numbers and a release needs a type. Kept beside it rather than
-    /// making it a map, because the common operations on `owned` are membership and
-    /// removal and this is read only where a failure is leaving. Cleared per function
-    /// with everything else.
-    outstanding: Vec<(u32, Ty)>,
-    /// Slots an expression is **part way through filling**, innermost last.
-    ///
-    /// A record or enum being assembled, and the value a `match` is holding, live in
-    /// frame slots, so the shared unwind block and every `return` release them by the
-    /// ordinary path. A `break` or a `continue` takes neither: it stays in the frame and
-    /// carries on, so the slot would keep a reference nothing will ever hand on — and the
-    /// next turn of the loop zeroes it. This is [`Self::outstanding`]'s other half, for
-    /// slots rather than registers, and it is read at exactly one place.
-    building: Vec<(usize, Ty)>,
-    /// The type of every slot in the function being emitted, by slot.
-    ///
-    /// `frame` holds only the owning ones, because only those need releasing; a field
-    /// assignment into a record of `Int`s still needs to know what the slot holds.
-    slot_types: Vec<Ty>,
-    /// Slots holding something this frame must release on the way out, in order.
-    ///
-    /// Parameters are excluded, and that exclusion *is* rule 2: a callee borrows, so
-    /// releasing a parameter would destroy storage its caller still holds.
-    frame: Vec<(usize, Ty)>,
-    /// Open `scope` blocks, innermost last, each as the SSA value of its list of tasks.
-    ///
-    /// A list rather than a counter because the join has to be emitted on **every** way
-    /// out of a scope — falling off the end, and every `return`, `break` or `continue`
-    /// that leaves it — and each of those needs the right list.
-    ///
-    /// The allocation dominates the whole body, including any loop inside it, so naming
-    /// the SSA value directly is valid wherever a join has to be written.
-    scopes: Vec<u32>,
-    /// Whether this function has anywhere that leaves for `%nz.unwind`, so the block is
-    /// written only when something branches to it. Reset per function.
-    used_unwind: bool,
+    /// The program whose functions are being emitted, and each function's signature.
+    program: &'a mir::Program,
+    sigs: &'a [Sig],
+    /// The type of every slot in the function being emitted, by local: `None` for a task
+    /// list, whose slot is a pointer the runtime owns.
+    slot_types: Vec<Option<Ty>>,
+    /// The label a failure in the statement being emitted leaves for: its MIR failure edge.
+    unwind_to: String,
     /// The per-record retain and release helpers, generated on demand.
     ///
     /// One function per record type per direction, rather than the field walk inlined at
-    /// every site that copies or drops one. Two reasons, and the second is the important
-    /// one: a record released in forty places emits forty calls instead of forty copies of
-    /// its field walk, and — because a nested record's helper calls the inner record's —
-    /// the recursion lives in the *emitted* code rather than in this compiler's stack.
+    /// every site that copies or drops one — and because a nested record's helper calls the
+    /// inner record's, the recursion lives in the *emitted* code rather than in this
+    /// compiler's stack.
     helpers: String,
     /// Which helpers have been generated: `(record, true)` for retain.
     generated: std::collections::BTreeSet<(RecordTy, bool)>,
@@ -278,22 +226,14 @@ struct Emitter<'a> {
     generated_vecs: std::collections::BTreeSet<VecTy>,
     /// The equality helpers generated, by record or enum type. N13.
     generated_eq: std::collections::BTreeSet<Ty>,
-    /// The argument-block types generated for `spawn` sites, by field list.
-    ///
-    /// One per distinct argument shape rather than one per site, so two `spawn`s of the
-    /// same signature share a type. Kept in declaration order, which is generation order,
-    /// so two builds of one module produce one text.
+    /// The argument-block types generated for `spawn` sites, by field list, in generation
+    /// order, so two builds of one module produce one text.
     blocks: Vec<(Vec<Ty>, String)>,
-    /// Their `type` lines, which must reach the **head** of the module.
-    ///
-    /// A named type referenced before it is defined is opaque to LLVM's textual parser,
-    /// and an opaque type has no size — so `getelementptr null, 1`, which is how the block
-    /// asks for its own size, is rejected. Functions may be forward-referenced; types may
-    /// not. The two therefore go to different places.
+    /// Their `type` lines, which must reach the **head** of the module: a named type
+    /// referenced before it is defined is opaque to LLVM's textual parser.
     block_types: String,
     /// The task trampolines, accumulated while functions are emitted and appended after
-    /// them. One per `spawn` site: it unpacks that site's argument block and calls the
-    /// function with the types that site established.
+    /// them. One per `spawn` site.
     tasks: String,
     /// Whether `scope` and `spawn` are reached, and with them the thread helpers.
     needs_tasks: bool,
@@ -305,92 +245,54 @@ struct Emitter<'a> {
     needs_io: bool,
     /// Whether `str_join`'s helper is reached.
     needs_join: bool,
-    /// Whether the sequence helpers are reached. They are emitted only when they are —
-    /// a program that never touches a sequence carries none of this.
+    /// Whether the sequence helpers are reached.
     needs_sequences: bool,
     /// Whether a string backing is allocated, retained or released.
     needs_strings: bool,
 }
 
-/// Where `break` and `continue` go for one loop.
-///
-/// `continue` targets the **condition**, never the body: re-evaluating the condition is
-/// what `continue` means, and jumping to the body would skip it — including any call or
-/// checked arithmetic it contains.
-struct Targets {
-    head: String,
-    exit: String,
-    /// How many scopes were open when this loop started.
-    ///
-    /// A `break` joins the scopes opened **inside** the loop and no others: the ones
-    /// around the loop are still running and are joined by their own closing braces.
-    /// Recording the depth here is what tells the two apart — the same shape the Nazm
-    /// parser's per-expression stack base has, for the same reason.
-    scope_depth: usize,
-    /// How many values were part way through being assembled when this loop started.
-    ///
-    /// The same distinction `scope_depth` draws, for the same reason: a `break` inside an
-    /// arm abandons what the arm's own loop was building and **not** the value the `match`
-    /// around it is holding, which the arm is still inside.
-    building_depth: usize,
-    /// How many temporaries were outstanding when this loop started.
-    ///
-    /// The third of the same distinction. A temporary produced **before** the loop and
-    /// consumed after it — an argument to a call whose later argument contains one — is
-    /// still wanted when a `break` inside leaves, and releasing it there would be a
-    /// premature free rather than a leak.
-    outstanding_depth: usize,
-}
-
-/// What emitting an expression produced.
-///
-/// The checker's `Completion`, as emission sees it. The type travels with the value
-/// because every producer knows it locally, and deriving it later from the node would be
-/// a second answer to a question already answered.
+/// What emitting one built-in produced.
 #[derive(Debug, Clone, Copy)]
 enum Val {
     Of {
         value: u32,
+        /// What each built-in states it produced. Nothing reads it since MIR carries every
+        /// type; kept because it is how each arm below says what it returns.
+        #[allow(dead_code)]
         ty: Ty,
     },
-    /// Control left along this path. There is no value, the current block already holds
-    /// its terminator, and **nothing may be invented for the caller to consume**.
+    /// The built-in does not return (only `exit_with`, which MIR makes a terminator, so
+    /// this is never produced for a program MIR accepted).
     Transferred,
 }
 
-/// Whether emission may keep appending to the current block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Reach {
-    FallsThrough,
-    /// A terminator has been written. Nothing may follow it, and this path is not a
-    /// predecessor of any join.
-    Transferred,
+/// A MIR block's label. `bb` never collides with the `b` of the blocks one statement's
+/// expansion opens.
+fn label(b: mir::BlockId) -> String {
+    format!("bb{}", b.0)
 }
 
-/// One branch's contribution to a join.
-///
-/// The value and the block it was produced in travel together because they are the two
-/// halves of one `phi` incoming; a `phi` naming a block that did not produce the value is
-/// precisely the defect this type makes unrepresentable. A branch that transferred
-/// contributes nothing at all, rather than a value nobody produced.
-enum Incoming {
-    Value { value: u32, ty: Ty, from: String },
-    Transferred,
+/// The predicate of a comparison. Signed: `Int` is signed.
+const fn predicate(op: mir::CmpOp) -> &'static str {
+    match op {
+        mir::CmpOp::Eq => "eq",
+        mir::CmpOp::NotEq => "ne",
+        mir::CmpOp::Lt => "slt",
+        mir::CmpOp::LtEq => "sle",
+        mir::CmpOp::Gt => "sgt",
+        mir::CmpOp::GtEq => "sge",
+    }
 }
 
-/// Take an operand's value, or stop emitting this expression because control left it.
-///
-/// The emitter's counterpart to the interpreter's `take!`, and for the same reason: a
-/// `break` can sit inside anything used as a value, and when it does the enclosing
-/// expression has no value and never will. Everything already emitted keeps its effects;
-/// nothing after it is emitted at all.
-macro_rules! operand {
-    ($e:expr) => {
-        match $e {
-            Val::Of { value, .. } => value,
-            Val::Transferred => return Val::Transferred,
-        }
-    };
+/// The backend's arithmetic operator for MIR's.
+const fn arith(op: mir::ArithOp) -> ArithOp {
+    match op {
+        mir::ArithOp::Add => ArithOp::Add,
+        mir::ArithOp::Sub => ArithOp::Sub,
+        mir::ArithOp::Mul => ArithOp::Mul,
+        mir::ArithOp::Div => ArithOp::Div,
+        mir::ArithOp::Rem => ArithOp::Rem,
+    }
 }
 
 impl Emitter<'_> {
@@ -1187,136 +1089,6 @@ impl Emitter<'_> {
         self.needs_sequences = true;
     }
 
-    /// Record that `value` holds a reference nobody has taken over yet.
-    ///
-    /// The type travels with it because releasing needs one, and a failure leaving the
-    /// function is where that happens — see [`Self::release_temporaries`].
-    fn own(&mut self, value: u32, ty: Ty) {
-        self.owned.insert(value);
-        self.outstanding.push((value, ty));
-    }
-
-    /// Make `value` a reference this code owns, retaining it if it was only borrowed.
-    ///
-    /// Called where something takes a reference over — a binding, a `return`. A value that
-    /// was already owned is handed on unchanged, which is what keeps `let xs = ints_new()`
-    /// free of traffic.
-    fn take(&mut self, value: u32, ty: Ty) {
-        if ty.owns().is_none() {
-            return;
-        }
-        if !self.owned.remove(&value) {
-            self.retain(value, ty);
-        }
-    }
-
-    /// Release a reference nothing took over.
-    ///
-    /// A temporary handed to a function that only borrowed it, or a statement whose value
-    /// was discarded. Both are ordinary; neither is an error.
-    fn drop_temporary(&mut self, value: u32, ty: Ty) {
-        if ty.owns().is_some() && self.owned.remove(&value) {
-            self.release(value, ty);
-        }
-    }
-
-    /// Build a record value, one initialiser at a time.
-    ///
-    /// # Why a slot, when the value is an aggregate in a register
-    ///
-    /// Because an initialiser can fail. `Holder(name: int_to_str(1), n: 1 / 0)` allocates
-    /// a string and then stops, and a value held only in a register is not reachable from
-    /// the frame's cleanup — so the string would leak on the one path the program was
-    /// already failing on. Assembling into a slot the frame releases makes that path
-    /// ordinary.
-    ///
-    /// The "which fields are initialised" bookkeeping `docs/spec.md` asks for is the
-    /// zeroed slot itself: a field not yet written is null, and releasing null is a no-op
-    /// in every one of the runtime's release functions. There is no separate flag to keep
-    /// in agreement with the value.
-    ///
-    /// A record no field of which owns anything gets no slot and pays for none of this.
-    fn record(&mut self, ty: Ty, fields: &[(u32, Expr)], slot: Option<usize>) -> Val {
-        let text = llvm_type(self.types, ty);
-        match slot {
-            None => {
-                // Nothing to clean, so the value is built in registers.
-                let mut built = format!("{text} undef");
-                let mut last = 0;
-                for (at, value) in fields {
-                    let Val::Of {
-                        value: v,
-                        ty: field,
-                    } = self.expr(value)
-                    else {
-                        return Val::Transferred;
-                    };
-                    let out = self.fresh();
-                    let _ = writeln!(
-                        self.out,
-                        "  %{out} = insertvalue {built}, {} %{v}, {at}",
-                        llvm_type(self.types, field)
-                    );
-                    built = format!("{text} %{out}");
-                    last = out;
-                }
-                Val::Of { value: last, ty }
-            }
-            Some(slot) => {
-                // Zeroed first. The slot is already zero on every path that reaches
-                // here — the prologue does it once, a completed construction restores it,
-                // and a `break` or a `continue` out of an unfinished one releases what it
-                // held and restores it too — so this store is what makes that a local
-                // fact rather than a property of three other places. It is also the
-                // "which fields are initialised" bookkeeping: a field not yet written is
-                // null, and releasing null is a no-op.
-                let _ = writeln!(
-                    self.out,
-                    "  store {text} {}, ptr %slot{slot}",
-                    ty.unwind_value()
-                );
-                // From here until the value leaves, a `break` or a `continue` out of an
-                // initialiser has to give back what the slot is already holding.
-                self.building.push((slot, ty));
-                for (at, value) in fields {
-                    let Val::Of {
-                        value: v,
-                        ty: field,
-                    } = self.expr(value)
-                    else {
-                        self.building.pop();
-                        return Val::Transferred;
-                    };
-                    // The initialiser's reference moves into the record, which the frame
-                    // now owns. Taking it here is what makes the cleanup on a later
-                    // failure correct rather than a double release.
-                    self.take(v, field);
-                    let held = self.fresh();
-                    let _ = writeln!(self.out, "  %{held} = load {text}, ptr %slot{slot}");
-                    let out = self.fresh();
-                    let _ = writeln!(
-                        self.out,
-                        "  %{out} = insertvalue {text} %{held}, {} %{v}, {at}",
-                        llvm_type(self.types, field)
-                    );
-                    let _ = writeln!(self.out, "  store {text} %{out}, ptr %slot{slot}");
-                }
-                // Complete. The value leaves with the references the slot was holding, and
-                // the slot is zeroed so the frame does not release them a second time.
-                let whole = self.fresh();
-                let _ = writeln!(self.out, "  %{whole} = load {text}, ptr %slot{slot}");
-                let _ = writeln!(
-                    self.out,
-                    "  store {text} {}, ptr %slot{slot}",
-                    ty.unwind_value()
-                );
-                self.building.pop();
-                self.own(whole, ty);
-                Val::Of { value: whole, ty }
-            }
-        }
-    }
-
     /// The LLVM name of one variant's payload struct.
     fn payload_type(&self, enum_ty: Ty, tag: u32) -> String {
         let Ty::Enum(id) = enum_ty else {
@@ -1325,314 +1097,6 @@ impl Emitter<'_> {
         enum_layout(self.types.enums, id)
             .and_then(|l| l.variants.get(tag as usize))
             .map_or_else(|| "<variant>".to_owned(), |v| v.name.to_string())
-    }
-
-    /// Build an enum value: a discriminant and one variant's payload.
-    ///
-    /// # Why the discriminant goes in first
-    ///
-    /// Because cleanup after a failed construction has to release what the construction
-    /// has already taken, and it finds those fields by dispatching on the discriminant.
-    /// Writing the tag last would leave the slot saying *variant 0* while the payload
-    /// being filled is variant 3's — so a failure would release variant 0's fields, find
-    /// null in each, do nothing, and leak everything the initialisers before the failure
-    /// had produced.
-    ///
-    /// So the slot is zeroed, the discriminant is written, and then the payload is filled.
-    /// Cleanup at any point in between dispatches on a **valid** tag and releases exactly
-    /// the fields that exist: the ones already stored, properly, and the ones not yet
-    /// stored as null, which every release function ignores. The zeroed payload *is* the
-    /// "which fields are initialised" bookkeeping, exactly as it is for a record.
-    fn variant(&mut self, ty: Ty, tag: u32, fields: &[(u32, Expr)], slot: Option<usize>) -> Val {
-        let whole = llvm_type(self.types, ty);
-        let payload_ty = self.payload_type(ty, tag);
-        match slot {
-            None => {
-                // Nothing to clean, so the value is built in registers.
-                let mut payload = format!("{payload_ty} zeroinitializer");
-                for (at, value) in fields {
-                    let Val::Of {
-                        value: v,
-                        ty: field,
-                    } = self.expr(value)
-                    else {
-                        return Val::Transferred;
-                    };
-                    let out = self.fresh();
-                    let _ = writeln!(
-                        self.out,
-                        "  %{out} = insertvalue {payload}, {} %{v}, {at}",
-                        llvm_type(self.types, field)
-                    );
-                    payload = format!("{payload_ty} %{out}");
-                }
-                let tagged = self.fresh();
-                let _ = writeln!(
-                    self.out,
-                    "  %{tagged} = insertvalue {whole} zeroinitializer, i64 {tag}, 0"
-                );
-                let out = self.fresh();
-                let _ = writeln!(
-                    self.out,
-                    "  %{out} = insertvalue {whole} %{tagged}, {payload}, {}",
-                    tag + 1
-                );
-                Val::Of { value: out, ty }
-            }
-            Some(slot) => {
-                // Zeroed first — see `record`, which says why this store is kept when
-                // the slot is already zero on every path that reaches it.
-                let _ = writeln!(
-                    self.out,
-                    "  store {whole} {}, ptr %slot{slot}",
-                    ty.unwind_value()
-                );
-                // From here until the value leaves, a `break` or a `continue` out of an
-                // initialiser has to give back what the slot is already holding.
-                self.building.push((slot, ty));
-                // The discriminant, before any payload: see above.
-                let empty = self.fresh();
-                let _ = writeln!(self.out, "  %{empty} = load {whole}, ptr %slot{slot}");
-                let tagged = self.fresh();
-                let _ = writeln!(
-                    self.out,
-                    "  %{tagged} = insertvalue {whole} %{empty}, i64 {tag}, 0"
-                );
-                let _ = writeln!(self.out, "  store {whole} %{tagged}, ptr %slot{slot}");
-                for (at, value) in fields {
-                    let Val::Of {
-                        value: v,
-                        ty: field,
-                    } = self.expr(value)
-                    else {
-                        self.building.pop();
-                        return Val::Transferred;
-                    };
-                    // The initialiser's reference moves into the value, which the frame
-                    // now owns. Taking it here is what makes the cleanup on a later
-                    // failure correct rather than a double release.
-                    self.take(v, field);
-                    let held = self.fresh();
-                    let _ = writeln!(self.out, "  %{held} = load {whole}, ptr %slot{slot}");
-                    let payload = self.fresh();
-                    let _ = writeln!(
-                        self.out,
-                        "  %{payload} = extractvalue {whole} %{held}, {}",
-                        tag + 1
-                    );
-                    let filled = self.fresh();
-                    let _ = writeln!(
-                        self.out,
-                        "  %{filled} = insertvalue {payload_ty} %{payload}, {} %{v}, {at}",
-                        llvm_type(self.types, field)
-                    );
-                    let out = self.fresh();
-                    let _ = writeln!(
-                        self.out,
-                        "  %{out} = insertvalue {whole} %{held}, {payload_ty} %{filled}, {}",
-                        tag + 1
-                    );
-                    let _ = writeln!(self.out, "  store {whole} %{out}, ptr %slot{slot}");
-                }
-                // The value leaves with the references the slot was holding, and the slot
-                // is zeroed so the frame does not release them a second time.
-                let complete = self.fresh();
-                let _ = writeln!(self.out, "  %{complete} = load {whole}, ptr %slot{slot}");
-                let _ = writeln!(
-                    self.out,
-                    "  store {whole} {}, ptr %slot{slot}",
-                    ty.unwind_value()
-                );
-                self.building.pop();
-                self.own(complete, ty);
-                Val::Of {
-                    value: complete,
-                    ty,
-                }
-            }
-        }
-    }
-
-    /// `match scrutinee { … }` — a `switch` on the discriminant, and a `phi` at the join.
-    ///
-    /// The shape is [`Self::conditional`]'s with N arms, plus the one thing an `if` does
-    /// not need: the value being matched is held in a slot the frame releases, so a
-    /// failure inside any arm gives it back, and the release at the join happens **after**
-    /// each arm has established its own result.
-    fn match_on(
-        &mut self,
-        scrutinee: &Expr,
-        scrutinee_ty: Ty,
-        slot: usize,
-        arms: &[MatchArm],
-    ) -> Val {
-        let tags: Vec<u32> = arms.iter().map(|a| a.tag).collect();
-        let Some((labels, join_label)) = self.dispatch(scrutinee, scrutinee_ty, slot, &tags) else {
-            return Val::Transferred;
-        };
-
-        let mut incomings: Vec<(u32, Ty, String)> = Vec::new();
-        for (arm, label) in arms.iter().zip(&labels) {
-            self.open(label);
-            if let Incoming::Value { value, ty, from } = self.value_branch(&arm.block, &join_label)
-            {
-                incomings.push((value, ty, from));
-            }
-        }
-
-        let Some(result_ty) = incomings.first().map(|(_, t, _)| *t) else {
-            // No arm arrives: every one transfers control. The join is never opened, and
-            // the value in the slot is released by whichever exit each arm took.
-            self.building.pop();
-            return Val::Transferred;
-        };
-
-        self.open(&join_label);
-        let out = self.fresh();
-        let list = incomings
-            .iter()
-            .map(|(v, _, from)| format!("[ %{v}, %{from} ]"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let _ = writeln!(
-            self.out,
-            "  %{out} = phi {} {list}",
-            llvm_type(self.types, result_ty)
-        );
-        if result_ty.owns().is_some() {
-            for (v, _, _) in &incomings {
-                self.owned.remove(v);
-            }
-            self.own(out, result_ty);
-        }
-        // **After** the result is established, and that ordering is the milestone. Each
-        // arm retained whatever it handed to the join before branching here, so a payload
-        // returned from an arm holds its own reference by the time the value it came out
-        // of is let go.
-        self.release_matched(scrutinee_ty, slot);
-        Val::Of {
-            value: out,
-            ty: result_ty,
-        }
-    }
-
-    /// Statement-position `match`: the same dispatch, arms that produce nothing, and no
-    /// `phi`.
-    ///
-    /// An arm that falls through branches to the continuation; one that transfers ended in
-    /// its own terminator and is not a predecessor of it. The continuation is opened only
-    /// if some arm arrives — every arm leaving is the whole statement leaving, and no
-    /// continuation is fabricated for it, exactly as [`Self::statement_if`] does.
-    fn statement_match(
-        &mut self,
-        scrutinee: &Expr,
-        scrutinee_ty: Ty,
-        slot: usize,
-        arms: &[StatementArm],
-    ) -> Reach {
-        let tags: Vec<u32> = arms.iter().map(|a| a.tag).collect();
-        let Some((labels, cont)) = self.dispatch(scrutinee, scrutinee_ty, slot, &tags) else {
-            return Reach::Transferred;
-        };
-
-        let mut arrives = false;
-        for (arm, label) in arms.iter().zip(&labels) {
-            // An arm's temporaries dominate neither its siblings nor the continuation. See
-            // `value_branch`.
-            let outer = self.owned.clone();
-            self.open(label);
-            if self.stmts(&arm.body) == Reach::FallsThrough {
-                let _ = writeln!(self.out, "  br label %{cont}");
-                arrives = true;
-            }
-            self.owned = outer;
-        }
-
-        if !arrives {
-            self.building.pop();
-            return Reach::Transferred;
-        }
-        self.open(&cont);
-        self.release_matched(scrutinee_ty, slot);
-        Reach::FallsThrough
-    }
-
-    /// Evaluate a `match`'s scrutinee into its slot and `switch` on the discriminant.
-    ///
-    /// Returns each arm's label, in the order given, and the join's — or `None` when the
-    /// scrutinee transferred, so no arm is reachable. On success the `match` is holding the
-    /// value in `slot` and has said so on `building`; whoever finishes the `match` pops it,
-    /// either through [`Self::release_matched`] at the join or directly when no arm
-    /// arrives.
-    fn dispatch(
-        &mut self,
-        scrutinee: &Expr,
-        scrutinee_ty: Ty,
-        slot: usize,
-        tags: &[u32],
-    ) -> Option<(Vec<String>, String)> {
-        let whole = llvm_type(self.types, scrutinee_ty);
-        let Val::Of { value: v, ty } = self.expr(scrutinee) else {
-            return None;
-        };
-        // The `match` takes the value over: a temporary is already owned and a binding is
-        // borrowed, and `take` is the one place that difference is settled. From here the
-        // slot holds the reference, so every exit — the join below, a `return` inside an
-        // arm, the unwind block a failure takes — releases it exactly once.
-        self.take(v, ty);
-        let _ = writeln!(self.out, "  store {whole} %{v}, ptr %slot{slot}");
-        // The `match` is holding it from here, so a `break` or a `continue` out of an arm
-        // gives it back rather than leaving it for the next turn of the loop to zero.
-        self.building.push((slot, ty));
-
-        let held = self.fresh();
-        let _ = writeln!(self.out, "  %{held} = load {whole}, ptr %slot{slot}");
-        let tag = self.fresh();
-        let _ = writeln!(self.out, "  %{tag} = extractvalue {whole} %{held}, 0");
-
-        let join_label = format!("b{}", self.fresh_label());
-        let labels: Vec<String> = tags
-            .iter()
-            .map(|_| format!("b{}", self.fresh_label()))
-            .collect();
-        // Checking has established that every variant has exactly one arm, so the default
-        // is unreachable for any value this program can build. It is written as a branch
-        // to the first arm rather than as `unreachable`: the block must exist for the
-        // instruction to be well formed, and a `switch` whose default is poison would make
-        // a compiler mistake into undefined behaviour instead of a wrong answer.
-        let default = labels
-            .first()
-            .cloned()
-            .unwrap_or_else(|| join_label.clone());
-        let table = tags
-            .iter()
-            .zip(&labels)
-            .map(|(t, l)| format!("i64 {t}, label %{l}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let _ = writeln!(
-            self.out,
-            "  switch i64 %{tag}, label %{default} [ {table} ]"
-        );
-        Some((labels, join_label))
-    }
-
-    /// Let go of the value a `match` was holding, at the join its arms arrived at.
-    ///
-    /// Only ever reached **after** the arms have established whatever they produce, which
-    /// is the take-before-release ordering: a payload an arm handed on holds its own
-    /// reference by now. The slot is zeroed so the frame does not release it again.
-    fn release_matched(&mut self, scrutinee_ty: Ty, slot: usize) {
-        let whole = llvm_type(self.types, scrutinee_ty);
-        let dying = self.fresh();
-        let _ = writeln!(self.out, "  %{dying} = load {whole}, ptr %slot{slot}");
-        let _ = writeln!(
-            self.out,
-            "  store {whole} {}, ptr %slot{slot}",
-            scrutinee_ty.unwind_value()
-        );
-        self.building.pop();
-        self.release(dying, scrutinee_ty);
     }
 
     /// Replace the field `path` reaches, starting from `slot`.
@@ -1693,33 +1157,513 @@ impl Emitter<'_> {
         self.release(old, old_ty);
     }
 
-    /// The type of a slot, as this frame recorded it.
-    ///
-    /// Slots that own nothing are not in `frame`, and a field assignment can reach one —
-    /// a record of `Int`s. The locals list is the authority; `frame` is a subset of it.
+    /// The type of a slot, as MIR declared it.
     fn frame_ty(&self, slot: usize) -> Ty {
-        self.frame.iter().find(|(s, _)| *s == slot).map_or(
-            self.slot_types.get(slot).copied().unwrap_or(Ty::Int),
-            |(_, t)| *t,
-        )
+        self.slot_types
+            .get(slot)
+            .copied()
+            .flatten()
+            .unwrap_or(Ty::Int)
     }
 
-    /// Release every handle this frame is still holding.
-    ///
-    /// Emitted before **every** way out of a function — the tail value, each `return`, and
-    /// the shared unwind block a failure takes — because `docs/spec.md` reclaims on the
-    /// semantic event, and "the closing brace" is not one of them. A slot never assigned
-    /// holds null, and releasing null is a no-op, so a path that skipped a declaration
-    /// costs one comparison and nothing else.
-    fn release_frame(&mut self) {
-        for (slot, ty) in self.frame.clone() {
-            let v = self.fresh();
-            let _ = writeln!(
-                self.out,
-                "  %{v} = load {}, ptr %slot{slot}",
-                llvm_type(self.types, ty)
-            );
-            self.release(v, ty);
+    /// Leave for the statement's failure edge. What the failure owes — the joins of open
+    /// scopes, the drops of what the function holds — is in the MIR blocks along that edge.
+    fn unwind(&mut self) {
+        let _ = writeln!(self.out, "  br label %{}", self.unwind_to);
+    }
+
+    /// If this thread has failed, leave along the failure edge; otherwise carry on in a fresh
+    /// block. Emitted after every call to a generated function, after the failure check MIR
+    /// places at a scope's closing brace, and inside `chan_recv`.
+    fn check_failed(&mut self) {
+        let flag = self.fresh();
+        let cont = self.fresh_label();
+        let _ = writeln!(self.out, "  %{flag} = load i1, ptr @nz.failed");
+        let _ = writeln!(
+            self.out,
+            "  br i1 %{flag}, label %{}, label %b{cont}",
+            self.unwind_to
+        );
+        self.open(&format!("b{cont}"));
+    }
+
+    /// The LLVM type of a local's slot.
+    fn slot_llvm(&self, l: mir::LocalId) -> String {
+        match self.slot_types.get(l.index()).copied().flatten() {
+            Some(t) => llvm_type(self.types, t),
+            None => "ptr".to_owned(),
+        }
+    }
+
+    fn slot_ty(&self, l: mir::LocalId) -> Ty {
+        self.slot_types
+            .get(l.index())
+            .copied()
+            .flatten()
+            .unwrap_or(Ty::Int)
+    }
+
+    /// The zero a slot of this local holds when it owns nothing.
+    fn slot_zero(&self, l: mir::LocalId) -> &'static str {
+        match self.slot_types.get(l.index()).copied().flatten() {
+            Some(t) => t.unwind_value(),
+            None => "null",
+        }
+    }
+
+    fn load(&mut self, l: mir::LocalId) -> u32 {
+        let ty = self.slot_llvm(l);
+        let v = self.fresh();
+        let _ = writeln!(self.out, "  %{v} = load {ty}, ptr %slot{}", l.0);
+        v
+    }
+
+    fn store(&mut self, l: mir::LocalId, value: &str) {
+        let ty = self.slot_llvm(l);
+        let _ = writeln!(self.out, "  store {ty} {value}, ptr %slot{}", l.0);
+    }
+
+    fn store_zero(&mut self, l: mir::LocalId) {
+        let zero = self.slot_zero(l);
+        self.store(l, zero);
+    }
+
+    /// An operand's value in a register.
+    fn operand(&mut self, o: &mir::Operand) -> (u32, Ty) {
+        match o {
+            mir::Operand::Local(l) => {
+                let ty = self.slot_ty(*l);
+                (self.load(*l), ty)
+            }
+            mir::Operand::Const(c) => self.constant(c),
+        }
+    }
+
+    fn constant(&mut self, c: &mir::Const) -> (u32, Ty) {
+        match c {
+            // Materialised through an instruction rather than used inline so every value
+            // has a number and one shape. `-O2` folds it; `-O0` does not, which is what makes
+            // the arithmetic genuinely execute during testing.
+            mir::Const::Int(v) => {
+                let n = self.fresh();
+                let _ = writeln!(self.out, "  %{n} = add i64 {v}, 0");
+                (n, Ty::Int)
+            }
+            mir::Const::Bool(v) => {
+                let n = self.fresh();
+                let _ = writeln!(self.out, "  %{n} = or i1 {v}, false");
+                (n, Ty::Bool)
+            }
+            // **Immortal.** The constant is in the object's read-only data and lives as long
+            // as the process; its owner is null, and every retain and release of it is a
+            // no-op that costs one comparison.
+            mir::Const::Str(bytes) => {
+                let sym = self.blob(bytes);
+                let n = self.fresh();
+                let _ = writeln!(self.out, "  %{n} = load {{ ptr, i64, ptr }}, ptr {sym}");
+                (n, Ty::Str)
+            }
+        }
+    }
+
+    /// Where the field declared at `field` sits in its record's struct: the layout boundary.
+    fn field_position(&self, f: mir::FieldRef) -> u32 {
+        record_layout(self.types.records, rty(f.record))
+            .and_then(|l| l.of_declaration.get(f.field as usize).copied())
+            .unwrap_or(0)
+    }
+
+    /// The discriminant of the variant declared at `variant`.
+    fn tag(&self, e: nazm_sema::EnumId, variant: u32) -> u32 {
+        enum_layout(self.types.enums, ety(e))
+            .and_then(|l| l.of_declaration.get(variant as usize).copied())
+            .unwrap_or(0)
+    }
+
+    /// Where a payload field sits in its variant's struct.
+    fn payload_position(&self, e: nazm_sema::EnumId, tag: u32, field: u32) -> u32 {
+        enum_layout(self.types.enums, ety(e))
+            .and_then(|l| l.variants.get(tag as usize))
+            .and_then(|v| v.of_declaration.get(field as usize).copied())
+            .unwrap_or(0)
+    }
+
+    fn statement(&mut self, s: &mir::Statement) {
+        self.unwind_to = s
+            .kind
+            .unwind()
+            .map_or_else(|| "nz.no.failure.edge".to_owned(), label);
+        match &s.kind {
+            mir::StatementKind::Assign { dst, value, .. } => {
+                let v = self.rvalue(value, s.at);
+                self.store(*dst, &v);
+            }
+            mir::StatementKind::SetField { base, path, value } => {
+                let new_ty = self.slot_ty(*value);
+                let new = self.load(*value);
+                self.store_zero(*value);
+                let steps: Vec<(u32, Ty)> = path
+                    .iter()
+                    .map(|f| {
+                        let ty = self
+                            .program
+                            .types
+                            .field(f.record, f.field)
+                            .map_or(Ty::Int, Ty::of);
+                        (self.field_position(*f), ty)
+                    })
+                    .collect();
+                self.set_field(base.index(), &steps, new, new_ty);
+            }
+            mir::StatementKind::Drop(l) => {
+                let ty = self.slot_ty(*l);
+                if owns_anything(self.types, ty) {
+                    let v = self.load(*l);
+                    self.store_zero(*l);
+                    self.release(v, ty);
+                }
+            }
+            mir::StatementKind::ScopeOpen { list, .. } => {
+                // The list is an ordinary sequence header, reused rather than reinvented: a
+                // task handle is pointer-sized and a growable array of them is exactly what
+                // `@nz.arr_new` already provides.
+                self.needs_sequences = true;
+                self.needs_tasks = true;
+                let tids = self.fresh();
+                let _ = writeln!(self.out, "  %{tids} = call ptr @nz.arr_new()");
+                let null = self.fresh();
+                let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{tids}, null");
+                self.guard(
+                    null,
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    s.at,
+                );
+                self.store(*list, &format!("%{tids}"));
+            }
+            mir::StatementKind::Spawn {
+                list, callee, args, ..
+            } => {
+                let tids = self.load(*list);
+                let vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
+                self.spawn(tids, *callee, &vals, s.at);
+            }
+            mir::StatementKind::ScopeJoin { list } => {
+                let tids = self.load(*list);
+                self.store_zero(*list);
+                self.join_one(tids);
+            }
+            mir::StatementKind::CheckFailed { .. } => self.check_failed(),
+        }
+    }
+
+    /// An rvalue's value, as an LLVM operand to store into its destination.
+    fn rvalue(&mut self, v: &mir::Rvalue, at: Span) -> String {
+        match v {
+            mir::Rvalue::Use(o) => format!("%{}", self.operand(o).0),
+            mir::Rvalue::Copy(l) => {
+                let ty = self.slot_ty(*l);
+                let x = self.load(*l);
+                self.retain(x, ty);
+                format!("%{x}")
+            }
+            mir::Rvalue::Move(l) => {
+                let x = self.load(*l);
+                self.store_zero(*l);
+                format!("%{x}")
+            }
+            mir::Rvalue::Neg(o) => {
+                let (x, _) = self.operand(o);
+                let r = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{r} = call {{i64, i1}} @llvm.ssub.with.overflow.i64(i64 0, i64 %{x})"
+                );
+                let ov = self.fresh();
+                let _ = writeln!(self.out, "  %{ov} = extractvalue {{i64, i1}} %{r}, 1");
+                self.guard(
+                    ov,
+                    &Failure {
+                        code: "N0400",
+                        message: "this negation overflows `Int`".to_owned(),
+                    },
+                    at,
+                );
+                let out = self.fresh();
+                let _ = writeln!(self.out, "  %{out} = extractvalue {{i64, i1}} %{r}, 0");
+                format!("%{out}")
+            }
+            mir::Rvalue::Arith(op, a, b) => {
+                // Left, then right: MIR evaluated both into operands in that order already.
+                let (x, _) = self.operand(a);
+                let (y, _) = self.operand(b);
+                let out = match arith(*op) {
+                    op @ (ArithOp::Add | ArithOp::Sub | ArithOp::Mul) => self.checked(op, x, y, at),
+                    ArithOp::Div => self.divide(x, y, at),
+                    ArithOp::Rem => self.remainder(x, y, at),
+                };
+                format!("%{out}")
+            }
+            mir::Rvalue::Compare {
+                op,
+                operand,
+                lhs,
+                rhs,
+                ..
+            } => {
+                let (a, _) = self.operand(lhs);
+                let (b, _) = self.operand(rhs);
+                let ty = Ty::of(*operand);
+                // `Str` is a three-field aggregate: two strings are equal when they have the
+                // same bytes, not when they share a buffer.
+                if ty == Ty::Str {
+                    let out = self.string_equality(a, b, *op == mir::CmpOp::NotEq);
+                    return format!("%{out}");
+                }
+                // A record or an enum: its equality helper, N13. `!=` is the negation of that
+                // one answer, never a second walk.
+                if matches!(ty, Ty::Record(_) | Ty::Enum(_)) {
+                    let same = self.equality(a, b, ty);
+                    if *op == mir::CmpOp::NotEq {
+                        let flipped = self.fresh();
+                        let _ = writeln!(self.out, "  %{flipped} = xor i1 %{same}, true");
+                        return format!("%{flipped}");
+                    }
+                    return format!("%{same}");
+                }
+                let out = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{out} = icmp {} {} %{a}, %{b}",
+                    predicate(*op),
+                    llvm_type(self.types, ty)
+                );
+                format!("%{out}")
+            }
+            mir::Rvalue::Call { callee, args } => {
+                let vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
+                let list = vals
+                    .iter()
+                    .map(|(v, t)| format!("{} %{v}", llvm_type(self.types, *t)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let (symbol, ret) = self
+                    .sigs
+                    .get(callee.index())
+                    .map_or((String::from("@nz.missing"), Ty::Int), |s| {
+                        (s.symbol.to_string(), s.ret)
+                    });
+                let out = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{out} = call {} {symbol}({list})",
+                    llvm_type(self.types, ret)
+                );
+                // A callee that failed has already unwound to its own `ret` and handed back
+                // a stand-in value. This is where that is noticed.
+                self.check_failed();
+                format!("%{out}")
+            }
+            mir::Rvalue::Primitive { op, elem, args } => {
+                let vals: Vec<u32> = args.iter().map(|a| self.operand(a).0).collect();
+                let out =
+                    match elem {
+                        Some(e) => {
+                            let vec = self.program.types.vec_of(*e).map_or(VecTy(u32::MAX), |t| {
+                                match Ty::of(t) {
+                                    Ty::Vec(v) => v,
+                                    _ => VecTy(u32::MAX),
+                                }
+                            });
+                            self.vec_op(*op, vec, Ty::of(*e), &vals, at)
+                        }
+                        None => self.builtin_op(*op, &vals, at),
+                    };
+                match out {
+                    Val::Of { value, .. } => format!("%{value}"),
+                    Val::Transferred => "undef".to_owned(),
+                }
+            }
+            mir::Rvalue::Record { record, fields } => {
+                let ty = Ty::Record(rty(*record));
+                let text = llvm_type(self.types, ty);
+                // Complete by construction: MIR builds a record only from every field, moved
+                // out of the temporaries they were evaluated into, in the order written.
+                let mut built = format!("{text} zeroinitializer");
+                let mut last = None;
+                for (field, tmp) in fields {
+                    let fty = self.slot_ty(*tmp);
+                    let v = self.load(*tmp);
+                    self.store_zero(*tmp);
+                    let at = self.field_position(mir::FieldRef {
+                        record: *record,
+                        field: *field,
+                    });
+                    let out = self.fresh();
+                    let _ = writeln!(
+                        self.out,
+                        "  %{out} = insertvalue {built}, {} %{v}, {at}",
+                        llvm_type(self.types, fty)
+                    );
+                    built = format!("{text} %{out}");
+                    last = Some(out);
+                }
+                last.map_or_else(|| "zeroinitializer".to_owned(), |o| format!("%{o}"))
+            }
+            mir::Rvalue::Variant {
+                enumeration,
+                variant,
+                fields,
+            } => {
+                let ty = Ty::Enum(ety(*enumeration));
+                let whole = llvm_type(self.types, ty);
+                let tag = self.tag(*enumeration, *variant);
+                let payload_ty = self.payload_type(ty, tag);
+                let mut payload = format!("{payload_ty} zeroinitializer");
+                for (field, tmp) in fields {
+                    let fty = self.slot_ty(*tmp);
+                    let v = self.load(*tmp);
+                    self.store_zero(*tmp);
+                    let at = self.payload_position(*enumeration, tag, *field);
+                    let out = self.fresh();
+                    let _ = writeln!(
+                        self.out,
+                        "  %{out} = insertvalue {payload}, {} %{v}, {at}",
+                        llvm_type(self.types, fty)
+                    );
+                    payload = format!("{payload_ty} %{out}");
+                }
+                let tagged = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{tagged} = insertvalue {whole} zeroinitializer, i64 {tag}, 0"
+                );
+                let out = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{out} = insertvalue {whole} %{tagged}, {payload}, {}",
+                    tag + 1
+                );
+                format!("%{out}")
+            }
+            mir::Rvalue::Field { base, field } => {
+                let (b, _) = self.operand(base);
+                let fty = self
+                    .program
+                    .types
+                    .field(field.record, field.field)
+                    .map_or(Ty::Int, Ty::of);
+                let at = self.field_position(*field);
+                let out = self.extract(b, rty(field.record), at, fty);
+                // Its own reference, by MIR's law: a projection is owned by its destination.
+                self.retain(out, fty);
+                format!("%{out}")
+            }
+            mir::Rvalue::Payload {
+                base,
+                enumeration,
+                variant,
+                field,
+            } => {
+                let ty = Ty::Enum(ety(*enumeration));
+                let whole = llvm_type(self.types, ty);
+                let tag = self.tag(*enumeration, *variant);
+                let payload_ty = self.payload_type(ty, tag);
+                let fty = self
+                    .program
+                    .types
+                    .payload(*enumeration, *variant, *field)
+                    .map_or(Ty::Int, Ty::of);
+                let at = self.payload_position(*enumeration, tag, *field);
+                let b = self.load(*base);
+                let slot = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{slot} = extractvalue {whole} %{b}, {}",
+                    tag + 1
+                );
+                let out = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{out} = extractvalue {payload_ty} %{slot}, {at}    ; {}",
+                    llvm_type(self.types, fty)
+                );
+                self.retain(out, fty);
+                format!("%{out}")
+            }
+        }
+    }
+
+    fn terminator(&mut self, t: &mir::Terminator, ret: Ty) {
+        match t {
+            mir::Terminator::Goto(b) => {
+                let _ = writeln!(self.out, "  br label %{}", label(*b));
+            }
+            mir::Terminator::Branch {
+                cond,
+                then,
+                otherwise,
+            } => {
+                let (c, _) = self.operand(cond);
+                let _ = writeln!(
+                    self.out,
+                    "  br i1 %{c}, label %{}, label %{}",
+                    label(*then),
+                    label(*otherwise)
+                );
+            }
+            mir::Terminator::Switch {
+                scrutinee,
+                enumeration,
+                arms,
+            } => {
+                let ty = Ty::Enum(ety(*enumeration));
+                let whole = llvm_type(self.types, ty);
+                let v = self.load(*scrutinee);
+                let tag = self.fresh();
+                let _ = writeln!(self.out, "  %{tag} = extractvalue {whole} %{v}, 0");
+                // MIR names every variant exactly once, so the default is unreachable for any
+                // value this program can build. It is written as the first arm rather than as
+                // `unreachable`: a `switch` whose default is poison would make a compiler
+                // mistake into undefined behaviour instead of a wrong answer.
+                let default = arms
+                    .first()
+                    .map_or_else(|| "nz.unwind".to_owned(), |(_, b)| label(*b));
+                let table = arms
+                    .iter()
+                    .map(|(v, b)| {
+                        format!("i64 {}, label %{}", self.tag(*enumeration, *v), label(*b))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let _ = writeln!(
+                    self.out,
+                    "  switch i64 %{tag}, label %{default} [ {table} ]"
+                );
+            }
+            mir::Terminator::Return(l) => {
+                let v = self.load(*l);
+                let _ = writeln!(self.out, "  ret {} %{v}", llvm_type(self.types, ret));
+            }
+            // The failure exit: a stand-in value the caller never reads, because its failure
+            // check leaves first.
+            mir::Terminator::Unwind => {
+                let _ = writeln!(
+                    self.out,
+                    "  ret {} {}",
+                    llvm_type(self.types, ret),
+                    ret.unwind_value()
+                );
+            }
+            mir::Terminator::Exit(code) => {
+                let (c, _) = self.operand(code);
+                let narrow = self.fresh();
+                let _ = writeln!(self.out, "  %{narrow} = trunc i64 %{c} to i32");
+                let _ = writeln!(self.out, "  call void @exit(i32 %{narrow})");
+                let _ = writeln!(self.out, "  unreachable");
+            }
         }
     }
 
@@ -1791,308 +1735,6 @@ impl Emitter<'_> {
         self.open(&format!("b{cont}"));
     }
 
-    /// Leave for the failure exit, joining every scope still open on the way.
-    ///
-    /// This is the whole of "a failure is reported at the closing brace". A failure in a
-    /// scope's body walks out through that scope's join, so the tasks it started finish
-    /// before anything is reported; nested scopes join innermost first, which is the
-    /// nesting. Written at each site rather than at one shared block because how many
-    /// scopes are open is a property of where the failure happened.
-    fn unwind(&mut self) {
-        self.release_temporaries();
-        self.join_through(0);
-        self.used_unwind = true;
-        let _ = writeln!(self.out, "  br label %nz.unwind");
-    }
-
-    /// Release every reference this expression is still holding, on a path that is leaving.
-    ///
-    /// # What this closes, and why it was invisible
-    ///
-    /// The shared unwind block releases the frame's **slots**, which is right for
-    /// everything a binding holds and says nothing about a value still in a register.
-    /// `str_concat(str_concat(a, b), int_to_str(1 / z))` has the inner result in hand when
-    /// the division fails, and it is nobody's: the outer call that would have consumed it
-    /// is on a path control never takes.
-    ///
-    /// That is a defect of N8's, not of records — every ingredient existed then. What made
-    /// it invisible is that a failure ends the process, so nothing downstream could
-    /// observe the difference, and no test had this exact shape: an owned temporary
-    /// outstanding **across a sibling that fails**. A record projection made the shape
-    /// ordinary, and `a_record_is_released_on_the_failure_path_too` found it.
-    ///
-    /// The set is exactly right here and nowhere else: which temporaries are outstanding
-    /// is a property of the program point, which is why this is written at each failure
-    /// site rather than in the one block they all reach.
-    fn release_temporaries(&mut self) {
-        self.release_temporaries_from(0);
-    }
-
-    /// The same, for the temporaries produced from `from` onwards.
-    ///
-    /// A failure leaves the function, so it releases everything; a `break` leaves one loop
-    /// and must not touch what an expression around that loop is still holding.
-    fn release_temporaries_from(&mut self, from: usize) {
-        for (value, ty) in self.outstanding.clone().into_iter().skip(from) {
-            if self.owned.contains(&value) {
-                self.release(value, ty);
-            }
-        }
-    }
-
-    /// Give back every value being assembled from `from` inwards, on a path that stays in
-    /// the frame.
-    ///
-    /// Innermost first, because that is the nesting: `E.V(a: R(b: f()))` has the record's
-    /// slot inside the variant's, and the record is the one the transfer leaves first.
-    ///
-    /// Each slot is zeroed once its contents are released, so the frame's own cleanup —
-    /// which still owns the slot, and reaches it when the loop finally ends — finds null
-    /// and does nothing. That is the same "released, and the zero says so" bookkeeping a
-    /// completed construction already leaves behind.
-    fn release_building(&mut self, from: usize) {
-        for (slot, ty) in self.building.clone().into_iter().skip(from).rev() {
-            let v = self.fresh();
-            let text = llvm_type(self.types, ty);
-            let _ = writeln!(self.out, "  %{v} = load {text}, ptr %slot{slot}");
-            let _ = writeln!(
-                self.out,
-                "  store {text} {}, ptr %slot{slot}",
-                ty.unwind_value()
-            );
-            self.release(v, ty);
-        }
-    }
-
-    /// If this thread has failed, leave; otherwise carry on in a fresh block.
-    ///
-    /// Emitted after every call to a generated function. Without it a failure deep in a
-    /// callee would set the flag, hand back the stand-in value, and let the caller go on
-    /// computing with it — running statements, printing, and possibly looping forever on
-    /// a number that was never produced.
-    fn check_failed(&mut self) {
-        let flag = self.fresh();
-        let cont = self.fresh_label();
-        let _ = writeln!(self.out, "  %{flag} = load i1, ptr @nz.failed");
-        // Straight to the function's exit when there is nothing to join **and** nothing
-        // outstanding, rather than through a block whose only instruction forwards to it.
-        //
-        // Worth writing down: this is emitted after *every* call, and the compiler's own
-        // source has about sixteen hundred of them. Each intermediate block cost clang far
-        // more at `-O0` than its two instructions suggest — building the compiler with
-        // itself went from 200 ms to 515 ms when this path did not exist, and 457 ms of
-        // that was clang rather than emission. So the shortcut is kept, and narrowed by
-        // exactly the condition that makes it wrong: a temporary this expression is
-        // holding has to be released before the failure leaves, and there is nowhere to
-        // write that but a block of its own.
-        if self.scopes.is_empty() && self.owned.is_empty() {
-            self.used_unwind = true;
-            let _ = writeln!(
-                self.out,
-                "  br i1 %{flag}, label %nz.unwind, label %b{cont}"
-            );
-        } else {
-            let unwind = self.fresh_label();
-            let _ = writeln!(
-                self.out,
-                "  br i1 %{flag}, label %b{unwind}, label %b{cont}"
-            );
-            self.open(&format!("b{unwind}"));
-            self.unwind();
-        }
-        self.open(&format!("b{cont}"));
-    }
-
-    /// Statements, then the block's value.
-    fn block(&mut self, b: &Block) -> Val {
-        if self.stmts(&b.stmts) == Reach::Transferred {
-            return Val::Transferred;
-        }
-        match &b.result {
-            Some(e) => self.expr(e),
-            // Unreachable: lowering leaves this empty only when the statements transfer,
-            // and that path returned above. Reported as a transfer rather than as a
-            // value, because inventing one is the single thing this file must not do —
-            // the block left without a terminator is then a module clang rejects loudly,
-            // which is a much better failure than a program that runs and is wrong.
-            None => Val::Transferred,
-        }
-    }
-
-    /// A statement sequence: a loop body, a statement-`if` branch, or a block's
-    /// statements. Shared by all three so they cannot acquire different semantics.
-    ///
-    /// Stops at the first statement that transfers. Anything after it is unreachable, and
-    /// the checker has already refused it (`N0313`) — but appending to a block that
-    /// already has a terminator is invalid IR, so this does not rely on that.
-    fn stmts(&mut self, stmts: &[Stmt]) -> Reach {
-        for stmt in stmts {
-            let reach = match stmt {
-                // One path for both, deliberately. A declaration and a reassignment are
-                // the same store once the slot is known, and giving them two arms here
-                // would be two places to keep a store correct.
-                //
-                // The value is emitted **before** the store. An operation that fails
-                // inside it branches to a block ending in `unreachable`; an operation
-                // that transfers branches to a loop target. Either way the store is not
-                // on a path from there, so an interrupted right-hand side never reaches
-                // the slot.
-                Stmt::Let { slot, value } | Stmt::Assign { slot, value } => {
-                    match self.expr(value) {
-                        Val::Of { value: v, ty } => {
-                            if ty.owns().is_some() {
-                                // The order is the whole of the correctness here. Take the
-                                // new reference **first**, so that `a = a` — and the
-                                // re-execution of a `let` in a loop with the same handle —
-                                // cannot drop the count to zero between the two steps and
-                                // free storage that is about to be stored again.
-                                self.take(v, ty);
-                                let old = self.fresh();
-                                let _ = writeln!(
-                                    self.out,
-                                    "  %{old} = load {}, ptr %slot{slot}",
-                                    llvm_type(self.types, ty)
-                                );
-                                let _ = writeln!(
-                                    self.out,
-                                    "  store {} %{v}, ptr %slot{slot}",
-                                    llvm_type(self.types, ty)
-                                );
-                                self.release(old, ty);
-                            } else {
-                                let _ = writeln!(
-                                    self.out,
-                                    "  store {} %{v}, ptr %slot{slot}",
-                                    llvm_type(self.types, ty)
-                                );
-                            }
-                            Reach::FallsThrough
-                        }
-                        Val::Transferred => Reach::Transferred,
-                    }
-                }
-                // `a.b.c = v`. A record is a value, not a handle, so there is nothing to
-                // write *through*: the record is read out of its slot, one field inside it
-                // is replaced, and the whole thing is stored back.
-                //
-                // The order is the same rule as an ordinary assignment and matters for the
-                // same reason. The new value is produced and **taken** first, so
-                // `p.name = p.name` and a right-hand side that shares the old field's
-                // backing are both safe; only then is the old field released.
-                Stmt::SetField { slot, path, value } => match self.expr(value) {
-                    Val::Of { value: v, ty } => {
-                        self.take(v, ty);
-                        self.set_field(*slot, path, v, ty);
-                        Reach::FallsThrough
-                    }
-                    Val::Transferred => Reach::Transferred,
-                },
-                // Evaluated for its effects; the value is dropped, exactly as `nazm run`
-                // drops it. What is not dropped is a transfer raised inside it.
-                Stmt::Discard(e) => match self.expr(e) {
-                    Val::Of { value, ty } => {
-                        self.drop_temporary(value, ty);
-                        Reach::FallsThrough
-                    }
-                    Val::Transferred => Reach::Transferred,
-                },
-                Stmt::While { cond, body } => self.while_loop(cond, body),
-                Stmt::If {
-                    cond,
-                    then_body,
-                    else_body,
-                } => self.statement_if(cond, then_body, else_body.as_deref()),
-                Stmt::Match {
-                    scrutinee,
-                    scrutinee_ty,
-                    slot,
-                    arms,
-                } => self.statement_match(scrutinee, *scrutinee_ty, *slot, arms),
-                // Its own `ret`, not a branch to a shared exit. An operand that
-                // transfers instead wins outright — the `break` in
-                // `return if c { break; } else { 1 };` leaves the loop and no `ret` is
-                // written, matching `take!`.
-                //
-                // The value is produced **before** the joins, and the joins before the
-                // `ret`: a `return` inside a `scope` still waits for that scope's tasks,
-                // which is the whole of what a scope promises. The order is the
-                // interpreter's — evaluate, join, then leave.
-                Stmt::Return(e) => {
-                    if let Val::Of { value, ty } = self.expr(e) {
-                        self.join_through(0);
-                        // Rule 3. The caller receives a reference that outlives this
-                        // frame, so it is taken over **before** the frame lets go of
-                        // everything else — otherwise returning a local would release the
-                        // storage on the way out of the function that is returning it.
-                        self.take(value, ty);
-                        // Taken over first, so releasing what this statement was still
-                        // holding cannot reach the value being returned. The slots are
-                        // the frame's and are released just below.
-                        self.release_temporaries();
-                        self.release_frame();
-                        let _ = writeln!(self.out, "  ret {} %{value}", llvm_type(self.types, ty));
-                    }
-                    Reach::Transferred
-                }
-                Stmt::Break => {
-                    self.transfer(|t| &t.exit);
-                    Reach::Transferred
-                }
-                Stmt::Continue => {
-                    self.transfer(|t| &t.head);
-                    Reach::Transferred
-                }
-                Stmt::Scope { body, span } => self.scope(body, *span),
-                Stmt::Spawn {
-                    callee,
-                    args,
-                    ret,
-                    span,
-                } => self.spawn(callee, args, *ret, *span),
-            };
-            if reach == Reach::Transferred {
-                return Reach::Transferred;
-            }
-        }
-        Reach::FallsThrough
-    }
-
-    /// Branch to the innermost loop's exit or condition.
-    ///
-    /// The stack is never empty here: lowering refuses a `break` or `continue` outside a
-    /// loop, and the checker refuses it first (`N0312`), so a `Stmt::Break` reaches this
-    /// point only from inside a `Stmt::While` body. If it somehow were empty, emitting
-    /// nothing would leave the block without a terminator and clang would reject the
-    /// module — a loud failure rather than a jump to the wrong place.
-    fn transfer(&mut self, pick: impl Fn(&Targets) -> &String) {
-        if let Some(target) = self.loops.last() {
-            let label = pick(target).clone();
-            let depth = target.scope_depth;
-            let building = target.building_depth;
-            let outstanding = target.outstanding_depth;
-            // The expression this `break` or `continue` is leaving will never finish, so
-            // what it was holding is nobody's. The failure path has released both halves
-            // since N9 and this one released neither.
-            self.release_temporaries_from(outstanding);
-            self.release_building(building);
-            // Only the scopes opened inside this loop. The ones around it are still
-            // running, and joining them here would wait for tasks the loop never started.
-            self.join_through(depth);
-            let _ = writeln!(self.out, "  br label %{label}");
-        }
-    }
-
-    /// Join every open scope from the innermost down to `depth`, innermost first.
-    ///
-    /// Innermost first because that is the nesting: an inner scope's tasks are contained
-    /// by the outer one, and waiting for the outer first would be waiting for a task that
-    /// has not been allowed to finish.
-    fn join_through(&mut self, depth: usize) {
-        for tids in self.scopes.clone().into_iter().skip(depth).rev() {
-            self.join_one(tids);
-        }
-    }
-
     /// Join one scope and take on the first failure any of its tasks had.
     ///
     /// `@nz.fail` keeps the first failure a thread records, so adopting a task's here can
@@ -2126,46 +1768,6 @@ impl Emitter<'_> {
         self.release_internal(tids);
     }
 
-    /// `scope { body }` — a list of tasks, the body, and the wait.
-    ///
-    /// The list is an ordinary sequence header, reused rather than reinvented: a task
-    /// handle is pointer-sized and a growable array of them is exactly what
-    /// `@nz.arr_new` already provides.
-    ///
-    /// A scope inside a loop allocates a fresh list each time round, because the
-    /// statement is reached each time round. Nothing is ever freed, here as everywhere
-    /// else (`docs/spec.md`).
-    fn scope(&mut self, body: &[Stmt], span: Span) -> Reach {
-        self.needs_sequences = true;
-        self.needs_tasks = true;
-        let tids = self.fresh();
-        let _ = writeln!(self.out, "  %{tids} = call ptr @nz.arr_new()");
-        let null = self.fresh();
-        let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{tids}, null");
-        self.guard(
-            null,
-            &Failure {
-                code: "N0406",
-                message: "out of memory".to_owned(),
-            },
-            span,
-        );
-
-        self.scopes.push(tids);
-        let reach = self.stmts(body);
-        self.scopes.pop();
-        // A body that transferred has already emitted its joins on the way out, at the
-        // point it left from — writing one here as well would append to a block that
-        // already has a terminator.
-        if reach == Reach::FallsThrough {
-            // The closing brace: wait for every task, take on the first failure any of
-            // them had, and only then decide whether this program continues.
-            self.join_one(tids);
-            self.check_failed();
-        }
-        reach
-    }
-
     /// `spawn f(args);` — pack the arguments, start the thread, record it for the join.
     ///
     /// # Why the arguments are copied to the heap
@@ -2174,17 +1776,14 @@ impl Emitter<'_> {
     /// pointer into it. One allocation per spawn carries the whole argument list, and its
     /// first eight bytes are the thread handle — so the list the scope joins holds one
     /// pointer per task and needs no second allocation.
-    fn spawn(&mut self, callee: &NativeSymbol, args: &[Expr], ret: Ty, span: Span) -> Reach {
+    fn spawn(&mut self, tids: u32, callee: mir::FuncId, vals: &[(u32, Ty)], span: Span) {
         self.needs_sequences = true;
         self.needs_tasks = true;
 
-        let mut vals = Vec::new();
-        for a in args {
-            match self.expr(a) {
-                Val::Of { value, ty } => vals.push((value, ty)),
-                Val::Transferred => return Reach::Transferred,
-            }
-        }
+        let (callee, ret) = self.sigs.get(callee.index()).map_or_else(
+            || (NativeSymbol::missing(), Ty::Int),
+            |s| (s.symbol.clone(), s.ret),
+        );
 
         // The block is a **named LLVM struct**: the handle, then this task's diagnostic
         // — message pointer, then length — then each argument in its own field.
@@ -2253,7 +1852,7 @@ impl Emitter<'_> {
                 "  %{slot} = getelementptr {block_ty}, ptr %{blk}, i64 0, i32 {}",
                 i + TASK_HEADER_FIELDS
             );
-            self.take(*value, *ty);
+            self.retain(*value, *ty);
             let _ = writeln!(
                 self.out,
                 "  store {} %{value}, ptr %{slot}",
@@ -2262,8 +1861,7 @@ impl Emitter<'_> {
         }
 
         let types: Vec<Ty> = vals.iter().map(|(_, t)| *t).collect();
-        let trampoline = self.trampoline(callee, ret, &types, &block_ty);
-        let tids = self.scopes.last().copied().unwrap_or_default();
+        let trampoline = self.trampoline(&callee, ret, &types, &block_ty);
         let rc = self.fresh();
         let _ = writeln!(
             self.out,
@@ -2323,7 +1921,6 @@ impl Emitter<'_> {
             },
             span,
         );
-        Reach::FallsThrough
     }
 
     /// The `void *(void *)` function a thread actually starts in.
@@ -2485,505 +2082,6 @@ impl Emitter<'_> {
         n
     }
 
-    /// `while`, as a condition block, a body block, a back edge and an exit block.
-    ///
-    /// # The back edge targets the condition, not the body
-    ///
-    /// That is the whole of the loop's meaning, and the one thing easy to get wrong.
-    /// Jumping back to the body would evaluate the condition once and then loop on its
-    /// first answer forever. `continue` targets the same label for the same reason.
-    ///
-    /// # The condition is not inside the loop
-    ///
-    /// The targets are pushed **after** the condition is emitted and popped before the
-    /// exit block is opened, so a `break` written in a condition leaves the *enclosing*
-    /// loop. That is the existing language's rule in both implementations, and pushing
-    /// earlier would silently retarget such a `break` at this loop.
-    ///
-    /// # No `alloca` here
-    ///
-    /// Every local has a slot in [`emit_function`]'s entry block, including locals
-    /// declared inside this body — a slot is per *binding*, not per execution of one.
-    ///
-    /// # Terminators
-    ///
-    /// The conditional branch and the back edge are appended to whatever block emission
-    /// has reached, never to the label opened for it: a condition or body may open blocks
-    /// of its own for a nested `if`, a checked-arithmetic guard, or a nested loop. And
-    /// the back edge is written **only if the body's path still falls through** — a body
-    /// ending in `break` or `continue` has its terminator already.
-    fn while_loop(&mut self, cond: &Expr, body: &[Stmt]) -> Reach {
-        let head = format!("b{}", self.fresh_label());
-        let body_label = format!("b{}", self.fresh_label());
-        let exit = format!("b{}", self.fresh_label());
-
-        // The block before the loop needs a terminator: control does not fall into a
-        // label in LLVM.
-        let _ = writeln!(self.out, "  br label %{head}");
-
-        self.open(&head);
-        let c = match self.expr(cond) {
-            Val::Of { value, .. } => value,
-            // The condition transferred unconditionally, so it left through an enclosing
-            // loop. Neither this body nor this exit can be reached, and emitting either
-            // would produce blocks with no predecessors.
-            Val::Transferred => return Reach::Transferred,
-        };
-        let _ = writeln!(self.out, "  br i1 %{c}, label %{body_label}, label %{exit}");
-
-        self.open(&body_label);
-        self.loops.push(Targets {
-            head: head.clone(),
-            exit: exit.clone(),
-            scope_depth: self.scopes.len(),
-            building_depth: self.building.len(),
-            outstanding_depth: self.outstanding.len(),
-        });
-        // The body's temporaries do not dominate the exit, and every statement in it has
-        // already consumed or dropped its own. See `value_branch`.
-        let outer = self.owned.clone();
-        let reach = self.stmts(body);
-        self.owned = outer;
-        self.loops.pop();
-        if reach == Reach::FallsThrough {
-            let _ = writeln!(self.out, "  br label %{head}");
-        }
-
-        // Always reachable: the condition's false edge goes here, whatever the body did.
-        self.open(&exit);
-        Reach::FallsThrough
-    }
-
-    /// Statement-position `if`: no value, and either branch may transfer.
-    ///
-    /// # Which continuations exist
-    ///
-    /// With no `else`, the false edge goes straight to the continuation, so the statement
-    /// **always falls through** however the branch ends. With an `else`, the continuation
-    /// is opened only if at least one branch still falls through — if both transfer, no
-    /// continuation is fabricated and the enclosing sequence stops here.
-    fn statement_if(
-        &mut self,
-        cond: &Expr,
-        then_body: &[Stmt],
-        else_body: Option<&[Stmt]>,
-    ) -> Reach {
-        let c = match self.expr(cond) {
-            Val::Of { value, .. } => value,
-            Val::Transferred => return Reach::Transferred,
-        };
-        let then_label = format!("b{}", self.fresh_label());
-        let cont = format!("b{}", self.fresh_label());
-
-        let Some(else_body) = else_body else {
-            let _ = writeln!(self.out, "  br i1 %{c}, label %{then_label}, label %{cont}");
-            let outer = self.owned.clone();
-            self.open(&then_label);
-            if self.stmts(then_body) == Reach::FallsThrough {
-                let _ = writeln!(self.out, "  br label %{cont}");
-            }
-            self.owned = outer;
-            self.open(&cont);
-            return Reach::FallsThrough;
-        };
-
-        let else_label = format!("b{}", self.fresh_label());
-        let _ = writeln!(
-            self.out,
-            "  br i1 %{c}, label %{then_label}, label %{else_label}"
-        );
-
-        // Neither branch's temporaries dominate the other's block or the continuation.
-        // See `value_branch`.
-        let outer = self.owned.clone();
-        self.open(&then_label);
-        let then_reach = self.stmts(then_body);
-        if then_reach == Reach::FallsThrough {
-            let _ = writeln!(self.out, "  br label %{cont}");
-        }
-        self.owned.clone_from(&outer);
-
-        self.open(&else_label);
-        let else_reach = self.stmts(else_body);
-        if else_reach == Reach::FallsThrough {
-            let _ = writeln!(self.out, "  br label %{cont}");
-        }
-        self.owned = outer;
-
-        if then_reach == Reach::FallsThrough || else_reach == Reach::FallsThrough {
-            self.open(&cont);
-            Reach::FallsThrough
-        } else {
-            // Both branches left. Nothing branches to `cont`, so it is never opened.
-            Reach::Transferred
-        }
-    }
-
-    fn expr(&mut self, e: &Expr) -> Val {
-        match e {
-            // A record, built one field at a time.
-            //
-            // Initialisers run in the order they were **written**, which is what
-            // `docs/spec.md` fixes; each goes into the position the layout gave it, which
-            // is unrelated. Keeping the two orders apart is the whole point of carrying
-            // both — a backend that filled fields in layout order would have made field
-            // order observable through side effects.
-            Expr::Record { ty, fields, slot } => self.record(*ty, fields, *slot),
-
-            // A field, read out of a record value.
-            //
-            // The result **takes its own reference** before the record it came from is
-            // dropped, which is what makes `make().name` valid: the temporary record dies
-            // on the next line and the string it held does not. `docs/spec.md`, rule 3
-            // applied to a projection.
-            Expr::Field {
-                base,
-                base_ty,
-                at,
-                ty,
-            } => {
-                let Val::Of { value: b, .. } = self.expr(base) else {
-                    return Val::Transferred;
-                };
-                let Ty::Record(id) = *base_ty else {
-                    return Val::Of { value: b, ty: *ty };
-                };
-                // **Whether the base was owned decides whether the field must be.**
-                //
-                // A projection out of a *borrowed* record is borrowed too: the record is
-                // in a slot, and nothing between here and the end of this expression can
-                // change it — assignment is a statement — so the slot is what keeps the
-                // field's storage alive, and taking a second reference would be the cost
-                // rule 2 exists to avoid. Whoever the value reaches takes it over if they
-                // keep it: a binding, a `return`, a container.
-                //
-                // A projection out of an owned *temporary* is the case `docs/spec.md`
-                // names: `make().name` outlives the record it came from only because it
-                // takes a reference **before** that record is dropped. The order of these
-                // three steps is the whole of it.
-                //
-                // Retaining unconditionally was wrong in a way only a failure could show:
-                // `ints_get(h.values, 0)` retained the sequence, the built-in failed, and
-                // the release that would have balanced it was on the path the program did
-                // not take. A borrowed projection has nothing to balance.
-                let borrowed = !self.owned.contains(&b);
-                let out = self.extract(b, id, *at, *ty);
-                if !borrowed && owns_anything(self.types, *ty) {
-                    self.retain(out, *ty);
-                    self.own(out, *ty);
-                }
-                self.drop_temporary(b, *base_ty);
-                Val::Of {
-                    value: out,
-                    ty: *ty,
-                }
-            }
-
-            Expr::Int(v) => {
-                // Materialised through an `add` rather than used inline so that every
-                // expression has a value number and the emitter has one shape to reason
-                // about. `-O2` folds it; `-O0` does not, which is what makes the
-                // arithmetic below genuinely execute during testing.
-                let n = self.fresh();
-                let _ = writeln!(self.out, "  %{n} = add i64 {v}, 0");
-                Val::Of {
-                    value: n,
-                    ty: Ty::Int,
-                }
-            }
-            Expr::Bool(v) => {
-                let n = self.fresh();
-                let _ = writeln!(self.out, "  %{n} = or i1 {v}, false");
-                Val::Of {
-                    value: n,
-                    ty: Ty::Bool,
-                }
-            }
-            Expr::Load { slot, ty } => {
-                let n = self.fresh();
-                let _ = writeln!(
-                    self.out,
-                    "  %{n} = load {}, ptr %slot{slot}",
-                    llvm_type(self.types, *ty)
-                );
-                Val::Of { value: n, ty: *ty }
-            }
-            Expr::Neg { operand, span } => {
-                let v = operand!(self.expr(operand));
-                let r = self.fresh();
-                let _ = writeln!(
-                    self.out,
-                    "  %{r} = call {{i64, i1}} @llvm.ssub.with.overflow.i64(i64 0, i64 %{v})"
-                );
-                let ov = self.fresh();
-                let _ = writeln!(self.out, "  %{ov} = extractvalue {{i64, i1}} %{r}, 1");
-                self.guard(
-                    ov,
-                    &Failure {
-                        code: "N0400",
-                        message: "this negation overflows `Int`".to_owned(),
-                    },
-                    *span,
-                );
-                let out = self.fresh();
-                let _ = writeln!(self.out, "  %{out} = extractvalue {{i64, i1}} %{r}, 0");
-                Val::Of {
-                    value: out,
-                    ty: Ty::Int,
-                }
-            }
-            Expr::Arith { op, lhs, rhs, span } => {
-                // Left, then right. `docs/spec.md` specifies the order, and here it is
-                // observable twice over: it decides which diagnostic a program with two
-                // failing operands reports, and — since either side may contain a
-                // `break` — whether the right side is evaluated at all.
-                let a = operand!(self.expr(lhs));
-                let b = operand!(self.expr(rhs));
-                let value = match op {
-                    ArithOp::Add | ArithOp::Sub | ArithOp::Mul => self.checked(*op, a, b, *span),
-                    ArithOp::Div => self.divide(a, b, *span),
-                    ArithOp::Rem => self.remainder(a, b, *span),
-                };
-                Val::Of { value, ty: Ty::Int }
-            }
-            Expr::Compare {
-                op,
-                operand_ty,
-                lhs,
-                rhs,
-            } => {
-                // Same left-to-right order, for the same reasons.
-                let a = operand!(self.expr(lhs));
-                let b = operand!(self.expr(rhs));
-                // `Str` is a two-field aggregate, so `icmp` does not apply to it: two
-                // strings are equal when they have the same bytes, not when they share
-                // a buffer. Ordering `Str` is refused by the checker, so only `==` and
-                // `!=` reach here.
-                if *operand_ty == Ty::Str {
-                    let out = self.string_equality(a, b, *op == crate::ir::CmpOp::NotEq);
-                    // Rule 2: a comparison borrows its operands exactly as a call does,
-                    // so a temporary compared is still nobody's once the answer exists.
-                    // `int_to_str(i) == "5"` leaked the left-hand string on every
-                    // evaluation until N10.1, here and in the compiler written in Nazm,
-                    // and the interpreter was right.
-                    self.drop_temporary(a, Ty::Str);
-                    self.drop_temporary(b, Ty::Str);
-                    return Val::Of {
-                        value: out,
-                        ty: Ty::Bool,
-                    };
-                }
-                // A record or an enum: its equality helper, N13. `!=` is the negation of
-                // that one answer, never a second walk. The operands are borrowed exactly
-                // as a `Str`'s are, so a temporary compared is released once, here, after
-                // the answer exists.
-                if matches!(operand_ty, Ty::Record(_) | Ty::Enum(_)) {
-                    let same = self.equality(a, b, *operand_ty);
-                    let out = if *op == crate::ir::CmpOp::NotEq {
-                        let flipped = self.fresh();
-                        let _ = writeln!(self.out, "  %{flipped} = xor i1 %{same}, true");
-                        flipped
-                    } else {
-                        same
-                    };
-                    self.drop_temporary(a, *operand_ty);
-                    self.drop_temporary(b, *operand_ty);
-                    return Val::Of {
-                        value: out,
-                        ty: Ty::Bool,
-                    };
-                }
-                let out = self.fresh();
-                // No guard, because no comparison can fail: `icmp` on two `i64`s or two
-                // `i1`s is total.
-                let _ = writeln!(
-                    self.out,
-                    "  %{out} = icmp {} {} %{a}, %{b}",
-                    op.predicate(),
-                    llvm_type(self.types, *operand_ty)
-                );
-                Val::Of {
-                    value: out,
-                    ty: Ty::Bool,
-                }
-            }
-            Expr::Call { callee, args, ret } => {
-                // Every argument is evaluated, left to right, **before** the call
-                // instruction is written. So an argument that fails stops the program
-                // there and an argument that transfers leaves through its loop target:
-                // either way the later arguments are never evaluated and the callee is
-                // never entered. That is not an optimisation — the call instruction is
-                // simply not on a path from where control went.
-                let mut vals = Vec::new();
-                for a in args {
-                    match self.expr(a) {
-                        Val::Of { value, ty } => vals.push((value, ty)),
-                        Val::Transferred => return Val::Transferred,
-                    }
-                }
-                let list = vals
-                    .iter()
-                    .map(|(v, t)| format!("{} %{v}", llvm_type(self.types, *t)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let out = self.fresh();
-                let _ = writeln!(
-                    self.out,
-                    "  %{out} = call {} {callee}({list})",
-                    llvm_type(self.types, *ret)
-                );
-                // A callee that failed has already unwound to its own `ret` and handed
-                // back a stand-in value. This is where that is noticed, so the failure
-                // keeps travelling outward instead of the caller carrying on with it.
-                self.check_failed();
-                // Rule 3: returning transfers, so what came back is a reference this
-                // expression now holds. Rule 2: the arguments were only borrowed, so a
-                // temporary passed in is still nobody's and is dropped here.
-                if ret.owns().is_some() {
-                    self.own(out, *ret);
-                }
-                for (v, t) in &vals {
-                    self.drop_temporary(*v, *t);
-                }
-                Val::Of {
-                    value: out,
-                    ty: *ret,
-                }
-            }
-            Expr::Str(bytes) => {
-                // **Immortal.** The constant is in the object's read-only data and lives
-                // as long as the process; its owner is null, and every retain and release
-                // of it is a no-op that costs one comparison.
-                let sym = self.blob(bytes);
-                let n = self.fresh();
-                let _ = writeln!(self.out, "  %{n} = load {{ ptr, i64, ptr }}, ptr {sym}");
-                Val::Of {
-                    value: n,
-                    ty: Ty::Str,
-                }
-            }
-            Expr::Builtin { op, args, span } => self.builtin(*op, args, *span),
-            Expr::Vec {
-                op,
-                vec,
-                elem,
-                args,
-                span,
-            } => self.vec_builtin(*op, *vec, *elem, args, *span),
-            Expr::Variant {
-                ty,
-                tag,
-                fields,
-                slot,
-            } => self.variant(*ty, *tag, fields, *slot),
-
-            Expr::Payload {
-                base,
-                base_ty,
-                tag,
-                at,
-                ty,
-            } => {
-                let Val::Of { value: b, .. } = self.expr(base) else {
-                    return Val::Transferred;
-                };
-                let whole = llvm_type(self.types, *base_ty);
-                let payload_ty = self.payload_type(*base_ty, *tag);
-                let slot = self.fresh();
-                let _ = writeln!(
-                    self.out,
-                    "  %{slot} = extractvalue {whole} %{b}, {}",
-                    tag + 1
-                );
-                let out = self.fresh();
-                let _ = writeln!(
-                    self.out,
-                    "  %{out} = extractvalue {payload_ty} %{slot}, {at}    ; {}",
-                    llvm_type(self.types, *ty)
-                );
-                // Borrowed, exactly as a record projection is: the value belongs to the
-                // enum the `match` is holding, and whoever takes it over retains it.
-                Val::Of {
-                    value: out,
-                    ty: *ty,
-                }
-            }
-
-            Expr::Match {
-                scrutinee,
-                scrutinee_ty,
-                slot,
-                arms,
-                ..
-            } => self.match_on(scrutinee, *scrutinee_ty, *slot, arms),
-
-            Expr::If {
-                cond,
-                then_block,
-                else_block,
-                ..
-            } => self.conditional(cond, then_block, else_block),
-
-            // The block every other block is. Nothing to restore afterwards: unlike a
-            // branch, it has no sibling its temporaries could fail to dominate.
-            Expr::Block(b) => self.block(b),
-        }
-    }
-
-    /// The built-ins, each as the instructions it means.
-    ///
-    /// Arguments are evaluated left to right and **all of them before any work**, the
-    /// same rule calls follow, so an argument that fails or transfers stops the built-in
-    /// before it starts.
-    fn builtin(&mut self, op: Builtin, args: &[Expr], span: Span) -> Val {
-        let mut vals = Vec::new();
-        let mut types = Vec::new();
-        for a in args {
-            match self.expr(a) {
-                Val::Of { value, ty } => {
-                    vals.push(value);
-                    types.push(ty);
-                }
-                Val::Transferred => return Val::Transferred,
-            }
-        }
-        // A built-in borrows its arguments, exactly as a function does. So a temporary
-        // handed to one — `ints_len(ints_new())` — is nobody's after it returns, and this
-        // is where that reference is dropped. Rare, and the rule is the same as
-        // everywhere else rather than an exception.
-        let out = self.builtin_op(op, &vals, span);
-        if let Val::Of { .. } = out {
-            for (v, t) in vals.iter().zip(&types) {
-                self.drop_temporary(*v, *t);
-            }
-        }
-        out
-    }
-
-    /// A `Vec[T]` built-in: its arguments evaluated left to right, then the operation, then
-    /// any temporary argument given back — the rule [`Self::builtin`] follows, because a
-    /// generic built-in borrows its arguments exactly as every other call does.
-    fn vec_builtin(&mut self, op: Builtin, vec: VecTy, elem: Ty, args: &[Expr], span: Span) -> Val {
-        let mut vals = Vec::new();
-        let mut types = Vec::new();
-        for a in args {
-            match self.expr(a) {
-                Val::Of { value, ty } => {
-                    vals.push(value);
-                    types.push(ty);
-                }
-                Val::Transferred => return Val::Transferred,
-            }
-        }
-        let out = self.vec_op(op, vec, elem, &vals, span);
-        if let Val::Of { .. } = out {
-            for (v, t) in vals.iter().zip(&types) {
-                self.drop_temporary(*v, *t);
-            }
-        }
-        out
-    }
-
     /// The size in bytes of one element of this type, as an SSA value.
     ///
     /// Asked of LLVM rather than computed here, by the address of element 1 of an array at
@@ -3023,7 +2121,6 @@ impl Emitter<'_> {
                     },
                     span,
                 );
-                self.own(h, Ty::Vec(vec));
                 Val::Of {
                     value: h,
                     ty: Ty::Vec(vec),
@@ -3046,8 +2143,7 @@ impl Emitter<'_> {
                 // expression is done, and what it returned must not care. N8's `strs_get`
                 // lesson, generic.
                 if elem.owns().is_some() {
-                    self.take(v, elem);
-                    self.own(v, elem);
+                    self.retain(v, elem);
                 }
                 Val::Of { value: v, ty: elem }
             }
@@ -3133,11 +2229,8 @@ impl Emitter<'_> {
                 let v = self.fresh();
                 let _ = writeln!(self.out, "  %{v} = load {t}, ptr %{slot}");
                 let _ = writeln!(self.out, "  store i64 %{last}, ptr %{}", arg(0));
-                // A **transfer**: the vector gives up its reference to the element and this
-                // expression holds that same one. No retain and no release.
-                if elem.owns().is_some() {
-                    self.own(v, elem);
-                }
+                // A **transfer**: the vector gives up its reference to the element and MIR's
+                // destination holds that same one. No retain and no release.
                 Val::Of { value: v, ty: elem }
             }
             // Only the `Vec` built-ins are lowered to this operation.
@@ -3218,7 +2311,6 @@ impl Emitter<'_> {
                 let _ = writeln!(self.out, "  call void @nz.str_retain(ptr %{owner})");
                 self.needs_strings = true;
                 let out = self.make_str(start, n, &format!("%{owner}"));
-                self.own(out, Ty::Str);
                 out
             }
             Builtin::StrConcat => {
@@ -3247,7 +2339,6 @@ impl Emitter<'_> {
                     "  call void @llvm.memcpy.p0.p0.i64(ptr %{rest}, ptr %{pb}, i64 %{lb}, i1 false)"
                 );
                 let out = self.make_str(buf, n, &format!("%{owner}"));
-                self.own(out, Ty::Str);
                 out
             }
             // --- the outside world ------------------------------------------------
@@ -3345,7 +2436,6 @@ impl Emitter<'_> {
                 );
                 // A file's contents are the program's own storage: one allocation, one
                 // reference, held by this expression.
-                self.own(out, Ty::Str);
                 return Val::Of {
                     value: out,
                     ty: Ty::Str,
@@ -3411,7 +2501,6 @@ impl Emitter<'_> {
                 );
                 // Born with one reference, and this expression is holding it. Whatever
                 // consumes the expression takes it over; a discard releases it.
-                self.own(h, op.lowered_ret());
                 return Val::Of {
                     value: h,
                     ty: op.lowered_ret(),
@@ -3441,8 +2530,7 @@ impl Emitter<'_> {
                 // construction rather than true because nothing was ever freed. Before
                 // N8 it was the second of those.
                 if elem.owns().is_some() {
-                    self.take(v, elem);
-                    self.own(v, elem);
+                    self.retain(v, elem);
                 }
                 return Val::Of { value: v, ty: elem };
             }
@@ -3501,7 +2589,6 @@ impl Emitter<'_> {
                     span,
                 );
                 // One allocation, one reference, and this expression is holding it.
-                self.own(out, Ty::Str);
                 return Val::Of {
                     value: out,
                     ty: Ty::Str,
@@ -3531,7 +2618,6 @@ impl Emitter<'_> {
                 // Born with one reference, held by this expression — the same rule a
                 // sequence follows. What consumes the expression takes it over, and a
                 // channel nothing binds is released as an ordinary temporary.
-                self.own(c, Ty::Chan);
                 return Val::Of {
                     value: c,
                     ty: Ty::Chan,
@@ -3633,9 +2719,6 @@ impl Emitter<'_> {
                 // reference to the element, and this expression takes that same one over.
                 // No retain, no release, and the count is unchanged — which is what makes
                 // popping in a loop cost nothing.
-                if elem.owns().is_some() {
-                    self.own(v, elem);
-                }
                 return Val::Of { value: v, ty: elem };
             }
             Builtin::IntsPush | Builtin::StrsPush => {
@@ -3704,7 +2787,6 @@ impl Emitter<'_> {
                 let one = self.fresh();
                 let _ = writeln!(self.out, "  %{one} = add i64 1, 0");
                 let out = self.make_str(buf, one, &format!("%{owner}"));
-                self.own(out, Ty::Str);
                 out
             }
             // The generic built-ins are lowered to `Expr::Vec` and never reach here: their
@@ -3734,7 +2816,6 @@ impl Emitter<'_> {
                 let n = self.fresh();
                 let _ = writeln!(self.out, "  %{n} = sext i32 %{written} to i64");
                 let out = self.make_str(buf, n, &format!("%{owner}"));
-                self.own(out, Ty::Str);
                 out
             }
         };
@@ -3784,119 +2865,6 @@ impl Emitter<'_> {
         let flipped = self.fresh();
         let _ = writeln!(self.out, "  %{flipped} = xor i1 %{out}, true");
         flipped
-    }
-
-    /// Value-position `if`, as a conditional branch and a join with a `phi`.
-    ///
-    /// The condition is emitted once, before either branch, and only the selected
-    /// branch's block is ever entered — so a failure in the branch not taken cannot run.
-    /// That is not an optimisation; it is what a conditional branch means.
-    ///
-    /// # Which branches reach the join
-    ///
-    /// Only the ones that produce a value. A branch ending in `break` or `continue` has
-    /// already branched somewhere else, contributes no `phi` incoming, and is not named
-    /// by one. When **one** branch transfers the `phi` has a single incoming, which is
-    /// how the value comes from the branch that actually arrives; when **both** do, there
-    /// is no join, no `phi`, and no value — the expression is emitted for its effects and
-    /// the caller is told control left.
-    fn conditional(&mut self, cond: &Expr, then_b: &Block, else_b: &Block) -> Val {
-        let c = operand!(self.expr(cond));
-        let then_label = format!("b{}", self.fresh_label());
-        let else_label = format!("b{}", self.fresh_label());
-        let join_label = format!("b{}", self.fresh_label());
-        let _ = writeln!(
-            self.out,
-            "  br i1 %{c}, label %{then_label}, label %{else_label}"
-        );
-
-        self.open(&then_label);
-        let then_in = self.value_branch(then_b, &join_label);
-
-        self.open(&else_label);
-        let else_in = self.value_branch(else_b, &join_label);
-
-        let incomings: Vec<(u32, Ty, String)> = [then_in, else_in]
-            .into_iter()
-            .filter_map(|i| match i {
-                Incoming::Value { value, ty, from } => Some((value, ty, from)),
-                Incoming::Transferred => None,
-            })
-            .collect();
-
-        let Some((_, ty, _)) = incomings.first() else {
-            // Neither branch arrives. Nothing branched to the join, so it is never
-            // opened, and there is no value to hand back.
-            return Val::Transferred;
-        };
-        let ty = *ty;
-
-        self.open(&join_label);
-        let out = self.fresh();
-        let list = incomings
-            .iter()
-            .map(|(v, _, from)| format!("[ %{v}, %{from} ]"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let _ = writeln!(
-            self.out,
-            "  %{out} = phi {} {list}",
-            llvm_type(self.types, ty)
-        );
-        if ty.owns().is_some() {
-            // Each incoming branch handed one reference to the join, so the merged value
-            // holds exactly one however control arrived.
-            for (v, _, _) in &incomings {
-                self.owned.remove(v);
-            }
-            self.own(out, ty);
-        }
-        Val::Of { value: out, ty }
-    }
-
-    /// Emit one branch of a value-position `if`, and branch to the join if it arrives.
-    ///
-    /// The predecessor is read **after** the branch is lowered, not before: the branch
-    /// may have opened blocks of its own — a nested `if`, any checked arithmetic, whose
-    /// guard opens a continuation, a nested loop — and the block a `phi` must name is the
-    /// one holding the jump to the join. Reading it here, next to the jump, is what keeps
-    /// the two from drifting apart.
-    fn value_branch(&mut self, b: &Block, join: &str) -> Incoming {
-        // What this branch creates is **not visible to its sibling**, and that is a
-        // dominance fact rather than a preference: a value defined inside the `then`
-        // block does not dominate the `else` block, so a failure over there may not
-        // release it. Releasing on a failure path is what made that matter — before it,
-        // the set was only read where the value was in hand anyway.
-        //
-        // Restoring is safe because nothing inside a branch can consume a temporary from
-        // outside it: an outer temporary has no name, so no statement in the branch can
-        // reach it. What the branch does create is either consumed inside it or becomes
-        // the branch's result, which the join takes over below.
-        let outer = self.owned.clone();
-        let incoming = self.value_branch_inner(b, join);
-        self.owned = outer;
-        incoming
-    }
-
-    fn value_branch_inner(&mut self, b: &Block, join: &str) -> Incoming {
-        match self.block(b) {
-            Val::Of { value, ty } => {
-                // A `phi` merges two branches that may have arrived at ownership
-                // differently — `if c { ints_new() } else { xs }` creates a reference on
-                // one side and borrows on the other — and a single value cannot be both.
-                // So each branch is brought to the same state here, **inside its own
-                // block and before its jump**, which is the only place a retain can go:
-                // after the `phi` there is no branch left to attribute it to.
-                self.take(value, ty);
-                if ty.owns().is_some() {
-                    self.own(value, ty);
-                }
-                let from = self.current.clone();
-                let _ = writeln!(self.out, "  br label %{join}");
-                Incoming::Value { value, ty, from }
-            }
-            Val::Transferred => Incoming::Transferred,
-        }
     }
 
     fn checked(&mut self, op: ArithOp, a: u32, b: u32, span: Span) -> u32 {
@@ -4166,18 +3134,9 @@ fn preamble(out: &mut String, source: &str) {
     out.push('\n');
 }
 
-/// Emit one Nazm module as a complete, independently assemblable LLVM module.
-///
-/// # What it contains, and what it cannot
-///
-/// This module's functions, its own string and error constants, and **declarations** of
-/// everything it refers to and does not own. It contains no other module's body, and
-/// there is nothing here through which one could arrive: the only cross-module information
-/// that reaches emission is a symbol and a signature, decided in [`crate::lower`].
-///
-/// The returned [`Needs`] is what this unit reached, for the driver to union.
-#[must_use]
-pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
+/// Emit one unit: its type definitions, its external declarations, its functions' bodies from
+/// MIR, their helpers and trampolines, and the constants they interned.
+pub fn emit_unit(native: &Native, unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
     let mut e = Emitter {
         out: String::new(),
         next: 0,
@@ -4191,14 +3150,10 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
             enums: &unit.enums,
             vecs: &unit.vecs,
         },
-        loops: Vec::new(),
-        owned: std::collections::BTreeSet::new(),
-        outstanding: Vec::new(),
-        building: Vec::new(),
+        program: &native.program,
+        sigs: &native.sigs,
         slot_types: Vec::new(),
-        frame: Vec::new(),
-        scopes: Vec::new(),
-        used_unwind: false,
+        unwind_to: String::new(),
         helpers: String::new(),
         generated: std::collections::BTreeSet::new(),
         generated_enums: std::collections::BTreeSet::new(),
@@ -4216,8 +3171,10 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         needs_strings: false,
     };
 
-    for f in &unit.functions {
-        emit_function(&mut e, f);
+    for id in &unit.functions {
+        if let (Some(f), Some(sig)) = (native.program.function(*id), native.sigs.get(id.index())) {
+            emit_function(&mut e, f, sig);
+        }
     }
 
     let mut head = String::new();
@@ -4226,17 +3183,6 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
     runtime_declarations(&mut head);
     head.push('\n');
 
-    // The record types this unit mentions, each as a named LLVM type.
-    //
-    // Named rather than written out at every use, for the reason a symbol is named: two
-    // objects that pass a record between them must agree about it, and a name derived
-    // from the record's durable identity is what makes that agreement a fact rather than
-    // a coincidence of two layout computations. The **order is layout order**, canonical
-    // by field name, which is why moving two field declarations changes no byte here.
-    //
-    // Only the ones this unit uses, closed over field types — so a record declared in
-    // another module and never named here does not appear, and adding one there leaves
-    // this unit's text, and therefore its object, untouched.
     let layouts = Layouts {
         records: &unit.records,
         enums: &unit.enums,
@@ -4255,15 +3201,10 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         head.push('\n');
     }
 
-    // The enum types this unit mentions: one named type per variant's payload, then the
-    // enum itself as a discriminant followed by one slot per variant.
-    //
-    // The payload types come first because the enum's definition names them, and LLVM
-    // requires a named type to be defined before it is used as an aggregate member.
-    // **The order is tag order**, canonical by variant name, which is why moving two
-    // variant declarations changes no byte here either.
-    for e in &unit.enums {
-        for v in &e.variants {
+    // Each variant's payload struct, then the enum itself: `{ i64, %V0, %V1, … }`. Payloads
+    // first because the enum's definition names them.
+    for en in &unit.enums {
+        for v in &en.variants {
             let fields = v
                 .fields
                 .iter()
@@ -4273,27 +3214,26 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
             let _ = writeln!(
                 head,
                 "{} = type {{ {fields} }}    ; {}.{}",
-                v.name, e.source, v.source
+                v.name, en.source, v.source
             );
         }
         let slots = std::iter::once("i64".to_owned())
-            .chain(e.variants.iter().map(|v| v.name.to_string()))
+            .chain(en.variants.iter().map(|v| v.name.to_string()))
             .collect::<Vec<_>>()
             .join(", ");
-        let _ = writeln!(head, "{} = type {{ {slots} }}    ; {}", e.name, e.source);
+        let _ = writeln!(head, "{} = type {{ {slots} }}    ; {}", en.name, en.source);
     }
     if !unit.enums.is_empty() {
         head.push('\n');
     }
 
-    // The argument-block types, for the same reason and with the same constraint.
     if !e.block_types.is_empty() {
         head.push_str(&e.block_types);
         head.push('\n');
     }
 
-    // The Nazm definitions this module calls and does not own. One line each, in the
-    // order `lower` sorted them, so two builds of one module produce one text.
+    // The Nazm definitions this module calls and does not own. One line each, in the order
+    // `lower` sorted them, so two builds of one module produce one text.
     for x in &unit.externals {
         let params = x
             .params
@@ -4312,10 +3252,8 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
         head.push('\n');
     }
 
-    // `int_to_str`'s format, inlined at its call sites, so it belongs to whichever unit
-    // uses one. `private` linkage means the symbol is a local label rather than an entry
-    // in the object's symbol table, so every unit may have its own and none can collide —
-    // which is also why the numbered constants below need no qualification.
+    // `int_to_str`'s format, inlined at its call sites, so it belongs to whichever unit uses
+    // one. `private` linkage makes it a local label, so every unit may have its own.
     let _ = writeln!(
         head,
         "@.dec = private unnamed_addr constant [5 x i8] c\"%lld\\00\""
@@ -4323,8 +3261,8 @@ pub fn emit_unit(unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
     constants(&mut head, &e);
     head.push('\n');
 
-    // Helpers before the trampolines, and both after the bodies: order in a module is
-    // not meaningful to LLVM, and a fixed one is what makes two builds produce one text.
+    // Helpers before the trampolines, and both after the bodies: order in a module is not
+    // meaningful to LLVM, and a fixed one is what makes two builds produce one text.
     (head + &e.out + &e.helpers + &e.tasks, e.needs())
 }
 
@@ -5085,126 +4023,79 @@ done:
 }
 ";
 
-/// One function definition.
+/// One function, from its MIR.
 ///
-/// Parameters arrive as SSA values and are immediately stored into their slots, so the
-/// body reads them with the same `load` it uses for any local. They are never stored to
-/// again — the language has no mutable parameter — so one write at entry is the whole
-/// story, and the emitter needs no notion of what a parameter is beyond "the first
-/// `params` slots".
-fn emit_function(e: &mut Emitter<'_>, f: &Function) {
-    // Numbering restarts per function: LLVM requires a function's unnamed values to be
-    // consecutive from zero, and `%p<n>`/`%slot<n>` are named so they do not consume the
-    // numbering.
+/// Every local gets a slot in the entry block; the ones that can own anything are zeroed
+/// there, and the parameters are stored into theirs. Then each MIR block becomes a label with
+/// its statements and its terminator, in MIR's order.
+fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
     e.next = 0;
     e.current = "entry".to_owned();
-    e.used_unwind = false;
-    e.owned.clear();
-    e.outstanding.clear();
-    e.building.clear();
-    // No loop target crosses a function boundary. Push and pop are balanced, so this is
-    // already empty — clearing it says so rather than relying on it.
-    e.loops.clear();
+    e.slot_types = f.locals.iter().map(|l| l.ty.value().map(Ty::of)).collect();
 
-    let params = f
-        .locals
+    let params = sig
+        .params
         .iter()
-        .take(f.params)
         .enumerate()
-        .map(|(i, l)| format!("{} %p{i}", llvm_type(e.types, l.ty)))
+        .map(|(i, t)| format!("{} %p{i}", llvm_type(e.types, *t)))
         .collect::<Vec<_>>()
         .join(", ");
     let _ = writeln!(
         e.out,
         "define {}{} {}({params}) {{   ; {}",
-        f.linkage.llvm(),
-        llvm_type(e.types, f.ret),
-        f.symbol,
+        sig.linkage.llvm(),
+        llvm_type(e.types, sig.ret),
+        sig.symbol,
         f.name
     );
     let _ = writeln!(e.out, "entry:");
     for (i, local) in f.locals.iter().enumerate() {
+        let l = mir::LocalId(u32::try_from(i).unwrap_or(u32::MAX));
+        let ty = e.slot_llvm(l);
+        let shown = match local.ty.value() {
+            Some(t) => Ty::of(t).name(),
+            None => "tasks",
+        };
         let _ = writeln!(
             e.out,
-            "  %slot{i} = alloca {}            ; {} : {}",
-            llvm_type(e.types, local.ty),
-            local.name,
-            local.ty.name()
+            "  %slot{i} = alloca {ty}            ; {} : {shown}",
+            local.name
         );
     }
-    // Every handle slot starts null, and null is what a release ignores. So a path that
-    // never reached a declaration, and the shared unwind block a failure takes, can both
-    // release the whole frame without asking which slots were ever written.
-    e.frame.clear();
-    e.slot_types = f.locals.iter().map(|l| l.ty).collect();
-    for (i, local) in f.locals.iter().enumerate() {
-        // Asked of the layout table rather than of the type alone: a record owns exactly
-        // what its fields own, so one whose every field is an `Int` is not a handle slot
-        // and pays for nothing.
-        if !owns_anything(e.types, local.ty) {
-            continue;
-        }
-        // Zeroed, so a slot never written holds a value whose owner is null — and
-        // releasing null is a no-op. That is what lets a path that skipped a declaration,
-        // and the shared unwind block a failure takes, release the whole frame without
-        // asking which slots were ever reached.
-        let _ = writeln!(
-            e.out,
-            "  store {} {}, ptr %slot{i}",
-            llvm_type(e.types, local.ty),
-            local.ty.unwind_value()
-        );
-        // Parameters are excluded, and that exclusion is rule 2: a callee borrows, so
-        // releasing one would destroy storage the caller is still holding.
-        if i >= f.params {
-            e.frame.push((i, local.ty));
+    // Zero every slot that can own something, parameters excepted: a drop of a local that
+    // holds nothing then releases the zero, which the runtime ignores.
+    for (i, _) in f.locals.iter().enumerate().skip(f.params as usize) {
+        let l = mir::LocalId(u32::try_from(i).unwrap_or(u32::MAX));
+        let owning = match e.slot_types.get(i).copied().flatten() {
+            Some(t) => owns_anything(e.types, t),
+            None => true,
+        };
+        if owning {
+            e.store_zero(l);
         }
     }
-
-    for (i, local) in f.locals.iter().take(f.params).enumerate() {
-        let _ = writeln!(
-            e.out,
-            "  store {} %p{i}, ptr %slot{i}",
-            llvm_type(e.types, local.ty)
-        );
+    for i in 0..f.params as usize {
+        let l = mir::LocalId(u32::try_from(i).unwrap_or(u32::MAX));
+        e.store(l, &format!("%p{i}"));
     }
-    match e.block(&f.body) {
-        Val::Of { value, .. } => {
-            // The tail is a `return` without the keyword, and it obeys the same two rules:
-            // take the reference the caller is about to receive, then let the frame go.
-            e.take(value, f.ret);
-            e.release_frame();
-            let _ = writeln!(e.out, "  ret {} %{value}", llvm_type(e.types, f.ret));
+    let _ = writeln!(e.out, "  br label %bb0");
+    for (i, b) in f.blocks.iter().enumerate() {
+        e.open(&label(mir::BlockId(u32::try_from(i).unwrap_or(u32::MAX))));
+        for s in &b.stmts {
+            e.statement(s);
         }
-        // The body transferred, which since M1f is ordinary: every path returned, so the
-        // current block already holds its `ret` and **nothing more may be written**.
-        // Appending `unreachable` here — as this arm did while the case could not arise —
-        // would give the block two terminators and produce a module clang rejects.
-        //
-        // If a block somehow reached here without a terminator it would have none at
-        // all, and clang would say so loudly. That is the right failure; the alternative,
-        // `unreachable` on a path control really takes, is undefined behaviour in
-        // silence.
-        Val::Transferred => {}
-    }
-    // One exit for every failure that passed through this function. Whatever it returns
-    // is never read: the caller checks the failure flag first, and the entry wrapper
-    // reports rather than using the value.
-    if e.used_unwind {
-        let _ = writeln!(e.out, "nz.unwind:");
-        // A failure leaves through here from anywhere in the function, so this is the one
-        // exit that source indentation would never have found. The frame is released on
-        // the way out: a program that failed still reclaims what it was holding.
-        e.release_frame();
-        let _ = writeln!(
-            e.out,
-            "  ret {} {}",
-            llvm_type(e.types, f.ret),
-            f.ret.unwind_value()
-        );
+        e.terminator(&b.term, sig.ret);
     }
     let _ = writeln!(e.out, "}}");
     e.out.push('\n');
+}
+
+fn rty(r: nazm_sema::RecordId) -> RecordTy {
+    RecordTy(u32::try_from(r.index()).unwrap_or(u32::MAX))
+}
+
+fn ety(e: nazm_sema::EnumId) -> EnumTy {
+    EnumTy(u32::try_from(e.index()).unwrap_or(u32::MAX))
 }
 
 /// The same escaping for arbitrary bytes, which a `Str` literal may contain.
@@ -5602,412 +4493,3 @@ entry:
   ret void
 }
 ";
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-mod tests {
-    use super::*;
-    use crate::ir::{Block, CmpOp, Expr, Function, Local, Stmt, Unit};
-    use crate::symbol::{Linkage, NativeSymbol};
-    use nazm_sema::key::{DefKey, DefKind, ModuleKey};
-    use nazm_sema::ModuleId;
-    use nazm_span::{SourceMap, Span};
-
-    /// The symbol a definition of `name` in `t.nz` gets.
-    fn sym(name: &str) -> NativeSymbol {
-        NativeSymbol::of_definition(&DefKey::new(
-            ModuleKey::relative("t.nz").expect("a key"),
-            DefKind::Function,
-            name,
-        ))
-    }
-
-    fn block(result: Expr) -> Block {
-        Block {
-            stmts: Vec::new(),
-            result: Some(Box::new(result)),
-        }
-    }
-
-    fn unit(functions: Vec<Function>) -> Unit {
-        Unit {
-            module: ModuleId::ROOT,
-            source: "t.nz".to_owned(),
-            functions,
-            externals: Vec::new(),
-            records: Vec::new(),
-            enums: Vec::new(),
-            vecs: Vec::new(),
-        }
-    }
-
-    fn module(result: Expr, locals: Vec<Local>, stmts: Vec<Stmt>) -> Unit {
-        unit(vec![Function {
-            symbol: sym("main"),
-            linkage: Linkage::Hidden,
-            name: "main".to_owned(),
-            locals,
-            params: 0,
-            ret: Ty::Int,
-            body: Block {
-                stmts,
-                result: Some(Box::new(result)),
-            },
-        }])
-    }
-
-    /// A two-function unit: `main` calls `helper(args)`.
-    fn calling(helper: Function, args: Vec<Expr>, ret: Ty) -> Unit {
-        let callee = helper.symbol.clone();
-        unit(vec![
-            Function {
-                symbol: sym("main"),
-                linkage: Linkage::Hidden,
-                name: "main".to_owned(),
-                locals: Vec::new(),
-                params: 0,
-                ret: Ty::Int,
-                body: Block {
-                    stmts: Vec::new(),
-                    result: Some(Box::new(Expr::Call { callee, args, ret })),
-                },
-            },
-            helper,
-        ])
-    }
-
-    /// One unit's IR, with the runtime and the entry wrapper appended so that a test can
-    /// look for anything the finished program contains.
-    fn ir_of(u: &Unit) -> String {
-        let map = SourceMap::single("t.nz", "a source line\nand another\n");
-        let (text, needs) = emit_unit(u, &SourceNames::only(&map));
-        text + &emit_runtime(needs) + &emit_entry(&sym("main"), 0, needs)
-    }
-
-    #[test]
-    fn overflow_is_an_intrinsic_and_a_branch_never_nsw() {
-        // The single most important property of this file. `nsw` does not check for
-        // overflow — it promises overflow cannot happen, which licenses the optimiser to
-        // delete the very branch that was supposed to catch it.
-        let m = module(
-            Expr::Arith {
-                op: ArithOp::Add,
-                lhs: Box::new(Expr::Int(1)),
-                rhs: Box::new(Expr::Int(2)),
-                span: Span::new(nazm_span::FileId::ROOT, 0, 1),
-            },
-            Vec::new(),
-            Vec::new(),
-        );
-        let ir = ir_of(&m);
-        assert!(ir.contains("@llvm.sadd.with.overflow.i64"), "{ir}");
-        assert!(ir.contains("br i1 %"), "{ir}");
-        assert!(!ir.contains(" nsw "), "emitted nsw: {ir}");
-        assert!(!ir.contains("llvm.trap"), "emitted llvm.trap: {ir}");
-    }
-
-    #[test]
-    fn division_is_guarded_before_the_instruction_that_would_fault() {
-        let m = module(
-            Expr::Arith {
-                op: ArithOp::Div,
-                lhs: Box::new(Expr::Int(1)),
-                rhs: Box::new(Expr::Int(0)),
-                span: Span::new(nazm_span::FileId::ROOT, 2, 3),
-            },
-            Vec::new(),
-            Vec::new(),
-        );
-        let ir = ir_of(&m);
-        let guard = ir.find("icmp eq i64").expect("a zero check");
-        let sdiv = ir.find("sdiv").expect("the division");
-        assert!(guard < sdiv, "the division precedes its guard:\n{ir}");
-        assert!(ir.contains("-9223372036854775808"), "no MIN/-1 check: {ir}");
-        assert!(ir.contains("N0401"), "{ir}");
-    }
-
-    #[test]
-    fn remainder_answers_min_by_minus_one_with_a_constant() {
-        let m = module(
-            Expr::Arith {
-                op: ArithOp::Rem,
-                lhs: Box::new(Expr::Int(i64::MIN)),
-                rhs: Box::new(Expr::Int(-1)),
-                span: Span::new(nazm_span::FileId::ROOT, 0, 1),
-            },
-            Vec::new(),
-            Vec::new(),
-        );
-        let ir = ir_of(&m);
-        assert!(
-            ir.contains("phi i64"),
-            "no constant path for MIN % -1: {ir}"
-        );
-        assert!(ir.contains("srem"), "{ir}");
-        assert!(ir.contains("N0401"), "{ir}");
-        assert!(
-            !ir.contains("remainder overflows"),
-            "`%` was given an overflow case it does not have: {ir}"
-        );
-    }
-
-    #[test]
-    fn a_runtime_message_carries_its_code_and_position() {
-        let m = module(
-            Expr::Arith {
-                op: ArithOp::Div,
-                lhs: Box::new(Expr::Int(1)),
-                rhs: Box::new(Expr::Int(0)),
-                // The `/` on the third line: 18 bytes of preceding lines plus six into
-                // this one, which is column 7.
-                span: Span::new(nazm_span::FileId::ROOT, 24, 25),
-            },
-            Vec::new(),
-            Vec::new(),
-        );
-        let map = SourceMap::single("prog.nz", "line one\nline two\n    1 / 0\n");
-        let (ir, _) = emit_unit(&m, &SourceNames::only(&map));
-        assert!(ir.contains("prog.nz:3:7"), "{ir}");
-        assert!(ir.contains("N0401"), "{ir}");
-    }
-
-    #[test]
-    fn locals_are_slots_and_carry_their_type() {
-        let m = module(
-            Expr::Load {
-                slot: 0,
-                ty: Ty::Bool,
-            },
-            vec![Local {
-                name: "flag".to_owned(),
-                ty: Ty::Bool,
-            }],
-            vec![Stmt::Let {
-                slot: 0,
-                value: Expr::Bool(true),
-            }],
-        );
-        let ir = ir_of(&m);
-        assert!(ir.contains("%slot0 = alloca i1"), "{ir}");
-        assert!(ir.contains("store i1 %"), "{ir}");
-        assert!(ir.contains("load i1, ptr %slot0"), "{ir}");
-    }
-
-    #[test]
-    fn a_comparison_is_signed_and_needs_no_guard() {
-        // `slt`, not `ult`: `Int` is signed, so `-1 < 1` must hold. An unsigned predicate
-        // would compare bit patterns and get it backwards.
-        let m = module(
-            Expr::Compare {
-                op: CmpOp::Lt,
-                operand_ty: Ty::Int,
-                lhs: Box::new(Expr::Int(-1)),
-                rhs: Box::new(Expr::Int(1)),
-            },
-            Vec::new(),
-            Vec::new(),
-        );
-        let ir = ir_of(&m);
-        assert!(ir.contains("icmp slt i64"), "{ir}");
-        assert!(!ir.contains("icmp ult"), "unsigned comparison: {ir}");
-    }
-
-    #[test]
-    fn a_phi_names_blocks_that_exist_and_reach_the_join() {
-        // The bug this test exists for: naming the branch's *entry* label. A branch
-        // containing checked arithmetic ends in the continuation block its guard opened,
-        // not in the block it started in, so an entry-label `phi` would name a
-        // predecessor that does not branch to the join — which LLVM rejects.
-        //
-        // Structural, not a snapshot: block numbers are an emission detail and pinning
-        // them would fail on any unrelated change.
-        let m = module(
-            Expr::If {
-                cond: Box::new(Expr::Bool(true)),
-                // Arithmetic in the branch, so the branch opens blocks of its own.
-                then_block: Box::new(block(Expr::Arith {
-                    op: ArithOp::Add,
-                    lhs: Box::new(Expr::Int(1)),
-                    rhs: Box::new(Expr::Int(2)),
-                    span: Span::new(nazm_span::FileId::ROOT, 0, 1),
-                })),
-                else_block: Box::new(block(Expr::Int(0))),
-                ty: Some(Ty::Int),
-            },
-            Vec::new(),
-            Vec::new(),
-        );
-        let ir = ir_of(&m);
-
-        let phi = ir
-            .lines()
-            .find(|l| l.contains("phi i64") && l.contains("], ["))
-            .expect("a phi for the if")
-            .to_owned();
-
-        let preds: Vec<String> = phi
-            .split(", %")
-            .skip(1)
-            .filter_map(|s| s.split([' ', ']', ',']).next())
-            .map(ToOwned::to_owned)
-            .collect();
-        assert_eq!(
-            preds.len(),
-            2,
-            "a two-way phi needs two predecessors: {phi}"
-        );
-
-        for pred in preds {
-            assert!(
-                ir.contains(&format!("\n{pred}:")),
-                "phi names `{pred}`, which is not a block:\n{ir}"
-            );
-            // And that block must actually branch to the join the phi is in.
-            let after = ir.split(&format!("\n{pred}:")).nth(1).unwrap_or_default();
-            let terminator = after
-                .lines()
-                .find(|l| l.trim_start().starts_with("br "))
-                .unwrap_or_default();
-            assert!(
-                terminator.contains("br label %"),
-                "`{pred}` does not jump to a join:\n{ir}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_symbol_is_generated_and_never_taken_from_the_source_name() {
-        // A source name in an LLVM identifier needs escaping rules, and the escaping is
-        // the bug. There are none here because no name reaches a symbol.
-        let helper = Function {
-            symbol: sym("helper"),
-            linkage: Linkage::Internal,
-            // Deliberately hostile: spaces, quotes, an `@`, and the names of the C
-            // functions this module declares.
-            name: "printf\" @exit write".to_owned(),
-            locals: Vec::new(),
-            params: 0,
-            ret: Ty::Int,
-            body: Block {
-                stmts: Vec::new(),
-                result: Some(Box::new(Expr::Int(1))),
-            },
-        };
-        let ir = ir_of(&calling(helper, Vec::new(), Ty::Int));
-
-        assert!(
-            ir.contains(&format!("define internal i64 {}(", sym("helper"))),
-            "{ir}"
-        );
-        // The name appears only after a comment marker, never as an identifier.
-        for line in ir.lines().filter(|l| l.contains("printf\" @exit write")) {
-            let before = line.split("printf").next().unwrap_or_default();
-            assert!(
-                before.contains(';'),
-                "a source name escaped into code:\n{line}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_platform_entry_is_a_wrapper_and_only_it_prints() {
-        // Nazm's `main` is an ordinary definition with an ordinary symbol, so a program
-        // cannot collide with the C entry point. And a helper returns a value rather than
-        // printing one.
-        let helper = Function {
-            symbol: sym("helper"),
-            linkage: Linkage::Internal,
-            name: "helper".to_owned(),
-            locals: Vec::new(),
-            params: 0,
-            ret: Ty::Int,
-            body: Block {
-                stmts: Vec::new(),
-                result: Some(Box::new(Expr::Int(7))),
-            },
-        };
-        let ir = ir_of(&calling(helper, Vec::new(), Ty::Int));
-
-        // The C entry point takes `argc`/`argv` since B3; what matters here is that it
-        // is a separate, external wrapper around Nazm's `main`, not its signature.
-        assert!(
-            ir.contains("define i32 @main(i32 %argc, ptr %argv) {"),
-            "{ir}"
-        );
-        assert!(
-            ir.contains(&format!("define hidden i64 {}(", sym("main"))),
-            "nazm main is not a wrapper: {ir}"
-        );
-        assert!(ir.contains(&format!("call i64 {}()", sym("main"))), "{ir}");
-        // **Called** once, by the wrapper. The declaration appears in every artefact
-        // since N5 — a `declare` costs nothing and deciding per unit which ones are
-        // needed is a class of bug — so counting mentions would count the wrong thing.
-        assert_eq!(
-            ir.matches("call i32 (ptr, ...) @printf").count(),
-            1,
-            "only the entry wrapper may print:\n{ir}"
-        );
-    }
-
-    #[test]
-    fn parameters_are_stored_into_their_slots_and_typed() {
-        let helper = Function {
-            symbol: sym("helper"),
-            linkage: Linkage::Internal,
-            name: "helper".to_owned(),
-            locals: vec![
-                Local {
-                    name: "n".to_owned(),
-                    ty: Ty::Int,
-                },
-                Local {
-                    name: "flag".to_owned(),
-                    ty: Ty::Bool,
-                },
-            ],
-            params: 2,
-            ret: Ty::Int,
-            body: Block {
-                stmts: Vec::new(),
-                result: Some(Box::new(Expr::Load {
-                    slot: 0,
-                    ty: Ty::Int,
-                })),
-            },
-        };
-        let ir = ir_of(&calling(
-            helper,
-            vec![Expr::Int(3), Expr::Bool(true)],
-            Ty::Int,
-        ));
-
-        assert!(
-            ir.contains(&format!(
-                "define internal i64 {}(i64 %p0, i1 %p1)",
-                sym("helper")
-            )),
-            "{ir}"
-        );
-        assert!(ir.contains("store i64 %p0, ptr %slot0"), "{ir}");
-        assert!(ir.contains("store i1 %p1, ptr %slot1"), "{ir}");
-        assert!(
-            ir.contains(&format!("call i64 {}(i64 %", sym("helper"))),
-            "{ir}"
-        );
-        assert!(
-            ir.contains(", i1 %"),
-            "the Bool argument lost its type: {ir}"
-        );
-    }
-
-    #[test]
-    fn the_result_is_printed_in_full_not_returned_as_a_status() {
-        // An exit status is 8 bits. Returning a 64-bit `Int` through it would be wrong
-        // for almost every value a program produces.
-        let m = module(Expr::Int(i64::MIN), Vec::new(), Vec::new());
-        let ir = ir_of(&m);
-        assert!(ir.contains("@printf"), "{ir}");
-        assert!(ir.contains("%lld"), "{ir}");
-        assert!(ir.contains("ret i32 0"), "{ir}");
-    }
-}
