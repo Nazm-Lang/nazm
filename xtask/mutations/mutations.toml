@@ -8433,10 +8433,10 @@ killers = [{ package = "nazm-cli", test = "cranelift", name = "every_example_com
 
 [[mutation]]
 name = "n41-a-runtime-signature-is-wrong"
-why = "the registry says `nz.format_int` returns a C `int`, so every call is built against a signature the runtime does not have"
+why = "the registry drops `nz.arr_grow`'s element-size parameter, so every push is built against a signature the runtime does not have (narrowing a result instead is invisible on a little-endian target that stores it into a zeroed field, which is why this mutant removes a parameter)"
 file = "crates/nazm-lir/src/runtime.rs"
-find = '    import!("nz.format_int", [Ptr, I64], Some(Word::I64), Base,'
-replace = '    import!("nz.format_int", [Ptr, I64], Some(Word::I32), Base,'
+find = '    import!("nz.arr_grow", [Ptr, I64], Some(Word::Ptr), Sequences,'
+replace = '    import!("nz.arr_grow", [Ptr], Some(Word::Ptr), Sequences,'
 killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
 
 [[mutation]]
