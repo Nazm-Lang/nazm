@@ -515,6 +515,89 @@ fn a_baseline_waits_for_a_flat_stretch_as_long_as_the_window_it_precedes() {
     assert!(settled(&[60_000, 61_000, 59_500, 62_000, 60_500]));
 }
 
+/// What a measured window's RSS samples say about memory growth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Growth {
+    /// Every sample within [`TOLERANCE_KB`] of the baseline.
+    Flat,
+    /// One increase larger than [`TOLERANCE_KB`] between adjacent samples — glibc giving a
+    /// worker thread its own arena — at this sample, with every sample before it within the
+    /// tolerance of the baseline and every sample after it within the tolerance of the first
+    /// post-step sample: a plateau.
+    OneStep { at: usize, plateau_delta: u64 },
+    /// Anything else: two or more large steps, growth beyond the tolerance before or after a
+    /// step, or a step at the last sample, after which no plateau could be observed.
+    Grows,
+}
+
+/// Classify RSS samples taken at even intervals across a measured window, the first being the
+/// baseline. At most one allocator discontinuity is allowed, and only when a plateau after it
+/// is observed; every other change stays inside the +4 MB bound the benchmark has always used.
+fn growth(samples: &[u64]) -> Growth {
+    let large: Vec<usize> = (1..samples.len())
+        .filter(|&i| samples[i].saturating_sub(samples[i - 1]) > TOLERANCE_KB)
+        .collect();
+    let within = |from: usize, to: usize, base: u64| {
+        samples[from..to].iter().all(|&x| x <= base + TOLERANCE_KB)
+    };
+    match large.as_slice() {
+        [] if within(0, samples.len(), samples[0]) => Growth::Flat,
+        // A plateau needs a sample after the step to be seen at all.
+        [at] if *at + 1 < samples.len()
+            && within(0, *at, samples[0])
+            && within(*at, samples.len(), samples[*at]) =>
+        {
+            let plateau = samples[*at];
+            let top = samples[*at..].iter().copied().max().unwrap_or(plateau);
+            Growth::OneStep {
+                at: *at,
+                plateau_delta: top - plateau,
+            }
+        }
+        _ => Growth::Grows,
+    }
+}
+
+#[test]
+fn a_measured_window_allows_one_allocator_step_and_only_with_a_plateau_after_it() {
+    use Growth::{Flat, Grows, OneStep};
+    // Flat, and drift within the tolerance: the original law.
+    assert_eq!(growth(&[53_000, 53_000, 53_000, 53_000, 53_000]), Flat);
+    assert_eq!(growth(&[53_000, 54_000, 55_500, 56_000, 57_000]), Flat);
+    assert_eq!(
+        growth(&[53_000, 54_000, 55_500, 56_000, 57_200]),
+        Grows,
+        "past +4 MB"
+    );
+    // One step, then flat or within +4 MB of the first sample after it.
+    assert_eq!(
+        growth(&[53_000, 53_000, 94_000, 94_000, 94_000]),
+        OneStep {
+            at: 2,
+            plateau_delta: 0
+        }
+    );
+    assert_eq!(
+        growth(&[53_000, 94_000, 95_000, 96_500, 97_000]),
+        OneStep {
+            at: 1,
+            plateau_delta: 3_000
+        }
+    );
+    // Two large steps.
+    assert_eq!(growth(&[53_000, 94_000, 94_000, 135_000, 135_000]), Grows);
+    // A steady leak: every step is large.
+    assert_eq!(growth(&[53_000, 65_000, 78_000, 91_000, 104_000]), Grows);
+    // A step, then growth continuing past +4 MB of the plateau.
+    assert_eq!(growth(&[53_000, 94_000, 97_000, 100_000, 103_000]), Grows);
+    // Growth past +4 MB before the step.
+    assert_eq!(growth(&[53_000, 56_000, 58_000, 99_000, 99_000]), Grows);
+    // A large step at the last sample: no plateau was observed, so not a pass.
+    assert_eq!(growth(&[53_000, 54_000, 55_000, 56_000, 94_000]), Grows);
+    // A fall is not growth.
+    assert_eq!(growth(&[94_000, 53_000, 53_000, 53_000, 53_000]), Flat);
+}
+
 fn rss_kb(pid: u32) -> u64 {
     let out = Command::new("ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
@@ -1785,6 +1868,45 @@ fn a_thousand_repository_calls_are_each_of_the_disk_and_keep_nothing() {
     });
 }
 
+/// The measurement law's own evidence: 3,000 sequential task contexts under the normal
+/// allocator, sampled every 250, to show that after at most one step RSS plateaus. Run by hand
+/// (`cargo test --release -p nazm-mcp --test protocol -- --ignored`).
+#[test]
+#[ignore = "a 3,000-request confirmation of the memory law; minutes in a release build"]
+fn three_thousand_task_contexts_plateau_after_at_most_one_step() {
+    let dir = project(&[("main.nz", MAIN), ("lib.nz", LIB)]);
+    let root = dir.path().join("main.nz");
+    runtime().block_on(async {
+        let (client, pid) = connect(&root).await;
+        let (map, _) = call_with(&client, REPOSITORY_MAP, json!({})).await;
+        let state = map["state"].as_str().unwrap().to_owned();
+        let asks = [
+            json!({"seeds": ["def:compiler:module.nz::fn attach_core"], "state": state, "intent": "edit"}),
+            json!({"seeds": ["doc:spec:returns"], "state": state, "intent": "understand"}),
+            json!({"seeds": ["package:nazm-docs"], "state": state, "intent": "test"}),
+            json!({"seeds": ["def:compiler:lex.nz::fn is_alnum"], "state": state, "intent": "understand"}),
+        ];
+        let mut first = Vec::new();
+        for a in &asks {
+            first.push(call_with(&client, TASK_CONTEXT, a.clone()).await.0);
+        }
+        let mut samples = vec![rss_kb(pid)];
+        for i in 0..3000 {
+            let k = i % asks.len();
+            let (v, _) = call_with(&client, TASK_CONTEXT, asks[k].clone()).await;
+            assert_eq!(v, first[k], "call {i}");
+            if (i + 1) % SAMPLE_EVERY == 0 {
+                samples.push(rss_kb(pid));
+            }
+        }
+        let verdict = growth(&samples);
+        let peak = peak_kb(pid).map_or_else(|| "unreported".to_owned(), |p| format!("{p} kB"));
+        eprintln!("3,000 task contexts: RSS {samples:?} kB, {verdict:?}, peak {peak}");
+        assert_ne!(verdict, Growth::Grows, "{samples:?} kB");
+        client.cancel().await.unwrap();
+    });
+}
+
 /// The 1,000-call measurement over this repository itself, for `performance.md`: a release
 /// build, run by hand (`cargo test --release -p nazm-mcp --test protocol -- --ignored`).
 #[test]
@@ -1831,22 +1953,25 @@ fn a_thousand_task_contexts_over_this_repository() {
             warmup += SAMPLE_EVERY;
             samples.push(rss_kb(pid));
         }
-        let baseline = rss_kb(pid);
+        // The measured window, sampled every 250 requests; the first sample is the baseline.
+        let mut window = vec![rss_kb(pid)];
         let start = std::time::Instant::now();
         for i in 0..1000 {
             let k = i % asks.len();
             let (v, _) = call_with(&client, TASK_CONTEXT, asks[k].clone()).await;
             assert_eq!(v, first[k], "call {i}");
+            if (i + 1) % SAMPLE_EVERY == 0 {
+                window.push(rss_kb(pid));
+            }
         }
         let per = start.elapsed().as_secs_f64();
-        let after = rss_kb(pid);
         let peak = peak_kb(pid).map_or_else(|| "unreported".to_owned(), |p| format!("{p} kB"));
         let step = samples.windows(2).any(|w| w[1].saturating_sub(w[0]) > TOLERANCE_KB);
+        let verdict = growth(&window);
         eprintln!(
-            "nazm-mcp over this repository: map {map_ms} ms; 1,000 task contexts, {per:.3} ms each on average; warm-up {warmup} requests, RSS samples {samples:?} kB, a step during warm-up: {step}; baseline {baseline} kB, after {after} kB, delta {} kB, peak {peak}",
-            i128::from(after) - i128::from(baseline)
+            "nazm-mcp over this repository: map {map_ms} ms; 1,000 task contexts, {per:.3} ms each on average; warm-up {warmup} requests, RSS samples {samples:?} kB, a step during warm-up: {step}; measured window {window:?} kB, {verdict:?}, peak {peak}"
         );
-        assert!(after <= baseline + TOLERANCE_KB, "{baseline} kB -> {after} kB");
+        assert_ne!(verdict, Growth::Grows, "{window:?} kB");
         client.cancel().await.unwrap();
     });
 }
