@@ -5271,6 +5271,61 @@ component*: only a key's first component may not hold `@`, because `lib/@core/x.
 project's own key. The source-root decision (`nazm-service/src/root.rs`) learned a fourth answer,
 `package`, reported by `--cache-report` and `--build-report` as a new value of `root`.
 
+## 7.49 Restriction profiles — N47, 2026-10-01
+
+Written before the code. One language, and profiles that refuse some of its programs.
+
+**What a profile is.** A named set of rules, each with a stable identity, each reading a fact the
+compiler already settled and passing or failing with witnesses. A profile may reject a program;
+it never changes what an accepted program means, compiles to or does. Every program a profile
+accepts, `general` accepts, and runs identically. There is no profile-specific syntax, built-in or
+code path, and nothing in a profile reads a name: an effect is an `Effect`, a contract is a
+function's `declared_effects`, a build's lock is `nazm-package`'s verification.
+
+**The rules.**
+
+| Rule | Fact | Refuses |
+| --- | --- | --- |
+| `declared-effects` | each function's declared contract | any function of the program's own modules (not the prelude's or a standard module's, all of which declare theirs) with no `! { … }` — the ambient bridge of N37 |
+| `no-io` | the effect set `main` requires | `io` anywhere in the program, through any call |
+| `no-spawn` | the same | `spawn`: tasks, and so the scheduler |
+| `no-foreign` | the same | `foreign`: any call into C |
+| `locked-build` | the build | a build that is not a package build whose lockfile verifies |
+
+`main`'s required effect set is transitive by construction (N36): through every call of every
+module, standard wrappers included — `io_println` carries `io` because it calls `print` — and an
+undeclared function of another module is assumed to have every bridged effect, so an effect rule
+over-refuses rather than misses.
+
+**The profiles.** `general`: no rules. `embedded`: `no-io`, `no-spawn` — no operating-system
+services and no scheduler; C (hardware access) is allowed. `critical`: `declared-effects`,
+`no-spawn`, `no-foreign`, `locked-build`. `cyber`: `declared-effects`, `no-foreign`,
+`locked-build`; because every function then declares its effects, N38's restricted flow (`N0372`)
+applies to every function of the program. None is a certification, a sandbox or a proof of
+anything beyond its rules.
+
+**What is not a rule, and why.** No allocation rule: allocation is not tracked. No determinism
+claim: forbidding `spawn` removes one source of nondeterminism, not every one. No provenance rule
+beyond N38's, which `declared-effects` extends to the whole program.
+
+**Selection and propagation.** `--profile NAME` on `check`, `build` and `run`, and `profile =
+"NAME"` in any package manifest of the build. The profiles in force are all of them; their rules
+are the union, evaluated over the whole program — so a dependency that requires `embedded` holds
+every program it is part of to it. An unknown name is `N0511`. No environment variable selects one.
+
+**When, and caching.** After a full check, before the command does its own work: `nazm build`
+under a profile that refuses writes nothing. The rules read the facts of an uncached check, and
+their verdicts are never cached, so a check cached under one profile can never carry its
+acceptance into another — the cost is one check more whenever a profile other than `general` is in
+force. What is compiled does not depend on the profile, so no object key needs it.
+
+**Diagnostics and the report.** Each failed rule is one `N0510` naming the profiles in force and
+the rule, pointing at its first witness — for an effect, the chain of calls from `main` to the
+built-in, `spawn` or contract where it enters — with the rest as secondary labels. `nazm check
+--profile-report` prints `nazm.profile-report/1`: the profiles, the outcome, and every rule's
+verdict and witnesses in rule order, byte-identical for the same program and build, and marked as
+compiler evidence rather than certification.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
