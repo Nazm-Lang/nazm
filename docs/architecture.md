@@ -324,7 +324,8 @@ step rather than a crate of its own. `nazm-hir`, `nazm-ty` and `nazm-db` are sti
 | 6 | **`nazm-mir`** | **exists** (N40) — MIR, level 6 by responsibility: each concrete function as a typed CFG with every copy, move, drop, scope join and failure edge explicit, validated. Not SSA, and no borrow checking. §7.42 |
 | 6 | `nazm-db` · `nazm-lsp` | planned |
 | 7 | **`nazm-lir`** | **exists** — since N40 it reads validated MIR and holds layout, symbols and LLVM text emission; the structured tree that was once named for this level is gone. See the note below |
-| 7 | `nazm-codegen-clif` · `nazm-link` · `nazm-driver` | planned |
+| 7 | **`nazm-codegen-clif`** | **exists** (N41) — the Cranelift backend behind `nazm-lir`'s `Backend`: every MIR function body to Cranelift IR to one object per unit, in process. §7.43 |
+| 7 | `nazm-link` · `nazm-driver` | planned — clang links, and `nazm-cli` drives |
 | 7 | `nazm-test` | **exists as a subcommand**, `nazm test`, not as a crate |
 | 8 | `nazm-rt` | planned |
 | 9 | `nazm-mono` | planned — and nothing is polymorphic, so there is nothing to monomorphise yet |
