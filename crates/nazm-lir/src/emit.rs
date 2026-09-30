@@ -1686,6 +1686,7 @@ impl Emitter<'_> {
             io: self.needs_io,
             join: self.needs_join,
             strings: self.needs_strings,
+            shims: false,
         }
     }
 
@@ -3008,6 +3009,9 @@ pub struct Needs {
     pub io: bool,
     pub join: bool,
     pub strings: bool,
+    /// The registry's pointer-taking entries and accessors (`crate::runtime`), which code a
+    /// second compiler generated calls instead of the aggregate-returning ones (N41).
+    pub shims: bool,
 }
 
 impl Needs {
@@ -3021,6 +3025,7 @@ impl Needs {
             io: self.io || other.io,
             join: self.join || other.join,
             strings: self.strings || other.strings,
+            shims: self.shims || other.shims,
         }
     }
 
@@ -3415,9 +3420,128 @@ pub fn emit_runtime(needs: Needs) -> String {
     if needs.channels {
         out.push_str(CHANNEL_RUNTIME);
     }
+    if needs.shims {
+        out.push_str(SHIM_RUNTIME);
+        if needs.sequences {
+            out.push_str(SHIM_SEQUENCE_RUNTIME);
+        }
+        if needs.io {
+            out.push_str(SHIM_IO_RUNTIME);
+        }
+        if needs.join {
+            out.push_str(SHIM_JOIN_RUNTIME);
+        }
+        if needs.tasks {
+            out.push_str(SHIM_TASK_RUNTIME);
+        }
+    }
     out.push('\n');
     out
 }
+
+/// The registry's accessors and pointer-taking entries (`crate::runtime`, N41), for code a
+/// second compiler generated. Each is a thin wrapper over an entry the LLVM text calls
+/// directly; none allocates, frees or counts anything the wrapped one does not.
+const SHIM_RUNTIME: &str = r#"
+@.dec.rt = private unnamed_addr constant [5 x i8] c"%lld\00"
+
+define hidden i32 @nz.failed_now() {
+entry:
+  %f = load i1, ptr @nz.failed
+  %r = zext i1 %f to i32
+  ret i32 %r
+}
+
+define hidden i64 @nz.format_int(ptr %buf, i64 %v) {
+entry:
+  %w = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 21, ptr @.dec.rt, i64 %v)
+  %n = sext i32 %w to i64
+  ret i64 %n
+}
+"#;
+
+/// `nz.vec_release`: the per-element release `crate::emit`'s `vec_helper` writes for each
+/// element type, once, with the element's release passed in — the same decrement, walk, frees
+/// and count.
+const SHIM_SEQUENCE_RUNTIME: &str = r"
+define hidden void @nz.vec_release(ptr %h, ptr %f, i64 %stride) {
+entry:
+  %none = icmp eq ptr %h, null
+  br i1 %none, label %done, label %drop
+drop:
+  %rcp = getelementptr i8, ptr %h, i64 24
+  %rc = load i64, ptr %rcp
+  %rc2 = sub i64 %rc, 1
+  store i64 %rc2, ptr %rcp
+  %last = icmp sle i64 %rc2, 0
+  br i1 %last, label %contents, label %done
+contents:
+  %n = load i64, ptr %h
+  %dp = getelementptr i8, ptr %h, i64 16
+  %data = load ptr, ptr %dp
+  br label %test
+test:
+  %i = phi i64 [ 0, %contents ], [ %next, %body ]
+  %more = icmp slt i64 %i, %n
+  br i1 %more, label %body, label %storage
+body:
+  %off = mul i64 %i, %stride
+  %e = getelementptr i8, ptr %data, i64 %off
+  call void %f(ptr %e)
+  %next = add i64 %i, 1
+  br label %test
+storage:
+  call void @free(ptr %data)
+  call void @free(ptr %h)
+  %c = atomicrmw add ptr @nz.seq_reclaimed, i64 1 monotonic
+  br label %done
+done:
+  ret void
+}
+";
+
+const SHIM_IO_RUNTIME: &str = r"
+define hidden void @nz.read_file_to(ptr %out, ptr %p, i64 %n) {
+entry:
+  %r = call { ptr, i64, ptr } @nz.read_file(ptr %p, i64 %n)
+  store { ptr, i64, ptr } %r, ptr %out
+  ret void
+}
+";
+
+const SHIM_JOIN_RUNTIME: &str = r"
+define hidden void @nz.str_join_to(ptr %out, ptr %h, ptr %sp, i64 %sn) {
+entry:
+  %r = call { ptr, i64, ptr } @nz.str_join(ptr %h, ptr %sp, i64 %sn)
+  store { ptr, i64, ptr } %r, ptr %out
+  ret void
+}
+";
+
+const SHIM_TASK_RUNTIME: &str = r"
+define hidden void @nz.scope_join_to(ptr %h, ptr %out) {
+entry:
+  %r = call { ptr, i64 } @nz.scope_join(ptr %h)
+  store { ptr, i64 } %r, ptr %out
+  ret void
+}
+
+define hidden void @nz.task_publish(ptr %a) {
+entry:
+  %failed = load i1, ptr @nz.failed
+  br i1 %failed, label %publish, label %done
+publish:
+  %em = load ptr, ptr @nz.errmsg
+  %el = load i64, ptr @nz.errlen
+  %emp = getelementptr i8, ptr %a, i64 8
+  store ptr %em, ptr %emp
+  %elp = getelementptr i8, ptr %a, i64 16
+  store i64 %el, ptr %elp
+  br label %done
+done:
+  ret void
+}
+";
 
 /// Emit the platform entry point: one per executable, and the only thing that prints.
 ///
