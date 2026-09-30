@@ -1831,6 +1831,47 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### Core IR — N39, measured 2026-09-30
+
+Core IR is a lowering every checked program now passes through (`architecture.md` §7.41), so what
+is measured is what it costs a build and a run, what it changed in what programs do, and what
+the interpreter gained by running it instead of the tree.
+
+- **Nothing changed in any program.** All 205 `.nz` sources in the tree, under the N38 release
+  build (`git archive 5e7e487`) and the N39 one, host: `nazm check --no-cache` output and status
+  identical for 205; `nazm run` stdout, stderr, `NAZM_MEMORY_REPORT` line and status identical for
+  205 (95 exit 0, the rest their documented diagnostics); `nazm build --no-cache --emit-ir`
+  identical output for all 205, and **every one of the 383 LLVM IR files the 104 buildable ones
+  emit byte-identical**. The native backend now lowers Core IR and produces the same text,
+  hidden slots and all.
+- **What each phase costs**, release, host, median of 15
+  (`what_each_phase_costs_on_the_compiler`, `crates/nazm-cli/tests/core_ir.rs`), cumulative:
+  `compiler/emit.nz` parse 16.7 ms, checking +15.9, **to Core IR +5.6** (verifying it 0.4 of that),
+  to LIR +4.1, to LLVM text +29.9 — 72.1 ms; `compiler/check.nz` parse 9.3, checking +8.6, to
+  Core IR +2.6; a 3,001-function chain parse 14.0, checking +12.2, to Core IR +3.4, to LIR +4.0,
+  to LLVM text +20.4.
+- **Whole commands, N38 against N39**, release, host: `nazm check --no-cache compiler/emit.nz`
+  57.3 and 57.5 ms, `compiler/check.nz` 34.6 and 34.5 (median of 25) — checking builds no Core
+  IR; `nazm build --no-cache compiler/emit.nz` 947 and 958 ms (+1.1 %, median of 7, clang
+  dominating); `examples/primes.nz` 137.6 and 136.3 ms.
+- **The interpreter got faster**, because it no longer searches frames for a name or asks the
+  resolution at every call and field (median of 7): `bench/programs/calls.nz` 897.6 → 430.9 ms
+  (−52 %), `sieve.nz` 424.4 → 245.0 (−42 %), `sequences.nz` 330.9 → 199.1 (−40 %), `strings.nz`
+  25.8 → 19.7 (−24 %), `arith.nz` 733.6 → 615.0 (−16 %), `channels.nz` 271.8 → 256.7 (−6 %),
+  `floor.nz` 4.5 → 4.4.
+- **Memory.** Peak RSS, host, median of 5, N38 and N39: `nazm check compiler/emit.nz` 29.3 and
+  29.2 MB; `nazm build compiler/emit.nz` 64.0 and 63.5; `nazm run` of the 3,001-function chain
+  51.2 and 50.5; `nazm build` of it 68.2 and 68.2; `nazm run` of a 2,000-binding function 37.1 and
+  38.6. The tree is dropped as soon as Core IR exists, in both `nazm run` and `nazm build`, and the
+  interpreter no longer clones the tree and the resolution into itself; what a run keeps is Core
+  IR alone.
+- **Scale.** Lowering is linear in functions and in one function's size
+  (`crates/nazm-core/tests/core_ir.rs`, a 3,000-function program and a 1,000-binding function
+  against a quarter of each). Checking is not linear in the number of bindings one function has:
+  `nazm check` of a function with 1,000, 2,000 and 4,000 bindings takes 0.05, 0.19 and 0.69 s under
+  N38 and N39 alike — a cost of the checker's own, found by N39's stress test and not addressed by
+  it.
+
 ### Provenance — N38, measured 2026-09-30
 
 Provenance is a checker fact and a whole-program solve over kept facts (`architecture.md` §7.40),
