@@ -2013,6 +2013,20 @@ few of the questions the service can, and none edits.
 **Evidence** · Multi-file builds work through path-relative `use`, two independent
 implementations: `crates/nazm-service/src/load.rs` and `compiler/module.nz`.
 
+*N46, 2026-10-01: packages v1 — VERIFIED for path dependencies, one host.* `architecture.md`
+§7.48 first. `crates/nazm-package`: the `nazm.package/1` manifest (unknown keys refused), exact
+versions, deterministic name-order resolution with conflicts, mismatches and cycles refused by
+code (`N0500`–`N0504`), BLAKE3 package digests, and the `nazm.lock/1` lockfile `nazm lock` writes;
+`--locked` refuses a missing, mismatched or tampered lock (`N0505`–`N0507`). `use "NAME:path"`
+reaches a declared dependency and nothing else (`N0508`); dependency modules are keyed
+`NAME@VERSION/path`. Evidence: `crates/nazm-cli/tests/packages.rs` — a diamond built from its
+directory by the interpreter and both backends; every refusal by code; visibility; the lockfile's
+bytes independent of the directory and not rewritten when unchanged; tampering refused before
+anything is built; dependency keys; an unchanged dependency reused and a changed one rechecked
+alone; two copies byte-identical from empty caches; 200 packages resolved and locked in name order.
+No registry, no remote sources, no version ranges, no build scripts, no workspaces of several
+roots.
+
 *N31, 2026-09-28: Compact Command Summary v1, `nazm.command-summary/1` — VERIFIED; Compact Test
 Summary v1, `nazm.test-summary/1` — VERIFIED; G76 — PARTIAL.* `--summary-json` on `nazm check`
 and `nazm build` (`crates/nazm-service/src/summary.rs`, `architecture.md` §7.33) prints the
@@ -3066,6 +3080,14 @@ source lines, runnable executables byte-identical too.
 **Evidence** · `scripts/release-candidate.sh` runs every gate, writes `PROVENANCE.txt` and
 `MANIFEST.txt`, and validates the package against its own manifest with counts compared
 both ways so a file copied in but not listed fails.
+
+*N46, 2026-10-01: reproducible executables — VERIFIED on one host.* Two copies of one package,
+built from empty caches in two directories, give byte-identical executables under both backends
+(`two_copies_built_from_empty_caches_are_byte_identical`): the link runs with `ZERO_AR_DATE=1` and
+under the final file name, because the Apple linker otherwise mixes a time and a temporary name
+into the executable's UUID and signature. The package lockfile records BLAKE3 digests of every
+package's sources and refuses a changed one. Not claimed across hosts, operating systems or
+toolchain versions.
 
 **Limitation** · Three claims, kept apart. Archive **entry metadata is normalised** — tar
 sorted with zeroed owner and mtime, gzip with no timestamp. Whole-archive
