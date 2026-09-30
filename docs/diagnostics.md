@@ -95,6 +95,27 @@ cannot call, a sequence handed to a task) are raised from MIR now and read exact
 across all 205 sources in the tree, every build diagnostic is byte-identical. The printed MIR,
 `nazm.mir/1`, is a debugging form with its own version and is not one of these schemas.
 
+**Applied to N41, the backend boundary.** No schema moved and no code appeared. A program the
+Cranelift backend cannot compile is refused under `N0101`, naming the construct and the
+backend, and never falls back to LLVM; a target triple that is not the host is refused by name
+before anything is compiled. `nazm.build-report/1` is unchanged: a Cranelift object reused by
+its key counts as reused, exactly as a clang one does.
+
+**Applied to N42, foreign functions.** Six codes appeared, all compatible: `N0380` (an ABI
+other than `"C"`), `N0381` (a parameter or result type that cannot cross the C boundary — only
+`Int` and `Bool` can), `N0382` (a symbol that is not a C identifier), `N0383` (two declarations
+of one C symbol that disagree about its signature — in one module at check time, across modules
+when the program is built — or a symbol the native runtime declares itself), `N0384` (type
+parameters or a written effect set on a foreign declaration) and `N0385` (`nazm run` asked to
+run a program that calls a foreign function, refused before any of it runs). A foreign call
+without a `ForeignCap` held is the existing `N0369`, with or without an effect set; a declared
+set that leaves `foreign` out is the existing `N0366`. One schema moved: the persisted module
+interface is `nazm.interface/7`, because an export may now carry `foreign`, its C symbol, and a
+`/6` reader would take such an export for an ordinary function with no body. `effects` lists
+may contain `"foreign"` — a new value of an existing field, which is compatible. A link that
+fails for a program with foreign calls names the foreign symbols and `--link` rather than
+reporting a compiler bug.
+
 A consumer that fails on an unrecognised field is not compatible with this contract, and
 the `additionalProperties: false` in the schema documents is a statement about *this*
 version's output, not a promise that the next one adds nothing.

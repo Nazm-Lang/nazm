@@ -2465,16 +2465,17 @@ fn main(io: IoCap) -> Int ! { io } {
 
 #### The capabilities
 
-There are exactly two, and they are the compiler's. There are **no user-defined
+There are exactly three, and they are the compiler's. There are **no user-defined
 capabilities**.
 
 | Kind | Type | Authorises | Effect it authorises |
 | --- | --- | --- | --- |
 | `Io` | `IoCap` | the eight outside-world built-ins — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` | `io` |
 | `Spawn` | `SpawnCap` | a `spawn` statement: starting a task | `spawn` |
+| `Foreign` | `ForeignCap` | a call to a foreign function: running C (N42) | `foreign` |
 
-A kind is identified by the compiler, never by how its type is spelled. `IoCap` and
-`SpawnCap` are **built-in type names**, like `Chan`: they mean the same in every module, and a
+A kind is identified by the compiler, never by how its type is spelled. `IoCap`,
+`SpawnCap` and `ForeignCap` are **built-in type names**, like `Chan`: they mean the same in every module, and a
 module may not declare a type of either name (`N0331`). Which authority a built-in needs is a
 property of the built-in's identity, decided by an exhaustive table the checker reads — a
 program's own function cannot be named `print`, so a call spelled `print` is the built-in.
@@ -2589,6 +2590,68 @@ Not in v1, and not implied by anything above: attenuation (there is no narrower 
 derive one into), resource-specific authority, revocation, linear or affine capabilities,
 capability polymorphism, user-defined capabilities, restriction profiles, and authority for a
 foreign function or unsafe code (*Open*, *Capabilities*).
+
+### Foreign functions: calling C
+<!-- id: foreign -->
+
+A **foreign function** is a C function a program calls. It is declared by its signature and its
+C symbol, and it has no body: the body is C's, compiled by a C compiler and handed to the linker
+with `nazm build --link FILE`. Nazm does not compile C, and does not check it.
+
+```nazm
+extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";
+extern "C" fn c_is_even(n: Int) -> Bool = "c_is_even";
+
+fn classify(f: ForeignCap, n: Int) -> Int ! { foreign } {
+    if c_is_even(n) { c_add(n, 1000) } else { c_add(n, 100) }
+}
+
+fn main(io: IoCap, f: ForeignCap) -> Int ! { io, foreign } {
+    print(int_to_str(classify(f, 3)));
+    0
+}
+```
+
+**The boundary is the C convention of the target, and only two types cross it.** `Int` is C's
+`int64_t` and `Bool` is C's `bool`, both by value. Nothing else is FFI-safe in v1 (`N0381`): a
+`Str` is not a C string (it is counted, not terminated, and reference-counted); a record or an
+enum has no C layout Nazm promises; a sequence or a channel is the runtime's; and a capability is
+authority, never a word C could forge or keep. No pointer crosses, so C cannot retain, free or
+alias anything Nazm owns, and nothing Nazm owns needs pinning across a call. No callback crosses
+either: Nazm has no function values.
+
+**The declaration.** `extern` begins it, before the ABI string — `"C"`, the only ABI (`N0380`);
+`extern` is recognised only there, and is not otherwise reserved. The symbol after `=` is the C
+identifier the linker resolves, exactly as written: ASCII letters, digits and `_`, not starting
+with a digit (`N0382`). A foreign declaration takes no type parameters and writes no effect set
+(`N0384`): its effect is always `foreign`. Two declarations of one symbol must agree about its
+signature, and none may name a symbol the native runtime itself declares, such as `malloc` or
+`main` (`N0383`). A `pub` foreign declaration is exported like any function, and the persisted
+interface carries its symbol.
+
+**Calling one is an effect and needs authority.** A foreign function's effect is `foreign`: a
+function whose declared set leaves it out cannot call one (`N0366`). And **every** call to one
+needs a `ForeignCap` in scope, whether or not the calling function declares an effect set
+(`N0369`): C can do anything, so the compatibility bridge that lets an undeclared function
+exercise its caller's `io` does not reach it. A function in another module that declares no
+effects is assumed to call C only if one of its parameters can carry a `ForeignCap`.
+
+**Failure and ownership.** C cannot fail the Nazm way: after a foreign call nothing is checked,
+and a C function that aborts, loops or corrupts memory does so outside every Nazm guarantee. An
+integer overflow inside C is C's. What Nazm owns stays Nazm's across the call: values held in
+the calling function are released on every path exactly as around any call.
+
+**Provenance.** What C returns carries the origin `unknown`, the worst there is, together with
+whatever its arguments carried: it may be anything, and may be derived from what it was given. So
+in a function that declares its effects, a `write_file` path computed from a C result is refused
+(`N0372`), exactly as one read from a file is. What C does with an argument is not a Nazm sink —
+it is authorised by the `ForeignCap` the call needed, and outside what a restriction can see.
+
+**Where it runs.** Only in a native build. `nazm run` refuses a program that calls a foreign
+function before running any of it (`N0385`); one that only declares one runs. `nazm build`
+declares each foreign function in every unit that calls it and defines it in none; a missing
+definition is the linker's refusal, reported as a missing `--link` naming the symbols. Both
+backends call C the same way.
 
 ### Provenance: where a value came from, and where it may go
 <!-- id: provenance -->
