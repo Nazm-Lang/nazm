@@ -1130,6 +1130,17 @@ inside a scope a `break` left was never waited for and its failure never taken o
 reference and the interpreter were right. Held by the `scope_*_joins` cases in
 `crates/nazm-cli/tests/transfers/`.
 
+*N44 (2026-10-01):* `architecture.md` §7.46 is the scheduler contract — task states, scope
+ownership, which failure a scope reports (the first in start order, the body's before any
+task's), no cancellation, the OS as scheduler and why a pool would break the progress guarantee,
+fairness and determinism, authority and provenance across a spawn, what may cross, channels,
+shutdown. `crates/nazm-cli/tests/scheduler.rs` holds it under the interpreter, LLVM `-O0`/`-O2`
+and Cranelift with every native run fully reclaimed: 5,000 short tasks, thirty nested scopes
+joined innermost first, the reported failure in start order not time order, a failure deep in
+nested scopes, records and enums handed to tasks, a waiting receiver woken, authority passed,
+withheld and bridged, provenance through a spawn (`N0372`), nothing mutable crossing (`N0321`,
+transitively), `exit_with` from a task. Peak RSS stays at 3.8 MB from 5,000 to 500,000 tasks.
+
 **Limitation** · One OS thread per task and nothing more. No M:N, no work stealing, no
 fairness, no task density, no timeouts, and **no cancellation beyond closing a channel**.
 `Chan` carries `Int` only. Ownership prevents data races; **that is not deadlock freedom**
@@ -1142,7 +1153,11 @@ and is not claimed as such (`architecture.md` §5).
 ### 15. Advanced scheduler — RESEARCH
 
 **Evidence** · `architecture.md` §5 and `roadmap.md`'s C-4/C-5 rows: M:N tasks, work
-stealing, growable stacks, an event reactor, blocking-FFI handoff.
+stealing, growable stacks, an event reactor, blocking-FFI handoff. N44 measured the baseline any
+of it must beat (`docs/performance.md`, N44): a task started and joined in 13 µs, a channel round
+trip between two tasks 4.6 µs, a streamed value 60 ns, and linear scaling to four tasks; and
+decided against a fixed worker pool, which with blocking channels and no suspendable tasks would
+deadlock programs that are correct today (§7.46).
 
 **Limitation** · None of it exists and none of it is measured. `architecture.md` records
 that the "1M live tasks under 2GB" target was **withdrawn** as arithmetically unsupported —

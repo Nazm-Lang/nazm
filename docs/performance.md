@@ -1831,6 +1831,27 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### Tasks and channels — N44, measured 2026-10-01
+
+N44 kept the scheduler — one OS thread per task, joined by its scope — and wrote its contract
+down, so what is measured is the baseline anything more elaborate would have to beat. Host, `-O2`,
+best of 5 (`what_tasks_and_channels_cost`, `crates/nazm-cli/tests/scheduler.rs`, `--ignored`),
+with a one-core mutation container running beside it:
+
+| | LLVM | Cranelift |
+| --- | --- | --- |
+| 10,000 tasks started and joined, in scopes of 50 | 131.7 ms (13.2 µs each) | 128.8 ms (12.9 µs) |
+| 100,000 channel round trips between two tasks | 462.7 ms (4.63 µs each) | 468.2 ms (4.68 µs) |
+| 1,000,000 values streamed through a 1,024-slot channel | 59.7 ms (60 ns each) | 60.3 ms (60 ns) |
+| 400 M loop iterations over 1 / 2 / 4 tasks | 1,653 / 829 / 419 ms | 1,655 / 829 / 416 ms |
+
+- **Scaling** is linear to four tasks (3.95× at 4), because independent tasks share nothing but
+  the atomic accounting counters.
+- **Memory plateau.** A program running rounds of 100 tasks that each allocate a string and
+  report on a channel: peak RSS 3.75 MB after 5,000 tasks, 3.83 MB after 50,000, 3.80 MB after
+  500,000 (`/usr/bin/time -l`, 16 KiB pages). No per-task growth: every thread is joined and every
+  block freed by its scope.
+
 ### The runtime contract — N43, measured 2026-10-01
 
 N43 moved the runtime into `crates/nazm-lir/src/runtime/` and wrote its contract down; it changed
