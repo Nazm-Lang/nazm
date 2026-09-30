@@ -5069,7 +5069,8 @@ scope still joins every task started before it.
 cancelled: they run to completion. At the scope's join, the first failure *in start order* is
 the scope's, and it continues in the parent as the parent's own failure — at the closing brace or
 the exit that joined. Later failures are dropped. A failure in the parent while tasks run is held
-until they are joined, then unwinds. So a scope's result is a function of its tasks' outcomes, not
+until they are joined, then unwinds — and it, not any task's, is the one reported, because a
+thread keeps only its first failure and the parent's came first on its own thread. So a scope's result is a function of its tasks' outcomes, not
 of the order they happened to finish in.
 
 **Cancellation: none in v1.** There is no cancel operation, no cancellation on sibling failure,
