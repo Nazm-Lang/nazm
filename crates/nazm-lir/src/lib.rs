@@ -33,13 +33,12 @@ pub mod names;
 pub mod runtime;
 pub mod symbol;
 
-pub use emit::{
-    emit_entry, emit_runtime, emit_unit, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, TARGET_NOTE,
-};
+pub use emit::{emit_unit, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, TARGET_NOTE};
 pub use ir::{
     ArithOp, CmpOp, EnumLayout, EnumTy, External, Owns, RecordLayout, RecordTy, Ty, Unit,
     VariantLayout,
 };
 pub use lower::{lower, LowerError, Native, Sig};
 pub use names::SourceNames;
+pub use runtime::{emit_entry, emit_runtime};
 pub use symbol::{Linkage, NativeSymbol};
