@@ -660,15 +660,16 @@ one the tests below never had to catch.
 Caught by `arguments_are_not_swapped`, which uses noncommutative operations: `sub(10, 3)`
 is 7 and the transposition makes it -7. `mix(1, 2, 3)` catches a rotation as well.
 Repointed by N40: a call's operands are MIR's, loaded in order by the backend.
-"""
+
+Repointed by N42: the call site now also decides whether the callee is foreign; a C call's arguments are the same operands in the same order."""
 file = "crates/nazm-lir/src/emit.rs"
 find = """                let vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
-                let list = vals"""
+                let foreign = self.sigs.get(callee.index()).is_some_and(|s| s.foreign);"""
 replace = """                let mut vals: Vec<(u32, Ty)> = args.iter().map(|a| self.operand(a)).collect();
                 if vals.len() >= 2 && vals[0].1 == vals[1].1 {
                     vals.swap(0, 1);
                 }
-                let list = vals"""
+                let foreign = self.sigs.get(callee.index()).is_some_and(|s| s.foreign);"""
 
 [[mutation]]
 name = "the-loop-reuses-its-first-condition"
@@ -1014,10 +1015,11 @@ durable identity, so a symbol depends on the order files were loaded in. The sam
 then gets different symbols depending on which file the compilation began at, which is
 exactly what a durable identity exists to prevent
 Repointed by N40: symbols are spelled from MIR's durable identity of each function.
-"""
+
+Repointed by N42: a foreign function's symbol is its declared C name; every other function's is still its durable identity."""
 file = "crates/nazm-lir/src/lower.rs"
-find = "                symbol: of_identity(&f.identity),"
-replace = "                symbol: NativeSymbol::of_unkeyed(f.module, &f.name),"
+find = "                    .map_or_else(|| of_identity(&f.identity), NativeSymbol::foreign),"
+replace = "                    .map_or_else(|| NativeSymbol::of_unkeyed(f.module, &f.name), NativeSymbol::foreign),"
 
 [[mutation]]
 name = "the-runtime-is-emitted-into-every-unit"
@@ -7534,10 +7536,11 @@ killers = [{ package = "nazm-core", test = "effects", name = "an_unknown_or_repe
 
 [[mutation]]
 name = "n36-an-undeclared-import-is-pure"
-why = "an import that declares no set is taken to have no effects, so a caller trusts a body it may not read"
+why = """an import that declares no set is taken to have no effects, so a caller trusts a body it may not read
+Repointed by N42: what is assumed of an undeclared import is `assumed()`, the bridged effects plus `foreign` where it can be handed a `ForeignCap`."""
 file = "crates/nazm-core/src/effects.rs"
-find = "                                direct.extend(EffectSet::all().iter().map(|effect| EffectReason {"
-replace = "                                direct.extend(EffectSet::EMPTY.iter().map(|effect| EffectReason {"
+find = "direct.extend(assumed(g, res).iter().map(|effect| EffectReason {"
+replace = "direct.extend(EffectSet::EMPTY.iter().map(|effect| EffectReason {"
 killers = [{ package = "nazm-service", test = "context", name = "a_functions_packet_carries_its_effects_and_why_from_the_checker" }]
 
 [[mutation]]
@@ -7586,10 +7589,11 @@ killers = [{ package = "nazm-service", test = "context", name = "a_functions_pac
 
 [[mutation]]
 name = "n36-the-interface-schema-stays"
-why = "the interface keeps the `/5` name for a shape whose absent `effects` now means undeclared, so a `/5` file is read as a `/6` one"
+why = """the interface keeps the `/5` name for a shape whose absent `effects` now means undeclared, so a `/5` file is read as a `/6` one
+Repointed by N42, whose `/7` adds foreign exports: the rule is the same, one version on — a `/6` file must not be read as a `/7` one."""
 file = "crates/nazm-iface/src/wire.rs"
-find = """pub const SCHEMA: &str = "nazm.interface/6";"""
-replace = """pub const SCHEMA: &str = "nazm.interface/5";"""
+find = """pub const SCHEMA: &str = "nazm.interface/7";"""
+replace = """pub const SCHEMA: &str = "nazm.interface/6";"""
 killers = [{ package = "nazm-iface", test = "persistence", name = "a_future_schema_is_refused_and_never_read_as_this_one" }]
 
 # `n36-the-epoch-stays` is retired: N37 moved the epoch to 9, and the rule it pinned — the epoch
@@ -7653,10 +7657,11 @@ killers = [{ package = "nazm-core", test = "capabilities", name = "an_undeclared
 
 [[mutation]]
 name = "n37-an-undeclared-import-brings-its-own-authority"
-why = "an import with no declared set needs nothing of its caller, so the compatibility bridge is a backdoor across a module boundary"
+why = """an import with no declared set needs nothing of its caller, so the compatibility bridge is a backdoor across a module boundary
+Repointed by N42: the authority an undeclared callee needs is `assumed()`'s set."""
 file = "crates/nazm-core/src/effects.rs"
 find = """                        Some(Some(_)) => None,
-                        _ => Some(EffectSet::all()),"""
+                        _ => Some(assumed(g, res)),"""
 replace = """                        Some(Some(_)) => None,
                         _ => None,"""
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_undeclared_import_needs_every_authority_from_a_caller_with_a_contract" }]
@@ -8012,10 +8017,11 @@ killers = [{ package = "nazm-service", test = "snapshot", name = "a_snapshot_is_
 
 [[mutation]]
 name = "n38-the-epoch-stays"
-why = "`SEMANTIC_EPOCH` is not bumped for a checker that now refuses a restricted flow, so an N37 entry is filed where an N38 one is looked for"
+why = """`SEMANTIC_EPOCH` is not bumped for a checker that now refuses a restricted flow, so an N37 entry is filed where an N38 one is looked for
+Repointed by N42, which moved the epoch to 11 for foreign declarations: an N41 entry must not be filed where an N42 one is looked for."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 10;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 9;"
+find = "pub const SEMANTIC_EPOCH: u32 = 11;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 10;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -8135,10 +8141,15 @@ killers = [{ package = "nazm-core", test = "enums", name = "a_variant_is_built_b
 
 [[mutation]]
 name = "n39-the-effect-contract-is-dropped"
-why = "a function's declared effect set does not survive into Core IR, so a later pass would see an ambient function where the source wrote a contract"
+why = """a function's declared effect set does not survive into Core IR, so a later pass would see an ambient function where the source wrote a contract
+Widened by N42: a foreign function's Core IR (no body) carries its contract the same way, so the body-bearing site is named."""
 file = "crates/nazm-core/src/lower.rs"
-find = "                declared: def.declared_effects,"
-replace = "                declared: None,"
+find = """            effects: cir::Effects {
+                declared: def.declared_effects,
+                required,"""
+replace = """            effects: cir::Effects {
+                declared: None,
+                required,"""
 killers = [{ package = "nazm-core", test = "core_ir", name = "effects_and_authority_survive_as_function_metadata" }]
 
 [[mutation]]
@@ -8399,6 +8410,7 @@ why = "the Cranelift backend is observed by compiling and running programs with 
 owns = ["crates/nazm-codegen-clif/"]
 targets = [
     { package = "nazm-cli", test = "cranelift" },
+    { package = "nazm-cli", test = "ffi" },
 ]
 
 [[mutation]]
@@ -8549,3 +8561,198 @@ file = "crates/nazm-lir/src/backend.rs"
 find = "        if wanted != host {"
 replace = "        if false && wanted != host {"
 killers = [{ package = "nazm-cli", test = "cranelift", name = "a_target_other_than_the_host_is_refused_and_nothing_is_written" }]
+
+# --- N42: the ABI and the foreign-function interface ------------------------------------------
+
+[[mutation]]
+name = "n42-any-abi-is-c"
+why = "an ABI string other than `\"C\"` is accepted, so a declaration promising a calling convention the backends do not implement is called with C's"
+file = "crates/nazm-core/src/check.rs"
+find = '    if d.abi != "C" {'
+replace = '    if d.abi.is_empty() {'
+killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outside_the_subset_is_refused_by_its_own_code" }]
+
+[[mutation]]
+name = "n42-every-type-is-ffi-safe"
+why = "a `Str`, record, sequence or capability crosses the C boundary, where its layout and ownership mean nothing"
+file = "crates/nazm-core/src/check.rs"
+find = "    let safe = |t: Type| matches!(t, Type::Int | Type::Bool);"
+replace = "    let safe = |t: Type| !matches!(t, Type::Unit);"
+killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outside_the_subset_is_refused_by_its_own_code" }]
+
+[[mutation]]
+name = "n42-a-symbol-may-start-with-a-digit"
+why = "a symbol no C compiler can define is handed to the linker"
+file = "crates/nazm-core/src/check.rs"
+find = "        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_');"
+replace = "        .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_');"
+killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outside_the_subset_is_refused_by_its_own_code" }]
+
+[[mutation]]
+name = "n42-a-runtime-symbol-may-be-redeclared"
+why = "a foreign `malloc` or `main` is declared beside the runtime's own, with a signature that may disagree with it"
+file = "crates/nazm-core/src/check.rs"
+find = "    if RESERVED_C_SYMBOLS.contains(&d.symbol.as_str()) {"
+replace = "    if RESERVED_C_SYMBOLS.is_empty() {"
+killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outside_the_subset_is_refused_by_its_own_code" }]
+
+[[mutation]]
+name = "n42-one-module-may-disagree-with-itself"
+why = "two declarations of one C symbol in a module with different signatures are both accepted, so one of the two calls uses the wrong ABI"
+file = "crates/nazm-core/src/check.rs"
+find = "                Some((p, r, at)) if (p.as_slice(), *r) != (params.as_slice(), ret) => {"
+replace = "                Some((p, r, at)) if (p.as_slice(), *r) != (p.as_slice(), *r) => {"
+killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outside_the_subset_is_refused_by_its_own_code" }]
+
+[[mutation]]
+name = "n42-two-modules-may-disagree-about-a-symbol"
+why = "the whole-program check compares nothing, so two modules' declarations of one symbol link to one definition with two ABIs"
+file = "crates/nazm-lir/src/lower.rs"
+find = "        let same = first.ret == f.ret && first.param_types().eq(f.param_types());"
+replace = "        let same = first.ret == first.ret;"
+killers = [{ package = "nazm-cli", test = "ffi", name = "two_modules_that_disagree_about_a_symbol_are_refused_before_linking" }]
+
+[[mutation]]
+name = "n42-a-foreign-function-may-be-generic"
+why = "a generic foreign declaration is accepted, though a C function has one signature and nothing could instantiate it"
+file = "crates/nazm-core/src/check.rs"
+find = """    if let (Some(first), Some(last)) = (f.type_params.first(), f.type_params.last()) {
+        errors.push(
+            Diagnostic::error(
+                codes::FOREIGN_SHAPE,"""
+replace = """    if let (Some(first), Some(last), false) = (f.type_params.first(), f.type_params.last(), true) {
+        errors.push(
+            Diagnostic::error(
+                codes::FOREIGN_SHAPE,"""
+killers = [{ package = "nazm-cli", test = "ffi", name = "every_declaration_outside_the_subset_is_refused_by_its_own_code" }]
+
+[[mutation]]
+name = "n42-a-foreign-call-needs-no-authority"
+why = "the strict `ForeignCap` check is skipped, so a function with no effect set calls C through the compatibility bridge without holding the authority for it"
+file = "crates/nazm-core/src/effects.rs"
+find = "            if foreign && !site.held.contains(CapabilityKind::Foreign) {"
+replace = "            if foreign && site.held.contains(CapabilityKind::Foreign) {"
+killers = [{ package = "nazm-cli", test = "ffi", name = "a_foreign_call_needs_a_foreign_cap_everywhere" }]
+
+[[mutation]]
+name = "n42-an-imported-foreign-function-is-an-ordinary-one"
+why = "the authority check reads only this module's declarations, so a `pub extern` function called through its interface needs no `ForeignCap`"
+file = "crates/nazm-core/src/effects.rs"
+find = "                    .any(|e| e.def == g && e.foreign.is_some());"
+replace = "                    .any(|e| e.def == g && e.foreign.is_none() && false);"
+killers = [{ package = "nazm-cli", test = "ffi", name = "an_imported_foreign_function_needs_a_foreign_cap_too" }]
+
+[[mutation]]
+name = "n42-the-interface-forgets-a-foreign-export"
+why = "a published interface drops an export's C symbol, so an importer reading it from the cache takes a C function for a Nazm one"
+file = "crates/nazm-iface/src/wire.rs"
+find = """                    .map(|s| s.names().into_iter().map(str::to_owned).collect()),
+                foreign: e.foreign.clone(),"""
+replace = """                    .map(|s| s.names().into_iter().map(str::to_owned).collect()),
+                foreign: None,"""
+killers = [{ package = "nazm-cli", test = "ffi", name = "an_imported_foreign_function_needs_a_foreign_cap_too" }]
+
+[[mutation]]
+name = "n42-the-interpreter-runs-a-foreign-call"
+why = "`nazm run` starts a program that calls C, and part of it runs before the interpreter meets a function it cannot execute"
+file = "crates/nazm-core/src/lib.rs"
+find = "                .filter(|d| d.foreign.is_some())"
+replace = "                .filter(|d| d.foreign.is_some() && d.foreign.is_none())"
+killers = [{ package = "nazm-cli", test = "ffi", name = "nazm_run_refuses_a_foreign_call_before_running_anything" }]
+
+[[mutation]]
+name = "n42-a-foreign-symbol-is-mangled"
+why = "a foreign function is given a Nazm symbol, which no C object defines"
+file = "crates/nazm-lir/src/lower.rs"
+find = "                    .map_or_else(|| of_identity(&f.identity), NativeSymbol::foreign),"
+replace = "                    .map_or_else(|| of_identity(&f.identity), |_| of_identity(&f.identity)),"
+killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
+
+[[mutation]]
+name = "n42-a-module-s-own-foreign-function-is-not-declared"
+why = "a module's unit calls a foreign function it neither defines nor declares, so the unit does not compile"
+file = "crates/nazm-lir/src/lower.rs"
+find = "                if owns_module && sig.module == module && !sig.instance && !sig.foreign {"
+replace = "                if owns_module && sig.module == module && !sig.instance {"
+killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
+
+[[mutation]]
+name = "n42-a-foreign-function-is-defined-by-its-unit"
+why = "a foreign function is given a definition with no body in its module's unit, which shadows the C one or fails to compile"
+file = "crates/nazm-lir/src/lower.rs"
+find = "                .filter(|f| f.module == *m && f.type_args.is_empty() && f.foreign.is_none())"
+replace = "                .filter(|f| f.module == *m && f.type_args.is_empty())"
+killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
+
+[[mutation]]
+name = "n42-link-is-not-handed-to-the-linker"
+why = "`--link` is accepted and checked, and then not passed, so every foreign call is unresolved"
+file = "crates/nazm-cli/src/build.rs"
+find = "    objects.extend(choice.link.iter().cloned());"
+replace = "    objects.extend(choice.link.iter().take(0).cloned());"
+killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
+
+[[mutation]]
+name = "n42-a-missing-link-file-reaches-the-linker"
+why = "a `--link` file that does not exist is found only after the whole program is compiled, by the linker, in its words"
+file = "crates/nazm-cli/src/build.rs"
+find = "    if let Some(missing) = choice.link.iter().find(|p| !p.is_file()) {"
+replace = "    if let Some(missing) = choice.link.iter().find(|p| !p.is_file() && p.is_file()) {"
+killers = [{ package = "nazm-cli", test = "ffi", name = "the_linker_is_handed_exactly_what_link_names" }]
+
+[[mutation]]
+name = "n42-an-unresolved-foreign-symbol-is-a-compiler-bug"
+why = "a link that fails for want of a `--link` is reported as a bug in `nazm build`, sending the user to report the compiler rather than to supply their object"
+file = "crates/nazm-cli/src/build.rs"
+find = "        Outcome::Ran(o) if !foreign.is_empty() => {"
+replace = "        Outcome::Ran(o) if foreign.is_empty() && false => {"
+killers = [{ package = "nazm-cli", test = "ffi", name = "the_linker_is_handed_exactly_what_link_names" }]
+
+[[mutation]]
+name = "n42-cranelift-calls-c-with-the-internal-convention-for-a-bool"
+why = "Cranelift declares a foreign function with the internal signature, whose `Bool` is a byte with no extension promised, where C's `bool` is zero-extended"
+file = "crates/nazm-codegen-clif/src/unit.rs"
+find = "                AbiParam::new(types::I8).uext()"
+replace = "                AbiParam::new(types::I64)"
+killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
+
+[[mutation]]
+name = "n42-what-c-returns-is-clean"
+why = "a foreign function is summarised as a function with no origins, so a path computed from what C returns is written by a restricted function as if the program had computed it"
+file = "crates/nazm-core/src/provenance.rs"
+find = """        if def.foreign.is_none() {
+            continue;
+        }
+        if let Some(s) = program.summaries.get_mut(i) {"""
+replace = """        if def.foreign.is_none() || def.foreign.is_some() {
+            continue;
+        }
+        if let Some(s) = program.summaries.get_mut(i) {"""
+killers = [{ package = "nazm-cli", test = "ffi", name = "what_c_returns_carries_the_unknown_origin" }]
+
+[[mutation]]
+name = "n42-a-foreign-int-is-a-c-int"
+why = "a foreign `Int` is passed as a 32-bit `int`, as if C's `int` were `int64_t`: the width mapping the boundary table states is not the one generated"
+file = "crates/nazm-lir/src/emit.rs"
+find = "        (false, _) => llvm_type(layouts, t),"
+replace = """        (false, _) if foreign && t == Ty::Int => "i32".to_owned(),
+        (false, _) => llvm_type(layouts, t),"""
+killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
+
+[[mutation]]
+name = "n42-cranelift-passes-a-foreign-int-as-a-c-int"
+why = "Cranelift declares a foreign `Int` as a 32-bit word, so the upper half of every argument and result is lost"
+file = "crates/nazm-codegen-clif/src/unit.rs"
+find = """            } else {
+                AbiParam::new(types::I64)
+            }
+        };
+        let mut s = self.module.make_signature();
+        s.returns.push(c(ret));"""
+replace = """            } else {
+                AbiParam::new(types::I32)
+            }
+        };
+        let mut s = self.module.make_signature();
+        s.returns.push(c(ret));"""
+killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
