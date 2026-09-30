@@ -157,6 +157,9 @@ impl Backend {
     pub(crate) fn link(&self, output: &Path, objects: &[PathBuf]) -> Outcome {
         run(self
             .command()
+            // The Apple linker otherwise mixes a time into the executable's UUID, so two links
+            // of the same objects differ (N46, reproducible builds). Ignored elsewhere.
+            .env("ZERO_AR_DATE", "1")
             .args(link_args(self.opt_level))
             .arg("-o")
             .arg(output)

@@ -60,6 +60,9 @@ pub enum How {
     Given,
     /// A `nazm.root` marker was found at or above the root module.
     Marker,
+    /// A package manifest (N46) at or above the root module declared the source root it
+    /// lies in.
+    Package,
     /// Neither: the root module's own directory, as before N4. Durable identity still
     /// works, and is relative to a root that depends on which file was named — so two
     /// compilations from two entry points do not share entries. Sound, and a smaller
@@ -82,6 +85,7 @@ impl How {
         match self {
             Self::Given => "given",
             Self::Marker => "marker",
+            Self::Package => "package",
             Self::Derived => "derived",
         }
     }
@@ -111,6 +115,24 @@ pub fn absolute(path: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// The source root the package manifest in `dir` declares, if there is one and it holds
+/// `module` — in the module's own spelling, like every other answer here.
+///
+/// # Errors
+///
+/// A manifest that is there and is not a valid one: a build does not quietly become a
+/// non-package build because its manifest has a typo.
+fn package_root(dir: &Path, module: &Path) -> Result<Option<PathBuf>, String> {
+    let path = dir.join(nazm_package::MANIFEST);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let manifest = nazm_package::Manifest::parse(&text, &path.display().to_string())
+        .map_err(|d| format!("{}: {}", d.code, d.message))?;
+    let root = dir.join(&manifest.root);
+    Ok(module.starts_with(&root).then_some(root))
 }
 
 /// Decide the source root for a compilation whose root module is `module`.
@@ -164,6 +186,15 @@ pub fn decide(module: &Path, given: Option<&Path>) -> Result<SourceRoot, String>
     // the inner directory would expect.
     let mut at: Option<&Path> = Some(&here);
     while let Some(dir) = at {
+        // A package's manifest (N46) declares its source root; the first one upward whose root
+        // holds the module is this compilation's. Checked before the marker in the same
+        // directory, and it too is the first found.
+        if let Some(root) = package_root(dir, &module)? {
+            return Ok(SourceRoot {
+                path: root,
+                how: How::Package,
+            });
+        }
         let marker = dir.join(MARKER);
         if marker.is_file() {
             let text = std::fs::read_to_string(&marker)
@@ -172,7 +203,7 @@ pub fn decide(module: &Path, given: Option<&Path>) -> Result<SourceRoot, String>
                 return Err(format!(
                     "`{}` must be empty. It declares where this project begins and owns \
                      nothing else; a marker that carried settings would be a manifest, \
-                     and this language has no package system to put one in",
+                     and a package's manifest is `nazm.toml`",
                     marker.display()
                 ));
             }

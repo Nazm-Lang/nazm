@@ -115,6 +115,49 @@ impl Sources for Disk {
     }
 }
 
+/// The package `name` as the package holding `importer` declares it.
+fn dependency<'g>(
+    packages: Option<&'g nazm_package::Graph>,
+    importer: &Path,
+    name: &str,
+) -> Result<&'g nazm_package::Package, Box<Diagnostic>> {
+    let Some(g) = packages else {
+        return Err(Box::new(
+            Diagnostic::error(
+                codes::UNKNOWN_DEPENDENCY,
+                Span::synthetic(),
+                format!("`{name}:` names a package, and this compilation is not a package's"),
+            )
+            .help("a package is a directory holding `nazm.toml`; build it by naming its directory"),
+        ));
+    };
+    let from = g.package_of(importer).and_then(|i| g.packages.get(i));
+    let found = from
+        .and_then(|p| p.dependencies.get(name))
+        .and_then(|&i| g.packages.get(i));
+    found.ok_or_else(|| {
+        let declared: Vec<String> = from
+            .map(|p| p.dependencies.keys().map(|d| format!("`{d}`")).collect())
+            .unwrap_or_default();
+        Box::new(
+            Diagnostic::error(
+                codes::UNKNOWN_DEPENDENCY,
+                Span::synthetic(),
+                format!(
+                    "`{name}` is not a dependency of `{}`",
+                    from.map_or("this package", |p| p.name.as_str())
+                ),
+            )
+            .help(if declared.is_empty() {
+                "it declares no dependencies; add one under `[dependencies]` in `nazm.toml`"
+                    .to_owned()
+            } else {
+                format!("it declares {}", declared.join(", "))
+            }),
+        )
+    })
+}
+
 /// One thing the loader has still to read: a file, or a standard module and its source.
 #[derive(Debug, Clone)]
 enum Item {
@@ -165,6 +208,51 @@ pub fn load_from(
     source_root: &Path,
     sources: &dyn Sources,
 ) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
+    // A package build (N46): the source root is the one a manifest beside it declares.
+    let packages = match package_context(source_root) {
+        None => None,
+        Some(Ok(g)) => Some(g),
+        Some(Err(d)) => {
+            let loaded = Loaded {
+                map: SourceMap::from_parts(Vec::new()),
+                graph: ModuleGraph::default(),
+            };
+            return Err((loaded, d));
+        }
+    };
+    load_packaged(root, source_root, sources, packages.as_ref())
+}
+
+/// The package whose declared source root `source_root` is, resolved with its dependencies —
+/// or `None` for a compilation that is not a package's.
+#[must_use]
+pub fn package_context(source_root: &Path) -> Option<Result<nazm_package::Graph, Vec<Diagnostic>>> {
+    let dir = source_root.parent()?;
+    if !nazm_package::is_package(dir) {
+        return None;
+    }
+    match nazm_package::resolve(dir) {
+        Err(d) => Some(Err(d)),
+        Ok(g) => {
+            let ours = source_root.canonicalize().ok();
+            let root = g.root_package().map(|p| p.source_root.clone());
+            (ours.is_some() && ours == root).then_some(Ok(g))
+        }
+    }
+}
+
+/// [`load_from`], with the package graph the compilation belongs to, if any.
+///
+/// # Errors
+///
+/// As [`load`], and an import that names a package the importing package does not declare
+/// (`N0508`) or a relative import that leaves its package's source root.
+pub fn load_packaged(
+    root: &Path,
+    source_root: &Path,
+    sources: &dyn Sources,
+    packages: Option<&nazm_package::Graph>,
+) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
     // Every module's durable identity is its path relative to this, so a checkout moved
     // from one directory to another keeps its identities — which is the property
     // `docs/spec.md` asks for and the reason the absolute path never reaches one. Whether
@@ -195,7 +283,21 @@ pub fn load_from(
         let (path, canonical, logical, standard) = match item {
             Item::File(path) => {
                 let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-                let logical = module_key(root_path, &path);
+                // A dependency package's module is keyed by its package and its path in that
+                // package's source root; the root package's, as any project's.
+                let logical = match packages.and_then(|g| {
+                    let i = g.package_of(&path)?;
+                    (i != g.root).then(|| g.packages.get(i)).flatten()
+                }) {
+                    Some(p) => canonical
+                        .strip_prefix(&p.source_root)
+                        .ok()
+                        .and_then(|rel| rel.to_str())
+                        .and_then(|rel| {
+                            ModuleKey::in_package(&p.key_prefix(), &rel.replace('\\', "/"))
+                        }),
+                    None => module_key(root_path, &path),
+                };
                 (path, canonical, logical, None)
             }
             Item::Std(name, source) => {
@@ -294,7 +396,39 @@ pub fn load_from(
                 ));
                 continue;
             }
-            let target = dir.join(&import.path);
+            // `NAME:path` (N46): a module of a package the importing package depends on.
+            let (target, package) = match import.path.split_once(':') {
+                Some((name, rest)) => match dependency(packages, &canonical, name) {
+                    Ok(dep) => (dep.source_root.join(rest), Some(dep.source_root.clone())),
+                    Err(mut d) => {
+                        // Aimed at the import that named the package.
+                        d.primary.span = import.path_span;
+                        errors.push(*d);
+                        continue;
+                    }
+                },
+                None => (
+                    dir.join(&import.path),
+                    packages
+                        .and_then(|g| g.package_of(&canonical).and_then(|i| g.packages.get(i)))
+                        .map(|p| p.source_root.clone()),
+                ),
+            };
+            // Inside a package, an import stays inside the source root it resolves against.
+            if let Some(root) = &package {
+                let inside = target.canonicalize().map_or(true, |t| t.starts_with(root));
+                if !inside {
+                    errors.push(
+                        Diagnostic::error(
+                            codes::MODULE_NOT_FOUND,
+                            import.path_span,
+                            format!("`{}` leaves its package's source root", import.path),
+                        )
+                        .help("a package reaches another package's modules as `NAME:path`"),
+                    );
+                    continue;
+                }
+            }
             if sources.exists(&target) {
                 children.push((Item::File(target), import.path_span));
             } else {
