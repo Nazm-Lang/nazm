@@ -852,43 +852,56 @@ they own, and a MIR would lower from that.
 per-step resolution lookups, and the native lowering's span lookups and its own `?` lowering, are
 gone, and a mechanical gate keeps them gone.
 
-### 9. MIR — MISSING
+### 9. MIR — VERIFIED (v1)
 
-**Evidence of absence** · No MIR, and no HIR. Since N11 the native backend compiles
-**monomorphised concrete instances**: the checker interns each applied record and enum with its
-substituted fields (`crates/nazm-sema/src/generic.rs`), and native lowering plans one instance per
-concrete generic function and lowers each — since N39, from its generic Core IR body
-(`crates/nazm-lir/src/instance.rs`). Traits and regions are absent, so neither gives a level below
-Core IR work yet; effects and provenance are checker facts.
+**Evidence** · N40 (2026-10-01). `crates/nazm-mir` is the representation (`ir.rs`), **the one
+lowering** from Core IR (`lower.rs`) with the instance planner moved into it (`instance.rs`), the
+validator (`verify.rs`), the printed form `nazm.mir/1` (`print.rs`, `nazm mir`) and each function's
+executable digest (`digest.rs`). `nazm build` lowers Core IR to MIR, validates it — a rejection
+after a clean check is `N0900` — and hands the native backend MIR and nothing of the checker.
+`architecture.md` §7.42 is the constitution, written before the code.
 
-*Historical, M1a:* `crates/nazm-lir/src/lib.rs` gave the original reason — the levels in
-between *"exist to carry information M1a has none of"*. The first level that did own something
-was Core IR (area 8), in N39.
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| MIR exists, and is the one Core IR → native lowering | VERIFIED v1 | `nazm build` goes through `crates/nazm-cli/src/mir.rs::lower`; `nazm-lir` depends on `nazm-mir` and not on `nazm-cir` (`xtask/src/rules.rs`), and the core ir boundary gate refuses `Resolution` or Core IR in it |
+| Explicit, deterministic CFG | VERIFIED | basic blocks, one terminator each; blocks, locals and temporaries numbered by a deterministic walk; `lowering_twice_gives_the_same_mir`, `the_printed_mir_is_the_same_bytes_in_every_process` |
+| Typed MIR | VERIFIED | concrete types on every local; the validator checks every operation's operand and result types, call and primitive signatures, field and payload identities; `the_validator_refuses_a_local_of_the_wrong_type`, `…_a_call_with_the_wrong_arguments`, `…_a_primitive_with_a_bad_signature` |
+| Cleanup obligations explicit and mechanically validated | VERIFIED | `copy`, `move`, `drop`, scope joins and failure edges are statements; an ownership dataflow refuses a use of an empty local, an overwrite of an owned one and anything still owned at `return` or `unwind`; `the_validator_refuses_a_leak_at_return`, `…_a_use_after_move`, `…_a_scope_left_without_its_join`, `…_dropping_a_parameter` |
+| Completion, `?`, records, enums and `match` without backend re-analysis | VERIFIED | `?` is a `switch` whose error arm returns; a `switch` names each variant once, and a payload read is valid only in its arm (`the_validator_refuses_a_payload_read_outside_its_arm`, `…_a_switch_that_misses_a_variant`) |
+| Finite, typed runtime primitives | VERIFIED | `Intrinsic` by identity with its element type; scope open, spawn, join and the failure check as MIR statements |
+| Behaviour preserved | VERIFIED | all 205 `.nz` sources before and after N40: `nazm check` and `nazm run` identical, every build diagnostic identical, and all 104 built executables' stdout, stderr, status and memory report identical (`performance.md`, N40) |
+| Executable digest | VERIFIED | formatting, comments, local names, effect contracts and unrelated definitions leave it; an executable change and a capability parameter move it (`crates/nazm-cli/tests/mir.rs`) |
+| Digests used as a cache key | MISSING | objects are keyed on the emitted unit's bytes (area 10b), a function of MIR |
+| The interpreter on MIR | not wanted | it stays on Core IR, by decision (§7.42): nothing it needs is below Core IR |
 
-*Still MISSING after N1 and N2, and deliberately.* A `Resolution` is **not an IR**, and neither
-is a `ModuleGraph` or a `UnitInterface`; reading any of them as an HIR would be the progress-bar
-mistake `master-architecture.md` §3 warns about.
+**Limitation** · Level 6 by responsibility, not by `architecture.md` §2's shape: no borrow
+checking and no optimisation run on it, locals are mutable slots, and there are no phi nodes.
+Every local becomes a stack slot in the emitted code, so an unoptimised build carries more
+loads and stores than N39's (`performance.md`, N40). MIR is built per run and never persisted.
+The ownership dataflow costs a word per 64 tracked locals per block, so a very large function
+costs more than linearly to validate (measured, N40).
 
-**Next dependency** · Ownership that places are needed for: exclusivity, regions, field- and
-alias-precise provenance (area 7), drop elaboration below Core IR's region ownership.
-
-**Accepted when** · Introducing the level **removes** code rather than adding a pass-through.
+**Accepted when** · Introducing the level **removed** code: the native lowering's temporaries,
+partial-construction slots and `?` completion rules, and the emitter's cleanup bookkeeping — its
+`owned`, `outstanding`, `building` and `frame` sets and every per-exit release decision — are
+gone; a validator and a mechanical gate keep the boundary.
 
 ### 10. LIR and the backend contract — PARTIAL
 
-**Evidence** · `crates/nazm-lir/src/ir.rs` and `crates/nazm-lir/src/lower.rs`, which since N39
-lowers **Core IR** (area 8) — `nazm-lir` depends on `nazm-cir` and not on `nazm-syntax`, and a
-`cargo xtask check` gate refuses a resolution position lookup in it. What it decides is what
-Core IR leaves out: layout, symbols, linkage, hidden slots for partly built values, instances. The
-distinguishing information it carries over Core IR is which operations can fail at the machine
-level and where; every fallible node carries a span. Signatures are lowered before
-bodies, so forward references resolve without a second walk, and all refusals are
-collected rather than the first. Layering is gated: `xtask/src/rules.rs` forbids
-`nazm-lir` depending on `nazm-core`.
+**Evidence** · Since N40 `crates/nazm-lir` reads **validated MIR** (area 9) and nothing of the
+checker: `lower.rs` settles layout (canonical by name, from the order MIR carries), symbols from
+MIR's durable identities, linkage, units and externals, and refuses what the native subset does
+not cover — recursion over MIR's call graph, a `main` taking anything but capabilities or not
+returning `Int`, a sequence handed to a task — with the same diagnostics as before;
+`emit.rs` writes each MIR block as a label, each local as a slot, each statement and terminator
+as the instructions it means. The distinguishing information it adds is how each operation
+fails at the machine level; every fallible statement carries a span and a MIR failure edge.
+Layering is gated: `xtask/src/rules.rs` forbids `nazm-lir` depending on `nazm-core` or
+`nazm-cir`.
 
-**Limitation** · It is not level 7 as `architecture.md` §2 defines it — a structured typed
-tree over numbered slots, not SSA over a CFG of places. No optimisation, inlining or
-constant folding happens here.
+**Limitation** · There is no level 7 of its own since N40: the structured LIR tree is gone, and
+what remains is layout, symbols and LLVM text emission over MIR — level 9's responsibility. No
+optimisation, inlining or constant folding happens here; clang's does.
 
 *The duplicate built-in table and the second resolver this row used to name were removed by
 N1; the forbidden dependency on `nazm-core` still holds, and is satisfied by both crates
