@@ -8390,3 +8390,162 @@ file = "crates/nazm-mir/src/digest.rs"
 find = """        let _ = writeln!(s, "local _{i} {}", text::local_ty(program, l.ty));"""
 replace = """        let _ = writeln!(s, "local _{i} {} {}", text::local_ty(program, l.ty), l.name);"""
 killers = [{ package = "nazm-cli", test = "mir", name = "formatting_comments_and_local_names_leave_the_executable_digest_alone" }]
+
+# --- N41: the backend boundary and the Cranelift backend ----------------------------------------
+
+[[profile]]
+name = "cranelift"
+why = "the Cranelift backend is observed by compiling and running programs with it against the LLVM backend and the interpreter, and by its cache and target tests"
+owns = ["crates/nazm-codegen-clif/"]
+targets = [
+    { package = "nazm-cli", test = "cranelift" },
+]
+
+[[mutation]]
+name = "n41-a-branch-goes-the-other-way"
+why = "a MIR branch's two targets are swapped in Cranelift IR, so every `if` and `while` condition means its negation"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = "                self.b.ins().brif(c, a, &[], b, &[]);"
+replace = "                self.b.ins().brif(c, b, &[], a, &[]);"
+killers = [{ package = "nazm-cli", test = "cranelift", name = "every_example_compiled_by_cranelift_agrees_with_llvm_and_the_interpreter" }]
+
+[[mutation]]
+name = "n41-an-ordering-is-unsigned"
+why = "`<` compiles to an unsigned comparison, so a negative `Int` is larger than every positive one"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = "                            mir::CmpOp::Lt => IntCC::SignedLessThan,"
+replace = "                            mir::CmpOp::Lt => IntCC::UnsignedLessThan,"
+killers = [{ package = "nazm-cli", test = "cranelift", name = "signed_arithmetic_and_its_edges_agree" }]
+
+[[mutation]]
+name = "n41-call-arguments-are-reversed"
+why = "a call passes its arguments last first, which is well typed whenever they share a type and wrong whenever the callee is not symmetric"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = """                for a in args {
+                    let v = self.argument(a);
+                    vals.push(v);
+                }"""
+replace = """                for a in args.iter().rev() {
+                    let v = self.argument(a);
+                    vals.push(v);
+                }"""
+killers = [{ package = "nazm-cli", test = "cranelift", name = "every_example_compiled_by_cranelift_agrees_with_llvm_and_the_interpreter" }]
+
+[[mutation]]
+name = "n41-a-runtime-signature-is-wrong"
+why = "the registry says `nz.format_int` returns a C `int`, so every call is built against a signature the runtime does not have"
+file = "crates/nazm-lir/src/runtime.rs"
+find = '    import!("nz.format_int", [Ptr, I64], Some(Word::I64), Base,'
+replace = '    import!("nz.format_int", [Ptr, I64], Some(Word::I32), Base,'
+killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
+
+[[mutation]]
+name = "n41-a-copied-string-takes-no-reference"
+why = "a copy of a `Str` does not retain its owner, so the first of two holders to let go frees storage the other still reads"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = """            Ty::Str => {
+                let owner = self.b.ins().load(types::I64, mem(), addr, 16);
+                self.rt("nz.str_retain", &[owner]);
+            }"""
+replace = """            Ty::Str => {
+                let owner = self.b.ins().load(types::I64, mem(), addr, 16);
+                let _ = owner;
+            }"""
+killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
+
+[[mutation]]
+name = "n41-a-string-is-never-released"
+why = "a dropped `Str` gives nothing back, so every string a program made outlives it: the runtime's report shows it live"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = """            Ty::Str => {
+                let owner = self.b.ins().load(types::I64, mem(), addr, 16);
+                self.rt("nz.str_release", &[owner]);
+            }"""
+replace = """            Ty::Str => {
+                let owner = self.b.ins().load(types::I64, mem(), addr, 16);
+                let _ = owner;
+            }"""
+killers = [{ package = "nazm-cli", test = "cranelift", name = "cleanup_on_every_exit_and_on_failure_agrees" }]
+
+[[mutation]]
+name = "n41-a-variant-is-tagged-by-its-declaration"
+why = "the Cranelift backend uses a variant's declaration index as its discriminant instead of `nazm-lir`'s canonical tag, so it disagrees with its own payload layout for any enum not declared in name order"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = """    pub(crate) fn tag(&self, e: nazm_sema::EnumId, variant: u32) -> u32 {"""
+replace = """    pub(crate) fn tag(&self, e: nazm_sema::EnumId, variant: u32) -> u32 {
+        if variant < 1000 {
+            let _ = e;
+            return variant;
+        }"""
+killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
+
+[[mutation]]
+name = "n41-a-field-is-at-the-first-offset"
+why = "every record field is read and written at the record's first offset, so a record of more than one field overlaps its fields"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = "                s.offsets.get(pos as usize).copied().unwrap_or(0),"
+replace = "                s.offsets.first().copied().unwrap_or(0),"
+killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
+
+[[mutation]]
+name = "n41-division-by-zero-is-not-guarded"
+why = "`/` reaches the machine's divide with a zero divisor, which on AArch64 answers 0 and on x86-64 kills the process — never the specified `N0401`"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = """            mir::ArithOp::Div => {
+                let zero = self.b.ins().icmp_imm_s(IntCC::Equal, y, 0);
+                self.guard(zero, "N0401", "division by zero");"""
+replace = """            mir::ArithOp::Div => {"""
+killers = [{ package = "nazm-cli", test = "cranelift", name = "every_trap_is_the_same_trap" }]
+
+[[mutation]]
+name = "n41-a-task-argument-is-not-held"
+why = "a handle packed into a task's block takes no reference of its own, so the task and its spawner each give back one reference the channel only had once"
+file = "crates/nazm-codegen-clif/src/func.rs"
+find = """                let v = self.value(a);
+                if self.g.lay.owns(*t) {
+                    self.retain_value(v, *t);
+                }
+                self.b.ins().store(mem(), v, dst, 0);"""
+replace = """                let v = self.value(a);
+                self.b.ins().store(mem(), v, dst, 0);"""
+killers = [{ package = "nazm-cli", test = "cranelift", name = "every_example_compiled_by_cranelift_agrees_with_llvm_and_the_interpreter" }]
+
+[[mutation]]
+name = "n41-the-object-key-forgets-the-mir"
+why = "a Cranelift object's key leaves out its functions' MIR, so a changed body reuses the old object"
+file = "crates/nazm-codegen-clif/src/lib.rs"
+find = "                h.update(nazm_mir::digest::executable(&native.program, f).as_bytes());"
+replace = "                let _ = f;"
+killers = [{ package = "nazm-cli", test = "cranelift", name = "an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated" }]
+
+[[mutation]]
+name = "n41-the-object-key-forgets-the-optimisation-level"
+why = "the backend's version string leaves out its optimisation setting, so an object built at one level is reused at another"
+file = "crates/nazm-codegen-clif/src/lib.rs"
+find = """            if self.opt_level == 0 { "none" } else { "speed" },"""
+replace = """            "none","""
+killers = [{ package = "nazm-cli", test = "cranelift", name = "a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those" }]
+
+[[mutation]]
+name = "n41-the-verifier-is-off"
+why = "Cranelift's IR verifier no longer runs, so an ill-formed function the backend generated would reach code generation unreported"
+file = "crates/nazm-codegen-clif/src/lib.rs"
+find = "            verify: true,"
+replace = "            verify: false,"
+killers = [{ package = "nazm-cli", test = "cranelift", name = "a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those" }]
+
+[[mutation]]
+name = "n41-cranelift-quietly-becomes-llvm"
+why = "asking for the Cranelift backend builds with the LLVM backend instead: a silent fallback, the one thing §7.43 forbids"
+file = "crates/nazm-cli/src/build.rs"
+find = "        nazm_lir::backend::BackendId::Cranelift => &cranelift,"
+replace = "        nazm_lir::backend::BackendId::Cranelift => &llvm,"
+killers = [{ package = "nazm-cli", test = "cranelift", name = "choosing_cranelift_writes_no_llvm_text_for_any_unit" }]
+
+[[mutation]]
+name = "n41-a-foreign-target-is-built-for-the-host"
+why = "a requested target that is not the host is accepted, and the build produces a host executable under the other target's name"
+file = "crates/nazm-lir/src/backend.rs"
+find = "        if wanted != host {"
+replace = "        if false && wanted != host {"
+killers = [{ package = "nazm-cli", test = "cranelift", name = "a_target_other_than_the_host_is_refused_and_nothing_is_written" }]
