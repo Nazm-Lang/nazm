@@ -370,6 +370,48 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N38, in dependency order
+
+No item is chosen here; N38 left these standing, beside N37's and N36's below.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| Implicit flow (conditions, loop bounds) | a control-dependence model | explicit data flow is what v1 can state exactly |
+| Field-, element- and alias-precise provenance | a MIR that tracks places | records are tracked whole and shared storage is `unknown` |
+| More sinks, user labels, declassification, sanitisers | a policy design | one sink is what current semantics justify without an escape hatch |
+| Provenance summaries for foreign code | an FFI | there is none |
+| The MCP task-context memory check | a methodology decision | glibc gives a worker thread its own arena once, a 40 MB step the check reads as growth (`performance.md`, N38) |
+
+### N38 — Provenance and information flow v1 — **complete, 2026-09-30**
+
+Where a value came from, statically. Four compiler-owned origins — `argument`, `file`, `authority`,
+`unknown` — enter only through the built-ins that bring data in and `main`'s capabilities, and flow
+by explicit data flow through bindings, operators, calls, records, variants, `Result` and `?`; a
+condition contributes nothing, and a value read out of a sequence or channel is `unknown`. Each
+module's bodies are reduced to facts kept in its check entry (`nazm.check/2`), and every run solves
+the whole program's summaries from them to the least fixed point, so a callee's body change reaches
+a caller the cache reused. One restricted flow: in a function with a declared effect set, the path
+`write_file` writes to may not derive from a file's contents or from shared storage, directly or
+through any function that writes to a path it is given (`N0372`). Tools carry it in
+`nazm.context/3`, `nazm.snapshot/3` and `nazm.delta/3`. Nothing reaches what runs: the IR is
+byte-identical under N37 and N38. `SEMANTIC_EPOCH` 9 → 10; `nazm.interface/6` unchanged. All 203
+existing sources check exactly as before.
+
+| Settled | Where |
+| --- | --- |
+| origins, flows, facts and summaries | `crates/nazm-sema/src/provenance.rs` |
+| the walk, the solve and the restriction | `crates/nazm-core/src/provenance.rs` |
+| facts across runs | `crates/nazm-iface/src/facts.rs`, `crates/nazm-cache/src/artifact.rs`, `crates/nazm-cli/src/checking.rs` |
+| packets, snapshots, deltas | `crates/nazm-service/`, `schema/nazm.{context,snapshot,delta}-3.json` |
+| the law | `spec.md` *Provenance: where a value came from*, `architecture.md` §7.40 |
+
+Mutation evidence: twenty-five new mutations and one retired; 34 selected with a stated link each,
+all caught (`capability-matrix.md` §30). The MILESTONE gate ran offline in 7,217 s; every stage
+passed but the MCP benchmark's memory check, which failed on an allocator effect diagnosed and
+recorded rather than loosened (`performance.md`).
+
+**N39 has not started.**
+
 ### After N37, in dependency order
 
 No item is chosen here; N37 left these standing, beside N36's below.
@@ -413,7 +455,6 @@ selected — the twenty and thirteen N36 entries each with a stated link — all
 and 1 at tier 2 whose killer was then strengthened and verified alone (`capability-matrix.md` §30).
 The MILESTONE gate ran offline: 5,737 s of wall time across its stages (`performance.md`).
 
-**N38 has not started.**
 
 ### After N36, in dependency order
 
