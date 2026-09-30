@@ -1871,6 +1871,36 @@ the interpreter gained by running it instead of the tree.
   `nazm check` of a function with 1,000, 2,000 and 4,000 bindings takes 0.05, 0.19 and 0.69 s under
   N38 and N39 alike — a cost of the checker's own, found by N39's stress test and not addressed by
   it.
+- **In the container the interpreter's gain does not hold everywhere.** The compiler benchmark's
+  interpreted rows, against N38's own gate run, Linux, 1 CPU: `calls` 1,672 → 1,467 ms (−12 %),
+  `strings` 48.6 → 48.7, `sieve` 948 → 999 (+5 %), `sequences` 723 → 770 (+6.5 %), `arith` 2,495
+  → 2,748 (+10 %). Those rows had held within about 2 % from N33 to N38, so the slowdown is real on
+  that platform while the same programs run 16–52 % faster on the host. Why is not established: the
+  interpreter's work per step fell on paper (a slot index for a name search, no frame per region),
+  and a profile on Linux is what would say. No optimisation was attempted — N39 adds no optimiser.
+- **The compiler benchmark otherwise** moved within a few per cent of N38's run: `compiler/check`
+  98.2 → 93.0 ms, `compiler/build-O0` 1,779 → 1,847 (+3.9 %), every program's `-O0` and `-O2`
+  build within −4 % to +3.5 %. The 21 drifts it reports are the same pre-N33 baseline ones.
+- **In the container**, the phase benchmark (`what_each_phase_costs_on_the_compiler`, release,
+  median of 15): `compiler/emit.nz` parse 29.0 ms, checking +20.5, to Core IR +9.3 (verifying 0.4),
+  to LIR +7.5, to LLVM text +36.6 — 102.8 ms; the 3,001-function chain 84.1 ms, of which Core IR 7.4.
+- **Size.** Linux release, contained: `nazm` 4,723,616 → 4,854,688 B (+131,072, +2.8 %); `nazm-mcp`
+  4,265,696 B, unchanged, since the server does not reach the lowering.
+- **The planner and servers**, contained: `repo --map` 391–411 ms, the four task contexts 52–635 ms,
+  1,000 MCP task contexts 115.5 ms each, the docs index 26.1 ms — within N38's. The MCP memory law
+  saw one allocator step during warm-up and a flat measured window (112,012–112,168 kB), `Flat`.
+
+**The gate**, offline, at `ab0a761`: mutation 13,876 s over six sessions (37 of 37 caught — 23 at
+tier 1 with killers verified, 13 at tier 2, 1 at tier 3; 34 at `ab0a761` and the three entries
+repaired after it at `eb80464`; `capability-matrix.md` area 30), workspace 478 s (1,903 passed, 0
+failed, 25 ignored, 121 suites; `memory.peak` again read its 4 GiB limit with no OOM kill), lifecycle
+186 s (19 of 19 — selected in full, since the harness's rules and catalogue changed), selfhost 61 s
+(38 of 38), bootstrap 39 s (C2 = C3, IR identical, executables identical once the linker UUID is
+removed), release benchmarks 960 s, compiler benchmark 212 s, checks 8 s (19 of 19, the new *core
+ir boundary* among them) — every stage passed, with no network (`NETWORK-ABSENT`). After the gate,
+`eb80464` changed one test's recursion depth, from 1,000 to 200 (area 30); that binary passes 116 of
+116 on the host.
+
 
 ### Provenance — N38, measured 2026-09-30
 

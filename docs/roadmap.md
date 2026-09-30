@@ -370,6 +370,55 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N39, in dependency order
+
+No item is chosen here; N39 left these standing, beside N38's below.
+
+| | Depends on | Why not before |
+| --- | --- | --- |
+| MIR: places, moves, drops, exclusivity | Core IR ✓, its region ownership ✓ | Core IR says what a region owns; nothing yet needs a place |
+| Digests as cache keys (Core IR, MIR, objects) | per-function digests ✓ | nothing reuses work at this level yet, so nothing could key on them |
+| Persisting Core IR across runs | a cache key that covers what lowering reads | built from each run's full check; cheap next to checking |
+| An optimiser | a level to optimise, and a reason | no pass exists and none was added for a benchmark |
+| The Nazm-written compiler reading Core IR | its own checker growing a lowering | the bootstrap compares what it emits, which did not move |
+| Checking cost in one function's bindings | a scope structure that is not scanned | quadratic in bindings per function (`performance.md`, N39) — the checker's, predating Core IR |
+
+### N39 — Core IR constitution and typed lowering v1 — **complete, 2026-09-30**
+
+One lowering of a checked program, and both backends start from it. `architecture.md` §7.41 was
+written first and says what Core IR represents and omits, when it is built, and the invariants a
+consumer may assume. `nazm-cir` holds it: typed values — the checker's types, or *never* for an
+`if`, `match` or block every path of which transfers — definitions and built-ins by identity,
+structured regions with explicit completion and a named loop on every `break` and `continue`,
+`?` as a `match` whose error arm returns, comparisons with their law, and each function's effect
+contract and authority. `nazm-core` lowers only after checking succeeded, privately, and a
+disagreement with the checker is `N0900`, a compiler defect; the verifier runs on every lowering.
+The interpreter runs Core IR with slot frames and reads neither the tree nor the resolution;
+`nazm-lir` lowers Core IR and no longer depends on `nazm-syntax`; a `cargo xtask check` gate, run
+by the suite too, refuses a position lookup below Core IR. `nazm core-ir` prints
+`nazm.core-ir/1`, deterministic and durable. Each function has a semantic and a body digest: an
+effect-only change moves only the first, a capability parameter both, provenance neither.
+Provenance stays a checker fact. All 205 sources check, run and emit IR byte-identically to N38;
+the interpreter is 16–52 % faster on the bench programs on the host, and mixed — −12 % to +10 % —
+in the Linux container. No language change: `SEMANTIC_EPOCH`
+stays 10, `nazm.interface/6` and every tooling schema unchanged.
+
+| Settled | Where |
+| --- | --- |
+| the constitution | `architecture.md` §7.41 |
+| the representation, verifier, printer, digests | `crates/nazm-cir/` |
+| the one lowering | `crates/nazm-core/src/lower.rs` |
+| the interpreter over Core IR | `crates/nazm-core/src/eval.rs` |
+| native lowering from Core IR | `crates/nazm-lir/src/lower.rs` |
+| the boundary | `cargo xtask check` *core ir boundary*, `xtask/src/rules.rs` |
+
+Mutation evidence: nineteen new mutations, twelve repointed to where their rule lives now, one
+retired; 37 selected with a stated link each, all caught (`capability-matrix.md` §30). The MILESTONE
+gate ran offline and every stage passed; the campaign needed six sessions, 13,876 s. The interpreter
+is faster on the host and mixed in the Linux container (`performance.md`, N39).
+
+**N40 has not started.**
+
 ### After N38, in dependency order
 
 No item is chosen here; N38 left these standing, beside N37's and N36's below.
@@ -410,7 +459,6 @@ check, which a one-time glibc arena step failed; its law now samples the measure
 one such step only with a plateau after it, and the release-benchmark stage passed when run again
 alone (`performance.md`).
 
-**N39 has not started.**
 
 ### After N37, in dependency order
 
