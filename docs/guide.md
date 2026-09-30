@@ -23,6 +23,14 @@ to a native executable that prints the same value. `nazm check` type-checks with
 running anything, and `nazm test` runs a directory of programs against recorded outputs
 — interpreted and compiled, requiring both to agree.
 
+`nazm build` has two code generators. The default, `--backend llvm`, writes LLVM IR as text and
+has clang compile it; `--backend cranelift` compiles every function in process with Cranelift,
+which builds noticeably faster. They produce programs that behave identically — the same output,
+the same failures, the same memory report — and neither ever stands in for the other: a program
+one cannot compile is refused, never quietly built by the other. `--target` names the target
+triple, and v1 builds for the machine it runs on only, so any other triple is refused rather than
+built for this one.
+
 ## The shape of the language, in six sentences
 
 - **A file is a module.** `use "other.nz";` makes the definitions that file marked `pub`

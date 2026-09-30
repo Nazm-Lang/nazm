@@ -68,7 +68,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 10a | Per-module code generation and linking | VERIFIED |
 | 10b | Native object reuse | VERIFIED |
 | 11 | LLVM backend | VERIFIED |
-| 12 | Cranelift backend | DESIGNED |
+| 12 | Cranelift backend | VERIFIED (v1, native subset, host) |
 | 13 | Runtime | PARTIAL |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | RESEARCH |
@@ -1048,20 +1048,36 @@ without `-g`, so a compiled program cannot be debugged symbolically.
 
 **Accepted when** · Already met for the current subset.
 
-### 12. Cranelift backend — DESIGNED
+### 12. Cranelift backend — VERIFIED (v1, for the native subset, on the host)
 
-**Evidence** · `architecture.md` §1 and `roadmap.md`, *Backends* — one component doing four jobs
-(JIT, comptime evaluator, REPL, hot reload), and an explicit ordering decision that it
-comes after, not instead. `xtask/src/main.rs` gates against a codegen dependency appearing
-unannounced.
+**Evidence** · N41 (2026-10-01). `crates/nazm-codegen-clif` implements `nazm-lir`'s `Backend`
+(`crates/nazm-lir/src/backend.rs`) with Cranelift 0.136.1, pinned exactly: every MIR function body
+of a unit becomes Cranelift IR, verified by Cranelift's verifier, and one object per unit is written
+by `cranelift-object`; the per-type retain, release and equality helpers and the task trampolines
+are generated with it. `nazm build --backend cranelift` selects it; `llvm` stays the default and
+the differential reference. `architecture.md` §7.43 is the constitution, written first.
 
-**Limitation** · None of the four jobs exists. A second backend now would be a second set
-of semantics bugs to keep in agreement for no present benefit.
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| A Cranelift-independent backend boundary | VERIFIED | `Backend` names no Cranelift type; `nazm-lir` and `nazm-cli` do not depend on a code generator (`cargo xtask check`, codegen reach) |
+| Cranelift consumes validated MIR, and nothing above it | VERIFIED | `nazm-codegen-clif` depends on `nazm-mir` and `nazm-lir` only (`the_cranelift_backend_reads_mir_and_nothing_above_it`) |
+| The whole native subset compiles with Cranelift | VERIFIED | all 104 programs of the 205-source corpus that build: stdout, stderr, exit status and memory report identical to the LLVM backend's (`performance.md`, N41); `crates/nazm-cli/tests/cranelift.rs` against the interpreter too |
+| Traps and arithmetic edges | VERIFIED | `every_trap_is_the_same_trap` (overflow, `/` and `%` by zero, `MIN / -1`, bounds, capacities), `signed_arithmetic_and_its_edges_agree` (`MIN % -1` is 0) |
+| No silent fallback | VERIFIED | `choosing_cranelift_writes_no_llvm_text_for_any_unit`; a refusal writes nothing (`recursion_is_refused_whichever_backend_is_asked`) |
+| Typed, centralised runtime imports | VERIFIED | every call into the runtime is built from `crates/nazm-lir/src/runtime.rs`; `a_runtime_entry_the_registry_names_is_one_the_runtime_defines` |
+| Object-cache identity and reuse | VERIFIED | a key over each unit's MIR digests, layouts, callee signatures, target, backend version and settings and the runtime ABI revision, known before generation; `an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated`, `a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those` |
+| Deterministic objects | VERIFIED | `the_same_mir_gives_the_same_object_bytes` (the compiler's own source) |
+| Debug information | MISSING | no DWARF; function symbols only (N48) |
+| A target other than the host | MISSING | refused by name (area 33) |
 
-**Next dependency** · One of the four jobs becoming real.
+**Limitation** · Every local that is not a scalar lives in a stack slot and is copied by
+`memcpy`-sized loads and stores; no optimisation pass runs beyond Cranelift's own. The runtime
+and the platform entry are still the runtime's LLVM text compiled by clang, and clang links, so a
+Cranelift build still needs clang. A Cranelift build links the whole runtime (a reused object is
+not generated, so it cannot say which parts it reaches). The backend has its own internal calling
+convention and layout; nothing passes a value between code the two backends generated.
 
-**Accepted when** · `nazm test --backend=all` means something — which first requires
-`docs/spec.md`'s backend-semantics questions to be settled.
+**Accepted when** · Already met for the declared set: the native subset, on the host.
 
 ---
 
@@ -3019,9 +3035,12 @@ permanently retired.
 (the latter inside `docker/contained.Dockerfile`). The emitter states its own scope, and
 `crates/nazm-cli/tests/docs.rs` asserts the documented target and the emitter agree.
 
-**Limitation** · **No cross-compilation and no target handling** — `crates/nazm-cli/src/build.rs`
-has no `--target`, and the emitted module carries no triple, so `clang` supplies the host's.
-Other targets are unverified rather than unsupported.
+**Limitation** · **No cross-compilation.** Since N41 `nazm build --target TRIPLE` names a target
+explicitly, and the matrix is closed: `aarch64-apple-darwin`, `aarch64-unknown-linux-gnu`,
+`x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`; any other triple is refused by name, and one
+that is not the host is refused too (`a_target_other_than_the_host_is_refused_and_nothing_is_written`),
+because an object for it would need a foreign linker and runtime. The x86-64 triples are accepted
+by both backends and carry no evidence.
 
 **BLOCKED, and it is a real finding** · `.github/workflows/ci.yml` runs
 `cargo test --workspace` and sets neither `NAZM_CONTAINED` nor `NAZM_ALLOW_UNCONTAINED`,
