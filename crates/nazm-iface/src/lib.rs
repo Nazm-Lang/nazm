@@ -28,9 +28,11 @@
 //! flag is. It is the artefact a cache would one day be built on, and
 //! `capability-matrix.md` says incremental compilation is absent.
 
+pub mod facts;
 pub mod fingerprint;
 pub mod wire;
 
+pub use facts::PersistentFacts;
 pub use fingerprint::InterfaceHash;
 pub use wire::{
     PersistentExport, PersistentType, PersistentUnitInterface, ReadError, Rehydrated, SCHEMA,

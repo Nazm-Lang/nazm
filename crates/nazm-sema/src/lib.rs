@@ -47,6 +47,7 @@ pub mod intrinsic;
 pub mod key;
 pub mod module;
 pub mod prelude;
+pub mod provenance;
 pub mod record;
 pub mod references;
 pub mod resolve;
@@ -61,6 +62,9 @@ pub use interface::{reachable_types, EnumExport, Export, RecordExport, UnitInter
 pub use intrinsic::{Intrinsic, Shape};
 pub use key::{DefKey, DefKind, ModuleKey};
 pub use module::{Dependency, ModuleGraph, ModuleId};
+pub use provenance::{
+    BuiltinFlow, CallFact, Flow, FunctionFacts, ModuleFacts, Origin, OriginSet, SinkFact, Summary,
+};
 pub use record::{FieldDef, RecordDef, RecordId, Records, TaskUnsafe};
 pub use references::{Coverage, ReferenceIndex, ReferenceTarget};
 pub use resolve::{

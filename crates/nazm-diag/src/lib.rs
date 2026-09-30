@@ -271,6 +271,10 @@ pub mod codes {
     pub const CAPABILITY_CONSTRUCTED: Code = Code::new("N0370");
     /// A `main` parameter that is not a capability: the runtime can supply nothing else.
     pub const MAIN_PARAMETER: Code = Code::new("N0371");
+    /// A restricted flow (N38): in a function that declares its effects, the path given to
+    /// `write_file` derives from a file's contents or from storage the checker does not
+    /// follow — directly, or through a function that writes to a path it is given.
+    pub const RESTRICTED_FLOW: Code = Code::new("N0372");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

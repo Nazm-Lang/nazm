@@ -30,6 +30,7 @@ use nazm_sema::resolve::{
 };
 use nazm_sema::types::{ParamOwner, Type, TypeParam};
 use nazm_sema::udt::{TypeNode, UserTypes, MAX_TYPE_DEPTH};
+use nazm_sema::ModuleFacts;
 
 #[derive(Debug, Clone)]
 pub struct Signature {
@@ -397,8 +398,17 @@ pub trait Reuse {
     /// This module's bodies were checked, and the module produced no diagnostic at all.
     ///
     /// Only then: an artefact means *this checked cleanly*, so a module with a diagnostic
-    /// produces none and a refusal can never be cached.
-    fn checked_clean(&mut self, module: ModuleId);
+    /// produces none and a refusal can never be cached. `facts` are its bodies reduced to
+    /// provenance flows (N38), which an artefact keeps so a later run that reuses the module
+    /// still has them: they are a function of exactly what the module's key covers.
+    fn checked_clean(&mut self, module: ModuleId, facts: &ModuleFacts, res: &Resolution);
+
+    /// The provenance facts of a module whose bodies were **not** checked this run, from
+    /// what [`Reuse::checked_clean`] kept. `None` when there are none, and the module's
+    /// functions are then taken as the worst case rather than as local.
+    fn facts(&self, _module: ModuleId, _res: &Resolution) -> Option<ModuleFacts> {
+        None
+    }
 }
 
 /// Check every module. The behaviour every caller but the cache has.
@@ -412,7 +422,7 @@ impl Reuse for CheckEverything {
         true
     }
 
-    fn checked_clean(&mut self, _module: ModuleId) {}
+    fn checked_clean(&mut self, _module: ModuleId, _facts: &ModuleFacts, _res: &Resolution) {}
 }
 
 /// Check a compilation. Returns what resolution decided and every diagnostic found.
@@ -542,9 +552,11 @@ pub fn check_reusing(
     // Stage 2, module by module. `deps` is the *direct* imports and nothing else, so a
     // name only reachable transitively is not in scope — by construction rather than by a
     // rule someone has to remember.
+    let mut all_facts: Vec<(ModuleId, Option<ModuleFacts>)> = Vec::with_capacity(units.len());
     for (n, u) in units.iter().enumerate() {
         let unparsed = unparsable.contains(&u.module);
         if !unparsed && !reuse.must_check(u.module) {
+            all_facts.push((u.module, reuse.facts(u.module, &res)));
             continue;
         }
         let deps: Vec<&UnitInterface> = u
@@ -554,10 +566,16 @@ pub fn check_reusing(
             .collect();
         let before = errors.len();
         check_unit(u, &deps, &mut res, &mut errors);
+        let facts = crate::provenance::facts(&u.functions, u.module, &res);
         if !unparsed && errors.len() == before && declared_cleanly.get(n) == Some(&true) {
-            reuse.checked_clean(u.module);
+            reuse.checked_clean(u.module, &facts, &res);
         }
+        all_facts.push((u.module, Some(facts)));
     }
+
+    // Provenance (N38): every module's facts, fresh or kept, solved as one program — every
+    // run, so a callee's body can never be stale in what its callers are told.
+    crate::provenance::solve(&all_facts, &mut res, &mut errors);
 
     // `main` cannot be generic: there is no caller to choose its type arguments.
     if let Some(def) = res
@@ -1767,6 +1785,7 @@ pub fn declare_unit(
             declared_effects,
             inferred_effects: None,
             effect_reasons: Vec::new(),
+            provenance: None,
             mentions: Vec::new(),
         });
         debug_assert_eq!(declared, id);
