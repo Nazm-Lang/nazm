@@ -1222,8 +1222,9 @@ frees on every release rather than on the last one, which is reference counting 
 counting removed. It is the failure that looks most like working code: a program with no
 aliasing behaves identically, and one that aliases — which the language specifies and
 measures — reads freed storage
-"""
-file = "crates/nazm-lir/src/emit.rs"
+
+Repointed by N43: the runtime's text moved to `runtime/core.rs`, unchanged."""
+file = "crates/nazm-lir/src/runtime/core.rs"
 find = """  %last = icmp sle i64 %rc2, 0
   br i1 %last, label %free, label %kept"""
 replace = """  %last = icmp sle i64 %rc2, 9223372036854775807
@@ -1310,8 +1311,9 @@ frees the array of descriptors and leaves every string it named behind. The coun
 sequences then looks perfect — the header really was reclaimed — while the bytes are gone
 for good. Converting a leak into a leak inside a container is the failure §17 of the N8
 directive names by that description
-"""
-file = "crates/nazm-lir/src/emit.rs"
+
+Repointed by N43: the runtime's text moved to `runtime/core.rs`, unchanged."""
+file = "crates/nazm-lir/src/runtime/core.rs"
 find = """  %last = icmp sle i64 %rc2, 0
   br i1 %last, label %contents, label %done
 contents:
@@ -1346,8 +1348,9 @@ frees a backing on every release rather than on the last one, which is reference
 with the counting removed. A slice of a slice, or a string bound twice, then frees storage
 its siblings still point into — and a program with no sharing behaves identically, which is
 what makes this the shape worth catching
-"""
-file = "crates/nazm-lir/src/emit.rs"
+
+Repointed by N43: the runtime's text moved to `runtime/core.rs`, unchanged."""
+file = "crates/nazm-lir/src/runtime/core.rs"
 find = """  %old = atomicrmw sub ptr %b, i64 1 release
   %last = icmp eq i64 %old, 1"""
 replace = """  %old = atomicrmw sub ptr %b, i64 1 release
@@ -1360,8 +1363,9 @@ destroys a channel's mutex, condition variable, ring and header on the first rel
 argument that makes `rc == 0` a safe moment to do this is that a waiter implies a live
 reference; removing the count removes the argument, and a channel a task still holds is
 torn down under it
-"""
-file = "crates/nazm-lir/src/emit.rs"
+
+Repointed by N43: the runtime's text moved to `runtime/core.rs`, unchanged."""
+file = "crates/nazm-lir/src/runtime/core.rs"
 find = """  %old = atomicrmw sub ptr %rcp, i64 1 release
   %last = icmp eq i64 %old, 1"""
 replace = """  %old = atomicrmw sub ptr %rcp, i64 1 release
@@ -3279,6 +3283,7 @@ why = "lowering and emission are observed by compiling and running programs: mem
 owns = ["crates/nazm-lir/"]
 targets = [
     { package = "nazm-lir", lib = true },
+    { package = "nazm-cli", test = "runtime" },
     { package = "nazm-cli", test = "mir" },
     { package = "nazm-cli", test = "memory" },
     { package = "nazm-cli", test = "value_blocks" },
@@ -7773,8 +7778,9 @@ killers = [{ package = "nazm-cli", test = "incremental", name = "a_capability_on
 
 [[mutation]]
 name = "n37-main-is-handed-nothing"
-why = "the entry wrapper hands `main` no roots, so a `main` that declares its authority is called with the wrong signature"
-file = "crates/nazm-lir/src/emit.rs"
+why = """the entry wrapper hands `main` no roots, so a `main` that declares its authority is called with the wrong signature
+Repointed by N43: the runtime's text moved to `runtime/entry.rs`, unchanged."""
+file = "crates/nazm-lir/src/runtime/entry.rs"
 find = """    let root_args = vec!["i64 0"; roots].join(", ");"""
 replace = """    let root_args = vec!["i64 0"; 0].join(", ");"""
 killers = [{ package = "nazm-cli", test = "capabilities", name = "a_capability_parameter_lowers_exactly_as_an_int_one_and_main_is_handed_its_roots" }]
@@ -8446,7 +8452,7 @@ killers = [{ package = "nazm-cli", test = "cranelift", name = "every_example_com
 [[mutation]]
 name = "n41-a-runtime-signature-is-wrong"
 why = "the registry drops `nz.arr_grow`'s element-size parameter, so every push is built against a signature the runtime does not have (narrowing a result instead is invisible on a little-endian target that stores it into a zeroed field, which is why this mutant removes a parameter)"
-file = "crates/nazm-lir/src/runtime.rs"
+file = "crates/nazm-lir/src/runtime/mod.rs"
 find = '    import!("nz.arr_grow", [Ptr, I64], Some(Word::Ptr), Sequences,'
 replace = '    import!("nz.arr_grow", [Ptr], Some(Word::Ptr), Sequences,'
 killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
@@ -8756,3 +8762,133 @@ replace = """            } else {
         let mut s = self.module.make_signature();
         s.returns.push(c(ret));"""
 killers = [{ package = "nazm-cli", test = "ffi", name = "a_program_calls_c_with_ints_and_bools_and_both_backends_agree" }]
+
+# --- N43: the runtime constitution -----------------------------------------------------------
+
+[[mutation]]
+name = "n43-the-runtime-abi-is-not-in-clang-s-key"
+why = "the clang code generation configuration leaves out the runtime ABI revision, so an object built against another runtime contract is reused"
+file = "crates/nazm-cli/src/backend.rs"
+find = """    arguments.push(runtime_abi(nazm_lir::runtime::RUNTIME_ABI_REVISION));
+"""
+replace = ""
+killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::the_runtime_abi_revision_is_part_of_every_configuration" }]
+
+[[mutation]]
+name = "n43-a-string-retain-takes-no-reference"
+why = "`nz.str_retain` does not count, so the first of two holders to release a backing frees it under the other"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = """bump:
+  %old = atomicrmw add ptr %b, i64 1 monotonic"""
+replace = """bump:
+  %old = load i64, ptr %b"""
+killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_services_keep_their_contract_when_called_directly" }]
+
+[[mutation]]
+name = "n43-a-string-is-freed-a-reference-early"
+why = "`nz.str_release` frees a backing when two references remain, so a live string's storage is released and later released again"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = """  %old = atomicrmw sub ptr %b, i64 1 release
+  %last = icmp eq i64 %old, 1"""
+replace = """  %old = atomicrmw sub ptr %b, i64 1 release
+  %last = icmp sle i64 %old, 2"""
+killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_services_keep_their_contract_when_called_directly" }]
+
+[[mutation]]
+name = "n43-a-sequence-is-never-reclaimed"
+why = "`nz.arr_release` never sees its last reference, so every sequence leaks"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = """  store i64 %rc2, ptr %rcp
+  %last = icmp sle i64 %rc2, 0
+  br i1 %last, label %free, label %kept"""
+replace = """  store i64 %rc2, ptr %rcp
+  %last = icmp slt i64 %rc2, 0
+  br i1 %last, label %free, label %kept"""
+killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_services_keep_their_contract_when_called_directly" }]
+
+[[mutation]]
+name = "n43-a-growth-overflow-is-not-refused"
+why = "a sequence growth whose byte count overflows is attempted with the wrapped size, so the caller writes past what was allocated"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = "  %over = or i1 %twice.o, %bytes.o"
+replace = "  %over = and i1 %twice.o, %bytes.o"
+killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_services_keep_their_contract_when_called_directly" }]
+
+[[mutation]]
+name = "n43-the-failure-state-is-shared-between-threads"
+why = "`nz.failed` is an ordinary global, so one task's failure is another's and the units' thread-local declarations disagree with the definition"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = """    let _ = writeln!(out, "@nz.failed = hidden thread_local global i1 false");"""
+replace = """    let _ = writeln!(out, "@nz.failed = hidden global i1 false");"""
+killers = [{ package = "nazm-lir", lib = true, name = "runtime::tests::every_runtime_global_is_inventoried" }]
+
+[[mutation]]
+name = "n43-a-later-failure-overwrites-the-first"
+why = "`nz.fail` records every failure, so the message reported is the last one — usually a consequence of the first, carrying on with its stand-in value"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = """    let _ = writeln!(out, "  br i1 %had, label %done, label %record");"""
+replace = """    let _ = writeln!(out, "  br i1 %had, label %record, label %record");"""
+killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_services_keep_their_contract_when_called_directly" }]
+
+[[mutation]]
+name = "n43-a-failure-ends-with-the-wrong-status"
+why = "a reported failure exits 1, the status a normal program may choose for itself, instead of 2"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = """    let _ = writeln!(out, "  call void @exit(i32 2)");"""
+replace = """    let _ = writeln!(out, "  call void @exit(i32 1)");"""
+killers = [{ package = "nazm-cli", test = "runtime", name = "the_three_ways_a_program_ends_are_distinguished" }]
+
+[[mutation]]
+name = "n43-the-memory-report-is-never-written"
+why = "the entry never writes the memory report, so reclamation cannot be asked about"
+file = "crates/nazm-lir/src/runtime/entry.rs"
+find = '''            "  br i1 %quiet, label %nz.checked, label %nz.memreport"'''
+replace = '''            "  br i1 %quiet, label %nz.checked, label %nz.checked"'''
+killers = [{ package = "nazm-cli", test = "runtime", name = "the_three_ways_a_program_ends_are_distinguished" }]
+
+[[mutation]]
+name = "n43-the-program-s-own-name-is-an-argument"
+why = "the entry stores `argc` rather than one fewer, so `args_count` counts the program's name and `arg(0)` is it"
+file = "crates/nazm-lir/src/runtime/entry.rs"
+find = """        let _ = writeln!(out, "  %nargs = sub i64 %argc64, 1");"""
+replace = """        let _ = writeln!(out, "  %nargs = sub i64 %argc64, 0");"""
+killers = [{ package = "nazm-cli", test = "runtime", name = "the_arguments_are_stored_once_at_startup_without_the_program_name" }]
+
+[[mutation]]
+name = "n43-an-inventoried-signature-is-wrong"
+why = "the inventory says `nz.arr_grow` takes one parameter, so every unit declares it with a signature the runtime does not define"
+file = "crates/nazm-lir/src/runtime/mod.rs"
+find = """    rt!("nz.arr_grow", "ptr" ("ptr", "i64") "","""
+replace = """    rt!("nz.arr_grow", "ptr" ("ptr") "","""
+killers = [{ package = "nazm-lir", lib = true, name = "runtime::tests::every_runtime_definition_is_inventoried_with_its_exact_signature" }]
+
+[[mutation]]
+name = "n43-a-runtime-symbol-is-not-inventoried"
+why = "`nz.cstr` is defined and not inventoried, so a symbol of the runtime has no stated contract"
+file = "crates/nazm-lir/src/runtime/mod.rs"
+find = """    rt!("nz.cstr", "ptr" ("ptr", "i64") "", false, Io, "", Null, Any, "a NUL-terminated copy of a path, for the C library", "the copy is owned by the caller, who frees it"),
+"""
+replace = ""
+killers = [{ package = "nazm-lir", lib = true, name = "runtime::tests::every_runtime_definition_is_inventoried_with_its_exact_signature" }]
+
+[[mutation]]
+name = "n43-the-runtime-reaches-around-the-adapter"
+why = "the adapter stops declaring `fclose`, which the runtime still calls, so the runtime reaches the operating system through something the adapter does not list"
+file = "crates/nazm-lir/src/runtime/os.rs"
+find = """        "declare i32 @fclose(ptr)",
+"""
+replace = ""
+killers = [{ package = "nazm-lir", lib = true, name = "runtime::tests::a_runtime_calls_the_operating_system_only_through_the_adapter" }]
+
+[[mutation]]
+name = "n43-a-close-discards-queued-values"
+why = "`nz.chan_recv` looks at the close flag before the queue, so closing a channel throws away what was already sent"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = """  %empty = icmp sle i64 %len, 0
+  br i1 %empty, label %maybe, label %take"""
+replace = """  %empty = icmp sle i64 %len, 0
+  %cl0 = load i64, ptr %closedp
+  %shut = icmp ne i64 %cl0, 0
+  %e2 = or i1 %empty, %shut
+  br i1 %e2, label %maybe, label %take"""
+killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_services_keep_their_contract_when_called_directly" }]
