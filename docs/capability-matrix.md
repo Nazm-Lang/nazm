@@ -60,7 +60,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 5 | Effects | PARTIAL |
 | 6 | Capabilities (language) | PARTIAL |
 | 7 | Provenance and information flow (language) | PARTIAL |
-| 8 | Core IR | MISSING |
+| 8 | Core IR | VERIFIED (v1) |
 | 9 | MIR | MISSING |
 | 10 | LIR and the backend contract | PARTIAL |
 | 10a | Per-module code generation and linking | VERIFIED |
@@ -89,7 +89,10 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
 
-Nine VERIFIED, sixteen PARTIAL, three DESIGNED, two RESEARCH, five MISSING. The shape is
+After N39: thirteen VERIFIED (areas 4 and 30 with a stated qualification), thirteen PARTIAL,
+three DESIGNED, two RESEARCH, five MISSING. The count that stood here — nine, sixteen, three,
+two, five — had not been kept up since the first era, and what follows is that era's summary,
+kept as it was written: the shape is
 worth reading directly: **everything verified is either a front-end capability, a tooling
 interface, or an evidence mechanism.** Nothing in the semantic core — ownership, effects,
 capabilities, provenance — exists at all, and that is the accurate summary of where the
@@ -816,46 +819,67 @@ exist.
 
 ## IR and backend
 
-### 8. Core IR — MISSING · ### 9. MIR — MISSING
+### 8. Core IR — VERIFIED (v1)
 
-**Evidence of absence** · Neither exists; no HIR either — no typed Core IR, no MIR, no
-HIR. What changed is the reason. Since N11 the language has first-order generics and the
-native backend compiles **monomorphised concrete instances**: the checker interns each
-applied record and enum with its substituted fields (`crates/nazm-sema/src/generic.rs`),
-and native lowering plans one instance per concrete generic function and lowers each from
-the same syntax tree (`crates/nazm-lir/src/instance.rs`). So polymorphism and
-monomorphisation exist, and **no dedicated Core or MIR level carries them** — the existing
-semantic and native pipeline does the specialisation, and nothing has shown that a level
-between them would own something neither owns. Traits, regions and effects are still
-absent, so none of those gives a middle level work either.
+**Evidence** · N39 (2026-09-30). `crates/nazm-cir` is the representation, its invariants
+(`verify.rs`), its printed form `nazm.core-ir/1` (`print.rs`, `nazm core-ir`) and each
+function's digests (`digest.rs`); `crates/nazm-core/src/lower.rs` is **the one lowering** from a
+checked program, private to `nazm-core` and reached only after checking succeeded;
+`crates/nazm-core/src/eval.rs` runs Core IR and nothing else; `crates/nazm-lir/src/lower.rs`
+lowers Core IR, and `nazm-lir` no longer depends on `nazm-syntax`. `architecture.md` §7.41 is the
+constitution, written before the code.
+
+| Claim | Status | Evidence |
+| --- | --- | --- |
+| Core IR exists, and is the one checked-to-IR lowering | VERIFIED v1 | both backends consume it; `xtask/src/rules.rs` places `nazm-cir` and forbids `nazm-lir` the syntax tree; `crates/nazm-core/tests/core_ir.rs` (a rejected program never reaches a consumer) |
+| Typed Core IR | VERIFIED | every value carries the checker's type or *never*; `cir::verify` runs on every lowering; `every_value_is_typed_by_what_the_checker_established` |
+| Canonical semantic lowering | VERIFIED | all 205 `.nz` sources: `nazm check`, `nazm run` (value, output, memory report, status) and every one of 383 emitted LLVM IR files byte-identical before and after (`performance.md`, N39) |
+| Control-flow normalisation | VERIFIED | explicit `LoopId` targets, explicit completion, value and statement `if` apart, `?` a `match` whose error arm returns; `every_break_and_continue_names_the_loop_it_leaves`, `a_question_mark_is_a_match_whose_error_arm_returns` |
+| Backend-neutral semantic operations | VERIFIED | `Intrinsic` by identity, `Law` on every comparison, records, variants and fields by identity, no layout, symbol or runtime call; the `core ir boundary` gate (`cargo xtask check`, and `nothing_below_core_ir_asks_what_a_source_position_meant` in the suite) |
+| Deterministic, durable printed form | VERIFIED | `the_printed_core_ir_is_the_same_bytes_in_every_process` (`crates/nazm-cli/tests/core_ir.rs`) |
+| Per-function digests, semantic and body | VERIFIED | the digest-law tests in `crates/nazm-core/tests/core_ir.rs`: a body change moves both, an effect change only the semantic one, a capability parameter both, provenance neither; a span, a local's name, a declaration's order, an arm's order and an unrelated definition none |
+| Digests used as a cache key | MISSING | nothing keys on them yet; the object cache keys on emitted IR (area 10b) |
+
+**Limitation** · Level 3 by responsibility, not by `architecture.md` §2's shape: a tree of
+structured regions, not ANF, and there are no traits to lower. Core IR is built from each run's
+full check and never persisted, so no reuse happens at this level. Generic bodies stay generic;
+instantiation is the native backend's. Ownership operations are not in it — regions state what
+they own, and a MIR would lower from that.
+
+**Accepted when** · Introducing the level **removed** code: the evaluator's name-keyed frames and
+per-step resolution lookups, and the native lowering's span lookups and its own `?` lowering, are
+gone, and a mechanical gate keeps them gone.
+
+### 9. MIR — MISSING
+
+**Evidence of absence** · No MIR, and no HIR. Since N11 the native backend compiles
+**monomorphised concrete instances**: the checker interns each applied record and enum with its
+substituted fields (`crates/nazm-sema/src/generic.rs`), and native lowering plans one instance per
+concrete generic function and lowers each — since N39, from its generic Core IR body
+(`crates/nazm-lir/src/instance.rs`). Traits and regions are absent, so neither gives a level below
+Core IR work yet; effects and provenance are checker facts.
 
 *Historical, M1a:* `crates/nazm-lir/src/lib.rs` gave the original reason — the levels in
-between *"exist to carry information M1a has none of"*, no generics to monomorphise, no
-traits to lower, no regions to infer, no effects to track. The absence it justified still
-stands; its "nothing is polymorphic" does not, since N11.
+between *"exist to carry information M1a has none of"*. The first level that did own something
+was Core IR (area 8), in N39.
 
-**Limitation** · Not the absence of the levels — that is correct restraint.
+*Still MISSING after N1 and N2, and deliberately.* A `Resolution` is **not an IR**, and neither
+is a `ModuleGraph` or a `UnitInterface`; reading any of them as an HIR would be the progress-bar
+mistake `master-architecture.md` §3 warns about.
 
-**Still MISSING after N1 and N2, and deliberately.** N1 produced a `Resolution`, and a
-resolution is **not an IR**: it holds no expressions and no control flow, only the answers
-to "what does this name refer to", keyed by where the name was written. N2 added a
-`ModuleGraph` and a `UnitInterface`, and neither holds a body — an interface is a module's
-signatures, which is less than an AST rather than more. Lowering still lowers from the AST.
-`nazm-sema` is not `nazm-hir`: the crate on §7's table is a graph of definitions *with*
-bodies. Reading either new type as an HIR would be exactly the progress-bar mistake
-`master-architecture.md` §3 warns about.
+**Next dependency** · Ownership that places are needed for: exclusivity, regions, field- and
+alias-precise provenance (area 7), drop elaboration below Core IR's region ownership.
 
-**Next dependency** · A responsibility no existing level owns. The duplicated one is gone;
-the next candidate has to be argued for on its own evidence.
-
-**Accepted when** · Introducing the level **removes** code rather than adding a
-pass-through.
+**Accepted when** · Introducing the level **removes** code rather than adding a pass-through.
 
 ### 10. LIR and the backend contract — PARTIAL
 
-**Evidence** · `crates/nazm-lir/src/ir.rs` and `crates/nazm-lir/src/lower.rs`. The
-distinguishing information it carries over the AST is which operations can fail and where
-the source said so; every fallible node carries a span. Signatures are lowered before
+**Evidence** · `crates/nazm-lir/src/ir.rs` and `crates/nazm-lir/src/lower.rs`, which since N39
+lowers **Core IR** (area 8) — `nazm-lir` depends on `nazm-cir` and not on `nazm-syntax`, and a
+`cargo xtask check` gate refuses a resolution position lookup in it. What it decides is what
+Core IR leaves out: layout, symbols, linkage, hidden slots for partly built values, instances. The
+distinguishing information it carries over Core IR is which operations can fail at the machine
+level and where; every fallible node carries a span. Signatures are lowered before
 bodies, so forward references resolve without a second walk, and all refusals are
 collected rather than the first. Layering is gated: `xtask/src/rules.rs` forbids
 `nazm-lir` depending on `nazm-core`.
@@ -869,7 +893,9 @@ N1; the forbidden dependency on `nazm-core` still holds, and is satisfied by bot
 depending on `nazm-sema`, which owns the shared vocabulary since N2.*
 
 *N12 added no node.* `?` is lowered to the LIR `match` it means, with a `Stmt::Return` in its
-error arm (`lower_propagate`), so its cleanup is `return`'s and the emitter did not change.
+error arm, so its cleanup is `return`'s and the emitter did not change. *Since N39 that `match`
+is Core IR's* — the lowering in `nazm-core` makes it once for both backends, and `lower_propagate`
+is gone; the LIR it produces is byte-identical.
 
 *N12.1 added two, and removed a refusal.* A block used as a value compiles natively: every
 value block goes through one `lower_block`, a `match` arm written as a block is its bindings

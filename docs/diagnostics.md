@@ -82,6 +82,12 @@ secondary labels are one chain to the sink and to where the origin entered; it c
 The provenance facts themselves are machine-readable only in the packet; the persisted module
 interface stays `nazm.interface/6`, and the cache's own entry format moved to `nazm.check/2`.
 
+**Applied to N39, Core IR.** No schema moved. One code appeared, `N0900`: the compiler
+contradicted itself — a program that checked with no diagnostic could not be lowered to Core IR,
+or its Core IR broke an invariant (`architecture.md` §7.41). It describes the compiler, not the
+program, carries no fix, and nothing is run or built after it. The printed Core IR,
+`nazm.core-ir/1`, is a debugging form with its own version and is not one of these schemas.
+
 A consumer that fails on an unrecognised field is not compatible with this contract, and
 the `additionalProperties: false` in the schema documents is a statement about *this*
 version's output, not a promise that the next one adds nothing.
