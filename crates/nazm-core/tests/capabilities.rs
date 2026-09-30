@@ -95,11 +95,12 @@ fn authority_passed_from_main_through_helpers_recursion_and_storage_is_accepted(
         fn ping(io: IoCap, n: Int) -> Int ! { io } { if n == 0 { 0 } else { pong(io, n - 1) } }\n\
         fn pong(io: IoCap, n: Int) -> Int ! { io } { show(io, n); ping(io, n) }\n\
         fn keep(io: IoCap) -> IoCap ! {} { io }\n\
+        fn carry(io: IoCap, n: Int) -> Int ! {} { str_len(int_to_str(n)) }\n\
         fn from_record(c: Ctx) -> Int ! { io } { let io = c.io; show(io, c.n) }\n\
         fn from_vec(v: Vec[IoCap]) -> Int ! { io } { let io = vec_get(v, 0); show(io, 7) }\n\
         fn from_enum(g: Grant) -> Int ! { io } { match g { Grant.None() => 0, Grant.Some(cap: io) => show(io, 8), } }\n\
         fn main(io: IoCap) -> Int ! { io } {\n\
-            mid(io, 1); walk(keep(io), 2); ping(io, 2);\n\
+            mid(io, 1); walk(keep(io), 2); ping(io, 2); carry(io, 3);\n\
             from_record(Ctx(io: io, n: 6));\n\
             let v = vec_new[IoCap](); vec_push(v, io); from_vec(v);\n\
             from_enum(Grant.Some(cap: io));\n\
@@ -119,8 +120,10 @@ fn authority_passed_from_main_through_helpers_recursion_and_storage_is_accepted(
     ] {
         assert_eq!(inferred(src, f), IO, "{f}");
     }
-    // Holding, returning and storing a capability exercises nothing.
+    // Holding, returning and storing a capability exercises nothing — not even at a call
+    // made while holding one.
     assert_eq!(inferred(src, "keep"), EffectSet::EMPTY);
+    assert_eq!(inferred(src, "carry"), EffectSet::EMPTY);
     assert_eq!(value(src), 0);
 }
 
