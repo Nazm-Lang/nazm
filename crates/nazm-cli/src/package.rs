@@ -27,7 +27,7 @@ fn report(diagnostics: &[Diagnostic]) -> ExitCode {
 }
 
 /// The package a command's file argument names or lies in, resolved.
-fn graph_for(path: &Path) -> Option<Result<nazm_package::Graph, Vec<Diagnostic>>> {
+pub(crate) fn graph_for(path: &Path) -> Option<Result<nazm_package::Graph, Vec<Diagnostic>>> {
     if path.is_dir() {
         return Some(nazm_package::resolve(path));
     }

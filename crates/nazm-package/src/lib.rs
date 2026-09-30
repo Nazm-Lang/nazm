@@ -97,6 +97,7 @@ struct RawPackage {
     version: String,
     root: Option<String>,
     main: Option<String>,
+    profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +118,9 @@ pub struct Manifest {
     pub main: Option<String>,
     /// Each dependency's name, with its path relative to this manifest and its exact version.
     pub dependencies: BTreeMap<String, (String, Version)>,
+    /// The restriction profile this package requires of every program it is part of (N47),
+    /// by name; validated by the command line, which knows the profiles.
+    pub profile: Option<String>,
 }
 
 fn error(code: Code, message: String) -> Diagnostic {
@@ -199,6 +203,7 @@ impl Manifest {
             root,
             main: raw.package.main,
             dependencies,
+            profile: raw.package.profile,
         })
     }
 }
@@ -221,6 +226,8 @@ pub struct Package {
     pub dependencies: BTreeMap<String, usize>,
     /// BLAKE3 over its manifest and its sources: `blake3:` and 64 hex digits.
     pub digest: String,
+    /// The restriction profile its manifest requires, if any (N47).
+    pub profile: Option<String>,
 }
 
 impl Package {
@@ -482,6 +489,7 @@ pub fn resolve(dir: &Path) -> Result<Graph, Vec<Diagnostic>> {
             digest: digest(&manifest_bytes, &source_root),
             source_root,
             source: format!("path+{}", relative(&root_dir, dir)),
+            profile: m.profile.clone(),
             dependencies: r
                 .edges
                 .get(old)
