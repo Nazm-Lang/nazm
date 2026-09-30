@@ -302,10 +302,18 @@ into every compiled program. What is still design is everything *between* the AS
 [`roadmap.md`](roadmap.md) for ordering and [`capability-matrix.md`](capability-matrix.md)
 for what each one's absence currently costs.
 
+**Corrected 2026-09-30 (N39).** One level between the AST and `nazm-lir` now exists: Core IR,
+`nazm-cir`, the one lowering of a checked program that the interpreter runs and `nazm-lir`
+lowers (§7.41). It earned its crate the way §3 of `master-architecture.md` requires — by taking
+a responsibility away from two places that each held it: deciding, from the tree, what a
+program's positions, `?`s, blocks and transfers mean. `nazm-hir`, `nazm-ty`, `nazm-db`,
+`nazm-mir` and `nazm-mono` are still design.
+
 | Phase | Crates | State |
 | --- | --- | --- |
 | 2 | `nazm-bench` · `xtask` | **exists** |
-| 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-sema` · `nazm-iface` · `nazm-core` · `nazm-cli` | **exists** (`nazm-core` is checker + evaluator, not the Core IR below; `nazm-sema` and `nazm-iface` are not on this diagram at all — see §7.2 and §7.3) |
+| 4 | `nazm-span` · `nazm-diag` · `nazm-syntax` · `nazm-sema` · `nazm-iface` · `nazm-core` · `nazm-cli` | **exists** (`nazm-core` is the checker, the one lowering to Core IR, and the evaluator over Core IR; `nazm-sema` and `nazm-iface` are not on this diagram at all — see §7.2 and §7.3) |
+| 4 | **`nazm-cir`** | **exists** (N39) — Core IR, level 3 by responsibility: typed, resolved, explicit control, effects as function metadata. A tree of structured regions, not ANF, and no traits to lower. §7.41 |
 | 4 | `nazm-hir` · `nazm-ty` · `nazm-mcp` | planned |
 | 6 | `nazm-db` · `nazm-mir` · `nazm-lsp` | planned |
 | 7 | **`nazm-lir`** | **exists** — named for this level, but a structured typed tree over numbered slots rather than SSA over a CFG of places. See the note below |
@@ -338,7 +346,9 @@ resolution — not a row in the table above, and §7.2 says why) · `iface` (a m
 interface as persisted, and its fingerprint — §7.3) · `diag` (stable error codes, fixits, JSON schema, renderer) · `syntax`
 (lexer, parser, CST, typed AST, canonical formatter, CST-preserving edits) · `hir` (`DefId`
 graph, modules, name resolution) · `ty` (types, effect rows, provenance, inference) · `core`
-(Core IR, normalisation, Merkle hashing, reference interpreter) · `db` (salsa queries +
+(the checker, the one lowering to Core IR, the reference interpreter) · `cir` (Core IR: its
+invariants, its printed form, per-function digests — §7.41; Merkle hashing over definitions is
+not built) · `db` (salsa queries +
 on-disk store) · `mir` (exclusivity, regions, taint, drop elaboration, effect lowering) ·
 `mono` (monomorphisation, devirtualisation, layout selection) · `lir` (backend contract +
 oracle interpreter) · `codegen-clif` / `codegen-llvm` · `link` · `rt` (scheduler, stacks,
@@ -4520,6 +4530,134 @@ every side channel are outside it. Records, variants and `Result` are tracked wh
 Ambient functions' own writes are not checked. No declassification, sanitiser, user label or
 policy exists. This is explicit information-flow provenance and a single restricted flow — not
 non-interference, confidentiality enforcement or a sandbox.
+
+## 7.41 Core IR: the constitution — N39, 2026-09-30
+
+Written before the representation, so that the structs follow the law and not the other way
+round. `crates/nazm-cir` holds the representation; this section is what it is allowed to be.
+
+```text
+source ─ parse ─ AST ─ check ─ Resolution ─┐
+                                           ├─ nazm-core::lower (only after checking succeeded)
+                                           ▼
+                                  Core IR  (crates/nazm-cir, nazm.core-ir/1)
+                                   │     │
+                interpreter ───────┘     └─── nazm-lir::lower ─ LIR ─ LLVM text ─ clang
+                (nazm-core::eval)              (reads no syntax tree and no position map)
+```
+
+**What Core IR represents.** The checked meaning of each function body, once: every value typed,
+every name replaced by what it resolved to, every control transfer explicit, every piece of
+surface sugar gone. It is the one lowering from a checked program; the interpreter and the native
+backend both start from it, and neither reads the syntax tree or the checker's position maps
+(the span-keyed answers: callee, binding, field, variant, payload, propagation, construction,
+type arguments, checked call).
+
+**What it deliberately omits.** Syntax: spellings, parentheses, statement-versus-expression
+position, `?`, the shape an `if` or a block was written in. Layout: field offsets, discriminants,
+aggregate shapes, symbols, linkage — the backend's, below the layout boundary of §2. Ownership
+operations: no retain, release, move or drop instruction exists; what Core IR carries is the
+semantic fact they are derived from, which locals a region owns until its exit (below).
+Provenance: it stays a checker fact (below). Level 3 of §2 is also described as ANF with traits
+as dictionaries; v1 is neither — it is a typed tree, and the language has no traits.
+
+**When it is constructed.** Only from a program that checked with no diagnostics, by
+`nazm-core`'s lowering, which is private to that crate and reached only through its checked entry
+points. A parse or check failure produces no Core IR. The language service, completion, the
+repository map and every other tool that reads incomplete source never construct it. A failure
+inside lowering after a clean check is a compiler defect, reported as one; there is no fallback
+to any other lowering.
+
+**Invariants every consumer may assume.**
+
+1. *Typed.* Every expression carries the type the checker established for it, read from the
+   checker's facts — a binding's type, a checked call's result, a record field's or payload's
+   declared type, the enum a variant constructs — and composed structurally, never inferred.
+   The one other state is *never*: an `if`, `match` or block every path of which transfers
+   control produces no value, and says so.
+2. *Resolved.* A call names a function by its definition identity and a built-in by
+   `Intrinsic`; a record, enum, field, variant and payload field are identities (declaration
+   indices within a definition, as resolution spells them). No spelling is identity anywhere; a
+   name kept for display is labelled display.
+3. *Explicit control.* Structured regions, not basic blocks (why: below). A loop has a
+   function-unique `LoopId`, and every `break` and `continue` names the loop it leaves or
+   restarts — a `break` in a loop's condition names the enclosing loop, as the language has
+   always meant. `return` carries its value. Each region states whether it falls through or
+   transfers, and a value region has a tail exactly when it falls through. `if` without `else`
+   exists only as a statement; `?` is a `match` whose error arm returns.
+4. *Deterministic.* Functions in declaration order, locals in slot order, constants in first-use
+   order, loops in source order, arms and initialisers in written order. The printed form of a
+   program is a function of the checked program; no map iteration order reaches it.
+5. *Source-linked, not source-identified.* Each node carries the span a diagnostic about it
+   points at; a compiler-made node (the `match` a `?` becomes, its two bindings) is marked as
+   such and carries the span of the source it came from. Spans are metadata: no digest includes
+   one.
+6. *Backend-neutral.* Nothing in it names LLVM, a slot index the emitter chose, a native type or
+   a runtime entry point.
+
+**IDs.** A function is its `FnId`, the checker's session-local definition identity — a Core IR
+function exists for each and at the same index. A local is a `LocalId`: the checker's slots,
+parameters first, then Core IR's own temporaries. A loop is a `LoopId`, a constant a `ConstId`,
+both per function. None is a `DefKey`: those are durable names for definitions, and an IR entity
+that lives for one compilation does not get one. The printed form names definitions and types by
+their durable keys, so it reads the same from any checkout.
+
+**Why regions and not basic blocks.** Both consumers are structured: the interpreter walks a tree,
+and LIR is a structured tree the emitter turns into LLVM blocks, placing releases by region. A CFG
+here would force a re-structuring pass downstream — a second analysis of control flow, which is
+what this milestone removes — and would lose the region-ownership facts. Explicit loop targets and
+explicit completion give every consumer what blocks would, without it. There is no SSA and no phi:
+locals are mutable slots, `let` binds one, assignment writes one. A MIR may choose blocks.
+
+**Generics.** Core IR is generic, as checking is: a generic function's body is lowered once, its
+types mentioning its own parameters, and each call records its type arguments. The interpreter
+runs it parametrically; the native backend instantiates it by substitution, as before. There is
+no second generic system and no monomorphisation above the backend.
+
+**Runtime primitives.** `Intrinsic`, the built-in table the checker reads — explicit, typed,
+enumerated. `Vec[T]` operations carry their element type. Channels, `spawn` and `scope` are Core IR
+operations; nothing is lowered to a thread or a runtime call here.
+
+**Equality.** A comparison states its operand type and which law applies — integer, boolean,
+bytes, or the derived structural equality of a named record or enum — or, in a generic body,
+that the parameter's instance decides. No consumer discovers it.
+
+**Effects and authority.** Each function carries its declared effect set, the set its body
+requires, and whether it is pure; its parameters' types say which capabilities it holds, since
+a capability is an ordinary typed value. Nothing re-infers either, and neither becomes a global
+permission flag.
+
+**The provenance boundary.** Provenance is decided before Core IR and stays in the checker's
+summaries (`FnDef::provenance`, `nazm.check/2`). Core IR carries none — nothing below it reads
+provenance, and a per-node origin set would be the bulk §7.40 avoided. No Core IR digest covers it;
+the check artefact owns it.
+
+**Memory management.** No retain or release is in Core IR. What survives is the semantic ownership
+level: every region lists the locals bound in it, which the language releases at its exit, and a
+`match` owns its scrutinee. The interpreter drops at exactly those points; LIR places native
+retains and releases from the same regions and from each type's ownership law. That boundary is
+the one a MIR will lower across.
+
+**Digests.** Two per function, BLAKE3 over a canonical encoding that names every definition and
+type durably and omits every span, display name and session-local number:
+
+- *semantic*: the signature, the effect contract (declared and required), purity, and the body;
+- *body*: what code generation reads — parameter, local and result types and the body — and no
+  effect metadata.
+
+An effect-only change moves the first and not the second; a capability-parameter change moves
+both, because Core IR is typed and a capability is a type, even though the native backend erases
+it (machine-code identity is the object cache's key, the emitted IR's bytes, §7.9); a
+provenance-only change moves neither. A digest is not an identity: two functions with equal
+digests are two definitions.
+
+**Incremental boundary.** Core IR is built per module from the current run's full check and is
+never persisted in v1; each function's digests exist for the caches that will key on them. Nothing
+is reused across runs at this level yet, so nothing can be reused wrongly.
+
+**Backend boundary.** Below Core IR a consumer may read the checker's semantic tables —
+definitions, signatures, visibility, the call graph, the user-type table — and nothing that answers
+a question about a source position. `cargo xtask check` enforces it.
 
 ## 8. Toolchain, and one real incompatibility
 
