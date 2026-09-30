@@ -600,18 +600,23 @@ and the mutation had stopped applying at all. A pattern that matches twice prove
 nothing, and the repair is two precise entries rather than one ambiguous one: the
 statement form and the value form are separate code paths and each deserves its own
 fact.
+Repointed by N40: the branch terminator MIR gives a statement `if`, which the backend emits as it is.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """        let else_label = format!("b{}", self.fresh_label());
-        let _ = writeln!(
-            self.out,
-            "  br i1 %{c}, label %{then_label}, label %{else_label}"
-        );"""
-replace = """        let else_label = format!("b{}", self.fresh_label());
-        let _ = writeln!(
-            self.out,
-            "  br i1 %{c}, label %{else_label}, label %{then_label}"
-        );"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """                cond: c,
+                then: then_b,
+                otherwise: else_b,
+            },
+            at,
+        );
+        let mut arrives = otherwise.is_none();"""
+replace = """                cond: c,
+                then: else_b,
+                otherwise: then_b,
+            },
+            at,
+        );
+        let mut arrives = otherwise.is_none();"""
 
 [[mutation]]
 name = "the-value-conditional-selects-the-wrong-branch"
@@ -620,18 +625,23 @@ The same swap in a value-position `if`, which is a different function and a diff
 shape: it has a join block and a `phi`, so the wrong arm's value is what the expression
 produces. Caught by outcome rather than by anything about the IR being malformed — the
 `phi` is well-formed either way.
+Repointed by N40: the branch terminator MIR gives a value `if`.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """        let join_label = format!("b{}", self.fresh_label());
-        let _ = writeln!(
-            self.out,
-            "  br i1 %{c}, label %{then_label}, label %{else_label}"
-        );"""
-replace = """        let join_label = format!("b{}", self.fresh_label());
-        let _ = writeln!(
-            self.out,
-            "  br i1 %{c}, label %{else_label}, label %{then_label}"
-        );"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """                cond: c,
+                then: then_b,
+                otherwise: else_b,
+            },
+            at,
+        );
+        let mut arrives = false;"""
+replace = """                cond: c,
+                then: else_b,
+                otherwise: then_b,
+            },
+            at,
+        );
+        let mut arrives = false;"""
 
 [[mutation]]
 name = "two-same-typed-arguments-are-transposed"
@@ -678,16 +688,19 @@ The other four terminate and fail on the **outcome**: their runaway bodies overf
 within seconds, so the program exits 2 with `N0400` where 0 and a value were expected.
 Neither group alone would have been the whole story, and a timeout is recorded as a
 failure rather than as a result.
+Repointed by N40: the back edge MIR lowering gives a loop body, to its condition block.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """        self.loops.pop();
-        if reach == Reach::FallsThrough {
-            let _ = writeln!(self.out, "  br label %{head}");
-        }"""
-replace = """        self.loops.pop();
-        if reach == Reach::FallsThrough {
-            let _ = writeln!(self.out, "  br label %{body_label}");
-        }"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """        self.stack.pop();
+        if self.cur.is_some() {
+            self.goto(head, at);
+        }
+        self.cur = Some(exit);"""
+replace = """        self.stack.pop();
+        if self.cur.is_some() {
+            self.goto(body_b, at);
+        }
+        self.cur = Some(exit);"""
 killers = [{ package = "nazm-cli", test = "build", name = "the_condition_is_reevaluated_on_every_iteration" }]
 
 [[mutation]]
@@ -712,12 +725,11 @@ Caught by `continue_skips_the_rest_of_the_iteration_and_rechecks_the_condition`,
 `an_inner_continue_reevaluates_the_inner_condition` and others, behaviourally — by the
 subprocess deadline where the mutant no longer terminates, and by a wrong value where it
 does.
+Repointed by N40: a `continue` is a MIR `goto` to its loop's condition block; the body block is created right after it.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """        self.loops.push(Targets {
-            head: head.clone(),"""
-replace = """        self.loops.push(Targets {
-            head: body_label.clone(),"""
+file = "crates/nazm-mir/src/lower.rs"
+find = "        let (depth, to) = (frame.depth, if leave { frame.exit } else { frame.head });"
+replace = "        let (depth, to) = (frame.depth, if leave { frame.exit } else { BlockId(frame.head.0 + 1) });"
 
 [[mutation]]
 name = "return-does-not-end-the-block-it-is-in"
@@ -735,12 +747,19 @@ Caught by `a_body_where_every_path_returns_needs_no_tail` and the `classify` pro
 `the_emitted_ir_for_a_return_heavy_function_is_well_formed`, both of which fail at the
 build step with a diagnostic instead of producing a value.
 Repointed by N39: LIR lowering reads Core IR statements; the refusal is the same.
+Repointed by N40: a `return` seals its MIR block; lowering then treats control as gone.
 """
-file = "crates/nazm-lir/src/lower.rs"
-find = """                // A `return` leaves the function whether or not its operand lowered, so
-                // the rest of the block is unreachable either way.
-                return (stmts, Ends::Transfers);"""
-replace = """                return (stmts, Ends::FallsThrough);"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """                if self.cur.is_some() {
+                    self.cleanup_to(0, *at);
+                    self.seal(Terminator::Return(tmp), *at);
+                }"""
+replace = """                if self.cur.is_some() {
+                    self.cleanup_to(0, *at);
+                    let open = self.cur;
+                    self.seal(Terminator::Return(tmp), *at);
+                    self.cur = open;
+                }"""
 
 [[mutation]]
 name = "every-definition-is-exported"
@@ -991,10 +1010,11 @@ makes every definition take the compilation-local form reserved for modules with
 durable identity, so a symbol depends on the order files were loaded in. The same module
 then gets different symbols depending on which file the compilation began at, which is
 exactly what a durable identity exists to prevent
+Repointed by N40: symbols are spelled from MIR's durable identity of each function.
 """
 file = "crates/nazm-lir/src/lower.rs"
-find = "    let symbol = match graph.key(def.module) {"
-replace = "    let symbol = match Option::<&nazm_sema::key::ModuleKey>::None {"
+find = "                symbol: of_identity(&f.identity),"
+replace = "                symbol: NativeSymbol::of_unkeyed(f.module, &f.name),"
 
 [[mutation]]
 name = "the-runtime-is-emitted-into-every-unit"
@@ -1014,10 +1034,11 @@ why = """
 makes every definition internal to its own object, including the exported ones and the
 root module's entry. Nothing outside a module can then bind its definitions, so a
 cross-module call has no definition to reach and the platform wrapper cannot find `main`
+Repointed by N40: linkage is decided from MIR's `exported`, `reached_from_generic`, instance and entry facts.
 """
 file = "crates/nazm-lir/src/lower.rs"
-find = "    let linkage = if def.visibility.is_exported() {"
-replace = "    let linkage = if false {"
+find = "                if f.exported || f.reached_from_generic || instance || Some(f.id) == entry_id {"
+replace = "                if false {"
 
 [[mutation]]
 name = "the-recursion-check-forgets-the-call-graph"
@@ -1026,14 +1047,12 @@ hands the cycle check no edges, so a recursive call is no longer refused and thi
 emits a program whose stack it has no plan for. The check is whole-program on purpose —
 `A::f` through `B::g` back to `A::f` is a cycle no single module can see — and per-module
 code generation is not a reason to stop looking
+Repointed by N40: the cycle check walks MIR's call graph, instances included.
 """
 file = "crates/nazm-lir/src/lower.rs"
-find = """            if let Callee::Function(to) = site.callee {
-                if let Some(e) = edges.get_mut(from) {
-                    e.push((to.index(), site.span));"""
-replace = """            if let Callee::Function(to) = site.callee {
-                if let Some(e) = edges.get_mut(from).filter(|_| false) {
-                    e.push((to.index(), site.span));"""
+find = "    let edges: Vec<Vec<(mir::FuncId, Span)>> = program.functions.iter().map(callees).collect();"
+replace = """    let edges: Vec<Vec<(mir::FuncId, Span)>> =
+        program.functions.iter().map(|_| Vec::new()).collect();"""
 
 [[mutation]]
 name = "the-object-key-forgets-its-input"
@@ -1113,12 +1132,17 @@ stores a handle into a binding without taking a reference to it, so two bindings
 sequence count as one. The first to die frees storage the other is still holding, which is
 a use-after-free the language's own aliasing rule makes ordinary rather than exotic —
 `let b = a;` is specified, measured and everywhere
+Repointed by N40: a binding of a managed local is a MIR `copy`, which the backend emits as a retain.
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """        if !self.owned.remove(&value) {
-            self.retain(value, ty);
-        }"""
-replace = """        self.owned.remove(&value);"""
+find = """            mir::Rvalue::Copy(l) => {
+                let ty = self.slot_ty(*l);
+                let x = self.load(*l);
+                self.retain(x, ty);"""
+replace = """            mir::Rvalue::Copy(l) => {
+                let ty = self.slot_ty(*l);
+                let x = self.load(*l);
+                let _ = ty;"""
 
 [[mutation]]
 name = "the-frame-is-not-released-on-a-normal-exit"
@@ -1127,11 +1151,11 @@ drops the release at the end of a function that falls off its own tail, which is
 common way out. Every sequence a function made and did not return then lives until the
 process ends — the leak N7 measured as linear in work done, reintroduced on the path
 nothing else covers
+Repointed by N40: a region's normal end drops what it bound: MIR lowering's `pop_to`. The validator refuses the leak at `return`.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """            e.take(value, f.ret);
-            e.release_frame();"""
-replace = """            e.take(value, f.ret);"""
+file = "crates/nazm-mir/src/lower.rs"
+find = "                Some(Entry::Owned(l)) => self.push(StatementKind::Drop(l), at),"
+replace = "                Some(Entry::Owned(_)) => {}"
 
 [[mutation]]
 name = "the-frame-is-not-released-when-a-failure-unwinds"
@@ -1140,13 +1164,13 @@ releases nothing on the one exit source indentation would never have found: the 
 block every failure in a function branches to. Cleanup that exists only on the path that
 succeeds is the defect `docs/spec.md` names when it says reclamation is on the semantic
 event rather than at the closing brace
+Repointed by N40: the shared unwind block MIR builds drops every managed local.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """        // A failure leaves through here from anywhere in the function, so this is the one
-        // exit that source indentation would never have found. The frame is released on
-        // the way out: a program that failed still reclaims what it was holding.
-        e.release_frame();"""
-replace = """"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """        if let Some(block) = self.blocks.get_mut(b.index()) {
+            block.stmts = drops;"""
+replace = """        if let Some(block) = self.blocks.get_mut(b.index()) {
+            let _ = drops;"""
 
 [[mutation]]
 name = "a-returned-sequence-is-released-on-the-way-out"
@@ -1154,16 +1178,15 @@ why = """
 lets the frame release run over a handle the function is returning, so the caller receives
 a reference to storage that has already been freed. Rule 3 says returning transfers, and
 the order of these two lines is the whole of what makes that true
+Repointed by N40: MIR `return` moves its value out; the backend must not release it.
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """                        self.take(value, ty);
-                        // Taken over first, so releasing what this statement was still
-                        // holding cannot reach the value being returned. The slots are
-                        // the frame's and are released just below.
-                        self.release_temporaries();
-                        self.release_frame();"""
-replace = """                        self.release_temporaries();
-                        self.release_frame();"""
+find = """            mir::Terminator::Return(l) => {
+                let v = self.load(*l);"""
+replace = """            mir::Terminator::Return(l) => {
+                let v = self.load(*l);
+                let dying = self.slot_ty(*l);
+                self.release(v, dying);"""
 
 [[mutation]]
 name = "a-borrowed-parameter-is-released-by-the-callee"
@@ -1172,12 +1195,13 @@ puts parameter slots into the set a frame releases, so a callee destroys storage
 caller is still holding. That exclusion is not an optimisation; it **is** rule 2, and
 without it every one of the compiler's 108 `Ints` parameters is a use-after-free waiting
 for the caller's next read
+Repointed by N40: parameters are borrowed: MIR's shared unwind block drops every managed local except them.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """        if i >= f.params {
-            e.frame.push((i, local.ty));
-        }"""
-replace = """        e.frame.push((i, local.ty));"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """            .skip(self.f.params as usize)
+            .filter(|(_, l)| l.ty.value().is_some_and(|t| self.managed(t)))"""
+replace = """            .skip(0)
+            .filter(|(_, l)| l.ty.value().is_some_and(|t| self.managed(t)))"""
 
 [[mutation]]
 name = "storage-goes-while-another-reference-remains"
@@ -1244,14 +1268,14 @@ hands back the stored descriptor without a reference of its own, so overwriting 
 element — or releasing the sequence — invalidates a value the program is still holding.
 `docs/spec.md` has promised since sequences existed that a `Str` already read out is
 unaffected by changing the sequence; until N8 that was true because nothing was freed
+Repointed by N40: a primitive's result is owned by its MIR destination, so `strs_get` retains.
 """
 file = "crates/nazm-lir/src/emit.rs"
 find = """                if elem.owns().is_some() {
-                    self.take(v, elem);
-                    self.own(v, elem);
+                    self.retain(v, elem);
                 }
                 return Val::Of { value: v, ty: elem };"""
-replace = """                return Val::Of { value: v, ty: elem };"""
+replace = "                return Val::Of { value: v, ty: elem };"
 
 [[mutation]]
 name = "an-overwritten-element-is-never-released"
@@ -1338,9 +1362,10 @@ packs a string or a channel into a task's argument block without taking a refere
 so a binding reassigned inside the scope releases storage the task is still reading — and
 the trampoline then releases it a second time. The window is real rather than theoretical:
 the scope's body runs concurrently with the task by construction
+Repointed by N40: a MIR `spawn` borrows its operands and the task holds a reference of its own.
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """            self.take(*value, *ty);
+find = """            self.retain(*value, *ty);
             let _ = writeln!(
                 self.out,
                 "  store {} %{value}, ptr %{slot}",
@@ -1422,21 +1447,8 @@ find = """            Some(Owns::Record(id)) => record_layout(types.records, id)
                 .unwrap_or_default(),"""
 replace = "            Some(Owns::Record(_)) => continue,"
 
-[[mutation]]
-name = "a-field-replacement-releases-before-it-takes"
-why = """
-releases the old field before the new value is taken, so `p.name = p.name` and any
-replacement whose new value shares the old one's backing free storage they are about to
-store. A use-after-free rather than a leak, and the order of two lines is all of it
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                    Val::Of { value: v, ty } => {
-                        self.take(v, ty);
-                        self.set_field(*slot, path, v, ty);"""
-replace = """                    Val::Of { value: v, ty } => {
-                        self.set_field(*slot, path, v, ty);
-                        self.take(v, ty);"""
 
+# `a-field-replacement-releases-before-it-takes` is retired by N40: MIR moves the new value into the field from a temporary that already owns it, so there is no take left to reorder: releasing the old field first is then harmless, and the defect is not expressible. The take itself — the retain that makes a projected or copied value owned — is `a-projection-out-of-a-temporary-is-only-borrowed` and `a-binding-does-not-take-the-reference-it-stores`.
 [[mutation]]
 name = "a-projection-out-of-a-temporary-is-only-borrowed"
 why = """
@@ -1444,16 +1456,13 @@ reads a field out of a record without taking a reference to what backs it, so
 `let s = make().name;` holds a view of storage the temporary released on the same line.
 Invisible in every shape where something else keeps the record alive, which is why the
 test that finds it uses a temporary that dies immediately
+Repointed by N40: a MIR field projection is owned by its destination, so the backend retains it.
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """                if !borrowed && owns_anything(self.types, *ty) {
-                    self.retain(out, *ty);
-                    self.own(out, *ty);
-                }"""
-replace = """                if false && owns_anything(self.types, *ty) {
-                    self.retain(out, *ty);
-                    self.own(out, *ty);
-                }"""
+find = """                // Its own reference, by MIR's law: a projection is owned by its destination.
+                self.retain(out, fty);"""
+replace = """                // Its own reference, by MIR's law: a projection is owned by its destination.
+                let _ = fty;"""
 
 [[mutation]]
 name = "a-partly-built-record-is-not-cleaned"
@@ -1461,14 +1470,28 @@ why = """
 assembles a construction in registers rather than in a frame slot, so an initialiser that
 fails after an earlier one produced a heap string leaves it unreachable from the frame's
 cleanup. The one path where the program was already failing becomes the one that leaks
+Repointed by N40: each initialiser is a MIR temporary on the cleanup stack until the record is built; the validator sees the leak.
 """
-file = "crates/nazm-lir/src/lower.rs"
-find = """    let slot = ctx
-        .res
-        .types()
-        .needs_cleanup(nazm_sema::Type::Record(id))
-        .then(|| ctx.hidden(ty, "record"));"""
-replace = "    let slot = None;"
+file = "crates/nazm-mir/src/lower.rs"
+find = """                    let fty = self.record_field_ty(rid, init.field, init.at);
+                    let tmp = self.temp(fty, init.at, "init");
+                    self.expr_into(&init.value, Some(tmp));
+                    if self.cur.is_none() {
+                        for (_, l) in built.iter().rev() {
+                            self.forget(*l);
+                        }
+                        return;
+                    }
+                    self.own(tmp);"""
+replace = """                    let fty = self.record_field_ty(rid, init.field, init.at);
+                    let tmp = self.temp(fty, init.at, "init");
+                    self.expr_into(&init.value, Some(tmp));
+                    if self.cur.is_none() {
+                        for (_, l) in built.iter().rev() {
+                            self.forget(*l);
+                        }
+                        return;
+                    }"""
 
 [[mutation]]
 name = "task-safety-stops-at-the-first-level"
@@ -1538,12 +1561,16 @@ why = """
 lays a record's fields out in declaration order rather than canonically by name, so moving
 two field declarations changes the object file. `docs/spec.md` says that edit means
 nothing; this makes the compiler and the linker disagree about whether anything happened
+Repointed by N40: layout is decided below MIR, from the canonical order MIR carries.
 """
 file = "crates/nazm-lir/src/lower.rs"
-find = """                def.in_layout_order().map(|(_, f)| Ty::of(f.ty)).collect()
-            } else {"""
-replace = """                def.fields.iter().map(|f| Ty::of(f.ty)).collect()
-            } else {"""
+find = """            fields: r
+                .canonical
+                .iter()
+                .filter_map(|d| r.fields.get(*d as usize))
+                .map(|f| Ty::of(f.ty))
+                .collect(),"""
+replace = "            fields: r.fields.iter().map(|f| Ty::of(f.ty)).collect(),"
 
 [[mutation]]
 name = "a-field-is-read-from-the-wrong-position"
@@ -1551,15 +1578,16 @@ why = """
 maps every field to layout position zero, so a projection reads whichever field sorts
 first whatever was written. A record of one field still works, which is why the case that
 finds it uses several of different widths
+Repointed by N40: declaration index to position, below MIR.
 """
 file = "crates/nazm-lir/src/lower.rs"
-find = """                if let Some(slot) = of_declaration.get_mut(declared as usize) {
-                    *slot = u32::try_from(position).unwrap_or(u32::MAX);
-                }"""
-replace = """                if let Some(slot) = of_declaration.get_mut(declared as usize) {
-                    let _ = position;
-                    *slot = 0;
-                }"""
+find = """        if let Some(slot) = out.get_mut(*declared as usize) {
+            *slot = u32::try_from(position).unwrap_or(u32::MAX);
+        }"""
+replace = """        if let Some(slot) = out.get_mut(*declared as usize) {
+            let _ = position;
+            *slot = 0;
+        }"""
 
 # `a-record-that-contains-itself-is-accepted` (N9) is retired as **equivalent**, found by the
 # first whole-catalogue run (N12.2, 2026-09-24): it SURVIVED the workspace suite because it
@@ -1796,12 +1824,18 @@ stops the `match` taking a reference to the value it is given, while still relea
 the join. A binding matched twice is freed twice, and the second `match` reads storage the
 first gave back — the ordering `docs/spec.md` states as *the scrutinee is a value the match
 owns* expressed as its absence
+Repointed by N40: a `match` evaluates its scrutinee into a temporary it owns; this moves a matched binding's own reference instead.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """        self.take(v, ty);
-        let _ = writeln!(self.out, "  store {whole} %{v}, ptr %slot{slot}");"""
-replace = """        let _ = ty;
-        let _ = writeln!(self.out, "  store {whole} %{v}, ptr %slot{slot}");"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """        let s = self.temp(st, m.scrutinee.at, name);
+        self.expr_into(&m.scrutinee, Some(s));"""
+replace = """        let s = self.temp(st, m.scrutinee.at, name);
+        match &m.scrutinee.kind {
+            cir::ExprKind::Local(l) if self.managed(st) => {
+                self.assign(s, Rvalue::Move(LocalId(l.0)), m.at);
+            }
+            _ => self.expr_into(&m.scrutinee, Some(s)),
+        }"""
 
 [[mutation]]
 name = "a-match-never-lets-go-of-what-it-matched"
@@ -1809,10 +1843,12 @@ why = """
 leaves the value a `match` owns in its slot and releases nothing, so every `match` over a
 temporary leaks its payload. Invisible to every behavioural test — the arm still produces
 the right answer — and visible to the counters, which is what they are for
+Repointed by N40: the drop of the scrutinee at the `match`'s join, in MIR lowering; the validator sees the leak.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = "        self.release(dying, scrutinee_ty);"
-replace = "        let _ = dying;"
+file = "crates/nazm-mir/src/lower.rs"
+find = """                self.stack.truncate(pos);
+                self.push(StatementKind::Drop(s), m.at);"""
+replace = "                self.stack.truncate(pos);"
 
 [[mutation]]
 name = "a-partly-built-variant-is-not-cleaned"
@@ -1820,10 +1856,28 @@ why = """
 builds every variant in registers, so a payload initialiser that fails after an earlier one
 produced a heap string leaves it unreachable from the frame's cleanup. The one path where
 the program was already failing becomes the one that leaks
+Repointed by N40: each payload initialiser is a MIR temporary on the cleanup stack until the variant is built.
 """
-file = "crates/nazm-lir/src/lower.rs"
-find = """    let slot = owns.then(|| ctx.hidden(ty, "variant"));"""
-replace = "    let slot = None;"
+file = "crates/nazm-mir/src/lower.rs"
+find = """                    let fty = self.payload_ty(eid, *variant, init.field, init.at);
+                    let tmp = self.temp(fty, init.at, "init");
+                    self.expr_into(&init.value, Some(tmp));
+                    if self.cur.is_none() {
+                        for (_, l) in built.iter().rev() {
+                            self.forget(*l);
+                        }
+                        return;
+                    }
+                    self.own(tmp);"""
+replace = """                    let fty = self.payload_ty(eid, *variant, init.field, init.at);
+                    let tmp = self.temp(fty, init.at, "init");
+                    self.expr_into(&init.value, Some(tmp));
+                    if self.cur.is_none() {
+                        for (_, l) in built.iter().rev() {
+                            self.forget(*l);
+                        }
+                        return;
+                    }"""
 
 [[mutation]]
 name = "a-task-does-not-give-back-the-enum-it-borrowed"
@@ -1887,34 +1941,29 @@ stops a `break` or a `continue` giving back the temporaries the expression it is
 had already produced, so every control transfer out of a half-evaluated call leaks them.
 The failure path still does, which is the version that looks like it works — and is exactly
 the state N8 shipped and N10 found
+Repointed by N40: a `break` or `continue` drops everything above its loop's marker on the cleanup stack.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """            self.release_temporaries_from(outstanding);
-            self.release_building(building);"""
-replace = """            self.release_building(building);"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """        self.cleanup_to(depth, at);
+        self.goto(to, at);"""
+replace = """        self.cleanup_to(self.stack.len().max(depth), at);
+        self.goto(to, at);"""
 
-[[mutation]]
-name = "a-continue-keeps-the-value-it-was-building"
-why = """
-stops a `break` or a `continue` giving back the record, enum or matched value the frame is
-part way through holding, so the next turn of the loop stores over a live reference. The
-register temporaries are still released, which is the half that hides it
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """            self.release_temporaries_from(outstanding);
-            self.release_building(building);"""
-replace = """            self.release_temporaries_from(outstanding);"""
 
+# `a-continue-keeps-the-value-it-was-building` is retired by N40: MIR has one cleanup stack: a value being built is a temporary on it like any other, so the `building` half this injected no longer exists apart from `a-break-keeps-what-the-expression-was-holding`.
 [[mutation]]
 name = "a-transfer-releases-what-the-loop-around-it-is-holding"
 why = """
 releases **every** outstanding temporary at a `break` rather than the ones this loop
 produced, so a value made before the loop and wanted after it is freed while still live.
 The opposite mistake to the one above, and a premature free rather than a leak
+Repointed by N40: the cleanup a transfer emits stops at its loop's marker.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """            self.release_temporaries_from(outstanding);"""
-replace = """            self.release_temporaries_from(0);"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """        self.cleanup_to(depth, at);
+        self.goto(to, at);"""
+replace = """        self.cleanup_to(0, at);
+        self.goto(to, at);"""
 
 [[mutation]]
 name = "the-self-hosted-compiler-keeps-what-a-continue-abandons"
@@ -2081,21 +2130,8 @@ replace = """        if t == t_unknown() { return t; }
     t
 }"""
 
-[[mutation]]
-name = "a-string-comparison-keeps-its-operands"
-why = """
-the leak both native backends had in `==` on strings until N10.1, with no transfer
-anywhere near it: the operands are borrowed and never given back, so a temporary compared
-is allocated and never reclaimed. The interpreter was right, which is what `memory.rs`
-compares against
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """                    self.drop_temporary(a, Ty::Str);
-                    self.drop_temporary(b, Ty::Str);
-"""
-replace = """"""
-killers = [{ package = "nazm-cli", test = "memory", name = "a_string_comparison_gives_back_its_operands" }]
 
+# `a-string-comparison-keeps-its-operands` is retired by N40: equivalent under MIR: a temporary the comparison does not give back stays on the cleanup stack and is dropped at its region's end, so the leak it injected cannot happen; the counters balance either way. The read-after-release ordering is `n13-native-operands-are-released-before-they-are-compared`.
 [[mutation]]
 name = "the-self-hosted-string-comparison-keeps-its-operands"
 why = """
@@ -2391,8 +2427,9 @@ killers = [{ package = "nazm-cli", test = "generics", name = "two_instances_that
 name = "an-instance-requested-twice-is-planned-twice"
 why = """
 the planner stops deduplicating the instances concrete code asks for, so two calls to `identity[Int]` plan two definitions of one symbol
+Repointed by N40: the planner moved to `nazm-mir` unchanged: MIR is post-instantiation.
 """
-file = "crates/nazm-lir/src/instance.rs"
+file = "crates/nazm-mir/src/instance.rs"
 find = """                    if !seen.contains_key(&key) {
                         seen.insert(key.clone(), order.len());
                         order.push((key.clone(), site.span));
@@ -2406,8 +2443,9 @@ replace = """                    seen.insert(key.clone(), order.len());
 name = "the-planner-skips-calls-made-by-an-instance"
 why = """
 an instance's own calls to generic functions are never planned, so `twice[T]` calling `id[T]` links against an instance nobody built
+Repointed by N40: the planner moved to `nazm-mir` unchanged.
 """
-file = "crates/nazm-lir/src/instance.rs"
+file = "crates/nazm-mir/src/instance.rs"
 find = """                let next = InstanceKey { def: g, args };
                 if !seen.contains_key(&next) {"""
 replace = """                let next = InstanceKey { def: g, args };
@@ -2417,8 +2455,9 @@ replace = """                let next = InstanceKey { def: g, args };
 name = "polymorphic-recursion-is-not-an-expanding-cycle"
 why = """
 no call is counted as expanding, so `grow[T]` calling `grow[Vec[T]]` is found by the instance budget instead of refused by name at the call that expands
+Repointed by N40: the planner moved to `nazm-mir` unchanged.
 """
-file = "crates/nazm-lir/src/instance.rs"
+file = "crates/nazm-mir/src/instance.rs"
 find = "                    let expanding = *t != Type::Param(param);"
 replace = "                    let expanding = false && *t != Type::Param(param);"
 
@@ -2438,30 +2477,29 @@ replace = """                // The vector keeps what it is given, so it takes a
 name = "vec-get-returns-a-borrowed-element"
 why = """
 `vec_get` hands out the vector's own reference, so an element read and then overwritten — or popped — is freed under its reader
+Repointed by N40: a primitive's result is owned by its MIR destination, so `vec_get` retains.
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """                // lesson, generic.
-                if elem.owns().is_some() {
-                    self.take(v, elem);
-                    self.own(v, elem);
-                }"""
-replace = "                // lesson, generic."
+find = """                if elem.owns().is_some() {
+                    self.retain(v, elem);
+                }
+                Val::Of { value: v, ty: elem }"""
+replace = "                Val::Of { value: v, ty: elem }"
 
 [[mutation]]
 name = "vec-pop-copies-instead-of-transferring"
 why = """
 `vec_pop` retains the element it takes out, so the vector's reference is never given up and every popped element leaks
+Repointed by N40: `vec_pop` transfers the element's reference to its MIR destination.
 """
 file = "crates/nazm-lir/src/emit.rs"
-find = """                // expression holds that same one. No retain and no release.
-                if elem.owns().is_some() {
-                    self.own(v, elem);
-                }"""
-replace = """                // expression holds that same one. No retain and no release.
-                if elem.owns().is_some() {
-                    self.take(v, elem);
-                    self.own(v, elem);
-                }"""
+find = """                let _ = writeln!(self.out, "  store i64 %{last}, ptr %{}", arg(0));
+                // A **transfer**: the vector gives up its reference to the element and MIR's
+                // destination holds that same one. No retain and no release.
+                Val::Of { value: v, ty: elem }"""
+replace = """                let _ = writeln!(self.out, "  store i64 %{last}, ptr %{}", arg(0));
+                self.retain(v, elem);
+                Val::Of { value: v, ty: elem }"""
 
 [[mutation]]
 name = "a-vec-is-freed-without-its-elements"
@@ -2957,39 +2995,56 @@ name = "lowered-arm-block-drops-its-statements"
 why = """
 an arm written as a block keeps only its tail, so the statements before it — the bindings its tail reads, the effects it has — never run
 Repointed by N39: LIR lowering of a Core IR arm region.
+Repointed by N40: an arm's region is lowered whole by MIR lowering.
 """
-file = "crates/nazm-lir/src/lower.rs"
-find = "        stmts.extend(inner.stmts);"
-replace = "                let _ = inner.stmts;"
+file = "crates/nazm-mir/src/lower.rs"
+find = """            self.block_into(&arm.body, dst);
+            self.pop_to(depth, arm.at);"""
+replace = """            if let Some(t) = &arm.body.tail {
+                self.expr_into(t, dst);
+            }
+            self.pop_to(depth, arm.at);"""
 killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_pattern_binding_returned_through_an_arm_block_outlives_the_scrutinee" }]
 
 [[mutation]]
 name = "a-bare-block-is-emitted-as-its-tail-alone"
 why = """
 a block in a value position emits its tail and skips its statements
+Repointed by N40: a value block is a region MIR lowering walks whole.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = "            Expr::Block(b) => self.block(b),"
-replace = """            Expr::Block(b) => match &b.result {
-                Some(e) => self.expr(e),
-                None => Val::Transferred,
-            },"""
+file = "crates/nazm-mir/src/lower.rs"
+find = "            cir::ExprKind::Block(b) => self.block_into(b, dst),"
+replace = """            cir::ExprKind::Block(b) => {
+                if let Some(t) = &b.tail {
+                    self.expr_into(t, dst);
+                }
+            }"""
 killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_str_tail_survives_its_local" }]
 
 [[mutation]]
 name = "a-block-value-is-released-as-it-leaves"
 why = """
 the value a block hands on is released as the block ends, before anything has taken it over, so a `Str` or `Vec` tail read from a block local is freed while it is still in use
+Repointed by N40: a region's tail is written into a destination outside the region, which its end must not drop.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = "            Expr::Block(b) => self.block(b),"
-replace = """            Expr::Block(b) => {
-                let v = self.block(b);
-                if let Val::Of { value, ty } = v {
-                    self.release(value, ty);
-                }
-                v
-            }"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """        if let Some(tail) = &b.tail {
+            if self.cur.is_some() {
+                self.expr_into(tail, dst);
+            }
+        }
+        self.pop_to(depth, b.at);"""
+replace = """        if let Some(tail) = &b.tail {
+            if self.cur.is_some() {
+                self.expr_into(tail, dst);
+            }
+        }
+        if let Some(d) = dst {
+            if self.cur.is_some() && self.managed(self.local_ty(d)) {
+                self.push(StatementKind::Drop(d), b.at);
+            }
+        }
+        self.pop_to(depth, b.at);"""
 killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_str_tail_survives_its_local" }]
 
 [[mutation]]
@@ -2997,66 +3052,62 @@ name = "a-statement-block-is-skipped"
 why = """
 a block written as a statement lowers to nothing, so its assignments never happen
 Repointed by N39: Core IR keeps a statement block as a region, and LIR flattens it in place.
+Repointed by N40: a statement block is a region MIR lowering walks.
 """
-file = "crates/nazm-lir/src/lower.rs"
-find = "                let (inner, ends) = lower_body(ctx, b);"
-replace = """                let (inner, ends) = (Vec::new(), Ends::FallsThrough);
-                let _ = b;"""
+file = "crates/nazm-mir/src/lower.rs"
+find = "            cir::Stmt::Block(b) => self.block_into(b, None),"
+replace = "            cir::Stmt::Block(_) => {}"
 killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_statement_match_whose_arms_produce_nothing_assigns_in_place" }]
 
 [[mutation]]
 name = "a-statement-match-claims-every-arm-leaves"
 why = """
 a statement `match` is said to transfer even when an arm falls through, so everything written after it is dropped from the function
+Repointed by N40: whether a `match` continues is whether any arm reached its join.
 """
-file = "crates/nazm-lir/src/lower.rs"
-find = """        if ends == Ends::FallsThrough {
-            every_arm_leaves = false;
-        }"""
-replace = "        let _ = ends;"
+file = "crates/nazm-mir/src/lower.rs"
+find = """            self.pop_to(depth, arm.at);
+            if self.cur.is_some() {
+                arrives = true;
+                self.goto(join, arm.at);
+            }"""
+replace = """            self.pop_to(depth, arm.at);
+            if self.cur.is_some() {
+                self.goto(join, arm.at);
+            }"""
 killers = [{ package = "nazm-cli", test = "memory", name = "a_matched_sequence_handle_is_the_one_it_names" }]
 
 [[mutation]]
 name = "a-statement-match-arm-does-not-rejoin"
 why = """
 a statement `match` arm that falls through never branches to the continuation, leaving its block without a terminator
+Repointed by N40: an arm that falls through ends in a MIR `goto` to the join.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """            if self.stmts(&arm.body) == Reach::FallsThrough {
-                let _ = writeln!(self.out, "  br label %{cont}");
+file = "crates/nazm-mir/src/lower.rs"
+find = """            self.pop_to(depth, arm.at);
+            if self.cur.is_some() {
                 arrives = true;
+                self.goto(join, arm.at);
             }"""
-replace = """            if self.stmts(&arm.body) == Reach::FallsThrough {
+replace = """            self.pop_to(depth, arm.at);
+            if self.cur.is_some() {
                 arrives = true;
             }"""
 killers = [{ package = "nazm-cli", test = "memory", name = "a_matched_sequence_handle_is_the_one_it_names" }]
 
-[[mutation]]
-name = "a-statement-match-never-lets-go-of-what-it-matched"
-why = """
-a statement `match` stops holding its scrutinee at the continuation without releasing it, so an owning scrutinee leaks every time an arm falls through
-"""
-file = "crates/nazm-lir/src/emit.rs"
-find = """        self.open(&cont);
-        self.release_matched(scrutinee_ty, slot);
-        Reach::FallsThrough"""
-replace = """        self.open(&cont);
-        self.building.pop();
-        Reach::FallsThrough"""
-killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_statement_match_whose_arms_produce_nothing_assigns_in_place" }]
 
+# `a-statement-match-never-lets-go-of-what-it-matched` is retired by N40: MIR lowers statement and value `match` by one function, whose drop is `a-match-never-lets-go-of-what-it-matched`.
 [[mutation]]
 name = "an-emitted-block-uses-its-tail-after-a-transfer"
 why = """
 a block whose statements transfer still emits its tail, treating `Diverges` as a value: instructions after a terminator, and a value on a path that never arrives
+Repointed by N40: lowering appends only while control can reach the current block.
 """
-file = "crates/nazm-lir/src/emit.rs"
-find = """        if self.stmts(&b.stmts) == Reach::Transferred {
-            return Val::Transferred;
-        }
-        match &b.result {"""
-replace = """        let _ = self.stmts(&b.stmts);
-        match &b.result {"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """    fn push(&mut self, kind: StatementKind, at: Span) {
+        if let Some(b) = self.cur {"""
+replace = """    fn push(&mut self, kind: StatementKind, at: Span) {
+        if let Some(b) = self.cur.or(Some(BlockId(0))) {"""
 
 # --- N12.1: a block used as a value, in the compiler written in Nazm -----------------------
 killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_match_whose_arms_all_leave_produces_no_value" }]
@@ -3601,44 +3652,37 @@ killers = [{ package = "nazm-cli", test = "equality", name = "enum_equality_comp
 
 [[mutation]]
 name = "n13-native-inequality-is-not-negated"
-why = "native `!=` on a record or an enum calls the helper and does not negate it"
+why = """
+native `!=` on a record or an enum calls the helper and does not negate it
+Repointed by N40: a MIR comparison of records or enums, emitted through the equality helper.
+"""
 file = "crates/nazm-lir/src/emit.rs"
-find = "                    let out = if *op == crate::ir::CmpOp::NotEq {"
-replace = "                    let out = if false {"
+find = """                    let same = self.equality(a, b, ty);
+                    if *op == mir::CmpOp::NotEq {"""
+replace = """                    let same = self.equality(a, b, ty);
+                    if false && *op == mir::CmpOp::NotEq {"""
 killers = [{ package = "nazm-cli", test = "equality", name = "record_equality_compiles_to_the_interpreter_s_answer" }]
 
-[[mutation]]
-name = "n13-native-the-left-temporary-leaks"
-why = "the left operand of a native record or enum comparison is not released, so `make() == make()` leaks its strings"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                    self.drop_temporary(a, *operand_ty);
-                    self.drop_temporary(b, *operand_ty);
-                    return Val::Of {"""
-replace = """                    self.drop_temporary(b, *operand_ty);
-                    return Val::Of {"""
-killers = [{ package = "nazm-cli", test = "equality", name = "owning_temporaries_live_through_the_comparison_and_are_released_once" }]
 
-[[mutation]]
-name = "n13-native-the-right-temporary-leaks"
-why = "the right operand of a native record or enum comparison is not released"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                    self.drop_temporary(a, *operand_ty);
-                    self.drop_temporary(b, *operand_ty);
-                    return Val::Of {"""
-replace = """                    self.drop_temporary(a, *operand_ty);
-                    return Val::Of {"""
-killers = [{ package = "nazm-cli", test = "equality", name = "owning_temporaries_live_through_the_comparison_and_are_released_once" }]
+# `n13-native-the-left-temporary-leaks` is retired by N40: equivalent under MIR for the reason `a-string-comparison-keeps-its-operands` is: the cleanup stack drops an operand temporary at its region's end.
 
+# `n13-native-the-right-temporary-leaks` is retired by N40: equivalent under MIR, as `n13-native-the-left-temporary-leaks`.
 [[mutation]]
 name = "n13-native-operands-are-released-before-they-are-compared"
-why = "the temporaries are released before the helper reads them, so a string payload is compared after its storage was freed — a real use-after-free, not an equivalent mutant"
-file = "crates/nazm-lir/src/emit.rs"
-find = """                if matches!(operand_ty, Ty::Record(_) | Ty::Enum(_)) {
-                    let same = self.equality(a, b, *operand_ty);"""
-replace = """                if matches!(operand_ty, Ty::Record(_) | Ty::Enum(_)) {
-                    self.drop_temporary(a, *operand_ty);
-                    self.drop_temporary(b, *operand_ty);
-                    let same = self.equality(a, b, *operand_ty);"""
+why = """
+the temporaries are released before the helper reads them, so a string payload is compared after its storage was freed — a real use-after-free, not an equivalent mutant
+Repointed by N40: a comparison borrows its operand temporaries and gives them back after; the validator refuses the read of an emptied one.
+"""
+file = "crates/nazm-mir/src/lower.rs"
+find = """                let (a, b) = two(ops);
+                self.write(
+                    dst,
+                    Rvalue::Compare {"""
+replace = """                let (a, b) = two(ops);
+                self.release_all(held.clone(), at);
+                self.write(
+                    dst,
+                    Rvalue::Compare {"""
 profile = "native"
 no_killer = "a known surviving mutant (campaign 418a5e5921b866cc: SURVIVED at the workspace suite). Nothing allocates between the early release and the helper's read, so the freed bytes are still there and every answer and memory counter is right; glibc 2.41 in the contained image ignores MALLOC_PERTURB_ and glibc.malloc.perturb (measured with a C probe), so no deterministic direct killer exists under the supported allocator and harness. A test-detection gap: it needs freed storage poisoned, which no supported configuration does"
 
@@ -8145,13 +8189,176 @@ find = "        let Some(arm) = m.arms.iter().find(|a| a.variant == subject.vari
 replace = "        let Some(arm) = m.arms.first() else {"
 killers = [{ package = "nazm-core", test = "enums", name = "a_variant_is_built_by_naming_its_enum_and_eliminated_by_match" }]
 
+
+# `n39-the-backend-asks-the-resolution-again` is retired by N40: structurally impossible since N40: `nazm-lir` takes no `Resolution` and does not depend on `nazm-cir` (`xtask/src/rules.rs`), and `cargo xtask check`'s core ir boundary refuses either name in it.
+# --- N40: MIR, the lowering, the validator, and the backend reading it ------------------------
+
 [[mutation]]
-name = "n39-the-backend-asks-the-resolution-again"
-why = "the native backend asks the checker's position map what a call was, beside what Core IR says — a second lowering growing back; behaviour is unchanged, so only the boundary the suite enforces sees it"
-file = "crates/nazm-lir/src/lower.rs"
-find = "    let callee = ctx.function_name(fid);"
-replace = """    let callee = ctx
-        .res
-        .checked_call(callee_span)
-        .map_or_else(|| ctx.function_name(fid), |_| ctx.function_name(fid));"""
-killers = [{ package = "xtask", bin = "xtask", name = "tests::nothing_below_core_ir_asks_what_a_source_position_meant" }]
+name = "n40-a-return-leaves-its-locals-owned"
+why = "a `return` in MIR drops nothing on its way out, so every managed value a function holds when it returns early is never given back"
+file = "crates/nazm-mir/src/lower.rs"
+find = """                if self.cur.is_some() {
+                    self.cleanup_to(0, *at);
+                    self.seal(Terminator::Return(tmp), *at);
+                }"""
+replace = """                if self.cur.is_some() {
+                    self.seal(Terminator::Return(tmp), *at);
+                }"""
+killers = [{ package = "nazm-cli", test = "mir", name = "cleanup_on_every_exit_is_balanced" }]
+
+[[mutation]]
+name = "n40-a-loop-body-leaves-for-the-exit"
+why = "a loop body's back edge goes to the exit instead of the condition, so every loop runs its body at most once"
+file = "crates/nazm-mir/src/lower.rs"
+find = """        self.stack.pop();
+        if self.cur.is_some() {
+            self.goto(head, at);
+        }
+        self.cur = Some(exit);"""
+replace = """        self.stack.pop();
+        if self.cur.is_some() {
+            self.goto(exit, at);
+        }
+        self.cur = Some(exit);"""
+killers = [{ package = "nazm-cli", test = "mir", name = "every_construct_runs_natively_as_it_is_interpreted_and_reclaims_everything" }]
+
+[[mutation]]
+name = "n40-a-switch-sends-each-variant-to-another-arm"
+why = "a `match` — and so every `?` — switches each variant to another variant's arm: `Ok` takes the error edge and `Err` the success edge"
+file = "crates/nazm-mir/src/lower.rs"
+find = """                scrutinee: s,
+                enumeration: eid,
+                arms: arms.clone(),"""
+replace = """                scrutinee: s,
+                enumeration: eid,
+                arms: arms
+                    .iter()
+                    .map(|(v, _)| *v)
+                    .zip(arms.iter().rev().map(|(_, b)| *b))
+                    .collect(),"""
+killers = [{ package = "nazm-cli", test = "mir", name = "every_construct_runs_natively_as_it_is_interpreted_and_reclaims_everything" }]
+
+[[mutation]]
+name = "n40-a-payload-binding-takes-no-reference"
+why = "a pattern binding reads its payload without a reference of its own, so the scrutinee's drop at the join frees storage the binding is still holding"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                    "  %{out} = extractvalue {payload_ty} %{slot}, {at}    ; {}",
+                    llvm_type(self.types, fty)
+                );
+                self.retain(out, fty);"""
+replace = """                    "  %{out} = extractvalue {payload_ty} %{slot}, {at}    ; {}",
+                    llvm_type(self.types, fty)
+                );"""
+killers = [{ package = "nazm-cli", test = "mir", name = "every_construct_runs_natively_as_it_is_interpreted_and_reclaims_everything" }]
+
+[[mutation]]
+name = "n40-a-drop-releases-nothing"
+why = "the backend empties a dropped local without releasing what it held: MIR is right and the program leaks, which only the runtime's counters can see"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                    let v = self.load(*l);
+                    self.store_zero(*l);
+                    self.release(v, ty);"""
+replace = """                    let v = self.load(*l);
+                    self.store_zero(*l);
+                    let _ = v;"""
+killers = [{ package = "nazm-cli", test = "mir", name = "cleanup_on_every_exit_is_balanced" }]
+
+[[mutation]]
+name = "n40-a-drop-leaves-its-local-owning"
+why = "a drop releases the value but leaves it in the slot, so the shared unwind block — or a later drop — releases it a second time"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                    let v = self.load(*l);
+                    self.store_zero(*l);
+                    self.release(v, ty);"""
+replace = """                    let v = self.load(*l);
+                    self.release(v, ty);"""
+killers = [{ package = "nazm-cli", test = "mir", name = "cleanup_on_every_exit_is_balanced" }]
+
+[[mutation]]
+name = "n40-a-move-leaves-its-source-owning"
+why = "a MIR `move` reads the value and leaves it in its source, so two locals own one reference and both drop it"
+file = "crates/nazm-lir/src/emit.rs"
+find = """            mir::Rvalue::Move(l) => {
+                let x = self.load(*l);
+                self.store_zero(*l);"""
+replace = """            mir::Rvalue::Move(l) => {
+                let x = self.load(*l);"""
+killers = [{ package = "nazm-cli", test = "mir", name = "cleanup_on_every_exit_is_balanced" }]
+
+[[mutation]]
+name = "n40-a-field-write-copies-its-value"
+why = "a field write stores the moved value without emptying the temporary it came from, which is then dropped: the field holds freed storage"
+file = "crates/nazm-lir/src/emit.rs"
+find = """                let new_ty = self.slot_ty(*value);
+                let new = self.load(*value);
+                self.store_zero(*value);"""
+replace = """                let new_ty = self.slot_ty(*value);
+                let new = self.load(*value);"""
+killers = [{ package = "nazm-cli", test = "mir", name = "a_field_write_moves_its_value_and_releases_the_old_one" }]
+
+[[mutation]]
+name = "n40-a-variant-is-tagged-by-declaration-order"
+why = "the backend uses a variant's declaration index as its discriminant, while the layout's payload slots are in canonical name order, so a variant declared out of name order is built into another's slot"
+file = "crates/nazm-lir/src/emit.rs"
+find = """    fn tag(&self, e: nazm_sema::EnumId, variant: u32) -> u32 {
+        enum_layout(self.types.enums, ety(e))
+            .and_then(|l| l.of_declaration.get(variant as usize).copied())
+            .unwrap_or(0)
+    }"""
+replace = """    fn tag(&self, e: nazm_sema::EnumId, variant: u32) -> u32 {
+        let _ = e;
+        variant
+    }"""
+killers = [{ package = "nazm-cli", test = "mir", name = "every_construct_runs_natively_as_it_is_interpreted_and_reclaims_everything" }]
+
+[[mutation]]
+name = "n40-a-failure-in-a-scope-skips-its-join"
+why = "a failure inside a `scope` leaves straight for the unwind block without joining the scope's tasks, so the failure is reported while they still run and their list is never released"
+file = "crates/nazm-mir/src/lower.rs"
+find = """        if self.scopes.is_empty() {
+            return shared;
+        }"""
+replace = """        if true {
+            return shared;
+        }"""
+killers = [{ package = "nazm-cli", test = "mir", name = "concurrency_lowers_to_scope_primitives_and_every_exit_joins" }]
+
+[[mutation]]
+name = "n40-the-validator-accepts-a-missing-block"
+why = "the validator accepts a jump to a block that does not exist, so a lowering that misnumbered its blocks would reach the backend unreported"
+file = "crates/nazm-mir/src/verify.rs"
+find = "            if !cx.block_exists(t) {"
+replace = "            if false && !cx.block_exists(t) {"
+killers = [{ package = "nazm-cli", test = "mir", name = "the_validator_refuses_a_jump_to_a_block_that_does_not_exist" }]
+
+[[mutation]]
+name = "n40-the-validator-skips-types"
+why = "the validator no longer checks that what an operation produces is its destination's type"
+file = "crates/nazm-mir/src/verify.rs"
+find = "                    if let Some(e) = rvalue(&cx, value, want, arm_of.get(bi).copied().flatten()) {"
+replace = "                    if let Some(e) = rvalue(&cx, value, want, arm_of.get(bi).copied().flatten()).filter(|_| false) {"
+killers = [{ package = "nazm-cli", test = "mir", name = "the_validator_refuses_a_local_of_the_wrong_type" }]
+
+[[mutation]]
+name = "n40-the-validator-misses-a-leak"
+why = "the validator no longer refuses a managed local still owned at a `return`, so a lowering that forgot a drop would pass"
+file = "crates/nazm-mir/src/verify.rs"
+find = "                    if Some(i) != returned {"
+replace = "                    if false && Some(i) != returned {"
+killers = [{ package = "nazm-cli", test = "mir", name = "the_validator_refuses_a_leak_at_return" }]
+
+[[mutation]]
+name = "n40-the-digest-ignores-the-body"
+why = "the executable digest leaves out every statement, so a changed operation leaves it unchanged and a cache keyed on it would reuse stale code"
+file = "crates/nazm-mir/src/digest.rs"
+find = """            let _ = writeln!(s, "  {}", text::statement(program, &st.kind));"""
+replace = """            let _ = st;"""
+killers = [{ package = "nazm-cli", test = "mir", name = "an_executable_change_moves_the_digest" }]
+
+[[mutation]]
+name = "n40-the-digest-sees-local-names"
+why = "the executable digest includes each local's display name, so renaming a binding — no change to what executes — moves it"
+file = "crates/nazm-mir/src/digest.rs"
+find = """        let _ = writeln!(s, "local _{i} {}", text::local_ty(program, l.ty));"""
+replace = """        let _ = writeln!(s, "local _{i} {} {}", text::local_ty(program, l.ty), l.name);"""
+killers = [{ package = "nazm-cli", test = "mir", name = "formatting_comments_and_local_names_leave_the_executable_digest_alone" }]

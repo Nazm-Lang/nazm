@@ -1030,7 +1030,14 @@ fn the_emitted_ir_for_a_conditional_is_well_formed() {
     let ir = emitted_ir(dir.path());
     assert!(ir.contains("icmp sgt i64"), "{ir}");
     assert!(ir.contains("br i1 %"), "{ir}");
-    assert!(ir.contains("phi i64"), "{ir}");
+    // Since N40 a value crosses MIR blocks in a slot, never a `phi`: each branch stores the
+    // `if`'s value into the one temporary MIR gave it, and the join reads it back.
+    assert!(!ir.contains(" = phi "), "{ir}");
+    let stored = ir
+        .lines()
+        .filter(|l| l.trim().starts_with("store i64 %"))
+        .count();
+    assert!(stored >= 2, "each branch stores the value:\n{ir}");
     assert!(!ir.contains(" nsw "), "{ir}");
     assert!(!ir.contains("llvm.trap"), "{ir}");
 }
@@ -2225,10 +2232,24 @@ fn many_iterations_with_body_locals_allocate_once_in_the_entry_block() {
             );
         }
     }
-    // i, total, a, b, c.
+    // One slot per MIR local, no more and no fewer: i, total, a, b, c, and the temporaries
+    // MIR evaluates through (N40). Counted from `nazm mir`, the representation the slots are
+    // for, rather than pinned: which temporaries exist is MIR's decision.
+    let mir = Command::new(NAZM)
+        .args(["mir", "--json", path.to_str().unwrap()])
+        .output()
+        .expect("mir");
+    let mir: serde_json::Value = serde_json::from_slice(&mir.stdout).expect("mir json");
+    let locals = mir
+        .get("functions")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|fs| fs.iter().find(|f| f.get("name") == Some(&"main".into())))
+        .and_then(|f| f.get("locals").and_then(serde_json::Value::as_array))
+        .map_or(0, Vec::len);
+    assert!(locals >= 5, "at least the five bindings: {mir}");
     assert_eq!(
-        allocas, 5,
-        "one slot per binding, no more and no fewer:\n{ir}"
+        allocas, locals,
+        "one slot per MIR local, no more and no fewer:\n{ir}"
     );
 
     // The loop really does go round: some branch targets a block that is already open
@@ -2803,17 +2824,15 @@ fn the_emitted_ir_for_nested_control_flow_is_well_formed() {
         "only {blocks} blocks — the shape is too simple to mean much"
     );
 
-    // A `phi` with a single incoming is the value-position `if` whose other branch
-    // transferred: the value comes from the branch that actually reaches the join.
-    let single = ir
-        .lines()
-        .filter(|l| l.contains(" = phi "))
-        .filter(|l| l.matches('[').count() == 1)
-        .count();
+    // The value-position `if` whose `then` continues: since N40 its value reaches the join
+    // through a slot, stored only by the branch that arrives — so there is no `phi` at all,
+    // and in particular none naming a branch that transferred.
     assert_eq!(
-        single, 1,
-        "expected exactly one single-incoming phi, for the branch whose `else` \
-         continues:\n{ir}"
+        ir.lines().filter(|l| l.contains(" = phi ")).count(),
+        // `n % 4` in `keep` and `o % 2` in `main`: each remainder's own join, where
+        // `Int::MIN % -1` answers zero without reaching `srem`.
+        2,
+        "the only phis are the two remainders' own:\n{ir}"
     );
 
     // And the whole thing produces the same number as the interpreter.

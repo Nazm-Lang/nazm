@@ -266,14 +266,31 @@ fn what_each_phase_costs_on_the_compiler() {
             }))
         })
         .unwrap();
-        let (lir, emitted) = if label == "compiler/check.nz" {
+        // MIR (N40): the lowering from Core IR, and — of that column — its validation.
+        let mir = median_ms(runs, &|| {
+            nazm_core::on_lowered(map, graph, nazm_core::Entry::Absent, |c, r| {
+                nazm_mir::lower(c, r, graph).map(|p| p.functions.len())
+            })
+            .unwrap();
+        });
+        let mir_verify = nazm_core::on_lowered(map, graph, nazm_core::Entry::Absent, |c, r| {
+            let p = nazm_mir::lower(c, r, graph)?;
+            Ok(median_ms(
+                runs,
+                &|| assert!(nazm_mir::verify(&p).is_empty()),
+            ))
+        })
+        .unwrap();
+        let (layout, emitted) = if label == "compiler/check.nz" {
             // A library-shaped module the native subset refuses as a program: its native
             // columns are not measured.
             (f64::NAN, f64::NAN)
         } else {
-            let lir = median_ms(runs, &|| {
+            let layout = median_ms(runs, &|| {
                 nazm_core::on_lowered(map, graph, nazm_core::Entry::Required, |c, r| {
-                    nazm_lir::lower(c, r, graph, &names)
+                    let p = nazm_mir::lower(c, r, graph)?;
+                    assert!(nazm_mir::verify(&p).is_empty());
+                    nazm_lir::lower(p, &names)
                         .map(|n| n.units.len())
                         .map_err(|e| e.diagnostics)
                 })
@@ -281,26 +298,30 @@ fn what_each_phase_costs_on_the_compiler() {
             });
             let emitted = median_ms(runs, &|| {
                 nazm_core::on_lowered(map, graph, nazm_core::Entry::Required, |c, r| {
-                    let native = nazm_lir::lower(c, r, graph, &names).map_err(|e| e.diagnostics)?;
+                    let p = nazm_mir::lower(c, r, graph)?;
+                    assert!(nazm_mir::verify(&p).is_empty());
+                    let native = nazm_lir::lower(p, &names).map_err(|e| e.diagnostics)?;
                     Ok(native
                         .units
                         .iter()
                         .chain(&native.instances)
-                        .map(|u| nazm_lir::emit_unit(u, &names).0.len())
+                        .map(|u| nazm_lir::emit_unit(&native, u, &names).0.len())
                         .sum::<usize>())
                 })
                 .unwrap();
             });
-            (lir, emitted)
+            (layout, emitted)
         };
         println!(
             "phases {label}: parse {parse:.2} ms · +check {:.2} · +Core IR {:.2} (verify {verify:.2}) \
-             · +LIR {:.2} · +LLVM text {:.2} · total {:.2} ms (median of {runs})",
+             · +MIR {:.2} (verify {mir_verify:.2}) · +layout {:.2} · +LLVM text {:.2} · total {:.2} ms \
+             (median of {runs})",
             check - parse,
             core - check,
-            lir - core,
-            emitted - lir,
-            if emitted.is_nan() { core } else { emitted }
+            mir - core,
+            layout - mir - mir_verify,
+            emitted - layout,
+            if emitted.is_nan() { mir } else { emitted }
         );
     }
 }
