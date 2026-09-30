@@ -453,6 +453,68 @@ fn two_servers_with_two_roots_answer_from_their_own_compilations() {
     });
 }
 
+/// The process's peak resident set (`VmHWM`), where the platform reports one: Linux, which is
+/// where the release benchmark runs. `None` elsewhere.
+fn peak_kb(pid: u32) -> Option<u64> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix("VmHWM:"))
+        .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+}
+
+/// Warm-up for a memory measurement: requests between RSS samples.
+const SAMPLE_EVERY: usize = 250;
+/// Consecutive samples that must agree before a baseline is taken: five samples span 1,000
+/// requests, as long as the measured window after them — a process is settled at the scale
+/// it is then measured at, not merely between two neighbouring samples.
+const STABLE_SAMPLES: usize = 5;
+/// At most this many warm-up requests; a process that has not settled by then fails.
+/// Three measured windows: the one-time allocator step N38 met came about 800 requests in.
+const MAX_WARMUP: usize = 3000;
+/// What the settled samples may differ by, and what the measured window may then grow by.
+const TOLERANCE_KB: u64 = 4096;
+
+/// Whether the last [`STABLE_SAMPLES`] RSS samples lie within [`TOLERANCE_KB`] of each other.
+///
+/// Separates one-time settling — glibc giving another worker thread its own arena is a single
+/// step of tens of megabytes, then nothing — from growth correlated with requests, which no
+/// stretch of samples would stay inside a fixed tolerance through. The measured window's own
+/// limit is not changed by it.
+fn settled(samples: &[u64]) -> bool {
+    let Some(tail) = samples
+        .len()
+        .checked_sub(STABLE_SAMPLES)
+        .map(|at| &samples[at..])
+    else {
+        return false;
+    };
+    let (lo, hi) = tail
+        .iter()
+        .fold((u64::MAX, 0), |(lo, hi), &x| (lo.min(x), hi.max(x)));
+    hi - lo <= TOLERANCE_KB
+}
+
+#[test]
+fn a_baseline_waits_for_a_flat_stretch_as_long_as_the_window_it_precedes() {
+    // Flat from the start: settled once there are enough samples, and not before.
+    assert!(!settled(&[50_000; 4]));
+    assert!(settled(&[50_000; 5]));
+    // N38's allocator step: flat, one step of 40 MB, then flat. Not settled while the step is
+    // inside the last five samples; settled once five samples after it agree.
+    let step = [
+        53_252, 53_252, 53_252, 53_252, 93_416, 93_416, 93_416, 93_416,
+    ];
+    assert!(!settled(&step[..5]));
+    assert!(!settled(&step));
+    assert!(settled(&[&step[..], &[93_416]].concat()));
+    // Growth with every batch never settles, however long it is watched.
+    let growing: Vec<u64> = (0..13).map(|i| 50_000 + i * 2_000).collect();
+    assert!(!settled(&growing));
+    // Noise within the tolerance is settled.
+    assert!(settled(&[60_000, 61_000, 59_500, 62_000, 60_500]));
+}
+
 fn rss_kb(pid: u32) -> u64 {
     let out = Command::new("ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
@@ -1752,7 +1814,24 @@ fn a_thousand_task_contexts_over_this_repository() {
                 call_with(&client, TASK_CONTEXT, a.clone()).await;
             }
         }
-        let settled = rss_kb(pid);
+        // Stabilise before the baseline: bounded batches, an RSS sample after each, until a
+        // stretch as long as the measured window agrees. A process that never settles fails.
+        let mut samples = vec![rss_kb(pid)];
+        let mut warmup = 0;
+        while !settled(&samples) {
+            assert!(
+                warmup < MAX_WARMUP,
+                "RSS did not settle within {MAX_WARMUP} warm-up requests: {samples:?} kB"
+            );
+            for i in 0..SAMPLE_EVERY {
+                let k = i % asks.len();
+                let (v, _) = call_with(&client, TASK_CONTEXT, asks[k].clone()).await;
+                assert_eq!(v, first[k], "warm-up call {}", warmup + i);
+            }
+            warmup += SAMPLE_EVERY;
+            samples.push(rss_kb(pid));
+        }
+        let baseline = rss_kb(pid);
         let start = std::time::Instant::now();
         for i in 0..1000 {
             let k = i % asks.len();
@@ -1761,10 +1840,13 @@ fn a_thousand_task_contexts_over_this_repository() {
         }
         let per = start.elapsed().as_secs_f64();
         let after = rss_kb(pid);
+        let peak = peak_kb(pid).map_or_else(|| "unreported".to_owned(), |p| format!("{p} kB"));
+        let step = samples.windows(2).any(|w| w[1].saturating_sub(w[0]) > TOLERANCE_KB);
         eprintln!(
-            "nazm-mcp over this repository: map {map_ms} ms; 1,000 task contexts, {per:.3} ms each on average; RSS settled {settled} kB, after {after} kB"
+            "nazm-mcp over this repository: map {map_ms} ms; 1,000 task contexts, {per:.3} ms each on average; warm-up {warmup} requests, RSS samples {samples:?} kB, a step during warm-up: {step}; baseline {baseline} kB, after {after} kB, delta {} kB, peak {peak}",
+            i128::from(after) - i128::from(baseline)
         );
-        assert!(after <= settled + 4096, "{settled} kB -> {after} kB");
+        assert!(after <= baseline + TOLERANCE_KB, "{baseline} kB -> {after} kB");
         client.cancel().await.unwrap();
     });
 }
