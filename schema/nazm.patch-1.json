@@ -41,7 +41,7 @@
       "additionalProperties": false,
       "required": ["module", "compiler"],
       "properties": {
-        "module": { "type": "string", "description": "The root module's durable key, as `nazm.snapshot/2` (`/1` before N36) gives it." },
+        "module": { "type": "string", "description": "The root module's durable key, as `nazm.snapshot/3` (`/2` before N38, `/1` before N36) gives it." },
         "compiler": { "type": "string" }
       }
     },
@@ -50,7 +50,7 @@
       "additionalProperties": false,
       "required": ["snapshot"],
       "properties": {
-        "snapshot": { "$ref": "#/$defs/digest", "description": "BLAKE3 of the root's canonical `nazm.snapshot/2` (`/1` before N36) bytes — what `nazm snapshot --json` prints, without its newline — when the patch was planned." }
+        "snapshot": { "$ref": "#/$defs/digest", "description": "BLAKE3 of the root's canonical `nazm.snapshot/3` (`/2` before N38, `/1` before N36) bytes — what `nazm snapshot --json` prints, without its newline — when the patch was planned." }
       }
     },
     "files": {

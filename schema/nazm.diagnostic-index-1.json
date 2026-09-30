@@ -50,7 +50,7 @@
       "required": ["source", "snapshot"],
       "properties": {
         "source": { "$ref": "#/$defs/digest", "description": "BLAKE3 over the root's identity and every loaded source file's root-relative path and exact bytes, in load order. Always present; a detail request names it." },
-        "snapshot": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "BLAKE3 of the root's `nazm.snapshot/2` (`/1` before N36) (N28); null where the compilation has none — after syntax recovery or a missing module." }
+        "snapshot": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$", "description": "BLAKE3 of the root's `nazm.snapshot/3` (`/2` before N38, `/1` before N36) (N28); null where the compilation has none — after syntax recovery or a missing module." }
       }
     },
     "span": {

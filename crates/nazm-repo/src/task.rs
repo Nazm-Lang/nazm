@@ -686,7 +686,7 @@ impl<'r> Planner<'r> {
                         "modules": c.modules.len(),
                     }));
                     i.retrieval = Some(retrieval(
-                        "nazm.snapshot/2",
+                        "nazm.snapshot/3",
                         &[("root", serde_json::Value::from(c.location()))],
                     ));
                     i
@@ -1822,7 +1822,7 @@ fn located(text: &str, find: &str) -> Option<(u32, u32)> {
 
 fn context_retrieval(c: &Compilation, d: &DurableDefinition) -> Retrieval {
     retrieval(
-        "nazm.context/2",
+        "nazm.context/3",
         &[
             ("root", serde_json::Value::from(c.location())),
             ("file", serde_json::Value::from(d.file.clone())),

@@ -227,7 +227,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Print one definition's semantic context packet, `nazm.context/2`.
+    /// Print one definition's semantic context packet, `nazm.context/3`.
     ///
     /// The function, record or enum declared or used at byte `--byte` of `--file`, a file
     /// the compilation rooted at `--root` loads: its exact source, and compact links to what
@@ -251,7 +251,7 @@ enum Command {
         #[arg(long)]
         source_root: Option<PathBuf>,
     },
-    /// Print the semantic snapshot of a root's compilation, `nazm.snapshot/2`.
+    /// Print the semantic snapshot of a root's compilation, `nazm.snapshot/3`.
     ///
     /// Every durable function, record and enum the compilation rooted at `--root` declares,
     /// each with one digest per semantic section the compiler records, from the disk as it
@@ -270,9 +270,9 @@ enum Command {
         #[arg(long)]
         source_root: Option<PathBuf>,
     },
-    /// Print what changed since a baseline snapshot, `nazm.delta/2`.
+    /// Print what changed since a baseline snapshot, `nazm.delta/3`.
     ///
-    /// Compares `--baseline`, a `nazm.snapshot/2` file of the same root, with the
+    /// Compares `--baseline`, a `nazm.snapshot/3` file of the same root, with the
     /// compilation rooted at `--root` as it is on disk now: durable definitions added,
     /// removed, and changed — naming exactly which recorded sections changed. Matching is
     /// by durable key only, so a rename is a removal and an addition. A baseline that is not
@@ -281,7 +281,7 @@ enum Command {
         /// The compilation's root module.
         #[arg(long)]
         root: PathBuf,
-        /// A `nazm.snapshot/2` file, as `nazm snapshot --json` wrote it.
+        /// A `nazm.snapshot/3` file, as `nazm snapshot --json` wrote it.
         #[arg(long)]
         baseline: PathBuf,
         /// The one canonical compact serialisation. Without it, the same object indented.

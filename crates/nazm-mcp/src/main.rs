@@ -7,9 +7,9 @@
 //!
 //! | Tool | Result | Command |
 //! | --- | --- | --- |
-//! | `nazm.semantic_context` | `nazm.context/2` for a position (N27) | `nazm context` |
-//! | `nazm.semantic_snapshot` | `nazm.snapshot/2` of the root's compilation (N28) | `nazm snapshot` |
-//! | `nazm.semantic_delta` | `nazm.delta/2` against a baseline snapshot the client supplies (N28) | `nazm delta` |
+//! | `nazm.semantic_context` | `nazm.context/3` for a position (N27) | `nazm context` |
+//! | `nazm.semantic_snapshot` | `nazm.snapshot/3` of the root's compilation (N28) | `nazm snapshot` |
+//! | `nazm.semantic_delta` | `nazm.delta/3` against a baseline snapshot the client supplies (N28) | `nazm delta` |
 //! | `nazm.semantic_patch` | `nazm.patch/1`, a planned rename or fix (N29) | `nazm patch` |
 //! | `nazm.diagnostics` | `nazm.diagnostic-index/1`, every current diagnostic compactly (N30) | `nazm diagnostics` |
 //! | `nazm.diagnostic_detail` | `nazm.diagnostic-detail/1`, one of them in full (N30) | `nazm diagnostics --detail` |
@@ -31,7 +31,7 @@
 //!
 //! The server keeps no previous snapshot. A client that wants to know what changed keeps
 //! the snapshot it was given and hands it back as `baseline` — data, validated as
-//! `nazm.snapshot/2` and compared with a snapshot derived from the disk at that call. A
+//! `nazm.snapshot/3` and compared with a snapshot derived from the disk at that call. A
 //! baseline is never a path: the server reads no file a client names.
 //!
 //! # A patch is a plan
@@ -93,20 +93,20 @@ use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 /// The context tool (N27).
 const TOOL: &str = "nazm.semantic_context";
 
-/// `nazm.context/2`, the context tool's output schema, exactly as the repository publishes it.
-const OUTPUT_SCHEMA: &str = include_str!("../../../schema/nazm.context-2.json");
+/// `nazm.context/3`, the context tool's output schema, exactly as the repository publishes it.
+const OUTPUT_SCHEMA: &str = include_str!("../../../schema/nazm.context-3.json");
 
 /// The snapshot tool (N28).
 const SNAPSHOT: &str = "nazm.semantic_snapshot";
 
-/// `nazm.snapshot/2`, exactly as the repository publishes it.
-const SNAPSHOT_SCHEMA: &str = include_str!("../../../schema/nazm.snapshot-2.json");
+/// `nazm.snapshot/3`, exactly as the repository publishes it.
+const SNAPSHOT_SCHEMA: &str = include_str!("../../../schema/nazm.snapshot-3.json");
 
 /// The delta tool (N28).
 const DELTA: &str = "nazm.semantic_delta";
 
-/// `nazm.delta/2`, exactly as the repository publishes it.
-const DELTA_SCHEMA: &str = include_str!("../../../schema/nazm.delta-2.json");
+/// `nazm.delta/3`, exactly as the repository publishes it.
+const DELTA_SCHEMA: &str = include_str!("../../../schema/nazm.delta-3.json");
 
 /// The patch-planning tool (N29).
 const PATCH: &str = "nazm.semantic_patch";
@@ -428,7 +428,7 @@ impl Server {
         )
     }
 
-    /// The context tool, with `nazm.context/2` as its output schema.
+    /// The context tool, with `nazm.context/3` as its output schema.
     fn tool() -> Tool {
         let input: JsonObject = serde_json::from_value(serde_json::json!({
             "type": "object",
@@ -451,7 +451,7 @@ impl Server {
         let output: JsonObject = serde_json::from_str(OUTPUT_SCHEMA).unwrap_or_default();
         let mut tool = Tool::new(
             TOOL,
-            "The semantic context packet (nazm.context/2) of the function, record or enum declared or used at a byte offset: its exact source, and compact links — identity, kind, name, place — to what it uses, what uses it, what it calls and what calls it, in the server's root compilation as it is on disk now. Effects, capabilities, tests and semantic changes are reported unsupported.",
+            "The semantic context packet (nazm.context/3) of the function, record or enum declared or used at a byte offset: its exact source, and compact links — identity, kind, name, place — to what it uses, what uses it, what it calls and what calls it, in the server's root compilation as it is on disk now. Effects, capabilities, tests and semantic changes are reported unsupported.",
             Arc::new(input),
         )
         .annotate(
@@ -465,7 +465,7 @@ impl Server {
         tool
     }
 
-    /// The snapshot tool: no arguments, `nazm.snapshot/2` as its output schema.
+    /// The snapshot tool: no arguments, `nazm.snapshot/3` as its output schema.
     fn snapshot_tool() -> Tool {
         let input: JsonObject = serde_json::from_value(serde_json::json!({
             "type": "object",
@@ -475,20 +475,20 @@ impl Server {
         .unwrap_or_default();
         Self::read_only(
             SNAPSHOT,
-            "The semantic snapshot (nazm.snapshot/2) of the server's root compilation as it is on disk now: every durable function, record and enum, by identity, with one digest per semantic section the compiler records — source, shape, dependencies, related types, references, callers, callees, diagnostics. Keep it and pass it to nazm.semantic_delta later. Digest equality is not behavioural equivalence; effects, capabilities and tests are unsupported.",
+            "The semantic snapshot (nazm.snapshot/3) of the server's root compilation as it is on disk now: every durable function, record and enum, by identity, with one digest per semantic section the compiler records — source, shape, dependencies, related types, references, callers, callees, diagnostics. Keep it and pass it to nazm.semantic_delta later. Digest equality is not behavioural equivalence; effects, capabilities and tests are unsupported.",
             input,
             SNAPSHOT_SCHEMA,
         )
     }
 
-    /// The delta tool: a baseline snapshot in, `nazm.delta/2` as its output schema.
+    /// The delta tool: a baseline snapshot in, `nazm.delta/3` as its output schema.
     fn delta_tool() -> Tool {
         let input: JsonObject = serde_json::from_value(serde_json::json!({
             "type": "object",
             "properties": {
                 "baseline": {
                     "type": "object",
-                    "description": "A nazm.snapshot/2 object exactly as nazm.semantic_snapshot returned it. Data, never a path."
+                    "description": "A nazm.snapshot/3 object exactly as nazm.semantic_snapshot returned it. Data, never a path."
                 }
             },
             "required": ["baseline"],
@@ -497,7 +497,7 @@ impl Server {
         .unwrap_or_default();
         Self::read_only(
             DELTA,
-            "What changed (nazm.delta/2) between a baseline nazm.snapshot/2 the client kept and the server's root compilation as it is on disk now: durable definitions added, removed, and changed, with exactly which recorded sections changed. Matched by durable key only — a rename is a removal and an addition. A baseline of another root or compiler, or not exactly nazm.snapshot/2, is refused. The server keeps no previous snapshot.",
+            "What changed (nazm.delta/3) between a baseline nazm.snapshot/3 the client kept and the server's root compilation as it is on disk now: durable definitions added, removed, and changed, with exactly which recorded sections changed. Matched by durable key only — a rename is a removal and an addition. A baseline of another root or compiler, or not exactly nazm.snapshot/3, is refused. The server keeps no previous snapshot.",
             input,
             DELTA_SCHEMA,
         )

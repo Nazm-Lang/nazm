@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nazm.context-2.json",
-  "title": "nazm.context/2",
-  "description": "One source definition's semantic context, from `nazm context --json` and the `nazm-mcp` tool `semantic_context`: its exact source and compact links to what the compiler knows it is connected to, in the compilation of one root. `status` is `available` with every section, or `unavailable` with a `reason` and no other section. Paths are relative to the compilation's source root; byte offsets are into the named file. Nothing session-local is included, so the same sources and query give the same bytes. `/2` (N36): a function's `effects` are the compiler's, where `/1` reported them unsupported.",
+  "$id": "nazm.context-3.json",
+  "title": "nazm.context/3",
+  "description": "One source definition's semantic context, from `nazm context --json` and the `nazm-mcp` tool `semantic_context`: its exact source and compact links to what the compiler knows it is connected to, in the compilation of one root. `status` is `available` with every section, or `unavailable` with a `reason` and no other section. Paths are relative to the compilation's source root; byte offsets are into the named file. Nothing session-local is included, so the same sources and query give the same bytes. `/2` (N36): a function's `effects` are the compiler's, where `/1` reported them unsupported. `/3` (N38): a function's `provenance` summary.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "status"],
   "properties": {
-    "schema": { "const": "nazm.context/2" },
+    "schema": { "const": "nazm.context/3" },
     "status": { "enum": ["available", "unavailable"] },
     "reason": {
       "enum": ["not_current", "not_in_compilation", "out_of_range", "not_a_name", "not_a_target", "incomplete_compilation"],
@@ -40,6 +40,10 @@
     "effects": {
       "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/effects" }],
       "description": "A function's effects, from the effect checker (N36); null for a record or an enum, and for a function whose body this compilation did not check."
+    },
+    "provenance": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/provenance" }],
+      "description": "A function's provenance summary, solved over the whole program (N38); null for a record or an enum, and for a function whose body did not parse."
     },
     "availability": { "$ref": "#/$defs/availability" }
   },
@@ -186,6 +190,29 @@
               "source": { "enum": ["builtin", "spawn", "inferred", "declared", "undeclared"], "description": "A built-in that exercises it; a `spawn`; a function of this module whose inferred set has it; a function whose declared set has it; or a function of another module that declares no set." },
               "builtin": { "type": ["string", "null"], "description": "The built-in's name, for `builtin`: compiler-owned, with no source." },
               "callee": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/identity" }] }
+            }
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origins", "passes_on", "reaches_write_path", "receives"],
+      "properties": {
+        "origins": { "type": "array", "items": { "enum": ["argument", "file", "authority", "unknown"] }, "description": "Origins its result carries whatever it is given, each once, in origin-id order. Empty is local." },
+        "passes_on": { "type": "array", "items": { "type": "string" }, "description": "The parameters whose provenance its result carries, by name, in parameter order." },
+        "reaches_write_path": { "type": "array", "items": { "type": "string" }, "description": "The parameters whose value may become the path `write_file` writes to, directly or through what it calls." },
+        "receives": {
+          "type": "array",
+          "description": "For each parameter, in order, the origins the program's calls and `spawn`s hand it.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["param", "origins"],
+            "properties": {
+              "param": { "type": "string" },
+              "origins": { "type": "array", "items": { "enum": ["argument", "file", "authority", "unknown"] } }
             }
           }
         }

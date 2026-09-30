@@ -1,6 +1,6 @@
-//! Semantic deltas: a baseline `nazm.snapshot/2` against the current compilation of the same
+//! Semantic deltas: a baseline `nazm.snapshot/3` against the current compilation of the same
 //! root — which durable definitions appeared, disappeared, or changed in a section Nazm
-//! records. `nazm.delta/2` (N28; the `effects` section since N36).
+//! records. `nazm.delta/3` (N28; the `effects` section since N36, `provenance` since N38).
 //!
 //! # The contract
 //!
@@ -17,7 +17,7 @@
 //! # A baseline is data
 //!
 //! It is validated before anything is compared, and refused — never reinterpreted or
-//! compared as well as it can be — when it is not `nazm.snapshot/2`, is an unavailable
+//! compared as well as it can be — when it is not `nazm.snapshot/3`, is an unavailable
 //! snapshot, has a field this version does not define, names a definition in anything but
 //! the canonical key spelling or under the wrong kind, names one twice, carries a digest
 //! that is not 64 lowercase hexadecimal digits, or is of another root or another compiler.
@@ -37,9 +37,9 @@ use crate::snapshot::{
 };
 
 /// The schema every delta declares.
-pub const SCHEMA: &str = "nazm.delta/2";
+pub const SCHEMA: &str = "nazm.delta/3";
 
-/// A delta, or why there is none, exactly as `nazm.delta/2` serialises it.
+/// A delta, or why there is none, exactly as `nazm.delta/3` serialises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum DeltaResult {
@@ -106,9 +106,11 @@ pub struct Sections {
     pub diagnostics: bool,
     /// A function's effects, declared or required (N36); `None` for a record or an enum.
     pub effects: Option<bool>,
+    /// A function's provenance summary (N38); `None` for a record or an enum.
+    pub provenance: Option<bool>,
 }
 
-/// Why there is no delta, as `nazm.delta/2` serialises it.
+/// Why there is no delta, as `nazm.delta/3` serialises it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NoDeltaResult {
     pub schema: &'static str,
@@ -127,11 +129,11 @@ pub enum NoDelta {
     IncompleteCompilation,
     /// The current root module has no durable key.
     NoDurableRoot,
-    /// The baseline does not declare `nazm.snapshot/2`.
+    /// The baseline does not declare `nazm.snapshot/3`.
     BaselineWrongSchema,
     /// The baseline is an unavailable snapshot: there is nothing to compare with.
     BaselineUnavailable,
-    /// The baseline is not a well-formed `nazm.snapshot/2`: a missing or unknown field, a
+    /// The baseline is not a well-formed `nazm.snapshot/3`: a missing or unknown field, a
     /// wrong type, a section present for a kind that has none or absent for one that has.
     BaselineMalformed,
     /// A definition's identity is not a canonical durable key of its kind.
@@ -171,7 +173,7 @@ impl DeltaResult {
 }
 
 impl LanguageService {
-    /// What changed between `baseline`, a `nazm.snapshot/2` object, and the compilation
+    /// What changed between `baseline`, a `nazm.snapshot/3` object, and the compilation
     /// rooted at the open document `root`, at `version`.
     #[must_use]
     pub fn semantic_delta(
@@ -231,6 +233,10 @@ fn compare(baseline: &Baseline, current: SemanticSnapshot) -> SemanticDelta {
             callees: b.callees.as_ref().map(|c| a.callees.as_ref() != Some(c)),
             diagnostics: a.diagnostics != b.diagnostics,
             effects: b.effects.as_ref().map(|c| a.effects.as_ref() != Some(c)),
+            provenance: b
+                .provenance
+                .as_ref()
+                .map(|c| a.provenance.as_ref() != Some(c)),
         };
         if sections.any() {
             changed.push(DeltaChange {
@@ -284,10 +290,11 @@ impl Sections {
             || self.callees == Some(true)
             || self.diagnostics
             || self.effects == Some(true)
+            || self.provenance == Some(true)
     }
 }
 
-/// `nazm.snapshot/2` exactly as it is written, and nothing else: an unknown field is refused.
+/// `nazm.snapshot/3` exactly as it is written, and nothing else: an unknown field is refused.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Wire {
@@ -339,6 +346,8 @@ struct WireDigests {
     diagnostics: String,
     #[serde(deserialize_with = "required_option")]
     effects: Option<String>,
+    #[serde(deserialize_with = "required_option")]
+    provenance: Option<String>,
 }
 
 /// A field that must be present and may be null — serde's default for an `Option` would
@@ -360,6 +369,7 @@ impl WireDefinition {
             callees: d.callees.clone(),
             diagnostics: d.diagnostics.clone(),
             effects: d.effects.clone(),
+            provenance: d.provenance.clone(),
         }
     }
 }
@@ -405,6 +415,7 @@ impl Baseline {
             if x.callers.is_some() != function
                 || x.callees.is_some() != function
                 || x.effects.is_some() != function
+                || x.provenance.is_some() != function
             {
                 return Err(NoDelta::BaselineMalformed);
             }
@@ -418,6 +429,7 @@ impl Baseline {
                 x.callees.as_ref(),
                 Some(&x.diagnostics),
                 x.effects.as_ref(),
+                x.provenance.as_ref(),
             ]
             .into_iter()
             .flatten()

@@ -155,12 +155,12 @@ pub(crate) const RELATIONS: &[&str] = &[
 
 /// Every schema a retrieval may name.
 pub(crate) const RETRIEVALS: &[&str] = &[
-    "nazm.context/2",
+    "nazm.context/3",
     "nazm.diagnostic-detail/1",
     "nazm.diagnostic-index/1",
     "nazm.docs-index/1",
     "nazm.docs-section/1",
-    "nazm.snapshot/2",
+    "nazm.snapshot/3",
     "nazm.task-context/1",
 ];
 
@@ -317,7 +317,7 @@ pub(crate) fn build(root: &Path, layout: &Layout) -> MapResult {
             }
             let at = serde_json::Value::from(c.location());
             e.retrieval
-                .push(retrieval("nazm.snapshot/2", &[("root", at.clone())]));
+                .push(retrieval("nazm.snapshot/3", &[("root", at.clone())]));
             e.retrieval
                 .push(retrieval("nazm.diagnostic-index/1", &[("root", at)]));
             entities.push(e);

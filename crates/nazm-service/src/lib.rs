@@ -21,11 +21,11 @@
 //! - [`hierarchy`] — a source function and the direct calls the checker recorded into and
 //!   out of it, in the compilation it was prepared from (N25);
 //! - [`context`] — one source definition's exact source and compact semantic links, as a
-//!   `nazm.context/2` packet (N27);
+//!   `nazm.context/3` packet (N27);
 //! - [`snapshot`] — one root compilation's durable definitions, with a digest per recorded
-//!   semantic section, as `nazm.snapshot/2` (N28);
+//!   semantic section, as `nazm.snapshot/3` (N28);
 //! - [`delta`] — a baseline snapshot against the current compilation of its root: what was
-//!   added, removed, or changed in which recorded section, as `nazm.delta/2` (N28);
+//!   added, removed, or changed in which recorded section, as `nazm.delta/3` (N28);
 //! - [`patch`] — a validated rename or a compiler-owned fix as minimal exact-byte edits,
 //!   bound to the root's snapshot, each file's digest and each edit's expected bytes, as
 //!   `nazm.patch/1`; planned, never applied (N29);
