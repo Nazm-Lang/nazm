@@ -75,6 +75,12 @@ impl ModuleKey {
         if key.0 == STD || key.0.starts_with("@std/") {
             return None;
         }
+        // Nor may its first component hold an `@` (N46): `NAME@VERSION/…` is a dependency
+        // package's module, and a project path spelled that way would otherwise be keyed as
+        // one. Deeper components may: `lib/@core/x.nz` is a project's own.
+        if key.0.split('/').next().is_some_and(|c| c.contains('@')) {
+            return None;
+        }
         Some(key)
     }
 
@@ -96,6 +102,15 @@ impl ModuleKey {
     #[must_use]
     pub fn std(name: &str) -> Self {
         Self(format!("{STD}/{name}"))
+    }
+
+    /// The key of the module at `path` in the package `NAME@VERSION` (N46): `NAME@VERSION/path`,
+    /// `path` relative to that package's source root and folded as any key is. `None` if it
+    /// leaves the root.
+    #[must_use]
+    pub fn in_package(prefix: &str, path: &str) -> Option<Self> {
+        let inner = Self::fold(path)?;
+        Some(Self(format!("{prefix}/{}", inner.0)))
     }
 
     /// Whether this is a standard module's key.
@@ -140,6 +155,26 @@ impl ModuleKey {
     pub fn parse(text: &str) -> Option<Self> {
         if text == PRELUDE {
             return Some(Self::prelude());
+        }
+        // A standard module's key (N45): `@std/` and a lowercase name.
+        if let Some(name) = text.strip_prefix("@std/") {
+            let ok = !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase());
+            return ok.then(|| Self::std(name));
+        }
+        // A dependency package's module (N46): `NAME@VERSION/` and a relative key.
+        if let Some((prefix, rest)) = text.split_once('/') {
+            if let Some((name, version)) = prefix.split_once('@') {
+                let name_ok = name.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+                let version_ok = version.split('.').count() == 3
+                    && version
+                        .split('.')
+                        .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+                let inner = Self::relative(rest)?;
+                return (name_ok && version_ok && inner.0 == rest).then(|| Self(text.to_owned()));
+            }
         }
         let candidate = Self(text.to_owned());
         let canonical = Self::relative(text)?;
@@ -326,6 +361,19 @@ mod tests {
             Some(ModuleKey::prelude())
         );
         assert_eq!(ModuleKey::parse("@core/other"), None);
+        // The toolchain's and the packages' keys read back as themselves (N45, N46).
+        assert_eq!(ModuleKey::parse("@std/text"), Some(ModuleKey::std("text")));
+        assert_eq!(ModuleKey::parse("@std/"), None);
+        assert_eq!(ModuleKey::parse("@std/Text"), None);
+        assert_eq!(
+            ModuleKey::parse("geo@1.2.0/lib.nz"),
+            ModuleKey::in_package("geo@1.2.0", "lib.nz")
+        );
+        assert!(ModuleKey::parse("geo@1.2/lib.nz").is_none());
+        assert!(ModuleKey::parse("geo@1.2.0/../lib.nz").is_none());
+        assert!(ModuleKey::parse("Geo@1.2.0/lib.nz").is_none());
+        // And no project path is keyed as either.
+        assert!(ModuleKey::relative("geo@1.2.0/lib.nz").is_none());
     }
 
     #[test]

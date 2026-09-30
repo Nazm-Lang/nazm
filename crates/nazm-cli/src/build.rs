@@ -270,7 +270,10 @@ pub(crate) fn run(
     // pairs of files beside somebody's binary.
     let stamp = std::process::id();
     let work = sibling(&output, &format!(".nazm-{stamp}"));
-    let tmp_exe = sibling(&output, &format!(".nazm-{stamp}.out"));
+    // Linked inside the working directory under the output's own file name (N46): the
+    // Mach-O linker writes that name into the executable's code signature and derives its
+    // UUID from it, so a temporary name would make two builds of one program differ.
+    let tmp_exe = work.join(output.file_name().unwrap_or_default());
     if let Err(e) = std::fs::create_dir_all(&work) {
         eprintln!("nazm: cannot create {}: {e}", work.display());
         if summary {
@@ -504,12 +507,11 @@ pub(crate) fn run(
             }
         }
     }
-    // The intermediates, and only them: the executable is still on its way into place.
+    // Published last, so an existing executable survives every failure above — and then the
+    // intermediates go, the working directory the executable was linked in included.
+    let published = std::fs::rename(&tmp_exe, &output);
     let _ = std::fs::remove_dir_all(&work);
-
-    // Published last, so an existing executable survives every failure above.
-    if let Err(e) = std::fs::rename(&tmp_exe, &output) {
-        let _ = std::fs::remove_file(&tmp_exe);
+    if let Err(e) = published {
         eprintln!("nazm: cannot write {}: {e}", output.display());
         if summary {
             return summarized(

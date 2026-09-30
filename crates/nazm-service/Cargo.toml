@@ -17,6 +17,8 @@ docs = ["architecture:7.18", "architecture:7.29", "architecture:7.30", "architec
 nazm-span = { workspace = true }
 nazm-diag = { workspace = true }
 nazm-core = { workspace = true }
+# Packages (N46): a build whose source root is a package's resolves its dependencies.
+nazm-package = { workspace = true }
 # The context packet's one serialisation, `nazm.context/1` (N27).
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -290,6 +290,29 @@ pub mod codes {
     /// `nazm run` was asked to run a program that calls a foreign function (N42).
     pub const FOREIGN_NOT_INTERPRETED: Code = Code::new("N0385");
 
+    // Packages (N46, `docs/architecture.md` §7.48)
+    /// A manifest that cannot be read as `nazm.package/1`: bad TOML, an unknown key, a name or
+    /// version of the wrong shape, or a path that leaves nothing to build.
+    pub const MANIFEST_INVALID: Code = Code::new("N0500");
+    /// A dependency's directory or manifest is not there.
+    pub const PACKAGE_NOT_FOUND: Code = Code::new("N0501");
+    /// A dependency's manifest states another version than the one declared for it.
+    pub const VERSION_MISMATCH: Code = Code::new("N0502");
+    /// Two packages of one name in one build.
+    pub const PACKAGE_CONFLICT: Code = Code::new("N0503");
+    /// A package depends on itself, through its dependencies.
+    pub const PACKAGE_CYCLE: Code = Code::new("N0504");
+    /// `--locked`, and there is no lockfile.
+    pub const LOCK_MISSING: Code = Code::new("N0505");
+    /// `--locked`, and the packages resolved are not the ones the lockfile records.
+    pub const LOCK_MISMATCH: Code = Code::new("N0506");
+    /// A package's bytes no longer match the digest the lockfile records for it.
+    pub const DIGEST_MISMATCH: Code = Code::new("N0507");
+    /// An import names a package the importing package does not declare.
+    pub const UNKNOWN_DEPENDENCY: Code = Code::new("N0508");
+    /// A package built as a program has no `main`.
+    pub const NO_ENTRY: Code = Code::new("N0509");
+
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no
     /// diagnostic could not be lowered to Core IR, or its Core IR broke an invariant every
