@@ -81,6 +81,7 @@ fn all_tests() -> String {
         "crates/nazm-syntax/src/parser.rs",
         "crates/nazm-diag/src/lib.rs",
         "crates/nazm-core/src/check.rs",
+        "crates/nazm-core/src/lower.rs",
     ] {
         let text = read(file);
         if let Some(i) = text.find("\nmod tests {") {

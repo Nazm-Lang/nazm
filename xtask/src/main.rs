@@ -33,6 +33,7 @@ fn main() -> ExitCode {
         // debugs.
         Some("check-matrix") => report(&[("capability matrix", check_capability_matrix())]),
         Some("check-resolver") => report(&[("one resolver", check_single_resolver())]),
+        Some("check-core-ir") => report(&[("core ir boundary", check_core_ir_boundary())]),
         Some("check-span") => report(&[("span identity", check_span_identity())]),
         Some("check-sema") => report(&[("sema purity", check_sema_purity())]),
         Some("check-cache") => report(&[("cache soundness", check_cache_soundness())]),
@@ -202,6 +203,7 @@ fn run_checks() -> ExitCode {
         ("doc claims", check_doc_claims()),
         ("capability matrix", check_capability_matrix()),
         ("one resolver", check_single_resolver()),
+        ("core ir boundary", check_core_ir_boundary()),
         ("span identity", check_span_identity()),
         ("sema purity", check_sema_purity()),
         ("cache soundness", check_cache_soundness()),
@@ -849,6 +851,105 @@ fn check_single_resolver() -> Result<(), Vec<String>> {
 
     problems.extend(cross_module_readers(&root));
 
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
+/// Nothing below Core IR asks what a source position meant (N39, `docs/architecture.md`
+/// §7.41).
+///
+/// The one lowering in `nazm-core` reads the checker's **position maps** — the span-keyed
+/// answers to which slot a name is, which function a call is, which field, variant or payload
+/// field is named, what a `?` means, which type arguments a call settled. Everything after it
+/// reads Core IR, where those answers already are. The native backend used to ask each
+/// question again, span by span, and the interpreter asked them as it ran; a lookup coming
+/// back in either is a second lowering growing beside the first.
+///
+/// `nazm-lir` may still read the checker's **semantic tables** — definitions, signatures,
+/// the call graph, the user-type table — which are about the program, not about where it was
+/// written. The interpreter reads Core IR alone: it may not name the resolution or the
+/// syntax tree at all.
+fn check_core_ir_boundary() -> Result<(), Vec<String>> {
+    const POSITION_MAPS: &[&str] = &[
+        "res.callee(",
+        "res.var(",
+        "res.local(",
+        "res.field(",
+        "res.construction(",
+        "res.variant(",
+        "res.propagation(",
+        "res.payload(",
+        "res.type_args(",
+        "res.checked_call(",
+        "res.checked_calls(",
+        "res.written_type(",
+        "res.type_name(",
+        "res.looked_up_on(",
+        "res.scopes(",
+    ];
+    const INTERPRETER: &str = "crates/nazm-core/src/eval.rs";
+    const INTERPRETER_MAY_NOT_NAME: &[&str] = &["Resolution", "nazm_syntax", "res."];
+    let Some(root) = workspace_root() else {
+        return Err(vec!["could not locate workspace root".to_owned()]);
+    };
+    let mut files: Vec<String> = Vec::new();
+    match std::fs::read_dir(root.join("crates/nazm-lir/src")) {
+        Ok(entries) => {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.ends_with(".rs") {
+                    files.push(format!("crates/nazm-lir/src/{name}"));
+                }
+            }
+        }
+        Err(e) => return Err(vec![format!("could not read crates/nazm-lir/src: {e}")]),
+    }
+    files.sort();
+    files.push(INTERPRETER.to_owned());
+    let mut problems = Vec::new();
+    for rel in &files {
+        let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
+            problems.push(format!("could not read {rel}"));
+            continue;
+        };
+        // The code with every comment and all whitespace removed, remembering the line each
+        // byte came from: a lookup written across lines — `ctx`, `.res`, `.callee(` — is the
+        // same lookup, and rustfmt writes long chains exactly that way.
+        let mut flat = String::new();
+        let mut line_of: Vec<usize> = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or_default();
+            for c in code.chars().filter(|c| !c.is_whitespace()) {
+                flat.push(c);
+                line_of.extend(std::iter::repeat_n(n + 1, c.len_utf8()));
+            }
+        }
+        let at = |i: usize| line_of.get(i).copied().unwrap_or(0);
+        for pat in POSITION_MAPS {
+            for (i, _) in flat.match_indices(pat) {
+                problems.push(format!(
+                    "{rel}:{} asks the resolution `{pat}…`, a question about a source \
+                     position. Below Core IR the answer is in Core IR; asking again is a \
+                     second lowering (docs/architecture.md §7.41)",
+                    at(i)
+                ));
+            }
+        }
+        if rel == INTERPRETER {
+            for word in INTERPRETER_MAY_NOT_NAME {
+                for (i, _) in flat.match_indices(word) {
+                    problems.push(format!(
+                        "{rel}:{} names `{word}`: the interpreter runs Core IR and nothing \
+                         else (docs/architecture.md §7.41)",
+                        at(i)
+                    ));
+                }
+            }
+        }
+    }
     if problems.is_empty() {
         Ok(())
     } else {
@@ -3083,9 +3184,17 @@ fn contained_probe(repo: &std::path::Path) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        absence_claims, cargo_test, cited_paths, contained::ExecutionProfile, default_profile,
-        mutate_parallelism, serde_in_manifest, serde_in_source, verified_without_evidence,
+        absence_claims, cargo_test, check_core_ir_boundary, cited_paths,
+        contained::ExecutionProfile, default_profile, mutate_parallelism, serde_in_manifest,
+        serde_in_source, verified_without_evidence,
     };
+
+    #[test]
+    fn nothing_below_core_ir_asks_what_a_source_position_meant() {
+        // The gate, over this tree, as a test: so a lookup coming back into the backend or
+        // the interpreter fails the suite, not only `cargo xtask check` (N39).
+        assert_eq!(check_core_ir_boundary(), Ok(()));
+    }
 
     #[test]
     fn only_the_calibrated_workloads_leave_p1() {
