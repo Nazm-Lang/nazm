@@ -115,6 +115,23 @@ impl Sources for Disk {
     }
 }
 
+/// One thing the loader has still to read: a file, or a standard module and its source.
+#[derive(Debug, Clone)]
+enum Item {
+    File(PathBuf),
+    Std(&'static str, &'static str),
+}
+
+impl Item {
+    /// The identity a second import of it is recognised by.
+    fn canonical(self) -> PathBuf {
+        match self {
+            Self::File(c) => c.canonicalize().unwrap_or(c),
+            Self::Std(name, _) => PathBuf::from(nazm_core::sema::stdlib::file_name(name)),
+        }
+    }
+}
+
 /// The source of a compilation, and how its modules relate.
 ///
 /// Two values that are always built together and always travel together: the text, for
@@ -169,11 +186,28 @@ pub fn load_from(
 
     // An explicit stack rather than recursion: an import chain has no bound, and the
     // compiler's own rule is that a recursive walk needs a bound or a controlled stack.
-    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    let mut stack: Vec<Item> = vec![Item::File(root.to_path_buf())];
 
-    while let Some(path) = stack.pop() {
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-        let logical = module_key(root_path, &path);
+    while let Some(item) = stack.pop() {
+        // A standard module (N45) is the toolchain's: its bytes are the compiler's copy, its
+        // key is `@std/name`, and its "path" is that file name, which no canonical path on
+        // disk can equal — a canonical path is absolute.
+        let (path, canonical, logical, standard) = match item {
+            Item::File(path) => {
+                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                let logical = module_key(root_path, &path);
+                (path, canonical, logical, None)
+            }
+            Item::Std(name, source) => {
+                let file = PathBuf::from(nazm_core::sema::stdlib::file_name(name));
+                (
+                    file.clone(),
+                    file,
+                    Some(nazm_core::sema::stdlib::key(name)),
+                    Some(source),
+                )
+            }
+        };
         if let Some(&already) = index.get(&canonical) {
             // One file, reached a second time. Ordinarily that is a diamond and the two
             // spellings normalise to one key. When they do not, a symbolic link has made
@@ -192,7 +226,11 @@ pub fn load_from(
             continue;
         }
 
-        let text = match sources.read(&path) {
+        let read = match standard {
+            Some(source) => Ok(source.to_owned()),
+            None => sources.read(&path),
+        };
+        let text = match read {
             Ok(t) => t,
             Err(e) => {
                 // No file to point into: this one could not be read. Said plainly rather
@@ -222,9 +260,43 @@ pub fn load_from(
 
         let mut children = Vec::new();
         for import in &program.imports {
+            // A path beginning with `@std/` is the standard library's and is never looked for
+            // on disk.
+            if nazm_core::sema::stdlib::reserved(&import.path) {
+                if let Some((name, source)) = nazm_core::sema::stdlib::module(&import.path) {
+                    children.push((Item::Std(name, source), import.path_span));
+                } else {
+                    let known: Vec<String> = nazm_core::sema::stdlib::MODULES
+                        .iter()
+                        .map(|(n, _)| format!("`{}{n}`", nazm_core::sema::stdlib::PREFIX))
+                        .collect();
+                    errors.push(
+                        Diagnostic::error(
+                            codes::MODULE_NOT_FOUND,
+                            import.path_span,
+                            format!("there is no standard module `{}`", import.path),
+                        )
+                        .help(format!(
+                            "a path beginning with `@std/` names a module the toolchain \
+                             provides; the standard modules are {}",
+                            known.join(", ")
+                        )),
+                    );
+                }
+                continue;
+            }
+            // A standard module imports only other standard modules: it has no directory.
+            if standard.is_some() {
+                errors.push(Diagnostic::error(
+                    codes::MODULE_NOT_FOUND,
+                    import.path_span,
+                    format!("a standard module cannot import `{}`", import.path),
+                ));
+                continue;
+            }
             let target = dir.join(&import.path);
             if sources.exists(&target) {
-                children.push((target, import.path_span));
+                children.push((Item::File(target), import.path_span));
             } else {
                 errors.push(
                     Diagnostic::error(
@@ -252,7 +324,7 @@ pub fn load_from(
         named.push(
             children
                 .into_iter()
-                .map(|(c, at)| (c.canonicalize().unwrap_or(c), at))
+                .map(|(c, at)| (c.canonical(), at))
                 .collect(),
         );
         parts.push((path.display().to_string(), text));

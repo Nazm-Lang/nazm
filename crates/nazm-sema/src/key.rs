@@ -26,6 +26,9 @@ use std::fmt;
 /// The directory-like prefix the toolchain reserves. No project key begins with it.
 const CORE: &str = "@core";
 
+/// The prefix of every standard module's key (N45). See [`ModuleKey::std`].
+const STD: &str = "@std";
+
 /// The core prelude's key. See [`ModuleKey::prelude`].
 const PRELUDE: &str = "@core/prelude";
 
@@ -67,6 +70,11 @@ impl ModuleKey {
         if key.0 == CORE || key.0.starts_with("@core/") {
             return None;
         }
+        // Nor is `@std` (N45): a project file under a directory of that name has no durable
+        // identity, so none can be keyed as a standard module is.
+        if key.0 == STD || key.0.starts_with("@std/") {
+            return None;
+        }
         Some(key)
     }
 
@@ -79,6 +87,21 @@ impl ModuleKey {
     #[must_use]
     pub fn prelude() -> Self {
         Self(PRELUDE.to_owned())
+    }
+
+    /// The key of the standard module `name`: `@std/name` (N45).
+    ///
+    /// Owned by the toolchain like the prelude's, so `@std/text` is one module in every
+    /// project; [`ModuleKey::relative`] can never produce one.
+    #[must_use]
+    pub fn std(name: &str) -> Self {
+        Self(format!("{STD}/{name}"))
+    }
+
+    /// Whether this is a standard module's key.
+    #[must_use]
+    pub fn is_std(&self) -> bool {
+        self.0.starts_with("@std/")
     }
 
     /// Whether this is the core prelude's key.
