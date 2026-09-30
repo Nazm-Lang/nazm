@@ -58,7 +58,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 4 | Memory model and reclamation | VERIFIED for the current type universe |
 | 5 | Effects | PARTIAL |
 | 6 | Capabilities (language) | PARTIAL |
-| 7 | Provenance and information flow (language) | MISSING |
+| 7 | Provenance and information flow (language) | PARTIAL |
 | 8 | Core IR | MISSING |
 | 9 | MIR | MISSING |
 | 10 | LIR and the backend contract | PARTIAL |
@@ -88,7 +88,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 32 | Reproducibility and provenance | PARTIAL |
 | 33 | Platform and target matrix | PARTIAL |
 
-Nine VERIFIED, fifteen PARTIAL, three DESIGNED, two RESEARCH, six MISSING. The shape is
+Nine VERIFIED, sixteen PARTIAL, three DESIGNED, two RESEARCH, five MISSING. The shape is
 worth reading directly: **everything verified is either a front-end capability, a tooling
 interface, or an evidence mechanism.** Nothing in the semantic core — ownership, effects,
 capabilities, provenance — exists at all, and that is the accurate summary of where the
@@ -758,21 +758,58 @@ plan of record and then not adopted. N37 adopted a capability parameter on `main
 a compile error with a span — met for every function that declares its effects, and not for an
 ambient one, which is the bridge above.
 
-### 7. Provenance and information flow, as a language feature — MISSING
+### 7. Provenance and information flow, as a language feature — PARTIAL
 
-**Evidence of absence** · No labels, lattice, sanitizers or declassification anywhere in
-the language crates. `architecture.md` §5 designs a lattice-valued qualifier
-(`Untrusted`, `Secret`, `PII`) and records that an earlier draft calling provenance
-*"nearly free once effects exist"* was overclaiming.
+*N38, 2026-09-30: Provenance identity v1 — VERIFIED; Explicit data-flow propagation v1 — VERIFIED;
+Function summary propagation v1 — VERIFIED; Cross-module provenance summaries v1 — VERIFIED;
+Restricted-flow checking v1 — VERIFIED. Implicit flow, field and element precision, user labels,
+declassification and runtime tracking are not here.* Four compiler-owned origins with stable ids —
+`argument`, `file`, `authority`, `unknown` — entered only by the built-ins that bring data in (an
+exhaustive table on their identity) and by `main`'s capabilities (`crates/nazm-sema/src/provenance.rs`).
+Each module's checked bodies are reduced to flows over parameters and calls, and the whole program's
+summaries — origins a result carries, parameters passed on, parameters reaching a sink, and what each
+parameter is handed — are solved by worklist to the least fixed point on every run
+(`crates/nazm-core/src/provenance.rs`). Facts cross modules in the check entry (`nazm.check/2`), by
+durable name, so a reused module still contributes them and no conclusion is cached. One restricted
+flow: in a function with a declared effect set, `write_file`'s path may not derive from a file's
+contents or from shared storage the checker does not follow, directly or through any function whose
+parameter reaches it (`N0372`, one witness chain). Tools: `nazm.context/3`, `nazm.snapshot/3`,
+`nazm.delta/3` (`architecture.md` §7.40, `spec.md` *Provenance*). Evidence:
+`crates/nazm-core/tests/provenance.rs` — the sources and that output is not input; joins through
+operators, built-ins, records, variants, `Result`, `?` and loops, in any order; pass-through, derived
+and constant-returning summaries (a constant is never tainted); conditions contributing nothing;
+recursion, mutual recursion and reversed source order; shared storage and channels `unknown`;
+authority handed through passing, records and a `spawn`; provenance adding no effect and granting no
+authority; the restricted path refused with its witness, through declared, undeclared, nested and
+spawned helpers, and allowed from the command line or the program; the codes' order; a 2,000-long
+chain and a 500-long cycle settling. `crates/nazm-cli/tests/incremental.rs` — a callee's body change
+reaching a caller the cache reused, both ways, and every module reused; a helper in another module
+carrying the rule; an entry keeping the facts. `crates/nazm-service/tests/snapshot.rs` and
+`context.rs` — a provenance-only change as its own section where no byte of the function moved, and
+the packet's summary. `crates/nazm-cli/tests/provenance.rs` — `examples/provenance/` agreeing
+interpreted and compiled, and a refused flow never built. Twenty-five N38 mutations (area 30).
 
-**Limitation** · Every question that makes information flow usable is open in
-`docs/spec.md`: implicit flows, sanitizer declaration, label propagation through a
-projection, declassification authority, and what label a value from C carries.
+**Limitation** · **Explicit data flow only**: a value is not tainted by the condition that chose it,
+so this is not non-interference, and timing and every side channel are outside it. **Coarse**: records,
+variants and `Result` are tracked whole, and every read of a sequence, `Vec` or channel is `unknown`,
+because aliasing hides their writers — conservative, and over-restrictive for a path built in one. One
+sink, `write_file`'s path; no user labels, sanitisers, declassification or policy. **The bridge**: a
+function with no declared effect set is not checked itself, though explicit code cannot launder
+through it. Authority has no restriction of its own, since types already keep it out of every output.
+Static only: nothing is tracked at runtime. Checking `compiler/emit.nz` costs about 10 % more.
 
-**Next dependency** · Effects and a MIR that tracks places.
+**Next dependency** · For implicit flow, a control-dependence model; for precision, a MIR that tracks
+places; for more sinks and declassification, a policy design; for foreign code, FFI summaries.
+
+*Before N38 this row was MISSING.* **Evidence of absence, then** · No labels, lattice, sanitizers or
+declassification anywhere in the language crates. `architecture.md` §5 designs a lattice-valued
+qualifier (`Untrusted`, `Secret`, `PII`) and records that an earlier draft calling provenance
+*"nearly free once effects exist"* was overclaiming; N38 is not that qualifier.
 
 **Accepted when** · A `Secret` reaching an output is refused, with a stated and documented
-approximation of what the analysis misses.
+approximation of what the analysis misses — met in kind for one origin and one sink (a file's contents
+at `write_file`'s path), with the approximation above; `Secret`, as a label a program writes, does not
+exist.
 
 ---
 
@@ -1627,7 +1664,7 @@ callees (N25; `not_applicable` for a type) and diagnostics inside it; effects, c
 semantic changes and deltas are `unsupported`, never empty. Paths are source-root-relative and
 nothing session-local is serialised. `nazm context --json` prints it; `nazm-mcp`
 (`crates/nazm-mcp/src/main.rs`), on the official Rust SDK, serves it with
-`schema/nazm.context-2.json` as its output schema. This establishes semantic context retrieval for
+`schema/nazm.context-3.json` (`-2` before N38) as its output schema. This establishes semantic context retrieval for
 those three kinds and a compact-by-design contract for the fields it promises; it does not make a
 packet sufficient for every task, and G68–G70 remain broader. Evidence:
 `crates/nazm-service/tests/context.rs` — a function, record and enum each the same packet from its

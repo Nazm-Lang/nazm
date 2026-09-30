@@ -13,9 +13,9 @@ against them — so these documents are tested rather than described.
 | `nazm.test/1` | `nazm test --json` | stdout | one object per case |
 | `nazm.check-report/1` | `nazm check --cache-report` | stdout | one object |
 | `nazm.build-report/1` | `nazm build --build-report` | stdout | one object, before the executable's path |
-| `nazm.context/2` | `nazm context --json`, and the `nazm-mcp` tool `nazm.semantic_context` | stdout; the tool result's structured content | one object |
-| `nazm.snapshot/2` | `nazm snapshot --json`, and the `nazm-mcp` tool `nazm.semantic_snapshot` | stdout; the tool result's structured content | one object |
-| `nazm.delta/2` | `nazm delta --json`, and the `nazm-mcp` tool `nazm.semantic_delta` | stdout; the tool result's structured content | one object |
+| `nazm.context/3` | `nazm context --json`, and the `nazm-mcp` tool `nazm.semantic_context` | stdout; the tool result's structured content | one object |
+| `nazm.snapshot/3` | `nazm snapshot --json`, and the `nazm-mcp` tool `nazm.semantic_snapshot` | stdout; the tool result's structured content | one object |
+| `nazm.delta/3` | `nazm delta --json`, and the `nazm-mcp` tool `nazm.semantic_delta` | stdout; the tool result's structured content | one object |
 | `nazm.patch/1` | `nazm patch rename --json`, `nazm patch fix --json`, and the `nazm-mcp` tool `nazm.semantic_patch` | stdout; the tool result's structured content | one object |
 | `nazm.diagnostic-index/1` | `nazm diagnostics --json`, and the `nazm-mcp` tool `nazm.diagnostics` | stdout; the tool result's structured content | one object |
 | `nazm.diagnostic-detail/1` | `nazm diagnostics --detail ID --state DIGEST --json`, and the `nazm-mcp` tool `nazm.diagnostic_detail` | stdout; the tool result's structured content | one object |
@@ -67,6 +67,20 @@ change is a `shape` change there and needed no new field; whether a function is 
 whether `effects.declared` is `null`, which already meant *declares none*. The persisted
 module interface, which is not one of these schemas, stays `nazm.interface/6` for the same
 reason: a capability parameter is written as every built-in type already is.
+
+**Applied to N38, provenance.** Three schemas moved, each because an object valid under the old
+major could not carry what the new one must say: `nazm.context/3` adds a function's
+`provenance` — the origins its result carries, the parameters it passes on and those reaching
+`write_file`'s path, and what each parameter is handed; `nazm.snapshot/3` adds a `provenance`
+digest per function; `nazm.delta/3` reports it. A `/2` reader would not know to compare the new
+section, and a function's provenance can change with no byte of it changing — when a callee's
+body does — so reporting it under `/2` would call such a function unchanged. One code appeared,
+`N0372`: in a function with a declared effect set, `write_file`'s path derives from a file's
+contents or from a sequence or channel the checker does not follow. Its primary span is the
+`write_file`, or the call handing such a value to a function whose parameter reaches one; its
+secondary labels are one chain to the sink and to where the origin entered; it carries no fix.
+The provenance facts themselves are machine-readable only in the packet; the persisted module
+interface stays `nazm.interface/6`, and the cache's own entry format moved to `nazm.check/2`.
 
 A consumer that fails on an unrecognised field is not compatible with this contract, and
 the `additionalProperties: false` in the schema documents is a statement about *this*

@@ -3592,7 +3592,7 @@ serialisation. The same sources and question give the same bytes, from any check
 **The CLI and the MCP server.** `nazm context` and `nazm-mcp` each open the root from disk, build
 the packet and drop everything: no packet, analysis or graph outlives a request. `nazm-mcp` is its
 own crate and binary on the official Rust SDK (`rmcp`), stdio only, with one tool,
-`nazm.semantic_context` (`file`, `byte_offset`), whose output schema is `schema/nazm.context-2.json`
+`nazm.semantic_context` (`file`, `byte_offset`), whose output schema is `schema/nazm.context-3.json`
 and whose result carries the packet once, as structured content, with an empty `content`;
 it advertises tools and nothing else, and answers resources, prompts and completions as methods it
 does not have. The root is fixed at startup; each call reads the disk as it is then, so an agent's
@@ -4442,6 +4442,84 @@ user-defined capabilities, channels as authority, restriction profiles, foreign 
 authority, runtime enforcement, retiring the bridge, and the Nazm-written compiler reading
 capabilities — no source it reads declares one (`examples/capabilities/` is outside its
 agreement tests' folders).
+
+## 7.40 Provenance and information flow — settled by N38, 2026-09-30
+
+```text
+check_unit      each module's bodies, as before
+  │
+facts           crate::provenance::facts          one walk per body over resolution (vars, callees):
+  │                                                 FunctionFacts { calls, result, sinks } as Flows
+  │                                                 Flow = origins + why spans + params + call indices
+  │             Reuse::checked_clean(m, facts)    kept in nazm.check/2 beside the interface
+  │             Reuse::facts(m)                   a reused module's, rehydrated by durable name
+solve           crate::provenance::solve          every module's facts, every run:
+  │                                                 worklist 1: origins + passed-on params (least fixed point)
+  │                                                 worklist 2: params reaching write_file's path
+  │                                                 fixed point 3: origins each param is handed
+restrict        explicit functions only           N0372 at the sink or the call, one witness chain
+  │
+tools           FnDef.provenance → nazm.context/3 · nazm.snapshot/3 · nazm.delta/3
+```
+
+**Provenance authority.** `nazm_sema::Origin` is the compiler's: four variants with stable ids —
+`argument`, `file`, `authority`, `unknown` — and the absence of all four is local. A built-in's flow
+is `Origin::of_intrinsic`, an exhaustive table on its identity: a source of one origin, a function
+of its arguments, a read out of shared storage (`unknown`), a fresh handle, or the one sink. No
+source syntax names an origin, so none can be forged.
+
+**Summary representation.** A body is reduced once to `FunctionFacts`: its call sites (callee,
+place, each argument's `Flow`), its result's `Flow` and its sinks. A `Flow` is a set of origins with
+the first span each was met at, the enclosing function's parameters and indices of its own calls —
+bounded by the body, whatever joins it. Solving turns each into a `Summary`: result origins,
+passed-on parameters, parameters reaching a sink, and the origins each parameter is handed. There
+is no symbolic execution and no per-operation identity; a function returning a constant has an
+empty summary.
+
+**The join law and the walk.** `Flow::join` is a set union and reports whether it grew. Bindings
+are flow-insensitive slots: a walk joins every assignment into its slot and re-walks only if a slot
+grew after the same walk read it, which is exactly when another walk could differ — so a body
+settles in one walk unless a loop or a later assignment feeds an earlier read. Conditions are walked
+for their calls and contribute nothing to values.
+
+**Fixed points.** Three, over the settled facts of every module. Summaries grow from empty; a
+worklist re-queues the callers of a function whose summary grew, seeded callees-last-first, and
+empties because origins and parameter positions are finite — recursion, mutual recursion and import
+cycles need no special case, and source order changes how soon, never what. Reaching a sink is a
+second worklist over the settled values; what parameters are handed is a third. Call values inside
+one function are their own small fixed point, since a loop can feed a call's result into its own
+argument.
+
+**Module persistence.** Facts name callees by module key and name, and places by byte range in the
+module's own file, as `nazm_iface::PersistentFacts`. They are a function of exactly what a module's
+`CheckKey` covers — its source and its imports' declarations — so they sit in the check entry, whose
+schema moved to `nazm.check/2`, and no key changed. A reused module's facts are rehydrated strictly;
+anything that does not fit this compilation is no facts, and a module without facts is solved as the
+worst case — every origin `unknown`, every parameter passed on and reaching the sink — never as
+local. `nazm.interface/6` did not move: the interface is declarations, and facts are not.
+
+**Incremental invalidation.** None is needed, and that is the design: conclusions are never cached.
+The whole program is solved every run from every module's facts, fresh or kept, so a callee's body
+edit that changes its summary reaches a caller whose own entry was reused, in the same run. What a
+cache hit saves is the body check and the walk; the solve is a few milliseconds over the facts.
+
+**Diagnostic witnesses.** `N0372` is raised only in functions with a declared effect set, at the
+`write_file` or at the call that hands a restricted value to a parameter that reaches one. Its
+labels are one deterministic chain: through callee results (`g returns data from …`) and
+pass-through calls to the span where the origin entered, and, for a call, through the callee's
+calls to its `write_file`. Diagnostics are sorted by span within a function, after its N0369s and
+N0366.
+
+**Runtime erasure.** Nothing reaches lowering: `nazm-lir` reads no provenance, and the IR of every
+example and of `compiler/emit.nz` is byte-identical under N37 and N38. The interpreter never reads a
+summary. There is no runtime tag, table or object.
+
+**Security limitations.** Explicit data flow only: implicit flow through conditions, timing and
+every side channel are outside it. Records, variants and `Result` are tracked whole; sequences,
+`Vec`s and channels are `unknown` on every read, because aliasing hides their writers. One sink.
+Ambient functions' own writes are not checked. No declassification, sanitiser, user label or
+policy exists. This is explicit information-flow provenance and a single restricted flow — not
+non-interference, confidentiality enforcement or a sandbox.
 
 ## 8. Toolchain, and one real incompatibility
 
