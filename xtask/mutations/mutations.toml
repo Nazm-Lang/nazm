@@ -1120,11 +1120,18 @@ keys each object on every unit's IR rather than on its own, which is what rebuil
 front end's dependency graph in a second key amounts to. It is sound and it throws the
 reuse away: a change anywhere invalidates everything, and the precision N5 measured — a
 dependency's body and its unused exports do not reach a caller's object — is gone
+Repointed by N41: an artefact's code is a `Code` now, and the LLVM text is its `Llvm` arm.
 """
 file = "crates/nazm-cli/src/build.rs"
-find = "            .map(|s| ObjectKey::of(LlvmInput::of(artefact.ir.as_bytes()), s.identity, s.config));"
+find = "            .map(|s| ObjectKey::of(LlvmInput::of(ir.as_bytes()), s.identity, s.config));"
 replace = """            .map(|s| {
-                let whole: String = artefacts.iter().map(|a| a.ir.as_str()).collect();
+                let whole: String = artefacts
+                    .iter()
+                    .filter_map(|a| match &a.code {
+                        nazm_lir::backend::Code::Llvm(t) => Some(t.as_str()),
+                        nazm_lir::backend::Code::Object(_) => None,
+                    })
+                    .collect();
                 ObjectKey::of(LlvmInput::of(whole.as_bytes()), s.identity, s.config)
             });"""
 
