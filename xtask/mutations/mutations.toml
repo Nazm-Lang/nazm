@@ -3284,6 +3284,7 @@ owns = ["crates/nazm-lir/"]
 targets = [
     { package = "nazm-lir", lib = true },
     { package = "nazm-cli", test = "runtime" },
+    { package = "nazm-cli", test = "scheduler" },
     { package = "nazm-cli", test = "mir" },
     { package = "nazm-cli", test = "memory" },
     { package = "nazm-cli", test = "value_blocks" },
@@ -8892,3 +8893,51 @@ replace = """  %empty = icmp sle i64 %len, 0
   %e2 = or i1 %empty, %shut
   br i1 %e2, label %maybe, label %take"""
 killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_services_keep_their_contract_when_called_directly" }]
+
+# --- N44: structured concurrency and the scheduler ---------------------------------------------
+
+[[mutation]]
+name = "n44-a-scope-swallows-its-tasks-failures"
+why = "`nz.scope_join` never takes a task's failure, so a task that failed is as if it had succeeded and the program ends 0"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = "  %take = and i1 %none, %this"
+replace = "  %take = and i1 %none, false"
+killers = [{ package = "nazm-cli", test = "scheduler", name = "a_failure_deep_in_nested_scopes_joins_every_level_and_reclaims_everything" }]
+
+[[mutation]]
+name = "n44-a-scope-reports-its-last-failure"
+why = "`nz.scope_join` keeps the last failure in start order, so which task is reported depends on how many failed after it"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = "  %take = and i1 %none, %this"
+replace = "  %take = and i1 %this, true"
+killers = [{ package = "nazm-cli", test = "scheduler", name = "a_scope_reports_its_first_failure_in_start_order_not_in_time" }]
+
+[[mutation]]
+name = "n44-the-scope-joins-no-task"
+why = "`nz.scope_join` looks at no task, so every task outlives its scope unjoined and its failure is never reported"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = """  %len = phi i64 [ 0, %entry ], [ %len2, %after ]
+  %more = icmp slt i64 %i, %n"""
+replace = """  %len = phi i64 [ 0, %entry ], [ %len2, %after ]
+  %more = icmp slt i64 %i, 0"""
+killers = [{ package = "nazm-cli", test = "scheduler", name = "a_failure_deep_in_nested_scopes_joins_every_level_and_reclaims_everything" }]
+
+[[mutation]]
+name = "n44-a-send-wakes-nobody"
+why = "`nz.chan_send` queues its value without waking the receivers waiting for one, so a receiver that was already waiting waits for ever"
+file = "crates/nazm-lir/src/runtime/core.rs"
+find = """  %n1 = add i64 %len, 1
+  store i64 %n1, ptr %lenp
+  %b = call i32 @pthread_cond_broadcast(ptr %cv)"""
+replace = """  %n1 = add i64 %len, 1
+  store i64 %n1, ptr %lenp
+  %b = add i32 0, 0"""
+killers = [{ package = "nazm-cli", test = "scheduler", name = "a_receiver_waiting_on_an_empty_channel_is_woken_by_a_send" }]
+
+[[mutation]]
+name = "n44-an-early-exit-leaves-its-scope-unjoined"
+why = "a `return`, `break` or `continue` out of a scope emits no join, so MIR's validator refuses the function and a task could outlive its scope"
+file = "crates/nazm-mir/src/lower.rs"
+find = "                Entry::Scope(l) => self.push(StatementKind::ScopeJoin { list: *l }, at),"
+replace = "                Entry::Scope(_) => {}"
+killers = [{ package = "nazm-cli", test = "concurrent", name = "a_return_out_of_a_scope_still_waits_for_its_tasks" }]
