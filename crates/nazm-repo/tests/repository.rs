@@ -372,7 +372,7 @@ fn an_understand_context_is_the_seed_its_direct_links_and_its_authority() {
         "fn helper(p: P) -> Int { far() + p.x }"
     );
     assert_eq!(seed["source_bytes"], 38);
-    assert_eq!(seed["retrieval"]["schema"], "nazm.context/2");
+    assert_eq!(seed["retrieval"]["schema"], "nazm.context/3");
     let byte = seed["retrieval"]["args"]["byte"].as_u64().unwrap() as usize;
     assert_eq!(&MAIN[byte..byte + 6], "helper");
     // What its signature names, and what it uses — by shape, without their source.

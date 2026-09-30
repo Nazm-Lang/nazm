@@ -163,9 +163,9 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
             ]
         );
         for (tool, schema) in tools.iter().zip([
-            "nazm.context-2.json",
-            "nazm.snapshot-2.json",
-            "nazm.delta-2.json",
+            "nazm.context-3.json",
+            "nazm.snapshot-3.json",
+            "nazm.delta-3.json",
             "nazm.patch-1.json",
             "nazm.diagnostic-index-1.json",
             "nazm.diagnostic-detail-1.json",
@@ -305,10 +305,10 @@ fn the_server_offers_read_only_tools_and_nothing_else() {
         let mut props: Vec<&String> = input["properties"].as_object().unwrap().keys().collect();
         props.sort();
         assert_eq!(props, ["byte_offset", "file"]);
-        // The output schema is `nazm.context/2`, exactly as the repository publishes it.
+        // The output schema is `nazm.context/3`, exactly as the repository publishes it.
         let published: Value = serde_json::from_str(
             &std::fs::read_to_string(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/nazm.context-2.json"),
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/nazm.context-3.json"),
             )
             .unwrap(),
         )
@@ -381,7 +381,7 @@ fn bad_requests_are_errors_and_other_files_are_never_read() {
             assert!(error, "{file}");
             assert_eq!(
                 v,
-                json!({"schema": "nazm.context/2", "status": "unavailable", "reason": "not_in_compilation"}),
+                json!({"schema": "nazm.context/3", "status": "unavailable", "reason": "not_in_compilation"}),
                 "{file}"
             );
             assert!(!v.to_string().contains("secret"));
@@ -563,7 +563,7 @@ fn standard_output_is_the_protocol_and_nothing_else() {
         direct(&root, &root, at(MAIN, "f(p"))
     );
     let wire = answer.to_string();
-    assert_eq!(wire.matches("nazm.context/2").count(), 1, "{wire}");
+    assert_eq!(wire.matches("nazm.context/3").count(), 1, "{wire}");
     assert_eq!(wire.matches("\"availability\"").count(), 1, "{wire}");
     assert!(by(4).get("error").is_some(), "unknown tool: {}", by(4));
     assert!(by(5).get("error").is_some(), "no resources: {}", by(5));
@@ -578,13 +578,13 @@ fn a_snapshot_crosses_the_protocol_unchanged_and_a_delta_needs_only_it() {
         let (client, _) = connect(&root).await;
         let (snapshot, error) = call_with(&client, SNAPSHOT, json!({})).await;
         assert!(!error, "{snapshot}");
-        assert_eq!(snapshot["schema"], "nazm.snapshot/2");
+        assert_eq!(snapshot["schema"], "nazm.snapshot/3");
         assert_eq!(snapshot, direct_snapshot(&root));
         // The client keeps the snapshot; the server keeps nothing. Handed back unchanged
         // as the baseline, nothing has changed.
         let (delta, error) = call_with(&client, DELTA, json!({"baseline": snapshot})).await;
         assert!(!error, "{delta}");
-        assert_eq!(delta["schema"], "nazm.delta/2");
+        assert_eq!(delta["schema"], "nazm.delta/3");
         assert_eq!(delta["changed"], json!([]));
         assert_eq!(
             delta["unchanged"],
@@ -696,12 +696,12 @@ fn a_snapshot_and_a_delta_travel_once() {
     let (snapshot, wire) = by(2);
     assert_eq!(snapshot["result"]["content"], json!([]));
     assert_eq!(snapshot["result"]["structuredContent"], baseline);
-    assert_eq!(wire.matches("nazm.snapshot/2").count(), 1, "{wire}");
+    assert_eq!(wire.matches("nazm.snapshot/3").count(), 1, "{wire}");
     assert_eq!(wire.matches("\"unsupported\"").count(), 1, "{wire}");
     let (delta, wire) = by(3);
     assert_eq!(delta["result"]["content"], json!([]));
     assert_eq!(delta["result"]["structuredContent"]["status"], "available");
-    assert_eq!(wire.matches("nazm.delta/2").count(), 1, "{wire}");
+    assert_eq!(wire.matches("nazm.delta/3").count(), 1, "{wire}");
     assert_eq!(wire.matches("\"unsupported\"").count(), 1, "{wire}");
     eprintln!(
         "nazm-mcp frames: snapshot {} bytes (structured {}), delta {} bytes (structured {})",

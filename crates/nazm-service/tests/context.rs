@@ -244,7 +244,7 @@ fn a_position_that_names_no_source_definition_has_no_packet() {
     let v = packet(&main, &p.path("other.nz"), 3);
     assert_eq!(
         v,
-        json!({"schema": "nazm.context/2", "status": "unavailable", "reason": "not_in_compilation"})
+        json!({"schema": "nazm.context/3", "status": "unavailable", "reason": "not_in_compilation"})
     );
     assert_eq!(
         packet(&main, Path::new("/etc/passwd"), 0)["reason"],
@@ -838,6 +838,49 @@ fn two_dependencies_of_one_spelling_are_two_dependencies() {
 }
 
 // ---------------------------------------------------------------------------------------
+// N38: a function's provenance is the solver's.
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_functions_packet_carries_its_provenance_summary() {
+    const SRC: &str = "fn save(io: IoCap, path: Str, data: Str) -> Int ! { io } { write_file(path, data) }\n\
+        fn load(name: Str) -> Str { read_file(name) }\n\
+        fn one(x: Str) -> Int ! {} { 1 }\n\
+        struct P { x: Int, }\n\
+        fn main(io: IoCap) -> Int ! { io } { save(io, arg(0), load(\"in\")) + one(\"x\") + P(x: 1).x }\n";
+    let p = Project::new(&[("main.nz", SRC)]);
+    let main = p.path("main.nz");
+    let of = |name: &str| {
+        packet(&main, &main, at(SRC, &format!("fn {name}("), 0) + 3)["provenance"].clone()
+    };
+    assert_eq!(
+        of("save"),
+        json!({"origins": [], "passes_on": ["path", "data"], "reaches_write_path": ["path"],
+               "receives": [{"param": "io", "origins": ["authority"]},
+                            {"param": "path", "origins": ["argument"]},
+                            {"param": "data", "origins": ["file"]}]})
+    );
+    assert_eq!(
+        of("load"),
+        json!({"origins": ["file"], "passes_on": ["name"], "reaches_write_path": [],
+               "receives": [{"param": "name", "origins": []}]})
+    );
+    assert_eq!(
+        of("one"),
+        json!({"origins": [], "passes_on": [], "reaches_write_path": [],
+               "receives": [{"param": "x", "origins": []}]})
+    );
+    assert_eq!(
+        of("main"),
+        json!({"origins": ["argument", "file"], "passes_on": [], "reaches_write_path": [],
+               "receives": [{"param": "io", "origins": []}]})
+    );
+    let record = packet(&main, &main, at(SRC, "struct P", 0) + 7);
+    assert_eq!(record["provenance"], Value::Null);
+    assert_eq!(record["schema"], "nazm.context/3");
+}
+
+// ---------------------------------------------------------------------------------------
 // N36: a function's effects are the checker's.
 // ---------------------------------------------------------------------------------------
 
@@ -896,7 +939,7 @@ fn a_functions_packet_carries_its_effects_and_why_from_the_checker() {
     // A record has no effects to have: null, not empty.
     let record = packet(&main, &main, at(FX, "struct P", 0) + 7);
     assert_eq!(record["effects"], Value::Null);
-    assert_eq!(record["schema"], "nazm.context/2");
+    assert_eq!(record["schema"], "nazm.context/3");
     // And the signature shows a declared set as the formatter writes it.
     let both_packet = packet(&main, &main, at(FX, "fn both(", 0) + 3);
     assert_eq!(

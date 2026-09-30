@@ -634,7 +634,7 @@ fn a_renamed_function_is_its_old_key_removed_and_new_key_added_in_the_delta() {
         d["changed"][1]["sections"],
         json!({"source": false, "shape": false, "dependencies": false, "related_types": false,
                "references": true, "callers": null, "callees": null, "diagnostics": false,
-               "effects": null})
+               "effects": null, "provenance": null})
     );
     let sections = &d["changed"][0]["sections"];
     for s in ["source", "dependencies", "callees"] {
