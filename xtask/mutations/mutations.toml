@@ -9018,3 +9018,136 @@ file = "crates/nazm-sema/src/key.rs"
 find = """        if key.0 == STD || key.0.starts_with("@std/") {"""
 replace = """        if key.0 == STD && key.0.starts_with("@std/") {"""
 killers = [{ package = "nazm-sema", lib = true, name = "stdlib::tests::no_project_path_is_keyed_as_a_standard_module" }]
+
+# --- N46: packages, locking and reproducible builds -------------------------------------------
+
+
+[[profile]]
+name = "package"
+why = "packages are observed by resolving, locking and building them: the package suite, and the resolver's own tests"
+owns = ["crates/nazm-package/"]
+targets = [
+    { package = "nazm-cli", test = "packages" },
+    { package = "nazm-package", lib = true },
+]
+
+[[mutation]]
+name = "n46-the-lock-ignores-the-digest"
+why = "`--locked` compares identities and never digests, so a dependency whose sources changed after locking builds as if it had not"
+file = "crates/nazm-package/src/lib.rs"
+find = "            } else if l.digest != p.digest {"
+replace = "            } else if l.digest != l.digest {"
+killers = [{ package = "nazm-cli", test = "packages", name = "the_lockfile_is_a_function_of_the_packages_and_a_locked_build_is_held_to_it" }]
+
+[[mutation]]
+name = "n46-resolution-keeps-discovery-order"
+why = "packages are listed in the order resolution met them rather than by name, so the lockfile's order depends on the shape of the graph"
+file = "crates/nazm-package/src/lib.rs"
+find = """    order.sort_by_key(|&i| r.found.get(i).map(|f| f.0.name.clone()));
+"""
+replace = ""
+killers = [{ package = "nazm-cli", test = "packages", name = "a_large_package_graph_resolves_and_locks_deterministically" }]
+
+[[mutation]]
+name = "n46-a-declared-version-is-not-checked"
+why = "a dependency's declared version is not compared with its manifest's, so a build silently uses another version than it asked for"
+file = "crates/nazm-package/src/lib.rs"
+find = """            if manifest.version != v {
+                return Err(Box::new(version_mismatch(name, v, manifest.version, by)));"""
+replace = """            if manifest.version != manifest.version {
+                return Err(Box::new(version_mismatch(name, v, manifest.version, by)));"""
+killers = [{ package = "nazm-cli", test = "packages", name = "every_resolution_refusal_has_its_own_code" }]
+
+[[mutation]]
+name = "n46-a-cycle-is-not-noticed"
+why = "resolution does not look for the package on the path it is resolving, so a cycle recurses until the depth bound and is reported without its path"
+file = "crates/nazm-package/src/lib.rs"
+find = "        if let Some(at) = self.path.iter().position(|p| *p == canonical) {"
+replace = "        if let Some(at) = self.path.iter().position(|p| *p == canonical && false) {"
+killers = [{ package = "nazm-cli", test = "packages", name = "every_resolution_refusal_has_its_own_code" }]
+
+[[mutation]]
+name = "n46-a-dependency-module-is-not-keyed-by-its-package"
+why = "a dependency's module is keyed by its path alone, so two packages' `lib.nz` are one module to every cache and packet"
+file = "crates/nazm-sema/src/key.rs"
+find = """        Some(Self(format!("{prefix}/{}", inner.0)))"""
+replace = "        Some(Self(inner.0))"
+killers = [{ package = "nazm-cli", test = "packages", name = "a_dependency_s_module_is_keyed_by_its_package" }]
+
+[[mutation]]
+name = "n46-the-link-mixes-in-a-time"
+why = "the link is not told to leave time out of the executable, so the Apple linker gives every link a new UUID and no two builds are the same"
+file = "crates/nazm-cli/src/backend.rs"
+find = """            .env("ZERO_AR_DATE", "1")
+"""
+replace = ""
+killers = [{ package = "nazm-cli", test = "packages", name = "two_copies_built_from_empty_caches_are_byte_identical" }]
+
+[[mutation]]
+name = "n46-a-temporary-name-reaches-the-executable"
+why = "the executable is linked under a temporary name with the process id in it, which the linker writes into its signature"
+file = "crates/nazm-cli/src/build.rs"
+find = "    let tmp_exe = work.join(output.file_name().unwrap_or_default());"
+replace = """    let tmp_exe = sibling(&output, &format!(".nazm-{stamp}.out"));"""
+killers = [{ package = "nazm-cli", test = "packages", name = "two_copies_built_from_empty_caches_are_byte_identical" }]
+
+[[mutation]]
+name = "n46-the-lockfile-records-an-absolute-path"
+why = "a package's source is recorded as its absolute directory, so the same packages lock to different bytes in every checkout"
+file = "crates/nazm-package/src/lib.rs"
+find = """            source: format!("path+{}", relative(&root_dir, dir)),"""
+replace = """            source: format!("path+{}", dir.display()),"""
+killers = [{ package = "nazm-cli", test = "packages", name = "the_lockfile_is_a_function_of_the_packages_and_a_locked_build_is_held_to_it" }]
+
+[[mutation]]
+name = "n46-a-dependency-s-dependency-is-visible"
+why = "an import is resolved against every package in the build rather than the importing package's own dependencies, so a transitive dependency becomes reachable"
+file = "crates/nazm-service/src/load.rs"
+find = """        .and_then(|p| p.dependencies.get(name))
+        .and_then(|&i| g.packages.get(i));"""
+replace = """        .and(g.packages.iter().position(|p| p.name == name))
+        .and_then(|i| g.packages.get(i));"""
+killers = [{ package = "nazm-cli", test = "packages", name = "a_package_sees_its_own_dependencies_and_nothing_else" }]
+
+[[mutation]]
+name = "n46-an-import-may-leave-its-package"
+why = "a relative import is not held inside its package's source root, so a package reaches another's files by path"
+file = "crates/nazm-service/src/load.rs"
+find = "                let inside = target.canonicalize().map_or(true, |t| t.starts_with(root));"
+replace = "                let inside = target.canonicalize().map_or(true, |t| t.starts_with(root) || true);"
+killers = [{ package = "nazm-cli", test = "packages", name = "a_package_sees_its_own_dependencies_and_nothing_else" }]
+
+[[mutation]]
+name = "n46-a-manifest-accepts-unknown-keys"
+why = "`[package]` accepts keys it does not know, so a manifest carries settings the compiler silently ignores"
+file = "crates/nazm-package/src/lib.rs"
+find = """#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPackage {"""
+replace = """#[derive(Debug, Deserialize)]
+struct RawPackage {"""
+killers = [{ package = "nazm-cli", test = "packages", name = "every_resolution_refusal_has_its_own_code" }]
+
+[[mutation]]
+name = "n46-the-lockfile-is-rewritten-unchanged"
+why = "`nazm lock` rewrites the lockfile even when its bytes would not change"
+file = "crates/nazm-package/src/lib.rs"
+find = "    if std::fs::read_to_string(&path).is_ok_and(|t| t == text) {"
+replace = "    if std::fs::read_to_string(&path).is_ok_and(|t| t == text && t.is_empty()) {"
+killers = [{ package = "nazm-cli", test = "packages", name = "the_lockfile_is_a_function_of_the_packages_and_a_locked_build_is_held_to_it" }]
+
+[[mutation]]
+name = "n46-a-package-key-does-not-read-back"
+why = "a dependency module's key is not accepted when a stored entry is read, so no dependency is ever reused from the cache"
+file = "crates/nazm-sema/src/key.rs"
+find = "                return (name_ok && version_ok && inner.0 == rest)"
+replace = "                return (name_ok && version_ok && inner.0 == rest && false)"
+killers = [{ package = "nazm-cli", test = "packages", name = "an_unchanged_dependency_is_reused_and_a_changed_one_is_not" }]
+
+[[mutation]]
+name = "n46-a-standard-key-does-not-read-back"
+why = "a standard module's key is not accepted when a stored entry is read, so no standard module is ever reused from the cache"
+file = "crates/nazm-sema/src/key.rs"
+find = "            return ok.then(|| Self::std(name));"
+replace = "            return None;"
+killers = [{ package = "nazm-cli", test = "stdlib", name = "a_standard_module_is_reused_from_the_cache_like_any_module" }]
