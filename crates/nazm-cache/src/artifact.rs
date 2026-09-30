@@ -31,7 +31,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use nazm_iface::{InterfaceHash, PersistentUnitInterface};
+use nazm_iface::{InterfaceHash, PersistentFacts, PersistentUnitInterface};
 use nazm_sema::key::ModuleKey;
 
 use crate::identity::CheckerIdentity;
@@ -45,7 +45,11 @@ use crate::source::SourceFingerprint;
 /// An unknown version is refused, never reinterpreted — a cache is the one place where
 /// reinterpreting a future file's fields as the current ones fails silently and
 /// successfully.
-pub const SCHEMA: &str = "nazm.check/1";
+///
+/// `/2` since N38: an entry also carries the module's provenance facts, which a run that
+/// reuses the module needs for the whole program's summaries. A `/1` entry has none, so it
+/// is refused and the module checked again — never read as a module with no flows.
+pub const SCHEMA: &str = "nazm.check/2";
 
 /// One dependency, as the artefact records it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +83,8 @@ pub struct CheckArtifact {
     /// The fingerprint of that interface, so a dependent can compute its own key from
     /// this entry without re-deriving one.
     pub interface_hash: String,
+    /// Its bodies reduced to provenance flows (N38): a function of exactly the inputs above.
+    pub provenance: PersistentFacts,
 }
 
 /// Why a stored check result could not be used.
@@ -137,6 +143,7 @@ pub struct Reusable {
     pub module: ModuleKey,
     pub interface: PersistentUnitInterface,
     pub interface_hash: InterfaceHash,
+    pub provenance: PersistentFacts,
 }
 
 impl CheckArtifact {
@@ -176,7 +183,15 @@ impl CheckArtifact {
                 .collect(),
             interface,
             interface_hash: interface_hash.to_string(),
+            provenance: PersistentFacts::default(),
         })
+    }
+
+    /// The same entry, carrying `facts` as the module's provenance facts.
+    #[must_use]
+    pub fn with_provenance(mut self, facts: PersistentFacts) -> Self {
+        self.provenance = facts;
+        self
     }
 
     /// The canonical bytes of this entry.
@@ -264,6 +279,7 @@ impl CheckArtifact {
             module,
             interface,
             interface_hash,
+            provenance: self.provenance.clone(),
         })
     }
 }

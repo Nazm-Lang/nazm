@@ -75,6 +75,8 @@ struct Entry {
     interface: Option<InterfaceHash>,
     dependencies: Option<Vec<Dependency>>,
     must_check: bool,
+    /// A reused module's provenance facts (N38), as its entry kept them.
+    provenance: Option<nazm_iface::PersistentFacts>,
 }
 
 /// The cache, as the checker sees it.
@@ -84,6 +86,8 @@ struct Cache<'a> {
     checker: CheckerIdentity,
     entries: Vec<Entry>,
     tally: Tally,
+    /// The compilation's graph, for writing and reading facts by durable name.
+    graph: ModuleGraph,
 }
 
 impl<'a> Cache<'a> {
@@ -94,6 +98,7 @@ impl<'a> Cache<'a> {
             checker: CheckerIdentity::current(),
             entries: Vec::new(),
             tally: Tally::default(),
+            graph: ModuleGraph::default(),
         }
     }
 
@@ -104,6 +109,7 @@ impl<'a> Cache<'a> {
 
 impl nazm_core::Reuse for Cache<'_> {
     fn plan(&mut self, graph: &ModuleGraph, interfaces: &[UnitInterface], types: &UserTypes) {
+        self.graph = graph.clone();
         // First, what each module *is* and what it offers. Both are functions of that
         // module alone, so this pass needs no order and a cycle costs it nothing.
         self.entries = graph
@@ -160,6 +166,7 @@ impl nazm_core::Reuse for Cache<'_> {
 
             let check_key = CheckKey::of(self.checker, &key, source, &deps);
             let found = self.store.get(&check_key);
+            let mut provenance = None;
             let reuse = match found {
                 Found::Hit(r) => {
                     // The entry says what this module offers, and stage 1 has just
@@ -168,6 +175,7 @@ impl nazm_core::Reuse for Cache<'_> {
                     // two different inputs under one key — into a miss.
                     if e.published.as_ref() == Some(&r.interface) {
                         self.tally.reused += 1;
+                        provenance = Some(r.provenance);
                         true
                     } else {
                         self.tally.rejected += 1;
@@ -187,6 +195,7 @@ impl nazm_core::Reuse for Cache<'_> {
             if let Some(e) = self.entries.get_mut(m.index()) {
                 e.dependencies = Some(deps);
                 e.must_check = !reuse;
+                e.provenance = provenance;
             }
         }
     }
@@ -195,7 +204,26 @@ impl nazm_core::Reuse for Cache<'_> {
         self.at(module).is_none_or(|e| e.must_check)
     }
 
-    fn checked_clean(&mut self, module: ModuleId) {
+    fn facts(
+        &self,
+        module: ModuleId,
+        res: &nazm_core::sema::resolve::Resolution,
+    ) -> Option<nazm_core::sema::ModuleFacts> {
+        self.at(module)?
+            .provenance
+            .as_ref()?
+            .rehydrate(module, res, &self.graph)
+    }
+
+    fn checked_clean(
+        &mut self,
+        module: ModuleId,
+        facts: &nazm_core::sema::ModuleFacts,
+        res: &nazm_core::sema::resolve::Resolution,
+    ) {
+        let Some(persisted) = nazm_iface::PersistentFacts::of(facts, res, &self.graph) else {
+            return;
+        };
         let Some(e) = self.entries.get(module.index()) else {
             return;
         };
@@ -211,6 +239,7 @@ impl nazm_core::Reuse for Cache<'_> {
         else {
             return;
         };
+        let artifact = artifact.with_provenance(persisted);
         // A store that will not take an entry is not a reason to fail a compilation: the
         // disk is full, or the tree is read-only, and the program is fine either way.
         if self.store.put(&artifact).is_ok() {

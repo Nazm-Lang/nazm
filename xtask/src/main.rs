@@ -1230,12 +1230,16 @@ fn check_cache_soundness() -> Result<(), Vec<String>> {
     let read = |rel: &str| std::fs::read_to_string(root.join(rel)).ok();
 
     // 1. The codes the checker can raise, against the list the identity is built from.
-    // The checker is `check.rs` and, since N36, the effect checker beside it.
+    // The checker is `check.rs` and, since N36, the effect checker beside it — and since
+    // N38 the provenance solver.
     let checker = match (
         read("crates/nazm-core/src/check.rs"),
         read("crates/nazm-core/src/effects.rs"),
+        read("crates/nazm-core/src/provenance.rs"),
     ) {
-        (Some(check), Some(effects)) => Some(format!("{check}\n{effects}")),
+        (Some(check), Some(effects), Some(provenance)) => {
+            Some(format!("{check}\n{effects}\n{provenance}"))
+        }
         _ => None,
     };
     match (checker, read("crates/nazm-cache/src/identity.rs")) {

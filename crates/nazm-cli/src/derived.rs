@@ -4,7 +4,7 @@
 //! artefact:
 //!
 //! ```text
-//! .nazm/check/    semantic check results     nazm.check/1
+//! .nazm/check/    semantic check results     nazm.check/2
 //! .nazm/native/   compiled objects           nazm.object/1
 //! ```
 //!

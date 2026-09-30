@@ -143,6 +143,10 @@ pub struct FnDef {
     /// For each inferred effect, the first thing in the body that requires it — in effect
     /// id order, one each. A diagnostic's witness is a chain of these.
     pub effect_reasons: Vec<crate::EffectReason>,
+    /// Its solved provenance (N38): what its result carries and which parameters reach a
+    /// restricted sink. `None` until the program is solved, and for a body that did not
+    /// parse.
+    pub provenance: Option<crate::Summary>,
     /// Every type a **generic** body's resolution mentions — its locals, what it constructs
     /// and the type arguments of what it calls — so that an instance can have each of them
     /// interned under its substitution before any native code is written. Empty for a
@@ -769,6 +773,13 @@ impl Resolution {
         if let Some(f) = self.functions.get_mut(id.index()) {
             f.inferred_effects = Some(inferred);
             f.effect_reasons = reasons;
+        }
+    }
+
+    /// Record a function's solved provenance (N38).
+    pub fn record_provenance(&mut self, id: FnId, summary: crate::Summary) {
+        if let Some(f) = self.functions.get_mut(id.index()) {
+            f.provenance = Some(summary);
         }
     }
 
