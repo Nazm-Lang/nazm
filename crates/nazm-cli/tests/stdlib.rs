@@ -177,6 +177,46 @@ fn every_standard_module_is_found_by_name_and_checks_cleanly() {
 }
 
 #[test]
+fn a_standard_module_is_reused_from_the_cache_like_any_module() {
+    // Its key, `@std/text`, reads back from a stored entry as itself.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("nazm.root"), "").unwrap();
+    std::fs::write(
+        dir.path().join("prog.nz"),
+        "use \"@std/text\";\nuse \"@std/seq\";\nfn main() -> Int { str_len(text_trim(\" a \")) }\n",
+    )
+    .unwrap();
+    let report = |o: &std::process::Output| -> (u64, u64) {
+        let text = String::from_utf8_lossy(&o.stdout).into_owned();
+        let line = text
+            .lines()
+            .find(|l| l.contains("nazm.check-report/1"))
+            .unwrap()
+            .to_owned();
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        (
+            v["checked"].as_u64().unwrap(),
+            v["reused"].as_u64().unwrap(),
+        )
+    };
+    let check = || {
+        Command::new(NAZM)
+            .current_dir(dir.path())
+            .args(["check", "prog.nz", "--cache-report"])
+            .output()
+            .unwrap()
+    };
+    let (checked, _) = report(&check());
+    assert!(checked >= 3);
+    let (checked, reused) = report(&check());
+    assert_eq!(
+        (checked, reused),
+        (0, 4),
+        "the program, two standard modules and the prelude"
+    );
+}
+
+#[test]
 fn a_standard_module_is_one_module_however_many_import_it() {
     let lib = "use \"@std/text\";\npub fn shout(s: Str) -> Str ! {} { str_concat(text_trim(s), \"!\") }\n";
     let prog = "use \"lib.nz\";\nuse \"@std/text\";\nfn main(io: IoCap) -> Int { print(shout(\"  hi \")); print(text_repeat(\"-\", 2)); 0 }\n";
