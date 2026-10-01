@@ -90,7 +90,8 @@ fn four(src: &str) -> Vec<(String, Ran)> {
             "nazm build",
         );
         assert_eq!(b.code, Some(0), "{label}: {}", b.stderr);
-        let mut c = common::bounded_exe(&exe);
+        // Many live tasks are this file's subject: see `TASKS_ADDRESS_SPACE_KB`.
+        let mut c = common::bounded_exe_within(&exe, common::TASKS_ADDRESS_SPACE_KB);
         c.env(nazm_lir::MEMORY_VARIABLE, "1");
         out.push((label.to_owned(), bounded(&mut c, label)));
     }
@@ -137,9 +138,9 @@ fn check_codes(src: &str) -> Vec<String> {
 fn five_thousand_short_tasks_finish_and_reclaim_everything() {
     // Two hundred scopes in sequence, twenty-five tasks each; every task takes a string it did
     // not allocate and one it did, and reports on a channel the parent drains after the join.
-    // Twenty-five at a time, not more: v1 starts one OS thread per task (§7.46), and a host —
-    // the contained gate's 512-process ceiling, shared with every test running beside this
-    // one — may refuse a thread with `N0404`, which is the contract but not this test's subject.
+    // Twenty-five at a time, not more: v1 starts one OS thread per task (§7.46), and a bounded
+    // host — the contained gate's 512-process ceiling, shared with every test running beside
+    // this one — may refuse a thread, which is the contract but not this test's subject.
     let src = "fn work(c: Chan, s: Str, n: Int) -> Int { let t = str_concat(s, int_to_str(n)); chan_send(c, str_len(t)); 0 }\n\
                fn main(t: SpawnCap) -> Int {\n\
                  let c = chan_new(25); let buf = ints_new(); let mut round = 0; let mut total = 0;\n\
