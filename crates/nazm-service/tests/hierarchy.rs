@@ -1069,7 +1069,14 @@ fn every_checked_call_of_the_repository_is_one_edge_occurrence_that_every_layer_
                     continue;
                 };
                 let def = res.function(to).unwrap();
-                if loaded.graph.module_of(def.name_span.file) == prelude {
+                // The prelude's and the standard library's functions (N45) are the
+                // toolchain's: no file to open, so no item in a hierarchy.
+                let module = loaded.graph.module_of(def.name_span.file);
+                if module == prelude
+                    || module
+                        .and_then(|m| loaded.graph.key(m))
+                        .is_some_and(nazm_core::sema::ModuleKey::is_std)
+                {
                     builtins += 1;
                     continue;
                 }
@@ -1106,7 +1113,7 @@ fn every_checked_call_of_the_repository_is_one_edge_occurrence_that_every_layer_
                             .canonicalize()
                             .is_ok_and(|p| p == f.locator.file)
                     })
-                    .unwrap();
+                    .unwrap_or_else(|| panic!("no loaded file is {}", f.locator.file.display()));
                 let at = nazm_span::Span::new(file, f.locator.name_start, f.locator.name_end);
                 match index.target(at) {
                     Some(ReferenceTarget::Function(id)) => u32::try_from(id.index()).unwrap(),

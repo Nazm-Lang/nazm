@@ -23,9 +23,6 @@
 
 use std::fmt;
 
-/// The directory-like prefix the toolchain reserves. No project key begins with it.
-const CORE: &str = "@core";
-
 /// The prefix of every standard module's key (N45). See [`ModuleKey::std`].
 const STD: &str = "@std";
 
@@ -64,20 +61,13 @@ impl ModuleKey {
     #[must_use]
     pub fn relative(path: &str) -> Option<Self> {
         let key = Self::fold(path)?;
-        // `@core` is the toolchain's, never a project's. A project file that happens to sit
-        // under a directory of that name compiles exactly as before and has no durable
-        // identity, so no project module can ever be keyed as the core prelude is.
-        if key.0 == CORE || key.0.starts_with("@core/") {
-            return None;
-        }
-        // Nor is `@std` (N45): a project file under a directory of that name has no durable
-        // identity, so none can be keyed as a standard module is.
-        if key.0 == STD || key.0.starts_with("@std/") {
-            return None;
-        }
-        // Nor may its first component hold an `@` (N46): `NAME@VERSION/…` is a dependency
-        // package's module, and a project path spelled that way would otherwise be keyed as
-        // one. Deeper components may: `lib/@core/x.nz` is a project's own.
+        // A first component holding an `@` belongs to a namespace that is never a project's:
+        // `@core` the toolchain's prelude, `@std` its standard library (N45), and
+        // `NAME@VERSION` a dependency package (N46). A project file that happens to sit under
+        // a directory spelled that way compiles exactly as before and has no durable identity,
+        // so no project module can ever be keyed as one of theirs is. Deeper components may
+        // hold one: `lib/@core/x.nz` is a project's own. One rule, so no check is left behind
+        // that another makes unreachable.
         if key.0.split('/').next().is_some_and(|c| c.contains('@')) {
             return None;
         }

@@ -96,9 +96,9 @@ pub struct Location {
 pub enum Target {
     /// In a file with a path.
     File(Location),
-    /// In the core prelude, which is compiled into the toolchain and has no file an editor
-    /// could open. Named rather than pointed at, so a client is not sent to a path that
-    /// does not exist.
+    /// In a module compiled into the toolchain — the core prelude, or a standard module
+    /// (N45) — which has no file an editor could open. Named rather than pointed at, so a
+    /// client is not sent to a path that does not exist.
     Prelude { name: String },
 }
 
@@ -592,7 +592,12 @@ impl Snapshot {
     /// A definition span as a place a client can go.
     pub(crate) fn target(&self, span: Span) -> Option<Target> {
         let module = self.graph.module_of(span.file)?;
-        if Some(module) == self.graph.prelude() {
+        if Some(module) == self.graph.prelude()
+            || self
+                .graph
+                .key(module)
+                .is_some_and(nazm_core::sema::ModuleKey::is_std)
+        {
             return Some(Target::Prelude {
                 name: self.map.name(span.file).to_owned(),
             });
