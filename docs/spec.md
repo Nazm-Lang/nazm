@@ -917,8 +917,9 @@ instantiations, what size `T` has and what a specialisation is called are not pa
 language. `nazm check` and `nazm run` are parametric; `nazm build` currently
 **monomorphises** — one native instance per concrete argument list — and that is a property
 of the current LLVM backend, not of the language (`architecture.md` §7.12). The native
-backend refuses recursion, which includes polymorphic recursion (`N0357`), and bounds how
-many instances one program may need (`N0358`).
+backend refuses polymorphic recursion (`N0357`) — recursion through which an instance would
+need another instance without end — and bounds how many instances one program may need (`N0358`);
+ordinary recursion through a generic function compiles (N49).
 
 #### What generics are not, in N11
 
@@ -1477,22 +1478,26 @@ nesting limit is the parser's; this implementation has all three so that a runaw
 fails visibly instead of consuming a machine. A different implementation may choose
 differently.
 
-#### Why native recursion is refused rather than counted
+#### Native recursion, and the stack it runs on — N49
+<!-- id: native-recursion -->
 
-*Condensed here from `roadmap.md` on 2026-09-21.* A call-depth counter alone **does not**
-guarantee a diagnostic before the native stack is exhausted: a counter bounds the number of
-frames, and whether that many frames fit is a question about frame size and about how much
-stack the process actually has. A budget of 512 says nothing until both are known.
+*Until N49 this section was "Why native recursion is refused rather than counted", and its
+argument still holds:* a call-depth counter alone does not guarantee a diagnostic before the
+native stack is exhausted, because whether that many frames fit depends on frame size and on
+how much stack a thread actually has. The interpreter pairs its counter with a stack it sizes
+from the counter (`--max-depth`, `N0403`). **`nazm build` now pairs a measurement with the stack
+it measures**, and recursion — direct and mutual, across modules and packages — compiles under
+both native backends.
 
-The interpreter never relied on a counter alone. `--max-depth` is one half of a pair —
-`nazm_core::eval::on_interpreter_stack` runs the pipeline on a thread whose stack it sizes
-*from the budget it is about to enforce*, with `N0404` when the host will not grant the
-reservation. It is the **combination** that makes `N0403` arrive before the stack runs out.
-Copying only the counter into generated code would copy the half that does not carry the
-guarantee, and neither quantity — the platform's main-thread stack, or a generated
-function's frame size — has been measured for native code. Emitting a bound derived from
-neither would be a guarantee with no basis. So recursion is **refused by name** until the
-contract exists, by both compilers.
+| | |
+| --- | --- |
+| **What is checked** | The stack itself, not a count. On entry to every function that is in a call cycle (a cycle of calls; `spawn` starts a task on its own stack and closes none), the frame's address is compared with the thread's limit |
+| **The limit** | Computed once per thread, at its first check: that frame's address minus three quarters of the smaller of `RLIMIT_STACK` and 8 MiB. Task threads are created with 8 MiB, so no thread's budget exceeds its stack |
+| **What a program sees** | `N0408`, *the native call stack is exhausted*, at the function entered, and then the failure unwinds like any other: what the frames own is released, an enclosing `scope` joins its tasks, and the process exits 2 with the diagnostic |
+| **What is guaranteed** | Unbounded recursion meets a check. A chain of non-recursive calls between two checks is bounded by the program's call graph but its stack is not measured: the guarantee holds while such a chain fits in the quarter kept as headroom (2 MiB at 8 MiB), and a program whose non-recursive frames are larger can still be killed by the operating system |
+| **What is not** | Tail calls are ordinary calls: no tail-call optimisation is performed or promised. Recursion depth is not bounded by the language, and the depth at which `N0408` arrives depends on frame sizes, the backend and the optimisation level |
+| **The interpreter** | Unchanged: its limit is its call-depth budget, `N0403`. The two implementations agree on what a terminating program produces; each reports its own limit, and neither limit is a language rule |
+| **The compiler written in Nazm** | Still refuses recursion by name: its emitter has no stack check, so the reason this section gave for refusing is still its reason |
 
 **The general rule, of which these are instances: a runtime resource limit is an
 implementation contract, never a silently invented language rule.** Where an
@@ -1504,11 +1509,9 @@ compiled program has no iteration budget and no call-depth budget: a loop whose 
 never becomes false runs until something kills it, with no `N0402`. This is stated here so
 that the difference is part of the record rather than a discovery. The two implementations
 agree on what a *terminating* program produces; they do not agree on what a runaway one
-does, and no test claims otherwise. Recursion is refused outright by **both** compilers for
-the related reason — `nazm build` since the native path existed, and the compiler written
-in Nazm since 2026-09-21, when a measured divergence between them was closed. The reason
-it is a refusal rather than a counter is below, under *Why native recursion is refused
-rather than counted*.
+does, and no test claims otherwise. Recursion was refused outright by both compilers until N49;
+`nazm build` now compiles it with a measured stack guard, and the compiler written in Nazm still
+refuses it — see *Native recursion, and the stack it runs on*, below.
 
 ### Strings are bytes, and what that commits to
 <!-- id: strings -->
@@ -1533,7 +1536,7 @@ two implementations end up disagreeing:
 | **Ordering** | `< <= > >=` do **not** apply to `Str`. Ordering text needs a collation decision this language has not made |
 | **Concatenation** | `str_concat(a, b)` is the bytes of `a` followed by the bytes of `b` |
 | **Conversion** | `int_to_str(n)` is the decimal form, with a leading `-` when negative. `int_to_str(0)` is `"0"`, and the full `Int` range round-trips |
-| **Construction** | `str_from_byte(b)` is a one-byte `Str`, and fails with `N0405` unless `0 <= b <= 255`. v0.1 literals have **no escapes**, so this is the only way to write a byte you cannot type — a newline, a NUL, anything above 127 |
+| **Construction** | `str_from_byte(b)` is a one-byte `Str`, and fails with `N0405` unless `0 <= b <= 255`. Since N49 a literal may write a byte below 128 with an escape (*String escapes*, below); `str_from_byte` remains the way to make one above 127 that UTF-8 source does not already spell |
 | **Allocation** | `str_concat`, `int_to_str` and `str_from_byte` allocate; `str_slice` does not. A compiled program reports `N0406` if the allocator refuses. The interpreter cannot: its host aborts on allocation failure, and that difference is stated rather than papered over |
 | **Ownership** | Values, not references. Passing, returning, binding and copying a `Str` produce a string with the same bytes, and there is no way to observe whether a copy was made |
 | **Mutation** | There is none. No operation changes an existing `Str` |
@@ -1542,6 +1545,26 @@ Source positions stay byte offsets throughout — `Span` is a byte range, diagno
 at byte ranges, and `str_len` counts the same units. A compiler written in Nazm therefore
 reports positions that mean the same thing as the ones this implementation reports,
 without a conversion step that could be got wrong.
+
+#### String escapes — N49
+<!-- id: string-escapes -->
+
+| Escape | Byte | | Escape | Byte |
+| --- | --- | --- | --- | --- |
+| `\n` | 10 | | `\0` | 0 |
+| `\t` | 9 | | `\\` | 92 |
+| `\r` | 13 | | `\"` | 34 |
+| `\xHH` | `0xHH`, for `HH` in `00`–`7F`, either case | | | |
+
+Each escape is **one byte**. Everything else in a literal is its own bytes, so `"é"` is still the
+two bytes of its UTF-8 encoding. A backslash followed by anything else, `\x` with fewer than two
+hexadecimal digits, and `\x80`–`\xFF` are refused (`N0004`) at the escape. `\xHH` stops at `7F`
+because a literal's bytes are UTF-8 text throughout this implementation and `str_from_byte` already
+makes any byte; there is no `\u{…}`, because `Str` is bytes and a Unicode escape would be a text
+encoding decision this specification has not made. `"\0"` is a one-byte string, as *Embedded NUL*
+above says any NUL is. Diagnostics point at the bytes written, and the formatter keeps a literal
+exactly as written. **Changed meaning:** before N49 a backslash in a literal was itself, so
+`"a\nb"` was four bytes; it is now three.
 
 #### What an implementation may not infer from its host
 
@@ -2917,11 +2940,46 @@ Since N15 the parser resumes after a malformed statement, so a second, independe
 error in the same body is reported too; what follows from the first — a stray token left
 behind by a missing brace — is not reported again. The body is still withheld from checking.
 
+### Logical operators — `&&`, `||`, `!` — N49
+<!-- id: logical-operators -->
+
+| | |
+| --- | --- |
+| **Syntax** | `!e` is a prefix, beside unary `-`. `a && b` and `a \|\| b` are infix and left-associative |
+| **Precedence** | `\|\|` binds loosest, then `&&`, then the comparisons, then `+ -`, then `* / %`, then the prefixes: `a == b && c < d \|\| !e` is `((a == b) && (c < d)) \|\| (!e)` |
+| **Types** | Every operand is `Bool`, and so is the result. Anything else is `N0301`, as for every operator |
+| **Short-circuit** | The left operand is evaluated first. `a && b` evaluates `b` only when `a` is `true`; `a \|\| b` only when `a` is `false`. So the right operand's effects, failures and non-termination happen only then |
+| **Meaning** | `a && b` is `if a { b } else { false }`, `a \|\| b` is `if a { true } else { b }`, and `!e` is `if e { false } else { true }` — not as an analogy: that is what they are, in every analysis and every implementation |
+| **Not** | No bitwise operators, no `and`/`or`/`not` words, and no truthiness: `!0` is a type error |
+
+### Qualified names — `use "PATH" as NAME;` and `NAME::item` — N49
+<!-- id: qualified-names -->
+
+```nazm
+use "@std/text" as t;
+use "geometry:shapes.nz" as g;
+
+fn main() -> Int { str_len(t::text_trim(" a ")) + g::area(g::Point(x: 2, y: 3)) }
+```
+
+| | |
+| --- | --- |
+| **Importing under a name** | `use "PATH" as NAME;` loads the module as `use "PATH";` does, and binds `NAME` to it in the importing module. **Its exports are not brought into scope unqualified**: they collide with nothing, and only `NAME::item` names them |
+| **Where a qualified name is written** | Wherever a definition is named: a call `NAME::f(…)`, a construction `NAME::R(…)`, a variant `NAME::E.V(…)`, and a type `NAME::R` or `NAME::E[Int]`. Nazm has no module-level values, so a qualified name is never a variable |
+| **What it means** | Exactly the definition the unqualified import would have named — the same identity, signature, effects and authority. Qualification chooses a definition; it does not create one |
+| **Scope** | An alias belongs to the module that writes it, as an import does. Two aliases may name one module. A module imported both plainly and under a name is one module, seen both ways |
+| **Refused** | An alias that is also one of the module's own definitions, a type, or another alias (`N0209`); `NAME::item` where `NAME` is no alias or the module does not export `item` (`N0210`) |
+| **`as`** | Recognised only after a `use` path. It takes no identifier from programs |
+| **Built-ins and the prelude** | Not modules a program imports, so never qualified: `str_len`, `Result` and the rest are written as before |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
 Valueless `return`, labelled break, `for`, `loop`, mutable parameters, floating point. A
 program using any of them is rejected by name rather than misparsed into something else.
+
+**Corrected 2026-10-01, N49.** String escapes, the logical operators `&&`, `||` and `!`, and
+qualified names exist, each specified above; native recursion compiles.
 
 **Corrected 2026-09-29, N36.** This list named **effects**, which N36 added: a function may
 declare the effects it exercises and the checker infers and holds them — *Effects: what a

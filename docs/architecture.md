@@ -5370,6 +5370,88 @@ area's status, the security and safety wording across the documents, a centralis
 limitations, release-candidate notes and a human release procedure — and freezes the v1
 performance baseline. Nothing is pushed, tagged or published by it.
 
+## 7.51 Usability and native completeness — N49, 2026-10-01
+
+Written before the code. Four small mechanisms, each closing a line of `limitations.md`, and an
+audit of every construct the interpreter runs and a native backend does not. None is a new
+semantic layer: each is owned by a layer that already owns its neighbours.
+
+**String escapes — the lexer's.** A string literal may contain `\n` (10), `\t` (9), `\r` (13),
+`\0` (0), `\\` (92), `\"` (34) and `\xHH` for `HH` in `00`–`7F` — two hexadecimal digits, either
+case. Each escape **is one byte**; nothing else in a literal changes, so a non-ASCII character
+written in UTF-8 source is its UTF-8 bytes as before. Any other backslash sequence, a `\x` with
+fewer than two hex digits, or a `\x` above `7F` is refused (`N0004`) at the escape's own bytes,
+and the literal is still one token so recovery is unchanged. `\x80`–`\xFF` are refused rather than
+defined because the reference representation of a literal is UTF-8 text in every layer from the
+token to MIR, and widening it to arbitrary bytes is a representation change with no user it would
+serve that `str_from_byte` does not; no `\u{…}`, because `Str` is bytes and a Unicode escape is an
+encoding decision. Decoding happens once, in the lexer; the token carries the decoded value and
+the span of the source bytes, so every diagnostic about a literal still points at what was
+written. The formatter prints a literal's source bytes, never its value, so escapes are kept
+exactly as written: the canonical form is the written form. **Semantic epoch moves (11 → 12):**
+a literal containing a backslash meant its bytes literally before N49 and means an escape after
+it, so a cached check of such a source is not a check of the new language. The compiler written
+in Nazm does not decode escapes and **refuses** a literal containing a backslash rather than
+reading it the old way.
+
+**Logical operators — the parser's and the checker's, lowered away in Core IR.** `!e` (prefix,
+beside unary `-`), `a && b` and `a || b`; `||` binds loosest, then `&&`, then the comparisons —
+`a == b && c < d || e` is `((a == b) && (c < d)) || e`. Every operand is `Bool` and so is the
+result (`N0301` otherwise, as for any operator). `&&` and `||` are left-associative and
+**short-circuit**: the right operand is evaluated only when the left does not decide the result,
+so its effects, its failures and its non-termination happen only then. Core IR lowers them away
+— `a && b` to `if a { b } else { false }`, `a || b` to `if a { true } else { b }`, `!e` to
+`if e { false } else { true }` — so MIR, both backends and the interpreter run them with no new
+case, and short-circuiting is a fact about control flow they already share rather than three
+implementations of it. The effect, capability and provenance analyses see the operands as the
+`if` they become: the right operand's effects are the expression's, conditionally, as any
+branch's are. No new code; the epoch already moves for escapes. The compiler written in Nazm
+refuses the three operators by name.
+
+**Native recursion — MIR's stack checks and the runtime's guard.** Recursion, direct and mutual,
+across modules and packages, compiles under both backends. The contract: **a native call that
+would exhaust its thread's stack fails with `N0408` at the function it entered, after which the
+failure unwinds like any other** (cleanup runs, a scope joins its tasks, `main`'s failure is
+reported and the process exits 2). The mechanism: MIR lowering places a `StackCheck` statement
+with a failure edge first in every function that is in a call cycle — the cycles of the call
+graph without `spawn`, which starts a task on its own stack — and each backend emits it as a call
+to the runtime's `nz.stack_check` and a branch to the failure edge. `nz.stack_check` compares the
+frame address with the thread's limit, which it computes once per thread on first use: the
+current frame minus a budget of three quarters of the smaller of the process's `RLIMIT_STACK` and
+8 MiB. Task threads are created with an 8 MiB stack (`pthread_attr_setstacksize`; Linux's default
+already, and raised from macOS's 512 KiB), so every thread's budget is within its stack. **What
+is guaranteed, and what is not:** the check is made on entry to every function in a cycle, so
+unbounded recursion meets it; a chain of non-recursive calls between two checks is bounded by the
+call graph but its stack is not measured, so the guarantee holds when no such chain plus the frames
+it builds exceeds the quarter left as headroom (2 MiB at 8 MiB). A program whose non-recursive
+frames are that large can still exhaust the stack and be killed by the operating system; no
+measured program comes close. There is no tail-call optimisation and none is promised; the
+interpreter's limit stays its own (`--max-depth`, `N0403`), so the two implementations agree on
+what a terminating program produces and each reports its own limit. **Runtime ABI revision moves
+(2 → 3):** generated code calls a runtime entry it did not before. The compiler written in Nazm
+still refuses recursion by name: its emitter has no stack check, and the reason it refused is the
+reason it still does.
+
+**Qualified names — the loader's, the checker's and the service's.** `use "PATH" as NAME;` imports
+a module **under a name**: its exports are not brought into scope unqualified, so they collide with
+nothing, and each is written `NAME::item` wherever a definition is named — a call `t::split(s)`, a
+construction `g::Point(x: 1)`, a variant `g::Shape.Circle(r: 2)`, a type `g::Point`. `as` is
+recognised only after a `use` path, so no identifier is taken from programs. The alias is the
+module's within the importing module only; two aliases may name one module; an alias that is
+also a definition's name, or a second alias of the same name, is refused (`N0209`), and a
+qualified name naming an alias that does not exist or an item the module does not export is
+refused (`N0210`) with the module's exports as candidates. **One resolver:** the checker resolves
+`NAME::item` against exactly the interface entry the unqualified import would have used, so a
+qualified call has the same `FnId`, durable identity, effects, capabilities and provenance as an
+unqualified one, and everything downstream — Core IR, MIR, both backends, the interpreter, the
+cache — sees no difference; the service's references, rename, semantic tokens and completion key on
+the item's name span, which is the same span. A plain `use "PATH";` is unchanged. The compiler
+written in Nazm refuses `as` and `::` by name.
+
+**The construct audit.** `nazm capabilities --json` is read row by row against both backends; every
+construct the interpreter runs and a backend refuses is classified as deliberate, a limitation, or
+a bug, and only the gaps above are closed here (`limitations.md` says which remain).
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
