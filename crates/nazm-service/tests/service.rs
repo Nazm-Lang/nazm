@@ -445,6 +445,29 @@ fn a_core_prelude_definition_is_named_not_given_a_path() {
 }
 
 #[test]
+fn a_standard_module_definition_is_named_not_given_a_path() {
+    // N45: a standard module is compiled into the toolchain, as the prelude is, so an editor
+    // asking where `text_contains` is declared is told its module rather than sent to a
+    // path that does not exist.
+    let p = Project::new(&[]);
+    let m = p.path("m.nz");
+    on_the_service_stack(move || {
+        let mut s = LanguageService::new();
+        let text = "use \"@std/text\";\nfn main() -> Bool {\n    text_contains(\"ab\", \"b\")\n}\n";
+        let out = s.open(&m, 1, text.into());
+        assert!(for_path(&out, &m).diagnostics.is_empty(), "{out:#?}");
+        let d = s
+            .definition(&m, 1, at(text, "text_contains(", 0, 3))
+            .unwrap();
+        assert_eq!(d.kind, "function");
+        let Target::Prelude { name } = d.target else {
+            panic!("a standard module has no path: {d:?}");
+        };
+        assert!(name.contains("@std/text"), "{name}");
+    });
+}
+
+#[test]
 fn hover_reads_the_resolution_and_nothing_else() {
     let p = Project::new(&[("lib.nz", LIB), ("main.nz", MAIN)]);
     let main = p.path("main.nz");

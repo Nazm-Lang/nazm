@@ -2732,8 +2732,9 @@ why = """
 a project file under a directory called `@core` gets a durable key in the toolchain's namespace, so a project module could be keyed as the prelude is
 """
 file = "crates/nazm-sema/src/key.rs"
-find = """        if key.0 == CORE || key.0.starts_with("@core/") {"""
-replace = """        if key.0 == CORE && false {"""
+find = """        if key.0.split('/').next().is_some_and(|c| c.contains('@')) {"""
+replace = """        if key.0.split('/').next().is_some_and(|c| c.contains('@') && !c.starts_with("@core")) {"""
+killers = [{ package = "nazm-sema", lib = true, name = "key::tests::no_project_path_can_take_the_cores_key" }]
 
 [[mutation]]
 name = "the-prelude-is-left-out-of-every-check-key"
@@ -4272,9 +4273,21 @@ killers = [{ package = "nazm-service", test = "service", name = "an_unsaved_depe
 name = "n16-the-prelude-is-given-a-path"
 why = "a core-prelude definition is reported as a file location, sending an editor to a path that does not exist"
 file = "crates/nazm-service/src/service.rs"
-find = "        if Some(module) == self.graph.prelude() {"
-replace = "        if Some(module) == self.graph.prelude() && false {"
+find = """        if Some(module) == self.graph.prelude()
+            || self"""
+replace = """        if Some(module) == self.graph.prelude() && false
+            || self"""
 killers = [{ package = "nazm-service", test = "service", name = "a_core_prelude_definition_is_named_not_given_a_path" }]
+
+[[mutation]]
+name = "n45-a-standard-module-is-given-a-path"
+why = "a standard-module definition is reported as a file location under its display name, sending an editor to a path that does not exist"
+file = "crates/nazm-service/src/service.rs"
+find = """                .is_some_and(nazm_core::sema::ModuleKey::is_std)
+        {"""
+replace = """                .is_some_and(|k| k.is_std() && false)
+        {"""
+killers = [{ package = "nazm-service", test = "service", name = "a_standard_module_definition_is_named_not_given_a_path" }]
 
 [[mutation]]
 name = "n16-a-position-past-a-name-is-on-it"
@@ -5489,7 +5502,7 @@ find = """        for (i, def) in res.functions().iter().enumerate() {
                 if callee(res, site.span) == Some(target) {"""
 replace = """        for (i, def) in res.functions().iter().enumerate() {
             let body = s.analysis.program.functions.get(def.decl as usize).map(|f| f.span);
-            let uses: Vec<nazm_core::sema::CallSite> = s.index.uses(ReferenceTarget::Function(target)).iter().filter(|u| body.is_some_and(|b| b.file == u.file && b.start <= u.start && u.end <= b.end)).map(|&span| nazm_core::sema::CallSite { span, callee: Callee::Function(target), type_args: Vec::new(), spawned: false }).collect();
+            let uses: Vec<nazm_core::sema::CallSite> = s.index.uses(ReferenceTarget::Function(target)).iter().filter(|u| body.is_some_and(|b| b.file == u.file && b.start <= u.start && u.end <= b.end)).map(|&span| nazm_core::sema::CallSite { span, callee: Callee::Function(target), type_args: Vec::new(), spawned: false, held: Default::default() }).collect();
             for site in &uses {
                 if def.name_span.file == site.span.file {"""
 killers = [{ package = "nazm-service", test = "hierarchy", name = "constructions_and_intrinsics_are_not_edges_and_a_spawn_is_a_call" }]
@@ -9016,9 +9029,17 @@ killers = [{ package = "nazm-cli", test = "stdlib", name = "text_behaves_as_docu
 name = "n45-a-project-path-can-take-a-standard-key"
 why = "`ModuleKey::relative` no longer refuses `@std`, so a project file under a directory of that name is keyed as a standard module"
 file = "crates/nazm-sema/src/key.rs"
-find = """        if key.0 == STD || key.0.starts_with("@std/") {"""
-replace = """        if key.0 == STD && key.0.starts_with("@std/") {"""
+find = """        if key.0.split('/').next().is_some_and(|c| c.contains('@')) {"""
+replace = """        if key.0.split('/').next().is_some_and(|c| c.contains('@') && !c.starts_with("@std")) {"""
 killers = [{ package = "nazm-sema", lib = true, name = "stdlib::tests::no_project_path_is_keyed_as_a_standard_module" }]
+
+[[mutation]]
+name = "n46-a-project-path-can-take-a-package-key"
+why = "`ModuleKey::relative` refuses only a first component that begins with `@`, so a project file under `NAME@VERSION/` is keyed as a dependency package's module"
+file = "crates/nazm-sema/src/key.rs"
+find = """        if key.0.split('/').next().is_some_and(|c| c.contains('@')) {"""
+replace = """        if key.0.split('/').next().is_some_and(|c| c.starts_with('@')) {"""
+killers = [{ package = "nazm-sema", lib = true, name = "key::tests::no_project_path_can_take_the_cores_key" }]
 
 # --- N46: packages, locking and reproducible builds -------------------------------------------
 

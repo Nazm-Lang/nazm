@@ -950,7 +950,15 @@ fn the_services_references_are_the_command_lines_resolution_read_backwards() {
                 let want: Vec<_> = index
                     .uses(t)
                     .iter()
-                    .filter(|u| loaded.graph.module_of(u.file) != prelude)
+                    // The toolchain's modules — the prelude, and the standard library's
+                    // (N45) — have no file to send a client to.
+                    .filter(|u| {
+                        let module = loaded.graph.module_of(u.file);
+                        module != prelude
+                            && !module
+                                .and_then(|m| loaded.graph.key(m))
+                                .is_some_and(nazm_core::sema::ModuleKey::is_std)
+                    })
                     .map(|u| place(*u))
                     .collect();
                 let (mut got_sorted, mut want_sorted) = (got.clone(), want.clone());
