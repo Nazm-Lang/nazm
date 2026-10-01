@@ -2060,7 +2060,7 @@ fn memory_variable() -> Str {
 }
 
 fn memory_format() -> Str {
-    "nazm-memory: sequences allocated=%lld reclaimed=%lld live=%lld strings allocated=%lld reclaimed=%lld live=%lld channels allocated=%lld reclaimed=%lld live=%lld"
+    "nazm-memory: sequences allocated=%lld reclaimed=%lld live=%lld strings allocated=%lld reclaimed=%lld live=%lld channels allocated=%lld reclaimed=%lld live=%lld closures allocated=%lld reclaimed=%lld live=%lld"
 }
 
 // The runtime every emitted program carries, as generated LLVM.
@@ -4368,7 +4368,7 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
             int_to_str(str_len(memfmt) + 2)),
             str_concat(str_concat(" x i8] c", dq()), memfmt)),
             str_concat(str_concat(str_concat(bs(), "0A"), str_concat(bs(), "00")), dq())));
-    add_line(head, "@.membuf = private global [256 x i8] zeroinitializer");
+    add_line(head, "@.membuf = private global [512 x i8] zeroinitializer");
     // `Str` literals: the bytes, and a constant pair naming them. An empty literal still
     // gets a byte of storage so its pointer stays valid to hand to `memcmp`.
     let mut sb = 0;
@@ -4464,7 +4464,7 @@ fn emit_program(src: Str, path: Str, mpath: Strs, mstart: Ints, mfirst: Ints, mc
     add_line(tail, "  %chana = load i64, ptr @nz.chan_allocated");
     add_line(tail, "  %chanr = load i64, ptr @nz.chan_reclaimed");
     add_line(tail, "  %chanl = sub i64 %chana, %chanr");
-    add_line(tail, "  %memout = call i32 (ptr, i64, ptr, ...) @snprintf(ptr @.membuf, i64 256, ptr @.memfmt, i64 %seqa, i64 %seqr, i64 %seql, i64 %stra, i64 %strr, i64 %strl, i64 %chana, i64 %chanr, i64 %chanl)");
+    add_line(tail, "  %memout = call i32 (ptr, i64, ptr, ...) @snprintf(ptr @.membuf, i64 512, ptr @.memfmt, i64 %seqa, i64 %seqr, i64 %seql, i64 %stra, i64 %strr, i64 %strl, i64 %chana, i64 %chanr, i64 %chanl, i64 0, i64 0, i64 0)");
     add_line(tail, "  %memlen = sext i32 %memout to i64");
     add_line(tail, "  %memwrote = call i64 @write(i32 2, ptr @.membuf, i64 %memlen)");
     add_line(tail, "  br label %nz.checked");

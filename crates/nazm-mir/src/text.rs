@@ -128,6 +128,13 @@ pub fn rvalue(program: &Program, v: &Rvalue) -> String {
         Rvalue::Call { callee: c, args } => {
             format!("call {}({})", callee(program, *c), operands(args))
         }
+        Rvalue::CallIndirect { callee: c, args } => {
+            format!("call_indirect {}({})", operand(c), operands(args))
+        }
+        Rvalue::Closure { func, captures } => {
+            format!("closure {}[{}]", callee(program, *func), operands(captures))
+        }
+        Rvalue::Capture { env, index } => format!("capture _{}.{index}", env.0),
         Rvalue::Primitive { op, elem, args } => match elem {
             Some(e) => format!("{}[{}]({})", op.name(), ty(program, *e), operands(args)),
             None => format!("{}({})", op.name(), operands(args)),

@@ -439,6 +439,28 @@ impl<'a> Canon<'a> {
                 self.tag("block-value");
                 self.block(b);
             }
+            // N50. A closure names its lifted body durably, as a call does, and the locals it
+            // copies; a function value names its function; an indirect call is its callee
+            // and its arguments.
+            ExprKind::Closure { func, captures } => {
+                self.tag("closure");
+                let name = self.names.function(*func);
+                self.bytes(name.as_bytes());
+                self.len(captures.len());
+                for l in captures {
+                    self.n(u64::from(l.0));
+                }
+            }
+            ExprKind::FnValue(func) => {
+                self.tag("fn-value");
+                let name = self.names.function(*func);
+                self.bytes(name.as_bytes());
+            }
+            ExprKind::CallIndirect { callee, args, .. } => {
+                self.tag("call-indirect");
+                self.expr(callee);
+                self.exprs(args);
+            }
         }
     }
 }

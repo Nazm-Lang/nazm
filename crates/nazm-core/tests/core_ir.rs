@@ -151,7 +151,16 @@ fn expr_all(e: &cir::Expr, out: &mut Vec<cir::Expr>) {
             exprs_of(otherwise, out);
         }
         ExprKind::Block(b) => exprs_of(b, out),
-        ExprKind::Const(_) | ExprKind::Local(_) => {}
+        ExprKind::CallIndirect { callee, args, .. } => {
+            expr_all(callee, out);
+            for a in args {
+                expr_all(a, out);
+            }
+        }
+        ExprKind::Const(_)
+        | ExprKind::Local(_)
+        | ExprKind::Closure { .. }
+        | ExprKind::FnValue(_) => {}
     }
 }
 

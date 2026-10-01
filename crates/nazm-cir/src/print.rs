@@ -597,6 +597,23 @@ impl Printer<'_> {
                 o.push(Self::op("block"));
                 o.push(("body", self.block(b)));
             }
+            ExprKind::Closure { func, captures } => {
+                o.push(Self::op("closure"));
+                o.push(("function", J::Str(self.names.function(*func))));
+                o.push((
+                    "captures",
+                    J::Arr(captures.iter().map(|l| J::uint(l.0)).collect()),
+                ));
+            }
+            ExprKind::FnValue(func) => {
+                o.push(Self::op("fn_value"));
+                o.push(("function", J::Str(self.names.function(*func))));
+            }
+            ExprKind::CallIndirect { callee, args, .. } => {
+                o.push(Self::op("call_indirect"));
+                o.push(("callee", self.expr(callee)));
+                o.push(("args", J::Arr(args.iter().map(|a| self.expr(a)).collect())));
+            }
         }
         o.push(("type", self.ty(e.ty)));
         self.at(&mut o, e.at);

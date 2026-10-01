@@ -659,6 +659,10 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                     }
                 }
                 Expr::Block(b) => stack.push(Node::Block(b)),
+                Expr::Closure { body, span, .. } => {
+                    spans.push((SyntaxKind::ClosureExpr, *span));
+                    stack.push(Node::Block(body));
+                }
             },
         }
     }

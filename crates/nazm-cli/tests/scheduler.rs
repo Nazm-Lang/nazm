@@ -115,7 +115,7 @@ fn reclaimed(label: &str, stderr: &str) {
         .lines()
         .find(|l| l.starts_with("nazm-memory:"))
         .unwrap_or_else(|| panic!("{label}: no memory report in {stderr:?}"));
-    assert_eq!(report.matches("live=0").count(), 3, "{label}: {report}");
+    assert_eq!(report.matches("live=0").count(), 4, "{label}: {report}");
 }
 
 fn check_codes(src: &str) -> Vec<String> {

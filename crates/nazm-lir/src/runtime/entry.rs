@@ -60,7 +60,7 @@ pub fn emit_entry(entry: &NativeSymbol, roots: usize, needs: Needs) -> String {
         MEMORY_FORMAT.len() + 2,
         escape(MEMORY_FORMAT)
     );
-    let _ = writeln!(out, "@.membuf = private global [256 x i8] zeroinitializer");
+    let _ = writeln!(out, "@.membuf = private global [512 x i8] zeroinitializer");
     out.push('\n');
 
     let _ = writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{");
@@ -95,6 +95,7 @@ pub fn emit_entry(entry: &NativeSymbol, roots: usize, needs: Needs) -> String {
             ("seq", "@nz.seq_allocated", "@nz.seq_reclaimed"),
             ("str", "@nz.str_allocated", "@nz.str_reclaimed"),
             ("chan", "@nz.chan_allocated", "@nz.chan_reclaimed"),
+            ("clo", "@nz.clo_allocated", "@nz.clo_reclaimed"),
         ] {
             let _ = writeln!(out, "  %{kind}a = load i64, ptr {allocated}");
             let _ = writeln!(out, "  %{kind}r = load i64, ptr {reclaimed}");
@@ -103,7 +104,7 @@ pub fn emit_entry(entry: &NativeSymbol, roots: usize, needs: Needs) -> String {
         }
         let _ = writeln!(
             out,
-            "  %memout = call i32 (ptr, i64, ptr, ...) @snprintf(ptr @.membuf, i64 256, \
+            "  %memout = call i32 (ptr, i64, ptr, ...) @snprintf(ptr @.membuf, i64 512, \
              ptr @.memfmt, {})",
             fields.join(", ")
         );

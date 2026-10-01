@@ -776,6 +776,8 @@ fn every_resolved_name_is_among_what_its_scope_offers() {
                                 Candidate::Entity(ReferenceTarget::Function(id))
                             }
                             Callee::Builtin(i) => Candidate::Intrinsic(i),
+                            // A call through a binding is the binding's use, met above (N50).
+                            Callee::Indirect(_) => continue,
                         };
                         (1, c)
                     } else if let Some(node) = res.type_name(span) {

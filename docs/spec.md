@@ -1108,7 +1108,7 @@ that exists but cannot be read is `N0407`.
 | `@std/text` | `text_starts_with(s, prefix) -> Bool`, `text_ends_with(s, suffix) -> Bool`, `text_find(s, needle) -> Option[Int]`, `text_contains(s, needle) -> Bool`, `text_repeat(s, n) -> Str`, `text_split(s, sep) -> Strs`, `text_is_space(byte) -> Bool`, `text_trim(s) -> Str`, `text_parse_int(s) -> Result[Int, Str]` |
 | `@std/option` | `option_is_some[T](o) -> Bool`, `option_is_none[T](o) -> Bool`, `option_unwrap_or[T](o, fallback) -> T` |
 | `@std/result` | `result_is_ok[T, E](r) -> Bool`, `result_is_err[T, E](r) -> Bool`, `result_unwrap_or[T, E](r, fallback) -> T`, `result_ok[T, E](r) -> Option[T]`, `result_err[T, E](r) -> Option[E]` |
-| `@std/seq` | `ints_index_of(xs, x) -> Option[Int]`, `ints_contains(xs, x) -> Bool`, `ints_sum(xs) -> Int`, `ints_max(xs) -> Option[Int]`, `ints_min(xs) -> Option[Int]`, `strs_index_of(xs, x) -> Option[Int]`, `strs_contains(xs, x) -> Bool`, `vec_index_of[T: Equality](xs, x) -> Option[Int]` |
+| `@std/seq` | `ints_index_of(xs, x) -> Option[Int]`, `ints_contains(xs, x) -> Bool`, `ints_sum(xs) -> Int`, `ints_max(xs) -> Option[Int]`, `ints_min(xs) -> Option[Int]`, `strs_index_of(xs, x) -> Option[Int]`, `strs_contains(xs, x) -> Bool`, `vec_index_of[T: Equality](xs, x) -> Option[Int]`, and (N50) `vec_map[T, U](xs, f: fn(T) -> U) -> Vec[U]`, `vec_filter[T](xs, keep: fn(T) -> Bool) -> Vec[T]`, `vec_fold[T, A](xs, init: A, f: fn(A, T) -> A) -> A` — each taking a function value with no effects |
 | `@std/io` | `io_println(io, s) -> Int`, `io_eprintln(io, s) -> Int`, `io_read(io, path) -> Result[Str, Str]` — each `! { io }` |
 | `@std/process` | `process_args(io) -> Strs` — `! { io }` |
 | `@std/chan` | `chan_take(c) -> Option[Int]`: the next value, or `None` once closed and drained |
@@ -2996,6 +2996,8 @@ fn main() -> Int {
 | **Call** | `f(a, b)`, where `f` is a parameter or binding of function type: the arguments must match its parameters, the result is its result, and the call performs its type's effects. Such a binding hides a function of the same name for calls in its scope. A function stored in a field is called by binding it first: `let g = r.f; g(1)` |
 | **Ownership** | A function value is a handle to its closure; copies share it, and what it captured is released when the last copy goes |
 | **Tasks** | A function value may not be passed to a task (`N0321`) |
+| **In a generic function** | Neither a closure nor a named function as a value may be written in the body of a generic function (`N0387`); a function value may be passed into one as an argument, and called there |
+| **Recursion through a value** | A native function that calls through a function value checks its stack first, as a recursive one does (`N0408`, *Native recursion*) |
 | **Not here** | Traits, methods, generic function values, a closure that names itself, effect-polymorphic function types — see `architecture.md` §7.52 |
 
 ### Not in v0.3, and unsupported rather than half-present

@@ -120,6 +120,32 @@ pub enum Value {
     /// no built-in takes one, and it has no equality — so it carries only its kind, for a
     /// diagnostic to name. The only ones are those [`Interpreter::run_main`] hands `main`.
     Cap(nazm_sema::CapabilityKind),
+    /// A function value (N50): a closure, with the copies it captured, or a named function,
+    /// with none. Shared, because a copy of a function value is another reference to the same
+    /// immutable thing — what the native closure object's count says.
+    Func(Arc<FuncVal>),
+}
+
+/// What a function value calls, and what it carries.
+#[derive(Debug)]
+pub struct FuncVal {
+    func: nazm_sema::FnId,
+    /// What it captured, in order.
+    carried: Vec<Value>,
+}
+
+impl FuncVal {
+    /// A new function value — one object, counted as the native closure object is.
+    fn new(func: nazm_sema::FnId, carried: Vec<Value>) -> Arc<Self> {
+        CLOSURES_ALLOCATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Arc::new(Self { func, carried })
+    }
+}
+
+impl Drop for FuncVal {
+    fn drop(&mut self) {
+        CLOSURES_RECLAIMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// A record value: which record it is, and its fields in **declaration order**.
@@ -458,6 +484,8 @@ static STRINGS_ALLOCATED: std::sync::atomic::AtomicU64 = std::sync::atomic::Atom
 static STRINGS_RECLAIMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static CHANNELS_ALLOCATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static CHANNELS_RECLAIMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CLOSURES_ALLOCATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CLOSURES_RECLAIMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// What one class of storage did: created, reclaimed.
 ///
@@ -470,6 +498,8 @@ pub struct Counts {
     pub sequences: (u64, u64),
     pub strings: (u64, u64),
     pub channels: (u64, u64),
+    /// Function values (N50): one object a closure or a named function's value makes.
+    pub closures: (u64, u64),
 }
 
 /// What this process allocated and reclaimed, by class.
@@ -485,6 +515,7 @@ pub fn memory_counts() -> Counts {
         sequences: (n(&ALLOCATED), n(&RECLAIMED)),
         strings: (n(&STRINGS_ALLOCATED), n(&STRINGS_RECLAIMED)),
         channels: (n(&CHANNELS_ALLOCATED), n(&CHANNELS_RECLAIMED)),
+        closures: (n(&CLOSURES_ALLOCATED), n(&CLOSURES_RECLAIMED)),
     }
 }
 
@@ -517,6 +548,7 @@ impl std::fmt::Display for Value {
             // for diagnostics, and says what it is rather than dumping it.
             Self::Record(r) => write!(f, "record({} fields)", r.fields.len()),
             Self::Enum(e) => write!(f, "variant {}({} fields)", e.variant, e.fields.len()),
+            Self::Func(v) => write!(f, "function value({} carried)", v.carried.len()),
         }
     }
 }
@@ -778,6 +810,15 @@ pub struct Interpreter {
     /// a b` gives `["a", "b"]`. Excluding it is what makes `arg(i)` mean the same thing
     /// interpreted and compiled: a native `argv[0]` is a path nobody should depend on.
     args: Vec<String>,
+}
+
+/// A shape the lowering never produces, reported rather than assumed away.
+fn unreachable_flow<T>(at: Span) -> Result<T, RuntimeError> {
+    Err(fail(
+        codes::COMPILER_DEFECT,
+        at,
+        "the interpreter met an expression it cannot evaluate",
+    ))
 }
 
 /// A fresh frame for `f`, with its parameters bound to `args`.
@@ -1837,13 +1878,55 @@ impl Interpreter {
                 self.intrinsic(*op, &values, e.at)?
             }
 
-            ExprKind::Call { callee, args, .. } => {
-                let mut values = Vec::with_capacity(args.len());
+            ExprKind::Closure {
+                func,
+                captures: taken,
+            } => {
+                let mut values = Vec::with_capacity(taken.len());
+                for l in taken {
+                    match env.get(l.index()).cloned().flatten() {
+                        Some(v) => values.push(v),
+                        None => {
+                            return Err(fail(
+                                codes::UNDEFINED_VARIABLE,
+                                e.at,
+                                "a closure captured a binding that holds nothing",
+                            ))
+                        }
+                    }
+                }
+                Value::Func(FuncVal::new(*func, values))
+            }
+            ExprKind::FnValue(func) => Value::Func(FuncVal::new(*func, Vec::new())),
+
+            ExprKind::Call { .. } | ExprKind::CallIndirect { .. } => {
+                let (target, args) = match &e.kind {
+                    ExprKind::Call { callee, args, .. } => (Ok(*callee), args),
+                    ExprKind::CallIndirect { callee, args, .. } => {
+                        let v = take!(self, f, callee, env);
+                        match v {
+                            Value::Func(fv) => (Err(fv), args),
+                            _ => {
+                                return Err(fail(
+                                    codes::TYPE_MISMATCH,
+                                    e.at,
+                                    "a call through something that is not a function value",
+                                ))
+                            }
+                        }
+                    }
+                    _ => unreachable_flow(e.at)?,
+                };
+                let mut values = Vec::with_capacity(args.len() + 1);
                 for a in args {
                     values.push(take!(self, f, a, env));
                 }
+                let callee = match &target {
+                    Ok(c) => *c,
+                    Err(fv) => fv.func,
+                };
                 let core = Arc::clone(&self.core);
-                let Some(g) = core.function(*callee) else {
+                let Some(g) = core.function(callee) else {
                     return Err(fail(
                         codes::UNDEFINED_FUNCTION,
                         e.at,
@@ -1872,8 +1955,24 @@ impl Interpreter {
                 }
 
                 // A fresh frame: a function sees its parameters and nothing from the
-                // caller. Lexical scope, not dynamic.
-                let out = self.call_body(g, frame(g, values));
+                // caller. Lexical scope, not dynamic. A closure's body sees itself first, then
+                // its parameters, and its captures where its body reads them (N50).
+                let mut fr = match &target {
+                    Err(fv) if g.closure => {
+                        values.insert(0, Value::Func(Arc::clone(fv)));
+                        frame(g, values)
+                    }
+                    _ => frame(g, values),
+                };
+                if let Err(fv) = &target {
+                    let slots = &g.captures;
+                    for (l, v) in slots.iter().zip(&fv.carried) {
+                        if let Some(slot) = fr.get_mut(l.index()) {
+                            *slot = Some(v.clone());
+                        }
+                    }
+                }
+                let out = self.call_body(g, fr);
                 self.depth -= 1;
                 // A call absorbs its callee's `return`: that is what makes it a call and
                 // not a jump. Nothing propagates outward from here but a genuine error.
@@ -2106,5 +2205,6 @@ fn type_name(v: &Value) -> &'static str {
         Value::Enum(_) => "an enum",
         Value::Vec(_) => "a `Vec`",
         Value::Cap(k) => k.type_name(),
+        Value::Func(_) => "a function value",
     }
 }
