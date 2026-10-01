@@ -51,6 +51,9 @@ pub mod codes {
     pub const UNKNOWN_CHARACTER: Code = Code::new("N0001");
     pub const UNTERMINATED_STRING: Code = Code::new("N0002");
     pub const INTEGER_TOO_LARGE: Code = Code::new("N0003");
+    /// A backslash in a string literal that is not one of the escapes `docs/spec.md` lists
+    /// (N49): an unknown letter, `\x` without two hex digits, or `\x` above `7F`.
+    pub const INVALID_ESCAPE: Code = Code::new("N0004");
 
     // Parsing
     /// An expression or block nested past the parser's limit. A parse-time bound, so

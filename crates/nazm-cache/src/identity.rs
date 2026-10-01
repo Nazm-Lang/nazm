@@ -145,7 +145,11 @@ use crate::digest::{self, Framed};
 /// syntax, `foreign` is an effect and `ForeignCap` a capability kind, and a call to a foreign
 /// function without a `ForeignCap` held is refused (`N0369`). Six codes appeared
 /// (`N0380`–`N0385`). A cached check result from epoch 10 cannot know any of it.
-pub const SEMANTIC_EPOCH: u32 = 11;
+/// `12` — N49, 2026-10-01. String escapes: a literal containing a backslash meant its bytes
+/// literally and now means an escape (`"a\nb"` was four bytes and is three), and a backslash
+/// that is no escape is refused (`N0004`). `&&`, `||`, `!` and qualified names became accepted
+/// syntax (`N0209`, `N0210`). A cached check from epoch 11 is a check of a different language.
+pub const SEMANTIC_EPOCH: u32 = 12;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

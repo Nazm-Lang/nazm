@@ -8041,10 +8041,11 @@ killers = [{ package = "nazm-service", test = "snapshot", name = "a_snapshot_is_
 [[mutation]]
 name = "n38-the-epoch-stays"
 why = """`SEMANTIC_EPOCH` is not bumped for a checker that now refuses a restricted flow, so an N37 entry is filed where an N38 one is looked for
-Repointed by N42, which moved the epoch to 11 for foreign declarations: an N41 entry must not be filed where an N42 one is looked for."""
+Repointed by N42, which moved the epoch to 11 for foreign declarations: an N41 entry must not be filed where an N42 one is looked for.
+Repointed by N49, which moved it to 12 for string escapes: an entry that read a backslash literally must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 11;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 10;"
+find = "pub const SEMANTIC_EPOCH: u32 = 12;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 11;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 

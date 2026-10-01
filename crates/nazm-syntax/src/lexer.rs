@@ -288,6 +288,87 @@ pub struct Token {
     pub span: Span,
 }
 
+/// A literal's bytes with its escapes decoded (`docs/spec.md`, *String escapes*, N49).
+///
+/// `span(a, b)` is the source span of `raw[a..b]`, so a refused escape is reported at the bytes
+/// written. A refused escape contributes nothing to the value and the rest of the literal is
+/// still decoded, so one bad escape is one diagnostic.
+fn decode_escapes(
+    raw: &str,
+    span: impl Fn(usize, usize) -> Span,
+    errors: &mut Vec<Diagnostic>,
+) -> String {
+    if !raw.contains('\\') {
+        return raw.to_owned();
+    }
+    let bytes = raw.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut k = 0;
+    while let Some(&b) = bytes.get(k) {
+        if b != b'\\' {
+            out.push(b);
+            k += 1;
+            continue;
+        }
+        let one = |v: u8| Some((v, 2usize));
+        let decoded = match bytes.get(k + 1) {
+            Some(b'n') => one(b'\n'),
+            Some(b't') => one(b'\t'),
+            Some(b'r') => one(b'\r'),
+            Some(b'0') => one(0),
+            Some(b'\\') => one(b'\\'),
+            Some(b'"') => one(b'"'),
+            Some(b'x') => {
+                let hex = |o: usize| bytes.get(k + o).and_then(|h| char::from(*h).to_digit(16));
+                match (hex(2), hex(3)) {
+                    (Some(hi), Some(lo)) if hi * 16 + lo <= 0x7f => {
+                        u8::try_from(hi * 16 + lo).ok().map(|v| (v, 4usize))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some((v, width)) = decoded {
+            out.push(v);
+            k += width;
+            continue;
+        }
+        // The extent of what was refused: the backslash and the one character after it, or
+        // the whole `\xHH` when there were two hex digits that named a byte above `7F`.
+        let width = match bytes.get(k + 1) {
+            Some(b'x')
+                if bytes.get(k + 2).is_some_and(u8::is_ascii_hexdigit)
+                    && bytes.get(k + 3).is_some_and(u8::is_ascii_hexdigit) =>
+            {
+                4
+            }
+            Some(n) if n.is_ascii() => 2,
+            Some(_) => {
+                let rest = raw.get(k + 1..).unwrap_or("");
+                1 + rest.chars().next().map_or(0, char::len_utf8)
+            }
+            None => 1,
+        };
+        let written = raw.get(k..k + width).unwrap_or("\\");
+        errors.push(
+            Diagnostic::error(
+                codes::INVALID_ESCAPE,
+                span(k, k + width),
+                format!("`{written}` is not an escape this language has"),
+            )
+            .help(
+                "the escapes are \\n \\t \\r \\0 \\\\ \\\" and \\xHH up to \\x7F; write `\\\\` for a \
+                 backslash, and use `str_from_byte` for a byte above 127",
+            ),
+        );
+        k += width;
+    }
+    // Every byte pushed is ASCII from an escape or a byte of `raw`, which was UTF-8, copied
+    // in order between escapes — so the result is UTF-8 too.
+    String::from_utf8(out).unwrap_or_default()
+}
+
 /// Tokenise, collecting every error rather than stopping at the first.
 ///
 /// For a single-file program. Multi-file compilation goes through
@@ -473,12 +554,16 @@ pub fn lex_lossless_in(file: FileId, text: &str) -> (Vec<Lexeme>, Vec<Diagnostic
             continue;
         }
 
-        // Strings. No escapes in v0.1: an escape table is a decision about text encoding
-        // that nothing here needs yet, and a half-done one is worse than none.
+        // Strings, with the escapes `docs/spec.md` lists (N49). The scan skips the byte
+        // after a backslash, so `\"` does not end the literal; decoding is below, once the
+        // literal's extent is known.
         if c == b'"' {
             i += 1;
             let content_start = i;
             while byte(i).is_some_and(|b| b != b'"' && b != b'\n') {
+                if byte(i) == Some(b'\\') && byte(i + 1).is_some_and(|n| n != b'\n') {
+                    i += 1;
+                }
                 i += 1;
             }
             if byte(i).is_none_or(|b| b == b'\n') {
@@ -500,7 +585,12 @@ pub fn lex_lossless_in(file: FileId, text: &str) -> (Vec<Lexeme>, Vec<Diagnostic
                 out.push(Lexeme::Invalid(Span::new(file, at(start), at(i))));
                 continue;
             }
-            let value = text.get(content_start..i).unwrap_or("").to_owned();
+            let raw = text.get(content_start..i).unwrap_or("");
+            let value = decode_escapes(
+                raw,
+                |a, b| Span::new(file, at(content_start + a), at(content_start + b)),
+                &mut errors,
+            );
             i += 1;
             out.push(Lexeme::Token(Token {
                 kind: TokenKind::Str(value),
@@ -693,5 +783,55 @@ mod tests {
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].code, codes::UNTERMINATED_STRING);
         assert!(!e[0].fixes.is_empty(), "should suggest closing it");
+    }
+
+    fn string(src: &str) -> String {
+        match kinds(src).first() {
+            Some(TokenKind::Str(v)) => v.clone(),
+            other => panic!("not a string: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_escape_is_the_one_byte_the_specification_names() {
+        assert_eq!(string(r#""a\nb""#).as_bytes(), b"a\nb");
+        assert_eq!(string(r#""\t\r\0""#).as_bytes(), b"\t\r\0");
+        assert_eq!(string(r#""\\""#).as_bytes(), b"\\");
+        assert_eq!(string(r#""say \"hi\"""#).as_bytes(), b"say \"hi\"");
+        assert_eq!(string(r#""\x41\x7f\x0a\x7F""#).as_bytes(), b"A\x7f\n\x7f");
+        // Everything that is not an escape is its own bytes, UTF-8 included.
+        assert_eq!(string("\"é\\n\"").as_bytes(), "é\n".as_bytes());
+        // An escaped quote does not end the literal.
+        assert_eq!(kinds(r#""a\"b" x"#).len(), 3);
+    }
+
+    #[test]
+    fn a_refused_escape_is_reported_at_its_own_bytes_and_decoding_goes_on() {
+        for (src, written) in [
+            (r#""a\qb""#, r"\q"),
+            (r#""\x8""#, r"\x"),
+            (r#""\x80""#, r"\x80"),
+            (r#""\xFF""#, r"\xFF"),
+            (r#""\u{41}""#, r"\u"),
+            ("\"\\é\"", "\\é"),
+        ] {
+            let (t, e) = lex(src);
+            assert_eq!(e.len(), 1, "{src}: {e:?}");
+            assert_eq!(e[0].code, codes::INVALID_ESCAPE, "{src}");
+            let at = &e[0].primary.span;
+            assert_eq!(
+                src.get(at.start as usize..at.end as usize),
+                Some(written),
+                "{src}"
+            );
+            // Still one string token, so what follows lexes as before.
+            assert!(
+                matches!(t.first().map(|t| &t.kind), Some(TokenKind::Str(_))),
+                "{src}"
+            );
+        }
+        let (t, e) = lex(r#""\q\n""#);
+        assert_eq!(e.len(), 1);
+        assert!(matches!(t.first().map(|t| &t.kind), Some(TokenKind::Str(v)) if v == "\n"));
     }
 }
