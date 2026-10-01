@@ -5326,6 +5326,47 @@ built-in, `spawn` or contract where it enters — with the rest as secondary lab
 verdict and witnesses in rule order, byte-identical for the same program and build, and marked as
 compiler evidence rather than certification.
 
+## 7.50 Inspection, debugging and profiling — N48, 2026-10-01
+
+Written before the code. Three surfaces over facts the compiler already has, none of which
+changes what a program does.
+
+**The inspector.** `nazm inspect FILE|DIR [--def NAME]` prints `nazm.inspect/1`, one line of JSON
+with sorted keys: the toolchain's identities (compiler version, semantic epoch, interface schema,
+runtime ABI revision, Cranelift version, host target), the package and the state of its lock
+(`verified`, `absent`, `mismatch`) and the profiles its manifests require, whether MIR validated,
+and for each definition in identity order — its durable identity, parameter and result types,
+whether it is generic, declared and required effects, the capabilities it takes, its provenance
+summary (the origins its result carries, the parameters it passes on and those reaching a sink),
+its foreign symbol, its Core IR semantic and body digests, and for each concrete function MIR has
+for it (an instance per type for a generic one) the executable digest and its block, statement
+and local counts. Excluded by construction: absolute paths, times, addresses, process ids,
+iteration order. The same program, toolchain and build give the same bytes.
+
+**Debug information.** `nazm build --debug` emits DWARF through the LLVM backend: a compile unit
+per object, a subprogram per function — the Nazm name, the native symbol as its linkage name, its
+file and the line of its declaration — and a source position on every instruction, taken from the
+span MIR recorded for the statement or terminator it was emitted for. Compiler-made code carries
+the position of the statement it belongs to, or its function's line; nothing is given a position
+the source does not have, and runtime and entry objects carry none. On macOS the executable's
+debug information is gathered into `OUTPUT.dSYM` with `dsymutil` before the objects are removed.
+What is claimed: a debugger resolves a breakpoint by Nazm function name or by file and line, shows
+Nazm frames with their files and lines, and steps by statement. What is not: local variables (no
+`DILocalVariable`), types, the Cranelift backend (`--debug` with it is refused, never silently
+ignored), and stepping into the runtime. Without `--debug` nothing changes: the emitter writes the
+same text it always did.
+
+**Timings.** `nazm build --timings` writes `nazm.timings/1` to stderr: the wall time of each phase
+in the order it ran — load, front end (parse, check, effects, capabilities, provenance, Core IR),
+MIR, LIR, code generation, native compilation, link — and the total. The front end is one phase
+here because the CLI runs it as one step; the per-pass split of the front end is the benchmark
+`what_each_phase_costs` in-process. The runtime's own counters stay `NAZM_MEMORY_REPORT`.
+
+**The v1 release audit.** N48 also audits what exists against what is claimed: every capability
+area's status, the security and safety wording across the documents, a centralised list of known
+limitations, release-candidate notes and a human release procedure — and freezes the v1
+performance baseline. Nothing is pushed, tagged or published by it.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
