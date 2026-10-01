@@ -42,6 +42,8 @@ pub enum Shape {
     T,
     /// `Vec[T]`.
     VecT,
+    /// `Chan[T]` (N53).
+    ChanT,
 }
 
 impl Shape {
@@ -55,7 +57,7 @@ impl Shape {
             Self::Ints => Some(Type::Ints),
             Self::Strs => Some(Type::Strs),
             Self::Chan => Some(Type::Chan),
-            Self::T | Self::VecT => None,
+            Self::T | Self::VecT | Self::ChanT => None,
         }
     }
 
@@ -71,6 +73,7 @@ impl Shape {
             Self::Chan => "Chan",
             Self::T => "T",
             Self::VecT => "Vec[T]",
+            Self::ChanT => "Chan[T]",
         }
     }
 }
@@ -162,6 +165,16 @@ pub enum Intrinsic {
     /// `chan_close(c: Chan) -> Int` — idempotent; wakes every blocked sender and
     /// receiver. Closing is the cancellation mechanism.
     ChanClose,
+    /// `chan_new_of[T](capacity: Int) -> Chan[T]` (N53) — `chan_new` for a `Chan[T]`.
+    ChanNewOf,
+    /// `chan_send_of[T](c: Chan[T], v: T) -> Bool` — a copy of `v` queued, or `false` and
+    /// nothing queued when closed.
+    ChanSendOf,
+    /// `chan_recv_of[T](c: Chan[T], out: Vec[T]) -> Bool` — one value moved onto `out`, or
+    /// `false` when closed and drained.
+    ChanRecvOf,
+    /// `chan_close_of[T](c: Chan[T]) -> Int` — `chan_close` for a `Chan[T]`.
+    ChanCloseOf,
 
     // --- the outside world -------------------------------------------------------
     //
@@ -218,7 +231,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 42] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -243,6 +256,10 @@ impl Intrinsic {
         Self::ChanSend,
         Self::ChanRecv,
         Self::ChanClose,
+        Self::ChanNewOf,
+        Self::ChanSendOf,
+        Self::ChanRecvOf,
+        Self::ChanCloseOf,
         Self::ArgsCount,
         Self::Arg,
         Self::ReadFile,
@@ -300,6 +317,10 @@ impl Intrinsic {
             Self::VecSet => "vec_set",
             Self::VecPush => "vec_push",
             Self::VecPop => "vec_pop",
+            Self::ChanNewOf => "chan_new_of",
+            Self::ChanSendOf => "chan_send_of",
+            Self::ChanRecvOf => "chan_recv_of",
+            Self::ChanCloseOf => "chan_close_of",
         }
     }
 
@@ -313,7 +334,11 @@ impl Intrinsic {
             | Self::VecGet
             | Self::VecSet
             | Self::VecPush
-            | Self::VecPop => 1,
+            | Self::VecPop
+            | Self::ChanNewOf
+            | Self::ChanSendOf
+            | Self::ChanRecvOf
+            | Self::ChanCloseOf => 1,
             _ => 0,
         }
     }
@@ -349,6 +374,10 @@ impl Intrinsic {
             Self::VecGet => &[Shape::VecT, Shape::Int],
             Self::VecSet => &[Shape::VecT, Shape::Int, Shape::T],
             Self::VecPush => &[Shape::VecT, Shape::T],
+            Self::ChanNewOf => &[Shape::Int],
+            Self::ChanSendOf => &[Shape::ChanT, Shape::T],
+            Self::ChanRecvOf => &[Shape::ChanT, Shape::VecT],
+            Self::ChanCloseOf => &[Shape::ChanT],
         }
     }
 
@@ -383,6 +412,9 @@ impl Intrinsic {
             Self::VecNew => Shape::VecT,
             Self::VecLen | Self::VecSet | Self::VecPush => Shape::Int,
             Self::VecGet | Self::VecPop => Shape::T,
+            Self::ChanNewOf => Shape::ChanT,
+            Self::ChanSendOf | Self::ChanRecvOf => Shape::Bool,
+            Self::ChanCloseOf => Shape::Int,
         }
     }
 

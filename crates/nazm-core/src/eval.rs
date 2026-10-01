@@ -227,7 +227,9 @@ pub struct Channel {
 
 #[derive(Debug, Default)]
 struct ChannelState {
-    queue: std::collections::VecDeque<i64>,
+    /// What is queued: `Int`s for a `Chan`, any value for a `Chan[T]` (N53). One channel for
+    /// both, since a value carries no static type here and the semantics are one.
+    queue: std::collections::VecDeque<Value>,
     closed: bool,
 }
 
@@ -243,7 +245,7 @@ impl Channel {
 
     /// Queue a value, or report that the channel is closed — in which case **the value
     /// was not sent**, which is what `docs/spec.md` promises.
-    fn send(&self, value: i64) -> Option<bool> {
+    fn send(&self, value: Value) -> Option<bool> {
         let mut state = self.state.lock().ok()?;
         while !state.closed && state.queue.len() >= self.capacity {
             state = self.changed.wait(state).ok()?;
@@ -260,7 +262,7 @@ impl Channel {
     /// Take a value, or report that the channel is closed **and drained**. Values queued
     /// before a close are still delivered: closing ends a channel, it does not discard
     /// what is in it.
-    fn recv(&self) -> Option<Option<i64>> {
+    fn recv(&self) -> Option<Option<Value>> {
         let mut state = self.state.lock().ok()?;
         while state.queue.is_empty() && !state.closed {
             state = self.changed.wait(state).ok()?;
@@ -1310,7 +1312,7 @@ impl Interpreter {
                     |v| Ok(Value::Int(v)),
                 )
             }
-            (Intrinsic::ChanNew, [Value::Int(capacity)]) => {
+            (Intrinsic::ChanNew | Intrinsic::ChanNewOf, [Value::Int(capacity)]) => {
                 let Ok(capacity) = usize::try_from(*capacity) else {
                     return Err(out_of_bounds(
                         "a channel needs a capacity of at least 1",
@@ -1325,8 +1327,10 @@ impl Interpreter {
                 }
                 Ok(Value::Chan(Arc::new(Channel::new(capacity))))
             }
-            (Intrinsic::ChanSend, [Value::Chan(c), Value::Int(value)]) => {
-                c.send(*value).map_or_else(
+            (Intrinsic::ChanSend, [Value::Chan(c), v @ Value::Int(_)])
+            | (Intrinsic::ChanSendOf, [Value::Chan(c), v]) => {
+                // A copy: the sender's binding is untouched (N53).
+                c.send(v.clone()).map_or_else(
                     || Err(bug("a channel that could not be locked")),
                     |sent| Ok(Value::Bool(sent)),
                 )
@@ -1336,9 +1340,26 @@ impl Interpreter {
                     return Err(bug("a channel that could not be locked"));
                 };
                 match taken {
-                    Some(v) => {
+                    Some(Value::Int(v)) => {
                         let Some(mut out) = seq(out) else {
                             return Err(bug("a sequence that could not be written"));
+                        };
+                        out.push(v);
+                        Ok(Value::Bool(true))
+                    }
+                    Some(_) => Err(bug("an `Int` channel held something else")),
+                    None => Ok(Value::Bool(false)),
+                }
+            }
+            // Moved out of the channel onto the vector (N53).
+            (Intrinsic::ChanRecvOf, [Value::Chan(c), Value::Vec(out)]) => {
+                let Some(taken) = c.recv() else {
+                    return Err(bug("a channel that could not be locked"));
+                };
+                match taken {
+                    Some(v) => {
+                        let Some(mut out) = seq(out) else {
+                            return Err(bug("a vector that could not be written"));
                         };
                         out.push(v);
                         Ok(Value::Bool(true))
@@ -1346,10 +1367,12 @@ impl Interpreter {
                     None => Ok(Value::Bool(false)),
                 }
             }
-            (Intrinsic::ChanClose, [Value::Chan(c)]) => c.close().map_or_else(
-                || Err(bug("a channel that could not be locked")),
-                |()| Ok(Value::Int(0)),
-            ),
+            (Intrinsic::ChanClose | Intrinsic::ChanCloseOf, [Value::Chan(c)]) => {
+                c.close().map_or_else(
+                    || Err(bug("a channel that could not be locked")),
+                    |()| Ok(Value::Int(0)),
+                )
+            }
             (Intrinsic::StrJoin, [Value::Strs(parts), Value::Str(sep)]) => {
                 let Some(parts) = seq(parts) else {
                     return Err(bug("a sequence that could not be read"));

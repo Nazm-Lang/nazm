@@ -439,6 +439,8 @@ pub struct Types {
     pub vecs: std::collections::BTreeMap<u32, VecInfo>,
     /// Function types, by `FnTypeId` index (N50).
     pub fns: std::collections::BTreeMap<u32, FnInfo>,
+    /// Generic channel types, by `ChanId` index (N53): the element, as a `Vec`'s is.
+    pub chans: std::collections::BTreeMap<u32, VecInfo>,
 }
 
 /// A function type's signature, concrete (N50).
@@ -560,6 +562,22 @@ impl Types {
             .map(|(id, _)| Type::Vec(nazm_sema::VecId::from_index(*id as usize)))
     }
 
+    /// The `Chan[T]` type whose element is `elem`, if the program has one (N53).
+    #[must_use]
+    pub fn chan_of(&self, elem: Type) -> Option<Type> {
+        self.chans
+            .iter()
+            .find(|(_, v)| v.elem == elem)
+            .map(|(id, _)| Type::ChanOf(nazm_sema::ChanId::from_index(*id as usize)))
+    }
+
+    /// A generic channel's element (N53).
+    #[must_use]
+    pub fn chan(&self, id: nazm_sema::ChanId) -> Option<&VecInfo> {
+        self.chans
+            .get(&(u32::try_from(id.index()).unwrap_or(u32::MAX)))
+    }
+
     /// Whether a value of `t` owns anything a drop must give back. The one classification
     /// every cleanup follows: a record or enum is managed exactly when some field it can hold
     /// is, transitively. Recursion through a type's own fields is impossible — the checker
@@ -574,7 +592,13 @@ impl Types {
             return true;
         }
         match t {
-            Type::Str | Type::Ints | Type::Strs | Type::Chan | Type::Vec(_) | Type::Fn(_) => true,
+            Type::Str
+            | Type::Ints
+            | Type::Strs
+            | Type::Chan
+            | Type::ChanOf(_)
+            | Type::Vec(_)
+            | Type::Fn(_) => true,
             Type::Int | Type::Bool | Type::Cap(_) | Type::Param(_) => false,
             Type::Record(id) => self.record(id).is_some_and(|r| {
                 r.fields

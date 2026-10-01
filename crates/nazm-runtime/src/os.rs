@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 /// symbol reference for one that is never called — and the alternative is deciding, per
 /// unit, which declarations it happens to need, which is a class of bug ("the IR was
 /// rejected because something was not declared") for no benefit.
-pub(crate) fn declarations(out: &mut String) {
+pub fn declarations(out: &mut String) {
     for d in [
         "declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)",
         "declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)",

@@ -150,10 +150,20 @@ fn statement(
                         | Intrinsic::ChanSend
                         | Intrinsic::ChanRecv
                         | Intrinsic::ChanClose
+                        | Intrinsic::ChanNewOf
+                        | Intrinsic::ChanSendOf
+                        | Intrinsic::ChanRecvOf
+                        | Intrinsic::ChanCloseOf
                 ) {
                     push(SiteKind::Channel, op.name());
                 }
-                if matches!(op, Intrinsic::ChanSend | Intrinsic::ChanRecv) {
+                if matches!(
+                    op,
+                    Intrinsic::ChanSend
+                        | Intrinsic::ChanRecv
+                        | Intrinsic::ChanSendOf
+                        | Intrinsic::ChanRecvOf
+                ) {
                     push(SiteKind::Block, op.name());
                 }
             }
@@ -187,6 +197,7 @@ const fn allocates(op: Intrinsic) -> bool {
             | Intrinsic::StrsNew
             | Intrinsic::VecNew
             | Intrinsic::ChanNew
+            | Intrinsic::ChanNewOf
             | Intrinsic::StrConcat
             | Intrinsic::IntToStr
             | Intrinsic::StrFromByte
@@ -196,6 +207,7 @@ const fn allocates(op: Intrinsic) -> bool {
             | Intrinsic::IntsPush
             | Intrinsic::StrsPush
             | Intrinsic::VecPush
+            | Intrinsic::ChanRecvOf
     )
 }
 

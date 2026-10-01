@@ -130,6 +130,10 @@ impl Effect {
             | Intrinsic::ChanSend
             | Intrinsic::ChanRecv
             | Intrinsic::ChanClose
+            | Intrinsic::ChanNewOf
+            | Intrinsic::ChanSendOf
+            | Intrinsic::ChanRecvOf
+            | Intrinsic::ChanCloseOf
             | Intrinsic::VecNew
             | Intrinsic::VecLen
             | Intrinsic::VecGet

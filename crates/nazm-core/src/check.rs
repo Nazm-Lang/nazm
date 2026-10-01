@@ -1725,6 +1725,22 @@ fn resolve_written_inner(
         }
         return *t;
     }
+    // `Chan[T]` (N53): `Chan` with an argument is a generic channel, for a `T` that may cross
+    // into a task; `Chan` alone is the `Int` channel, below.
+    if !qualified && written.name == "Chan" {
+        if let Some(args) = args {
+            if args.len() != 1 {
+                errors.push(wrong_arity("Chan", 1, args.len(), written.span));
+            }
+            let elem = args.first().copied().unwrap_or(Type::Int);
+            if let Some(d) = channel_element(res.types(), elem, written.span) {
+                errors.push(d);
+            }
+            let chan = res.types_mut().chan_of(elem);
+            res.record_written_type(written.name_span, WrittenType::Builtin(chan));
+            return chan;
+        }
+    }
     if !qualified && written.name == VEC {
         let Some(args) = args else {
             errors.push(
@@ -2456,6 +2472,7 @@ fn environment(
         let mut shape = |s: Shape| match s.monomorphic() {
             Some(m) => m,
             None if s == Shape::T => t,
+            None if s == Shape::ChanT => res.types_mut().chan_of(t),
             None => res.types_mut().vec_of(t),
         };
         let params: Vec<Type> = i.params().iter().map(|s| shape(*s)).collect();
@@ -2709,13 +2726,33 @@ fn inferred_from(
 ) -> Option<Type> {
     match formal {
         Type::Param(p) if p == param => Some(actual),
-        Type::Vec(_) | Type::Record(_) | Type::Enum(_) => types
+        Type::Vec(_) | Type::ChanOf(_) | Type::Record(_) | Type::Enum(_) => types
             .type_args(formal)
             .into_iter()
             .zip(types.type_args(actual))
             .find_map(|(f, a)| inferred_from(types, f, a, param)),
         _ => None,
     }
+}
+
+/// `N0390` for a `Chan[elem]` whose element may not cross into a task, or `None` (N53): the
+/// rule a `spawn` argument follows, so a channel carries exactly what a task may be given.
+fn channel_element(types: &nazm_sema::UserTypes, elem: Type, at: Span) -> Option<Diagnostic> {
+    let why = types.task_safety(elem).err()?;
+    let shown = types.show(elem);
+    let message = if why.path.is_empty() {
+        format!("a channel cannot carry `{shown}`: it may not cross into a task")
+    } else {
+        format!(
+            "a channel cannot carry `{shown}`: its `{}` is a `{}`, which may not cross into a task",
+            why.path.join("."),
+            types.show(why.ty)
+        )
+    };
+    Some(Diagnostic::error(codes::CHANNEL_ELEMENT, at, message).help(
+        "a channel's values reach another task, so they follow the rule a `spawn` argument \
+         does: `Int`, `Bool`, `Str`, channels, and records and enums of those",
+    ))
 }
 
 /// A list of names, quoted, for a diagnostic that has to name several.
@@ -5600,6 +5637,15 @@ impl Checker<'_> {
         for t in &settled {
             self.mention(*t);
         }
+        // The one generic built-in that makes a `Chan[T]` from a written `T` (N53).
+        if owner == ParamOwner::Builtin(Intrinsic::ChanNewOf) {
+            if let Some(d) = settled
+                .first()
+                .and_then(|t| channel_element(self.res.types(), *t, at))
+            {
+                self.errors.push(d);
+            }
+        }
         self.res.record_type_args(at, settled.clone());
         self.record_site(at, settled.clone(), false);
         // What this call settled, for tooling: unsettled parameters stay themselves, and
@@ -5687,6 +5733,17 @@ impl Checker<'_> {
             }
             Type::Vec(_) => {
                 let (Type::Vec(_), Some(fe), Some(ae)) = (
+                    actual,
+                    types.type_args(formal).first().copied(),
+                    types.type_args(actual).first().copied(),
+                ) else {
+                    return Err(Unify::Mismatch);
+                };
+                self.unify(fe, ae, owner, solved, bound, caller, arg)
+            }
+            // A generic channel, as a `Vec` is: through its element (N53).
+            Type::ChanOf(_) => {
+                let (Type::ChanOf(_), Some(fe), Some(ae)) = (
                     actual,
                     types.type_args(formal).first().copied(),
                     types.type_args(actual).first().copied(),

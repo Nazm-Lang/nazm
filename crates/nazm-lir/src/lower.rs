@@ -470,6 +470,15 @@ pub fn lower(program: mir::Program, names: &SourceNames<'_>) -> Result<Native, L
                         }
                     }
                 }
+                // What a generic channel carries is laid out in this unit, as an element is.
+                Type::ChanOf(id) => {
+                    if let Some(c) = program.types.chan(id) {
+                        let elem = c.elem;
+                        if !used.contains(&elem) {
+                            used.push(elem);
+                        }
+                    }
+                }
                 _ => {}
             }
         }

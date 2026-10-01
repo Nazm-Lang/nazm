@@ -58,15 +58,11 @@ use crate::ir::{
     VariantLayout, VecLayout, VecTy,
 };
 use crate::lower::{Native, Sig};
-use crate::runtime::core::runtime_declarations;
-pub use crate::runtime::core::{MEMORY_FORMAT, MEMORY_VARIABLE};
-use crate::runtime::os::declarations;
 use crate::symbol::NativeSymbol;
-
-/// What this emitter has been verified against, recorded so a reader does not have to
-/// infer portability from silence.
-pub const TARGET_NOTE: &str = "verified on aarch64-apple-darwin with Apple clang; other \
-                               targets are unverified rather than unsupported";
+pub(crate) use nazm_runtime::escape;
+use nazm_runtime::runtime_declarations;
+use nazm_runtime::{declarations, preamble};
+pub use nazm_runtime::{Needs, MEMORY_FORMAT, MEMORY_VARIABLE, TARGET_NOTE};
 
 /// Bytes between a string backing's address and its first byte of text.
 ///
@@ -217,6 +213,11 @@ struct Emitter<'a> {
     /// What the closure object of the function being emitted carries, if it is a function
     /// value's code (N50).
     carried: Vec<Ty>,
+    /// The function's scratch slots for a generic channel's send and receive, one per element
+    /// type, allocated in its entry block so a loop does not grow the stack (N53).
+    chan_slots: Vec<(Ty, u32)>,
+    /// The generic channel element release helpers generated, by name (N53).
+    generated_chan_helpers: std::collections::BTreeSet<String>,
     /// The label a failure in the statement being emitted leaves for: its MIR failure edge.
     unwind_to: String,
     /// The per-record retain and release helpers, generated on demand.
@@ -519,7 +520,8 @@ impl Emitter<'_> {
                 let _ = writeln!(self.out, "  call void @nz.str_retain(ptr %{owner})");
                 self.needs_strings = true;
             }
-            Some(Owns::Channel) => {
+            // A generic channel's count is where an `Int` channel's is (N53).
+            Some(Owns::Channel | Owns::GenericChannel) => {
                 let _ = writeln!(self.out, "  call void @nz.chan_retain(ptr %{value})");
                 self.needs_channels = true;
             }
@@ -599,6 +601,10 @@ impl Emitter<'_> {
             }
             Some(Owns::Channel) => {
                 let _ = writeln!(self.out, "  call void @nz.chan_release(ptr %{value})");
+                self.needs_channels = true;
+            }
+            Some(Owns::GenericChannel) => {
+                let _ = writeln!(self.out, "  call void @nz.chanv_release(ptr %{value})");
                 self.needs_channels = true;
             }
             Some(Owns::Closure) => {
@@ -1638,6 +1644,18 @@ impl Emitter<'_> {
                 let vals: Vec<u32> = args.iter().map(|a| self.operand(a).0).collect();
                 let out =
                     match elem {
+                        // A generic channel's four, by their element (N53).
+                        Some(e)
+                            if matches!(
+                                op,
+                                Builtin::ChanNewOf
+                                    | Builtin::ChanSendOf
+                                    | Builtin::ChanRecvOf
+                                    | Builtin::ChanCloseOf
+                            ) =>
+                        {
+                            self.chan_op(*op, *e, &vals, at)
+                        }
                         Some(e) => {
                             let vec = self.program.types.vec_of(*e).map_or(VecTy(u32::MAX), |t| {
                                 match Ty::of(t) {
@@ -2149,7 +2167,7 @@ impl Emitter<'_> {
                     self.needs_strings = true;
                 }
                 Some(Owns::Backing) => self.needs_strings = true,
-                Some(Owns::Channel) => self.needs_channels = true,
+                Some(Owns::Channel | Owns::GenericChannel) => self.needs_channels = true,
                 // Nothing: a record's or an enum's runtime is its fields', and the helper
                 // generated below is what reaches them. Setting flags from a partial walk
                 // here would be a second answer to the same question.
@@ -2206,6 +2224,9 @@ impl Emitter<'_> {
                 }
                 Some(Owns::Channel) => {
                     let _ = writeln!(&mut body, "  call void @nz.chan_release(ptr %v{i})");
+                }
+                Some(Owns::GenericChannel) => {
+                    let _ = writeln!(&mut body, "  call void @nz.chanv_release(ptr %v{i})");
                 }
                 // The same helper the ordinary release path calls, which is why a record
                 // or an enum crossing a task boundary needs nothing written here. For an
@@ -2282,6 +2303,165 @@ impl Emitter<'_> {
         let size = self.fresh();
         let _ = writeln!(self.out, "  %{size} = ptrtoint ptr %{at} to i64");
         size
+    }
+
+    /// The release function a generic channel calls on each slot it still holds when it goes
+    /// (N53): `void(ptr slot)`, loading the element and releasing it by its own law. `null`
+    /// for an element that owns nothing.
+    fn chan_element_release(&mut self, elem: nazm_sema::Type) -> String {
+        let t = Ty::of(elem);
+        if !owns_anything(self.types, t) {
+            return "null".to_owned();
+        }
+        let key = self
+            .program
+            .types
+            .chan_of(elem)
+            .and_then(|c| match c {
+                nazm_sema::Type::ChanOf(id) => {
+                    self.program.types.chan(id).map(|i| i.elem_key.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+        let name = format!("nz.crel.{}", crate::symbol::encoded(&key));
+        if !self.generated_chan_helpers.insert(name.clone()) {
+            return format!("@{name}");
+        }
+        let lt = llvm_type(self.types, t);
+        let saved_out = std::mem::take(&mut self.out);
+        let saved_next = self.next;
+        let saved_label = self.next_label;
+        let saved_current = std::mem::take(&mut self.current);
+        self.next = 0;
+        self.next_label = 0;
+        self.current = "entry".to_owned();
+        let _ = writeln!(
+            self.out,
+            "\ndefine internal void @{name}(ptr %slot) {{\nentry:"
+        );
+        let v = self.fresh();
+        let _ = writeln!(self.out, "  %{v} = load {lt}, ptr %slot");
+        self.release(v, t);
+        let _ = writeln!(self.out, "  ret void\n}}");
+        let helper = std::mem::replace(&mut self.out, saved_out);
+        self.helpers.push_str(&helper);
+        self.next = saved_next;
+        self.next_label = saved_label;
+        self.current = saved_current;
+        format!("@{name}")
+    }
+
+    /// One `Chan[T]` operation, with its arguments already evaluated (N53). A send hands the
+    /// channel a reference of its own, given back at once if the channel refuses; a receive
+    /// takes the slot's reference and moves it onto the vector.
+    fn chan_op(&mut self, op: Builtin, elem: nazm_sema::Type, vals: &[u32], span: Span) -> Val {
+        let arg = |i: usize| vals.get(i).copied().unwrap_or_default();
+        self.needs_channels = true;
+        let t = Ty::of(elem);
+        let lt = llvm_type(self.types, t);
+        let slot = self
+            .chan_slots
+            .iter()
+            .find(|(have, _)| *have == t)
+            .map_or_else(|| "null".to_owned(), |(_, k)| format!("%chs{k}"));
+        match op {
+            Builtin::ChanNewOf => {
+                let bad = self.fresh();
+                let _ = writeln!(self.out, "  %{bad} = icmp slt i64 %{}, 1", arg(0));
+                self.require(bad, "a channel needs a capacity of at least 1", span);
+                let size = self.stride(t);
+                let release = self.chan_element_release(elem);
+                let c = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{c} = call ptr @nz.chanv_new(i64 %{}, i64 %{size}, ptr {release})",
+                    arg(0)
+                );
+                let null = self.fresh();
+                let _ = writeln!(self.out, "  %{null} = icmp eq ptr %{c}, null");
+                self.guard(
+                    null,
+                    &Failure {
+                        code: "N0406",
+                        message: "out of memory".to_owned(),
+                    },
+                    span,
+                );
+                let ty = self.program.types.chan_of(elem).map_or(Ty::Int, Ty::of);
+                Val::Of { value: c, ty }
+            }
+            Builtin::ChanSendOf => {
+                // The channel's own reference, taken before the copy goes in.
+                self.retain(arg(1), t);
+                let _ = writeln!(self.out, "  store {lt} %{}, ptr {slot}", arg(1));
+                let ok = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{ok} = call i1 @nz.chanv_send(ptr %{}, ptr {slot})",
+                    arg(0)
+                );
+                if owns_anything(self.types, t) {
+                    let refused = self.fresh_label();
+                    let cont = self.fresh_label();
+                    let _ = writeln!(self.out, "  br i1 %{ok}, label %b{cont}, label %b{refused}");
+                    self.open(&format!("b{refused}"));
+                    // Closed: nothing was queued, so the reference taken for it goes back.
+                    self.release(arg(1), t);
+                    let _ = writeln!(self.out, "  br label %b{cont}");
+                    self.open(&format!("b{cont}"));
+                }
+                Val::Of {
+                    value: ok,
+                    ty: Ty::Bool,
+                }
+            }
+            Builtin::ChanRecvOf => {
+                let got = self.fresh();
+                let _ = writeln!(
+                    self.out,
+                    "  %{got} = call i1 @nz.chanv_recv(ptr %{}, ptr {slot})",
+                    arg(0)
+                );
+                let take = self.fresh_label();
+                let cont = self.fresh_label();
+                let _ = writeln!(self.out, "  br i1 %{got}, label %b{take}, label %b{cont}");
+                self.open(&format!("b{take}"));
+                let v = self.fresh();
+                let _ = writeln!(self.out, "  %{v} = load {lt}, ptr {slot}");
+                let vec =
+                    self.program
+                        .types
+                        .vec_of(elem)
+                        .map_or(VecTy(u32::MAX), |vt| match Ty::of(vt) {
+                            Ty::Vec(v) => v,
+                            _ => VecTy(u32::MAX),
+                        });
+                // The push takes a reference of its own, so the one the receive handed over
+                // is given back: the value has moved, not been copied.
+                let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);
+                self.release(v, t);
+                let _ = writeln!(self.out, "  br label %b{cont}");
+                self.open(&format!("b{cont}"));
+                Val::Of {
+                    value: got,
+                    ty: Ty::Bool,
+                }
+            }
+            Builtin::ChanCloseOf => {
+                let _ = writeln!(self.out, "  call void @nz.chan_close(ptr %{})", arg(0));
+                let zero = self.fresh();
+                let _ = writeln!(self.out, "  %{zero} = add i64 0, 0");
+                Val::Of {
+                    value: zero,
+                    ty: Ty::Int,
+                }
+            }
+            _ => {
+                let _ = writeln!(self.out, "  unreachable");
+                Val::Transferred
+            }
+        }
     }
 
     /// One `Vec[T]` operation, with its arguments already evaluated.
@@ -2992,7 +3172,11 @@ impl Emitter<'_> {
             | Builtin::VecGet
             | Builtin::VecSet
             | Builtin::VecPush
-            | Builtin::VecPop => {
+            | Builtin::VecPop
+            | Builtin::ChanNewOf
+            | Builtin::ChanSendOf
+            | Builtin::ChanRecvOf
+            | Builtin::ChanCloseOf => {
                 let _ = writeln!(self.out, "  unreachable");
                 return Val::Transferred;
             }
@@ -3177,77 +3361,6 @@ impl Emitter<'_> {
     }
 }
 
-/// Which runtime helper sets a compilation reaches.
-///
-/// # Why this is a whole-program fact
-///
-/// The runtime is emitted **once**, so what it defines cannot be decided by one module.
-/// A unit records what it reached; the driver unions those and hands the answer to
-/// [`emit_runtime`]. That makes the runtime artefact a function of the program's feature
-/// use rather than of any module — the honest shape, and the one a future cache would
-/// have to key on.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct Needs {
-    pub tasks: bool,
-    pub channels: bool,
-    pub sequences: bool,
-    pub io: bool,
-    pub join: bool,
-    pub strings: bool,
-    /// The registry's pointer-taking entries and accessors (`crate::runtime`), which code a
-    /// second compiler generated calls instead of the aggregate-returning ones (N41).
-    pub shims: bool,
-    /// `nz.stack_check`, which a function in a call cycle calls first (N49).
-    pub stack: bool,
-    /// The closure objects' allocation and count (N50).
-    pub closures: bool,
-}
-
-impl Needs {
-    /// Everything either of them reaches.
-    #[must_use]
-    pub fn union(self, other: Self) -> Self {
-        Self {
-            tasks: self.tasks || other.tasks,
-            channels: self.channels || other.channels,
-            sequences: self.sequences || other.sequences,
-            io: self.io || other.io,
-            join: self.join || other.join,
-            strings: self.strings || other.strings,
-            shims: self.shims || other.shims,
-            stack: self.stack || other.stack,
-            closures: self.closures || other.closures,
-        }
-    }
-
-    /// What the helper sets imply about each other.
-    ///
-    /// Both the task and the channel runtimes grow a sequence, so either one reaching
-    /// means the sequence runtime is reached too. Derived in one place rather than at each
-    /// use, so the two facts cannot drift apart.
-    #[must_use]
-    pub fn settled(self) -> Self {
-        Self {
-            sequences: self.sequences || self.tasks || self.channels,
-            // `str_join` builds a string and the I/O helpers return one, so either of
-            // them reaching means the string helpers are reached too. A `Strs` needs them
-            // as well, and says so at the site that retains or releases an element rather
-            // than by implication from the sequence flag — an `Ints`-only program carries
-            // no string runtime at all.
-            strings: self.strings || self.join || self.io,
-            ..self
-        }
-    }
-}
-
-/// The header every generated artefact carries.
-pub(crate) fn preamble(out: &mut String, source: &str) {
-    let _ = writeln!(out, "; Generated by nazm build. Do not edit.");
-    let _ = writeln!(out, "; {TARGET_NOTE}");
-    let _ = writeln!(out, "source_filename = \"{source}\"");
-    out.push('\n');
-}
-
 /// Emit one unit: its type definitions, its external declarations, its functions' bodies from
 /// MIR, their helpers and trampolines, and the constants they interned.
 pub fn emit_unit(native: &Native, unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
@@ -3293,6 +3406,8 @@ pub(crate) fn emit_unit_with(
         needs_stack: false,
         needs_closures: false,
         carried: Vec::new(),
+        chan_slots: Vec::new(),
+        generated_chan_helpers: std::collections::BTreeSet::new(),
         task_count: 0,
         needs_channels: false,
         needs_sequences: false,
@@ -3485,6 +3600,30 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
             local.name
         );
     }
+    // One scratch slot per element type a generic channel's send or receive here copies
+    // through (N53), in the entry block.
+    e.chan_slots.clear();
+    for b in &f.blocks {
+        for s in &b.stmts {
+            if let mir::StatementKind::Assign {
+                value:
+                    mir::Rvalue::Primitive {
+                        op: Builtin::ChanSendOf | Builtin::ChanRecvOf,
+                        elem: Some(t),
+                        ..
+                    },
+                ..
+            } = &s.kind
+            {
+                let t = Ty::of(*t);
+                if !e.chan_slots.iter().any(|(have, _)| *have == t) {
+                    let k = u32::try_from(e.chan_slots.len()).unwrap_or(u32::MAX);
+                    let _ = writeln!(e.out, "  %chs{k} = alloca {}", llvm_type(e.types, t));
+                    e.chan_slots.push((t, k));
+                }
+            }
+        }
+    }
     // Zero every slot that can own something, parameters excepted: a drop of a local that
     // holds nothing then releases the zero, which the runtime ignores.
     for (i, _) in f.locals.iter().enumerate().skip(f.params as usize) {
@@ -3564,19 +3703,6 @@ fn escape_bytes(bytes: &[u8]) -> String {
             let _ = write!(out, "\\{b:02X}");
         } else {
             out.push(*b as char);
-        }
-    }
-    out
-}
-
-/// LLVM's constant-string escaping: `\XX` for anything not printable ASCII.
-pub(crate) fn escape(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        if b == b'"' || b == b'\\' || !(0x20..0x7f).contains(&b) {
-            let _ = write!(out, "\\{b:02X}");
-        } else {
-            out.push(b as char);
         }
     }
     out

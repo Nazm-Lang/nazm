@@ -1219,7 +1219,7 @@ aliasing behaves identically, and one that aliases — which the language specif
 measures — reads freed storage
 
 Repointed by N43: the runtime's text moved to `runtime/core.rs`, unchanged."""
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """  %last = icmp sle i64 %rc2, 0
   br i1 %last, label %free, label %kept"""
 replace = """  %last = icmp sle i64 %rc2, 9223372036854775807
@@ -1308,7 +1308,7 @@ for good. Converting a leak into a leak inside a container is the failure §17 o
 directive names by that description
 
 Repointed by N43: the runtime's text moved to `runtime/core.rs`, unchanged."""
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """  %last = icmp sle i64 %rc2, 0
   br i1 %last, label %contents, label %done
 contents:
@@ -1345,7 +1345,7 @@ its siblings still point into — and a program with no sharing behaves identica
 what makes this the shape worth catching
 
 Repointed by N43: the runtime's text moved to `runtime/core.rs`, unchanged."""
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """  %old = atomicrmw sub ptr %b, i64 1 release
   %last = icmp eq i64 %old, 1"""
 replace = """  %old = atomicrmw sub ptr %b, i64 1 release
@@ -1360,7 +1360,7 @@ reference; removing the count removes the argument, and a channel a task still h
 torn down under it
 
 Repointed by N43: the runtime's text moved to `runtime/core.rs`, unchanged."""
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """  %old = atomicrmw sub ptr %rcp, i64 1 release
   %last = icmp eq i64 %old, 1"""
 replace = """  %old = atomicrmw sub ptr %rcp, i64 1 release
@@ -2525,10 +2525,14 @@ replace = ""
 name = "a-vec-hides-what-it-owns"
 why = """
 the ownership graph does not follow a `Vec` to its element, so `struct Node { children: Vec[Node] }` is accepted and its values can own themselves
+Repointed by N53, whose `Chan[T]` arm repeats the line: the find now names the `Vec` arm's element.
 """
 file = "crates/nazm-sema/src/udt.rs"
-find = "                    self.owned_by(e, COUNTED, via, uses, out);"
-replace = ""
+find = """
+                if let Some(e) = self.vec_element(v) {
+                    self.owned_by(e, COUNTED, via, uses, out);"""
+replace = """
+                if let Some(e) = self.vec_element(v) {"""
 
 [[mutation]]
 name = "a-parameter-no-field-uses-counts-as-used"
@@ -7796,7 +7800,7 @@ killers = [{ package = "nazm-cli", test = "incremental", name = "a_capability_on
 name = "n37-main-is-handed-nothing"
 why = """the entry wrapper hands `main` no roots, so a `main` that declares its authority is called with the wrong signature
 Repointed by N43: the runtime's text moved to `runtime/entry.rs`, unchanged."""
-file = "crates/nazm-lir/src/runtime/entry.rs"
+file = "crates/nazm-runtime/src/entry.rs"
 find = """    let root_args = vec!["i64 0"; roots].join(", ");"""
 replace = """    let root_args = vec!["i64 0"; 0].join(", ");"""
 killers = [{ package = "nazm-cli", test = "capabilities", name = "a_capability_parameter_lowers_exactly_as_an_int_one_and_main_is_handed_its_roots" }]
@@ -8040,10 +8044,11 @@ Repointed by N42, which moved the epoch to 11 for foreign declarations: an N41 e
 Repointed by N49, which moved it to 12 for string escapes: an entry that read a backslash literally must not be reused.
 Repointed by N50, which moved it to 13 for function values: an entry that refused a function named as a value must not be reused.
 Repointed by N51, which moved it to 14 for effect parameters: an entry that refused a captured capability must not be reused.
-Repointed by N52, which moved it to 15 for declassification: an entry that accepted a function named str_vouch must not be reused."""
+Repointed by N52, which moved it to 15 for declassification: an entry that accepted a function named str_vouch must not be reused.
+Repointed by N53, which moved it to 16 for generic channels: an entry that refused `Chan[Str]` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 15;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 14;"
+find = "pub const SEMANTIC_EPOCH: u32 = 16;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 15;"
 killers = [{ package = "nazm-cli", test = "incremental", name = "an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -8477,7 +8482,7 @@ killers = [{ package = "nazm-cli", test = "cranelift", name = "every_example_com
 [[mutation]]
 name = "n41-a-runtime-signature-is-wrong"
 why = "the registry drops `nz.arr_grow`'s element-size parameter, so every push is built against a signature the runtime does not have (narrowing a result instead is invisible on a little-endian target that stores it into a zeroed field, which is why this mutant removes a parameter)"
-file = "crates/nazm-lir/src/runtime/mod.rs"
+file = "crates/nazm-runtime/src/lib.rs"
 find = '    import!("nz.arr_grow", [Ptr, I64], Some(Word::Ptr), Sequences,'
 replace = '    import!("nz.arr_grow", [Ptr], Some(Word::Ptr), Sequences,'
 killers = [{ package = "nazm-cli", test = "cranelift", name = "records_enums_matches_and_managed_values_agree" }]
@@ -8802,7 +8807,7 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::the_run
 [[mutation]]
 name = "n43-a-string-retain-takes-no-reference"
 why = "`nz.str_retain` does not count, so the first of two holders to release a backing frees it under the other"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """bump:
   %old = atomicrmw add ptr %b, i64 1 monotonic"""
 replace = """bump:
@@ -8812,7 +8817,7 @@ killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_servi
 [[mutation]]
 name = "n43-a-string-is-freed-a-reference-early"
 why = "`nz.str_release` frees a backing when two references remain, so a live string's storage is released and later released again"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """  %old = atomicrmw sub ptr %b, i64 1 release
   %last = icmp eq i64 %old, 1"""
 replace = """  %old = atomicrmw sub ptr %b, i64 1 release
@@ -8822,7 +8827,7 @@ killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_servi
 [[mutation]]
 name = "n43-a-sequence-is-never-reclaimed"
 why = "`nz.arr_release` never sees its last reference, so every sequence leaks"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """  store i64 %rc2, ptr %rcp
   %last = icmp sle i64 %rc2, 0
   br i1 %last, label %free, label %kept"""
@@ -8834,7 +8839,7 @@ killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_servi
 [[mutation]]
 name = "n43-a-growth-overflow-is-not-refused"
 why = "a sequence growth whose byte count overflows is attempted with the wrapped size, so the caller writes past what was allocated"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = "  %over = or i1 %twice.o, %bytes.o"
 replace = "  %over = and i1 %twice.o, %bytes.o"
 killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_services_keep_their_contract_when_called_directly" }]
@@ -8842,15 +8847,15 @@ killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_servi
 [[mutation]]
 name = "n43-the-failure-state-is-shared-between-threads"
 why = "`nz.failed` is an ordinary global, so one task's failure is another's and the units' thread-local declarations disagree with the definition"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """    let _ = writeln!(out, "@nz.failed = hidden thread_local global i1 false");"""
 replace = """    let _ = writeln!(out, "@nz.failed = hidden global i1 false");"""
-killers = [{ package = "nazm-lir", lib = true, name = "runtime::tests::every_runtime_global_is_inventoried" }]
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::every_runtime_global_is_inventoried" }]
 
 [[mutation]]
 name = "n43-a-later-failure-overwrites-the-first"
 why = "`nz.fail` records every failure, so the message reported is the last one — usually a consequence of the first, carrying on with its stand-in value"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """    let _ = writeln!(out, "  br i1 %had, label %done, label %record");"""
 replace = """    let _ = writeln!(out, "  br i1 %had, label %record, label %record");"""
 killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_services_keep_their_contract_when_called_directly" }]
@@ -8858,7 +8863,7 @@ killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_servi
 [[mutation]]
 name = "n43-a-failure-ends-with-the-wrong-status"
 why = "a reported failure exits 1, the status a normal program may choose for itself, instead of 2"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """    let _ = writeln!(out, "  call void @exit(i32 2)");"""
 replace = """    let _ = writeln!(out, "  call void @exit(i32 1)");"""
 killers = [{ package = "nazm-cli", test = "runtime", name = "the_three_ways_a_program_ends_are_distinguished" }]
@@ -8866,7 +8871,7 @@ killers = [{ package = "nazm-cli", test = "runtime", name = "the_three_ways_a_pr
 [[mutation]]
 name = "n43-the-memory-report-is-never-written"
 why = "the entry never writes the memory report, so reclamation cannot be asked about"
-file = "crates/nazm-lir/src/runtime/entry.rs"
+file = "crates/nazm-runtime/src/entry.rs"
 find = '''            "  br i1 %quiet, label %nz.checked, label %nz.memreport"'''
 replace = '''            "  br i1 %quiet, label %nz.checked, label %nz.checked"'''
 killers = [{ package = "nazm-cli", test = "runtime", name = "the_three_ways_a_program_ends_are_distinguished" }]
@@ -8874,7 +8879,7 @@ killers = [{ package = "nazm-cli", test = "runtime", name = "the_three_ways_a_pr
 [[mutation]]
 name = "n43-the-program-s-own-name-is-an-argument"
 why = "the entry stores `argc` rather than one fewer, so `args_count` counts the program's name and `arg(0)` is it"
-file = "crates/nazm-lir/src/runtime/entry.rs"
+file = "crates/nazm-runtime/src/entry.rs"
 find = """        let _ = writeln!(out, "  %nargs = sub i64 %argc64, 1");"""
 replace = """        let _ = writeln!(out, "  %nargs = sub i64 %argc64, 0");"""
 killers = [{ package = "nazm-cli", test = "runtime", name = "the_arguments_are_stored_once_at_startup_without_the_program_name" }]
@@ -8882,33 +8887,33 @@ killers = [{ package = "nazm-cli", test = "runtime", name = "the_arguments_are_s
 [[mutation]]
 name = "n43-an-inventoried-signature-is-wrong"
 why = "the inventory says `nz.arr_grow` takes one parameter, so every unit declares it with a signature the runtime does not define"
-file = "crates/nazm-lir/src/runtime/mod.rs"
+file = "crates/nazm-runtime/src/lib.rs"
 find = """    rt!("nz.arr_grow", "ptr" ("ptr", "i64") "","""
 replace = """    rt!("nz.arr_grow", "ptr" ("ptr") "","""
-killers = [{ package = "nazm-lir", lib = true, name = "runtime::tests::every_runtime_definition_is_inventoried_with_its_exact_signature" }]
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::every_runtime_definition_is_inventoried_with_its_exact_signature" }]
 
 [[mutation]]
 name = "n43-a-runtime-symbol-is-not-inventoried"
 why = "`nz.cstr` is defined and not inventoried, so a symbol of the runtime has no stated contract"
-file = "crates/nazm-lir/src/runtime/mod.rs"
+file = "crates/nazm-runtime/src/lib.rs"
 find = """    rt!("nz.cstr", "ptr" ("ptr", "i64") "", false, Io, "", Null, Any, "a NUL-terminated copy of a path, for the C library", "the copy is owned by the caller, who frees it"),
 """
 replace = ""
-killers = [{ package = "nazm-lir", lib = true, name = "runtime::tests::every_runtime_definition_is_inventoried_with_its_exact_signature" }]
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::every_runtime_definition_is_inventoried_with_its_exact_signature" }]
 
 [[mutation]]
 name = "n43-the-runtime-reaches-around-the-adapter"
 why = "the adapter stops declaring `fclose`, which the runtime still calls, so the runtime reaches the operating system through something the adapter does not list"
-file = "crates/nazm-lir/src/runtime/os.rs"
+file = "crates/nazm-runtime/src/os.rs"
 find = """        "declare i32 @fclose(ptr)",
 """
 replace = ""
-killers = [{ package = "nazm-lir", lib = true, name = "runtime::tests::a_runtime_calls_the_operating_system_only_through_the_adapter" }]
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_runtime_calls_the_operating_system_only_through_the_adapter" }]
 
 [[mutation]]
 name = "n43-a-close-discards-queued-values"
 why = "`nz.chan_recv` looks at the close flag before the queue, so closing a channel throws away what was already sent"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """  %empty = icmp sle i64 %len, 0
   br i1 %empty, label %maybe, label %take"""
 replace = """  %empty = icmp sle i64 %len, 0
@@ -8923,7 +8928,7 @@ killers = [{ package = "nazm-cli", test = "runtime", name = "the_runtime_s_servi
 [[mutation]]
 name = "n44-a-scope-swallows-its-tasks-failures"
 why = "`nz.scope_join` never takes a task's failure, so a task that failed is as if it had succeeded and the program ends 0"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = "  %take = and i1 %none, %this"
 replace = "  %take = and i1 %none, false"
 killers = [{ package = "nazm-cli", test = "scheduler", name = "a_failure_deep_in_nested_scopes_joins_every_level_and_reclaims_everything" }]
@@ -8931,7 +8936,7 @@ killers = [{ package = "nazm-cli", test = "scheduler", name = "a_failure_deep_in
 [[mutation]]
 name = "n44-a-scope-reports-its-last-failure"
 why = "`nz.scope_join` keeps the last failure in start order, so which task is reported depends on how many failed after it"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = "  %take = and i1 %none, %this"
 replace = "  %take = and i1 %this, true"
 killers = [{ package = "nazm-cli", test = "scheduler", name = "a_scope_reports_its_first_failure_in_start_order_not_in_time" }]
@@ -8939,7 +8944,7 @@ killers = [{ package = "nazm-cli", test = "scheduler", name = "a_scope_reports_i
 [[mutation]]
 name = "n44-the-scope-joins-no-task"
 why = "`nz.scope_join` looks at no task, so every task outlives its scope unjoined and its failure is never reported"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """  %len = phi i64 [ 0, %entry ], [ %len2, %after ]
   %more = icmp slt i64 %i, %n"""
 replace = """  %len = phi i64 [ 0, %entry ], [ %len2, %after ]
@@ -8949,7 +8954,7 @@ killers = [{ package = "nazm-cli", test = "scheduler", name = "a_failure_deep_in
 [[mutation]]
 name = "n44-a-send-wakes-nobody"
 why = "`nz.chan_send` queues its value without waking the receivers waiting for one, so a receiver that was already waiting waits for ever"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = """  %n1 = add i64 %len, 1
   store i64 %n1, ptr %lenp
   %b = call i32 @pthread_cond_broadcast(ptr %cv)"""
@@ -9467,7 +9472,7 @@ killers = [{ package = "nazm-cli", test = "usability", name = "unbounded_recursi
 [[mutation]]
 name = "n49-the-stack-limit-is-never-reached"
 why = "the runtime compares the frame with zero, so no stack is ever past its limit"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = "  %past = icmp ult i64 %sp, %l"
 replace = "  %past = icmp ult i64 %sp, 0"
 killers = [{ package = "nazm-cli", test = "usability", name = "unbounded_recursion_reports_n0408_instead_of_crashing" }]
@@ -9475,10 +9480,10 @@ killers = [{ package = "nazm-cli", test = "usability", name = "unbounded_recursi
 [[mutation]]
 name = "n49-a-task-gets-the-platform-default-stack"
 why = "task threads are started without the 8 MiB the check budgets for, so on a host whose default is smaller (macOS, 512 KiB) a recursive task overruns its stack before the check fires"
-file = "crates/nazm-lir/src/runtime/core.rs"
+file = "crates/nazm-runtime/src/core.rs"
 find = "  %as = call i32 @pthread_attr_setstacksize(ptr %attr, i64 8388608)"
 replace = ""
-killers = [{ package = "nazm-lir", lib = true, name = "runtime::tests::a_task_thread_has_the_stack_the_check_budgets_for_on_every_host" }]
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_task_thread_has_the_stack_the_check_budgets_for_on_every_host" }]
 
 [[mutation]]
 name = "n49-an-instance-declares-itself"
@@ -10084,3 +10089,185 @@ replace = """
             }
             Intrinsic::StrSlice => {"""
 killers = [{ package = "nazm-cli", test = "cost_and_flow", name = "a_vouch_changes_nothing_at_run_time_everywhere" }]
+
+
+# --- N53: the runtime component and generic channels -------------------------------------------
+
+[[mutation]]
+name = "n53-any-element-may-cross"
+why = "a channel of storage shared with its maker is accepted, so a task holds what another frees"
+file = "crates/nazm-core/src/check.rs"
+find = "    let why = types.task_safety(elem).err()?;"
+replace = "    let why = types.task_safety(elem).err().filter(|_| false)?;"
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "an_element_that_cannot_cross_into_a_task_is_refused" }]
+
+[[mutation]]
+name = "n53-a-made-channel-is-not-checked"
+why = "`chan_new_of[Ints]` makes a channel nothing written ever checked"
+file = "crates/nazm-core/src/check.rs"
+find = "        if owner == ParamOwner::Builtin(Intrinsic::ChanNewOf) {"
+replace = "        if owner == ParamOwner::Builtin(Intrinsic::ChanCloseOf) {"
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "an_element_that_cannot_cross_into_a_task_is_refused" }]
+
+[[mutation]]
+name = "n53-a-channel-type-unifies-with-a-vec"
+why = "a generic call accepts a `Vec[T]` where a `Chan[T]` is formal"
+file = "crates/nazm-core/src/check.rs"
+find = "                let (Type::ChanOf(_), Some(fe), Some(ae)) = ("
+replace = "                let (Type::ChanOf(_) | Type::Vec(_), Some(fe), Some(ae)) = ("
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_typed_channel_carries_only_its_element" }]
+
+[[mutation]]
+name = "n53-queued-values-are-not-released"
+why = "the last reference to a channel frees its ring and leaks every value still queued in it"
+file = "crates/nazm-runtime/src/core.rs"
+find = "  br i1 %norel, label %destroy, label %walk"
+replace = "  br i1 true, label %destroy, label %walk"
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_value_still_queued_when_the_channel_goes_is_released_once" }]
+
+[[mutation]]
+name = "n53-a-closed-typed-channel-accepts"
+why = "a send after close is queued, so a receiver drains what was sent after the end"
+file = "crates/nazm-runtime/src/core.rs"
+find = """
+  %closed = load i64, ptr %closedp
+  %isclosed = icmp ne i64 %closed, 0
+  br i1 %isclosed, label %refuse, label %space
+space:
+  %len = load i64, ptr %lenp
+  %cap = load i64, ptr %c
+  %full = icmp sge i64 %len, %cap
+  br i1 %full, label %wait, label %store
+wait:
+  %w = call i32 @pthread_cond_wait(ptr %cv, ptr %m)
+  br label %check
+refuse:
+  %u1 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i1 false
+store:
+  %head = load i64, ptr %headp
+  %sum = add i64 %head, %len
+  %idx = urem i64 %sum, %cap
+  %data = load ptr, ptr %datap
+  %off = mul i64 %idx, %stride"""
+replace = """
+  %closed = load i64, ptr %closedp
+  %isclosed = icmp ne i64 %closed, 0
+  br i1 false, label %refuse, label %space
+space:
+  %len = load i64, ptr %lenp
+  %cap = load i64, ptr %c
+  %full = icmp sge i64 %len, %cap
+  br i1 %full, label %wait, label %store
+wait:
+  %w = call i32 @pthread_cond_wait(ptr %cv, ptr %m)
+  br label %check
+refuse:
+  %u1 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i1 false
+store:
+  %head = load i64, ptr %headp
+  %sum = add i64 %head, %len
+  %idx = urem i64 %sum, %cap
+  %data = load ptr, ptr %datap
+  %off = mul i64 %idx, %stride"""
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_send_after_close_is_refused_and_its_value_released" }]
+
+[[mutation]]
+name = "n53-the-llvm-send-takes-no-reference"
+why = "the LLVM send queues a value without the channel's own reference, so the sender's release frees what is queued"
+file = "crates/nazm-lir/src/emit.rs"
+find = """
+                // The channel's own reference, taken before the copy goes in.
+                self.retain(arg(1), t);"""
+replace = """
+                // The channel's own reference, taken before the copy goes in."""
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_value_still_queued_when_the_channel_goes_is_released_once" }]
+
+[[mutation]]
+name = "n53-the-llvm-refused-send-keeps-its-reference"
+why = "a value refused by a closed channel keeps the reference taken for queueing it, and leaks"
+file = "crates/nazm-lir/src/emit.rs"
+find = """
+                    // Closed: nothing was queued, so the reference taken for it goes back.
+                    self.release(arg(1), t);"""
+replace = """
+                    // Closed: nothing was queued, so the reference taken for it goes back."""
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_send_after_close_is_refused_and_its_value_released" }]
+
+[[mutation]]
+name = "n53-the-llvm-receive-copies"
+why = "the LLVM receive pushes the value and keeps the reference it was handed, so every received string leaks"
+file = "crates/nazm-lir/src/emit.rs"
+find = """
+                let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);
+                self.release(v, t);"""
+replace = """
+                let _ = self.vec_op(Builtin::VecPush, vec, t, &[arg(1), v], span);"""
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "records_and_strings_cross_tasks_through_typed_channels_everywhere" }]
+
+[[mutation]]
+name = "n53-the-cranelift-refused-send-keeps-its-reference"
+why = "the Cranelift send does not give back the reference of a value a closed channel refused"
+file = "crates/nazm-codegen-clif/src/prims.rs"
+find = """
+                    self.b.switch_to_block(refused);
+                    self.release_at(slot, t);"""
+replace = """
+                    self.b.switch_to_block(refused);"""
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_send_after_close_is_refused_and_its_value_released" }]
+
+[[mutation]]
+name = "n53-the-cranelift-channel-has-no-element-release"
+why = "a Cranelift channel of strings is made without its element's release, so what is queued at the end leaks"
+file = "crates/nazm-codegen-clif/src/prims.rs"
+find = """
+                let release = if self.g.lay.owns(t) {
+                    let h = self.g.helper(crate::unit::Helper::ReleaseElement(t));"""
+replace = """
+                let release = if self.g.lay.owns(t) && false {
+                    let h = self.g.helper(crate::unit::Helper::ReleaseElement(t));"""
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_value_still_queued_when_the_channel_goes_is_released_once" }]
+
+[[mutation]]
+name = "n53-a-read-channel-type-is-a-vec"
+why = "an interface read back turns `Chan[T]` into `Vec[T]`, so a reused library's channel parameter accepts the wrong argument"
+file = "crates/nazm-iface/src/wire.rs"
+find = """
+            let elem = read_type(chan, ids, types, owner);
+            types.chan_of(elem)"""
+replace = """
+            let elem = read_type(chan, ids, types, owner);
+            types.vec_of(elem)"""
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_channel_type_crosses_a_module_boundary_and_its_interface" }]
+
+[[mutation]]
+name = "n53-a-typed-send-is-not-a-channel-site"
+why = "`explain-cost` misses a typed channel's send"
+file = "crates/nazm-mir/src/cost.rs"
+find = """
+                        | Intrinsic::ChanNewOf
+                        | Intrinsic::ChanSendOf"""
+replace = """
+                        | Intrinsic::ChanNewOf"""
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_typed_channel_s_operations_are_resource_sites" }]
+
+[[mutation]]
+name = "n53-the-runtime-digest-is-not-in-the-key"
+why = "an LLVM object built against a runtime whose text changed without a revision bump is reused"
+file = "crates/nazm-cli/src/backend.rs"
+find = """
+        "nazm-runtime-abi={revision}+{}",
+        nazm_lir::runtime::digest()"""
+replace = """
+        "nazm-runtime-abi={revision}+{}",
+        """""
+killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::the_runtime_s_digest_is_part_of_every_configuration" }]
+
+[[mutation]]
+name = "n53-the-runtime-abi-stays"
+why = "the generic channel runtime ships under N50's revision, so an object built before it is reused"
+file = "crates/nazm-runtime/src/lib.rs"
+find = "pub const RUNTIME_ABI_REVISION: u32 = 5;"
+replace = "pub const RUNTIME_ABI_REVISION: u32 = 4;"
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_five_and_its_digest_covers_generic_channels" }]

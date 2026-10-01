@@ -555,7 +555,13 @@ impl Law {
             (false, Type::Param(_)) => Some(Self::Parametric),
             (
                 false,
-                Type::Ints | Type::Strs | Type::Chan | Type::Vec(_) | Type::Cap(_) | Type::Fn(_),
+                Type::Ints
+                | Type::Strs
+                | Type::Chan
+                | Type::ChanOf(_)
+                | Type::Vec(_)
+                | Type::Cap(_)
+                | Type::Fn(_),
             ) => None,
         }
     }

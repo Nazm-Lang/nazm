@@ -28,6 +28,10 @@ pub fn ty(program: &Program, t: Type) -> String {
             .types
             .vec(v)
             .map_or_else(|| "Vec(?)".to_owned(), |i| format!("Vec({})", i.elem_key)),
+        Type::ChanOf(c) => program
+            .types
+            .chan(c)
+            .map_or_else(|| "Chan(?)".to_owned(), |i| format!("Chan({})", i.elem_key)),
         Type::Param(_) => "?param".to_owned(),
         other => other.builtin_name().unwrap_or("?").to_owned(),
     }

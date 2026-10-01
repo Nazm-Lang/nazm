@@ -3313,10 +3313,17 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
                 // in one program.
                 Shape::T => "0",
                 Shape::VecT => "vec_new[Int]()",
+                Shape::ChanT => "chan_new_of[Int](1)",
             })
             .collect();
         // `vec_new` is the one built-in whose type argument nothing else could say.
-        let name = if i.params().is_empty() && i.generics() > 0 {
+        // `chan_new_of` likewise: its one parameter is the capacity, not a `T`.
+        let name = if i.generics() > 0
+            && !i
+                .params()
+                .iter()
+                .any(|p| matches!(p, Shape::T | Shape::VecT | Shape::ChanT))
+        {
             format!("{}[Int]", i.name())
         } else {
             i.name().to_owned()
@@ -3336,6 +3343,7 @@ fn every_front_end_builtin_is_lowered_or_refused_by_name() {
             // program may observe without racing. Sending into it is the shortest way
             // to reach an `Int` from one.
             Shape::Chan => format!("if chan_send({call}, 0) {{ 1 }} else {{ 0 }}"),
+            Shape::ChanT => format!("if chan_send_of({call}, 0) {{ 1 }} else {{ 0 }}"),
         };
         let src = format!("fn main() -> Int {{ {body} }}\n");
 

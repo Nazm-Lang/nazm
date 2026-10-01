@@ -388,6 +388,18 @@ What follows is **not started** and is bounded here so it is not mistaken for v1
 | A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
 | Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
 
+### N53 — Runtime crate and generic channels — **complete, 2026-10-02**
+
+`architecture.md` §7.55 first. The runtime is its own crate, `nazm-runtime` — text, inventory,
+OS adapter and platform entry — depending on nothing of the compiler and consumed by both
+backends; runtime ABI revision 5, and a digest of what the runtime emits enters every object key
+beside it. `Chan[T]` for any `T` that may cross into a task (`N0390` otherwise), with
+`chan_new_of`, `chan_send_of`, `chan_recv_of` and `chan_close_of`: one runtime (`nz.chanv_*`) whose
+header extends the `Int` channel's with the element's stride and release, so retain and close are
+shared; a queued value is released by the channel's last reference, a refused one by its sender.
+The `Int`-only `Chan` and its built-ins are unchanged, and the Nazm-written compiler does not
+carry the typed channel. Semantic epoch 16. Next: N54.
+
 ### N52 — Resource cost and information flow v2 — **complete, 2026-10-02**
 
 `architecture.md` §7.54 first. Resource sites read off MIR with a count per call that is
@@ -619,7 +631,7 @@ N36's wording was corrected so that `fn f() -> Int` and `fn f() -> Int ! {}` can
 | capability kinds, sets and the built-in table | `crates/nazm-sema/src/capability.rs`, `types.rs` |
 | possession, forging, `main`'s parameters | `crates/nazm-core/src/check.rs` |
 | the authority check and its witness | `crates/nazm-core/src/effects.rs` |
-| the root at runtime | `crates/nazm-core/src/eval.rs`, `crates/nazm-lir/src/runtime/entry.rs` |
+| the root at runtime | `crates/nazm-core/src/eval.rs`, `crates/nazm-runtime/src/entry.rs` |
 | the law | `spec.md` *Capabilities: what allows a function to act*, `architecture.md` §7.39 |
 
 Mutation evidence, under the new responsibility law: twenty new mutations and one retired; 33

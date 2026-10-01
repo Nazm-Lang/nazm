@@ -1761,7 +1761,7 @@ fn check_mutations_apply() -> Result<(), Vec<String>> {
 /// retain, where to release. Nothing textual can check that, and it is what the
 /// differential memory tests in `crates/nazm-cli/tests/selfhost.rs` are for.
 fn check_runtime_parity() -> Result<(), Vec<String>> {
-    const RUST: &str = "crates/nazm-lir/src/runtime/core.rs";
+    const RUST: &str = "crates/nazm-runtime/src/core.rs";
     const NAZM: &str = "compiler/emit.nz";
     // Which Rust runtime constants make up each Nazm function, in order.
     const GROUPS: &[(&str, &[&str])] = &[

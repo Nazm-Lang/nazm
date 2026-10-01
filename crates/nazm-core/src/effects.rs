@@ -512,6 +512,10 @@ fn carries(t: nazm_sema::Type, kind: CapabilityKind, res: &Resolution, depth: us
             .types()
             .vec_element(v)
             .is_some_and(|e| carries(e, kind, res, depth + 1)),
+        nazm_sema::Type::ChanOf(c) => res
+            .types()
+            .chan_element(c)
+            .is_some_and(|e| carries(e, kind, res, depth + 1)),
         _ => false,
     }
 }

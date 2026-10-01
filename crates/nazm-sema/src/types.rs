@@ -35,6 +35,22 @@ impl VecId {
     }
 }
 
+/// A generic channel type of this compilation, `Chan[T]`, interned by element type (N53).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ChanId(u32);
+
+impl ChanId {
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    #[must_use]
+    pub fn from_index(i: usize) -> Self {
+        Self(u32::try_from(i).unwrap_or(u32::MAX))
+    }
+}
+
 /// A function type of this compilation, by its session-local interned id (N50). Session-local
 /// like [`VecId`]; the durable spelling of a function type is its parameters, result and effects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -159,6 +175,9 @@ pub enum Type {
     /// `fn(T…) -> R ! {e}` (N50), interned by parameters, result and effects, so `==` is the
     /// language's structural equality of function types. A handle to a closure object.
     Fn(FnTypeId),
+    /// `Chan[T]` (N53), interned by element type: a bounded channel of `T`, by reference, for
+    /// a `T` that may cross into a task. `Chan` alone is [`Self::Chan`], the `Int` channel.
+    ChanOf(ChanId),
 }
 
 impl Type {
@@ -199,7 +218,12 @@ impl Type {
             Self::Strs => Some("Strs"),
             Self::Chan => Some("Chan"),
             Self::Cap(k) => Some(k.type_name()),
-            Self::Record(_) | Self::Enum(_) | Self::Vec(_) | Self::Param(_) | Self::Fn(_) => None,
+            Self::Record(_)
+            | Self::Enum(_)
+            | Self::Vec(_)
+            | Self::Param(_)
+            | Self::Fn(_)
+            | Self::ChanOf(_) => None,
         }
     }
 

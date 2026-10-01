@@ -6,8 +6,7 @@ use std::fmt::Write as _;
 
 use super::core::runtime_declarations;
 use super::os::declarations;
-use crate::emit::{escape, preamble, Needs, MEMORY_FORMAT, MEMORY_VARIABLE};
-use crate::symbol::NativeSymbol;
+use crate::{escape, preamble, Needs, MEMORY_FORMAT, MEMORY_VARIABLE};
 
 /// Emit the platform entry point: one per executable, and the only thing that prints.
 ///
@@ -23,7 +22,7 @@ use crate::symbol::NativeSymbol;
 /// `roots` is how many capability parameters `main` takes (N37). Each is handed a `0`:
 /// authority was checked when the program was, and the word is all that is left of it.
 #[must_use]
-pub fn emit_entry(entry: &NativeSymbol, roots: usize, needs: Needs) -> String {
+pub fn emit_entry(entry: &str, roots: usize, needs: Needs) -> String {
     let needs = needs.settled();
     let mut out = String::new();
     preamble(&mut out, "<nazm entry>");

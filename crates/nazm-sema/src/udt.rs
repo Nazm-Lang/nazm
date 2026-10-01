@@ -225,6 +225,7 @@ impl UserTypes {
                 }
             }
             Type::Vec(_) => format!("Vec[{}]", shown(self)),
+            Type::ChanOf(_) => format!("Chan[{}]", shown(self)),
             Type::Fn(f) => match self.fn_signature(f) {
                 Some(sig) => {
                     let params: Vec<String> = sig.params.iter().map(|p| self.show(*p)).collect();
@@ -662,6 +663,11 @@ impl UserTypes {
                 Some(e) if self.reaches_param(e, p, uses) != 0 => COUNTED,
                 _ => 0,
             },
+            // A channel holds what it queues behind a counted handle, as a `Vec` does (N53).
+            Type::ChanOf(c) => match self.chan_element(c) {
+                Some(e) if self.reaches_param(e, p, uses) != 0 => COUNTED,
+                _ => 0,
+            },
             Type::Record(_) | Type::Enum(_) => {
                 let Some(template) = self.definition_of(t) else {
                     return 0;
@@ -735,6 +741,11 @@ impl UserTypes {
         match t {
             Type::Vec(v) => {
                 if let Some(e) = self.vec_element(v) {
+                    self.owned_by(e, COUNTED, via, uses, out);
+                }
+            }
+            Type::ChanOf(c) => {
+                if let Some(e) = self.chan_element(c) {
                     self.owned_by(e, COUNTED, via, uses, out);
                 }
             }

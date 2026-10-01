@@ -56,7 +56,16 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // lowered from Core IR and the checker's tables, and describes nothing about how a
         // program was written. `docs/architecture.md` §7.42.
         "nazm-mir" => &["nazm-span", "nazm-diag", "nazm-sema", "nazm-cir"],
-        "nazm-lir" => &["nazm-span", "nazm-diag", "nazm-sema", "nazm-mir"],
+        "nazm-lir" => &[
+            "nazm-span",
+            "nazm-diag",
+            "nazm-sema",
+            "nazm-mir",
+            "nazm-runtime",
+        ],
+        // The runtime component (N53): text, inventory and entry, depending on nothing of the
+        // compiler — a program's runtime is not a function of how it was compiled.
+        "nazm-runtime" => &[],
         // The Cranelift backend, N41: validated MIR and the backend boundary `nazm-lir` holds,
         // and nothing above them — not Core IR, not the checker, not the syntax tree. The one
         // crate besides `xtask` that may depend on a code generator (`may_depend_on_codegen`).

@@ -101,6 +101,15 @@ backend, and never falls back to LLVM; a target triple that is not the host is r
 before anything is compiled. `nazm.build-report/1` is unchanged: a Cranelift object reused by
 its key counts as reused, exactly as a clang one does.
 
+**Applied to N53, the runtime component and generic channels.** One code appeared, compatible:
+`N0390` (a `Chan[T]` written or made whose element may not cross into a task — a sequence, a
+closure, or a record or enum holding one — with the path to the offending field). Everything
+else a typed channel can get wrong is an existing code with its meaning unchanged: an element of
+the wrong type is `N0303`, `Chan` with two arguments `N0300`. No schema moved: a channel type in
+a persisted interface is a new shape, `{"chan":T}`, which a `nazm.interface/7` reader refuses
+rather than misreads. `nazm.cost/1` gains no field; a typed channel's operations are sites of
+the existing kinds.
+
 **Applied to N52, resource facts and information flow.** No code appeared: a vouch without a
 `VouchCap` is the existing `N0369`, and a profile's new rules are the existing `N0510`. Two
 schemas appeared, `nazm.cost/1` (`nazm explain-cost --json`: per function, each site's `kind`,
