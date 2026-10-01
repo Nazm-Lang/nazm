@@ -244,6 +244,8 @@ struct Emitter<'a> {
     needs_tasks: bool,
     /// Whether a stack check was emitted (N49).
     needs_stack: bool,
+    /// Whether a closure was made, retained or released (N50).
+    needs_closures: bool,
     /// How many trampolines have been generated, which is what names the next one.
     task_count: usize,
     /// Whether a channel is reached.
@@ -518,6 +520,10 @@ impl Emitter<'_> {
                 let _ = writeln!(self.out, "  call void @nz.chan_retain(ptr %{value})");
                 self.needs_channels = true;
             }
+            Some(Owns::Closure) => {
+                let _ = writeln!(self.out, "  call void @nz.closure_retain(ptr %{value})");
+                self.needs_closures = true;
+            }
             // Field by field, recursively. A record owns nothing of its own — it has no
             // header and no count — so taking a reference to one is taking a reference to
             // each of the things its fields name. That is the composition N9 is a test of,
@@ -591,6 +597,10 @@ impl Emitter<'_> {
             Some(Owns::Channel) => {
                 let _ = writeln!(self.out, "  call void @nz.chan_release(ptr %{value})");
                 self.needs_channels = true;
+            }
+            Some(Owns::Closure) => {
+                let _ = writeln!(self.out, "  call void @nz.closure_release(ptr %{value})");
+                self.needs_closures = true;
             }
             // The mirror of the retain above, and the order between fields is not
             // observable: `docs/spec.md` says a record is destroyed by releasing each
@@ -1725,6 +1735,7 @@ impl Emitter<'_> {
             strings: self.needs_strings,
             shims: false,
             stack: self.needs_stack,
+            closures: self.needs_closures,
         }
     }
 
@@ -2025,6 +2036,8 @@ impl Emitter<'_> {
                 // Never reached: a `Vec` may not cross into a task (`N0321`), and the
                 // lowering refuses one by name as well.
                 Some(Owns::Vec(_)) => self.needs_sequences = true,
+                // Never reached: a function value may not cross into a task (`N0321`, N50).
+                Some(Owns::Closure) => self.needs_closures = true,
             }
         }
         // The task's return value is discarded, which `docs/spec.md` says outright:
@@ -2088,6 +2101,10 @@ impl Emitter<'_> {
                         let t = llvm_type(self.types, *ty);
                         let _ = writeln!(&mut body, "  call void @{helper}({t} %v{i})");
                     }
+                }
+                // Never reached (`N0321`, N50); released correctly if it were.
+                Some(Owns::Closure) => {
+                    let _ = writeln!(&mut body, "  call void @nz.closure_release(ptr %v{i})");
                 }
                 // Never reached, for the reason above; released correctly if it were.
                 Some(Owns::Vec(id)) => {
@@ -3052,6 +3069,8 @@ pub struct Needs {
     pub shims: bool,
     /// `nz.stack_check`, which a function in a call cycle calls first (N49).
     pub stack: bool,
+    /// The closure objects' allocation and count (N50).
+    pub closures: bool,
 }
 
 impl Needs {
@@ -3067,6 +3086,7 @@ impl Needs {
             strings: self.strings || other.strings,
             shims: self.shims || other.shims,
             stack: self.stack || other.stack,
+            closures: self.closures || other.closures,
         }
     }
 
@@ -3141,6 +3161,7 @@ pub(crate) fn emit_unit_with(
         tasks: String::new(),
         needs_tasks: false,
         needs_stack: false,
+        needs_closures: false,
         task_count: 0,
         needs_channels: false,
         needs_sequences: false,
