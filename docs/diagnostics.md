@@ -101,6 +101,15 @@ backend, and never falls back to LLVM; a target triple that is not the host is r
 before anything is compiled. `nazm.build-report/1` is unchanged: a Cranelift object reused by
 its key counts as reused, exactly as a clang one does.
 
+**Applied to N51, effect parameters.** Two codes appeared, both compatible: `N0388` (an effect
+parameter where none may be: a second one, on a foreign function, on `main`, on a function with
+no declared effect set, or named inside a type's arguments) and `N0389` (a call binding one effect
+parameter to two different sets). `N0386` narrowed to a `let mut` binding: a captured capability
+is now accepted. `N0369` gained a case — making a value of an undeclared function without the
+authority its type's effects need — with its meaning unchanged. No schema moved: an effect list
+may hold `"*"`, the effect parameter, which a `nazm.interface/7` reader refuses as an unknown
+effect rather than misreads.
+
 **Applied to N50, function values and closures.** Two codes appeared, both compatible: `N0386`
 (a closure captures a `let mut` binding or a capability) and `N0387` (a generic, built-in or
 foreign function used as a value, or a closure or named function value written inside a generic

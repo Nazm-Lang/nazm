@@ -745,7 +745,7 @@ impl<'a> Parser<'a> {
                 return None;
             }
         };
-        let type_params = self.type_params()?;
+        let type_params = self.only_type_params()?;
 
         let list = self.checkpoint();
         self.expect(&TokenKind::LBrace, "to start the fields")?;
@@ -829,7 +829,7 @@ impl<'a> Parser<'a> {
                 return None;
             }
         };
-        let type_params = self.type_params()?;
+        let type_params = self.only_type_params()?;
 
         let list = self.checkpoint();
         self.expect(&TokenKind::LBrace, "to start the variants")?;
@@ -994,7 +994,8 @@ impl<'a> Parser<'a> {
             }
         };
 
-        let type_params = self.type_params()?;
+        let (effect_params, type_params): (Vec<TypeParam>, Vec<TypeParam>) =
+            self.type_params()?.into_iter().partition(|p| p.effect);
         let params = self.param_list("after the function name")?;
 
         // Required, not optional. A missing return type would have to mean either "infer
@@ -1032,6 +1033,7 @@ impl<'a> Parser<'a> {
                 name_span,
                 pub_span,
                 type_params,
+                effect_params,
                 params,
                 return_type,
                 effects,
@@ -1073,6 +1075,7 @@ impl<'a> Parser<'a> {
             name_span,
             pub_span,
             type_params,
+            effect_params,
             params,
             return_type,
             effects,
@@ -1194,6 +1197,30 @@ impl<'a> Parser<'a> {
     /// At least one name and no trailing comma: an empty list declares nothing, and a
     /// parameter list is written on one line. Uniqueness and what a name may be are the
     /// checker's — they are questions about a namespace, not about punctuation.
+    /// A record's or an enum's type parameters: an effect parameter is a function's alone
+    /// (N51), since only a function performs anything.
+    fn only_type_params(&mut self) -> Option<Vec<TypeParam>> {
+        let list = self.type_params()?;
+        if let Some(e) = list.iter().find(|p| p.effect) {
+            self.report(
+                Diagnostic::error(
+                    codes::UNEXPECTED_TOKEN,
+                    e.span,
+                    format!(
+                        "`{}` is an effect parameter, and only a function has one",
+                        e.name
+                    ),
+                )
+                .help(
+                    "a record or an enum performs nothing; a function value it holds carries \
+                     its effects in its own type",
+                ),
+            );
+            return None;
+        }
+        Some(list)
+    }
+
     fn type_params(&mut self) -> Option<Vec<TypeParam>> {
         let mut out = Vec::new();
         if !self.at(&TokenKind::LBracket) {
@@ -1205,6 +1232,22 @@ impl<'a> Parser<'a> {
             let param = self.checkpoint();
             let span = self.peek_span();
             match self.advance() {
+                // `effects E` (N51): `effects` is a word only here, and only before a name.
+                TokenKind::Ident(w)
+                    if w == "effects" && matches!(self.peek(), TokenKind::Ident(_)) =>
+                {
+                    let at = self.peek_span();
+                    let TokenKind::Ident(n) = self.advance() else {
+                        return None;
+                    };
+                    self.wrap(param, SyntaxKind::TypeParam);
+                    out.push(TypeParam {
+                        name: n,
+                        span: at,
+                        effect: true,
+                        requires: None,
+                    });
+                }
                 TokenKind::Ident(n) => {
                     // `T: Equality` — at most one requirement, one name. There is no `+`:
                     // one capability exists, and a list of one is not a list.
@@ -1237,6 +1280,7 @@ impl<'a> Parser<'a> {
                     out.push(TypeParam {
                         name: n,
                         span,
+                        effect: false,
                         requires,
                     });
                 }

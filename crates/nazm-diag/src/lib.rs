@@ -309,6 +309,13 @@ pub mod codes {
     /// a closure is written inside a generic function (N50).
     pub const NOT_A_FUNCTION_VALUE: Code = Code::new("N0387");
 
+    // Effect parameters (N51, `docs/architecture.md` §7.53)
+    /// An effect parameter where none may be: a second one, one on a foreign function, on
+    /// `main`, on a function that declares no effect set, or named inside a type's arguments.
+    pub const EFFECT_PARAMETER: Code = Code::new("N0388");
+    /// A call binds its callee's effect parameter to two different sets (N51).
+    pub const CONFLICTING_EFFECT_ARGUMENT: Code = Code::new("N0389");
+
     // Packages (N46, `docs/architecture.md` §7.48)
     /// A manifest that cannot be read as `nazm.package/1`: bad TOML, an unknown key, a name or
     /// version of the wrong shape, or a path that leaves nothing to build.

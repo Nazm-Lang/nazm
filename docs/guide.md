@@ -495,7 +495,7 @@ accepts.
 | `effect_set` | `"!" , "{" , [ effect_name , { "," , effect_name } ] , "}"` |
 | `effect_name` | `IDENT \| "spawn"` |
 | `type_parameters` | `"[" , type_parameter , { "," , type_parameter } , "]"` |
-| `type_parameter` | `IDENT , [ ":" , IDENT ]` |
+| `type_parameter` | `IDENT , [ ":" , IDENT ] \| "effects" , IDENT` |
 | `visibility` | `"pub"` |
 | `record` | `[ visibility ] , "struct" , IDENT , [ type_parameters ] , "{" , [ fields ] , "}"` |
 | `fields` | `field , { "," , field } , [ "," ]` |
@@ -711,9 +711,13 @@ enum Maybe[T] { None, Some(value: T), } fn main() -> Int { 0 }
 ### `type_parameter`
 
 ```ebnf
-type_parameter = IDENT , [ ":" , IDENT ] ;
+type_parameter = IDENT , [ ":" , IDENT ] | "effects" , IDENT ;
 ```
 
+`effects E` declares the function's effect parameter (N51): `effects` is a word only
+here, before a name. At most one, only on a function that declares its effect set, and
+never on a record or an enum (`N0388`); its name may then be written in the function's
+effect sets. See `docs/spec.md`, *Effect parameters and captured authority*.
 A parameter may require a capability of every type it stands for: one name after a
 `:`, and no list. `Equality` is the only capability, only a function's parameter may
 require it, and inside the function the parameter then has `==`. The name is not a
@@ -722,6 +726,10 @@ equality*.
 
 ```nazm
 fn same[T: Equality](a: T, b: T) -> Bool { a == b } fn main() -> Int { if same(1, 1) { 1 } else { 0 } }
+```
+
+```nazm
+fn apply[effects E](f: fn() -> Int ! { E }) -> Int ! { E } { f() } fn main() -> Int { apply(fn() -> Int { 1 }) }
 ```
 
 ### `visibility`
