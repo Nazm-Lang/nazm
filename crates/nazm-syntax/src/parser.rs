@@ -36,8 +36,8 @@ use nazm_span::{FileId, Span};
 
 use crate::ast::{
     Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, ForeignDecl, Function,
-    HoleSite, Import, Let, MatchArm, Param, PatternField, Place, PlaceField, Program, Record,
-    Requirement, Return, Scope, Spawn, Stmt, TypeName, TypeParam, Variant, While,
+    HoleSite, Import, Let, MatchArm, Param, PatternField, Place, PlaceField, Program, Qualifier,
+    Record, Requirement, Return, Scope, Spawn, Stmt, TypeName, TypeParam, Variant, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -503,6 +503,7 @@ impl<'a> Parser<'a> {
         self.built(1)?;
         self.wrap(at, SyntaxKind::VariantExpr);
         Some(Expr::Variant {
+            qualifier: None,
             ty: name,
             ty_span: span,
             type_args: Some(args),
@@ -531,6 +532,7 @@ impl<'a> Parser<'a> {
         self.built(1)?;
         self.wrap(at, SyntaxKind::CallExpr);
         Some(Expr::Call {
+            qualifier: None,
             callee: name,
             callee_span: span,
             type_args,
@@ -604,11 +606,36 @@ impl<'a> Parser<'a> {
                 return None;
             }
         };
+        // `as name` (N49): `as` is a word here and nowhere else, so no identifier is taken.
+        let alias = if matches!(self.peek(), TokenKind::Ident(w) if w == "as") {
+            self.advance();
+            let alias_span = self.peek_span();
+            match self.advance() {
+                TokenKind::Ident(name) => Some(Qualifier {
+                    name,
+                    span: alias_span,
+                }),
+                other => {
+                    self.report(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            alias_span,
+                            format!("expected a name after `as`, found {}", other.describe()),
+                        )
+                        .help("an import under a name is written `use \"other.nz\" as other;`"),
+                    );
+                    return None;
+                }
+            }
+        } else {
+            None
+        };
         let end = self.expect(&TokenKind::Semi, "to end an import")?;
         self.wrap(at, SyntaxKind::UseItem);
         Some(Import {
             path,
             path_span,
+            alias,
             span: start.join(end),
         })
     }
@@ -1221,6 +1248,24 @@ impl<'a> Parser<'a> {
     ///
     /// Recursion here is counted against the same budget as every other: `Vec[Vec[…]]` is a
     /// tree, and each level is one more frame in every pass that walks it.
+    /// `m::` before a name in a type or a pattern (N49), consumed; `None` and nothing consumed
+    /// otherwise. Two tokens decide it: a name, then `::`.
+    fn qualifier_before_name(&mut self) -> Option<Qualifier> {
+        let TokenKind::Ident(name) = self.peek().clone() else {
+            return None;
+        };
+        if !matches!(
+            self.tokens.get(self.pos + 1).map(|t| &t.kind),
+            Some(TokenKind::ColonColon)
+        ) {
+            return None;
+        }
+        let span = self.peek_span();
+        self.advance();
+        self.advance();
+        Some(Qualifier { name, span })
+    }
+
     fn type_name(&mut self) -> Option<TypeName> {
         if !self.enter() {
             return None;
@@ -1233,6 +1278,12 @@ impl<'a> Parser<'a> {
     fn type_name_inner(&mut self) -> Option<TypeName> {
         let at = self.checkpoint();
         let name_span = self.peek_span();
+        let qualifier = self.qualifier_before_name();
+        let name_span = if qualifier.is_some() {
+            self.peek_span()
+        } else {
+            name_span
+        };
         match self.advance() {
             TokenKind::Ident(n) => {
                 let (args, end) = if self.at(&TokenKind::LBracket) {
@@ -1243,6 +1294,7 @@ impl<'a> Parser<'a> {
                 };
                 self.wrap(at, SyntaxKind::Type);
                 Some(TypeName {
+                    qualifier,
                     name: n,
                     name_span,
                     span: name_span.join(end),
@@ -1768,6 +1820,7 @@ impl<'a> Parser<'a> {
         self.built(deepest + 1)?;
         self.wrap(at, SyntaxKind::ConstructExpr);
         Some(Expr::Construct {
+            qualifier: None,
             ty,
             ty_span,
             type_args,
@@ -1797,6 +1850,7 @@ impl<'a> Parser<'a> {
         self.built(deepest + 1)?;
         self.wrap(at, SyntaxKind::VariantExpr);
         Some(Expr::Variant {
+            qualifier: None,
             ty,
             ty_span,
             type_args,
@@ -1820,6 +1874,7 @@ impl<'a> Parser<'a> {
         let mut arms = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
             let arm = self.checkpoint();
+            let qualifier = self.qualifier_before_name();
             let ty_span = self.peek_span();
             let ty = match self.advance() {
                 TokenKind::Ident(n) => n,
@@ -1872,6 +1927,7 @@ impl<'a> Parser<'a> {
             deepest = deepest.max(self.child());
             self.wrap(arm, SyntaxKind::MatchArm);
             arms.push(MatchArm {
+                qualifier,
                 ty,
                 ty_span,
                 variant,
@@ -2119,6 +2175,181 @@ impl<'a> Parser<'a> {
         Some(out)
     }
 
+    /// A primary that begins with a name: a variable, a call, a construction, a variant, each
+    /// possibly qualified (N49). Its own frame, never inlined: `primary_inner` recurses through
+    /// every nesting level, and the parser's depth bound is measured against that frame, so
+    /// what only a name needs is kept out of it.
+    #[inline(never)]
+    fn ident_primary(&mut self, at: Checkpoint, name: String, span: Span) -> Option<Expr> {
+        if self.reserved(&name, span) {
+            self.advance();
+            return None;
+        }
+        self.advance();
+        // `m::name` (N49): the alias is held here, in this frame, and attached to the
+        // node the name turns out to begin once it is built — a name nested in its
+        // arguments has a frame of its own. The item's name and span are what
+        // everything below reads.
+        let (qualifier, name, span) = if self.at(&TokenKind::ColonColon) {
+            self.advance();
+            let item_span = self.peek_span();
+            match self.advance() {
+                TokenKind::Ident(item) => (Some(Qualifier { name, span }), item, item_span),
+                other => {
+                    self.report(Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        item_span,
+                        format!("expected a name after `::`, found {}", other.describe()),
+                    ));
+                    return None;
+                }
+            }
+        } else {
+            (None, name, span)
+        };
+        // `name[T, …]` — type arguments, before a call, a construction or a
+        // variant. Nothing else can follow a name with `[`: there is no indexing.
+        let type_args = if self.at(&TokenKind::LBracket) {
+            let (args, _) = self.type_args()?;
+            // `Maybe[Int].` with the cursor right after the `.`: a probe's hole,
+            // the empty variant name of an applied enum's construction (N26).
+            if self.hole.is_some()
+                && self.at(&TokenKind::Dot)
+                && self.ends_at_hole(self.pos)
+                && !self.ident_at(self.pos + 1)
+            {
+                return self
+                    .variant_hole(at, name, span, args)
+                    .map(|e| qualified(e, qualifier));
+            }
+            let applies = self.at(&TokenKind::LParen)
+                || (self.at(&TokenKind::Dot)
+                    && matches!(
+                        self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                        Some(TokenKind::Ident(_))
+                    )
+                    && matches!(
+                        self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                        Some(TokenKind::LParen)
+                    ));
+            if !applies {
+                let at = self.peek_span();
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        at,
+                        format!(
+                            "expected `(` after the type arguments of `{name}`, found {}",
+                            self.peek().describe()
+                        ),
+                    )
+                    .help(
+                        "type arguments are written where something is called or \
+                         built: `identity[Int](7)`, `Box[Int](value: 7)`, \
+                         `Maybe[Int].None()`",
+                    ),
+                );
+                return None;
+            }
+            Some(args)
+        } else {
+            None
+        };
+        // `Enum.Variant(…)` is a variant. Three tokens decide it, and the
+        // decision is total: the language has no methods and no function values,
+        // so a `(` can never follow a field projection and nothing else has this
+        // shape. `docs/spec.md` records why a variant is always parenthesised.
+        let variant = self.at(&TokenKind::Dot)
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Ident(_))
+            )
+            && matches!(
+                self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                Some(TokenKind::LParen)
+            );
+        if variant {
+            return self
+                .variant_construction(at, name, span, type_args)
+                .map(|e| qualified(e, qualifier));
+        }
+        // `Name(field: …)` is a construction; `f(a, b)` is a call. Two tokens
+        // past the `(` decide it, and the decision is total: no expression can
+        // begin with a name followed by a colon, so neither form can be mistaken
+        // for the other and neither needs to know about the other.
+        let constructing = self.at(&TokenKind::LParen)
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Ident(_))
+            )
+            && matches!(
+                self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                Some(TokenKind::Colon)
+            );
+        if constructing {
+            return self
+                .construction(at, name, span, type_args)
+                .map(|e| qualified(e, qualifier));
+        }
+        // `Name(` with the cursor right after the `(` and no label: a probe's hole.
+        // The grammar reads a `(` without labels as a call, and so does this; what
+        // `Name` is, the checker decides (N26).
+        if self.hole.is_some() && self.at(&TokenKind::LParen) && self.ends_at_hole(self.pos)
+        {
+            return self
+                .call_hole(at, name, span, type_args)
+                .map(|e| qualified(e, qualifier));
+        }
+        if self.at(&TokenKind::LParen) {
+            // Taken only once the `(` is there: a checkpoint emits the trivia before
+            // the next token, and for a plain name that trivia is not the name's.
+            let args_at = self.checkpoint();
+            self.bump();
+            let mut args = Vec::new();
+            let mut deepest = 0;
+            while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
+                args.push(self.expr()?);
+                deepest = deepest.max(self.child());
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            let close = self.expect(&TokenKind::RParen, "to close the argument list")?;
+            self.wrap(args_at, SyntaxKind::ArgList);
+            self.built(deepest + 1)?;
+            self.wrap(at, SyntaxKind::CallExpr);
+            Some(Expr::Call {
+                qualifier,
+                callee: name,
+                callee_span: span,
+                type_args,
+                args,
+                span: span.join(close),
+            })
+        } else {
+            // A qualified name names a definition, and Nazm has no module-level
+            // values: `m::x` alone is not an expression (N49).
+            if let Some(q) = qualifier {
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        q.span.join(span),
+                        format!("`{}::{name}` names a definition, not a value", q.name),
+                    )
+                    .help(
+                        "a qualified name is called, constructed or names a variant: \
+                         `m::f(…)`, `m::R(…)`, `m::E.V(…)`",
+                    ),
+                );
+                return None;
+            }
+            self.built(1)?;
+            self.wrap(at, SyntaxKind::NameRef);
+            Some(Expr::Var { name, span })
+        }
+    }
+
+
     /// `at` is the checkpoint taken before the operand's first token, which every form
     /// below wraps its node at.
     fn primary_inner(&mut self, at: Checkpoint) -> Option<Expr> {
@@ -2269,128 +2500,7 @@ impl<'a> Parser<'a> {
                 self.built(self.child() + 1)?;
                 Some(Expr::Block(Box::new(b)))
             }
-            TokenKind::Ident(name) => {
-                if self.reserved(&name, span) {
-                    self.advance();
-                    return None;
-                }
-                self.advance();
-                // `name[T, …]` — type arguments, before a call, a construction or a
-                // variant. Nothing else can follow a name with `[`: there is no indexing.
-                let type_args = if self.at(&TokenKind::LBracket) {
-                    let (args, _) = self.type_args()?;
-                    // `Maybe[Int].` with the cursor right after the `.`: a probe's hole,
-                    // the empty variant name of an applied enum's construction (N26).
-                    if self.hole.is_some()
-                        && self.at(&TokenKind::Dot)
-                        && self.ends_at_hole(self.pos)
-                        && !self.ident_at(self.pos + 1)
-                    {
-                        return self.variant_hole(at, name, span, args);
-                    }
-                    let applies = self.at(&TokenKind::LParen)
-                        || (self.at(&TokenKind::Dot)
-                            && matches!(
-                                self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                                Some(TokenKind::Ident(_))
-                            )
-                            && matches!(
-                                self.tokens.get(self.pos + 2).map(|t| &t.kind),
-                                Some(TokenKind::LParen)
-                            ));
-                    if !applies {
-                        let at = self.peek_span();
-                        self.report(
-                            Diagnostic::error(
-                                codes::UNEXPECTED_TOKEN,
-                                at,
-                                format!(
-                                    "expected `(` after the type arguments of `{name}`, found {}",
-                                    self.peek().describe()
-                                ),
-                            )
-                            .help(
-                                "type arguments are written where something is called or \
-                                 built: `identity[Int](7)`, `Box[Int](value: 7)`, \
-                                 `Maybe[Int].None()`",
-                            ),
-                        );
-                        return None;
-                    }
-                    Some(args)
-                } else {
-                    None
-                };
-                // `Enum.Variant(…)` is a variant. Three tokens decide it, and the
-                // decision is total: the language has no methods and no function values,
-                // so a `(` can never follow a field projection and nothing else has this
-                // shape. `docs/spec.md` records why a variant is always parenthesised.
-                let variant = self.at(&TokenKind::Dot)
-                    && matches!(
-                        self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                        Some(TokenKind::Ident(_))
-                    )
-                    && matches!(
-                        self.tokens.get(self.pos + 2).map(|t| &t.kind),
-                        Some(TokenKind::LParen)
-                    );
-                if variant {
-                    return self.variant_construction(at, name, span, type_args);
-                }
-                // `Name(field: …)` is a construction; `f(a, b)` is a call. Two tokens
-                // past the `(` decide it, and the decision is total: no expression can
-                // begin with a name followed by a colon, so neither form can be mistaken
-                // for the other and neither needs to know about the other.
-                let constructing = self.at(&TokenKind::LParen)
-                    && matches!(
-                        self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                        Some(TokenKind::Ident(_))
-                    )
-                    && matches!(
-                        self.tokens.get(self.pos + 2).map(|t| &t.kind),
-                        Some(TokenKind::Colon)
-                    );
-                if constructing {
-                    return self.construction(at, name, span, type_args);
-                }
-                // `Name(` with the cursor right after the `(` and no label: a probe's hole.
-                // The grammar reads a `(` without labels as a call, and so does this; what
-                // `Name` is, the checker decides (N26).
-                if self.hole.is_some() && self.at(&TokenKind::LParen) && self.ends_at_hole(self.pos)
-                {
-                    return self.call_hole(at, name, span, type_args);
-                }
-                if self.at(&TokenKind::LParen) {
-                    // Taken only once the `(` is there: a checkpoint emits the trivia before
-                    // the next token, and for a plain name that trivia is not the name's.
-                    let args_at = self.checkpoint();
-                    self.bump();
-                    let mut args = Vec::new();
-                    let mut deepest = 0;
-                    while !self.at(&TokenKind::RParen) && !self.at(&TokenKind::Eof) {
-                        args.push(self.expr()?);
-                        deepest = deepest.max(self.child());
-                        if !self.eat(&TokenKind::Comma) {
-                            break;
-                        }
-                    }
-                    let close = self.expect(&TokenKind::RParen, "to close the argument list")?;
-                    self.wrap(args_at, SyntaxKind::ArgList);
-                    self.built(deepest + 1)?;
-                    self.wrap(at, SyntaxKind::CallExpr);
-                    Some(Expr::Call {
-                        callee: name,
-                        callee_span: span,
-                        type_args,
-                        args,
-                        span: span.join(close),
-                    })
-                } else {
-                    self.built(1)?;
-                    self.wrap(at, SyntaxKind::NameRef);
-                    Some(Expr::Var { name, span })
-                }
-            }
+            TokenKind::Ident(name) => self.ident_primary(at, name, span),
             TokenKind::Match => {
                 self.advance();
                 self.match_expr(at, span)
@@ -3107,4 +3217,19 @@ mod ast_depth_tests {
             }
         });
     }
+}
+
+/// `e` with the alias written before the name it begins (N49): a call, a construction or a
+/// variant, the only nodes a qualified name can begin.
+fn qualified(mut e: Expr, q: Option<Qualifier>) -> Expr {
+    if q.is_none() {
+        return e;
+    }
+    match &mut e {
+        Expr::Call { qualifier, .. }
+        | Expr::Construct { qualifier, .. }
+        | Expr::Variant { qualifier, .. } => *qualifier = q,
+        _ => {}
+    }
+    e
 }

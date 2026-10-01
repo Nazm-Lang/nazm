@@ -53,13 +53,24 @@ pub enum HoleSite {
     Payload { variant: Span, pattern: bool },
 }
 
-/// `use "path";`
+/// `use "path";` or `use "path" as name;`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Import {
     /// The text between the quotes, exactly as written.
     pub path: String,
     /// The string literal's span, which is where a "cannot find" diagnostic points.
     pub path_span: Span,
+    /// `as name` (N49): the module is imported under this name, and its exports are written
+    /// `name::item` rather than brought into scope.
+    pub alias: Option<Qualifier>,
+    pub span: Span,
+}
+
+/// A module alias written before `::` (N49): `t` in `t::text_split`. Its span is the alias's
+/// alone; the item's name keeps its own span, which is what resolution is keyed by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Qualifier {
+    pub name: String,
     pub span: Span,
 }
 
@@ -208,6 +219,8 @@ pub struct Param {
 /// parser about punctuation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeName {
+    /// `m::` before the name (N49).
+    pub qualifier: Option<Qualifier>,
     pub name: String,
     /// Where the name alone is written, for a diagnostic about the name.
     pub name_span: Span,
@@ -221,6 +234,7 @@ impl TypeName {
     #[must_use]
     pub fn plain(name: impl Into<String>, span: Span) -> Self {
         Self {
+            qualifier: None,
             name: name.into(),
             name_span: span,
             span,
@@ -379,6 +393,8 @@ pub struct PlaceField {
 pub struct MatchArm {
     /// The enum named before the `.`. Resolved against the type namespace, and required to
     /// be the scrutinee's own enum — there is no structural variant matching.
+    /// `m::` before the enum's name (N49).
+    pub qualifier: Option<Qualifier>,
     pub ty: String,
     pub ty_span: Span,
     pub variant: String,
@@ -471,6 +487,8 @@ pub enum Expr {
         span: Span,
     },
     Call {
+        /// `m::` before the callee (N49).
+        qualifier: Option<Qualifier>,
         callee: String,
         callee_span: Span,
         /// `f[Int](…)` — explicit type arguments, or `None` where none were written.
@@ -489,6 +507,8 @@ pub enum Expr {
     /// by `IDENT :` — which is a decision, not a guess: no argument expression can begin
     /// with a name followed by a colon.
     Construct {
+        /// `m::` before the record's name (N49).
+        qualifier: Option<Qualifier>,
         ty: String,
         ty_span: Span,
         /// `Pair[Int, Str](…)` — the type arguments of a generic record, which are always
@@ -505,6 +525,8 @@ pub enum Expr {
     /// there are no methods and no function values, so nothing else can put a `(` after a
     /// field read.
     Variant {
+        /// `m::` before the enum's name (N49).
+        qualifier: Option<Qualifier>,
         ty: String,
         ty_span: Span,
         /// `Maybe[Int].Some(…)` — the type arguments of a generic enum, which are always

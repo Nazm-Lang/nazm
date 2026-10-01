@@ -159,6 +159,7 @@ pub const SEMANTIC_EPOCH: u32 = 12;
 /// `crates/nazm-core/src/check.rs` and fails if the two sets differ — so this cannot
 /// silently fall behind the checker it describes.
 pub const CHECKER_CODES: &[&str] = &[
+    "ALIAS_COLLIDES",
     "ALREADY_DEFINED_IN_SCOPE",
     "AMBIGUOUS_IMPORT",
     "ASSIGN_TO_IMMUTABLE",
@@ -212,6 +213,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "UNDEFINED_VARIABLE",
     "UNKNOWN_EFFECT",
     "UNKNOWN_FIELD",
+    "UNKNOWN_QUALIFIED_NAME",
     "UNKNOWN_REQUIREMENT",
     "UNKNOWN_TYPE",
     "UNKNOWN_VARIANT",

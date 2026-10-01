@@ -160,6 +160,8 @@ fn rust_tokens(source: &str) -> Vec<Tok> {
                 // this test reads writes one.
                 T::AmpAmp => 56,
                 T::PipePipe => 57,
+                // `::` (N49), which the Nazm-written lexer refuses by name.
+                T::ColonColon => 58,
                 // The Rust lexer emits a final `Eof`; the Nazm one prints `EOF` and
                 // stops, so there is nothing to compare.
                 T::Eof => return None,

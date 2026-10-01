@@ -787,19 +787,24 @@ one module requires, and its absence is invisible in any single-module test
 """
 file = "crates/nazm-core/src/check.rs"
 # Repointed in N19, which records the names an environment refuses: its pattern gained the
-# line that starts that list. The defect is unchanged.
+# line that starts that list. Repointed in N49, which added the aliases and made a
+# dependency no longer `Copy`. The defect is unchanged.
 find = """    let mut brought_in: HashMap<&str, Span> = HashMap::new();
     let mut refused: Vec<String> = Vec::new();
+    let mut aliases: HashMap<String, ModuleId> = HashMap::new();
+    let mut alias_at: HashMap<String, Span> = HashMap::new();
     for d in unit.imports {"""
 replace = """    let mut brought_in: HashMap<&str, Span> = HashMap::new();
     let mut refused: Vec<String> = Vec::new();
+    let mut aliases: HashMap<String, ModuleId> = HashMap::new();
+    let mut alias_at: HashMap<String, Span> = HashMap::new();
     let reachable: Vec<Dependency> = unit
         .imports
         .iter()
-        .copied()
+        .cloned()
         .chain(
             deps.iter()
-                .flat_map(|i| i.imports().iter().copied())
+                .flat_map(|i| i.imports().iter().cloned())
                 .collect::<Vec<_>>(),
         )
         .collect();
@@ -5646,6 +5651,7 @@ name = "n26-a-bare-paren-is-a-construction"
 why = "a probe reads `Name(` as a construction rather than the call the grammar reads, so a record is guessed where a function of the same name is what is called"
 file = "crates/nazm-syntax/src/parser.rs"
 find = """        Some(Expr::Call {
+            qualifier: None,
             callee: name,
             callee_span: span,
             type_args,
@@ -5653,6 +5659,7 @@ find = """        Some(Expr::Call {
             span: span.join(close),
         })"""
 replace = """        Some(Expr::Construct {
+            qualifier: None,
             ty: name,
             ty_span: span,
             type_args,
@@ -9466,4 +9473,65 @@ file = "crates/nazm-lir/src/lower.rs"
 find = "                if !sig.foreign && functions.contains(&callee) {"
 replace = "                if false && !sig.foreign && functions.contains(&callee) {"
 killers = [{ package = "nazm-cli", test = "usability", name = "direct_mutual_generic_and_cross_module_recursion_compile_and_agree" }]
+
+# N49: qualified names.
+
+[[mutation]]
+name = "n49-an-import-under-a-name-brings-its-functions-in-anyway"
+why = "an aliased import's exports enter the unqualified namespace too, so `use \"m.nz\" as m;` collides like a plain import and `m::` buys nothing"
+file = "crates/nazm-core/src/check.rs"
+find = """        if !d.plain {
+            continue;
+        }
+        for e in iface.exports() {"""
+replace = """        for e in iface.exports() {"""
+killers = [{ package = "nazm-cli", test = "usability", name = "an_import_under_a_name_brings_nothing_into_scope_unqualified" }]
+
+[[mutation]]
+name = "n49-an-aliased-function-is-held-unqualified"
+why = "an aliased module's functions are held under their bare names, so `m::f` resolves to nothing"
+file = "crates/nazm-core/src/check.rs"
+find = "                    qualified_key(alias, &e.name),"
+replace = "                    e.name.clone(),"
+killers = [{ package = "nazm-cli", test = "usability", name = "qualified_names_resolve_to_the_definitions_an_import_would_and_agree_everywhere" }]
+
+[[mutation]]
+name = "n49-an-aliased-type-is-unreachable"
+why = "an aliased module's records and enums are never held under `alias::Name`, so `g::Point` is no type"
+file = "crates/nazm-core/src/check.rs"
+find = "                    names.insert(qualified_key(alias, &name), offer);"
+replace = "                    let _ = (alias, &name, offer);"
+killers = [{ package = "nazm-cli", test = "usability", name = "qualified_names_resolve_to_the_definitions_an_import_would_and_agree_everywhere" }]
+
+[[mutation]]
+name = "n49-two-imports-may-share-a-name"
+why = "a second import under an alias already taken is accepted, and which module `g::` means depends on import order"
+file = "crates/nazm-core/src/check.rs"
+find = """            let clash = if let Some(first) = alias_at.get(alias) {"""
+replace = """            let clash = if let Some(first) = alias_at.get(alias).filter(|_| false) {"""
+killers = [{ package = "nazm-cli", test = "usability", name = "an_alias_that_already_means_something_is_refused" }]
+
+[[mutation]]
+name = "n49-the-parser-drops-a-qualifier"
+why = "the parser builds a qualified construction or variant without its alias, so `g::Point(…)` is looked up as `Point`"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "        | Expr::Variant { qualifier, .. } => *qualifier = q,"
+replace = "        | Expr::Variant { qualifier, .. } => *qualifier = q.filter(|_| false),"
+killers = [{ package = "nazm-cli", test = "usability", name = "qualified_names_resolve_to_the_definitions_an_import_would_and_agree_everywhere" }]
+
+[[mutation]]
+name = "n49-a-second-import-of-a-module-loses-its-name"
+why = "a module imported plainly and then under a name keeps only the first import, so the alias names nothing"
+file = "crates/nazm-sema/src/module.rs"
+find = "                    d.aliases.extend(alias);"
+replace = "                    let _ = alias;"
+killers = [{ package = "nazm-cli", test = "usability", name = "a_module_imported_both_ways_is_one_module_seen_both_ways" }]
+
+[[mutation]]
+name = "n49-a-qualified-name-is-spaced"
+why = "the formatter prints `g ::area`, a layout that is not the canonical one"
+file = "crates/nazm-syntax/src/format.rs"
+find = "        ) || *next == TokenKind::ColonColon"
+replace = "        )"
+killers = [{ package = "nazm-cli", test = "usability", name = "the_formatter_glues_a_qualified_name" }]
 

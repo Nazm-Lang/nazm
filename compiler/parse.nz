@@ -1314,6 +1314,12 @@ pub fn parse_program(kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
                 // no node — exactly as the reference parser treats them.
                 i = i + 1;
                 i = expect(kinds, starts, i, k_str(), "expected a quoted path");
+                // `use "path" as name;` (N49) is not in the bootstrap subset, and says so.
+                if kind_at(kinds, i) == k_ident() {
+                    if text_at(texts, i) == "as" {
+                        die("an import under a name, `as`, is not in the bootstrap subset", start_at(starts, i));
+                    }
+                }
                 i = expect(kinds, starts, i, k_semi(), "expected `;` after an import");
                 continue;
             }

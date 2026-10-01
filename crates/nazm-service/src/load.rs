@@ -269,7 +269,7 @@ pub fn load_packaged(
     let mut visited: HashMap<PathBuf, ()> = HashMap::new();
     // Parallel to `parts`: for each file, the imports it named, as `(canonical path,
     // where it was written)`. Resolved to ids once every file has one.
-    let mut named: Vec<Vec<(PathBuf, Span)>> = Vec::new();
+    let mut named: Vec<Vec<Named>> = Vec::new();
     let mut errors: Vec<Diagnostic> = Vec::new();
 
     // An explicit stack rather than recursion: an import chain has no bound, and the
@@ -366,7 +366,7 @@ pub fn load_packaged(
             // on disk.
             if nazm_core::sema::stdlib::reserved(&import.path) {
                 if let Some((name, source)) = nazm_core::sema::stdlib::module(&import.path) {
-                    children.push((Item::Std(name, source), import.path_span));
+                    children.push((Item::Std(name, source), import.path_span, alias_of(import)));
                 } else {
                     let known: Vec<String> = nazm_core::sema::stdlib::MODULES
                         .iter()
@@ -430,7 +430,7 @@ pub fn load_packaged(
                 }
             }
             if sources.exists(&target) {
-                children.push((Item::File(target), import.path_span));
+                children.push((Item::File(target), import.path_span, alias_of(import)));
             } else {
                 errors.push(
                     Diagnostic::error(
@@ -449,7 +449,7 @@ pub fn load_packaged(
 
         // Pushed in reverse so the stack pops them in source order: the map's order
         // follows the program's text, which is what makes it reproducible.
-        for (child, _) in children.iter().rev() {
+        for (child, _, _) in children.iter().rev() {
             stack.push(child.clone());
         }
 
@@ -458,7 +458,7 @@ pub fn load_packaged(
         named.push(
             children
                 .into_iter()
-                .map(|(c, at)| (c.canonical(), at))
+                .map(|(c, at, alias)| (c.canonical(), at, alias))
                 .collect(),
         );
         parts.push((path.display().to_string(), text));
@@ -484,12 +484,12 @@ pub fn load_packaged(
         let Some(from) = graph.module_of(FileId::from_index(i)) else {
             continue;
         };
-        for (target, at) in imports {
+        for (target, at, alias) in imports {
             let Some(&j) = index.get(target) else {
                 continue;
             };
             if let Some(to) = graph.module_of(FileId::from_index(j)) {
-                graph.import(from, to, *at);
+                graph.import_as(from, to, *at, alias.clone());
             }
         }
     }
@@ -505,4 +505,13 @@ pub fn load_packaged(
     } else {
         Err((loaded, errors))
     }
+}
+
+/// One import a file wrote, resolved to a path: the canonical path, where the quoted path is
+/// written, and the name it gives the module, if any (N49).
+type Named = (PathBuf, Span, Option<(String, Span)>);
+
+/// The name an import gives its module, `as NAME` (N49), as the graph records it.
+fn alias_of(import: &nazm_core::__syntax::Import) -> Option<(String, Span)> {
+    import.alias.as_ref().map(|q| (q.name.clone(), q.span))
 }

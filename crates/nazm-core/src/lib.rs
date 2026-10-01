@@ -43,8 +43,8 @@ pub mod __syntax {
     pub use nazm_syntax::HoleSite;
     pub use nazm_syntax::{
         format, lex, lex_in, parse_file, parse_map, parse_source, Block, Enum, Expr, Field,
-        FieldInit, Function, MatchArm, PatternField, Place, PlaceField, Program, Record, Stmt,
-        TokenKind, TypeName, TypeParam, Variant, PARSE_STACK_BYTES,
+        FieldInit, Function, Import, MatchArm, PatternField, Place, PlaceField, Program, Qualifier,
+        Record, Stmt, TokenKind, TypeName, TypeParam, Variant, PARSE_STACK_BYTES,
     };
     /// The lossless tree (N15), for a tool that needs to know where a position is. What a
     /// position *means* is the resolution's, never the tree's.

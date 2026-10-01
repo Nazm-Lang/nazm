@@ -417,3 +417,112 @@ fn the_interpreter_keeps_its_own_limit() {
     let r = nazm(d.path(), &["run", "prog.nz"]);
     assert!(r.stderr.contains("N0403"), "{}", r.stderr);
 }
+
+// --- qualified names -------------------------------------------------------------------
+
+const GEOMETRY: &str = "pub struct Point { x: Int, y: Int, }\n\
+pub enum Shape { Dot(at: Point), Square(side: Int), }\n\
+pub fn area(s: Shape) -> Int { match s { Shape.Dot(at: _) => 0, Shape.Square(side: n) => n * n, } }\n\
+pub fn parse(s: Str) -> Int { str_len(s) }\n";
+
+const OTHER: &str = "pub fn parse(s: Str) -> Int { 100 + str_len(s) }\n";
+
+#[test]
+fn qualified_names_resolve_to_the_definitions_an_import_would_and_agree_everywhere() {
+    // Two modules export `parse`: unqualified that is N0207, qualified it is two names.
+    let main = r#"
+use "geometry.nz" as g;
+use "other.nz" as o;
+use "@std/text" as t;
+fn corner(p: g::Point) -> Int { p.x + p.y }
+fn measure(s: g::Shape) -> Int {
+    match s { g::Shape.Dot(at: p) => corner(p), g::Shape.Square(side: n) => n, }
+}
+fn main() -> Int {
+    let p = g::Point(x: 2, y: 3);
+    let sq = g::Shape.Square(side: 4);
+    print(str_concat(t::text_trim("  hi  "), "\n"));
+    g::area(sq) + measure(g::Shape.Dot(at: p)) + g::parse("ab") + o::parse("ab")
+}
+"#;
+    // 16 + 5 + 2 + 102.
+    agrees_on(
+        &[
+            ("main.nz", main),
+            ("geometry.nz", GEOMETRY),
+            ("other.nz", OTHER),
+        ],
+        "hi\n125",
+        0,
+    );
+}
+
+#[test]
+fn a_module_imported_both_ways_is_one_module_seen_both_ways() {
+    let main = "use \"geometry.nz\";\nuse \"geometry.nz\" as g;\n\
+                fn main() -> Int { area(g::Shape.Square(side: 3)) + g::area(Shape.Square(side: 2)) }\n";
+    agrees_on(&[("main.nz", main), ("geometry.nz", GEOMETRY)], "13", 0);
+}
+
+#[test]
+fn an_import_under_a_name_brings_nothing_into_scope_unqualified() {
+    let main = "use \"geometry.nz\" as g;\nfn main() -> Int { parse(\"a\") }\n";
+    let codes = check_codes(&[("main.nz", main), ("geometry.nz", GEOMETRY)]);
+    assert!(codes.contains(&"N0201".to_owned()), "{codes:?}");
+}
+
+#[test]
+fn an_alias_that_already_means_something_is_refused() {
+    for main in [
+        "use \"geometry.nz\" as main;\nfn main() -> Int { 0 }\n",
+        "use \"geometry.nz\" as Item;\nstruct Item { v: Int, }\nfn main() -> Int { 0 }\n",
+        "use \"geometry.nz\" as g;\nuse \"other.nz\" as g;\nfn main() -> Int { 0 }\n",
+    ] {
+        let codes = check_codes(&[
+            ("main.nz", main),
+            ("geometry.nz", GEOMETRY),
+            ("other.nz", OTHER),
+        ]);
+        assert_eq!(codes, ["N0209"], "{main}");
+    }
+}
+
+#[test]
+fn a_qualified_name_that_names_nothing_is_refused_by_what_is_missing() {
+    for main in [
+        "use \"geometry.nz\" as g;\nfn main() -> Int { h::area(g::Shape.Square(side: 1)) }\n",
+        "use \"geometry.nz\" as g;\nfn main() -> Int { g::nope(1) }\n",
+        "use \"geometry.nz\" as g;\nfn f(p: g::Nope) -> Int { 0 }\nfn main() -> Int { 0 }\n",
+    ] {
+        let codes = check_codes(&[("main.nz", main), ("geometry.nz", GEOMETRY)]);
+        assert!(codes.contains(&"N0210".to_owned()), "{main}: {codes:?}");
+    }
+    // A qualified name is never a value: Nazm has no module-level ones.
+    let codes = check_codes(&[
+        (
+            "main.nz",
+            "use \"geometry.nz\" as g;\nfn main() -> Int { let a = g::area; 0 }\n",
+        ),
+        ("geometry.nz", GEOMETRY),
+    ]);
+    assert!(
+        codes.contains(&"N0001".to_owned()) || !codes.is_empty(),
+        "{codes:?}"
+    );
+}
+
+#[test]
+fn the_formatter_glues_a_qualified_name() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("geometry.nz"), GEOMETRY).unwrap();
+    std::fs::write(
+        d.path().join("main.nz"),
+        "use \"geometry.nz\"   as   g;\nfn main()->Int{g :: area(g::Shape.Square(side:1))}\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["fmt", "main.nz"]);
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    let out = std::fs::read_to_string(d.path().join("main.nz")).unwrap();
+    assert!(out.contains("use \"geometry.nz\" as g;"), "{out}");
+    assert!(out.contains("g::area(g::Shape.Square(side: 1))"), "{out}");
+}
