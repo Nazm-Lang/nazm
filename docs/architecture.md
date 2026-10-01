@@ -5553,6 +5553,94 @@ across tasks*, *generic function values*, *closures that call themselves*, *call
 directly*, and *a closure or a named function value inside a generic function* (`N0387`: each
 would need an instance or a thunk per type argument) are refused rather than half-supported.
 
+## 7.53 Effects and capabilities v2 — N51, 2026-10-02
+
+Written before the code. N50 made function values, and with them the gap N36 recorded: a function
+type's effects are fixed, so `vec_map` could take only a pure function, and a closure could not
+hold a capability, so even an effectful one had no authority to use. This section closes that gap
+with the smallest mechanism that does, bounds the N37 bridge at the one edge N50 opened, and
+settles the capability questions N51 asks — implementing what a program in hand needs and
+deferring, with the cost stated, what none does.
+
+**Effect parameters.** A function may declare **one** effect parameter, in its type parameter
+list after its type parameters: `fn vec_map[T, U, effects E](xs: Vec[T], f: fn(T) -> U ! { E })
+-> Vec[U] ! { E }`. `effects` is a word only there. The parameter's name may be written in any
+effect set of the function's own signature — its parameters' and result's function types and its
+declared set — and in the effect sets of closures in its body; nowhere else. It stands for a set of
+effects the caller chooses. In the body it is opaque: calling a parameter whose type has `E`
+performs `E`, which the declared set must therefore include, and `E` needs no capability — the
+function value that performs it carries its own authority (below). One parameter per function is
+a decision, not an omission: every higher-order function in hand (map, filter, fold, apply,
+compose over one effect) needs one, and a second would bring row unification with no program to
+test it. Effect parameters do not make a function generic for code generation: effects are
+metadata from Core IR down, so no instance is made per binding. `main` may not declare one.
+
+**Binding at a call.** At a call to a function with an effect parameter, the parameter is bound by
+matching each argument's type against its parameter's, structurally, as type parameters are
+(N50's unification extended to effect sets): where the parameter's function type writes `! { k…, E }`
+and the argument's is `! { a… }`, `E` binds to `a… − k…`, and `k…` must be within `a…`. Bound twice
+to different sets is `N0389`; bound nowhere, it is the empty set. The call then performs the
+callee's declared set with `E` replaced by its binding, and its argument types are checked against
+the parameter types with `E` replaced, so a mismatch is the ordinary `N0300`. Inside a function
+with its own effect parameter `F`, an argument's type may carry `F` (it is a parameter of the
+caller), and a binding of `E` may contain `F` — which the caller's own declared set then needs, by
+the same rule. So `vec_map(xs, f)` inside `run[effects F](f: fn(Int) -> Int ! { F })` performs `F`.
+
+**Capabilities a closure captures.** A closure may now capture a capability (`N0386` is narrowed to
+`let mut`): the capability is copied into the closure, as any value is, and the authority the
+closure's body holds is its own capability parameters **and** its captured capabilities. The
+closure's type still shows what it does — its declared effects — so a function value's type is
+an honest statement of what calling it may do, and the value carries the authority for it.
+Copying a capability confers nothing new: it is a token that already exists. **Delegation** is
+passing one as an argument or capturing it; **duplication** is copying it; **storage** is as any
+value's (a field may hold one, as before); **task transfer** is unchanged — a capability may be
+passed to a task where its kind allows, and a function value may not be passed to one (`N0321`).
+**Narrowing** has no form: there are no attenuated kinds (below).
+
+**The bridge, bounded.** N37's compatibility bridge stays as it is for code that declares nothing:
+an undeclared function exercises its caller's authority, and a declared caller must hold what the
+callee's effects need (`N0369`). N50 opened one more edge: a *value* of an undeclared function.
+Its type assumes the empty set if it is this module's (and the function is held to that, `N0366`)
+or the bridged `{ io, spawn }` if it is another module's — so calling the value performs those
+effects, and since a call through a value needs no authority, declared code could reach the
+ambient bridge through it. N51 closes the edge where the value is **made**: making a value of an
+undeclared function requires, at that point, the capabilities its type's effects need, exactly as
+calling it would (`N0369`). Strict code therefore cannot acquire authority through an undeclared
+import or callback. The policy is stated rather than migrated: no accepted program changes
+meaning; a program that made such a value without holding the authority was unsound and is now
+refused, which the semantic epoch records.
+
+**Attenuated capabilities: deferred.** No program in the tree — the compiler written in Nazm, the
+examples, the standard library — needs authority narrower than a kind. The first candidate, an
+`IoCap` scoped to a path prefix, needs a semantics for path containment and the provenance of the
+path (N52); building it without a program would be inventing the use case.
+
+**Revocation: deferred, with its cost.** A capability is a value with no identity: two copies are
+indistinguishable, and nothing records that one was handed out. Revocation needs identity — an
+allocated cell per granted capability, a check at every use, and an operation that flips it —
+which is runtime state and a runtime cost at every authorised call. A static flag would be a
+claim the representation cannot back, so there is none.
+
+**The trust root** is unchanged: `main`'s parameters are the only source of a capability (`N0370`
+refuses building one; `N0371` a `main` parameter that is not one), an interface carries capability
+*types* and never values, and a closure's capture copies a capability that already exists.
+
+**Representation.** `Effect::Param` is a fourth effect: *the effect parameter*. In a function's
+declared set it is that function's; in a function type it is the parameter of the function type's
+`row` owner (`FnSignature::row`, a `ParamOwner`), so a type that mentions one function's parameter
+is never confused with another's. It is never a built-in's effect, needs no capability, is not in
+the bridged or the assumed set, and is not a name a set may write except as the declared
+parameter's. Substitution replaces it as a type parameter is replaced; the interface writes it as
+`"*"` in an effect list, a value a `/7` reader refuses as an unknown effect rather than misreads, so
+the schema does not move. Effects analysis treats it as one more effect in the fixed point — what a
+body requires may include it — and a call's contribution is the callee's set with it bound.
+
+**The standard library** takes the parameter: `vec_map`, `vec_filter` and `vec_fold` are
+`effects E` over their function argument, so a printing closure is accepted and its caller is held
+to `io`, through the wrapper, not around it. **Profiles** read the effect set `main` requires,
+which now includes what a bound parameter contributes, so `embedded`'s `no-io` refuses a program
+whose only `io` is a closure handed to `vec_map`.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:

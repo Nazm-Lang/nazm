@@ -3000,6 +3000,30 @@ fn main() -> Int {
 | **Recursion through a value** | A native function that calls through a function value checks its stack first, as a recursive one does (`N0408`, *Native recursion*) |
 | **Not here** | Traits, methods, generic function values, a closure that names itself, effect-polymorphic function types — see `architecture.md` §7.52 |
 
+### Effect parameters and captured authority — N51
+<!-- id: effect-parameters -->
+
+```nazm
+use "@std/seq";
+
+fn main(io: IoCap) -> Int ! { io } {
+    let xs = vec_new[Int]();
+    vec_push(xs, 1);
+    vec_push(xs, 2);
+    let shown = vec_map(xs, fn(x: Int) -> Int ! { io } { print(int_to_str(x)); x * 10 });
+    vec_len(shown)
+}
+```
+
+| | |
+| --- | --- |
+| **Declaring one** | `fn name[T…, effects E](…)`: at most one effect parameter, after the type parameters. Its name may be written in the effect sets of the function's own signature and of closures in its body. `main` may not have one |
+| **In the body** | Opaque. Calling something whose type has `E` performs `E`, so the declared set must include it; `E` needs no capability |
+| **At a call** | Bound from the arguments: a parameter typed `fn(…) -> R ! { k…, E }` given a value of type `fn(…) -> R ! { a… }` binds `E` to `a…` without `k…` (and `k…` must be within `a…`). Bound to two different sets is `N0389`; bound by nothing, it is empty. The call performs the callee's declared set with `E` replaced |
+| **Capture** | A closure may capture a capability; its body then holds that authority as well as its own capability parameters'. Its type still declares what it does. A `let mut` binding still may not be captured (`N0386`) |
+| **Values of undeclared functions** | Making one needs, where it is made, the capabilities its type's effects need, as calling the function would (`N0369`) |
+| **Not here** | Two effect parameters, effect subtyping, attenuated capabilities, revocation — see `architecture.md` §7.53 |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 
