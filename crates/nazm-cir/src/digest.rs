@@ -154,6 +154,11 @@ impl<'a> Canon<'a> {
 
     /// What code generation reads: the signature's types, every local's type, the body.
     fn code(&mut self, f: &Function) {
+        // A foreign function's code is its symbol (N42).
+        if let Some(sym) = &f.foreign {
+            self.tag("foreign");
+            self.tag(sym);
+        }
         self.n(u64::from(f.type_params));
         self.n(u64::from(f.params));
         self.ty(f.ret);

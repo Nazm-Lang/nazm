@@ -157,10 +157,31 @@ impl Backend {
     pub(crate) fn link(&self, output: &Path, objects: &[PathBuf]) -> Outcome {
         run(self
             .command()
+            // The Apple linker otherwise mixes a time into the executable's UUID, so two links
+            // of the same objects differ (N46, reproducible builds). Ignored elsewhere.
+            .env("ZERO_AR_DATE", "1")
             .args(link_args(self.opt_level))
             .arg("-o")
             .arg(output)
             .args(objects))
+    }
+
+    /// Gather a macOS executable's debug information into a `.dSYM` bundle (N48), with the
+    /// `dsymutil` beside the toolchain; the bundle is what a debugger reads once the objects
+    /// the executable was linked from are gone.
+    pub(crate) fn gather_debug_info(&self, exe: &Path, dsym: &Path) -> Result<(), String> {
+        let mut c = Command::new("dsymutil");
+        c.env_clear();
+        for name in PASSED {
+            if let Some(value) = std::env::var_os(name) {
+                c.env(name, value);
+            }
+        }
+        match c.arg(exe).arg("-o").arg(dsym).output() {
+            Ok(o) if o.status.success() => Ok(()),
+            Ok(o) => Err(String::from_utf8_lossy(&o.stderr).into_owned()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     /// The driver, with an environment built from nothing.
@@ -234,8 +255,20 @@ fn probe(opt_level: u8, work: &Path) -> Option<Settled> {
     }
     Some(Settled {
         identity: BackendIdentity::of(DRIVER, &banner),
-        config: CodegenConfig::of(&arguments),
+        config: configuration(arguments),
     })
+}
+
+/// The code generation configuration: what the driver resolved, and the runtime ABI
+/// revision. The runtime's contract decides what a unit's calls into it mean, so an object
+/// built against another revision is another object (N43, §7.45).
+fn configuration(mut arguments: Vec<String>) -> CodegenConfig {
+    arguments.push(runtime_abi(nazm_lir::runtime::RUNTIME_ABI_REVISION));
+    CodegenConfig::of(&arguments)
+}
+
+fn runtime_abi(revision: u32) -> String {
+    format!("nazm-runtime-abi={revision}")
 }
 
 /// What the driver says it is, minus where it says it is installed.
@@ -451,6 +484,19 @@ mod tests {
     ///
     /// Not a mock: the point of asking the compiler what it will do is that nobody has to
     /// predict the answer, and a test that predicted it would be testing the prediction.
+    #[test]
+    fn the_runtime_abi_revision_is_part_of_every_configuration() {
+        let resolved = vec!["-cc1".to_owned(), "-O0".to_owned()];
+        let with = configuration(resolved.clone());
+        assert_ne!(with, CodegenConfig::of(&resolved));
+        let mut this = resolved.clone();
+        this.push(runtime_abi(nazm_lir::runtime::RUNTIME_ABI_REVISION));
+        assert_eq!(with, CodegenConfig::of(&this));
+        let mut older = resolved;
+        older.push(runtime_abi(nazm_lir::runtime::RUNTIME_ABI_REVISION - 1));
+        assert_ne!(with, CodegenConfig::of(&older));
+    }
+
     #[test]
     fn this_machine_s_backend_identifies_itself_and_its_configuration() {
         let dir = tempfile::tempdir().expect("tempdir");

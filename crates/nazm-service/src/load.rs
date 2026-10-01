@@ -115,6 +115,66 @@ impl Sources for Disk {
     }
 }
 
+/// The package `name` as the package holding `importer` declares it.
+fn dependency<'g>(
+    packages: Option<&'g nazm_package::Graph>,
+    importer: &Path,
+    name: &str,
+) -> Result<&'g nazm_package::Package, Box<Diagnostic>> {
+    let Some(g) = packages else {
+        return Err(Box::new(
+            Diagnostic::error(
+                codes::UNKNOWN_DEPENDENCY,
+                Span::synthetic(),
+                format!("`{name}:` names a package, and this compilation is not a package's"),
+            )
+            .help("a package is a directory holding `nazm.toml`; build it by naming its directory"),
+        ));
+    };
+    let from = g.package_of(importer).and_then(|i| g.packages.get(i));
+    let found = from
+        .and_then(|p| p.dependencies.get(name))
+        .and_then(|&i| g.packages.get(i));
+    found.ok_or_else(|| {
+        let declared: Vec<String> = from
+            .map(|p| p.dependencies.keys().map(|d| format!("`{d}`")).collect())
+            .unwrap_or_default();
+        Box::new(
+            Diagnostic::error(
+                codes::UNKNOWN_DEPENDENCY,
+                Span::synthetic(),
+                format!(
+                    "`{name}` is not a dependency of `{}`",
+                    from.map_or("this package", |p| p.name.as_str())
+                ),
+            )
+            .help(if declared.is_empty() {
+                "it declares no dependencies; add one under `[dependencies]` in `nazm.toml`"
+                    .to_owned()
+            } else {
+                format!("it declares {}", declared.join(", "))
+            }),
+        )
+    })
+}
+
+/// One thing the loader has still to read: a file, or a standard module and its source.
+#[derive(Debug, Clone)]
+enum Item {
+    File(PathBuf),
+    Std(&'static str, &'static str),
+}
+
+impl Item {
+    /// The identity a second import of it is recognised by.
+    fn canonical(self) -> PathBuf {
+        match self {
+            Self::File(c) => c.canonicalize().unwrap_or(c),
+            Self::Std(name, _) => PathBuf::from(nazm_core::sema::stdlib::file_name(name)),
+        }
+    }
+}
+
 /// The source of a compilation, and how its modules relate.
 ///
 /// Two values that are always built together and always travel together: the text, for
@@ -148,6 +208,51 @@ pub fn load_from(
     source_root: &Path,
     sources: &dyn Sources,
 ) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
+    // A package build (N46): the source root is the one a manifest beside it declares.
+    let packages = match package_context(source_root) {
+        None => None,
+        Some(Ok(g)) => Some(g),
+        Some(Err(d)) => {
+            let loaded = Loaded {
+                map: SourceMap::from_parts(Vec::new()),
+                graph: ModuleGraph::default(),
+            };
+            return Err((loaded, d));
+        }
+    };
+    load_packaged(root, source_root, sources, packages.as_ref())
+}
+
+/// The package whose declared source root `source_root` is, resolved with its dependencies —
+/// or `None` for a compilation that is not a package's.
+#[must_use]
+pub fn package_context(source_root: &Path) -> Option<Result<nazm_package::Graph, Vec<Diagnostic>>> {
+    let dir = source_root.parent()?;
+    if !nazm_package::is_package(dir) {
+        return None;
+    }
+    match nazm_package::resolve(dir) {
+        Err(d) => Some(Err(d)),
+        Ok(g) => {
+            let ours = source_root.canonicalize().ok();
+            let root = g.root_package().map(|p| p.source_root.clone());
+            (ours.is_some() && ours == root).then_some(Ok(g))
+        }
+    }
+}
+
+/// [`load_from`], with the package graph the compilation belongs to, if any.
+///
+/// # Errors
+///
+/// As [`load`], and an import that names a package the importing package does not declare
+/// (`N0508`) or a relative import that leaves its package's source root.
+pub fn load_packaged(
+    root: &Path,
+    source_root: &Path,
+    sources: &dyn Sources,
+    packages: Option<&nazm_package::Graph>,
+) -> Result<Loaded, (Loaded, Vec<Diagnostic>)> {
     // Every module's durable identity is its path relative to this, so a checkout moved
     // from one directory to another keeps its identities — which is the property
     // `docs/spec.md` asks for and the reason the absolute path never reaches one. Whether
@@ -169,11 +274,42 @@ pub fn load_from(
 
     // An explicit stack rather than recursion: an import chain has no bound, and the
     // compiler's own rule is that a recursive walk needs a bound or a controlled stack.
-    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    let mut stack: Vec<Item> = vec![Item::File(root.to_path_buf())];
 
-    while let Some(path) = stack.pop() {
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-        let logical = module_key(root_path, &path);
+    while let Some(item) = stack.pop() {
+        // A standard module (N45) is the toolchain's: its bytes are the compiler's copy, its
+        // key is `@std/name`, and its "path" is that file name, which no canonical path on
+        // disk can equal — a canonical path is absolute.
+        let (path, canonical, logical, standard) = match item {
+            Item::File(path) => {
+                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                // A dependency package's module is keyed by its package and its path in that
+                // package's source root; the root package's, as any project's.
+                let logical = match packages.and_then(|g| {
+                    let i = g.package_of(&path)?;
+                    (i != g.root).then(|| g.packages.get(i)).flatten()
+                }) {
+                    Some(p) => canonical
+                        .strip_prefix(&p.source_root)
+                        .ok()
+                        .and_then(|rel| rel.to_str())
+                        .and_then(|rel| {
+                            ModuleKey::in_package(&p.key_prefix(), &rel.replace('\\', "/"))
+                        }),
+                    None => module_key(root_path, &path),
+                };
+                (path, canonical, logical, None)
+            }
+            Item::Std(name, source) => {
+                let file = PathBuf::from(nazm_core::sema::stdlib::file_name(name));
+                (
+                    file.clone(),
+                    file,
+                    Some(nazm_core::sema::stdlib::key(name)),
+                    Some(source),
+                )
+            }
+        };
         if let Some(&already) = index.get(&canonical) {
             // One file, reached a second time. Ordinarily that is a diamond and the two
             // spellings normalise to one key. When they do not, a symbolic link has made
@@ -192,7 +328,11 @@ pub fn load_from(
             continue;
         }
 
-        let text = match sources.read(&path) {
+        let read = match standard {
+            Some(source) => Ok(source.to_owned()),
+            None => sources.read(&path),
+        };
+        let text = match read {
             Ok(t) => t,
             Err(e) => {
                 // No file to point into: this one could not be read. Said plainly rather
@@ -222,9 +362,75 @@ pub fn load_from(
 
         let mut children = Vec::new();
         for import in &program.imports {
-            let target = dir.join(&import.path);
+            // A path beginning with `@std/` is the standard library's and is never looked for
+            // on disk.
+            if nazm_core::sema::stdlib::reserved(&import.path) {
+                if let Some((name, source)) = nazm_core::sema::stdlib::module(&import.path) {
+                    children.push((Item::Std(name, source), import.path_span));
+                } else {
+                    let known: Vec<String> = nazm_core::sema::stdlib::MODULES
+                        .iter()
+                        .map(|(n, _)| format!("`{}{n}`", nazm_core::sema::stdlib::PREFIX))
+                        .collect();
+                    errors.push(
+                        Diagnostic::error(
+                            codes::MODULE_NOT_FOUND,
+                            import.path_span,
+                            format!("there is no standard module `{}`", import.path),
+                        )
+                        .help(format!(
+                            "a path beginning with `@std/` names a module the toolchain \
+                             provides; the standard modules are {}",
+                            known.join(", ")
+                        )),
+                    );
+                }
+                continue;
+            }
+            // A standard module imports only other standard modules: it has no directory.
+            if standard.is_some() {
+                errors.push(Diagnostic::error(
+                    codes::MODULE_NOT_FOUND,
+                    import.path_span,
+                    format!("a standard module cannot import `{}`", import.path),
+                ));
+                continue;
+            }
+            // `NAME:path` (N46): a module of a package the importing package depends on.
+            let (target, package) = match import.path.split_once(':') {
+                Some((name, rest)) => match dependency(packages, &canonical, name) {
+                    Ok(dep) => (dep.source_root.join(rest), Some(dep.source_root.clone())),
+                    Err(mut d) => {
+                        // Aimed at the import that named the package.
+                        d.primary.span = import.path_span;
+                        errors.push(*d);
+                        continue;
+                    }
+                },
+                None => (
+                    dir.join(&import.path),
+                    packages
+                        .and_then(|g| g.package_of(&canonical).and_then(|i| g.packages.get(i)))
+                        .map(|p| p.source_root.clone()),
+                ),
+            };
+            // Inside a package, an import stays inside the source root it resolves against.
+            if let Some(root) = &package {
+                let inside = target.canonicalize().map_or(true, |t| t.starts_with(root));
+                if !inside {
+                    errors.push(
+                        Diagnostic::error(
+                            codes::MODULE_NOT_FOUND,
+                            import.path_span,
+                            format!("`{}` leaves its package's source root", import.path),
+                        )
+                        .help("a package reaches another package's modules as `NAME:path`"),
+                    );
+                    continue;
+                }
+            }
             if sources.exists(&target) {
-                children.push((target, import.path_span));
+                children.push((Item::File(target), import.path_span));
             } else {
                 errors.push(
                     Diagnostic::error(
@@ -252,7 +458,7 @@ pub fn load_from(
         named.push(
             children
                 .into_iter()
-                .map(|(c, at)| (c.canonicalize().unwrap_or(c), at))
+                .map(|(c, at)| (c.canonical(), at))
                 .collect(),
         );
         parts.push((path.display().to_string(), text));

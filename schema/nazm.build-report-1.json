@@ -9,8 +9,8 @@
   "properties": {
     "schema": { "const": "nazm.build-report/1" },
     "root": {
-      "enum": ["given", "marker", "derived"],
-      "description": "How the source root was decided: named with `--source-root`, found as a `nazm.root` marker, or derived from the file named on the command line. It decides every module's durable identity, which is the name the generated code carries — so a marker is what lets two entry points share the objects of a module they both import."
+      "enum": ["given", "marker", "package", "derived"],
+      "description": "How the source root was decided: named with `--source-root`, found as a `nazm.root` marker, declared by a package manifest `nazm.toml` (N46), or derived from the file named on the command line. It decides every module's durable identity, which is the name the generated code carries — so a marker is what lets two entry points share the objects of a module they both import."
     },
     "semantic": {
       "type": "object",

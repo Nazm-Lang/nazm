@@ -57,12 +57,23 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // program was written. `docs/architecture.md` §7.42.
         "nazm-mir" => &["nazm-span", "nazm-diag", "nazm-sema", "nazm-cir"],
         "nazm-lir" => &["nazm-span", "nazm-diag", "nazm-sema", "nazm-mir"],
+        // The Cranelift backend, N41: validated MIR and the backend boundary `nazm-lir` holds,
+        // and nothing above them — not Core IR, not the checker, not the syntax tree. The one
+        // crate besides `xtask` that may depend on a code generator (`may_depend_on_codegen`).
+        "nazm-codegen-clif" => &[
+            "nazm-span",
+            "nazm-diag",
+            "nazm-sema",
+            "nazm-mir",
+            "nazm-lir",
+        ],
         // The driver library and the language service, N16. Through `nazm-core` only, like
         // the CLI and for the same reason: the service consumes the compiler's answers,
         // and a direct dependency on the parser or on `nazm-sema` would be the first step
         // to it computing its own. Not `nazm-cache` either: an unsaved buffer is not state
         // the cache may record.
-        "nazm-service" => &["nazm-span", "nazm-diag", "nazm-core"],
+        "nazm-service" => &["nazm-span", "nazm-diag", "nazm-core", "nazm-package"],
+        "nazm-package" => &["nazm-span", "nazm-diag"],
         // Nazm's own documentation as sections, N32. It reads the corpus's files and nothing
         // of the compiler: answering a documentation query must not need a parse, a check
         // or a backend.
@@ -95,9 +106,11 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
             "nazm-core",
             "nazm-lir",
             "nazm-mir",
+            "nazm-codegen-clif",
             "nazm-iface",
             "nazm-cache",
             "nazm-service",
+            "nazm-package",
             "nazm-docs",
             "nazm-repo",
         ],
@@ -168,6 +181,8 @@ pub(crate) fn emission_allowlist() -> &'static [(&'static str, &'static [&'stati
         ("crates/nazm-cir", &[]),
         ("crates/nazm-mir", &[]),
         ("crates/nazm-lir", &["emits LLVM IR"]),
+        // Object code, in process; it never runs a tool and never writes LLVM IR.
+        ("crates/nazm-codegen-clif", &[]),
         // The language service answers questions; it never emits or runs anything.
         ("crates/nazm-service", &[]),
         // Nor does the repository planner, which only composes the service's answers.
@@ -233,7 +248,18 @@ mod tests {
 
     #[test]
     fn an_unplaced_crate_is_a_failure_not_a_default() {
-        assert!(allowed_internal_deps("nazm-codegen-clif").is_none());
+        assert!(allowed_internal_deps("nazm-codegen-llvm").is_none());
+    }
+
+    #[test]
+    fn the_cranelift_backend_reads_mir_and_nothing_above_it() {
+        let clif = allowed_internal_deps("nazm-codegen-clif").unwrap();
+        for above in ["nazm-cir", "nazm-core", "nazm-syntax", "nazm-service"] {
+            assert!(!clif.contains(&above), "{above}");
+        }
+        assert!(clif.contains(&"nazm-mir") && clif.contains(&"nazm-lir"));
+        assert!(may_depend_on_codegen("nazm-codegen-clif"));
+        assert!(!may_depend_on_codegen("nazm-lir") && !may_depend_on_codegen("nazm-cli"));
     }
 
     #[test]
@@ -279,6 +305,7 @@ mod tests {
             "nazm-core",
             "nazm-mir",
             "nazm-lir",
+            "nazm-codegen-clif",
             "nazm-service",
             "nazm-docs",
             "nazm-repo",

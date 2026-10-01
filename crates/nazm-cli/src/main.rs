@@ -43,10 +43,13 @@ mod diagnostics;
 mod docs;
 mod fix;
 mod fmt;
+mod inspect;
 mod interface;
 mod lsp;
 mod mir;
+mod package;
 mod patch;
+mod profile;
 mod repo;
 mod snapshot;
 mod summary;
@@ -182,6 +185,15 @@ enum Command {
             value_parser = max_depth,
         )]
         max_depth: usize,
+        /// Refuse to build unless the package's `nazm.lock` records exactly the packages this
+        /// resolves to, with their bytes unchanged (N46).
+        #[arg(long)]
+        locked: bool,
+        /// A restriction profile to hold the program to (N47): `general`, `embedded`,
+        /// `critical` or `cyber`. Added to any the packages' manifests require; a profile only
+        /// refuses, and never changes what an accepted program does.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
     },
     /// Type-check without evaluating.
     Check {
@@ -214,6 +226,19 @@ enum Command {
         /// unchanged. `--json` still gives every diagnostic in full.
         #[arg(long, conflicts_with_all = ["json", "cache_report"])]
         summary_json: bool,
+        /// Refuse to build unless the package's `nazm.lock` records exactly the packages this
+        /// resolves to, with their bytes unchanged (N46).
+        #[arg(long)]
+        locked: bool,
+        /// A restriction profile to hold the program to (N47): `general`, `embedded`,
+        /// `critical` or `cyber`. Added to any the packages' manifests require; a profile only
+        /// refuses, and never changes what an accepted program does.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
+        /// One `nazm.profile-report/1` object on stdout: every rule of the profiles in force,
+        /// its verdict and its witnesses.
+        #[arg(long)]
+        profile_report: bool,
     },
     /// Apply the repairs the compiler already knows about.
     ///
@@ -558,6 +583,53 @@ enum Command {
         /// unchanged. `--json` still gives every diagnostic in full.
         #[arg(long, conflicts_with_all = ["json", "build_report"])]
         summary_json: bool,
+        /// The code generator: `llvm` (the default: LLVM IR text compiled by clang) or
+        /// `cranelift` (in process). Neither falls back to the other; a program one cannot
+        /// compile is refused by name.
+        #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift"])]
+        backend: String,
+        /// The target triple. v1 builds for the host only, so any other triple is refused
+        /// rather than silently built for this machine.
+        #[arg(long, value_name = "TRIPLE")]
+        target: Option<String>,
+        /// An object file or static library that defines foreign (`extern "C"`) functions
+        /// the program calls, handed to the linker after the program's own objects. It may
+        /// be given more than once; it must exist. Nazm does not compile C.
+        #[arg(long = "link", value_name = "FILE")]
+        link: Vec<PathBuf>,
+        /// One `nazm.timings/1` line on stderr: each phase's wall time — load, front end, MIR,
+        /// LIR, code generation, native compilation, link — and the total (N48).
+        #[arg(long)]
+        timings: bool,
+        /// Carry DWARF debug information (N48): a subprogram for each function and a source
+        /// position on each instruction, so a debugger stops in Nazm functions and shows their
+        /// lines. LLVM backend only; the same program, with more metadata.
+        #[arg(long)]
+        debug: bool,
+        /// Refuse to build unless the package's `nazm.lock` records exactly the packages this
+        /// resolves to, with their bytes unchanged (N46).
+        #[arg(long)]
+        locked: bool,
+        /// A restriction profile to hold the program to (N47): `general`, `embedded`,
+        /// `critical` or `cyber`. Added to any the packages' manifests require; a profile only
+        /// refuses, and never changes what an accepted program does.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
+    },
+    /// Print one program's facts as `nazm.inspect/1` (N48): every definition's identity,
+    /// signature, effects, capabilities, provenance, Core IR and MIR digests, and the toolchain,
+    /// package and lock identities — one deterministic line of JSON.
+    Inspect {
+        file: PathBuf,
+        /// Only the function of this name.
+        #[arg(long, value_name = "NAME")]
+        def: Option<String>,
+    },
+    /// Resolve a package and write its `nazm.lock` (N46): the exact package versions, sources
+    /// and digests a `--locked` build is held to. Written only when its bytes would change.
+    Lock {
+        /// The package's directory, holding `nazm.toml`.
+        dir: PathBuf,
     },
 }
 
@@ -586,7 +658,69 @@ fn max_depth(raw: &str) -> Result<usize, String> {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    // A package (N46): its directory stands for its `main`, and `--locked` holds the build to
+    // its lockfile — both settled before any command sees the file.
+    if let Command::Lock { dir } = &cli.command {
+        return package::lock(dir);
+    }
+
+    match &mut cli.command {
+        Command::Run { file, locked, .. }
+        | Command::Check { file, locked, .. }
+        | Command::Build { file, locked, .. } => match package::entry(file, *locked) {
+            Ok(Some(main)) => *file = main,
+            Ok(None) => {}
+            Err(code) => return code,
+        },
+        Command::Inspect { file, .. } => match package::entry(file, false) {
+            Ok(Some(main)) => *file = main,
+            Ok(None) => {}
+            Err(code) => return code,
+        },
+        _ => {}
+    }
+    if let Command::Inspect { file, def } = &cli.command {
+        return inspect::run(file, def.as_deref());
+    }
+    // Restriction profiles (N47): held before the command does its own work, from the facts a
+    // full check settles.
+    let wants_report = matches!(
+        &cli.command,
+        Command::Check {
+            profile_report: true,
+            ..
+        }
+    );
+    match &cli.command {
+        Command::Run {
+            file,
+            locked,
+            profile,
+            ..
+        }
+        | Command::Build {
+            file,
+            locked,
+            profile,
+            ..
+        } => {
+            if let Err(code) = profile::enforce(file, profile.as_deref(), *locked, false) {
+                return code;
+            }
+        }
+        Command::Check {
+            file,
+            locked,
+            profile,
+            ..
+        } => {
+            if let Err(code) = profile::enforce(file, profile.as_deref(), *locked, wants_report) {
+                return code;
+            }
+        }
+        _ => {}
+    }
     if let Command::Build {
         file,
         out,
@@ -596,6 +730,13 @@ fn main() -> ExitCode {
         no_cache,
         build_report,
         summary_json,
+        backend,
+        target,
+        link,
+        timings,
+        debug,
+        locked: _,
+        profile: _,
     } = cli.command
     {
         return build::run(
@@ -607,6 +748,14 @@ fn main() -> ExitCode {
             !no_cache,
             build_report,
             summary_json,
+            build::Choice {
+                backend: nazm_lir::backend::BackendId::by_name(&backend)
+                    .unwrap_or(nazm_lir::backend::BackendId::Llvm),
+                target: target.as_deref(),
+                link: &link,
+                timings,
+                debug,
+            },
         );
     }
     match cli.command {
@@ -617,6 +766,9 @@ fn main() -> ExitCode {
             no_cache,
             cache_report,
             summary_json,
+            locked: _,
+            profile: _,
+            profile_report: _,
         } => {
             return checking::run(
                 &file,
@@ -774,6 +926,8 @@ fn main() -> ExitCode {
             json,
             max_iterations,
             max_depth,
+            locked: _,
+            profile: _,
         } => (
             file,
             json,
@@ -803,7 +957,9 @@ fn main() -> ExitCode {
         | Command::Lsp { .. }
         | Command::CoreIr { .. }
         | Command::Mir { .. }
-        | Command::Capabilities { .. } => {
+        | Command::Capabilities { .. }
+        | Command::Lock { .. }
+        | Command::Inspect { .. } => {
             unreachable!("handled above")
         }
     };

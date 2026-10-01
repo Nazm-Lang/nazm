@@ -23,6 +23,33 @@ to a native executable that prints the same value. `nazm check` type-checks with
 running anything, and `nazm test` runs a directory of programs against recorded outputs
 — interpreted and compiled, requiring both to agree.
 
+`nazm build` has two code generators. The default, `--backend llvm`, writes LLVM IR as text and
+has clang compile it; `--backend cranelift` compiles every function in process with Cranelift,
+which builds noticeably faster. They produce programs that behave identically — the same output,
+the same failures, the same memory report — and neither ever stands in for the other: a program
+one cannot compile is refused, never quietly built by the other. `--target` names the target
+triple, and v1 builds for the machine it runs on only, so any other triple is refused rather than
+built for this one.
+
+A native program can call C. `extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";` declares a
+C function by its signature and its symbol, and `nazm build --link add.o` hands the object that
+defines it to the linker. Only `Int` (`int64_t`) and `Bool` (`bool`) cross; every call needs a
+`ForeignCap` in scope and is the effect `foreign`; and `nazm run` refuses such a program rather
+than pretend to run C. See `docs/spec.md`, *Foreign functions*.
+
+### Writing a program the way v1 prefers
+
+Declare what each function does and hand it the authority it needs, rather than relying on a
+caller's: `fn save(io: IoCap, path: Str, data: Str) -> Int ! { io } { write_file(path, data) }`.
+A function that declares `! {}` is pure, and a profile such as `critical` or `cyber` refuses any
+function that declares nothing. Reach for the standard library before writing helpers —
+`use "@std/text";` gives `text_split`, `text_trim` and `text_parse_int`, which returns a `Result`
+rather than failing. A program that grows past one directory becomes a package: a `nazm.toml`
+beside `src/`, dependencies as `use "NAME:path.nz";`, and `nazm lock` before a `--locked` build.
+`nazm build --debug` makes a program a debugger can stop in, `nazm build --timings` says where a
+build's time went, and `nazm inspect` prints everything the compiler knows about a program.
+`docs/limitations.md` lists what v1 does not do.
+
 ## The shape of the language, in six sentences
 
 - **A file is a module.** `use "other.nz";` makes the definitions that file marked `pub`
@@ -460,9 +487,10 @@ accepts.
 
 | Rule | Definition |
 | --- | --- |
-| `program` | `{ use_item } , { function \| record \| enumeration }` |
+| `program` | `{ use_item } , { function \| foreign_function \| record \| enumeration }` |
 | `use_item` | `"use" , STRING , ";"` |
 | `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
+| `foreign_function` | `[ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , "=" , STRING , ";"` |
 | `effect_set` | `"!" , "{" , [ effect_name , { "," , effect_name } ] , "}"` |
 | `effect_name` | `IDENT \| "spawn"` |
 | `type_parameters` | `"[" , type_parameter , { "," , type_parameter } , "]"` |
@@ -514,7 +542,7 @@ accepts.
 ### `program`
 
 ```ebnf
-program = { use_item } , { function | record | enumeration } ;
+program = { use_item } , { function | foreign_function | record | enumeration } ;
 ```
 
 ```nazm
@@ -569,6 +597,28 @@ pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) }
 fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") }
 ```
 
+### `foreign_function`
+
+```ebnf
+foreign_function = [ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , "=" , STRING , ";" ;
+```
+
+A foreign function (N42): a C function this program calls, declared by its signature and
+its C symbol, with no body. `extern` is not a keyword — it is recognised only where a
+declaration starts, before a string — so it is an IDENT here, and the string before `fn`
+is the ABI, which must be `"C"`. Only `Int` and `Bool` cross; no type parameters and no
+written effect set: calling one is always the effect `foreign`, and needs a `ForeignCap`.
+`nazm run` refuses a program that calls one; `nazm build --link FILE` links it. See
+`docs/spec.md`, *Foreign functions*.
+
+```nazm
+extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add"; fn main() -> Int { 0 }
+```
+
+```nazm
+pub extern "C" fn is_even(n: Int) -> Bool = "c_is_even"; fn main() -> Int { 0 }
+```
+
 ### `effect_set`
 
 ```ebnf
@@ -582,7 +632,7 @@ another module calling the function must assume every effect — so `fn f() -> I
 `fn f() -> Int ! {}` are not the same: only the second promises purity. A declared set
 says what a function does, not what allows it: its body holds only the authority of
 the capability values in its scope (`IoCap`, `SpawnCap`). The names live in their
-own namespace: `io` and `spawn` are the only effects, a name that is not one is refused,
+own namespace: `io`, `spawn` and `foreign` are the only effects, a name that is not one is refused,
 and so is one written twice. Order means nothing. See `docs/spec.md`, *Effects*.
 
 ```nazm

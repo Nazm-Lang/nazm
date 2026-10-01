@@ -1,0 +1,92 @@
+// `@std/seq`: searching and summarising the built-in sequences.
+//
+// Imported with `use "@std/seq";`. The sequences themselves — `Ints`, `Strs` and `Vec[T]` — and
+// their `_new`, `_len`, `_get`, `_set`, `_push` and `_pop` are built-ins; these are written over
+// them. None fails: an empty sequence has no maximum, so that is `None`, not a trap.
+
+/// The first index at which `xs` holds `x`, or `None`.
+pub fn ints_index_of(xs: Ints, x: Int) -> Option[Int] ! {} {
+    let mut i = 0;
+    // -1 while searching, -2 once every element has been looked at, the index once found.
+    let mut found = 0 - 1;
+    while found == 0 - 1 {
+        if i == ints_len(xs) { found = 0 - 2; } else { if ints_get(xs, i) == x { found = i; } else { i = i + 1; } }
+    }
+    if found < 0 { Option[Int].None() } else { Option[Int].Some(value: found) }
+}
+
+/// Whether `xs` holds `x`.
+pub fn ints_contains(xs: Ints, x: Int) -> Bool ! {} {
+    match ints_index_of(xs, x) {
+        Option.Some(value: i) => true,
+        Option.None() => false,
+    }
+}
+
+/// The sum of `xs`, checked like every addition: an overflow is `N0400`.
+pub fn ints_sum(xs: Ints) -> Int ! {} {
+    let mut total = 0;
+    let mut i = 0;
+    while i < ints_len(xs) { total = total + ints_get(xs, i); i = i + 1; }
+    total
+}
+
+/// The largest element of `xs`, or `None` when it is empty.
+pub fn ints_max(xs: Ints) -> Option[Int] ! {} {
+    if ints_len(xs) == 0 {
+        Option[Int].None()
+    } else {
+        let mut best = ints_get(xs, 0);
+        let mut i = 1;
+        while i < ints_len(xs) {
+            if ints_get(xs, i) > best { best = ints_get(xs, i); }
+            i = i + 1;
+        }
+        Option[Int].Some(value: best)
+    }
+}
+
+/// The smallest element of `xs`, or `None` when it is empty.
+pub fn ints_min(xs: Ints) -> Option[Int] ! {} {
+    if ints_len(xs) == 0 {
+        Option[Int].None()
+    } else {
+        let mut best = ints_get(xs, 0);
+        let mut i = 1;
+        while i < ints_len(xs) {
+            if ints_get(xs, i) < best { best = ints_get(xs, i); }
+            i = i + 1;
+        }
+        Option[Int].Some(value: best)
+    }
+}
+
+/// The first index at which `xs` holds `x`, or `None`.
+pub fn strs_index_of(xs: Strs, x: Str) -> Option[Int] ! {} {
+    let mut i = 0;
+    // -1 while searching, -2 once every element has been looked at, the index once found.
+    let mut found = 0 - 1;
+    while found == 0 - 1 {
+        if i == strs_len(xs) { found = 0 - 2; } else { if strs_get(xs, i) == x { found = i; } else { i = i + 1; } }
+    }
+    if found < 0 { Option[Int].None() } else { Option[Int].Some(value: found) }
+}
+
+/// Whether `xs` holds `x`.
+pub fn strs_contains(xs: Strs, x: Str) -> Bool ! {} {
+    match strs_index_of(xs, x) {
+        Option.Some(value: i) => true,
+        Option.None() => false,
+    }
+}
+
+/// The first index at which `xs` holds a value equal to `x`, or `None`.
+pub fn vec_index_of[T: Equality](xs: Vec[T], x: T) -> Option[Int] ! {} {
+    let mut i = 0;
+    // -1 while searching, -2 once every element has been looked at, the index once found.
+    let mut found = 0 - 1;
+    while found == 0 - 1 {
+        if i == vec_len(xs) { found = 0 - 2; } else { if vec_get(xs, i) == x { found = i; } else { i = i + 1; } }
+    }
+    if found < 0 { Option[Int].None() } else { Option[Int].Some(value: found) }
+}

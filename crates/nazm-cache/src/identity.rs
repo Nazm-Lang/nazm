@@ -141,7 +141,11 @@ use crate::digest::{self, Framed};
 /// function in another module, whose body the importer's key does not cover. That flow is
 /// solved over every module's facts on every run rather than cached, and the check-artefact
 /// schema moved (`nazm.check/2`) to carry those facts; the counter covers the refusal itself.
-pub const SEMANTIC_EPOCH: u32 = 10;
+/// `11` — N42, 2026-10-01. Foreign functions: `extern "C" fn … = "symbol";` is accepted
+/// syntax, `foreign` is an effect and `ForeignCap` a capability kind, and a call to a foreign
+/// function without a `ForeignCap` held is refused (`N0369`). Six codes appeared
+/// (`N0380`–`N0385`). A cached check result from epoch 10 cannot know any of it.
+pub const SEMANTIC_EPOCH: u32 = 11;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -168,6 +172,11 @@ pub const CHECKER_CODES: &[&str] = &[
     "DUPLICATE_TYPE_PARAMETER",
     "DUPLICATE_VARIANT",
     "EMPTY_ENUM",
+    "FOREIGN_ABI",
+    "FOREIGN_CONFLICT",
+    "FOREIGN_SHAPE",
+    "FOREIGN_SYMBOL",
+    "FOREIGN_TYPE",
     "GENERIC_MAIN",
     "ILLEGAL_TASK_CAPTURE",
     "IMPORT_COLLIDES_WITH_DEFINITION",

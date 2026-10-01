@@ -77,6 +77,7 @@ pub(crate) fn run(
     cache: bool,
     with_report: bool,
     summary: bool,
+    choice: Choice<'_>,
 ) -> ExitCode {
     // `--summary-json` (N31): at every exit below, the outcome reported as one
     // `nazm.command-summary/1` on stdout in place of the rendering and the path. The exit
@@ -107,6 +108,60 @@ pub(crate) fn run(
             return ExitCode::from(exit::NO_SUCH_FILE);
         }
     };
+    // The target and the backend, settled before anything is compiled (N41). A target that
+    // is not this host is refused: an object for it would need a linker and a runtime v1
+    // does not have, and building for the host instead would be a silent lie.
+    let target = match nazm_lir::backend::Target::requested(choice.target) {
+        Ok(t) => t,
+        Err(e) => {
+            if summary {
+                return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+            }
+            eprintln!("nazm: {e}");
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        }
+    };
+    // A foreign object that is not there is refused before anything is compiled, by name,
+    // rather than reported by the linker as an undefined symbol after the whole build (N42).
+    if let Some(missing) = choice.link.iter().find(|p| !p.is_file()) {
+        if summary {
+            return summarized(Status::Refused, exit::TOOLCHAIN_FAILED, &[], None, None);
+        }
+        eprintln!(
+            "nazm: `--link {}`: no such file; `--link` names an object or library that \
+             defines foreign functions",
+            missing.display()
+        );
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
+    // Debug information is the LLVM backend's (N48): refused, rather than silently dropped,
+    // for Cranelift.
+    if choice.debug && choice.backend == nazm_lir::backend::BackendId::Cranelift {
+        eprintln!(
+            "nazm: `--debug` carries debug information through the LLVM backend only; \
+             `--backend cranelift` writes none"
+        );
+        return ExitCode::from(exit::TOOLCHAIN_FAILED);
+    }
+    let llvm = nazm_lir::backend::LlvmText::new(target.clone()).with_debug(choice.debug);
+    let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level);
+    let chosen: &(dyn nazm_lir::backend::Backend + Sync) = match choice.backend {
+        nazm_lir::backend::BackendId::Llvm => &llvm,
+        nazm_lir::backend::BackendId::Cranelift => &cranelift,
+    };
+    // Objects a backend can key before generating them are looked up by that key, so a
+    // reused unit is not generated at all. Keyed apart from clang's: a Cranelift object is a
+    // function of its MIR and Cranelift's settings, not of any C compiler.
+    let clif_store: Option<ObjectStore> =
+        cache.then(|| crate::derived::objects(source_root.path()));
+    let clif_key = |k: &str| {
+        ObjectKey::of(
+            LlvmInput::of(k.as_bytes()),
+            nazm_cache::BackendIdentity::of(chosen.id().name(), &chosen.version()),
+            nazm_cache::CodegenConfig::of(&[chosen.target().triple.clone()]),
+        )
+    };
+    let clock = Clock::start();
     let loaded = match crate::load::load(input, source_root.path()) {
         Ok(f) => f,
         Err((partial, diagnostics)) => {
@@ -164,15 +219,33 @@ pub(crate) fn run(
     //
     // The backend is handed validated MIR, lowered from Core IR — never the tree (N39), and
     // never Core IR or the checker's tables either (N40).
+    // The foreign symbols the program calls, so a link that cannot resolve them is reported
+    // as the missing `--link` it is rather than as a compiler bug (N42).
+    let mut foreign: Vec<String> = Vec::new();
+    clock.mark("load");
     let artefacts = match nazm_core::on_lowered(
         map,
         &loaded.graph,
         nazm_core::Entry::Required,
         |core, resolution| {
+            clock.mark("front_end");
             let program = crate::mir::lower(core, resolution, &loaded.graph)?;
-            nazm_lir::lower(program, &names)
-                .map(|native| emit_artefacts(&native, &names))
-                .map_err(|e| e.diagnostics)
+            clock.mark("mir");
+            let native = nazm_lir::lower(program, &names).map_err(|e| e.diagnostics)?;
+            clock.mark("lir");
+            foreign = native
+                .sigs
+                .iter()
+                .filter(|s| s.foreign)
+                .map(|s| s.symbol.as_str().to_owned())
+                .collect();
+            let cached = |k: &str| match clif_store.as_ref().map(|s| s.get(&clif_key(k))) {
+                Some(ObjectFound::Hit(bytes)) => Some(bytes),
+                _ => None,
+            };
+            let made = emit_artefacts(&native, &names, chosen, &cached);
+            clock.mark("codegen");
+            made
         },
     ) {
         Ok(a) => a,
@@ -213,7 +286,10 @@ pub(crate) fn run(
     // pairs of files beside somebody's binary.
     let stamp = std::process::id();
     let work = sibling(&output, &format!(".nazm-{stamp}"));
-    let tmp_exe = sibling(&output, &format!(".nazm-{stamp}.out"));
+    // Linked inside the working directory under the output's own file name (N46): the
+    // Mach-O linker writes that name into the executable's code signature and derives its
+    // UUID from it, so a temporary name would make two builds of one program differ.
+    let tmp_exe = work.join(output.file_name().unwrap_or_default());
     if let Err(e) = std::fs::create_dir_all(&work) {
         eprintln!("nazm: cannot create {}: {e}", work.display());
         if summary {
@@ -262,11 +338,57 @@ pub(crate) fn run(
         let ll = work.join(format!("{}.ll", artefact.name));
         let obj = work.join(format!("{}.o", artefact.name));
 
+        // An object a backend produced itself: written down, and stored under the key its
+        // backend gave it, unless it came from the store.
+        let ir = match &artefact.code {
+            nazm_lir::backend::Code::Llvm(ir) => ir,
+            nazm_lir::backend::Code::Object(bytes) => {
+                if let Err(e) = std::fs::write(&obj, bytes) {
+                    cleanup(false);
+                    eprintln!("nazm: cannot write {}: {e}", obj.display());
+                    if summary {
+                        return summarized(
+                            Status::ToolchainFailed,
+                            exit::TOOLCHAIN_FAILED,
+                            &[],
+                            Some(map),
+                            None,
+                        );
+                    }
+                    return ExitCode::from(exit::TOOLCHAIN_FAILED);
+                }
+                if artefact.reused {
+                    tally.reused += 1;
+                    if artefact.instance {
+                        tally.instances_reused += 1;
+                    }
+                } else {
+                    tally.compiled += 1;
+                    if artefact.instance {
+                        tally.instances_compiled += 1;
+                    }
+                    if let (Some(store), Some(k)) = (clif_store.as_ref(), artefact.key.as_deref()) {
+                        let entry = ObjectArtifact::of(
+                            LlvmInput::of(k.as_bytes()),
+                            nazm_cache::BackendIdentity::of(chosen.id().name(), &chosen.version()),
+                            nazm_cache::CodegenConfig::of(&[chosen.target().triple.clone()]),
+                            bytes.clone(),
+                        );
+                        if entry.key() == Some(clif_key(k)) && store.put(&entry).is_ok() {
+                            tally.stored += 1;
+                        }
+                    }
+                }
+                objects.push(obj);
+                continue;
+            }
+        };
+
         // The key is over the bytes that are about to be handed over, so it cannot
         // describe anything but what is compiled.
         let key = backend
             .settled()
-            .map(|s| ObjectKey::of(LlvmInput::of(artefact.ir.as_bytes()), s.identity, s.config));
+            .map(|s| ObjectKey::of(LlvmInput::of(ir.as_bytes()), s.identity, s.config));
         if let (Some(store), Some(key)) = (store.as_ref(), key) {
             match store.get(&key) {
                 ObjectFound::Hit(bytes) => {
@@ -287,7 +409,7 @@ pub(crate) fn run(
             }
         }
 
-        if let Err(e) = std::fs::write(&ll, &artefact.ir) {
+        if let Err(e) = std::fs::write(&ll, ir) {
             cleanup(false);
             eprintln!("nazm: cannot write {}: {e}", ll.display());
             if summary {
@@ -331,7 +453,7 @@ pub(crate) fn run(
             (store.as_ref(), key, backend.settled(), std::fs::read(&obj))
         {
             let entry = ObjectArtifact::of(
-                LlvmInput::of(artefact.ir.as_bytes()),
+                LlvmInput::of(ir.as_bytes()),
                 settled.identity,
                 settled.config,
                 bytes,
@@ -345,8 +467,36 @@ pub(crate) fn run(
 
     // Deterministic: the units are in load order and the support artefacts last, so the
     // command line does not depend on anything the filesystem decided.
+    objects.extend(choice.link.iter().cloned());
+    clock.mark("native_compile");
     match backend.link(&tmp_exe, &objects) {
         Outcome::Ran(o) if o.status.success() => {}
+        Outcome::Ran(o) if !foreign.is_empty() => {
+            // A program that calls C links against what `--link` named, so an unresolved
+            // symbol is most likely the user's, not the compiler's: say which ones it may be.
+            cleanup(false);
+            eprint!("{}", String::from_utf8_lossy(&o.stderr));
+            eprintln!(
+                "nazm: linking failed. This program calls the foreign function{} {}; each \
+                 must be defined by an object or library passed with `--link FILE`",
+                if foreign.len() == 1 { "" } else { "s" },
+                foreign
+                    .iter()
+                    .map(|f| format!("`{f}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if summary {
+                return summarized(
+                    Status::ToolchainFailed,
+                    exit::TOOLCHAIN_FAILED,
+                    &[],
+                    Some(map),
+                    None,
+                );
+            }
+            return ExitCode::from(exit::TOOLCHAIN_FAILED);
+        }
         other => {
             let code = report_clang(other, &work, cleanup);
             if summary {
@@ -365,18 +515,29 @@ pub(crate) fn run(
     if emit_ir {
         // Beside the output, one file per unit, named as the artefacts are.
         for artefact in &artefacts {
+            let nazm_lir::backend::Code::Llvm(ir) = &artefact.code else {
+                continue;
+            };
             let beside = with_suffix(&output, &format!("{}.ll", artefact.name));
-            if let Err(e) = std::fs::write(&beside, &artefact.ir) {
+            if let Err(e) = std::fs::write(&beside, ir) {
                 eprintln!("nazm: cannot write {}: {e}", beside.display());
             }
         }
     }
-    // The intermediates, and only them: the executable is still on its way into place.
+    // On macOS the linker leaves debug information in the objects it read, which are about
+    // to go, so a debug build gathers it into `OUTPUT.dSYM` first (N48). Elsewhere it is in
+    // the executable already.
+    if choice.debug && cfg!(target_os = "macos") {
+        let dsym = with_suffix(&output, "dSYM");
+        if let Err(e) = backend.gather_debug_info(&tmp_exe, &dsym) {
+            eprintln!("nazm: the debug information was not gathered: {e}");
+        }
+    }
+    // Published last, so an existing executable survives every failure above — and then the
+    // intermediates go, the working directory the executable was linked in included.
+    let published = std::fs::rename(&tmp_exe, &output);
     let _ = std::fs::remove_dir_all(&work);
-
-    // Published last, so an existing executable survives every failure above.
-    if let Err(e) = std::fs::rename(&tmp_exe, &output) {
-        let _ = std::fs::remove_file(&tmp_exe);
+    if let Err(e) = published {
         eprintln!("nazm: cannot write {}: {e}", output.display());
         if summary {
             return summarized(
@@ -398,11 +559,56 @@ pub(crate) fn run(
             Some(output.display().to_string()),
         );
     }
+    clock.mark("link");
     if with_report {
         println!("{}", report(source_root.how(), map.len(), tally));
     }
+    if choice.timings {
+        eprintln!("{}", clock.report());
+    }
     println!("{}", output.display());
     ExitCode::from(exit::OK)
+}
+
+/// Where a build's time went (N48): each phase's wall time since the one before, in the order
+/// the build ran them. `--timings` prints them as `nazm.timings/1`, one line on stderr.
+struct Clock {
+    start: std::time::Instant,
+    last: std::sync::Mutex<(std::time::Instant, Vec<(&'static str, f64)>)>,
+}
+
+impl Clock {
+    fn start() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            start: now,
+            last: std::sync::Mutex::new((now, Vec::new())),
+        }
+    }
+
+    fn mark(&self, phase: &'static str) {
+        if let Ok(mut g) = self.last.lock() {
+            let now = std::time::Instant::now();
+            let ms = now.duration_since(g.0).as_secs_f64() * 1000.0;
+            g.1.push((phase, ms));
+            g.0 = now;
+        }
+    }
+
+    fn report(&self) -> String {
+        let total = self.start.elapsed().as_secs_f64() * 1000.0;
+        let phases = self
+            .last
+            .lock()
+            .map(|g| {
+                g.1.iter()
+                    .map(|(p, ms)| format!("{{\"phase\":\"{p}\",\"ms\":{ms:.3}}}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_default();
+        format!("{{\"schema\":\"nazm.timings/1\",\"phases\":[{phases}],\"total_ms\":{total:.3}}}")
+    }
 }
 
 /// One `nazm.build-report/1` object.
@@ -440,6 +646,20 @@ fn report(root: crate::root::How, modules: usize, t: Native) -> String {
     )
 }
 
+/// What `nazm build` was asked to generate code with (N41).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Choice<'a> {
+    pub(crate) backend: nazm_lir::backend::BackendId,
+    /// An explicit target triple, which must be the host's.
+    pub(crate) target: Option<&'a str>,
+    /// Foreign objects and libraries for the linker (N42), in the order given.
+    pub(crate) link: &'a [std::path::PathBuf],
+    /// Print where the build's time went (N48).
+    pub(crate) timings: bool,
+    /// Carry debug information, for a debugger (N48).
+    pub(crate) debug: bool,
+}
+
 /// One generated native unit, ready to be written down.
 struct Artefact {
     /// The file name to use, without an extension.
@@ -449,53 +669,83 @@ struct Artefact {
     /// **not this compiler's to trust**. `docs/architecture.md` records it as build
     /// plumbing, deliberately not as an identity.
     name: String,
-    ir: String,
+    /// LLVM text for clang, or an object a backend produced itself.
+    code: nazm_lir::backend::Code,
     /// Whether this is a generic function instance's unit.
     instance: bool,
+    /// For an object: the key its backend gave it before generating it.
+    key: Option<String>,
+    /// Whether the object came from the store under that key rather than being generated.
+    reused: bool,
 }
 
 /// Lower a checked compilation into one artefact per module, plus the program's support.
 ///
 /// The order is load order, then the runtime, then the entry. Nothing here reads a
-/// directory, so the same program produces the same artefacts in the same order.
-fn emit_artefacts(native: &nazm_lir::Native, names: &nazm_lir::SourceNames<'_>) -> Vec<Artefact> {
+/// directory, so the same program produces the same artefacts in the same order. A unit the
+/// backend can key before generating it, and whose object is in the store, is not generated.
+fn emit_artefacts(
+    native: &nazm_lir::Native,
+    names: &nazm_lir::SourceNames<'_>,
+    backend: &dyn nazm_lir::backend::Backend,
+    cached: &dyn Fn(&str) -> Option<Vec<u8>>,
+) -> Result<Vec<Artefact>, Vec<nazm_diag::Diagnostic>> {
     let mut out = Vec::new();
-    let mut needs = nazm_lir::Needs::default();
-    for (i, unit) in native.units.iter().enumerate() {
-        let (ir, reached) = nazm_lir::emit_unit(native, unit, names);
-        needs = needs.union(reached);
-        out.push(Artefact {
-            name: format!("m{i}"),
-            ir,
-            instance: false,
-        });
+    let mut needs = backend.baseline();
+    let mut errors = Vec::new();
+    // One artefact per module and one per generic function instance, never folded into a
+    // caller's: the object cache then reuses each by its own identity, one instance
+    // requested by two modules is one object, and a module's object does not change when
+    // another module starts instantiating something. `docs/architecture.md` §7.12.
+    for (i, plan) in backend.plan(native).into_iter().enumerate() {
+        if let Some(bytes) = plan.key.as_deref().and_then(cached) {
+            out.push(Artefact {
+                name: plan.name,
+                code: nazm_lir::backend::Code::Object(bytes),
+                instance: plan.instance,
+                key: plan.key,
+                reused: true,
+            });
+            continue;
+        }
+        match backend.generate(native, names, i) {
+            Ok(g) => {
+                needs = needs.union(g.needs);
+                out.push(Artefact {
+                    name: plan.name,
+                    code: g.code,
+                    instance: plan.instance,
+                    key: plan.key,
+                    reused: false,
+                });
+            }
+            Err(mut e) => errors.append(&mut e),
+        }
     }
-    // One artefact per generic function instance, never folded into a caller's: the
-    // object cache then reuses each by its own bytes, one instance requested by two modules
-    // is one object, and a module's object does not change when another module starts
-    // instantiating something. `docs/architecture.md` §7.12.
-    for (i, unit) in native.instances.iter().enumerate() {
-        let (ir, reached) = nazm_lir::emit_unit(native, unit, names);
-        needs = needs.union(reached);
-        out.push(Artefact {
-            name: format!("g{i}"),
-            ir,
-            instance: true,
-        });
+    if !errors.is_empty() {
+        return Err(errors);
     }
     // After every unit, because what the runtime must define is the union of what the
     // modules reached — a whole-program fact, and the only one emission needs.
     out.push(Artefact {
         name: "runtime".to_owned(),
-        ir: nazm_lir::emit_runtime(needs),
+        code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_runtime(needs)),
         instance: false,
+        key: None,
+        reused: false,
     });
     out.push(Artefact {
         name: "entry".to_owned(),
-        ir: nazm_lir::emit_entry(&native.entry, native.entry_roots, needs),
+        code: nazm_lir::backend::Code::Llvm(nazm_lir::emit_entry(
+            &native.entry,
+            native.entry_roots,
+            needs,
+        )),
         instance: false,
+        key: None,
+        reused: false,
     });
-    out
+    Ok(out)
 }
 
 /// Explain a `clang` failure, keeping the IR when its complaint is about it.

@@ -87,7 +87,7 @@ impl Origin {
             Self::Argument => "the command line",
             Self::File => "the contents of a file",
             Self::Authority => "the runtime's root authority",
-            Self::Unknown => "shared storage the checker does not follow",
+            Self::Unknown => "shared storage or foreign code the checker does not follow",
         }
     }
 

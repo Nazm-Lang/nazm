@@ -192,14 +192,14 @@ pub(crate) fn analyse(
                                     source: EffectSource::Declared(g),
                                 }));
                             }
-                            // Imported and undeclared, or not found at all: every effect.
-                            _ => {
-                                direct.extend(EffectSet::all().iter().map(|effect| EffectReason {
-                                    effect,
-                                    at,
-                                    source: EffectSource::Undeclared(g),
-                                }))
-                            }
+                            // Imported and undeclared, or not found at all: every effect
+                            // the bridge covers, and `foreign` if it can be handed the
+                            // authority for it.
+                            _ => direct.extend(assumed(g, res).iter().map(|effect| EffectReason {
+                                effect,
+                                at,
+                                source: EffectSource::Undeclared(g),
+                            })),
                         },
                     }
                 }
@@ -265,7 +265,10 @@ pub(crate) fn analyse(
             continue;
         };
         why.sort_by_key(|r| r.effect.id());
-        if node.f.body.is_some() {
+        if node.f.foreign.is_some() {
+            // A foreign function's body is C: what it requires is its contract, `foreign`.
+            res.record_effects(node.id, EffectSet::of(Effect::Foreign), Vec::new());
+        } else if node.f.body.is_some() {
             res.record_effects(node.id, set, why.clone());
         }
     }
@@ -286,6 +289,83 @@ pub(crate) fn analyse(
             continue;
         }
         errors.push(undeclared(node, declared, decl, missing, why, res));
+    }
+    // A foreign call needs a `ForeignCap` held, in every function (N42): N37's bridge does not
+    // reach it.
+    for node in &nodes {
+        if node.f.body.is_none() {
+            continue;
+        }
+        let sites = res
+            .function(node.id)
+            .map(|d| d.call_sites.clone())
+            .unwrap_or_default();
+        for site in sites {
+            let Callee::Function(g) = site.callee else {
+                continue;
+            };
+            // This module's own declaration is read from the resolution; another module's is
+            // what its interface publishes, as its effect contract is — the importer does not
+            // read the declaration.
+            let foreign = match res.function(g) {
+                Some(d) if d.module == module => d.foreign.is_some(),
+                _ => deps
+                    .iter()
+                    .flat_map(|d| d.exports())
+                    .any(|e| e.def == g && e.foreign.is_some()),
+            };
+            if foreign && !site.held.contains(CapabilityKind::Foreign) {
+                errors.push(missing_authority(
+                    node,
+                    CapabilityKind::Foreign,
+                    site.span,
+                    Needs::Foreign { callee: g },
+                    res,
+                ));
+                break;
+            }
+        }
+    }
+}
+
+/// What a caller must assume of `g`, a function in another module that declares no effect
+/// set: every effect the bridge covers, and `foreign` too if one of its parameters can carry
+/// a `ForeignCap` — the only way it could reach C.
+pub fn assumed(g: FnId, res: &Resolution) -> EffectSet {
+    let receives = res.function(g).is_some_and(|d| {
+        d.params
+            .iter()
+            .any(|t| carries(*t, CapabilityKind::Foreign, res, 0))
+    });
+    if receives {
+        EffectSet::bridged().with(Effect::Foreign)
+    } else {
+        EffectSet::bridged()
+    }
+}
+
+/// Whether a value of `t` can carry a capability of this kind: it is one, or a record or enum
+/// field it holds is, transitively.
+fn carries(t: nazm_sema::Type, kind: CapabilityKind, res: &Resolution, depth: usize) -> bool {
+    if depth > nazm_sema::MAX_TYPE_DEPTH * 4 {
+        return true;
+    }
+    match t {
+        nazm_sema::Type::Cap(k) => k == kind,
+        nazm_sema::Type::Record(id) => res
+            .records()
+            .get(id)
+            .is_some_and(|r| r.fields.iter().any(|f| carries(f.ty, kind, res, depth + 1))),
+        nazm_sema::Type::Enum(id) => res.enums().get(id).is_some_and(|e| {
+            e.variants
+                .iter()
+                .any(|v| v.fields.iter().any(|f| carries(f.ty, kind, res, depth + 1)))
+        }),
+        nazm_sema::Type::Vec(v) => res
+            .types()
+            .vec_element(v)
+            .is_some_and(|e| carries(e, kind, res, depth + 1)),
+        _ => false,
     }
 }
 
@@ -384,6 +464,8 @@ enum Needs {
     /// A function with no declared effect set, which exercises its **caller's** authority —
     /// N37's compatibility bridge. The caller must hold what the callee's effects need.
     Ambient { callee: FnId, local: bool },
+    /// A foreign function (N42), which needs a `ForeignCap` wherever it is called.
+    Foreign { callee: FnId },
 }
 
 /// Check that a function with a declared effect set holds, at every call, the authority
@@ -436,7 +518,7 @@ fn authority(
                 } else {
                     match contract(g) {
                         Some(Some(_)) => None,
-                        _ => Some(EffectSet::all()),
+                        _ => Some(assumed(g, res)),
                     }
                 };
                 if let Some(effects) = effects {
@@ -478,7 +560,9 @@ fn missing_authority(
     let what = match why {
         Needs::Builtin(b) => format!("the built-in `{}`", b.name()),
         Needs::Spawn => "starting a task".to_owned(),
-        Needs::Ambient { callee, .. } => format!("calling {}", name_of(callee)),
+        Needs::Ambient { callee, .. } | Needs::Foreign { callee } => {
+            format!("calling {}", name_of(callee))
+        }
     };
     let mut d = Diagnostic::error(
         codes::MISSING_AUTHORITY,
@@ -492,6 +576,12 @@ fn missing_authority(
             kind.article()
         ),
         Needs::Spawn => format!("`spawn` is authorised by {} `{kind}`", kind.article()),
+        Needs::Foreign { callee } => format!(
+            "{} is a foreign function: calling C is authorised by {} `{kind}`, with or \
+             without an effect set",
+            name_of(callee),
+            kind.article()
+        ),
         Needs::Ambient {
             callee,
             local: true,

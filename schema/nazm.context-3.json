@@ -166,8 +166,8 @@
     },
     "effect_names": {
       "type": "array",
-      "items": { "enum": ["io", "spawn"] },
-      "description": "A set of effects, each once, in effect-id order: `io`, then `spawn`."
+      "items": { "enum": ["io", "spawn", "foreign"] },
+      "description": "A set of effects, each once, in effect-id order: `io`, then `spawn`, then `foreign` (N42)."
     },
     "effects": {
       "type": "object",
@@ -185,7 +185,7 @@
             "additionalProperties": false,
             "required": ["effect", "at", "source", "builtin", "callee"],
             "properties": {
-              "effect": { "enum": ["io", "spawn"] },
+              "effect": { "enum": ["io", "spawn", "foreign"] },
               "at": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/span" }] },
               "source": { "enum": ["builtin", "spawn", "inferred", "declared", "undeclared"], "description": "A built-in that exercises it; a `spawn`; a function of this module whose inferred set has it; a function whose declared set has it; or a function of another module that declares no set." },
               "builtin": { "type": ["string", "null"], "description": "The built-in's name, for `builtin`: compiler-owned, with no source." },

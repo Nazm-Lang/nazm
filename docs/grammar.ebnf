@@ -25,7 +25,7 @@
 (* @example struct Point { x: Int, } fn main() -> Int { Point(x: 1).x } *)
 (* @example enum State { Ready, } fn main() -> Int { match State.Ready() { State.Ready() => 0, } } *)
 (* @example fn identity[T](value: T) -> T { value } fn main() -> Int { identity(7) } *)
-program = { use_item } , { function | record | enumeration } ;
+program = { use_item } , { function | foreign_function | record | enumeration } ;
 
 (* @example use "lib/helpers.nz"; fn main() -> Int { 0 } *)
 use_item = "use" , STRING , ";" ;
@@ -37,6 +37,19 @@ use_item = "use" , STRING , ";" ;
 function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" ,
            "->" , type , [ effect_set ] , block ;
 
+(* A foreign function (N42): a C function this program calls, declared by its signature and
+ * its C symbol, with no body. `extern` is not a keyword — it is recognised only where a
+ * declaration starts, before a string — so it is an IDENT here, and the string before `fn`
+ * is the ABI, which must be `"C"`. Only `Int` and `Bool` cross; no type parameters and no
+ * written effect set: calling one is always the effect `foreign`, and needs a `ForeignCap`.
+ * `nazm run` refuses a program that calls one; `nazm build --link FILE` links it. See
+ * `docs/spec.md`, *Foreign functions*.
+ *)
+(* @example extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add"; fn main() -> Int { 0 } *)
+(* @example pub extern "C" fn is_even(n: Int) -> Bool = "c_is_even"; fn main() -> Int { 0 } *)
+foreign_function = [ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" ,
+                   "->" , type , "=" , STRING , ";" ;
+
 (* The effects a function declares it may exercise: after the return type, a `!` and a
  * set in braces. `! {}` is the empty set — the function is pure, and its body may call
  * nothing that is not. With no set written the checker infers one from the body, and
@@ -44,7 +57,7 @@ function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ paramet
  * `fn f() -> Int ! {}` are not the same: only the second promises purity. A declared set
  * says what a function does, not what allows it: its body holds only the authority of
  * the capability values in its scope (`IoCap`, `SpawnCap`). The names live in their
- * own namespace: `io` and `spawn` are the only effects, a name that is not one is refused,
+ * own namespace: `io`, `spawn` and `foreign` are the only effects, a name that is not one is refused,
  * and so is one written twice. Order means nothing. See `docs/spec.md`, *Effects*.
  *)
 (* @example fn show(io: IoCap, s: Str) -> Int ! { io } { print(s) } fn main(io: IoCap) -> Int { show(io, "hi") } *)

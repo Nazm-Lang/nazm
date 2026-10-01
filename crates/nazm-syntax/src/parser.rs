@@ -35,9 +35,9 @@ use nazm_diag::{codes, Diagnostic};
 use nazm_span::{FileId, Span};
 
 use crate::ast::{
-    Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, Function, HoleSite, Import,
-    Let, MatchArm, Param, PatternField, Place, PlaceField, Program, Record, Requirement, Return,
-    Scope, Spawn, Stmt, TypeName, TypeParam, Variant, While,
+    Assign, BinOp, Block, EffectDecl, Enum, Expr, Field, FieldInit, ForeignDecl, Function,
+    HoleSite, Import, Let, MatchArm, Param, PatternField, Place, PlaceField, Program, Record,
+    Requirement, Return, Scope, Spawn, Stmt, TypeName, TypeParam, Variant, While,
 };
 use crate::cst::{Checkpoint, Cst, Sink, SyntaxKind};
 use crate::lexer::{Lexeme, Token, TokenKind};
@@ -915,6 +915,24 @@ impl<'a> Parser<'a> {
             s
         });
 
+        // `extern "C"` (N42). `extern` is contextual: an identifier everywhere else, and a
+        // foreign declaration's first word only here, at the start of an item and before a
+        // string — where no other item can begin — so no program naming something `extern`
+        // changes meaning.
+        let mut foreign_abi: Option<(String, nazm_span::Span)> = None;
+        if matches!(self.peek(), TokenKind::Ident(w) if w == "extern")
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Str(_))
+            )
+        {
+            self.advance();
+            let abi_span = self.peek_span();
+            if let TokenKind::Str(abi) = self.advance() {
+                foreign_abi = Some((abi, abi_span));
+            }
+        }
+
         if let TokenKind::Ident(name) = self.peek().clone() {
             let at = self.peek_span();
             if self.reserved(&name, at) {
@@ -1004,6 +1022,47 @@ impl<'a> Parser<'a> {
         self.wrap(ret, SyntaxKind::RetType);
         let effects = self.effect_set()?;
 
+        // A foreign declaration ends where a body would begin: `= "symbol";`. The symbol is
+        // written, never derived from the name.
+        if let Some((abi, abi_span)) = foreign_abi {
+            self.expect(&TokenKind::Eq, "before a foreign function's symbol")?;
+            let symbol_span = self.peek_span();
+            let symbol = match self.advance() {
+                TokenKind::Str(sym) => sym,
+                other => {
+                    self.report(Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        symbol_span,
+                        format!(
+                            "expected the foreign function's symbol as a string, found {}",
+                            other.describe()
+                        ),
+                    ));
+                    return None;
+                }
+            };
+            let end = self.peek_span();
+            self.expect(&TokenKind::Semi, "after a foreign function's symbol")?;
+            self.wrap(at, SyntaxKind::FnItem);
+            return Some(Function {
+                name,
+                name_span,
+                pub_span,
+                type_params,
+                params,
+                return_type,
+                effects,
+                body: None,
+                foreign: Some(ForeignDecl {
+                    abi,
+                    abi_span,
+                    symbol,
+                    symbol_span,
+                }),
+                span: start.join(end),
+            });
+        }
+
         // Deliberately not `?`. A parse error inside the body would otherwise drop the
         // whole declaration, and every call to it would then report that the function
         // does not exist — several errors for one mistake, which is the failure mode this
@@ -1035,6 +1094,7 @@ impl<'a> Parser<'a> {
             return_type,
             effects,
             body,
+            foreign: None,
             span: start.join(span),
         })
     }

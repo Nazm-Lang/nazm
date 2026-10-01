@@ -444,6 +444,26 @@ pub(crate) fn solve(
         }
     }
 
+    // A foreign function (N42) has no body to reduce: its result is C's, which may be anything
+    // — `Unknown`, the worst origin — and may be derived from any argument, so each argument's
+    // origins pass through to it. What C does with an argument is not a Nazm sink: it is
+    // authorised by the `ForeignCap` the call needed, and outside what a restriction can see.
+    for (i, def) in res.functions().iter().enumerate() {
+        if def.foreign.is_none() {
+            continue;
+        }
+        if let Some(s) = program.summaries.get_mut(i) {
+            *s = Summary {
+                origins: OriginSet::of(Origin::Unknown),
+                params: (0..def.params.len())
+                    .map(|p| u32::try_from(p).unwrap_or(u32::MAX))
+                    .collect(),
+                reaches: Vec::new(),
+                receives: vec![OriginSet::default(); def.params.len()],
+            };
+        }
+    }
+
     // Who calls whom, by index into `facts`: a changed summary re-queues its callers only.
     let mut callers: Vec<Vec<usize>> = vec![Vec::new(); program.facts.len()];
     for (k, f) in program.facts.iter().enumerate() {
@@ -630,8 +650,8 @@ pub(crate) fn solve(
 
 const HELP: &str = "in a function that declares its effects, the path a program writes to may \
     come from the command line or be computed in the program, but not from the contents of a \
-    file, nor from a sequence or channel the checker does not follow. v1 has no way to vouch \
-    for such a value";
+    file, nor from a sequence or channel the checker does not follow, nor from what a foreign \
+    (C) function returns. v1 has no way to vouch for such a value";
 
 fn name(res: &Resolution, g: FnId) -> String {
     res.function(g)
@@ -721,10 +741,15 @@ fn witness(
             continue;
         };
         if s.origins.contains(o) {
-            labels.push((
-                c.at,
-                format!("{} returns data from {}", name(res, c.callee), o.describe()),
-            ));
+            let said = if res.function(c.callee).is_some_and(|d| d.foreign.is_some()) {
+                format!(
+                    "{} is a foreign function, and what C returns is not followed",
+                    name(res, c.callee)
+                )
+            } else {
+                format!("{} returns data from {}", name(res, c.callee), o.describe())
+            };
+            labels.push((c.at, said));
             if let Some(g) = p.facts_of(c.callee) {
                 witness(p, res, g, &g.result, o, labels, depth + 1);
             }
