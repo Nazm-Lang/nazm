@@ -3024,6 +3024,24 @@ fn main(io: IoCap) -> Int ! { io } {
 | **Values of undeclared functions** | Making one needs, where it is made, the capabilities its type's effects need, as calling the function would (`N0369`) |
 | **Not here** | Two effect parameters, effect subtyping, attenuated capabilities, revocation — see `architecture.md` §7.53 |
 
+### Declassification — N52
+<!-- id: declassification -->
+
+```nazm
+fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
+    let secret = read_file("token.txt");
+    let shown = str_vouch(str_slice(secret, 0, 4));
+    print(shown)
+}
+```
+
+| | |
+| --- | --- |
+| **`str_vouch(s: Str) -> Str`** | Its argument, with no origin. Needs a `VouchCap` held where it is written, in every function (`N0369` otherwise) |
+| **`VouchCap`** | A capability kind, minted only for `main`'s parameters; no effect is authorised by it |
+| **Evidence** | Every vouch is recorded with the origins it cleared; `nazm explain-flow` prints them beside every sink |
+| **Policy** | The language refuses one flow (`N0372`); profiles refuse more: `cyber`'s `contents-stay-in-files`, `critical`'s `no-declassification` |
+
 ### Not in v0.3, and unsupported rather than half-present
 <!-- id: not-in-v0-3 -->
 

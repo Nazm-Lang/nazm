@@ -5651,6 +5651,70 @@ to `io`, through the wrapper, not around it. **Profiles** read the effect set `m
 which now includes what a bound parameter contributes, so `embedded`'s `no-io` refuses a program
 whose only `io` is a closure handed to `vec_map`.
 
+## 7.54 Resource facts and information flow v2 — N52, 2026-10-02
+
+Written before the code. Two gaps, one each side of the language. The capability matrix lists
+allocation as untracked: a reader, an agent or a profile cannot ask where a function allocates,
+retains, blocks or starts a task. And provenance has one source rule and one sink — a path
+`write_file` writes to — so a program that echoes a file's contents to standard output is
+invisible to every policy, and a program that has checked a value has no way to say so.
+
+**Resource facts are read off MIR**, where every operation that allocates, retains, blocks, talks
+to a channel, calls C or starts a task is already an explicit statement — no layer below has to
+rediscover them and none above can see them. The classes, each from its MIR form:
+
+| class | MIR |
+| --- | --- |
+| `allocation` | a built-in that makes storage (`ints_new`, `strs_new`, `vec_new`, `chan_new`, `str_concat`, `int_to_str`, `str_from_byte`, `str_join`, `read_file`, `arg`), a closure object (`Rvalue::Closure`), and a push that may grow its sequence |
+| `retain` | a copy of a managed value (`Rvalue::Copy`, a field or payload read, a capture) |
+| `block` | `chan_send` and `chan_recv` on a bounded channel, and a `scope`'s join |
+| `channel` | every channel operation |
+| `foreign` | a call to a foreign function |
+| `task` | a `spawn` |
+
+Each site carries a **count per call of its function**: `at-most-once` when its block is in no
+cycle of the function's control-flow graph, and `unknown` when it is — inside a loop the count
+depends on values the compiler does not know. `unknown` is a value of its own and is never
+written as a number; there is no "zero" in the vocabulary, because a site that exists may run. A
+count is per call: what a caller's loop makes of it is the caller's site. Nothing here is a
+measurement, and nothing claims an upper bound on bytes. `nazm explain-cost` prints the sites,
+by function, for a reader and as `nazm.cost/1` for a tool.
+
+**A profile reads them.** `embedded` gains `bounded-allocation`: no allocation site whose count is
+`unknown`, so an accepted embedded program allocates a number of times bounded by its call
+structure (recursion is already a cycle the rule sees through its calls' sites; an indirect call
+is reported as such).
+
+**Provenance v2: a registry of sinks.** A sink is an argument of a built-in that takes data out of
+the program, by class: `path` (the path `write_file` writes to, N38's), `output` (what `print`
+and `eprint` write) and `file-data` (what `write_file` writes). The sources are N38's four origins.
+Every sink is reduced to flows and solved through summaries exactly as the path sink is — through
+helpers, higher-order calls (N50's conservative indirect-call rule) and modules — and every solved
+sink is recorded with its origins. The language's own restriction is unchanged: `N0372` for a
+restricted origin at a `path` sink in a declared function. What other classes may receive is
+**profile policy**: `cyber` gains `contents-stay-in-files`, refusing a file's contents (or an unknown
+origin) at an `output` sink. **Containers** stay conservative, and say so: a value read out of a
+sequence or a channel is `unknown`, the whole container standing for every element, because a
+local analysis cannot see every alias that wrote to it.
+
+**Declassification is authority, not a name.** `str_vouch(s: Str) -> Str` returns its argument with
+no origin. It needs a `VouchCap` held where it is written — in every function, declared or not, as a
+foreign call does — and `VouchCap` is a new capability kind, minted only for `main`'s parameters like
+every other. Nothing is inferred from a function's name, and nothing else clears an origin. Each
+vouch is recorded with the origins it cleared, which `nazm explain-flow` (`nazm.flow/1`) prints
+beside every sink, so the evidence is machine-readable; `critical` gains `no-declassification`,
+refusing any vouch at all.
+
+**Bounded and deterministic.** The provenance fixed point is over finite lattices (origins ×
+parameters) and its worklists re-queue callers only on growth; a stress test holds a 2,000-function
+call chain to a deadline and to identical output on two runs. Resource facts are one pass over each
+MIR function's blocks.
+
+**Versions.** The semantic epoch moves: `str_vouch` and `VouchCap` are new names a program may use,
+and a program that declared a type or function of either name moves from accepted to refused. The
+check artefact's sink facts gain a class; an entry from an older checker is unreachable by the epoch.
+`nazm.cost/1` and `nazm.flow/1` are new schemas.
+
 ## 8. Toolchain, and one real incompatibility
 
 Availability is not compatibility. Declared MSRVs checked 2026-09-19:
