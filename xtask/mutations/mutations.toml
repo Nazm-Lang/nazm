@@ -10182,7 +10182,7 @@ find = """
                 self.retain(arg(1), t);"""
 replace = """
                 // The channel's own reference, taken before the copy goes in."""
-killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_value_still_queued_when_the_channel_goes_is_released_once" }]
+killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_queued_string_outlives_the_binding_it_was_sent_from" }]
 
 [[mutation]]
 name = "n53-the-llvm-refused-send-keeps-its-reference"
@@ -10239,7 +10239,7 @@ find = """
 replace = """
             let elem = read_type(chan, ids, types, owner);
             types.vec_of(elem)"""
-killers = [{ package = "nazm-cli", test = "generic_channels", name = "a_channel_type_crosses_a_module_boundary_and_its_interface" }]
+killers = [{ package = "nazm-iface", test = "persistence", name = "a_channel_type_is_published_and_read_back_as_the_same_type" }]
 
 [[mutation]]
 name = "n53-a-typed-send-is-not-a-channel-site"

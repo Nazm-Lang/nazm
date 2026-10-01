@@ -255,6 +255,36 @@ fn main() -> Int {
 }
 
 #[test]
+fn a_queued_string_outlives_the_binding_it_was_sent_from() {
+    // The channel holds its own reference: the sender's binding goes at the end of `put`,
+    // the freed-size allocations after it would reuse a string the channel did not hold,
+    // and the value received must still be the one sent.
+    agrees(
+        r#"
+fn put(c: Chan[Str]) -> Bool {
+    let s = str_concat("ab", "cd");
+    chan_send_of(c, s)
+}
+
+fn main() -> Int {
+    let c = chan_new_of[Str](1);
+    put(c);
+    let junk = vec_new[Str]();
+    let mut i = 0;
+    while i < 64 {
+        vec_push(junk, str_concat("zz", "zz"));
+        i = i + 1;
+    }
+    let got = vec_new[Str]();
+    if chan_recv_of(c, got) { print(vec_pop(got)); }
+    0
+}
+"#,
+        "abcd0",
+    );
+}
+
+#[test]
 fn a_send_after_close_is_refused_and_its_value_released() {
     agrees(
         r#"
@@ -389,4 +419,8 @@ fn a_typed_channel_carries_only_its_element() {
             .is_empty()
     );
     assert!(!codes("fn f(c: Chan[Int, Int]) -> Int { 0 }\nfn main() -> Int { 0 }\n").is_empty());
+    // A vector of the element is not a channel of it, to a generic built-in either.
+    assert!(
+        !codes("fn main() -> Int { let v = vec_new[Int](); chan_send_of(v, 1); 0 }\n").is_empty()
+    );
 }
