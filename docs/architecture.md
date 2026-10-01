@@ -5397,7 +5397,7 @@ reading it the old way.
 **Logical operators — the parser's and the checker's, lowered away in Core IR.** `!e` (prefix,
 beside unary `-`), `a && b` and `a || b`; `||` binds loosest, then `&&`, then the comparisons —
 `a == b && c < d || e` is `((a == b) && (c < d)) || e`. Every operand is `Bool` and so is the
-result (`N0301` otherwise, as for any operator). `&&` and `||` are left-associative and
+result (`N0304` otherwise, as for any operator). `&&` and `||` are left-associative and
 **short-circuit**: the right operand is evaluated only when the left does not decide the result,
 so its effects, its failures and its non-termination happen only then. Core IR lowers them away
 — `a && b` to `if a { b } else { false }`, `a || b` to `if a { true } else { b }`, `!e` to
