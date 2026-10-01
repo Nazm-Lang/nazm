@@ -3113,7 +3113,7 @@ replace = """    fn push(&mut self, kind: StatementKind, at: Span) {
         if let Some(b) = self.cur.or(Some(BlockId(0))) {"""
 
 # --- N12.1: a block used as a value, in the compiler written in Nazm -----------------------
-killers = [{ package = "nazm-cli", test = "value_blocks", name = "a_match_whose_arms_all_leave_produces_no_value" }]
+killers = [{ package = "nazm-cli", test = "memory", name = "an_explicit_return_of_a_sequence_transfers_it" }]
 
 [[mutation]]
 name = "selfhost-a-block-operand-is-not-parsed"
