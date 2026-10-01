@@ -26,7 +26,8 @@
 //! the architectural view.
 
 pub mod backend;
-pub mod emit;
+mod debug;
+mod emit;
 pub mod ir;
 pub mod lower;
 pub mod names;

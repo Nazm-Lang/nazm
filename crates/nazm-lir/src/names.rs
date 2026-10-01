@@ -69,6 +69,24 @@ impl<'a> SourceNames<'a> {
         Self { map, logical }
     }
 
+    /// Where `span` is, as (file index, line, column), both counted from 1 — or `None` for a
+    /// synthetic span, which has no place in any file (N48).
+    #[must_use]
+    pub fn position(&self, span: Span) -> Option<(u32, u32, u32)> {
+        if span == Span::synthetic() {
+            return None;
+        }
+        let at = self.map.line_col(span);
+        Some((u32::try_from(span.file.index()).ok()?, at.line, at.column))
+    }
+
+    /// The name a debugger shows for the file at `index`: the loader's, which is the path
+    /// the source can be found at.
+    #[must_use]
+    pub fn debug_file(&self, index: u32) -> String {
+        self.map.name(FileId::from_index(index as usize)).to_owned()
+    }
+
     /// A source map alone, for a caller that has no graph: every name is the loader's.
     ///
     /// Used by the tests that emit one unit directly. A compilation always has a graph.

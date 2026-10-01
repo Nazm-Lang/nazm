@@ -166,6 +166,24 @@ impl Backend {
             .args(objects))
     }
 
+    /// Gather a macOS executable's debug information into a `.dSYM` bundle (N48), with the
+    /// `dsymutil` beside the toolchain; the bundle is what a debugger reads once the objects
+    /// the executable was linked from are gone.
+    pub(crate) fn gather_debug_info(&self, exe: &Path, dsym: &Path) -> Result<(), String> {
+        let mut c = Command::new("dsymutil");
+        c.env_clear();
+        for name in PASSED {
+            if let Some(value) = std::env::var_os(name) {
+                c.env(name, value);
+            }
+        }
+        match c.arg(exe).arg("-o").arg(dsym).output() {
+            Ok(o) if o.status.success() => Ok(()),
+            Ok(o) => Err(String::from_utf8_lossy(&o.stderr).into_owned()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
     /// The driver, with an environment built from nothing.
     fn command(&self) -> Command {
         let mut c = Command::new(DRIVER);

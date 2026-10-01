@@ -186,6 +186,8 @@ struct Failure {
 
 struct Emitter<'a> {
     out: String,
+    /// Whether to write the source-position markers `crate::debug` turns into DWARF (N48).
+    debug: bool,
     /// Next SSA value number. LLVM requires unnamed values to be numbered consecutively
     /// within a function.
     next: u32,
@@ -296,6 +298,16 @@ const fn arith(op: mir::ArithOp) -> ArithOp {
 }
 
 impl Emitter<'_> {
+    /// The marker `crate::debug` reads: where the instructions that follow come from (N48).
+    /// Only in a debug build, and only for a position the program has.
+    fn mark_position(&mut self, at: nazm_span::Span) {
+        if !self.debug {
+            return;
+        }
+        if let Some((file, line, column)) = self.names.position(at) {
+            let _ = writeln!(self.out, "  ; nz.loc {file} {line} {column}");
+        }
+    }
     fn fresh(&mut self) -> u32 {
         let n = self.next;
         self.next += 1;
@@ -3064,8 +3076,21 @@ pub(crate) fn preamble(out: &mut String, source: &str) {
 /// Emit one unit: its type definitions, its external declarations, its functions' bodies from
 /// MIR, their helpers and trampolines, and the constants they interned.
 pub fn emit_unit(native: &Native, unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
+    emit_unit_with(native, unit, names, false)
+}
+
+/// [`emit_unit`], with debug information when `debug` is set (N48): the same instructions, a
+/// source position on each, and a subprogram for each function.
+#[must_use]
+pub(crate) fn emit_unit_with(
+    native: &Native,
+    unit: &Unit,
+    names: &SourceNames<'_>,
+    debug: bool,
+) -> (String, Needs) {
     let mut e = Emitter {
         out: String::new(),
+        debug,
         next: 0,
         next_label: 0,
         current: "entry".to_owned(),
@@ -3191,7 +3216,14 @@ pub fn emit_unit(native: &Native, unit: &Unit, names: &SourceNames<'_>) -> (Stri
 
     // Helpers before the trampolines, and both after the bodies: order in a module is not
     // meaningful to LLVM, and a fixed one is what makes two builds produce one text.
-    (head + &e.out + &e.helpers + &e.tasks, e.needs())
+    let text = head + &e.out + &e.helpers + &e.tasks;
+    if debug {
+        return (
+            crate::debug::attach(&text, &|i| names.debug_file(i)),
+            e.needs(),
+        );
+    }
+    (text, e.needs())
 }
 
 /// The `Str` literals and failure messages one unit interned.
@@ -3252,6 +3284,12 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
         f.name
     );
     let _ = writeln!(e.out, "entry:");
+    if e.debug {
+        if let Some((file, line, _)) = e.names.position(f.span) {
+            let _ = writeln!(e.out, "  ; nz.fn {file} {line}");
+            let _ = writeln!(e.out, "  ; nz.loc {file} {line} 1");
+        }
+    }
     for (i, local) in f.locals.iter().enumerate() {
         let l = mir::LocalId(u32::try_from(i).unwrap_or(u32::MAX));
         let ty = e.slot_llvm(l);
@@ -3285,8 +3323,10 @@ fn emit_function(e: &mut Emitter<'_>, f: &mir::Function, sig: &Sig) {
     for (i, b) in f.blocks.iter().enumerate() {
         e.open(&label(mir::BlockId(u32::try_from(i).unwrap_or(u32::MAX))));
         for s in &b.stmts {
+            e.mark_position(s.at);
             e.statement(s);
         }
+        e.mark_position(b.term_at);
         e.terminator(&b.term, sig.ret);
     }
     let _ = writeln!(e.out, "}}");
