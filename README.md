@@ -253,6 +253,9 @@ Stated up front, because these are easy to blur:
 | Capabilities (static, N37) | Isolation at runtime. Nothing sandboxes the process, and a function with no declared effects still uses its caller's authority |
 | Provenance (static, N38) | Non-interference or confidentiality. Only explicit data flow is tracked, one sink is restricted, and containers are coarse |
 | Definition-hash equality | All behaviour-preserving rewrites. Only one class: normalised-Core alpha-equivalence |
+| Foreign functions (N42) | Anything about the C side. Only `Int` and `Bool` cross and authority is required, but a C function can corrupt memory, block or never return |
+| Restriction profiles (N47) | Certification, sandboxing or a security property beyond the rule. Each rule refuses a stated fact and nothing else |
+| Reproducible builds (N46) | Identity across hosts, operating systems or toolchain versions. Two builds on one host are byte-identical |
 | Passing the test suite | Correctness |
 | Reproducible bootstrap | Compiler trustworthiness |
 | Differential testing | Absence of bugs shared by all implementations |
@@ -290,12 +293,14 @@ business raising the floor for the crates that ship.
 | --- | --- |
 | `nazm run FILE` | Check and evaluate, printing the value of `main` |
 | `nazm check FILE` | Check without evaluating. Reuses the result of checking a module whose source and dependencies' interfaces are unchanged; `--no-cache` checks everything, `--cache-report` says what it did, `--summary-json` prints one compact `nazm.command-summary/1` — status, exit status and a reference to each diagnostic, no prose |
-| `nazm build FILE` | Compile to a native executable. Each module becomes its own object, and an object whose exact LLVM input, backend and codegen configuration were compiled before is reused instead; `--no-cache` compiles everything, `--build-report` says what it did, `--summary-json` prints one `nazm.command-summary/1` with the artifact written. The link runs every time |
+| `nazm build FILE` | Compile to a native executable. Each module becomes its own object, and an object whose exact LLVM input, backend and codegen configuration were compiled before is reused instead; `--no-cache` compiles everything, `--build-report` says what it did, `--summary-json` prints one `nazm.command-summary/1` with the artifact written. The link runs every time. `--backend llvm\|cranelift` picks the code generator (N41), `--target` must be the host, `--link FILE` adds C objects (N42), `--locked` and a package directory build a package against its lockfile (N46), `--profile NAME` holds it to a restriction profile (N47), `--debug` writes DWARF and `--timings` reports each phase (N48) |
 | `nazm test PATH…` | Run every `NAME.nz` with a `NAME.expected` beside it, interpreted **and** compiled. `--summary-json` prints one `nazm.test-summary/1`: counts, and only the cases that did not pass, with how each leg ended |
 | `nazm fmt FILE…` | Lay files out canonically. `--check` writes nothing and fails if any would change |
 | `nazm fix FILE` | Apply the repairs the compiler already knows about. Nothing is written without `--apply`, and only fixes marked `automatic` are ever applied |
 | `nazm capabilities` | What this build supports, read from the compiler's own tables |
 | `nazm core-ir FILE` | What a checked program became — its Core IR, `nazm.core-ir/1`: typed, every name an identity, every transfer explicit. A debugging view of what `nazm run` and `nazm build` both start from; `--no-spans`, `--json` |
+| `nazm inspect FILE` | One program's facts as `nazm.inspect/1`, one deterministic line: the toolchain's identities, the package and its lock, and per definition its identity, types, effects, capabilities, provenance, Core IR and MIR digests (N48); `--def NAME` for one |
+| `nazm lock DIR` | Resolve the package in `DIR` (its `nazm.toml`) and write `nazm.lock`, `nazm.lock/1`: every package's exact version, source and BLAKE3 digest, in name order, rewritten only when its bytes change. `nazm check`, `build` and `run` take a package's directory, and `--locked` holds them to its lockfile (N46) |
 | `nazm mir FILE` | What `nazm build` lowers a checked program to — its MIR, `nazm.mir/1`: each concrete function (generic instances included) as basic blocks with every copy, move, drop, scope join and failure edge written out, after the validator accepted it. A debugging view; `--spans`, `--json` |
 | `nazm interface FILE` | Write what that module offers, durably — `nazm.interface/1`, or its fingerprint with `--hash`. Not a cache: it reuses nothing |
 | `nazm context --root FILE --file FILE --byte N` | One definition's semantic context packet, `nazm.context/1`: the exact source of the function, record or enum declared or used at that byte, and compact links to what it uses, what uses it, what it calls and what calls it — in the root's compilation, read from disk. `--json` prints the canonical compact form |

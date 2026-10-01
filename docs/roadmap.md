@@ -370,6 +370,64 @@ compilers, and the `-1` sentinel became an `Option`. Derived equality is what is
 | Copy elision, specified | records ✓, variants ✓, generics ✓ | unchanged |
 | A lossless CST | nothing above | unchanged; still independent |
 
+### After N48: the v1 foundation, and what is deliberately after it
+
+N40–N48 complete the v1 foundation; `docs/limitations.md` is the one list of what it does not do.
+What follows is **not started** and is bounded here so it is not mistaken for v1 scope:
+
+| Post-v1 work | Depends on | Why not in v1 |
+| --- | --- | --- |
+| Function values, closures, traits | a calling convention for captures | changes the language; every layer below would move |
+| Effect polymorphism, attenuation and revocation of capabilities | function values; a capability with a type argument | the coarse kinds are what N37 settled |
+| Richer information flow: more sinks, declassification | N38's framework | one sink was enough to make the framework real |
+| More targets and cross-compilation | a foreign linker and runtime per target | the host is the only verified one |
+| A suspendable-task scheduler (M:N) | stack switching or compiled continuations | a worker pool would deadlock blocking programs (§7.46) |
+| A JIT, SIMD, GPU/HPC | a reason; area 21 | none proposed |
+| Pointers, strings and structs across the FFI | a layout promise and a borrowed-string type | scalars were enough to make the boundary real |
+| Debug variables, a live-debugger workflow, Cranelift DWARF | `DILocalVariable` from MIR locals | function and statement positions were the declared scope |
+| A package registry and version ranges | a resolver that chooses | exact path dependencies choose nothing |
+| Formal methods | a semantics to state them against | area 19's acceptance is an assessment, not a test count |
+
+### N48 — Inspector, debug information, timings, and the v1 release audit — **complete, 2026-10-01**
+
+`architecture.md` §7.50 first. `nazm inspect` prints `nazm.inspect/1`; `nazm build --debug` writes
+DWARF through the LLVM backend, verified statically with lldb; `nazm build --timings` prints
+`nazm.timings/1`. The release audit added `docs/limitations.md`, release-candidate notes and the
+human release procedure in `docs/releases/`, and this section.
+
+### N47 — Restriction profiles — **complete, 2026-10-01**
+
+`architecture.md` §7.49. `general`, `embedded`, `critical` and `cyber`: rules with stable ids over
+the checker's facts, `N0510`/`N0511`, and `nazm.profile-report/1`. A profile only refuses.
+
+### N46 — Packages, locking and reproducible builds — **complete, 2026-10-01**
+
+`architecture.md` §7.48. `nazm.toml`, `use "NAME:path"`, `nazm lock`, `--locked`, `N0500`–`N0509`,
+and byte-identical executables from two directories.
+
+### N45 — The standard library — **complete, 2026-10-01**
+
+`architecture.md` §7.47. Seven `@std/…` modules of Nazm source, every function's contract declared.
+
+### N44 — Structured concurrency and the scheduler — **complete, 2026-10-01**
+
+`architecture.md` §7.46. The OS as scheduler, stated and stress-tested; no cancellation, by
+decision.
+
+### N43 — The runtime constitution — **complete, 2026-10-01**
+
+`architecture.md` §7.45. One typed inventory of the runtime, an OS adapter, runtime ABI revision 2
+in every object key, and the runtime tested directly.
+
+### N42 — The ABI and foreign functions — **complete, 2026-10-01**
+
+`architecture.md` §7.44. `extern "C"` declarations of `Int` and `Bool`, the effect `foreign` and
+`ForeignCap`, `--link`, `nazm.interface/7`, semantic epoch 11.
+
+### N41 — The backend boundary and the Cranelift backend — **complete, 2026-10-01**
+
+`architecture.md` §7.43. A `Backend` trait, a typed runtime registry, and Cranelift 0.136.1
+compiling every MIR function, identical to LLVM on all 104 buildable programs.
 ### N40 — MIR, the one lowering for the native backend — **complete, 2026-10-01**
 
 `architecture.md` §7.42 was written first. `nazm-mir` holds MIR: each concrete function — every
@@ -518,7 +576,7 @@ N36's wording was corrected so that `fn f() -> Int` and `fn f() -> Int ! {}` can
 | capability kinds, sets and the built-in table | `crates/nazm-sema/src/capability.rs`, `types.rs` |
 | possession, forging, `main`'s parameters | `crates/nazm-core/src/check.rs` |
 | the authority check and its witness | `crates/nazm-core/src/effects.rs` |
-| the root at runtime | `crates/nazm-core/src/eval.rs`, `crates/nazm-lir/src/emit.rs` |
+| the root at runtime | `crates/nazm-core/src/eval.rs`, `crates/nazm-lir/src/runtime/entry.rs` |
 | the law | `spec.md` *Capabilities: what allows a function to act*, `architecture.md` §7.39 |
 
 Mutation evidence, under the new responsibility law: twenty new mutations and one retired; 33

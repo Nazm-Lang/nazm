@@ -1065,6 +1065,56 @@ would need a propagation protocol, and traits do not exist.
 **`main` is unchanged.** It returns `Int`, so a program handles its errors itself with a
 `match` and decides what they mean; nothing maps an `Err` to an exit status.
 
+### The standard library — `use "@std/…"`
+<!-- id: std -->
+
+A **standard module** is a toolchain-owned Nazm module a program imports by name. There are seven,
+each ordinary source checked like any module, and none is visible unless a module writes its `use`:
+
+```nazm
+use "@std/text";
+use "@std/io";
+
+fn main(io: IoCap) -> Int ! { io } {
+    let words = text_split("alpha,beta,,gamma", ",");
+    io_println(io, int_to_str(strs_len(words)));
+    match text_parse_int(text_trim("  42 ")) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0,
+    }
+}
+```
+
+**Resolution.** An import path beginning with `@std/` names a module the toolchain provides and
+is never looked for on disk: `@std/NAME` is the standard module `NAME`, and any other `@std/` path
+is `N0205`. Every other path, including one beginning with another `@`, is relative to the
+importing file as before. A standard module's durable identity is `@std/NAME`, which no project file can have. Its
+exported functions enter the importer's namespace like any module's, so each is named after its
+module — `text_split`, not `split` — and a program may not define a function of the same name in a
+module that imports it (`N0208`).
+
+**Contracts.** Every standard function declares its effect set. The pure ones are `! {}`; the ones
+that reach the outside world take the `IoCap` they need and declare `! { io }`, so a caller's
+authority is as visible as with the built-ins. What they read carries the built-ins' origins:
+`io_read`'s result is `file`.
+
+**Errors.** Ordinary failure is a value: `Err` or `None`, never a trap. A standard function fails
+only where a built-in it calls would — `ints_sum` overflows as `+` does, and `io_read` of a file
+that exists but cannot be read is `N0407`.
+
+| Module | Functions |
+| --- | --- |
+| `@std/text` | `text_starts_with(s, prefix) -> Bool`, `text_ends_with(s, suffix) -> Bool`, `text_find(s, needle) -> Option[Int]`, `text_contains(s, needle) -> Bool`, `text_repeat(s, n) -> Str`, `text_split(s, sep) -> Strs`, `text_is_space(byte) -> Bool`, `text_trim(s) -> Str`, `text_parse_int(s) -> Result[Int, Str]` |
+| `@std/option` | `option_is_some[T](o) -> Bool`, `option_is_none[T](o) -> Bool`, `option_unwrap_or[T](o, fallback) -> T` |
+| `@std/result` | `result_is_ok[T, E](r) -> Bool`, `result_is_err[T, E](r) -> Bool`, `result_unwrap_or[T, E](r, fallback) -> T`, `result_ok[T, E](r) -> Option[T]`, `result_err[T, E](r) -> Option[E]` |
+| `@std/seq` | `ints_index_of(xs, x) -> Option[Int]`, `ints_contains(xs, x) -> Bool`, `ints_sum(xs) -> Int`, `ints_max(xs) -> Option[Int]`, `ints_min(xs) -> Option[Int]`, `strs_index_of(xs, x) -> Option[Int]`, `strs_contains(xs, x) -> Bool`, `vec_index_of[T: Equality](xs, x) -> Option[Int]` |
+| `@std/io` | `io_println(io, s) -> Int`, `io_eprintln(io, s) -> Int`, `io_read(io, path) -> Result[Str, Str]` — each `! { io }` |
+| `@std/process` | `process_args(io) -> Strs` — `! { io }` |
+| `@std/chan` | `chan_take(c) -> Option[Int]`: the next value, or `None` once closed and drained |
+
+**Stability.** Pre-1.0. A standard module may change between milestones; its interface hash says
+when, and no semantic epoch moves for it.
+
 ### Equality is derived — `==` on the value types that can have it
 <!-- id: equality -->
 
@@ -2006,6 +2056,68 @@ compilation were a duplicate definition, so imported files had to rename theirs.
 `main` need not be `pub`. Being the entry point is not the same as being importable, and
 requiring the keyword would suggest the runtime resolves it by name from outside.
 
+### Packages — `nazm.toml`, `use "NAME:path"` and `nazm.lock`
+<!-- id: packages -->
+
+A **package** is a directory holding a manifest, `nazm.toml` (`nazm.package/1`): its name, its
+exact version, its source root (`src` unless it says otherwise), an optional entry module, and
+its dependencies — each a path and the exact version that package must state.
+
+```toml
+schema = "nazm.package/1"
+
+[package]
+name = "app"
+version = "0.1.0"
+main = "main.nz"
+
+[dependencies]
+geo = { path = "../geo", version = "1.2.0" }
+```
+
+`use "geo:lib.nz";` imports the module `lib.nz` of the package `app` declares as `geo`, resolved
+against `geo`'s source root. A package sees its own dependencies and nothing else — not its
+dependencies' dependencies (`N0508`) — and a relative import stays inside its package's source
+root. A dependency's module is identified as `NAME@VERSION/path` (`geo@1.2.0/lib.nz`), which no
+project path can be.
+
+`nazm check|build|run DIR` builds the package in `DIR` from its `main` (`N0509` without one).
+Resolution is exact and deterministic: packages are read in name order; a declared version its
+manifest does not state is `N0502`, two packages of one name `N0503`, a cycle `N0504`, a missing
+dependency `N0501`, an invalid manifest — an unknown key included — `N0500`. Every source is a
+path, so nothing is ever downloaded.
+
+`nazm lock DIR` writes `nazm.lock` (`nazm.lock/1`): each package's name, version, source relative
+to the root package, and a BLAKE3 digest of its manifest and sources, in name order — the same
+bytes for the same packages anywhere. `--locked` holds `check`, `build` or `run` to it before
+anything is compiled: no lockfile is `N0505`, other packages than it records `N0506`, and a package
+whose bytes changed since it was locked `N0507`.
+
+**Reproducible builds.** The same sources, lockfile, toolchain, target, backend and settings give
+byte-identical executables on one host, from empty caches, in any directory.
+
+### Restriction profiles — `--profile`
+<!-- id: profiles -->
+
+A **profile** refuses some programs and changes nothing about the ones it accepts. It is chosen
+with `--profile NAME` on `check`, `build` and `run`, or required by a package's manifest
+(`profile = "NAME"` under `[package]`); every profile in force applies to the whole program.
+
+| Profile | Rules |
+| --- | --- |
+| `general` | none |
+| `embedded` | `no-io`, `no-spawn` |
+| `critical` | `declared-effects`, `no-spawn`, `no-foreign`, `locked-build` |
+| `cyber` | `declared-effects`, `no-foreign`, `locked-build` |
+
+`no-io`, `no-spawn` and `no-foreign` refuse a program whose `main` requires that effect, through
+any call, standard functions included. `declared-effects` refuses any function of the program that
+writes no `! { … }`, so no function exercises its caller's authority. `locked-build` refuses a
+build that is not a package build whose lockfile verifies. A refusal is `N0510`, naming the profile,
+the rule and where it comes from; an unknown profile is `N0511`. `nazm check --profile-report`
+prints `nazm.profile-report/1`. A profile is compiler-enforced evidence about these rules and
+nothing more: not a certification, not a sandbox.
+
 ### Durable identity: what makes this the same module, or the same definition
 <!-- id: durable-identity -->
 
@@ -2465,16 +2577,17 @@ fn main(io: IoCap) -> Int ! { io } {
 
 #### The capabilities
 
-There are exactly two, and they are the compiler's. There are **no user-defined
+There are exactly three, and they are the compiler's. There are **no user-defined
 capabilities**.
 
 | Kind | Type | Authorises | Effect it authorises |
 | --- | --- | --- | --- |
 | `Io` | `IoCap` | the eight outside-world built-ins — `args_count`, `arg`, `read_file`, `write_file`, `file_exists`, `print`, `eprint`, `exit_with` | `io` |
 | `Spawn` | `SpawnCap` | a `spawn` statement: starting a task | `spawn` |
+| `Foreign` | `ForeignCap` | a call to a foreign function: running C (N42) | `foreign` |
 
-A kind is identified by the compiler, never by how its type is spelled. `IoCap` and
-`SpawnCap` are **built-in type names**, like `Chan`: they mean the same in every module, and a
+A kind is identified by the compiler, never by how its type is spelled. `IoCap`,
+`SpawnCap` and `ForeignCap` are **built-in type names**, like `Chan`: they mean the same in every module, and a
 module may not declare a type of either name (`N0331`). Which authority a built-in needs is a
 property of the built-in's identity, decided by an exhaustive table the checker reads — a
 program's own function cannot be named `print`, so a call spelled `print` is the built-in.
@@ -2589,6 +2702,68 @@ Not in v1, and not implied by anything above: attenuation (there is no narrower 
 derive one into), resource-specific authority, revocation, linear or affine capabilities,
 capability polymorphism, user-defined capabilities, restriction profiles, and authority for a
 foreign function or unsafe code (*Open*, *Capabilities*).
+
+### Foreign functions: calling C
+<!-- id: foreign -->
+
+A **foreign function** is a C function a program calls. It is declared by its signature and its
+C symbol, and it has no body: the body is C's, compiled by a C compiler and handed to the linker
+with `nazm build --link FILE`. Nazm does not compile C, and does not check it.
+
+```nazm
+extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";
+extern "C" fn c_is_even(n: Int) -> Bool = "c_is_even";
+
+fn classify(f: ForeignCap, n: Int) -> Int ! { foreign } {
+    if c_is_even(n) { c_add(n, 1000) } else { c_add(n, 100) }
+}
+
+fn main(io: IoCap, f: ForeignCap) -> Int ! { io, foreign } {
+    print(int_to_str(classify(f, 3)));
+    0
+}
+```
+
+**The boundary is the C convention of the target, and only two types cross it.** `Int` is C's
+`int64_t` and `Bool` is C's `bool`, both by value. Nothing else is FFI-safe in v1 (`N0381`): a
+`Str` is not a C string (it is counted, not terminated, and reference-counted); a record or an
+enum has no C layout Nazm promises; a sequence or a channel is the runtime's; and a capability is
+authority, never a word C could forge or keep. No pointer crosses, so C cannot retain, free or
+alias anything Nazm owns, and nothing Nazm owns needs pinning across a call. No callback crosses
+either: Nazm has no function values.
+
+**The declaration.** `extern` begins it, before the ABI string — `"C"`, the only ABI (`N0380`);
+`extern` is recognised only there, and is not otherwise reserved. The symbol after `=` is the C
+identifier the linker resolves, exactly as written: ASCII letters, digits and `_`, not starting
+with a digit (`N0382`). A foreign declaration takes no type parameters and writes no effect set
+(`N0384`): its effect is always `foreign`. Two declarations of one symbol must agree about its
+signature, and none may name a symbol the native runtime itself declares, such as `malloc` or
+`main` (`N0383`). A `pub` foreign declaration is exported like any function, and the persisted
+interface carries its symbol.
+
+**Calling one is an effect and needs authority.** A foreign function's effect is `foreign`: a
+function whose declared set leaves it out cannot call one (`N0366`). And **every** call to one
+needs a `ForeignCap` in scope, whether or not the calling function declares an effect set
+(`N0369`): C can do anything, so the compatibility bridge that lets an undeclared function
+exercise its caller's `io` does not reach it. A function in another module that declares no
+effects is assumed to call C only if one of its parameters can carry a `ForeignCap`.
+
+**Failure and ownership.** C cannot fail the Nazm way: after a foreign call nothing is checked,
+and a C function that aborts, loops or corrupts memory does so outside every Nazm guarantee. An
+integer overflow inside C is C's. What Nazm owns stays Nazm's across the call: values held in
+the calling function are released on every path exactly as around any call.
+
+**Provenance.** What C returns carries the origin `unknown`, the worst there is, together with
+whatever its arguments carried: it may be anything, and may be derived from what it was given. So
+in a function that declares its effects, a `write_file` path computed from a C result is refused
+(`N0372`), exactly as one read from a file is. What C does with an argument is not a Nazm sink —
+it is authorised by the `ForeignCap` the call needed, and outside what a restriction can see.
+
+**Where it runs.** Only in a native build. `nazm run` refuses a program that calls a foreign
+function before running any of it (`N0385`); one that only declares one runs. `nazm build`
+declares each foreign function in every unit that calls it and defines it in none; a missing
+definition is the linker's refusal, reported as a missing `--link` naming the symbols. Both
+backends call C the same way.
 
 ### Provenance: where a value came from, and where it may go
 <!-- id: provenance -->

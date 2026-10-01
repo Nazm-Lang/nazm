@@ -1831,6 +1831,116 @@ attempt's script used a shell form the container's `sh` refused, and failed in 1
 measuring anything), compiler benchmark 200 s, checks 16 s — **2,428 s, 40.5 minutes**. The
 benchmark stage's release builds and the mutation stage's pristine build started from nothing.
 
+### Restriction profiles — N47, measured 2026-10-01
+
+Host, release, `nazm check --no-cache`, median of 9. The rules themselves cost nothing measurable:
+they read facts the check already settled. What a profile costs is the check it runs to get those
+facts, before the command's own: a 2,000-function pure program takes 31.4 ms under `general`, 56.2 ms
+under `embedded` (accepted: two checks) and 31.8 ms under `cyber` (refused before the command
+checks); `--profile-report` alone costs the same second check, 56.0 ms. On the compiler's own
+`compiler/emit.nz`, refused under `embedded` and `critical`, 59.4 ms against 59.5 ms. Reusing the
+command's check for the profile would remove the second one; v1 does not.
+
+### Packages — N46, measured 2026-10-01
+
+Host, best of 5 (`what_packages_cost`, `crates/nazm-cli/tests/packages.rs`, `--ignored`), the
+three-package diamond of the tests: `nazm lock` 5.2 ms (resolution, three manifests, three
+digests, the lockfile's bytes compared and left alone); `nazm check` 8.5 ms with `--no-cache` and
+10.0 ms from a warm cache (for three one-function packages the cache's reads cost more than the
+checking they save); `nazm build --no-cache` 210.9 ms and a warm build 86.9 ms (clang is most of
+both). Two hundred packages, each depending on up to three earlier ones: resolving, locking,
+checking and locking again takes 2.6 s in all, dominated by checking 200 modules. Every existing
+program is unaffected: nothing that is not a package takes the new paths, and the only change to
+the link — `ZERO_AR_DATE=1`, and linking under the final file name — makes executables
+reproducible without changing what they contain.
+
+### The standard library — N45, measured 2026-10-01
+
+The standard library is Nazm source, so what it costs is what the code generators make of it.
+Host, `-O2`, best of 5 (`what_the_standard_library_costs`, `crates/nazm-cli/tests/stdlib.rs`,
+`--ignored`):
+
+| | LLVM | Cranelift |
+| --- | --- | --- |
+| `text_split` of a 120 KB string into 20,000 pieces, 50 times (1 M pieces) | 111.9 ms | 84.6 ms |
+| `text_find` over 100,001 bytes, 20 times (2 M positions) | 27.2 ms | 27.3 ms |
+| `text_parse_int` of `int_to_str(i)` for 1 M values | 83.0 ms | 102.8 ms |
+| `ints_sum` and `ints_max` over 1 M elements, 20 times | 17.4 ms | 72.6 ms |
+
+About 110 ns a piece to split (each piece a borrowed slice pushed into a `Strs`), 14 ns a
+position to search (a slice and a byte comparison), 80–100 ns to format and parse an integer. The
+sequence loop is where the backends differ most: LLVM keeps the loop in registers; Cranelift, which
+holds every local in a stack slot (§7.43), reloads it each iteration. No program's code changed:
+nothing in the tree imports a standard module.
+
+### Tasks and channels — N44, measured 2026-10-01
+
+N44 kept the scheduler — one OS thread per task, joined by its scope — and wrote its contract
+down, so what is measured is the baseline anything more elaborate would have to beat. Host, `-O2`,
+best of 5 (`what_tasks_and_channels_cost`, `crates/nazm-cli/tests/scheduler.rs`, `--ignored`),
+with a one-core mutation container running beside it:
+
+| | LLVM | Cranelift |
+| --- | --- | --- |
+| 10,000 tasks started and joined, in scopes of 50 | 131.7 ms (13.2 µs each) | 128.8 ms (12.9 µs) |
+| 100,000 channel round trips between two tasks | 462.7 ms (4.63 µs each) | 468.2 ms (4.68 µs) |
+| 1,000,000 values streamed through a 1,024-slot channel | 59.7 ms (60 ns each) | 60.3 ms (60 ns) |
+| 400 M loop iterations over 1 / 2 / 4 tasks | 1,653 / 829 / 419 ms | 1,655 / 829 / 416 ms |
+
+- **Scaling** is linear to four tasks (3.95× at 4), because independent tasks share nothing but
+  the atomic accounting counters.
+- **Memory plateau.** A program running rounds of 100 tasks that each allocate a string and
+  report on a channel: peak RSS 3.75 MB after 5,000 tasks, 3.83 MB after 50,000, 3.80 MB after
+  500,000 (`/usr/bin/time -l`, 16 KiB pages). No per-task growth: every thread is joined and every
+  block freed by its scope.
+
+### The runtime contract — N43, measured 2026-10-01
+
+N43 moved the runtime into `crates/nazm-lir/src/runtime/` and wrote its contract down; it changed
+no instruction, so what is measured is what the runtime costs, now that there is a harness that
+calls it directly.
+
+- **Nothing a program runs changed.** All 205 sources, N42 (`9b35099`) against N43 release builds,
+  `nazm build --no-cache --emit-ir`: the same status and diagnostics for all 205, and every LLVM
+  file of the 104 that build — runtime and entry units included — byte-identical.
+- **Cold start.** An executable whose `main` returns `0`, host, 200 runs: median 3.65 ms (LLVM),
+  3.73 ms (Cranelift); p10–p90 3.25–4.22 and 3.37–4.30 ms. Nothing is initialised lazily and the
+  entry does four stores before calling `main`, so this is the process's own cost.
+- **What a runtime call costs**, host, clang `-O2`, 10 million iterations, best of four: a string
+  backing allocated and released 15.3 ns; a retain and a release of a shared backing (two atomic
+  operations) 11.6 ns; a sequence push through `nz.arr_grow`, amortised over doubling, 1.7 ns.
+- **Memory.** The same harness peaks at 84.1 MB, which is the 10-million-element sequence
+  (80 MB of data after doubling) and nothing else; the direct-test harness runs at under 10 MB.
+- **Size.** The smallest executable is 50,680 B (LLVM) and 52,832 B (Cranelift, which links the
+  whole runtime); unchanged by N43.
+
+### Foreign calls — N42, measured 2026-10-01
+
+A foreign call is a direct call with the C convention and no failure check after it, so what is
+measured is what one costs against a Nazm call, and what the feature costs a build.
+
+- **A call into C costs what a Nazm call costs.** Host, `-O2`, best of 3, a checked loop of 10
+  million iterations whose body is one call (`t = add(t, i)`) and an overflow-checked `+`: calling
+  a clang `-O1` C `c_add` 56.6 ms with the LLVM backend and 53.8 ms with Cranelift; the same loop
+  calling a Nazm `add` 48.0 ms (LLVM, which can inline it) and 62.3 ms (Cranelift, which cannot,
+  and checks for a failure after each call). About 5–6 ns an iteration either way; nothing is
+  marshalled, because only `Int` and `Bool` cross.
+- **Nothing else moved.** A build of the loop takes 0.14 s with or without the foreign
+  declaration and `--link`. A program with no foreign declaration is untouched: all 205 sources in
+  the tree, N41 (`eceeccc`) against N42 release builds, `nazm build --no-cache --emit-ir` — the same
+  status and diagnostics for all 205, and every LLVM file of the 104 that build byte-identical.
+
+### The Cranelift backend — N41, measured 2026-10-01
+
+- **Every buildable program behaves identically under both backends**: the 104 programs of the
+  205-source corpus that build, stdout, stderr, exit status and the memory report.
+- **Build time.** `nazm build --no-cache compiler/emit.nz` at `-O0`, host: Cranelift 0.74 s, LLVM
+  (clang) 1.21 s. The Cranelift figure still includes clang compiling the runtime's LLVM text and
+  linking.
+- **Code size.** The resulting executable: 1.89 MB (Cranelift) and 1.87 MB (LLVM `-O0`).
+- **Reuse.** An unchanged unit's Cranelift object is found by a key computed from MIR before any
+  code is generated, so a warm rebuild generates nothing for it
+  (`an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated`).
 ### MIR — N40, measured 2026-10-01
 
 - **Nothing changed in any program.** All 205 sources, N39 against N40: `check`, `run` and `build`

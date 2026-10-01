@@ -1,0 +1,12 @@
+// `@std/chan`: receiving one value from a channel as an `Option`.
+//
+// Imported with `use "@std/chan";`. Channels, `spawn` and `scope` are the language's; this
+// only hides the sequence `chan_recv` appends to, which a program receiving one value at a
+// time would otherwise allocate for itself.
+
+/// The next value from `c`, blocking while it is empty, or `None` once it is closed and
+/// drained.
+pub fn chan_take(c: Chan) -> Option[Int] ! {} {
+    let buf = ints_new();
+    if chan_recv(c, buf) { Option[Int].Some(value: ints_get(buf, 0)) } else { Option[Int].None() }
+}
